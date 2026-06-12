@@ -43,15 +43,17 @@ pub struct DeviceManager {
 
 impl DeviceManager {
     pub fn new() -> Self {
-        let mut mgr = Self { devices: vec![] };
-        mgr.scan();
-        mgr
+        // Do not scan here: hidapi on macOS pumps the run loop during enumeration,
+        // which re-enters winit while its event handler is still active.
+        Self { devices: vec![] }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn scan_devices() -> Vec<Device> {
         let mut devices = Vec::new();
 
+        #[cfg(target_os = "macos")]
+        let _hid_lock = crate::hid::macos_hid_operation_lock();
         if let Ok(api) = hidapi::HidApi::new() {
             for info in api.device_list() {
                 // Filter: Vial usage page 0xFF60, usage 0x61

@@ -282,6 +282,8 @@ fn run_bridge(path: String, mode: HostDataMode, stop: Arc<AtomicBool>) {
 }
 
 fn open_raw_hid(path: &str) -> anyhow::Result<hidapi::HidDevice> {
+    #[cfg(target_os = "macos")]
+    let _hid_lock = crate::hid::macos_hid_operation_lock();
     let api = hidapi::HidApi::new()?;
     Ok(api.open_path(&std::ffi::CString::new(path)?)?)
 }

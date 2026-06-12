@@ -17,6 +17,14 @@ use std::sync::{mpsc, Mutex};
 mod hid_protocol;
 use hid_protocol::*;
 
+/// hidapi's macOS backend uses a process-global IOHIDManager. Concurrent
+/// enumeration while another thread holds an open device can crash on macOS 26.
+#[cfg(target_os = "macos")]
+pub(crate) fn macos_hid_operation_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 const VIAL_GUI_USB_RETRIES: usize = 20;
 const VIAL_GUI_READ_TIMEOUT_MS: i32 = 500;
 const WINDOWS_BLE_READ_TIMEOUT_MS: i32 = 2_500;
@@ -171,6 +179,8 @@ fn device_info_matches(
 #[cfg(not(target_arch = "wasm32"))]
 impl HidDevice {
     pub fn open(path: &str) -> Result<Self> {
+        #[cfg(target_os = "macos")]
+        let _hid_lock = macos_hid_operation_lock();
         let api = hidapi::HidApi::new().context("Failed to init hidapi")?;
         let device = api
             .open_path(&std::ffi::CString::new(path)?)
@@ -274,6 +284,8 @@ impl HidDevice {
     }
 
     fn try_open_fresh_for(device: &crate::device::Device) -> Result<Self> {
+        #[cfg(target_os = "macos")]
+        let _hid_lock = macos_hid_operation_lock();
         let api = hidapi::HidApi::new().context("Failed to init hidapi")?;
 
         if !device.path.is_empty() {

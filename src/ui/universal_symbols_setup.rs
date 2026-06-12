@@ -99,6 +99,18 @@ impl EntropyApp {
             },
         );
 
+        #[cfg(target_os = "macos")]
+        {
+            self.draw_macos_universal_symbols_permission_rows(
+                ui,
+                metrics,
+                row_content_width,
+                row_height,
+                lang,
+                dark,
+            );
+        }
+
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
             row_content_width,
@@ -217,13 +229,13 @@ impl EntropyApp {
         {
             if crate::ui_style::modern_button(
                 ui,
-                crate::i18n::tr_catalog(lang, "universal_symbols_setup.open_privacy_settings"),
+                crate::i18n::tr_catalog(lang, "universal_symbols_setup.request_input_monitoring"),
                 metrics.size(168.0, 34.0),
                 true,
             )
             .clicked()
             {
-                self.open_macos_universal_symbols_privacy_settings(lang);
+                self.request_macos_input_monitoring_access(lang);
             }
         }
 
@@ -262,7 +274,51 @@ impl EntropyApp {
 
         #[cfg(target_os = "macos")]
         {
-            let _ = (ui, metrics);
+            let lang = self.app_settings.language;
+            let row_height = metrics.settings_row_height();
+            let row_content_width = metrics.settings_row_content_width();
+
+            let accessibility_clicked = draw_universal_symbols_action_row(
+                ui,
+                metrics,
+                row_content_width,
+                row_height,
+                lang,
+                "universal_symbols_setup.open_accessibility_settings",
+                "universal_symbols_setup.open_accessibility_settings_tooltip",
+                "universal_symbols_setup.open_privacy_settings",
+            );
+            if accessibility_clicked {
+                self.open_macos_accessibility_settings(lang);
+            }
+
+            let monitoring_clicked = draw_universal_symbols_action_row(
+                ui,
+                metrics,
+                row_content_width,
+                row_height,
+                lang,
+                "universal_symbols_setup.open_input_monitoring_settings",
+                "universal_symbols_setup.open_input_monitoring_settings_tooltip",
+                "universal_symbols_setup.open_privacy_settings",
+            );
+            if monitoring_clicked {
+                self.open_macos_input_monitoring_settings(lang);
+            }
+
+            let restart_clicked = draw_universal_symbols_action_row(
+                ui,
+                metrics,
+                row_content_width,
+                row_height,
+                lang,
+                "universal_symbols_setup.restart_event_tap",
+                "universal_symbols_setup.restart_event_tap_tooltip",
+                "universal_symbols_setup.restart_event_tap_button",
+            );
+            if restart_clicked {
+                self.restart_macos_event_tap(lang);
+            }
         }
 
         #[cfg(target_os = "linux")]
@@ -434,7 +490,135 @@ impl EntropyApp {
     }
 
     #[cfg(target_os = "macos")]
-    fn open_macos_universal_symbols_privacy_settings(&mut self, lang: crate::i18n::Language) {
+    fn draw_macos_universal_symbols_permission_rows(
+        &mut self,
+        ui: &mut egui::Ui,
+        metrics: crate::ui_style::ResponsiveMetrics,
+        row_content_width: f32,
+        row_height: f32,
+        lang: crate::i18n::Language,
+        dark: bool,
+    ) {
+        let status = crate::smart_input::macos_universal_symbols_status();
+        let granted = crate::i18n::tr_catalog(lang, "universal_symbols_setup.permission_granted");
+        let denied = crate::i18n::tr_catalog(lang, "universal_symbols_setup.permission_denied");
+        let active = crate::i18n::tr_catalog(lang, "universal_symbols_setup.event_tap_active");
+        let inactive = crate::i18n::tr_catalog(lang, "universal_symbols_setup.event_tap_inactive");
+
+        crate::ui_style::settings_list_row_with_tooltip(
+            ui,
+            row_content_width,
+            row_height,
+            crate::i18n::tr_catalog(lang, "universal_symbols_setup.accessibility_status"),
+            true,
+            Some(crate::i18n::tr_catalog(
+                lang,
+                "universal_symbols_setup.accessibility_status_tooltip",
+            )),
+            metrics.value(250.0),
+            |ui| {
+                draw_universal_symbols_value(
+                    ui,
+                    metrics,
+                    250.0,
+                    if status.accessibility_granted {
+                        granted
+                    } else {
+                        denied
+                    },
+                    macos_permission_color(status.accessibility_granted, dark),
+                );
+            },
+        );
+
+        crate::ui_style::settings_list_row_with_tooltip(
+            ui,
+            row_content_width,
+            row_height,
+            crate::i18n::tr_catalog(lang, "universal_symbols_setup.input_monitoring_status"),
+            true,
+            Some(crate::i18n::tr_catalog(
+                lang,
+                "universal_symbols_setup.input_monitoring_status_tooltip",
+            )),
+            metrics.value(250.0),
+            |ui| {
+                draw_universal_symbols_value(
+                    ui,
+                    metrics,
+                    250.0,
+                    if status.input_monitoring_granted {
+                        granted
+                    } else {
+                        denied
+                    },
+                    macos_permission_color(status.input_monitoring_granted, dark),
+                );
+            },
+        );
+
+        let capture_detail = macos_event_capture_detail(lang, &status);
+        crate::ui_style::settings_list_row_with_tooltip(
+            ui,
+            row_content_width,
+            row_height,
+            crate::i18n::tr_catalog(lang, "universal_symbols_setup.event_capture_status"),
+            true,
+            Some(crate::i18n::tr_catalog(
+                lang,
+                "universal_symbols_setup.event_capture_status_tooltip",
+            )),
+            metrics.value(250.0),
+            |ui| {
+                if capture_detail.is_empty() {
+                    draw_universal_symbols_value(
+                        ui,
+                        metrics,
+                        250.0,
+                        if status.event_tap_active {
+                            active
+                        } else {
+                            inactive
+                        },
+                        macos_permission_color(status.event_tap_active, dark),
+                    );
+                } else {
+                    draw_universal_symbols_two_line_value(
+                        ui,
+                        metrics,
+                        250.0,
+                        if status.event_tap_active {
+                            active
+                        } else {
+                            inactive
+                        },
+                        &capture_detail,
+                        dark,
+                    );
+                }
+            },
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    fn request_macos_input_monitoring_access(&mut self, lang: crate::i18n::Language) {
+        crate::smart_input::request_input_monitoring_access();
+        self.status_msg =
+            crate::i18n::tr_catalog(lang, "universal_symbols_setup.input_monitoring_requested_status")
+                .to_string();
+        crate::smart_input::restart_event_tap();
+    }
+
+    #[cfg(target_os = "macos")]
+    fn restart_macos_event_tap(&mut self, lang: crate::i18n::Language) {
+        crate::smart_input::restart_event_tap();
+        self.status_msg =
+            crate::i18n::tr_catalog(lang, "universal_symbols_setup.event_tap_restarted_status")
+                .to_string();
+    }
+
+    #[cfg(target_os = "macos")]
+    fn open_macos_accessibility_settings(&mut self, lang: crate::i18n::Language) {
         let result = std::process::Command::new("open")
             .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
             .status();
@@ -449,6 +633,55 @@ impl EntropyApp {
             .to_string()
         };
     }
+
+    #[cfg(target_os = "macos")]
+    fn open_macos_input_monitoring_settings(&mut self, lang: crate::i18n::Language) {
+        let result = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
+            .status();
+        self.status_msg = if matches!(result, Ok(status) if status.success()) {
+            crate::i18n::tr_catalog(
+                lang,
+                "universal_symbols_setup.macos_input_monitoring_opened_status",
+            )
+            .to_string()
+        } else {
+            crate::i18n::tr_catalog(
+                lang,
+                "universal_symbols_setup.macos_privacy_open_failed_status",
+            )
+            .to_string()
+        };
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_permission_color(granted: bool, dark: bool) -> Color32 {
+    if granted {
+        Color32::from_rgb(56, 142, 60)
+    } else {
+        app_muted_text(dark)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_event_capture_detail(
+    lang: crate::i18n::Language,
+    status: &crate::smart_input::MacosUniversalSymbolsStatus,
+) -> String {
+    if let Some(reason) = &status.failure_reason {
+        return reason.clone();
+    }
+    if let Some(ms) = status.last_event_ms_ago {
+        if ms < 30_000 {
+            return crate::i18n::tr_catalog(lang, "universal_symbols_setup.last_key_event_recent")
+                .replace("{seconds}", &format!("{:.1}", ms as f64 / 1000.0));
+        }
+    }
+    if status.event_tap_active {
+        return crate::i18n::tr_catalog(lang, "universal_symbols_setup.waiting_for_key_event").to_string();
+    }
+    String::new()
 }
 
 fn draw_universal_symbols_value(
@@ -557,7 +790,7 @@ fn draw_universal_symbols_finish_step_row(
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn draw_universal_symbols_action_row(
     ui: &mut egui::Ui,
     metrics: crate::ui_style::ResponsiveMetrics,
