@@ -7,7 +7,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 
 ## v0.1.0-beta.1 - Public Beta
 
-Based on internal build `v1.13.152`.
+Based on internal build `v1.13.153`.
 
 ### Main Features
 
@@ -20,7 +20,7 @@ Based on internal build `v1.13.152`.
 - Matrix Tester for supported Vial devices
 - Layout Indicator companion window with opacity, pinning, layer labels, and pressed-key display
 - App settings for language, key legends, shifted number symbols, accent color, UI scale, background mode, startup, and Linux Vial udev rules
-- Diagnostics mode in App Settings writes rotating troubleshooting logs when enabled
+- Diagnostics mode in App Settings writes focused rotating troubleshooting logs when enabled
 - Local Text Expander and Universal Symbols integrations
 - Linux IBus and Fcitx5 helper backends for Wayland input-method workflows
 

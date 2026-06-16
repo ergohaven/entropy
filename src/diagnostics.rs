@@ -21,12 +21,8 @@ struct DiagnosticsLogger {
 
 impl Log for DiagnosticsLogger {
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-        let max_level = if self.enabled.load(Ordering::Relaxed) {
-            Level::Debug
-        } else {
-            Level::Info
-        };
-        metadata.level() <= max_level
+        metadata.level()
+            <= max_level_for_target(self.enabled.load(Ordering::Relaxed), metadata.target())
     }
 
     fn log(&self, record: &Record<'_>) {
@@ -77,8 +73,8 @@ pub(crate) fn init(enabled: bool) {
         std::env::consts::ARCH
     );
     if enabled {
-        log::info!("Diagnostics log: {}", active_log_path().display());
-        log::info!("Config dir: {}", entropy_config_dir().display());
+        log::info!("Diagnostics log: {}", display_path(&active_log_path()));
+        log::info!("Config dir: {}", display_path(&entropy_config_dir()));
     }
 }
 
@@ -177,4 +173,28 @@ fn rotate_logs_if_needed() -> std::io::Result<()> {
 
 fn rotated_log_path(index: usize) -> std::path::PathBuf {
     diagnostics_log_dir().join(format!("entropy.{index}.log"))
+}
+
+fn max_level_for_target(diagnostics_enabled: bool, target: &str) -> Level {
+    if !diagnostics_enabled {
+        return Level::Info;
+    }
+
+    if target == "entropy" || target.starts_with("entropy::") {
+        Level::Debug
+    } else {
+        Level::Warn
+    }
+}
+
+fn display_path(path: &std::path::Path) -> String {
+    let raw = path.to_string_lossy();
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = std::path::PathBuf::from(home);
+        let home = home.to_string_lossy();
+        if let Some(rest) = raw.strip_prefix(home.as_ref()) {
+            return format!("~{rest}");
+        }
+    }
+    raw.into_owned()
 }
