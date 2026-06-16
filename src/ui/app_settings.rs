@@ -530,6 +530,36 @@ impl EntropyApp {
                     );
                 }
                 9 => {
+                    let mut diagnostics_enabled = self.app_settings.diagnostics_enabled;
+                    crate::ui_style::settings_list_row_with_tooltip(
+                        ui,
+                        content_width,
+                        row_height,
+                        crate::i18n::tr_catalog(lang, "ui.diagnostics_mode_label"),
+                        true,
+                        tooltip(crate::i18n::tr_catalog(lang, "ui.diagnostics_mode_tooltip")),
+                        switch_width,
+                        |ui| {
+                            let _ = crate::ui_style::settings_switch_sized_stable(
+                                ui,
+                                "app_settings_diagnostics_enabled",
+                                &mut diagnostics_enabled,
+                                switch_size,
+                            );
+                        },
+                    );
+                    if diagnostics_enabled != self.app_settings.diagnostics_enabled {
+                        self.app_settings.diagnostics_enabled = diagnostics_enabled;
+                        crate::diagnostics::set_enabled(diagnostics_enabled);
+                        self.status_msg = if diagnostics_enabled {
+                            crate::i18n::tr_catalog(lang, "ui.diagnostics_enabled_status").into()
+                        } else {
+                            crate::i18n::tr_catalog(lang, "ui.diagnostics_disabled_status").into()
+                        };
+                        save_app_settings(&self.app_settings);
+                    }
+                }
+                10 => {
                     let mut show_signature = self.app_settings.show_made_by_signature;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -634,7 +664,7 @@ impl EntropyApp {
 }
 
 fn total_app_settings_rows() -> usize {
-    let rows = 10;
+    let rows = 11;
     #[cfg(target_os = "linux")]
     {
         rows + 1

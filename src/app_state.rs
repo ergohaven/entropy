@@ -50,6 +50,8 @@ pub(crate) struct AppSettings {
     #[serde(default = "default_ui_scale")]
     pub(crate) ui_scale: f32,
     #[serde(default)]
+    pub(crate) diagnostics_enabled: bool,
+    #[serde(default)]
     pub(crate) onboarding_tour_seen_version: u16,
     #[serde(default)]
     pub(crate) text_expander_enabled: bool,
@@ -139,6 +141,7 @@ impl Default for AppSettings {
             key_legend_layout: KeyLegendLayout::default(),
             accent_color: default_app_accent_color(),
             ui_scale: default_ui_scale(),
+            diagnostics_enabled: false,
             onboarding_tour_seen_version: 0,
             text_expander_enabled: false,
             text_expander_app_blacklist: String::new(),

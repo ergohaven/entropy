@@ -3,6 +3,7 @@
 mod app;
 pub(crate) mod app_icon;
 mod device;
+mod diagnostics;
 mod firmware;
 #[cfg(not(target_arch = "wasm32"))]
 mod hid;
@@ -252,7 +253,7 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    env_logger::init();
+    diagnostics::init(diagnostics::settings_file_enabled());
 
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     if !try_acquire_single_instance() {
