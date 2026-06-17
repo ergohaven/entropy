@@ -126,6 +126,10 @@ pub(crate) fn active_log_path() -> std::path::PathBuf {
     diagnostics_log_dir().join(ACTIVE_LOG_FILE)
 }
 
+pub(crate) fn active_log_path_display() -> String {
+    display_path(&active_log_path())
+}
+
 fn entropy_config_dir() -> std::path::PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))

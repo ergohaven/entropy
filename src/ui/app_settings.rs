@@ -531,13 +531,19 @@ impl EntropyApp {
                 }
                 9 => {
                     let mut diagnostics_enabled = self.app_settings.diagnostics_enabled;
+                    let diagnostics_log_path = crate::diagnostics::active_log_path_display();
+                    let diagnostics_tooltip = crate::i18n::tr_catalog_format(
+                        lang,
+                        "ui.diagnostics_mode_tooltip",
+                        &[("path", diagnostics_log_path.as_str())],
+                    );
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
                         content_width,
                         row_height,
                         crate::i18n::tr_catalog(lang, "ui.diagnostics_mode_label"),
                         true,
-                        tooltip(crate::i18n::tr_catalog(lang, "ui.diagnostics_mode_tooltip")),
+                        (!suppress_tooltips).then_some(diagnostics_tooltip.as_str()),
                         switch_width,
                         |ui| {
                             let _ = crate::ui_style::settings_switch_sized_stable(
