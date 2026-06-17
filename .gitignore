@@ -1,6 +1,5 @@
 /target
 /dist
-Cargo.lock
 *.swp
 .DS_Store
 
