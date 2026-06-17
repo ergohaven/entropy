@@ -79,6 +79,15 @@ pub(crate) fn init(enabled: bool) {
 }
 
 pub(crate) fn set_enabled(enabled: bool) {
+    if LOGGER.enabled.load(Ordering::Relaxed) == enabled {
+        log::set_max_level(if enabled {
+            LevelFilter::Debug
+        } else {
+            LevelFilter::Info
+        });
+        return;
+    }
+
     let opened = if enabled {
         match open_log_file() {
             Ok(file) => Some(file),
