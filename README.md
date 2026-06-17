@@ -126,6 +126,34 @@ sudo apt-get install ibus python3-gi gir1.2-ibus-1.0
 After installation, restart IBus if Entropy did not do it automatically, then add
 **Entropy Universal Symbols** as an input source in your desktop input settings.
 
+## Universal Symbols
+
+Universal Symbols let a keyboard type the same punctuation, typography, math,
+currency, and Cyrillic characters regardless of the active OS keyboard layout.
+They are intended for characters that are inconvenient or inconsistent across
+language layouts.
+
+Entropy implements this by using `F13`-`F24` as transport keys. Firmware sends
+`F13`-`F24`, optionally with `Shift`, `Ctrl`, and/or `Alt`; Entropy catches those
+carrier events and types the mapped Unicode character through the native OS
+input backend.
+
+Because of that, `F13`-`F24` must be treated as reserved when Universal Symbols
+are enabled:
+
+- Do not assign `F13`-`F24` to personal firmware actions, macros, combos, tap
+  dance entries, key overrides, or OS/application shortcuts
+- Do not use modified `F13`-`F24` chords such as `Alt+F13`, `Ctrl+F13`, or
+  `Ctrl+Alt+F13` for unrelated firmware behavior
+- Assign Universal Symbols from Entropy's key picker instead of manually reusing
+  raw `F13`-`F24` keycodes
+- Keep Entropy running while using Universal Symbols; without Entropy, the OS
+  will receive raw `F13`-`F24` events
+
+This reservation avoids conflicts where browsers, mail clients, or other desktop
+apps interpret raw or modified `F13`-`F24` events as interface shortcuts instead
+of text input.
+
 ## Compatibility
 
 Entropy currently communicates with Vial-compatible HID devices. Its UI is designed
