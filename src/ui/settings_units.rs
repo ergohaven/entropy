@@ -2,6 +2,7 @@
 pub(crate) enum SettingsFieldUnit {
     Milliseconds,
     Minutes,
+    Seconds,
     CursorSteps,
     SpeedSteps,
 }
@@ -11,6 +12,7 @@ impl SettingsFieldUnit {
         match self {
             SettingsFieldUnit::Milliseconds => "field_units.milliseconds",
             SettingsFieldUnit::Minutes => "field_units.minutes",
+            SettingsFieldUnit::Seconds => "field_units.seconds",
             SettingsFieldUnit::CursorSteps => "field_units.cursor_steps",
             SettingsFieldUnit::SpeedSteps => "field_units.speed_steps",
         }

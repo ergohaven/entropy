@@ -245,7 +245,7 @@ pub(crate) struct ConnectResult {
     pub(crate) one_shot_settings: OneShotSettingsState,
     /// Grave Escape settings from QMK settings, if supported (qsid 1 bits 0..=3)
     pub(crate) grave_escape_settings: GraveEscapeSettingsState,
-    /// Ergohaven per-layer LED settings from QMK settings, if supported (qsid 300..=317)
+    /// Ergohaven LED settings from QMK settings, if supported
     pub(crate) layer_led_settings: LayerLedSettingsState,
     /// Runtime RGB settings, if supported by the current Vial/QMK lighting backend
     pub(crate) rgb_settings: RgbSettingsState,
@@ -712,23 +712,48 @@ impl GraveEscapeSettingsState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LayerLedColorSetting {
+    pub(crate) qsid: u16,
+    pub(crate) value: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LayerLedTimeoutUnit {
+    Minutes,
+    Seconds,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LayerLedNumericSetting {
+    pub(crate) qsid: u16,
+    pub(crate) width: u8,
+    pub(crate) value: u16,
+    pub(crate) max: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LayerLedSettingsState {
-    /// qsid 300+: palette color index for each firmware-supported logical layer
-    pub(crate) layer_colors: Vec<u8>,
-    /// qsid 316: global LED brightness, clamped by firmware to 0..=255
-    pub(crate) brightness: u16,
-    /// qsid 317: timeout in minutes, 0 disables timeout
-    pub(crate) timeout_mins: u8,
-    /// Whether qsid 300 was readable (firmware support flag)
+    /// Palette color index for each firmware-supported Bluetooth profile
+    pub(crate) bt_profile_colors: Vec<LayerLedColorSetting>,
+    /// Palette color index for each firmware-supported logical layer
+    pub(crate) layer_colors: Vec<LayerLedColorSetting>,
+    /// Global LED brightness, clamped by firmware to the advertised max
+    pub(crate) brightness: Option<LayerLedNumericSetting>,
+    /// LED timeout, 0 disables timeout
+    pub(crate) timeout: Option<LayerLedNumericSetting>,
+    pub(crate) timeout_unit: LayerLedTimeoutUnit,
+    /// Whether any Ergohaven LED QMK setting was readable (firmware support flag)
     pub(crate) supported: bool,
 }
 
 impl Default for LayerLedSettingsState {
     fn default() -> Self {
         Self {
+            bt_profile_colors: Vec::new(),
             layer_colors: Vec::new(),
-            brightness: 0,
-            timeout_mins: 0,
+            brightness: None,
+            timeout: None,
+            timeout_unit: LayerLedTimeoutUnit::Minutes,
             supported: false,
         }
     }

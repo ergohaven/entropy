@@ -1027,6 +1027,9 @@ led_brightness = "LED brightness"
 global_led_brightness_for_layer_color_lighting = "Global LED brightness for layer color lighting"
 led_timeout = "LED timeout"
 minutes_before_leds_turn_off_automatically_0_disables_timeout = "Minutes before LEDs turn off automatically, 0 disables timeout"
+seconds_before_leds_turn_off_automatically_0_disables_timeout = "Seconds before LEDs turn off automatically, 0 disables timeout"
+bt_profile_color = "BT profile {profile} color"
+led_palette_color_for_bluetooth_profile = "LED palette color used when Bluetooth profile {profile} is active"
 off = "Off"
 alt_forces_esc = "Alt forces Esc"
 when_alt_is_held_grave_escape_sends_esc_instead_of_grave_or_tilde = "When Alt is held, Grave Escape sends Esc instead of ` or ~"
@@ -1419,6 +1422,7 @@ wheel_time_to_max_tooltip = "How long wheel scrolling takes to accelerate from b
 [field_units]
 milliseconds = "Value is in milliseconds"
 minutes = "Value is in minutes"
+seconds = "Value is in seconds"
 cursor_steps = "Value is in cursor movement steps"
 speed_steps = "Value is in firmware speed steps"
 

@@ -272,7 +272,7 @@ impl EntropyApp {
             self.layer_led_settings
                 .layer_colors
                 .get(layer)
-                .copied()
+                .map(|color| color.value)
                 .filter(|color_idx| !matches!(color_idx, 0 | 1))
         } else {
             None

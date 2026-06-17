@@ -1027,6 +1027,9 @@ led_brightness = "Яркость подсветки"
 global_led_brightness_for_layer_color_lighting = "Общая яркость цветной подсветки слоёв"
 led_timeout = "Таймаут подсветки"
 minutes_before_leds_turn_off_automatically_0_disables_timeout = "Минут до автоотключения подсветки; 0 отключает таймаут"
+seconds_before_leds_turn_off_automatically_0_disables_timeout = "Секунд до автоотключения подсветки; 0 отключает таймаут"
+bt_profile_color = "Цвет BT-профиля {profile}"
+led_palette_color_for_bluetooth_profile = "Цвет подсветки, когда активен Bluetooth-профиль {profile}"
 off = "Выкл"
 alt_forces_esc = "Alt отправляет Esc"
 when_alt_is_held_grave_escape_sends_esc_instead_of_grave_or_tilde = "При удержании Alt Grave Escape отправляет Esc вместо ` или ~"
@@ -1419,6 +1422,7 @@ wheel_time_to_max_tooltip = "За сколько прокрутка колеса
 [field_units]
 milliseconds = "Значение указывается в миллисекундах"
 minutes = "Значение указывается в минутах"
+seconds = "Значение указывается в секундах"
 cursor_steps = "Значение указывается в шагах движения курсора"
 speed_steps = "Значение указывается в шагах скорости прошивки"
 

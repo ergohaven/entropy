@@ -662,55 +662,12 @@ impl EntropyApp {
                     }
                 };
 
-                let layer_led_settings = {
-                    let mut leds = LayerLedSettingsState::default();
-                    if has_qmk_setting(300) {
-                        // Layer LED color settings are the contiguous firmware-declared
-                        // QMK settings starting at qsid 300. Stop at the fixed global
-                        // brightness qsid 316 so we do not invent color slots.
-                        const LAYER_LED_COLOR_QSID_BASE: u16 = 300;
-                        const LAYER_LED_BRIGHTNESS_QSID: u16 = 316;
-                        let max_color_layers = layer_count
-                            .min((LAYER_LED_BRIGHTNESS_QSID - LAYER_LED_COLOR_QSID_BASE) as usize);
-                        for layer in 0..max_color_layers {
-                            let qsid = LAYER_LED_COLOR_QSID_BASE + layer as u16;
-                            if has_qmk_setting(qsid) {
-                                let value = dev_conn.get_qmk_setting_u8(qsid).unwrap_or_else(|e| {
-                                    log::warn!("get_qmk_setting_u8(layer_led qsid {qsid}): {e}");
-                                    0
-                                });
-                                leds.layer_colors.push(value);
-                            } else {
-                                break;
-                            }
-                        }
-                        leds.supported = !leds.layer_colors.is_empty();
-                        if leds.supported {
-                            leds.brightness = if has_qmk_setting(316) {
-                                dev_conn
-                                    .get_qmk_setting_u16(316)
-                                    .unwrap_or_else(|e| {
-                                        log::warn!(
-                                            "get_qmk_setting_u16(layer_led brightness): {e}"
-                                        );
-                                        0
-                                    })
-                                    .min(255)
-                            } else {
-                                0
-                            };
-                            leds.timeout_mins = if has_qmk_setting(317) {
-                                dev_conn.get_qmk_setting_u8(317).unwrap_or_else(|e| {
-                                    log::warn!("get_qmk_setting_u8(layer_led timeout): {e}");
-                                    0
-                                })
-                            } else {
-                                0
-                            };
-                        }
-                    }
-                    leds
-                };
+                let layer_led_settings = Self::read_layer_led_settings(
+                    &json,
+                    &supported_qmk_settings,
+                    layer_count,
+                    &dev_conn,
+                );
 
                 let rgb_settings = if layer_led_settings.supported && layout.lighting_mode.is_none()
                 {

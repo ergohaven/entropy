@@ -302,6 +302,274 @@ impl EntropyApp {
         })
     }
 
+    fn parse_trailing_setting_index(
+        lower_title: &str,
+        prefix: &str,
+        suffix: &str,
+    ) -> Option<usize> {
+        let rest = lower_title.strip_prefix(prefix)?.trim_start();
+        let leading_digits = rest
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect::<String>();
+        if !leading_digits.is_empty() {
+            let after_digits = rest[leading_digits.len()..].trim_start();
+            if after_digits.starts_with(suffix) {
+                return leading_digits.parse().ok();
+            }
+        }
+        let rest = rest.strip_prefix(suffix)?.trim_start();
+        let trailing_digits = rest
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect::<String>();
+        if trailing_digits.is_empty() {
+            None
+        } else {
+            trailing_digits.parse().ok()
+        }
+    }
+
+    fn layer_led_field_width(field: &serde_json::Value) -> u8 {
+        field
+            .get("width")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(1)
+            .clamp(1, 2) as u8
+    }
+
+    fn layer_led_field_max(field: &serde_json::Value, width: u8) -> u16 {
+        field
+            .get("max")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(if width > 1 {
+                u16::MAX as u64
+            } else {
+                u8::MAX as u64
+            })
+            .min(u16::MAX as u64) as u16
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_layer_led_numeric_setting(
+        dev_conn: &crate::hid::HidDevice,
+        qsid: u16,
+        width: u8,
+        max: u16,
+        label: &str,
+    ) -> LayerLedNumericSetting {
+        let value = if width > 1 {
+            dev_conn.get_qmk_setting_u16(qsid)
+        } else {
+            dev_conn.get_qmk_setting_u8(qsid).map(|value| value as u16)
+        }
+        .unwrap_or_else(|e| {
+            log::warn!("get_qmk_setting({label} qsid {qsid}): {e}");
+            0
+        })
+        .min(max);
+
+        LayerLedNumericSetting {
+            qsid,
+            width,
+            value,
+            max,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn read_layer_led_settings(
+        json: &serde_json::Value,
+        supported_qmk_settings: &[u16],
+        layer_count: usize,
+        dev_conn: &crate::hid::HidDevice,
+    ) -> LayerLedSettingsState {
+        let has_qmk_setting = |qsid: u16| supported_qmk_settings.contains(&qsid);
+        let mut brightness = None;
+        let mut timeout = None;
+        let mut timeout_unit = LayerLedTimeoutUnit::Minutes;
+        let mut bt_profiles = Vec::<(usize, u16)>::new();
+        let mut layers = Vec::<(usize, u16)>::new();
+
+        if let Some(tabs) = json.get("settings").and_then(|value| value.as_array()) {
+            for field in tabs
+                .iter()
+                .filter(|tab| {
+                    tab.get("name")
+                        .and_then(|value| value.as_str())
+                        .map(|name| name.to_ascii_lowercase().contains("led"))
+                        .unwrap_or(false)
+                })
+                .filter_map(|tab| tab.get("fields").and_then(|value| value.as_array()))
+                .flatten()
+            {
+                let Some(qsid) = field
+                    .get("qsid")
+                    .and_then(|value| value.as_u64())
+                    .map(|value| value as u16)
+                else {
+                    continue;
+                };
+                if !has_qmk_setting(qsid) {
+                    continue;
+                }
+                let title = field
+                    .get("title")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                let lower_title = title.to_ascii_lowercase();
+                let width = Self::layer_led_field_width(field);
+                let max = Self::layer_led_field_max(field, width);
+
+                if lower_title.contains("led brightness") {
+                    brightness = Some(Self::read_layer_led_numeric_setting(
+                        dev_conn,
+                        qsid,
+                        width,
+                        max.min(255),
+                        "layer_led brightness",
+                    ));
+                } else if lower_title.contains("led timeout") {
+                    let lower_unit = field
+                        .get("unit")
+                        .or_else(|| field.get("units"))
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    timeout_unit = if lower_title.contains("sec")
+                        || lower_title.contains("second")
+                        || lower_unit.contains("sec")
+                        || lower_unit.contains("second")
+                        || (width > 1 && max > u8::MAX as u16)
+                    {
+                        LayerLedTimeoutUnit::Seconds
+                    } else {
+                        LayerLedTimeoutUnit::Minutes
+                    };
+                    timeout = Some(Self::read_layer_led_numeric_setting(
+                        dev_conn,
+                        qsid,
+                        width,
+                        max,
+                        "layer_led timeout",
+                    ));
+                } else if lower_title.contains("bt profile") && lower_title.contains("color") {
+                    if let Some(profile) =
+                        Self::parse_trailing_setting_index(&lower_title, "bt profile", "color")
+                    {
+                        bt_profiles.push((profile, qsid));
+                    }
+                } else if lower_title.contains("layer") && lower_title.contains("color") {
+                    if let Some(layer) =
+                        Self::parse_trailing_setting_index(&lower_title, "layer", "color")
+                    {
+                        layers.push((layer, qsid));
+                    }
+                }
+            }
+        }
+
+        if brightness.is_none() && timeout.is_none() && bt_profiles.is_empty() && layers.is_empty()
+        {
+            return Self::read_legacy_layer_led_settings(
+                supported_qmk_settings,
+                layer_count,
+                dev_conn,
+            );
+        }
+
+        bt_profiles.sort_by_key(|(profile, _)| *profile);
+        layers.sort_by_key(|(layer, _)| *layer);
+
+        let bt_profile_colors = bt_profiles
+            .into_iter()
+            .filter(|(profile, _)| *profile <= 4)
+            .map(|(_, qsid)| LayerLedColorSetting {
+                qsid,
+                value: dev_conn.get_qmk_setting_u8(qsid).unwrap_or_else(|e| {
+                    log::warn!("get_qmk_setting_u8(layer_led bt profile qsid {qsid}): {e}");
+                    0
+                }),
+            })
+            .collect::<Vec<_>>();
+
+        let layer_colors = layers
+            .into_iter()
+            .filter(|(layer, _)| *layer < layer_count)
+            .map(|(_, qsid)| LayerLedColorSetting {
+                qsid,
+                value: dev_conn.get_qmk_setting_u8(qsid).unwrap_or_else(|e| {
+                    log::warn!("get_qmk_setting_u8(layer_led layer qsid {qsid}): {e}");
+                    0
+                }),
+            })
+            .collect::<Vec<_>>();
+
+        let supported = brightness.is_some()
+            || timeout.is_some()
+            || !bt_profile_colors.is_empty()
+            || !layer_colors.is_empty();
+        LayerLedSettingsState {
+            bt_profile_colors,
+            layer_colors,
+            brightness,
+            timeout,
+            timeout_unit,
+            supported,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_legacy_layer_led_settings(
+        supported_qmk_settings: &[u16],
+        layer_count: usize,
+        dev_conn: &crate::hid::HidDevice,
+    ) -> LayerLedSettingsState {
+        let has_qmk_setting = |qsid: u16| supported_qmk_settings.contains(&qsid);
+        let mut leds = LayerLedSettingsState::default();
+        if !has_qmk_setting(300) {
+            return leds;
+        }
+
+        const LAYER_LED_COLOR_QSID_BASE: u16 = 300;
+        const LAYER_LED_BRIGHTNESS_QSID: u16 = 316;
+        let max_color_layers =
+            layer_count.min((LAYER_LED_BRIGHTNESS_QSID - LAYER_LED_COLOR_QSID_BASE) as usize);
+        for layer in 0..max_color_layers {
+            let qsid = LAYER_LED_COLOR_QSID_BASE + layer as u16;
+            if !has_qmk_setting(qsid) {
+                break;
+            }
+            let value = dev_conn.get_qmk_setting_u8(qsid).unwrap_or_else(|e| {
+                log::warn!("get_qmk_setting_u8(layer_led qsid {qsid}): {e}");
+                0
+            });
+            leds.layer_colors.push(LayerLedColorSetting { qsid, value });
+        }
+        leds.supported = !leds.layer_colors.is_empty();
+        if leds.supported {
+            if has_qmk_setting(316) {
+                leds.brightness = Some(Self::read_layer_led_numeric_setting(
+                    dev_conn,
+                    316,
+                    2,
+                    255,
+                    "layer_led brightness",
+                ));
+            }
+            if has_qmk_setting(317) {
+                leds.timeout = Some(Self::read_layer_led_numeric_setting(
+                    dev_conn,
+                    317,
+                    1,
+                    255,
+                    "layer_led timeout",
+                ));
+            }
+        }
+        leds
+    }
+
     fn parse_module_setting_field(
         field: &serde_json::Value,
         supported_qmk_settings: &[u16],
