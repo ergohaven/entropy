@@ -103,6 +103,7 @@ jobs:
           - Changed supported RMK LED timeout controls to use seconds instead of minutes.
           - Fixed macro handling for extended Vial macro keycodes.
           - Fixed a macOS startup crash related to device scanning.
+          - Added the Debugger tool for easier troubleshooting and device inspection.
           - Improved Universal Symbols on Windows so punctuation and symbols are typed instead of triggering app menus.
           - Documented Universal Symbols carrier keys so custom firmware authors avoid using F13-F24 for their own actions.
           - Added a macOS DMG download; the current build is x86_64 and also runs on Apple Silicon through Rosetta.
