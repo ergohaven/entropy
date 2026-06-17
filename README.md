@@ -69,6 +69,23 @@ Beta builds are published on the
 Windows builds are unsigned during beta, so Windows SmartScreen may warn before
 launching the app.
 
+macOS DMG builds are unsigned and not notarized during beta. To run a downloaded
+DMG on macOS:
+
+1. Open the `.dmg`
+2. Drag `Entropy.app` to `/Applications`
+3. Remove the quarantine flag:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Entropy.app
+```
+
+4. Launch Entropy:
+
+```sh
+open /Applications/Entropy.app
+```
+
 ## Quick Start
 
 1. Download the build for your platform from GitHub Releases

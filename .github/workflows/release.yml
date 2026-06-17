@@ -11,6 +11,9 @@ permissions:
 jobs:
   build:
     name: Build (${{ matrix.os }})
+    # v1.13.x tags are internal build markers for downstream packagers.
+    # Public GitHub releases use public version tags such as v0.1.0-beta.1.
+    if: ${{ !startsWith(github.ref_name, 'v1.13.') }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -72,6 +75,7 @@ jobs:
   release:
     name: Create Release
     needs: build
+    if: ${{ !startsWith(github.ref_name, 'v1.13.') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
