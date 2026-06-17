@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'v0.1.0-beta.*'
 
 permissions:
   contents: write
@@ -11,9 +11,8 @@ permissions:
 jobs:
   build:
     name: Build (${{ matrix.os }})
-    # v1.13.x tags are internal build markers for downstream packagers.
-    # Public GitHub releases use public version tags such as v1.14.3.
-    if: ${{ !startsWith(github.ref_name, 'v1.13.') }}
+    # Public GitHub releases use beta tags such as v0.1.0-beta.2.
+    if: ${{ startsWith(github.ref_name, 'v0.1.0-beta.') }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -85,7 +84,7 @@ jobs:
   release:
     name: Create Release
     needs: build
-    if: ${{ !startsWith(github.ref_name, 'v1.13.') }}
+    if: ${{ startsWith(github.ref_name, 'v0.1.0-beta.') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

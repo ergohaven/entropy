@@ -3,7 +3,7 @@
 Modern app for programmable keyboards and input devices, built by Ergohaven.
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
-[![Latest beta](https://img.shields.io/badge/latest-v1.14.3-lightgrey.svg)](https://github.com/ergohaven/entropy/releases)
+[![Latest beta](https://img.shields.io/badge/latest-v0.1.0--beta.2-lightgrey.svg)](https://github.com/ergohaven/entropy/releases)
 [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey.svg)](#platforms)
 [![Firmware](https://img.shields.io/badge/firmware-Vial--QMK%20%7C%20Vial--RMK-lightgrey.svg)](#compatibility)
 
@@ -62,9 +62,9 @@ unsigned and not notarized during beta.
 Beta builds are published on the
 [GitHub Releases](https://github.com/ergohaven/entropy/releases) page:
 
-- `entropy-v1.14.3-x86_64.AppImage`
-- `entropy-v1.14.3-windows-x86_64.exe`
-- `entropy-v1.14.3-macos-x86_64.dmg`
+- `entropy-v0.1.0-beta.2-x86_64.AppImage`
+- `entropy-v0.1.0-beta.2-windows-x86_64.exe`
+- `entropy-v0.1.0-beta.2-macos-x86_64.dmg`
 
 Windows builds are unsigned during beta, so Windows SmartScreen may warn before
 launching the app.
