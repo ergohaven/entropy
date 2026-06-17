@@ -1,12 +1,28 @@
 [package]
-name = "entropy"
-version = "1.13.156"
+name = "ergohaven-entropy"
+version = "1.13.157"
 edition = "2021"
-description = "Entropy"
+description = "Desktop app for configuring Vial-QMK and Vial-RMK programmable keyboards and input devices"
 authors = ["Ergohaven"]
 license = "GPL-3.0-or-later"
 repository = "https://github.com/ergohaven/entropy"
+homepage = "https://github.com/ergohaven/entropy"
+readme = "README.md"
+keywords = ["keyboard", "vial", "qmk", "rmk", "hid"]
+categories = ["gui", "hardware-support"]
 build = "build.rs"
+include = [
+    "Cargo.lock",
+    "Cargo.toml",
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.md",
+    "assets/**",
+    "build.rs",
+    "i18n/**",
+    "linux/**",
+    "src/**",
+]
 
 [[bin]]
 name = "entropy"

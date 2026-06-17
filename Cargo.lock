@@ -1224,34 +1224,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099"
 
 [[package]]
-name = "entropy"
-version = "1.13.156"
-dependencies = [
- "anyhow",
- "chrono",
- "dirs 5.0.1",
- "eframe",
- "egui",
- "env_logger",
- "flate2",
- "getrandom 0.2.17",
- "hidapi",
- "log",
- "lzma-rs",
- "raw-window-handle",
- "rfd",
- "serde",
- "serde_json",
- "tray-icon",
- "wasm-bindgen-futures",
- "web-sys",
- "windows 0.56.0",
- "windows-sys 0.60.2",
- "winresource",
- "x11-dl",
-]
-
-[[package]]
 name = "enumflags2"
 version = "0.7.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1336,6 +1308,34 @@ name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+
+[[package]]
+name = "ergohaven-entropy"
+version = "1.13.157"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs 5.0.1",
+ "eframe",
+ "egui",
+ "env_logger",
+ "flate2",
+ "getrandom 0.2.17",
+ "hidapi",
+ "log",
+ "lzma-rs",
+ "raw-window-handle",
+ "rfd",
+ "serde",
+ "serde_json",
+ "tray-icon",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "windows 0.56.0",
+ "windows-sys 0.60.2",
+ "winresource",
+ "x11-dl",
+]
 
 [[package]]
 name = "errno"
