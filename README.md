@@ -3,7 +3,7 @@
 Modern app for programmable keyboards and input devices, built by Ergohaven.
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
-[![Latest beta](https://img.shields.io/badge/latest-v0.1.0--beta.2-lightgrey.svg)](https://github.com/ergohaven/entropy/releases)
+[![Latest release](https://img.shields.io/badge/latest-v0.1.1-lightgrey.svg)](https://github.com/ergohaven/entropy/releases)
 [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey.svg)](#platforms)
 [![Firmware](https://img.shields.io/badge/firmware-Vial--QMK%20%7C%20Vial--RMK-lightgrey.svg)](#compatibility)
 
@@ -50,27 +50,27 @@ and firmware settings from one coherent interface.
 
 | Platform | Status | Package |
 | --- | --- | --- |
-| Linux x86_64 | Primary beta target | AppImage |
-| Windows x86_64 | Beta target | Portable EXE |
-| macOS x86_64 (Intel) | Beta target | Unsigned DMG |
+| Linux x86_64 | Primary target | AppImage |
+| Windows x86_64 | Release target | Portable EXE |
+| macOS x86_64 (Intel) | Release target | Unsigned DMG |
 
-Public beta builds are published for Linux, Windows, and macOS. macOS builds are
-unsigned and not notarized during beta.
+Public builds are published for Linux, Windows, and macOS. macOS builds are
+unsigned and not notarized for now.
 
 ## Downloads
 
-Beta builds are published on the
+Release builds are published on the
 [GitHub Releases](https://github.com/ergohaven/entropy/releases) page:
 
-- `entropy-v0.1.0-beta.2-x86_64.AppImage`
-- `entropy-v0.1.0-beta.2-windows-x86_64.exe`
-- `entropy-v0.1.0-beta.2-macos-x86_64.dmg`
+- `entropy-v0.1.1-x86_64.AppImage`
+- `entropy-v0.1.1-windows-x86_64.exe`
+- `entropy-v0.1.1-macos-x86_64.dmg`
 
-Windows builds are unsigned during beta, so Windows SmartScreen may warn before
+Windows builds are unsigned for now, so Windows SmartScreen may warn before
 launching the app.
 
-macOS DMG builds are x86_64/Intel, unsigned, and not notarized during beta. To
-run a downloaded DMG on macOS:
+macOS DMG builds are x86_64/Intel, unsigned, and not notarized for now. To run
+a downloaded DMG on macOS:
 
 1. Open the `.dmg`
 2. Drag `Entropy.app` to `/Applications`
@@ -164,7 +164,7 @@ Best-tested hardware is Ergohaven hardware and Vial-compatible QMK/RMK-style dev
 Firmware support varies by device; Entropy hides firmware-gated pages when the
 connected device does not expose the required capability.
 
-Not in scope for this beta:
+Not in scope for this release:
 
 - Browser-only configuration
 - Mobile platforms
