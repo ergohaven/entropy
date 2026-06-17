@@ -98,6 +98,7 @@ jobs:
           cat > RELEASE_NOTES.md <<'EOF'
           ## What's new
 
+          - Fixed the Linux download so it is a real AppImage again and is back to the smaller expected size.
           - Added LED color settings for Bluetooth profiles 0-4 on supported RMK firmware.
           - Changed supported RMK LED timeout controls to use seconds instead of minutes.
           - Fixed macro handling for extended Vial macro keycodes.
