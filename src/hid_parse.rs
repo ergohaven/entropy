@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 
-pub(crate) fn parse_macro_buffer(buf: &[u8], count: u8) -> Vec<String> {
+pub(crate) fn parse_macro_buffer(buf: &[u8], count: u8) -> Vec<Vec<u8>> {
     let mut macros = Vec::new();
     let mut start = 0;
     for _ in 0..count {
@@ -9,24 +9,23 @@ pub(crate) fn parse_macro_buffer(buf: &[u8], count: u8) -> Vec<String> {
             .position(|&b| b == 0)
             .map(|p| start + p)
             .unwrap_or(buf.len());
-        let s = String::from_utf8_lossy(&buf[start..end]).to_string();
-        macros.push(s);
+        macros.push(buf[start..end].to_vec());
         start = end + 1;
         if start >= buf.len() {
             break;
         }
     }
     while macros.len() < count as usize {
-        macros.push(String::new());
+        macros.push(Vec::new());
     }
     macros
 }
 
-pub(crate) fn encode_macro_buffer(macros: &[String], buf_size: u16) -> Vec<u8> {
+pub(crate) fn encode_macro_buffer(macros: &[Vec<u8>], buf_size: u16) -> Vec<u8> {
     let max_len = buf_size as usize;
     let mut buf = Vec::new();
     for m in macros {
-        buf.extend_from_slice(m.as_bytes());
+        buf.extend_from_slice(m);
         buf.push(0);
     }
     if buf.is_empty() {
@@ -158,12 +157,15 @@ mod tests {
     #[test]
     fn parses_and_pads_macro_buffer() {
         let parsed = parse_macro_buffer(b"one\0two", 4);
-        assert_eq!(parsed, vec!["one", "two", "", ""]);
+        assert_eq!(
+            parsed,
+            vec![b"one".to_vec(), b"two".to_vec(), Vec::new(), Vec::new()]
+        );
     }
 
     #[test]
     fn encodes_macro_buffer_with_null_separators() {
-        let encoded = encode_macro_buffer(&["a".into(), "bc".into()], 6);
+        let encoded = encode_macro_buffer(&[b"a".to_vec(), b"bc".to_vec()], 6);
         assert_eq!(encoded, b"a\0bc\0".to_vec());
     }
 
@@ -175,7 +177,7 @@ mod tests {
 
     #[test]
     fn truncates_macro_buffer_to_firmware_size() {
-        let encoded = encode_macro_buffer(&["abcd".into(), "ef".into()], 5);
+        let encoded = encode_macro_buffer(&[b"abcd".to_vec(), b"ef".to_vec()], 5);
         assert_eq!(encoded, b"abcd\0".to_vec());
     }
 

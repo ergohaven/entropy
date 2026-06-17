@@ -94,9 +94,9 @@ pub struct TapDanceEntry {
 #[derive(Clone, Debug)]
 pub enum MacroAction {
     Text(String),
-    Tap(u8),    // QMK keycode
-    Down(u8),   // key press
-    Up(u8),     // key release
+    Tap(u16),   // QMK/Vial keycode
+    Down(u16),  // key press
+    Up(u16),    // key release
     Delay(u16), // milliseconds
 }
 
@@ -117,6 +117,7 @@ pub struct KeycodePicker {
     pub supports_repeat_key: bool,
     pub supports_layer_lock: bool,
     pub supports_persistent_default_layer: bool,
+    pub supports_macro_ext_keycodes: bool,
     pub layer_names: Vec<String>,
     pub layer_count: usize,
     pub layer_has_content: Vec<bool>,
@@ -140,8 +141,8 @@ pub struct KeycodePicker {
     /// Pending tap dance Mod+Key selection: (td_idx, field, modifier base)
     pub td_mod_key_pick: Option<(usize, u8, u16)>,
     pub macro_inline_selected: Option<u8>,
-    /// Macro editor text buffers (one per macro)
-    pub macro_texts: Vec<String>,
+    /// Macro editor bytecode buffers (one per macro)
+    pub macro_texts: Vec<Vec<u8>>,
     /// User-visible names for macros (optional)
     pub macro_names: Vec<String>,
     /// Macro actions for editor UI
@@ -283,6 +284,7 @@ impl Default for KeycodePicker {
             supports_repeat_key: true,
             supports_layer_lock: true,
             supports_persistent_default_layer: true,
+            supports_macro_ext_keycodes: true,
             layer_names: (0..16).map(|i| i.to_string()).collect(),
             layer_count: 4,
             layer_has_content: vec![true; 16],
@@ -302,7 +304,7 @@ impl Default for KeycodePicker {
             tap_dance_dirty: false,
             td_key_pick: None,
             td_mod_key_pick: None,
-            macro_texts: vec![String::new(); 16],
+            macro_texts: vec![Vec::new(); 16],
             macro_names: vec![String::new(); 16],
             macro_actions: vec![vec![]; 16],
             macro_undo_stack: Vec::new(),
@@ -494,7 +496,7 @@ impl KeycodePicker {
                                 return;
                             }
                             if let Some(qmk) = egui_key_to_qmk(*key, *modifiers) {
-                                if qmk > 0 && qmk < 0x0100 {
+                                if qmk > 0 && (qmk < 0x0100 || self.supports_macro_ext_keycodes) {
                                     let mut changed = false;
                                     if let Some(action) = self
                                         .macro_actions
@@ -503,16 +505,16 @@ impl KeycodePicker {
                                     {
                                         match action {
                                             MacroAction::Tap(kc) => {
-                                                changed = *kc != qmk as u8;
-                                                *kc = qmk as u8;
+                                                changed = *kc != qmk;
+                                                *kc = qmk;
                                             }
                                             MacroAction::Down(kc) => {
-                                                changed = *kc != qmk as u8;
-                                                *kc = qmk as u8;
+                                                changed = *kc != qmk;
+                                                *kc = qmk;
                                             }
                                             MacroAction::Up(kc) => {
-                                                changed = *kc != qmk as u8;
-                                                *kc = qmk as u8;
+                                                changed = *kc != qmk;
+                                                *kc = qmk;
                                             }
                                             _ => {}
                                         }
@@ -565,9 +567,13 @@ impl KeycodePicker {
                     self.macro_key_pick = None;
                 }
                 ui.add_space(4.0);
+                let supports_macro_ext_keycodes = self.supports_macro_ext_keycodes;
                 let key_choices: Vec<&'static crate::keycode::Keycode> = KEYCODES
                     .iter()
-                    .filter(|kc| is_8bit_tap_key_choice(kc) && !kc.name.starts_with("RGB_"))
+                    .filter(|kc| {
+                        (supports_macro_ext_keycodes || is_8bit_tap_key_choice(kc))
+                            && !kc.name.starts_with("RGB_")
+                    })
                     .collect();
                 egui::ScrollArea::vertical()
                     .max_height(key_picker_popup_scroll_height(popup_size))
@@ -589,16 +595,16 @@ impl KeycodePicker {
                             {
                                 match action {
                                     MacroAction::Tap(k) => {
-                                        changed = *k != value as u8;
-                                        *k = value as u8;
+                                        changed = *k != value;
+                                        *k = value;
                                     }
                                     MacroAction::Down(k) => {
-                                        changed = *k != value as u8;
-                                        *k = value as u8;
+                                        changed = *k != value;
+                                        *k = value;
                                     }
                                     MacroAction::Up(k) => {
-                                        changed = *k != value as u8;
-                                        *k = value as u8;
+                                        changed = *k != value;
+                                        *k = value;
                                     }
                                     _ => {}
                                 }

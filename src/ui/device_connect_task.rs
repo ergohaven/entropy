@@ -345,13 +345,13 @@ impl EntropyApp {
                                     Ok(buf) => crate::hid::HidDevice::parse_macros(&buf, count),
                                     Err(e) => {
                                         log::warn!("get_macro_buffer: {e}");
-                                        vec![String::new(); count as usize]
+                                        vec![Vec::new(); count as usize]
                                     }
                                 }
                             }
                             Err(e) => {
                                 log::warn!("get_macro_buffer_size: {e}");
-                                vec![String::new(); count as usize]
+                                vec![Vec::new(); count as usize]
                             }
                         }
                     }
@@ -813,6 +813,7 @@ impl EntropyApp {
                     keyboard_id,
                     hid_device: Some(dev_conn),
                     macro_texts,
+                    supports_macro_ext_keycodes: vial_protocol >= 5,
                     tap_dance_entries,
                     combo_entries,
                     combo_term,

@@ -1,10 +1,11 @@
 use super::*;
 use anyhow::{bail, Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 const ENTLAYOUT_FORMAT: &str = "entropy.layout";
-const ENTLAYOUT_VERSION: u16 = 2;
+const ENTLAYOUT_VERSION: u16 = 3;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct EntLayoutFile {
@@ -167,7 +168,11 @@ impl EntLayoutSectionImportStats {
             return crate::i18n::tr_catalog_format(
                 language,
                 "entlayout.summary_full",
-                &[("section", label), ("imported", &imported), ("total", &total)],
+                &[
+                    ("section", label),
+                    ("imported", &imported),
+                    ("total", &total),
+                ],
             );
         }
         let mut reasons = Vec::new();
@@ -236,6 +241,9 @@ struct EntTextExpanderRuleFile {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct EntMacroData {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    bytecode_base64: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     texts: Vec<String>,
     names: Vec<String>,
 }
@@ -346,11 +354,9 @@ impl EntropyApp {
         };
         self.pending_entlayout_import_path = Some(path);
         self.import_progress_started_at = None;
-        self.import_progress_title = crate::i18n::tr_catalog(
-            self.app_settings.language,
-            "entlayout.importing_layout",
-        )
-        .into();
+        self.import_progress_title =
+            crate::i18n::tr_catalog(self.app_settings.language, "entlayout.importing_layout")
+                .into();
         self.import_progress_body = crate::i18n::tr_catalog(
             self.app_settings.language,
             "entlayout.applying_layout_import",
@@ -368,11 +374,9 @@ impl EntropyApp {
                 &[("path", &path.display().to_string())],
             )
         })?;
-        let bundle: EntLayoutFile =
-            serde_json::from_str(&data).context(crate::i18n::tr_catalog(
-                lang,
-                "entlayout.invalid_entlayout_json",
-            ))?;
+        let bundle: EntLayoutFile = serde_json::from_str(&data).context(
+            crate::i18n::tr_catalog(lang, "entlayout.invalid_entlayout_json"),
+        )?;
         self.validate_entlayout_file(&bundle)?;
         let backup_path = self.write_entlayout_auto_backup()?;
         let (firmware_failures, mapping) = self.apply_entlayout(&bundle)?;
@@ -407,7 +411,13 @@ impl EntropyApp {
                 layer_names: self.layer_names.clone(),
                 text_expander: self.text_expander_entlayout_snapshot(),
                 macros: EntMacroData {
-                    texts: self.keycode_picker.macro_texts.clone(),
+                    bytecode_base64: self
+                        .keycode_picker
+                        .macro_texts
+                        .iter()
+                        .map(|bytes| BASE64_STANDARD.encode(bytes))
+                        .collect(),
+                    texts: Vec::new(),
                     names: self.keycode_picker.macro_names.clone(),
                 },
                 combos: EntComboData {
@@ -503,12 +513,10 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn write_entlayout_auto_backup(&self) -> Result<PathBuf> {
-        let bundle = self
-            .entlayout_snapshot()
-            .context(crate::i18n::tr_catalog(
-                self.app_settings.language,
-                "entlayout.cannot_create_backup_without_keyboard",
-            ))?;
+        let bundle = self.entlayout_snapshot().context(crate::i18n::tr_catalog(
+            self.app_settings.language,
+            "entlayout.cannot_create_backup_without_keyboard",
+        ))?;
         let dir = dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("entropy")
@@ -547,30 +555,21 @@ impl EntropyApp {
                 )
             );
         }
-        let _layout = self
-            .layout
-            .as_ref()
-            .context(crate::i18n::tr_catalog(
-                self.app_settings.language,
-                "entlayout.connect_target_keyboard",
-            ))?;
+        let _layout = self.layout.as_ref().context(crate::i18n::tr_catalog(
+            self.app_settings.language,
+            "entlayout.connect_target_keyboard",
+        ))?;
         if bundle.data.keymap.is_empty() {
             bail!(
                 "{}",
-                crate::i18n::tr_catalog(
-                    self.app_settings.language,
-                    "entlayout.keymap_empty",
-                )
+                crate::i18n::tr_catalog(self.app_settings.language, "entlayout.keymap_empty",)
             );
         }
         let source_key_count = bundle_source_key_count(bundle);
         if source_key_count == 0 {
             bail!(
                 "{}",
-                crate::i18n::tr_catalog(
-                    self.app_settings.language,
-                    "entlayout.no_source_keys",
-                )
+                crate::i18n::tr_catalog(self.app_settings.language, "entlayout.no_source_keys",)
             );
         }
         if bundle
@@ -606,13 +605,10 @@ impl EntropyApp {
     }
 
     fn entlayout_import_mapping(&self, bundle: &EntLayoutFile) -> Result<EntLayoutImportMapping> {
-        let layout = self
-            .layout
-            .as_ref()
-            .context(crate::i18n::tr_catalog(
-                self.app_settings.language,
-                "entlayout.connect_target_keyboard",
-            ))?;
+        let layout = self.layout.as_ref().context(crate::i18n::tr_catalog(
+            self.app_settings.language,
+            "entlayout.connect_target_keyboard",
+        ))?;
         let exact_layout = bundle.keyboard.layout_hash == entlayout_hash(layout)
             && bundle.keyboard.layers == layout.layers.len()
             && bundle_source_key_count(bundle) == layout.keys.len()
@@ -676,7 +672,7 @@ impl EntropyApp {
         };
         let limits = self.entlayout_keycode_import_limits();
         let mut macro_stats = EntLayoutSectionImportStats::default();
-        for (idx, _) in bundle.data.macros.texts.iter().enumerate() {
+        for idx in 0..entmacro_count(&bundle.data.macros) {
             if idx < self.keycode_picker.macro_count {
                 macro_stats.record_imported();
             } else {
@@ -775,7 +771,7 @@ impl EntropyApp {
         if self.current_device_is_likely_rmk() {
             skipped.push(tr("entlayout.firmware_dynamic_sections_rmk"));
         } else {
-            if !bundle.data.macros.texts.is_empty() && self.keycode_picker.macro_count > 0 {
+            if entmacro_count(&bundle.data.macros) > 0 && self.keycode_picker.macro_count > 0 {
                 imported.push(tr("entlayout.macros"));
             } else {
                 skipped.push(crate::i18n::tr_catalog_format(
@@ -803,7 +799,10 @@ impl EntropyApp {
                 skipped.push(crate::i18n::tr_catalog_format(
                     lang,
                     "entlayout.not_available",
-                    &[("section", crate::i18n::tr_catalog(lang, "entlayout.tap_dance"))],
+                    &[(
+                        "section",
+                        crate::i18n::tr_catalog(lang, "entlayout.tap_dance"),
+                    )],
                 ));
             }
 
@@ -815,7 +814,10 @@ impl EntropyApp {
                 skipped.push(crate::i18n::tr_catalog_format(
                     lang,
                     "entlayout.not_available",
-                    &[("section", crate::i18n::tr_catalog(lang, "entlayout.key_overrides"))],
+                    &[(
+                        "section",
+                        crate::i18n::tr_catalog(lang, "entlayout.key_overrides"),
+                    )],
                 ));
             }
 
@@ -825,7 +827,10 @@ impl EntropyApp {
                 skipped.push(crate::i18n::tr_catalog_format(
                     lang,
                     "entlayout.not_available",
-                    &[("section", crate::i18n::tr_catalog(lang, "entlayout.alt_repeat"))],
+                    &[(
+                        "section",
+                        crate::i18n::tr_catalog(lang, "entlayout.alt_repeat"),
+                    )],
                 ));
             }
         }
@@ -948,7 +953,10 @@ impl EntropyApp {
         let layout = self
             .layout
             .as_ref()
-            .context(crate::i18n::tr_catalog(lang, "entlayout.no_connected_layout"))?
+            .context(crate::i18n::tr_catalog(
+                lang,
+                "entlayout.no_connected_layout",
+            ))?
             .clone();
         let limits = self.entlayout_keycode_import_limits();
         let mut failures = Vec::new();
@@ -1065,14 +1073,14 @@ impl EntropyApp {
             return Ok(failures);
         }
 
-        if !bundle.data.macros.texts.is_empty() && self.keycode_picker.macro_count > 0 {
+        if entmacro_count(&bundle.data.macros) > 0 && self.keycode_picker.macro_count > 0 {
             if let Err(err) = (|| -> Result<()> {
-                let mut macro_texts = bundle.data.macros.texts.clone();
-                macro_texts.resize(self.keycode_picker.macro_count, String::new());
+                let mut macro_texts = entmacro_bytecode(&bundle.data.macros)?;
+                macro_texts.resize(self.keycode_picker.macro_count, Vec::new());
                 macro_texts.truncate(self.keycode_picker.macro_count);
 
                 let mut current_macro_texts = self.keycode_picker.macro_texts.clone();
-                current_macro_texts.resize(self.keycode_picker.macro_count, String::new());
+                current_macro_texts.resize(self.keycode_picker.macro_count, Vec::new());
                 current_macro_texts.truncate(self.keycode_picker.macro_count);
                 if macro_texts == current_macro_texts {
                     return Ok(());
@@ -1348,11 +1356,12 @@ impl EntropyApp {
             return Ok(());
         }
 
-        self.keycode_picker.macro_texts = normalized_strings(
-            &bundle.data.macros.texts,
+        self.keycode_picker.macro_texts = entmacro_bytecode(&bundle.data.macros)?;
+        self.keycode_picker.macro_texts.resize(
             self.keycode_picker
                 .macro_count
-                .max(bundle.data.macros.texts.len()),
+                .max(entmacro_count(&bundle.data.macros)),
+            Vec::new(),
         );
         self.keycode_picker
             .macro_texts
@@ -2055,8 +2064,10 @@ fn write_entlayout_file(
     bundle: &EntLayoutFile,
     language: crate::i18n::Language,
 ) -> Result<()> {
-    let json = serde_json::to_string_pretty(bundle)
-        .context(crate::i18n::tr_catalog(language, "entlayout.failed_to_serialize"))?;
+    let json = serde_json::to_string_pretty(bundle).context(crate::i18n::tr_catalog(
+        language,
+        "entlayout.failed_to_serialize",
+    ))?;
     std::fs::write(path, json).with_context(|| {
         crate::i18n::tr_catalog_format(
             language,
@@ -2071,6 +2082,74 @@ fn normalized_strings(values: &[String], len: usize) -> Vec<String> {
     out.resize(len, String::new());
     out.truncate(len);
     out
+}
+
+fn entmacro_count(macros: &EntMacroData) -> usize {
+    if !macros.bytecode_base64.is_empty() {
+        macros.bytecode_base64.len()
+    } else {
+        macros.texts.len()
+    }
+}
+
+fn entmacro_bytecode(macros: &EntMacroData) -> Result<Vec<Vec<u8>>> {
+    if !macros.bytecode_base64.is_empty() {
+        macros
+            .bytecode_base64
+            .iter()
+            .enumerate()
+            .map(|(idx, encoded)| {
+                BASE64_STANDARD
+                    .decode(encoded)
+                    .with_context(|| format!("invalid macro bytecode_base64 at index {idx}"))
+            })
+            .collect()
+    } else {
+        Ok(macros
+            .texts
+            .iter()
+            .map(|text| text.as_bytes().to_vec())
+            .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn entmacro_bytecode_prefers_base64() {
+        let bytes = vec![0x01, 0x05, 0xA0, 0xFF];
+        let macros = EntMacroData {
+            bytecode_base64: vec![BASE64_STANDARD.encode(&bytes)],
+            texts: vec!["legacy".to_owned()],
+            names: Vec::new(),
+        };
+
+        assert_eq!(entmacro_bytecode(&macros).unwrap(), vec![bytes]);
+    }
+
+    #[test]
+    fn entmacro_bytecode_reads_legacy_texts() {
+        let macros = EntMacroData {
+            bytecode_base64: Vec::new(),
+            texts: vec!["abc".to_owned()],
+            names: Vec::new(),
+        };
+
+        assert_eq!(entmacro_bytecode(&macros).unwrap(), vec![b"abc".to_vec()]);
+    }
+
+    #[test]
+    fn entmacro_bytecode_rejects_invalid_base64() {
+        let macros = EntMacroData {
+            bytecode_base64: vec!["not base64".to_owned()],
+            texts: Vec::new(),
+            names: Vec::new(),
+        };
+
+        assert!(entmacro_bytecode(&macros).is_err());
+    }
 }
 
 fn entlayout_hash(layout: &KeyboardLayout) -> String {

@@ -75,13 +75,13 @@ impl HidDevice {
         Ok(())
     }
 
-    /// Parse macro buffer into individual macro strings.
-    pub fn parse_macros(buf: &[u8], count: u8) -> Vec<String> {
+    /// Parse macro buffer into individual macro bytecode entries.
+    pub fn parse_macros(buf: &[u8], count: u8) -> Vec<Vec<u8>> {
         parse_macro_buffer(buf, count)
     }
 
-    /// Encode macro strings into buffer (null-separated).
-    pub fn encode_macros(macros: &[String], buf_size: u16) -> Vec<u8> {
+    /// Encode macro bytecode entries into buffer (null-separated).
+    pub fn encode_macros(macros: &[Vec<u8>], buf_size: u16) -> Vec<u8> {
         encode_macro_buffer(macros, buf_size)
     }
 }

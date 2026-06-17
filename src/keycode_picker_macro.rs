@@ -1,5 +1,31 @@
 use super::*;
 
+const SS_QMK_PREFIX: u8 = 1;
+const SS_TAP_CODE: u8 = 1;
+const SS_DOWN_CODE: u8 = 2;
+const SS_UP_CODE: u8 = 3;
+const SS_DELAY_CODE: u8 = 4;
+const VIAL_MACRO_EXT_TAP: u8 = 5;
+const VIAL_MACRO_EXT_DOWN: u8 = 6;
+const VIAL_MACRO_EXT_UP: u8 = 7;
+
+fn append_macro_key_action(encoded: &mut Vec<u8>, basic_opcode: u8, ext_opcode: u8, keycode: u16) {
+    encoded.push(SS_QMK_PREFIX);
+    if keycode < 0x0100 {
+        encoded.push(basic_opcode);
+        encoded.push(keycode as u8);
+        return;
+    }
+
+    encoded.push(ext_opcode);
+    let wire_keycode = if keycode & 0x00FF == 0 {
+        0xFF00 | (keycode >> 8)
+    } else {
+        keycode
+    };
+    encoded.extend_from_slice(&wire_keycode.to_le_bytes());
+}
+
 impl KeycodePicker {
     fn show_macro_editor_contents(
         &mut self,
@@ -545,7 +571,7 @@ impl KeycodePicker {
 
     fn ensure_macro_meta_len(&mut self, n: usize) {
         while self.macro_texts.len() <= n {
-            self.macro_texts.push(String::new());
+            self.macro_texts.push(Vec::new());
         }
         while self.macro_names.len() <= n {
             self.macro_names.push(String::new());
@@ -571,7 +597,7 @@ impl KeycodePicker {
 
     pub(super) fn encode_macro(&mut self, n: usize) {
         while self.macro_texts.len() <= n {
-            self.macro_texts.push(String::new());
+            self.macro_texts.push(Vec::new());
         }
         while self.macro_actions.len() <= n {
             self.macro_actions.push(vec![]);
@@ -581,31 +607,25 @@ impl KeycodePicker {
             match action {
                 MacroAction::Text(s) => encoded.extend_from_slice(s.as_bytes()),
                 MacroAction::Tap(kc) => {
-                    encoded.push(1);
-                    encoded.push(1);
-                    encoded.push(*kc);
+                    append_macro_key_action(&mut encoded, SS_TAP_CODE, VIAL_MACRO_EXT_TAP, *kc);
                 }
                 MacroAction::Down(kc) => {
-                    encoded.push(1);
-                    encoded.push(2);
-                    encoded.push(*kc);
+                    append_macro_key_action(&mut encoded, SS_DOWN_CODE, VIAL_MACRO_EXT_DOWN, *kc);
                 }
                 MacroAction::Up(kc) => {
-                    encoded.push(1);
-                    encoded.push(3);
-                    encoded.push(*kc);
+                    append_macro_key_action(&mut encoded, SS_UP_CODE, VIAL_MACRO_EXT_UP, *kc);
                 }
                 MacroAction::Delay(ms) => {
                     let hi = (*ms / 255 + 1) as u8;
                     let lo = (*ms % 255 + 1) as u8;
-                    encoded.push(1);
-                    encoded.push(4);
+                    encoded.push(SS_QMK_PREFIX);
+                    encoded.push(SS_DELAY_CODE);
                     encoded.push(lo);
                     encoded.push(hi);
                 }
             }
         }
-        self.macro_texts[n] = String::from_utf8_lossy(&encoded).to_string();
+        self.macro_texts[n] = encoded;
     }
 
     pub(super) fn show_vial_macros(&mut self, ui: &mut egui::Ui) {
@@ -622,5 +642,39 @@ impl KeycodePicker {
             self.macros_dirty = true;
         }
         self.macro_inline_selected = Some(selected);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encodes_basic_macro_tap_as_vial_short_action() {
+        let mut picker = KeycodePicker::default();
+        picker.macro_actions = vec![vec![MacroAction::Tap(0x0006)]];
+
+        picker.encode_macro(0);
+
+        assert_eq!(picker.macro_texts[0].as_slice(), &[0x01, 0x01, 0x06]);
+    }
+
+    #[test]
+    fn encodes_modified_macro_tap_as_vial_extended_action() {
+        let mut picker = KeycodePicker::default();
+        picker.macro_actions = vec![vec![MacroAction::Tap(0x0106)]];
+
+        picker.encode_macro(0);
+
+        assert_eq!(picker.macro_texts[0].as_slice(), &[0x01, 0x05, 0x06, 0x01]);
+    }
+
+    #[test]
+    fn encodes_zero_low_byte_extended_keycode_with_vial_escape() {
+        let mut encoded = Vec::new();
+
+        append_macro_key_action(&mut encoded, SS_TAP_CODE, VIAL_MACRO_EXT_TAP, 0xA000);
+
+        assert_eq!(encoded, [0x01, 0x05, 0xA0, 0xFF]);
     }
 }

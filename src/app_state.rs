@@ -217,8 +217,10 @@ pub(crate) struct ConnectResult {
     pub(crate) hid_device: Option<crate::hid::HidDevice>,
     pub(crate) layout: KeyboardLayout,
     pub(crate) layer_count: usize,
-    /// Macro texts read from device
-    pub(crate) macro_texts: Vec<String>,
+    /// Macro bytecode entries read from device
+    pub(crate) macro_texts: Vec<Vec<u8>>,
+    /// Vial protocol >= 5 supports 2-byte keycodes in macros.
+    pub(crate) supports_macro_ext_keycodes: bool,
     /// Tap dance entries
     pub(crate) tap_dance_entries: Vec<crate::keycode_picker::TapDanceEntry>,
     /// Combo entries

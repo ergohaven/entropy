@@ -144,13 +144,12 @@ impl EntropyApp {
                 self.keycode_picker.macro_count = r.macro_texts.len();
                 self.keycode_picker.macro_texts = r.macro_texts.clone();
                 self.keycode_picker.macro_names = vec![String::new(); r.macro_texts.len()];
-                // Parse macro texts into actions
-                // Parse macro texts → actions (Vial protocol v2: prefix 0x01 before actions)
+                self.keycode_picker.supports_macro_ext_keycodes = r.supports_macro_ext_keycodes;
+                // Parse macro texts into actions (Vial protocol v2+ bytecode).
                 self.keycode_picker.macro_actions = r
                     .macro_texts
                     .iter()
-                    .map(|text| {
-                        let bytes = text.as_bytes();
+                    .map(|bytes| {
                         let mut actions = Vec::new();
                         let mut i = 0;
                         while i < bytes.len() {
@@ -160,21 +159,21 @@ impl EntropyApp {
                                     1 if i + 2 < bytes.len() => {
                                         // SS_TAP
                                         actions.push(crate::keycode_picker::MacroAction::Tap(
-                                            bytes[i + 2],
+                                            bytes[i + 2] as u16,
                                         ));
                                         i += 3;
                                     }
                                     2 if i + 2 < bytes.len() => {
                                         // SS_DOWN
                                         actions.push(crate::keycode_picker::MacroAction::Down(
-                                            bytes[i + 2],
+                                            bytes[i + 2] as u16,
                                         ));
                                         i += 3;
                                     }
                                     3 if i + 2 < bytes.len() => {
                                         // SS_UP
                                         actions.push(crate::keycode_picker::MacroAction::Up(
-                                            bytes[i + 2],
+                                            bytes[i + 2] as u16,
                                         ));
                                         i += 3;
                                     }
@@ -183,6 +182,28 @@ impl EntropyApp {
                                         let ms = (bytes[i + 2] as u16 - 1)
                                             + (bytes[i + 3] as u16 - 1) * 255;
                                         actions.push(crate::keycode_picker::MacroAction::Delay(ms));
+                                        i += 4;
+                                    }
+                                    5..=7 if i + 3 < bytes.len() => {
+                                        let mut keycode =
+                                            u16::from_le_bytes([bytes[i + 2], bytes[i + 3]]);
+                                        // Matches Vial GUI's workaround for QMK decode_keycode():
+                                        // values whose low byte is zero are serialized as FFxx.
+                                        if keycode > 0xFF00 {
+                                            keycode = (keycode & 0xFF) << 8;
+                                        }
+                                        match bytes[i + 1] {
+                                            5 => actions.push(
+                                                crate::keycode_picker::MacroAction::Tap(keycode),
+                                            ),
+                                            6 => actions.push(
+                                                crate::keycode_picker::MacroAction::Down(keycode),
+                                            ),
+                                            7 => actions.push(
+                                                crate::keycode_picker::MacroAction::Up(keycode),
+                                            ),
+                                            _ => {}
+                                        }
                                         i += 4;
                                     }
                                     _ => {
