@@ -155,6 +155,50 @@ fn modifier_down(vk: i32) -> bool {
 }
 
 #[cfg(target_os = "windows")]
+fn modifier_group_for_vk(vk: u32) -> u32 {
+    match vk as i32 {
+        VK_SHIFT | VK_LSHIFT | VK_RSHIFT => MOD_SHIFT as u32,
+        VK_CONTROL | VK_LCONTROL | VK_RCONTROL => MOD_CTRL as u32,
+        VK_MENU | VK_LMENU | VK_RMENU => MOD_ALT as u32,
+        _ => 0,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn suppress_transport_modifier_keyups(trigger_keycode: u16) {
+    TRANSPORT_MODIFIER_KEYUPS_TO_SUPPRESS.fetch_or(
+        trigger_keycode as u32 & (MOD_CTRL | MOD_SHIFT | MOD_ALT) as u32,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+#[cfg(target_os = "windows")]
+fn should_suppress_transport_modifier_keyup(vk: u32) -> bool {
+    let group = modifier_group_for_vk(vk);
+    if group == 0 {
+        return false;
+    }
+
+    let mut pending =
+        TRANSPORT_MODIFIER_KEYUPS_TO_SUPPRESS.load(std::sync::atomic::Ordering::Relaxed);
+    loop {
+        if pending & group == 0 {
+            return false;
+        }
+        let next = pending & !group;
+        match TRANSPORT_MODIFIER_KEYUPS_TO_SUPPRESS.compare_exchange_weak(
+            pending,
+            next,
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+        ) {
+            Ok(_) => return true,
+            Err(current) => pending = current,
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
 unsafe fn run_windows_keyboard_hook_loop() {
     let module = GetModuleHandleW(std::ptr::null());
     let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), module, 0);
@@ -220,6 +264,9 @@ unsafe extern "system" fn keyboard_proc(n_code: i32, w_param: usize, l_param: is
             if foreground_is_current_process() {
                 return CallNextHookEx(std::ptr::null_mut(), n_code, w_param, l_param);
             }
+            if is_key_up && should_suppress_transport_modifier_keyup(info.vkCode) {
+                return 1;
+            }
             if is_key_down && text_expander_enabled() {
                 if text_expander_suppressed_for_context() {
                     if let Ok(mut engine) = text_expander_engine().lock() {
@@ -246,7 +293,8 @@ unsafe extern "system" fn keyboard_proc(n_code: i32, w_param: usize, l_param: is
 
             if let Some((symbol, trigger_keycode)) = symbol_for_vk(info.vkCode) {
                 if is_key_down {
-                    send_unicode_char(symbol, trigger_keycode);
+                    suppress_transport_modifier_keyups(trigger_keycode);
+                    schedule_unicode_char(symbol, trigger_keycode);
                 }
                 if is_key_down || is_key_up {
                     return 1;
@@ -496,8 +544,15 @@ unsafe fn send_vk_tap(vk: u16) {
 }
 
 #[cfg(target_os = "windows")]
+fn schedule_unicode_char(symbol: char, trigger_keycode: u16) {
+    std::thread::spawn(move || unsafe {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        send_unicode_char(symbol, trigger_keycode);
+    });
+}
+
+#[cfg(target_os = "windows")]
 unsafe fn send_unicode_char(symbol: char, trigger_keycode: u16) {
-    release_transport_modifiers(trigger_keycode);
     for unit in symbol.encode_utf16(&mut [0; 2]) {
         let down = INPUT::keyboard_unicode(*unit, false);
         let up = INPUT::keyboard_unicode(*unit, true);
@@ -511,18 +566,34 @@ unsafe fn send_unicode_char(symbol: char, trigger_keycode: u16) {
             log::warn!("Smart Input: SendInput failed for U+{:04X}", *unit as u32);
         }
     }
+    release_transport_modifiers(trigger_keycode);
 }
 
 #[cfg(target_os = "windows")]
 unsafe fn release_transport_modifiers(trigger_keycode: u16) {
     if trigger_keycode & MOD_SHIFT != 0 {
-        send_vk_keyup(VK_SHIFT as u16);
+        release_modifier_pair(VK_SHIFT, VK_LSHIFT, VK_RSHIFT);
     }
     if trigger_keycode & MOD_ALT != 0 {
-        send_vk_keyup(VK_MENU as u16);
+        release_modifier_pair(VK_MENU, VK_LMENU, VK_RMENU);
     }
     if trigger_keycode & MOD_CTRL != 0 {
-        send_vk_keyup(VK_CONTROL as u16);
+        release_modifier_pair(VK_CONTROL, VK_LCONTROL, VK_RCONTROL);
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn release_modifier_pair(generic: i32, left: i32, right: i32) {
+    let left_down = modifier_down(left);
+    let right_down = modifier_down(right);
+    if left_down {
+        send_vk_keyup(left as u16);
+    }
+    if right_down {
+        send_vk_keyup(right as u16);
+    }
+    if !left_down && !right_down {
+        send_vk_keyup(generic as u16);
     }
 }
 
@@ -559,6 +630,18 @@ const VK_CONTROL: i32 = 0x11;
 const VK_MENU: i32 = 0x12;
 #[cfg(target_os = "windows")]
 const VK_CAPITAL: i32 = 0x14;
+#[cfg(target_os = "windows")]
+const VK_LSHIFT: i32 = 0xA0;
+#[cfg(target_os = "windows")]
+const VK_RSHIFT: i32 = 0xA1;
+#[cfg(target_os = "windows")]
+const VK_LCONTROL: i32 = 0xA2;
+#[cfg(target_os = "windows")]
+const VK_RCONTROL: i32 = 0xA3;
+#[cfg(target_os = "windows")]
+const VK_LMENU: i32 = 0xA4;
+#[cfg(target_os = "windows")]
+const VK_RMENU: i32 = 0xA5;
 #[cfg(target_os = "windows")]
 const VK_BACK: i32 = 0x08;
 #[cfg(target_os = "windows")]
@@ -599,6 +682,10 @@ const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
 const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
 #[cfg(target_os = "windows")]
 const WINEVENT_OUTOFCONTEXT: u32 = 0x0000;
+
+#[cfg(target_os = "windows")]
+static TRANSPORT_MODIFIER_KEYUPS_TO_SUPPRESS: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
 
 #[cfg(target_os = "windows")]
 type HHOOK = *mut core::ffi::c_void;
