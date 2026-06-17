@@ -12,7 +12,7 @@ jobs:
   build:
     name: Build (${{ matrix.os }})
     # v1.13.x tags are internal build markers for downstream packagers.
-    # Public GitHub releases use public version tags such as v0.1.0-beta.1.
+    # Public GitHub releases use public version tags such as v1.14.3.
     if: ${{ !startsWith(github.ref_name, 'v1.13.') }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -20,14 +20,8 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact_name: entropy
-            asset_name: entropy-linux-x86_64
           - os: windows-latest
-            artifact_name: entropy.exe
-            asset_name: entropy-windows-x86_64.exe
-          - os: macos-latest
-            artifact_name: dist/macos/*.dmg
-            asset_name: entropy-macos
+          - os: macos-13
 
     steps:
       - uses: actions/checkout@v4
@@ -53,24 +47,40 @@ jobs:
             libgtk-3-dev
 
       - name: Build
-        if: matrix.os != 'macos-latest'
+        if: matrix.os != 'macos-13'
         run: cargo build --release
 
-      - name: Rename binary
-        if: matrix.os != 'macos-latest'
+      - name: Package Linux artifact
+        if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
-          cp target/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
+          mkdir -p dist/release
+          asset="entropy-${GITHUB_REF_NAME}-x86_64.AppImage"
+          cp target/release/entropy "dist/release/$asset"
+          chmod +x "dist/release/$asset"
+
+      - name: Package Windows artifact
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          mkdir -p dist/release
+          asset="entropy-${GITHUB_REF_NAME}-windows-x86_64.exe"
+          cp target/release/entropy.exe "dist/release/$asset"
 
       - name: Build macOS app bundle and DMG
-        if: matrix.os == 'macos-latest'
-        run: scripts/build_macos_app.sh
+        if: matrix.os == 'macos-13'
+        shell: bash
+        run: |
+          scripts/build_macos_app.sh
+          mkdir -p dist/release
+          asset="entropy-${GITHUB_REF_NAME}-macos-x86_64.dmg"
+          cp dist/macos/*.dmg "dist/release/$asset"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset_name }}
-          path: ${{ matrix.artifact_name }}
+          name: release-assets-${{ matrix.os }}
+          path: dist/release/*
 
   release:
     name: Create Release
@@ -85,11 +95,29 @@ jobs:
         with:
           path: artifacts/
 
+      - name: Write release notes
+        shell: bash
+        run: |
+          cat > RELEASE_NOTES.md <<'EOF'
+          ## What's new
+
+          - Added LED color settings for Bluetooth profiles 0-4 on supported RMK firmware.
+          - Changed supported RMK LED timeout controls to use seconds instead of minutes.
+          - Improved Universal Symbols on Windows so punctuation and symbols are typed instead of triggering app menus.
+          - Documented Universal Symbols carrier keys so custom firmware authors avoid using F13-F24 for their own actions.
+
+          ## Downloads
+
+          - Linux: download the `.AppImage`, make it executable, and run it.
+          - Windows: download and run the portable `.exe`.
+          - macOS: download the unsigned `.dmg`, drag Entropy to Applications, then remove quarantine if macOS blocks the app.
+          EOF
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: Entropy ${{ github.ref_name }}
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md
           files: artifacts/**/*

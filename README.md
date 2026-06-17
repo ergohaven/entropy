@@ -3,7 +3,7 @@
 Modern app for programmable keyboards and input devices, built by Ergohaven.
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
-[![Latest beta](https://img.shields.io/badge/latest-v0.1.0--beta.1-lightgrey.svg)](https://github.com/ergohaven/entropy/releases)
+[![Latest beta](https://img.shields.io/badge/latest-v1.14.3-lightgrey.svg)](https://github.com/ergohaven/entropy/releases)
 [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey.svg)](#platforms)
 [![Firmware](https://img.shields.io/badge/firmware-Vial--QMK%20%7C%20Vial--RMK-lightgrey.svg)](#compatibility)
 
@@ -51,20 +51,20 @@ and firmware settings from one coherent interface.
 | Platform | Status | Package |
 | --- | --- | --- |
 | Linux x86_64 | Primary beta target | AppImage |
-| Windows x86_64 | Beta target | Portable ZIP |
-| macOS | Source/build-script available | App bundle script |
+| Windows x86_64 | Beta target | Portable EXE |
+| macOS x86_64 | Beta target | Unsigned DMG |
 
-Public beta builds focus on Linux and Windows first. macOS packaging exists in the
-repository for source builds.
+Public beta builds are published for Linux, Windows, and macOS. macOS builds are
+unsigned and not notarized during beta.
 
 ## Downloads
 
 Beta builds are published on the
 [GitHub Releases](https://github.com/ergohaven/entropy/releases) page:
 
-- `entropy-0.1.0-beta.1-linux-x86_64.AppImage`
-- `entropy-0.1.0-beta.1-windows-x86_64.zip`
-- `SHA256SUMS.txt`
+- `entropy-v1.14.3-x86_64.AppImage`
+- `entropy-v1.14.3-windows-x86_64.exe`
+- `entropy-v1.14.3-macos-x86_64.dmg`
 
 Windows builds are unsigned during beta, so Windows SmartScreen may warn before
 launching the app.
@@ -192,7 +192,7 @@ sudo apt-get install \
   libgtk-3-dev
 ```
 
-Build a macOS app bundle on macOS:
+Build a macOS app bundle and DMG on macOS:
 
 ```sh
 scripts/build_macos_app.sh
