@@ -56,4 +56,3 @@ pub(super) const DYNAMIC_VIAL_ALT_REPEAT_KEY_GET: u8 = 0x07;
 pub(super) const DYNAMIC_VIAL_ALT_REPEAT_KEY_SET: u8 = 0x08;
 
 pub(super) const BUFFER_FETCH_CHUNK: usize = 28;
-

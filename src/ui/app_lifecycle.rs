@@ -317,10 +317,15 @@ impl eframe::App for EntropyApp {
         self.handle_pending_imports(ctx, now);
         self.auto_reload_text_expander_rules_file(now);
         let is_connecting = matches!(self.connect_state, ConnectState::Loading { .. });
+        #[cfg(target_os = "macos")]
+        let hid_session_active = self.hid_device.is_some();
+        #[cfg(not(target_os = "macos"))]
+        let hid_session_active = false;
         if !selected_device_is_bluetooth
             && (self.last_device_scan_at == 0.0 || now - self.last_device_scan_at >= 1.0)
             && !self.vial_unlock_polling
             && !is_connecting
+            && !hid_session_active
         {
             self.scan_frame = self.scan_frame.wrapping_add(1);
             self.last_device_scan_at = now;

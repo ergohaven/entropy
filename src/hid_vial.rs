@@ -1,5 +1,5 @@
-use super::hid_protocol::*;
 use super::hid_parse::parse_unlock_status_response;
+use super::hid_protocol::*;
 use super::HidDevice;
 use anyhow::{bail, Context, Result};
 
@@ -88,8 +88,7 @@ impl HidDevice {
 
     /// Start unlock sequence — returns keys to hold (row, col pairs)
     pub fn unlock_start(&self) -> Result<()> {
-        self
-            .usb_send(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_UNLOCK_START])
+        self.usb_send(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_UNLOCK_START])
             .context("failed to start Vial unlock sequence")?;
         Ok(())
     }
@@ -106,10 +105,8 @@ impl HidDevice {
 
     /// Lock the keyboard
     pub fn lock(&self) -> Result<()> {
-        self
-            .usb_send(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_LOCK])
+        self.usb_send(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_LOCK])
             .context("failed to lock Vial device")?;
         Ok(())
     }
-
 }

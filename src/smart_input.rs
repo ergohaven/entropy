@@ -391,14 +391,32 @@ pub fn start() {
 }
 
 #[cfg(target_os = "macos")]
+pub struct MacosUniversalSymbolsStatus {
+    pub accessibility_granted: bool,
+    pub input_monitoring_granted: bool,
+    pub event_tap_active: bool,
+    pub last_event_ms_ago: Option<u128>,
+    pub failure_reason: Option<String>,
+}
+
+#[cfg(target_os = "macos")]
+pub fn macos_universal_symbols_status() -> MacosUniversalSymbolsStatus {
+    macos::status_snapshot()
+}
+
+#[cfg(target_os = "macos")]
+pub fn request_input_monitoring_access() -> bool {
+    macos::request_input_monitoring_access()
+}
+
+#[cfg(target_os = "macos")]
+pub fn restart_event_tap() {
+    macos::restart_event_tap();
+}
+
+#[cfg(target_os = "macos")]
 pub fn start() {
-    use std::sync::Once;
-    static START: Once = Once::new();
-    START.call_once(|| {
-        std::thread::spawn(|| unsafe {
-            macos::run_event_tap();
-        });
-    });
+    macos::ensure_event_tap_thread();
 }
 
 #[cfg(target_os = "linux")]
@@ -418,7 +436,8 @@ mod macos {
     use super::*;
     use std::ffi::c_void;
     use std::ptr::null_mut;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
     type CGEventTapProxy = *mut c_void;
@@ -431,6 +450,8 @@ mod macos {
     const K_CG_HID_EVENT_TAP: u32 = 0;
     const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
     const K_CG_EVENT_TAP_OPTION_DEFAULT: u32 = 0;
+    const K_CG_EVENT_TAP_DISABLED: u32 = 0xFFFF_FFFE;
+    const K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT: u32 = 0xFFFF_FFFF;
     const K_CG_EVENT_KEY_DOWN: u32 = 10;
     const K_CG_EVENT_KEY_UP: u32 = 11;
     const K_CG_KEYBOARD_EVENT_KEYCODE: i32 = 9;
@@ -451,33 +472,175 @@ mod macos {
     static MACOS_EXPANDING_TEXT: AtomicBool = AtomicBool::new(false);
     static FOREGROUND_CACHE: OnceLock<Mutex<Option<(Instant, Option<TextExpanderAppCandidate>)>>> =
         OnceLock::new();
+    static TAP_THREAD_RUNNING: AtomicBool = AtomicBool::new(false);
+    static EVENT_TAP_ACTIVE: AtomicBool = AtomicBool::new(false);
+    static TAP_PORT_ADDR: AtomicUsize = AtomicUsize::new(0);
+    static TAP_RUN_LOOP_ADDR: AtomicUsize = AtomicUsize::new(0);
+    static LAST_EVENT_AT: Mutex<Option<Instant>> = Mutex::new(None);
+    static FAILURE_REASON: Mutex<Option<String>> = Mutex::new(None);
+    static RESTART_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-    pub unsafe fn run_event_tap() {
-        let mask = (1u64 << K_CG_EVENT_KEY_DOWN) | (1u64 << K_CG_EVENT_KEY_UP);
-        let tap = CGEventTapCreate(
-            K_CG_HID_EVENT_TAP,
-            K_CG_HEAD_INSERT_EVENT_TAP,
-            K_CG_EVENT_TAP_OPTION_DEFAULT,
-            mask,
-            Some(event_tap_callback),
-            null_mut(),
-        );
-        if tap.is_null() {
-            log::warn!("Smart Input: macOS event tap failed; Accessibility/Input Monitoring permission may be required");
+    struct TapThreadGuard;
+    impl Drop for TapThreadGuard {
+        fn drop(&mut self) {
+            EVENT_TAP_ACTIVE.store(false, Ordering::SeqCst);
+            TAP_PORT_ADDR.store(0, Ordering::SeqCst);
+            TAP_RUN_LOOP_ADDR.store(0, Ordering::SeqCst);
+            TAP_THREAD_RUNNING.store(false, Ordering::SeqCst);
+        }
+    }
+
+    pub fn status_snapshot() -> MacosUniversalSymbolsStatus {
+        let last_event_ms_ago = LAST_EVENT_AT
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().map(|at| at.elapsed().as_millis()));
+        MacosUniversalSymbolsStatus {
+            accessibility_granted: accessibility_granted(),
+            input_monitoring_granted: input_monitoring_granted(),
+            event_tap_active: EVENT_TAP_ACTIVE.load(Ordering::SeqCst),
+            last_event_ms_ago,
+            failure_reason: FAILURE_REASON.lock().ok().and_then(|guard| guard.clone()),
+        }
+    }
+
+    pub fn request_input_monitoring_access() -> bool {
+        if input_monitoring_granted() {
+            return true;
+        }
+        unsafe { CGRequestListenEventAccess() }
+    }
+
+    pub fn ensure_event_tap_thread() {
+        if TAP_THREAD_RUNNING.load(Ordering::SeqCst) {
             return;
         }
+        if TAP_THREAD_RUNNING
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+        std::thread::spawn(|| {
+            let _guard = TapThreadGuard;
+            unsafe {
+                run_event_tap_loop();
+            }
+        });
+    }
 
-        let source = CFMachPortCreateRunLoopSource(null_mut(), tap, 0);
-        if source.is_null() {
-            log::warn!("Smart Input: macOS run-loop source creation failed");
+    pub fn restart_event_tap() {
+        RESTART_REQUESTED.store(true, Ordering::SeqCst);
+        let run_loop_addr = TAP_RUN_LOOP_ADDR.load(Ordering::SeqCst);
+        if run_loop_addr != 0 {
+            unsafe {
+                CFRunLoopStop(run_loop_addr as CFRunLoopRef);
+            }
+        }
+        if !TAP_THREAD_RUNNING.load(Ordering::SeqCst) {
+            ensure_event_tap_thread();
+        }
+    }
+
+    fn accessibility_granted() -> bool {
+        unsafe { AXIsProcessTrusted() }
+    }
+
+    fn input_monitoring_granted() -> bool {
+        unsafe { CGPreflightListenEventAccess() }
+    }
+
+    fn set_failure_reason(reason: impl Into<String>) {
+        let reason = reason.into();
+        log::warn!("Smart Input: {reason}");
+        if let Ok(mut guard) = FAILURE_REASON.lock() {
+            *guard = Some(reason);
+        }
+        EVENT_TAP_ACTIVE.store(false, Ordering::SeqCst);
+    }
+
+    fn clear_failure_reason() {
+        if let Ok(mut guard) = FAILURE_REASON.lock() {
+            guard.take();
+        }
+    }
+
+    fn note_event_received() {
+        if let Ok(mut guard) = LAST_EVENT_AT.lock() {
+            *guard = Some(Instant::now());
+        }
+    }
+
+    unsafe fn run_event_tap_loop() {
+        loop {
+            clear_failure_reason();
+
+            if !input_monitoring_granted() {
+                set_failure_reason("Input Monitoring permission is required for Universal Symbols");
+                std::thread::sleep(Duration::from_secs(2));
+                if !RESTART_REQUESTED.swap(false, Ordering::SeqCst) {
+                    return;
+                }
+                continue;
+            }
+
+            if !accessibility_granted() {
+                set_failure_reason("Accessibility permission is required for Universal Symbols");
+                std::thread::sleep(Duration::from_secs(2));
+                if !RESTART_REQUESTED.swap(false, Ordering::SeqCst) {
+                    return;
+                }
+                continue;
+            }
+
+            let mask = (1u64 << K_CG_EVENT_KEY_DOWN) | (1u64 << K_CG_EVENT_KEY_UP);
+            let tap = CGEventTapCreate(
+                K_CG_HID_EVENT_TAP,
+                K_CG_HEAD_INSERT_EVENT_TAP,
+                K_CG_EVENT_TAP_OPTION_DEFAULT,
+                mask,
+                Some(event_tap_callback),
+                null_mut(),
+            );
+            if tap.is_null() {
+                set_failure_reason(
+                    "Failed to create keyboard event tap; check Accessibility and Input Monitoring",
+                );
+                std::thread::sleep(Duration::from_secs(2));
+                if !RESTART_REQUESTED.swap(false, Ordering::SeqCst) {
+                    return;
+                }
+                continue;
+            }
+
+            TAP_PORT_ADDR.store(tap as usize, Ordering::SeqCst);
+
+            let source = CFMachPortCreateRunLoopSource(null_mut(), tap, 0);
+            if source.is_null() {
+                set_failure_reason("Failed to create macOS run-loop source for event tap");
+                CFRelease(tap as *const c_void);
+                TAP_PORT_ADDR.store(0, Ordering::SeqCst);
+                return;
+            }
+
+            let run_loop = CFRunLoopGetCurrent();
+            TAP_RUN_LOOP_ADDR.store(run_loop as usize, Ordering::SeqCst);
+            CFRunLoopAddSource(run_loop, source, kCFRunLoopCommonModes);
+            CGEventTapEnable(tap, true);
+            EVENT_TAP_ACTIVE.store(true, Ordering::SeqCst);
+            log::info!("Smart Input: macOS event tap started");
+            CFRunLoopRun();
+            EVENT_TAP_ACTIVE.store(false, Ordering::SeqCst);
+            TAP_PORT_ADDR.store(0, Ordering::SeqCst);
+            TAP_RUN_LOOP_ADDR.store(0, Ordering::SeqCst);
+            CFRelease(source as *const c_void);
             CFRelease(tap as *const c_void);
-            return;
-        }
 
-        let run_loop = CFRunLoopGetCurrent();
-        CFRunLoopAddSource(run_loop, source, kCFRunLoopCommonModes);
-        CGEventTapEnable(tap, true);
-        CFRunLoopRun();
+            if RESTART_REQUESTED.swap(false, Ordering::SeqCst) {
+                continue;
+            }
+            break;
+        }
     }
 
     unsafe extern "C" fn event_tap_callback(
@@ -486,6 +649,18 @@ mod macos {
         event: CGEventRef,
         _user_info: *mut c_void,
     ) -> CGEventRef {
+        if event_type == K_CG_EVENT_TAP_DISABLED || event_type == K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT
+        {
+            let tap_addr = TAP_PORT_ADDR.load(Ordering::SeqCst);
+            if tap_addr != 0 {
+                log::warn!("Smart Input: macOS event tap disabled; re-enabling");
+                CGEventTapEnable(tap_addr as CFMachPortRef, true);
+            }
+            return event;
+        }
+
+        note_event_received();
+
         if event_type != K_CG_EVENT_KEY_DOWN && event_type != K_CG_EVENT_KEY_UP {
             return event;
         }
@@ -503,10 +678,14 @@ mod macos {
                 smart_symbol_for_transport(base_keycode, ctrl, shift, alt)
             {
                 if event_type == K_CG_EVENT_KEY_DOWN {
-                    send_unicode_char(symbol);
+                    schedule_unicode_char(symbol);
                 }
                 return null_mut();
             }
+        } else if is_probable_f_key(keycode) {
+            log::debug!(
+                "Smart Input: unmapped macOS F-key keycode 0x{keycode:02X} (decimal {keycode})"
+            );
         }
 
         if event_type == K_CG_EVENT_KEY_DOWN {
@@ -725,6 +904,13 @@ end tell"#;
         Some(String::from_utf8_lossy(&output.stdout).trim().to_owned())
     }
 
+    fn is_probable_f_key(keycode: u16) -> bool {
+        matches!(
+            keycode,
+            0x40 | 0x4F | 0x50 | 0x5A | 0x5B | 0x5C | 0x5D | 0x5E | 0x69 | 0x6A | 0x6B | 0x71
+        )
+    }
+
     fn mac_keycode_to_qmk_f_key(keycode: u16) -> Option<u16> {
         let offset = match keycode {
             0x69 => 0, // F13
@@ -746,21 +932,32 @@ end tell"#;
         Some(KC_F13 + offset)
     }
 
+    fn schedule_unicode_char(symbol: char) {
+        std::thread::spawn(move || unsafe {
+            send_unicode_char(symbol);
+        });
+    }
+
     unsafe fn send_unicode_char(symbol: char) {
         let mut buffer = [0u16; 2];
         let units = symbol.encode_utf16(&mut buffer);
-        let event = CGEventCreateKeyboardEvent(null_mut(), 0, true);
-        if event.is_null() {
-            return;
+        for key_down in [true, false] {
+            let event = CGEventCreateKeyboardEvent(null_mut(), 0, key_down);
+            if event.is_null() {
+                continue;
+            }
+            CGEventSetFlags(event, 0);
+            CGEventKeyboardSetUnicodeString(event, units.len(), units.as_ptr());
+            CGEventPost(K_CG_ANNOTATED_SESSION_EVENT_TAP, event);
+            CFRelease(event as *const c_void);
         }
-        CGEventSetFlags(event, 0);
-        CGEventKeyboardSetUnicodeString(event, units.len(), units.as_ptr());
-        CGEventPost(K_CG_ANNOTATED_SESSION_EVENT_TAP, event);
-        CFRelease(event as *const c_void);
     }
 
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
+        fn AXIsProcessTrusted() -> bool;
+        fn CGPreflightListenEventAccess() -> bool;
+        fn CGRequestListenEventAccess() -> bool;
         fn CGEventTapCreate(
             tap: u32,
             place: u32,
@@ -805,6 +1002,7 @@ end tell"#;
         fn CFRunLoopGetCurrent() -> CFRunLoopRef;
         fn CFRunLoopAddSource(rl: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFStringRef);
         fn CFRunLoopRun();
+        fn CFRunLoopStop(rl: CFRunLoopRef);
         fn CFRelease(cf: *const c_void);
     }
 }
