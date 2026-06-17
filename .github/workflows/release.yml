@@ -21,7 +21,7 @@ jobs:
         include:
           - os: ubuntu-latest
           - os: windows-latest
-          - os: macos-13
+          - os: macos-26-intel
 
     steps:
       - uses: actions/checkout@v4
@@ -47,7 +47,7 @@ jobs:
             libgtk-3-dev
 
       - name: Build
-        if: matrix.os != 'macos-13'
+        if: matrix.os != 'macos-26-intel'
         run: cargo build --release
 
       - name: Package Linux artifact
@@ -68,7 +68,7 @@ jobs:
           cp target/release/entropy.exe "dist/release/$asset"
 
       - name: Build macOS app bundle and DMG
-        if: matrix.os == 'macos-13'
+        if: matrix.os == 'macos-26-intel'
         shell: bash
         run: |
           scripts/build_macos_app.sh

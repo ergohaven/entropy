@@ -52,7 +52,7 @@ and firmware settings from one coherent interface.
 | --- | --- | --- |
 | Linux x86_64 | Primary beta target | AppImage |
 | Windows x86_64 | Beta target | Portable EXE |
-| macOS x86_64 | Beta target | Unsigned DMG |
+| macOS x86_64 (Intel) | Beta target | Unsigned DMG |
 
 Public beta builds are published for Linux, Windows, and macOS. macOS builds are
 unsigned and not notarized during beta.
@@ -69,8 +69,8 @@ Beta builds are published on the
 Windows builds are unsigned during beta, so Windows SmartScreen may warn before
 launching the app.
 
-macOS DMG builds are unsigned and not notarized during beta. To run a downloaded
-DMG on macOS:
+macOS DMG builds are x86_64/Intel, unsigned, and not notarized during beta. To
+run a downloaded DMG on macOS:
 
 1. Open the `.dmg`
 2. Drag `Entropy.app` to `/Applications`
