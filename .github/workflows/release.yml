@@ -102,8 +102,11 @@ jobs:
 
           - Added LED color settings for Bluetooth profiles 0-4 on supported RMK firmware.
           - Changed supported RMK LED timeout controls to use seconds instead of minutes.
+          - Fixed macro handling for extended Vial macro keycodes.
+          - Fixed a macOS startup crash related to device scanning.
           - Improved Universal Symbols on Windows so punctuation and symbols are typed instead of triggering app menus.
           - Documented Universal Symbols carrier keys so custom firmware authors avoid using F13-F24 for their own actions.
+          - Added a macOS DMG download for Intel Macs.
 
           ## Downloads
 
