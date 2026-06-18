@@ -553,6 +553,7 @@ fn schedule_unicode_char(symbol: char, trigger_keycode: u16) {
 
 #[cfg(target_os = "windows")]
 unsafe fn send_unicode_char(symbol: char, trigger_keycode: u16) {
+    release_transport_modifiers(trigger_keycode);
     for unit in symbol.encode_utf16(&mut [0; 2]) {
         let down = INPUT::keyboard_unicode(*unit, false);
         let up = INPUT::keyboard_unicode(*unit, true);
@@ -566,7 +567,6 @@ unsafe fn send_unicode_char(symbol: char, trigger_keycode: u16) {
             log::warn!("Smart Input: SendInput failed for U+{:04X}", *unit as u32);
         }
     }
-    release_transport_modifiers(trigger_keycode);
 }
 
 #[cfg(target_os = "windows")]
