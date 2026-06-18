@@ -104,3 +104,42 @@ impl DeviceManager {
         &self.devices
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_device(bus_type: &str, path: &str) -> Device {
+        Device {
+            name: "Test Keyboard".to_owned(),
+            vendor_id: 0x1209,
+            product_id: 0x2327,
+            manufacturer: "Entropy".to_owned(),
+            serial_number: "serial".to_owned(),
+            bus_type: bus_type.to_owned(),
+            path: path.to_owned(),
+            firmware: FirmwareProtocol::Vial,
+        }
+    }
+
+    #[test]
+    fn detects_bluetooth_from_bus_type() {
+        let device = test_device("Bluetooth", "IOService:/AppleUserHIDDevice");
+
+        assert!(device.is_bluetooth_transport());
+    }
+
+    #[test]
+    fn detects_bluetooth_from_path_hint() {
+        let device = test_device("Unknown", "IOService:/AppleBluetoothHIDKeyboard");
+
+        assert!(device.is_bluetooth_transport());
+    }
+
+    #[test]
+    fn leaves_usb_transport_unmarked() {
+        let device = test_device("Usb", "IOService:/AppleUserUSBHostHIDDevice");
+
+        assert!(!device.is_bluetooth_transport());
+    }
+}

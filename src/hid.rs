@@ -428,13 +428,11 @@ impl HidDevice {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn device_transport(device: &crate::device::Device) -> HidTransport {
-    #[cfg(target_os = "windows")]
-    {
-        if device.is_bluetooth_transport() {
-            return HidTransport::Bluetooth;
-        }
+    if device.is_bluetooth_transport() {
+        HidTransport::Bluetooth
+    } else {
+        HidTransport::Usb
     }
-    HidTransport::Usb
 }
 
 #[cfg(not(target_arch = "wasm32"))]
