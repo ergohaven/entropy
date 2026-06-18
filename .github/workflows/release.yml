@@ -26,9 +26,11 @@ jobs:
           - os: macos-26
             kind: macos
             arch: arm64
+            target: aarch64-apple-darwin
           - os: macos-26-intel
             kind: macos
             arch: x86_64
+            target: x86_64-apple-darwin
 
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +40,10 @@ jobs:
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
+
+      - name: Install macOS Rust target
+        if: matrix.kind == 'macos'
+        run: rustup target add ${{ matrix.target }}
 
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
@@ -76,7 +82,7 @@ jobs:
         if: matrix.kind == 'macos'
         shell: bash
         run: |
-          scripts/build_macos_app.sh
+          TARGET="${{ matrix.target }}" scripts/build_macos_app.sh
           mkdir -p dist/release
           asset="entropy-${GITHUB_REF_NAME}-macos-${{ matrix.arch }}.dmg"
           cp dist/macos/*.dmg "dist/release/$asset"
