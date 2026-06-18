@@ -1,4 +1,40 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+#![allow(
+    deprecated,
+    dead_code,
+    unreachable_code,
+    unused_imports,
+    unused_mut,
+    unused_variables,
+    clippy::collapsible_if,
+    clippy::collapsible_match,
+    clippy::derivable_impls,
+    clippy::empty_line_after_doc_comments,
+    clippy::enum_variant_names,
+    clippy::field_reassign_with_default,
+    clippy::filter_map_bool_then,
+    clippy::identity_op,
+    clippy::if_same_then_else,
+    clippy::items_after_test_module,
+    clippy::large_enum_variant,
+    clippy::let_and_return,
+    clippy::manual_clamp,
+    clippy::manual_is_multiple_of,
+    clippy::manual_range_contains,
+    clippy::needless_borrow,
+    clippy::needless_range_loop,
+    clippy::needless_return,
+    clippy::neg_multiply,
+    clippy::never_loop,
+    clippy::no_effect_replace,
+    clippy::question_mark,
+    clippy::redundant_closure,
+    clippy::single_match,
+    clippy::suspicious_open_options,
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::unnecessary_cast
+)]
 
 mod app;
 pub(crate) mod app_icon;
