@@ -414,16 +414,15 @@ impl EntropyApp {
 
             if let Some(colors) = combo_key_colors.get(*ki) {
                 if !colors.is_empty() {
-                    if let Some((_, selected_color)) = colors
-                        .iter()
-                        .find(|(combo_idx, _)| *combo_idx == self.selected_combo)
+                    if let Some(outline_color) =
+                        combo_key_outline_color(colors, self.selected_combo)
                     {
                         paint_layout_keycap(
                             painter,
                             draw_rect.shrink(1.5),
                             key.rotation,
                             Color32::TRANSPARENT,
-                            Stroke::new(2.0, selected_color.gamma_multiply(0.95)),
+                            Stroke::new(2.0, outline_color.gamma_multiply(0.95)),
                         );
                     }
                     paint_combo_color_markers(painter, draw_rect, colors, dark);
@@ -961,6 +960,14 @@ fn layout_combo_match_keycode(layout: &KeyboardLayout, layer: usize, key_idx: us
         .map(|fallback_layer| layout.get_keycode(fallback_layer, key_idx))
         .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001))
         .unwrap_or(0x0000)
+}
+
+fn combo_key_outline_color(colors: &[(usize, Color32)], selected_combo: usize) -> Option<Color32> {
+    colors
+        .iter()
+        .find(|(combo_idx, _)| *combo_idx == selected_combo)
+        .or_else(|| colors.first())
+        .map(|(_, color)| *color)
 }
 
 fn paint_combo_color_markers(
