@@ -11,8 +11,9 @@ permissions:
 jobs:
   build:
     name: Build (${{ matrix.os }})
-    # Public GitHub releases use stable-style public tags such as v0.1.1.
-    if: ${{ startsWith(github.ref_name, 'v0.') && !contains(github.ref_name, '-') }}
+    # Stable tags such as v0.1.2 publish as latest releases.
+    # Suffix tags such as v0.1.2-rc.1 publish as prereleases.
+    if: ${{ startsWith(github.ref_name, 'v0.') }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -89,7 +90,7 @@ jobs:
   release:
     name: Create Release
     needs: build
-    if: ${{ startsWith(github.ref_name, 'v0.') && !contains(github.ref_name, '-') }}
+    if: ${{ startsWith(github.ref_name, 'v0.') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -127,6 +128,7 @@ jobs:
         with:
           name: Entropy ${{ github.ref_name }}
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
           body_path: RELEASE_NOTES.md
           files: artifacts/**/*

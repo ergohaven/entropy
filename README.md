@@ -68,6 +68,10 @@ Release builds are published on the
 - `entropy-v0.1.1-macos-arm64.dmg`
 - `entropy-v0.1.1-macos-x86_64.dmg`
 
+Stable tags such as `v0.1.2` publish a regular GitHub release and mark it as
+latest. Tags with a suffix, such as `v0.1.2-rc.1`, publish the same artifacts as
+a GitHub prerelease.
+
 Windows builds are unsigned for now, so Windows SmartScreen may warn before
 launching the app.
 
