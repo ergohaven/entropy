@@ -41,7 +41,8 @@ impl KeycodePicker {
             let t = parts.next().unwrap_or("");
             let b = parts.next().unwrap_or(label);
             (Some(t), b)
-        } else if let Some(pos) = label.find('/') {
+        } else if let Some(pos) = label.find('/').filter(|pos| *pos > 0 && *pos + 1 < label.len())
+        {
             (Some(&label[..pos]), &label[pos + 1..])
         } else {
             (None, label)
