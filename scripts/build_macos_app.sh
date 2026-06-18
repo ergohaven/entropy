@@ -8,18 +8,60 @@ MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-10.15}"
 export MACOSX_DEPLOYMENT_TARGET
 
 VERSION="$(
-  awk -F '"' '/^version = / { print $2; exit }' "$ROOT/Cargo.toml"
+	awk -F '"' '/^version = / { print $2; exit }' "$ROOT/Cargo.toml"
 )"
+
+target_arch_label() {
+	case "$1" in
+	aarch64-apple-darwin) echo "arm64" ;;
+	x86_64-apple-darwin) echo "x86_64" ;;
+	*) echo "${1%%-*}" ;;
+	esac
+}
+
+current_arch_label() {
+	case "$(uname -m)" in
+	aarch64) echo "arm64" ;;
+	*) uname -m ;;
+	esac
+}
+
+running_under_rosetta() {
+	[[ "$(sysctl -in sysctl.proc_translated 2>/dev/null || true)" == "1" ]]
+}
+
+target_root() {
+	echo "${CARGO_TARGET_DIR:-$ROOT/target}"
+}
+
+validate_binary_arch() {
+	if ! command -v lipo >/dev/null 2>&1; then
+		echo "lipo not found; skipped binary architecture validation"
+		return
+	fi
+
+	local archs
+	archs="$(lipo -archs "$BIN")"
+	if [[ " $archs " != *" $ARCH "* ]]; then
+		echo "Expected $BIN to contain architecture '$ARCH', found: $archs" >&2
+		exit 1
+	fi
+}
 
 TARGET="${TARGET:-}"
 if [[ -n "$TARGET" ]]; then
-  BUILD_ARGS=(--release --target "$TARGET")
-  BIN="$ROOT/target/$TARGET/release/entropy"
-  ARCH="${TARGET%%-*}"
+	BUILD_ARGS=(--release --target "$TARGET")
+	BIN="$(target_root)/$TARGET/release/entropy"
+	ARCH="$(target_arch_label "$TARGET")"
 else
-  BUILD_ARGS=(--release)
-  BIN="$ROOT/target/release/entropy"
-  ARCH="$(uname -m)"
+	if running_under_rosetta; then
+		echo "Refusing implicit macOS build while the shell is running under Rosetta." >&2
+		echo "Run from a native arm64 shell or set TARGET=aarch64-apple-darwin explicitly." >&2
+		exit 1
+	fi
+	BUILD_ARGS=(--release)
+	BIN="$(target_root)/release/entropy"
+	ARCH="$(current_arch_label)"
 fi
 
 DIST_DIR="$ROOT/dist/macos"
@@ -32,6 +74,7 @@ DMG_PATH="$DIST_DIR/entropy-v$VERSION-macos-$ARCH.dmg"
 
 cd "$ROOT"
 cargo build "${BUILD_ARGS[@]}"
+validate_binary_arch
 
 rm -rf "$APP_PATH" "$ZIP_PATH" "$DMG_PATH"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
@@ -41,13 +84,13 @@ chmod 755 "$MACOS_DIR/entropy"
 
 ICON_PLIST=""
 if [[ -f "$ROOT/assets/entropy.icns" ]]; then
-  cp "$ROOT/assets/entropy.icns" "$RESOURCES_DIR/entropy.icns"
-  ICON_PLIST='
+	cp "$ROOT/assets/entropy.icns" "$RESOURCES_DIR/entropy.icns"
+	ICON_PLIST='
     <key>CFBundleIconFile</key>
     <string>entropy</string>'
 fi
 
-cat > "$CONTENTS_DIR/Info.plist" <<PLIST
+cat >"$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -79,21 +122,21 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 PLIST
 
 if command -v ditto >/dev/null 2>&1; then
-  ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
+	ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
 else
-  (cd "$DIST_DIR" && zip -qry "$(basename "$ZIP_PATH")" "$APP_NAME.app")
+	(cd "$DIST_DIR" && zip -qry "$(basename "$ZIP_PATH")" "$APP_NAME.app")
 fi
 
 if command -v hdiutil >/dev/null 2>&1; then
-  hdiutil create \
-    -volname "$APP_NAME" \
-    -srcfolder "$APP_PATH" \
-    -ov \
-    -format UDZO \
-    "$DMG_PATH" >/dev/null
-  echo "Built $DMG_PATH"
+	hdiutil create \
+		-volname "$APP_NAME" \
+		-srcfolder "$APP_PATH" \
+		-ov \
+		-format UDZO \
+		"$DMG_PATH" >/dev/null
+	echo "Built $DMG_PATH"
 else
-  echo "hdiutil not found; skipped DMG build"
+	echo "hdiutil not found; skipped DMG build"
 fi
 
 echo "Built $APP_PATH"
