@@ -318,6 +318,18 @@ impl EntropyApp {
             }
 
             let kc = layout.get_keycode(layer, *ki);
+            let combo_colors = combo_key_colors.get(*ki);
+            let combo_outline = combo_colors
+                .and_then(|colors| combo_key_outline_color(colors))
+                .map(|color| combo_outline_color(color, dark));
+            let neutral_border = if dark {
+                Color32::from_rgb(54, 54, 58)
+            } else {
+                Color32::from_rgb(230, 230, 233)
+            };
+            let key_border = combo_outline
+                .or(layer_led_outline)
+                .unwrap_or(neutral_border);
 
             if kc == 0x0001 {
                 paint_layout_keycap(
@@ -325,16 +337,7 @@ impl EntropyApp {
                     draw_rect,
                     key.rotation,
                     bg,
-                    Stroke::new(
-                        1.0,
-                        layer_led_outline.unwrap_or_else(|| {
-                            if dark {
-                                Color32::from_rgb(54, 54, 58)
-                            } else {
-                                Color32::from_rgb(230, 230, 233)
-                            }
-                        }),
-                    ),
+                    Stroke::new(1.0, key_border),
                 );
                 if !is_hovering {
                     let fallback_kc = (0..layer)
@@ -368,34 +371,20 @@ impl EntropyApp {
                     );
                 }
             } else if kc == 0x0000 {
-                let border = layer_led_outline.unwrap_or_else(|| {
-                    if dark {
-                        Color32::from_rgb(54, 54, 58)
-                    } else {
-                        Color32::from_rgb(230, 230, 233)
-                    }
-                });
                 paint_layout_keycap(
                     painter,
                     draw_rect,
                     key.rotation,
                     bg,
-                    Stroke::new(1.0, border),
+                    Stroke::new(1.0, key_border),
                 );
             } else {
-                let border = layer_led_outline.unwrap_or_else(|| {
-                    if dark {
-                        Color32::from_rgb(54, 54, 58)
-                    } else {
-                        Color32::from_rgb(230, 230, 233)
-                    }
-                });
                 paint_layout_keycap(
                     painter,
                     draw_rect,
                     key.rotation,
                     bg,
-                    Stroke::new(1.0, border),
+                    Stroke::new(1.0, key_border),
                 );
                 let label = number_row_shifted_label(
                     keycode_label_with_macro_names(
@@ -412,17 +401,8 @@ impl EntropyApp {
                 draw_key_label(&painter, draw_rect, &label, dark, key.rotation.to_radians());
             }
 
-            if let Some(colors) = combo_key_colors.get(*ki) {
+            if let Some(colors) = combo_colors {
                 if !colors.is_empty() {
-                    if let Some(outline_color) = combo_key_outline_color(colors) {
-                        paint_layout_keycap(
-                            painter,
-                            draw_rect.shrink(1.5),
-                            key.rotation,
-                            Color32::TRANSPARENT,
-                            Stroke::new(2.0, combo_outline_color(outline_color, dark)),
-                        );
-                    }
                     paint_combo_color_markers(painter, draw_rect, colors, dark);
                 }
             }
