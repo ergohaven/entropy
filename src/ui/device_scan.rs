@@ -6,6 +6,16 @@ impl EntropyApp {
             return;
         }
 
+        #[cfg(target_os = "macos")]
+        if crate::hid::macos_hid_scan_disabled_for_rosetta() {
+            if self.status_msg.is_empty() {
+                self.status_msg =
+                    "Apple Silicon detected under Rosetta - install the macOS arm64 build for HID access"
+                        .into();
+            }
+            return;
+        }
+
         let (tx, rx) = mpsc::channel();
         self.device_scan_state = DeviceScanState::Scanning(rx);
         std::thread::spawn(move || {

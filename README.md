@@ -52,6 +52,7 @@ and firmware settings from one coherent interface.
 | --- | --- | --- |
 | Linux x86_64 | Primary target | AppImage |
 | Windows x86_64 | Release target | Portable EXE |
+| macOS arm64 (Apple Silicon) | Release target | Unsigned DMG |
 | macOS x86_64 (Intel) | Release target | Unsigned DMG |
 
 Public builds are published for Linux, Windows, and macOS. macOS builds are
@@ -64,12 +65,14 @@ Release builds are published on the
 
 - `entropy-v0.1.1-x86_64.AppImage`
 - `entropy-v0.1.1-windows-x86_64.exe`
+- `entropy-v0.1.1-macos-arm64.dmg`
 - `entropy-v0.1.1-macos-x86_64.dmg`
 
 Windows builds are unsigned for now, so Windows SmartScreen may warn before
 launching the app.
 
-macOS DMG builds are x86_64/Intel, unsigned, and not notarized for now. To run
+macOS DMG builds are unsigned and not notarized for now. On Apple Silicon,
+use the `macos-arm64` build; the `macos-x86_64` build is for Intel Macs. To run
 a downloaded DMG on macOS:
 
 1. Open the `.dmg`

@@ -25,6 +25,45 @@ pub(crate) fn macos_hid_operation_lock() -> std::sync::MutexGuard<'static, ()> {
     LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn macos_hid_scan_disabled_for_rosetta() -> bool {
+    macos_running_under_rosetta()
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn macos_running_under_rosetta() -> bool {
+    use std::os::raw::{c_char, c_int, c_void};
+
+    extern "C" {
+        fn sysctlbyname(
+            name: *const c_char,
+            oldp: *mut c_void,
+            oldlenp: *mut usize,
+            newp: *mut c_void,
+            newlen: usize,
+        ) -> c_int;
+    }
+
+    let mut translated = 0i32;
+    let mut len = std::mem::size_of_val(&translated);
+    let rc = unsafe {
+        sysctlbyname(
+            b"sysctl.proc_translated\0".as_ptr().cast(),
+            (&mut translated as *mut i32).cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+
+    rc == 0 && translated == 1
+}
+
+#[cfg(all(target_os = "macos", not(target_arch = "x86_64")))]
+fn macos_running_under_rosetta() -> bool {
+    false
+}
+
 const VIAL_GUI_USB_RETRIES: usize = 20;
 const VIAL_GUI_READ_TIMEOUT_MS: i32 = 500;
 const WINDOWS_BLE_READ_TIMEOUT_MS: i32 = 2_500;

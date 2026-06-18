@@ -56,6 +56,11 @@ impl DeviceManager {
         let mut devices = Vec::new();
 
         #[cfg(target_os = "macos")]
+        if crate::hid::macos_hid_scan_disabled_for_rosetta() {
+            return devices;
+        }
+
+        #[cfg(target_os = "macos")]
         let _hid_lock = crate::hid::macos_hid_operation_lock();
         if let Ok(api) = hidapi::HidApi::new() {
             for info in api.device_list() {

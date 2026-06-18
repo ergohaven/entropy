@@ -19,8 +19,15 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
+            kind: linux
           - os: windows-latest
+            kind: windows
+          - os: macos-26
+            kind: macos
+            arch: arm64
           - os: macos-26-intel
+            kind: macos
+            arch: x86_64
 
     steps:
       - uses: actions/checkout@v4
@@ -46,18 +53,18 @@ jobs:
             libgtk-3-dev
 
       - name: Build
-        if: matrix.os == 'windows-latest'
+        if: matrix.kind == 'windows'
         run: cargo build --release
 
       - name: Package Linux artifact
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.kind == 'linux'
         shell: bash
         run: |
           asset="entropy-${GITHUB_REF_NAME}-x86_64.AppImage"
           scripts/build_linux_appimage.sh "${GITHUB_REF_NAME}" "dist/release/$asset"
 
       - name: Package Windows artifact
-        if: matrix.os == 'windows-latest'
+        if: matrix.kind == 'windows'
         shell: bash
         run: |
           mkdir -p dist/release
@@ -65,12 +72,12 @@ jobs:
           cp target/release/entropy.exe "dist/release/$asset"
 
       - name: Build macOS app bundle and DMG
-        if: matrix.os == 'macos-26-intel'
+        if: matrix.kind == 'macos'
         shell: bash
         run: |
           scripts/build_macos_app.sh
           mkdir -p dist/release
-          asset="entropy-${GITHUB_REF_NAME}-macos-x86_64.dmg"
+          asset="entropy-${GITHUB_REF_NAME}-macos-${{ matrix.arch }}.dmg"
           cp dist/macos/*.dmg "dist/release/$asset"
 
       - name: Upload artifact
@@ -106,13 +113,13 @@ jobs:
           - Added the Debugger tool for easier troubleshooting and device inspection.
           - Improved Universal Symbols on Windows so punctuation and symbols are typed instead of triggering app menus.
           - Documented Universal Symbols carrier keys so custom firmware authors avoid using F13-F24 for their own actions.
-          - Added a macOS DMG download; the current build is x86_64 and also runs on Apple Silicon through Rosetta.
+          - Added macOS DMG downloads for Apple Silicon and Intel Macs.
 
           ## Downloads
 
           - Linux: download the `.AppImage`, make it executable, and run it.
           - Windows: download and run the portable `.exe`.
-          - macOS: download the unsigned `.dmg`, drag Entropy to Applications, then remove quarantine if macOS blocks the app.
+          - macOS: download the unsigned `.dmg` for your Mac (`arm64` for Apple Silicon, `x86_64` for Intel), drag Entropy to Applications, then remove quarantine if macOS blocks the app.
           EOF
 
       - name: Create GitHub Release
