@@ -415,6 +415,10 @@ fn should_use_clipboard_paste(text: &str) -> bool {
 
 #[cfg(target_os = "windows")]
 unsafe fn paste_text_with_clipboard_restore(text: &str) -> bool {
+    let _guard = match CLIPBOARD_PASTE_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     let Some(previous_text) = read_clipboard_text() else {
         return false;
     };
@@ -554,6 +558,12 @@ fn schedule_unicode_char(symbol: char, trigger_keycode: u16) {
 #[cfg(target_os = "windows")]
 unsafe fn send_unicode_char(symbol: char, trigger_keycode: u16) {
     release_transport_modifiers(trigger_keycode);
+    let symbol_text = symbol.to_string();
+    if should_paste_universal_symbol_for_foreground_app()
+        && paste_text_with_clipboard_restore(&symbol_text)
+    {
+        return;
+    }
     for unit in symbol.encode_utf16(&mut [0; 2]) {
         let down = INPUT::keyboard_unicode(*unit, false);
         let up = INPUT::keyboard_unicode(*unit, true);
@@ -567,6 +577,32 @@ unsafe fn send_unicode_char(symbol: char, trigger_keycode: u16) {
             log::warn!("Smart Input: SendInput failed for U+{:04X}", *unit as u32);
         }
     }
+}
+
+#[cfg(target_os = "windows")]
+fn should_paste_universal_symbol_for_foreground_app() -> bool {
+    foreground_process_name_lower()
+        .as_deref()
+        .map(app_prefers_clipboard_unicode_input)
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn app_prefers_clipboard_unicode_input(exe: &str) -> bool {
+    matches!(
+        exe.strip_suffix(".exe").unwrap_or(exe),
+        "brave"
+            | "chrome"
+            | "firefox"
+            | "librewolf"
+            | "msedge"
+            | "opera"
+            | "opera_gx"
+            | "thunderbird"
+            | "vivaldi"
+            | "waterfox"
+            | "yandex"
+    )
 }
 
 #[cfg(target_os = "windows")]
@@ -686,6 +722,9 @@ const WINEVENT_OUTOFCONTEXT: u32 = 0x0000;
 #[cfg(target_os = "windows")]
 static TRANSPORT_MODIFIER_KEYUPS_TO_SUPPRESS: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
+
+#[cfg(target_os = "windows")]
+static CLIPBOARD_PASTE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(target_os = "windows")]
 type HHOOK = *mut core::ffi::c_void;
