@@ -106,15 +106,15 @@ jobs:
           cat > RELEASE_NOTES.md <<'EOF'
           ## What's new
 
-          - Fixed the Linux download so it is a real AppImage again and is back to the smaller expected size.
-          - Added LED color settings for Bluetooth profiles 0-4 on supported RMK firmware.
-          - Changed supported RMK LED timeout controls to use seconds instead of minutes.
-          - Fixed macro handling for extended Vial macro keycodes.
-          - Fixed a macOS startup crash related to device scanning.
-          - Added the Debugger tool for easier troubleshooting and device inspection.
-          - Improved Universal Symbols on Windows so punctuation and symbols are typed instead of triggering app menus.
-          - Documented Universal Symbols carrier keys so custom firmware authors avoid using F13-F24 for their own actions.
-          - Added macOS DMG downloads for Apple Silicon and Intel Macs.
+          - Fixed Windows Universal Symbols modifier release.
+          - Fixed the slash key picker label.
+          - Fixed top tab overlap at scaled widths.
+          - Fixed a macOS Apple Silicon release startup crash.
+          - Added combo color highlights on the keyboard layout.
+          - Matched the combo color picker to the Layer LED palette, including scroll.
+          - Made new combo colors default to No color and migrated auto-assigned colors from the previous test build.
+          - Aligned single combo outlines with the key border and made the outline heavier.
+          - Kept circle markers only for keys with multiple colored combos.
 
           ## Downloads
 
