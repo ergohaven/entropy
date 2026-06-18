@@ -934,7 +934,7 @@ fn combo_key_colors_for_layer(
         let color_value = colors
             .get(combo_idx)
             .copied()
-            .unwrap_or_else(|| combo_default_color(combo_idx));
+            .unwrap_or(COMBO_NO_COLOR);
         let color = (color_value != COMBO_NO_COLOR).then(|| combo_color32(color_value));
         for (key_idx, slot) in key_colors.iter_mut().enumerate() {
             let keycode = layout_combo_match_keycode(layout, layer, key_idx);

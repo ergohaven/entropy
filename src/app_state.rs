@@ -393,8 +393,8 @@ pub(crate) fn combo_color32(rgb: u32) -> Color32 {
 pub(crate) fn normalize_combo_colors(colors: &mut Vec<u32>, len: usize) {
     let start = colors.len();
     colors.truncate(len);
-    for idx in start..len {
-        colors.push(combo_default_color(idx));
+    for _ in start..len {
+        colors.push(COMBO_NO_COLOR);
     }
 
     let palette = combo_color_palette(len);
@@ -417,6 +417,17 @@ pub(crate) fn normalize_combo_colors(colors: &mut Vec<u32>, len: usize) {
         } else {
             *color = COMBO_NO_COLOR;
         }
+    }
+}
+
+pub(crate) fn migrate_legacy_combo_default_colors(colors: &mut [u32]) {
+    if !colors.is_empty()
+        && colors
+            .iter()
+            .enumerate()
+            .all(|(idx, color)| *color == combo_default_color(idx))
+    {
+        colors.fill(COMBO_NO_COLOR);
     }
 }
 

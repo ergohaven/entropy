@@ -105,6 +105,7 @@ impl EntropyApp {
                 self.combo_names
                     .resize(self.combo_entries.len(), String::new());
                 self.combo_colors = load_combo_colors(&self.current_device_name);
+                migrate_legacy_combo_default_colors(&mut self.combo_colors);
                 normalize_combo_colors(&mut self.combo_colors, self.combo_entries.len());
                 self.combo_term = r.combo_term.or(Some(50));
                 self.auto_shift_options = r.auto_shift_options;

@@ -308,7 +308,7 @@ impl EntropyApp {
                     .combo_colors
                     .get(combo_idx)
                     .copied()
-                    .unwrap_or_else(|| combo_default_color(combo_idx));
+                    .unwrap_or(COMBO_NO_COLOR);
                 let color_palette = combo_color_palette(self.combo_entries.len());
                 let color_swatch_width = metrics.value(64.0);
                 let color_swatch_size = metrics.size(64.0, 34.0);
@@ -670,8 +670,7 @@ impl EntropyApp {
                             .get(combo_idx)
                             .map(|s| !s.trim().is_empty())
                             .unwrap_or(false)
-                        || self.combo_colors.get(combo_idx).copied()
-                            != Some(combo_default_color(combo_idx)));
+                        || self.combo_colors.get(combo_idx).copied() != Some(COMBO_NO_COLOR));
                 let clear_resp = crate::ui_style::modern_button_with_font(
                     ui,
                     crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.clear"),
@@ -686,7 +685,7 @@ impl EntropyApp {
                         name.clear();
                     }
                     if let Some(color) = self.combo_colors.get_mut(combo_idx) {
-                        *color = combo_default_color(combo_idx);
+                        *color = COMBO_NO_COLOR;
                     }
                     self.combo_dirty = true;
                     self.combo_names_dirty = true;

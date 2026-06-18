@@ -1470,6 +1470,7 @@ impl EntropyApp {
 
         self.combo_names = normalized_strings(&bundle.data.combos.names, self.combo_entries.len());
         self.combo_colors = bundle.data.combos.colors.clone();
+        migrate_legacy_combo_default_colors(&mut self.combo_colors);
         normalize_combo_colors(&mut self.combo_colors, self.combo_entries.len());
         self.combo_term = bundle.data.combos.term.or(self.combo_term);
         save_combo_names(&self.combo_names, &self.current_device_name);
