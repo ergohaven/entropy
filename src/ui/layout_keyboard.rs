@@ -322,6 +322,7 @@ impl EntropyApp {
             let combo_outline = combo_colors
                 .and_then(|colors| combo_key_outline_color(colors))
                 .map(|color| combo_outline_color(color, dark));
+            let has_combo_outline = combo_outline.is_some();
             let neutral_border = if dark {
                 Color32::from_rgb(54, 54, 58)
             } else {
@@ -330,15 +331,11 @@ impl EntropyApp {
             let key_border = combo_outline
                 .or(layer_led_outline)
                 .unwrap_or(neutral_border);
+            let key_border_stroke =
+                Stroke::new(if has_combo_outline { 2.0 } else { 1.0 }, key_border);
 
             if kc == 0x0001 {
-                paint_layout_keycap(
-                    painter,
-                    draw_rect,
-                    key.rotation,
-                    bg,
-                    Stroke::new(1.0, key_border),
-                );
+                paint_layout_keycap(painter, draw_rect, key.rotation, bg, key_border_stroke);
                 if !is_hovering {
                     let fallback_kc = (0..layer)
                         .rev()
@@ -371,21 +368,9 @@ impl EntropyApp {
                     );
                 }
             } else if kc == 0x0000 {
-                paint_layout_keycap(
-                    painter,
-                    draw_rect,
-                    key.rotation,
-                    bg,
-                    Stroke::new(1.0, key_border),
-                );
+                paint_layout_keycap(painter, draw_rect, key.rotation, bg, key_border_stroke);
             } else {
-                paint_layout_keycap(
-                    painter,
-                    draw_rect,
-                    key.rotation,
-                    bg,
-                    Stroke::new(1.0, key_border),
-                );
+                paint_layout_keycap(painter, draw_rect, key.rotation, bg, key_border_stroke);
                 let label = number_row_shifted_label(
                     keycode_label_with_macro_names(
                         kc,
@@ -911,10 +896,7 @@ fn combo_key_colors_for_layer(
         if triggers.is_empty() || combo.output == 0 {
             continue;
         }
-        let color_value = colors
-            .get(combo_idx)
-            .copied()
-            .unwrap_or(COMBO_NO_COLOR);
+        let color_value = colors.get(combo_idx).copied().unwrap_or(COMBO_NO_COLOR);
         let color = (color_value != COMBO_NO_COLOR).then(|| combo_color32(color_value));
         for (key_idx, slot) in key_colors.iter_mut().enumerate() {
             let keycode = layout_combo_match_keycode(layout, layer, key_idx);
@@ -940,8 +922,10 @@ fn layout_combo_match_keycode(layout: &KeyboardLayout, layer: usize, key_idx: us
 }
 
 fn combo_key_outline_color(colors: &[(usize, Option<Color32>)]) -> Option<Color32> {
-    if colors.len() == 1 {
-        colors.first().and_then(|(_, color)| *color)
+    let mut colored = colors.iter().filter_map(|(_, color)| *color);
+    let first = colored.next()?;
+    if colored.next().is_none() {
+        Some(first)
     } else {
         None
     }
@@ -961,10 +945,10 @@ fn paint_combo_color_markers(
         return;
     }
     let marker_colors = combo_conflict_marker_colors(colors);
-    let marker_count = marker_colors.len().min(4);
-    if marker_count == 0 {
+    if marker_colors.len() < 2 {
         return;
     }
+    let marker_count = marker_colors.len().min(4);
 
     let radius = (rect.width().min(rect.height()) * 0.06).clamp(2.2, 4.0);
     let gap = radius * 0.85;
