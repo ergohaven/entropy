@@ -481,6 +481,36 @@ pub(super) fn save_combo_names(names: &[String], device_name: &str) {
     }
 }
 
+pub(super) fn combo_colors_path(device_name: &str) -> std::path::PathBuf {
+    let dir = dirs::config_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("entropy");
+    std::fs::create_dir_all(&dir).ok();
+    let slug = device_id_slug(device_name);
+    dir.join(format!("combo_colors_{}.json", slug))
+}
+
+pub(super) fn load_combo_colors(device_name: &str) -> Vec<u32> {
+    let path = combo_colors_path(device_name);
+    if let Ok(data) = std::fs::read_to_string(&path) {
+        if let Ok(v) = serde_json::from_str::<Vec<u32>>(&data) {
+            return v;
+        }
+    }
+    vec![]
+}
+
+pub(super) fn save_combo_colors(colors: &[u32], device_name: &str) {
+    if let Ok(data) = serde_json::to_string(colors) {
+        let path = combo_colors_path(device_name);
+        if let Err(e) = std::fs::write(&path, &data) {
+            log::warn!("save_combo_colors failed at {:?}: {e}", path);
+        } else {
+            log::info!("save_combo_colors ok → {:?}", path);
+        }
+    }
+}
+
 pub(super) fn combo_display_name(combo_names: &[String], idx: usize) -> String {
     match combo_names.get(idx) {
         Some(name) if !name.trim().is_empty() => name.clone(),

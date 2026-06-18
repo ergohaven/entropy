@@ -252,6 +252,8 @@ struct EntMacroData {
 struct EntComboData {
     entries: Vec<EntComboEntry>,
     names: Vec<String>,
+    #[serde(default)]
+    colors: Vec<u32>,
     term: Option<u16>,
 }
 
@@ -430,6 +432,7 @@ impl EntropyApp {
                         })
                         .collect(),
                     names: self.combo_names.clone(),
+                    colors: self.combo_colors.clone(),
                     term: self.combo_term,
                 },
                 tap_dance: EntTapDanceData {
@@ -1466,10 +1469,14 @@ impl EntropyApp {
         }
 
         self.combo_names = normalized_strings(&bundle.data.combos.names, self.combo_entries.len());
+        self.combo_colors = bundle.data.combos.colors.clone();
+        normalize_combo_colors(&mut self.combo_colors, self.combo_entries.len());
         self.combo_term = bundle.data.combos.term.or(self.combo_term);
         save_combo_names(&self.combo_names, &self.current_device_name);
+        save_combo_colors(&self.combo_colors, &self.current_device_name);
         self.combo_dirty = false;
         self.combo_names_dirty = false;
+        self.combo_colors_dirty = false;
         self.combo_term_dirty = false;
 
         self.keycode_picker.tap_dance_names = normalized_strings(

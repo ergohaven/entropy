@@ -117,6 +117,7 @@ impl EntropyApp {
         self.combo_pick_target = None;
         self.combo_dirty = false;
         self.combo_names_dirty = false;
+        self.combo_colors_dirty = false;
         self.combo_term_dirty = false;
         self.auto_shift_options = AutoShiftOptionsState::default();
         self.auto_shift_timeout = None;

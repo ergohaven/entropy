@@ -10,6 +10,9 @@ pub(crate) const UI_SCALE_MIN: f32 = 0.5;
 pub(crate) const UI_SCALE_MAX: f32 = 2.0;
 pub(crate) const UI_SCALE_STEP: f32 = 0.1;
 pub(crate) const ONBOARDING_TOUR_VERSION: u16 = 1;
+pub(crate) const COMBO_COLOR_PALETTE: [u32; 8] = [
+    0xC48490, 0x9280B8, 0x749AD4, 0xD29C5C, 0xC07458, 0x589E94, 0xB28A6A, 0x8A9A66,
+];
 
 use super::*;
 
@@ -354,6 +357,36 @@ pub(crate) fn vial_layer_retarget_base(kc: u16) -> Option<u16> {
 pub(crate) struct ComboEntry {
     pub(crate) keys: [u16; 4],
     pub(crate) output: u16,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ComboUndoSnapshot {
+    pub(crate) entries: Vec<ComboEntry>,
+    pub(crate) names: Vec<String>,
+    pub(crate) colors: Vec<u32>,
+    pub(crate) term: Option<u16>,
+    pub(crate) selected: usize,
+    pub(crate) visible_count: usize,
+}
+
+pub(crate) fn combo_default_color(idx: usize) -> u32 {
+    COMBO_COLOR_PALETTE[idx % COMBO_COLOR_PALETTE.len()]
+}
+
+pub(crate) fn combo_color32(rgb: u32) -> Color32 {
+    Color32::from_rgb(
+        ((rgb >> 16) & 0xff) as u8,
+        ((rgb >> 8) & 0xff) as u8,
+        (rgb & 0xff) as u8,
+    )
+}
+
+pub(crate) fn normalize_combo_colors(colors: &mut Vec<u32>, len: usize) {
+    let start = colors.len();
+    colors.truncate(len);
+    for idx in start..len {
+        colors.push(combo_default_color(idx));
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1264,9 +1297,11 @@ pub struct EntropyApp {
     pub(crate) main_menu_tab: MainMenuTab,
     pub(crate) combo_entries: Vec<ComboEntry>,
     pub(crate) combo_names: Vec<String>,
+    pub(crate) combo_colors: Vec<u32>,
     pub(crate) selected_combo: usize,
     pub(crate) combo_dirty: bool,
     pub(crate) combo_names_dirty: bool,
+    pub(crate) combo_colors_dirty: bool,
     pub(crate) combo_term: Option<u16>,
     pub(crate) auto_shift_options: AutoShiftOptionsState,
     pub(crate) auto_shift_timeout: Option<u16>,
@@ -1291,7 +1326,7 @@ pub struct EntropyApp {
     pub(crate) encoder_visibility: Vec<bool>,
     pub(crate) combo_term_dirty: bool,
     pub(crate) combo_visible_count: usize,
-    pub(crate) combo_undo_stack: Vec<(Vec<ComboEntry>, Vec<String>, Option<u16>, usize, usize)>,
+    pub(crate) combo_undo_stack: Vec<ComboUndoSnapshot>,
     pub(crate) combo_pick_target: Option<(usize, ComboPickField)>,
     pub(crate) key_override_entries: Vec<KeyOverrideEntry>,
     pub(crate) key_override_names: Vec<String>,

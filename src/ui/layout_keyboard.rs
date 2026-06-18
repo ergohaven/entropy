@@ -282,6 +282,13 @@ impl EntropyApp {
         let layer_led_outline = layer_led_color_idx.map(layer_led_outline_color);
         let layer_led_hover_fill =
             layer_led_color_idx.map(|color_idx| layer_led_hover_fill(color_idx, dark));
+        let combo_key_colors = combo_key_colors_for_layer(
+            layout,
+            layer,
+            self.combo_entries.as_slice(),
+            self.combo_colors.as_slice(),
+        );
+        let emphasize_selected_combo = matches!(self.settings_tab, SettingsTab::Combo);
         for (ki, rect, _) in &rects {
             let key = &layout.keys[*ki];
             let is_selected = self.selected_key == Some((layer, *ki));
@@ -404,6 +411,26 @@ impl EntropyApp {
                     self.app_settings.key_legend_layout,
                 );
                 draw_key_label(&painter, draw_rect, &label, dark, key.rotation.to_radians());
+            }
+
+            if let Some(colors) = combo_key_colors.get(*ki) {
+                if !colors.is_empty() {
+                    if emphasize_selected_combo {
+                        if let Some((_, selected_color)) = colors
+                            .iter()
+                            .find(|(combo_idx, _)| *combo_idx == self.selected_combo)
+                        {
+                            paint_layout_keycap(
+                                painter,
+                                draw_rect.shrink(1.5),
+                                key.rotation,
+                                Color32::TRANSPARENT,
+                                Stroke::new(2.0, selected_color.gamma_multiply(0.95)),
+                            );
+                        }
+                    }
+                    paint_combo_color_markers(painter, draw_rect, colors, dark);
+                }
             }
         }
 
@@ -895,5 +922,76 @@ impl EntropyApp {
         if layout_h > avail.y {
             ui.allocate_space(Vec2::new(0.0, (layout_h - avail.y).max(0.0)));
         }
+    }
+}
+
+fn combo_key_colors_for_layer(
+    layout: &KeyboardLayout,
+    layer: usize,
+    combos: &[ComboEntry],
+    colors: &[u32],
+) -> Vec<Vec<(usize, Color32)>> {
+    let mut key_colors = vec![Vec::new(); layout.keys.len()];
+    for (combo_idx, combo) in combos.iter().enumerate() {
+        let triggers: Vec<u16> = combo.keys.iter().copied().filter(|&key| key != 0).collect();
+        if triggers.is_empty() || combo.output == 0 {
+            continue;
+        }
+        let color = combo_color32(
+            colors
+                .get(combo_idx)
+                .copied()
+                .unwrap_or_else(|| combo_default_color(combo_idx)),
+        );
+        for (key_idx, slot) in key_colors.iter_mut().enumerate() {
+            let keycode = layout_combo_match_keycode(layout, layer, key_idx);
+            if keycode != 0 && triggers.contains(&keycode) {
+                slot.push((combo_idx, color));
+            }
+        }
+    }
+    key_colors
+}
+
+fn layout_combo_match_keycode(layout: &KeyboardLayout, layer: usize, key_idx: usize) -> u16 {
+    let keycode = layout.get_keycode(layer, key_idx);
+    if keycode != 0x0001 {
+        return keycode;
+    }
+
+    (0..layer)
+        .rev()
+        .map(|fallback_layer| layout.get_keycode(fallback_layer, key_idx))
+        .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001))
+        .unwrap_or(0x0000)
+}
+
+fn paint_combo_color_markers(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    colors: &[(usize, Color32)],
+    dark: bool,
+) {
+    let marker_count = colors.len().min(4);
+    if marker_count == 0 {
+        return;
+    }
+
+    let radius = (rect.width().min(rect.height()) * 0.06).clamp(2.2, 4.0);
+    let gap = radius * 0.85;
+    let total_width = marker_count as f32 * radius * 2.0 + (marker_count - 1) as f32 * gap;
+    let mut x = rect.center().x - total_width * 0.5 + radius;
+    let y = rect.top() + radius + rect.height() * 0.08;
+    let outline = if dark {
+        Color32::from_rgb(38, 38, 40)
+    } else {
+        Color32::from_rgb(255, 255, 255)
+    };
+
+    for (_, color) in colors.iter().take(marker_count) {
+        let center = egui::pos2(x, y);
+        painter.circle_filled(center, radius + 1.0, outline);
+        painter.circle_filled(center, radius, color.gamma_multiply(0.9));
+        x += radius * 2.0 + gap;
     }
 }

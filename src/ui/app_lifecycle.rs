@@ -882,6 +882,11 @@ impl eframe::App for EntropyApp {
             self.combo_names_dirty = false;
         }
 
+        if self.combo_colors_dirty {
+            save_combo_colors(&self.combo_colors, &self.current_device_name);
+            self.combo_colors_dirty = false;
+        }
+
         // Write tap dance to device if changed
         if self.keycode_picker.tap_dance_dirty
             && !self.keycode_picker.open

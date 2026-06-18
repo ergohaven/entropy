@@ -35,13 +35,14 @@ impl EntropyApp {
     }
 
     pub(super) fn push_combo_undo(&mut self) {
-        self.combo_undo_stack.push((
-            self.combo_entries.clone(),
-            self.combo_names.clone(),
-            self.combo_term,
-            self.selected_combo,
-            self.combo_visible_count,
-        ));
+        self.combo_undo_stack.push(ComboUndoSnapshot {
+            entries: self.combo_entries.clone(),
+            names: self.combo_names.clone(),
+            colors: self.combo_colors.clone(),
+            term: self.combo_term,
+            selected: self.selected_combo,
+            visible_count: self.combo_visible_count,
+        });
         if self.combo_undo_stack.len() > 64 {
             self.combo_undo_stack.remove(0);
         }
@@ -98,17 +99,19 @@ impl EntropyApp {
             .min(self.combo_entries.len().saturating_sub(1));
         self.combo_names
             .resize(self.combo_entries.len(), String::new());
+        normalize_combo_colors(&mut self.combo_colors, self.combo_entries.len());
         self.combo_visible_count = self.combo_entries.len().max(1);
 
         let combo_idx = self.selected_combo;
         let page_center_x = ui.max_rect().center().x;
-        let combo_undo_snapshot = (
-            self.combo_entries.clone(),
-            self.combo_names.clone(),
-            self.combo_term,
-            self.selected_combo,
-            self.combo_visible_count,
-        );
+        let combo_undo_snapshot = ComboUndoSnapshot {
+            entries: self.combo_entries.clone(),
+            names: self.combo_names.clone(),
+            colors: self.combo_colors.clone(),
+            term: self.combo_term,
+            selected: self.selected_combo,
+            visible_count: self.combo_visible_count,
+        };
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
         let scale = metrics.scale;
         let content_width = metrics.settings_content_width();
@@ -300,6 +303,66 @@ impl EntropyApp {
                     self.combo_undo_stack.push(combo_undo_snapshot.clone());
                     self.combo_names_dirty = true;
                 }
+
+                let selected_color = self
+                    .combo_colors
+                    .get(combo_idx)
+                    .copied()
+                    .unwrap_or_else(|| combo_default_color(combo_idx));
+                crate::ui_style::settings_list_row_with_tooltip(
+                    ui,
+                    row_content_width,
+                    row_height,
+                    crate::i18n::tr_catalog(self.app_settings.language, "common.color"),
+                    true,
+                    Some(crate::i18n::tr_catalog(
+                        self.app_settings.language,
+                        "combo_editor.local_color_for_combo_slot",
+                    )),
+                    metrics.value(218.0),
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = metrics.value(7.0);
+                            for color_value in COMBO_COLOR_PALETTE {
+                                let color = combo_color32(color_value);
+                                let selected = color_value == selected_color;
+                                let (rect, resp) = ui.allocate_exact_size(
+                                    metrics.size(26.0, 26.0),
+                                    egui::Sense::click(),
+                                );
+                                if resp.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                }
+                                if resp.clicked()
+                                    && self.combo_colors.get(combo_idx).copied()
+                                        != Some(color_value)
+                                {
+                                    self.combo_undo_stack.push(combo_undo_snapshot.clone());
+                                    if let Some(slot_color) = self.combo_colors.get_mut(combo_idx) {
+                                        *slot_color = color_value;
+                                    }
+                                    self.combo_colors_dirty = true;
+                                }
+                                let stroke = if selected {
+                                    Stroke::new(metrics.value(2.0), color)
+                                } else {
+                                    crate::ui_style::modal_outline_stroke(dark)
+                                };
+                                ui.painter().circle_filled(
+                                    rect.center(),
+                                    metrics.value(8.5),
+                                    color,
+                                );
+                                ui.painter().circle_stroke(
+                                    rect.center(),
+                                    metrics.value(11.0),
+                                    stroke,
+                                );
+                                resp.on_hover_text(format!("#{color_value:06X}"));
+                            }
+                        });
+                    },
+                );
 
                 crate::ui_style::settings_list_row_with_tooltip(
                     ui,
@@ -512,7 +575,9 @@ impl EntropyApp {
                             .combo_names
                             .get(combo_idx)
                             .map(|s| !s.trim().is_empty())
-                            .unwrap_or(false));
+                            .unwrap_or(false)
+                        || self.combo_colors.get(combo_idx).copied()
+                            != Some(combo_default_color(combo_idx)));
                 let clear_resp = crate::ui_style::modern_button_with_font(
                     ui,
                     crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.clear"),
@@ -526,8 +591,12 @@ impl EntropyApp {
                     if let Some(name) = self.combo_names.get_mut(combo_idx) {
                         name.clear();
                     }
+                    if let Some(color) = self.combo_colors.get_mut(combo_idx) {
+                        *color = combo_default_color(combo_idx);
+                    }
                     self.combo_dirty = true;
                     self.combo_names_dirty = true;
+                    self.combo_colors_dirty = true;
                 }
                 let undo_enabled = !self.combo_undo_stack.is_empty();
                 let undo_resp = crate::ui_style::modern_button_with_font(
@@ -538,18 +607,20 @@ impl EntropyApp {
                     undo_enabled,
                 );
                 if undo_resp.clicked() && undo_enabled {
-                    if let Some((entries, names, term, selected, visible_count)) =
-                        self.combo_undo_stack.pop()
-                    {
-                        self.combo_entries = entries;
-                        self.combo_names = names;
-                        self.combo_term = term;
-                        self.combo_visible_count =
-                            visible_count.clamp(1, self.combo_entries.len().max(1));
-                        self.selected_combo =
-                            selected.min(self.combo_visible_count.saturating_sub(1));
+                    if let Some(snapshot) = self.combo_undo_stack.pop() {
+                        self.combo_entries = snapshot.entries;
+                        self.combo_names = snapshot.names;
+                        self.combo_colors = snapshot.colors;
+                        self.combo_term = snapshot.term;
+                        self.combo_visible_count = snapshot
+                            .visible_count
+                            .clamp(1, self.combo_entries.len().max(1));
+                        self.selected_combo = snapshot
+                            .selected
+                            .min(self.combo_visible_count.saturating_sub(1));
                         self.combo_dirty = true;
                         self.combo_names_dirty = true;
+                        self.combo_colors_dirty = true;
                         self.combo_term_dirty = true;
                     }
                 }
