@@ -414,15 +414,13 @@ impl EntropyApp {
 
             if let Some(colors) = combo_key_colors.get(*ki) {
                 if !colors.is_empty() {
-                    if let Some(outline_color) =
-                        combo_key_outline_color(colors, self.selected_combo)
-                    {
+                    if let Some(outline_color) = combo_key_outline_color(colors) {
                         paint_layout_keycap(
                             painter,
                             draw_rect.shrink(1.5),
                             key.rotation,
                             Color32::TRANSPARENT,
-                            Stroke::new(2.0, outline_color.gamma_multiply(0.95)),
+                            Stroke::new(2.0, combo_outline_color(outline_color, dark)),
                         );
                     }
                     paint_combo_color_markers(painter, draw_rect, colors, dark);
@@ -926,19 +924,18 @@ fn combo_key_colors_for_layer(
     layer: usize,
     combos: &[ComboEntry],
     colors: &[u32],
-) -> Vec<Vec<(usize, Color32)>> {
+) -> Vec<Vec<(usize, Option<Color32>)>> {
     let mut key_colors = vec![Vec::new(); layout.keys.len()];
     for (combo_idx, combo) in combos.iter().enumerate() {
         let triggers: Vec<u16> = combo.keys.iter().copied().filter(|&key| key != 0).collect();
         if triggers.is_empty() || combo.output == 0 {
             continue;
         }
-        let color = combo_color32(
-            colors
-                .get(combo_idx)
-                .copied()
-                .unwrap_or_else(|| combo_default_color(combo_idx)),
-        );
+        let color_value = colors
+            .get(combo_idx)
+            .copied()
+            .unwrap_or_else(|| combo_default_color(combo_idx));
+        let color = (color_value != COMBO_NO_COLOR).then(|| combo_color32(color_value));
         for (key_idx, slot) in key_colors.iter_mut().enumerate() {
             let keycode = layout_combo_match_keycode(layout, layer, key_idx);
             if keycode != 0 && triggers.contains(&keycode) {
@@ -962,23 +959,30 @@ fn layout_combo_match_keycode(layout: &KeyboardLayout, layer: usize, key_idx: us
         .unwrap_or(0x0000)
 }
 
-fn combo_key_outline_color(colors: &[(usize, Color32)], selected_combo: usize) -> Option<Color32> {
-    colors
-        .iter()
-        .find(|(combo_idx, _)| *combo_idx == selected_combo)
-        .or_else(|| colors.first())
-        .map(|(_, color)| *color)
+fn combo_key_outline_color(colors: &[(usize, Option<Color32>)]) -> Option<Color32> {
+    if colors.len() == 1 {
+        colors.first().and_then(|(_, color)| *color)
+    } else {
+        None
+    }
+}
+
+fn combo_outline_color(color: Color32, dark: bool) -> Color32 {
+    color.gamma_multiply(if dark { 0.72 } else { 0.62 })
 }
 
 fn paint_combo_color_markers(
     painter: &egui::Painter,
     rect: egui::Rect,
-    colors: &[(usize, Color32)],
+    colors: &[(usize, Option<Color32>)],
     dark: bool,
 ) {
+    if colors.len() < 2 {
+        return;
+    }
     let marker_colors = combo_conflict_marker_colors(colors);
     let marker_count = marker_colors.len().min(4);
-    if marker_count < 2 {
+    if marker_count == 0 {
         return;
     }
 
@@ -1000,11 +1004,11 @@ fn paint_combo_color_markers(
     }
 }
 
-fn combo_conflict_marker_colors(colors: &[(usize, Color32)]) -> Vec<Color32> {
+fn combo_conflict_marker_colors(colors: &[(usize, Option<Color32>)]) -> Vec<Color32> {
     let mut marker_colors = Vec::new();
-    for (_, color) in colors {
-        if !marker_colors.contains(color) {
-            marker_colors.push(*color);
+    for color in colors.iter().filter_map(|(_, color)| *color) {
+        if !marker_colors.contains(&color) {
+            marker_colors.push(color);
         }
     }
     marker_colors

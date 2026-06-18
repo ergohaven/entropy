@@ -10,8 +10,10 @@ pub(crate) const UI_SCALE_MIN: f32 = 0.5;
 pub(crate) const UI_SCALE_MAX: f32 = 2.0;
 pub(crate) const UI_SCALE_STEP: f32 = 0.1;
 pub(crate) const ONBOARDING_TOUR_VERSION: u16 = 1;
-pub(crate) const COMBO_COLOR_PALETTE: [u32; 8] = [
-    0xC48490, 0x9280B8, 0x749AD4, 0xD29C5C, 0xC07458, 0x589E94, 0xB28A6A, 0x8A9A66,
+pub(crate) const COMBO_NO_COLOR: u32 = 0x000000;
+pub(crate) const COMBO_COLOR_SEED_PALETTE: [u32; 16] = [
+    0xC48490, 0x9280B8, 0x749AD4, 0xD29C5C, 0xC07458, 0x589E94, 0xB28A6A, 0x8A9A66, 0xB070A8,
+    0x6F94B8, 0xB6A05F, 0x7DA986, 0xC18B74, 0x8F8BC0, 0xC2A078, 0x6FA4A0,
 ];
 
 use super::*;
@@ -369,8 +371,15 @@ pub(crate) struct ComboUndoSnapshot {
     pub(crate) visible_count: usize,
 }
 
+pub(crate) fn combo_color_palette(len: usize) -> Vec<u32> {
+    (0..len).map(combo_default_color).collect()
+}
+
 pub(crate) fn combo_default_color(idx: usize) -> u32 {
-    COMBO_COLOR_PALETTE[idx % COMBO_COLOR_PALETTE.len()]
+    COMBO_COLOR_SEED_PALETTE
+        .get(idx)
+        .copied()
+        .unwrap_or_else(|| combo_generated_color(idx))
 }
 
 pub(crate) fn combo_color32(rgb: u32) -> Color32 {
@@ -387,6 +396,68 @@ pub(crate) fn normalize_combo_colors(colors: &mut Vec<u32>, len: usize) {
     for idx in start..len {
         colors.push(combo_default_color(idx));
     }
+
+    let palette = combo_color_palette(len);
+    let mut used = Vec::new();
+    for color in colors.iter_mut() {
+        if *color == COMBO_NO_COLOR {
+            continue;
+        }
+        if !used.contains(color) {
+            used.push(*color);
+            continue;
+        }
+        if let Some(replacement) = palette
+            .iter()
+            .copied()
+            .find(|candidate| *candidate != COMBO_NO_COLOR && !used.contains(candidate))
+        {
+            *color = replacement;
+            used.push(replacement);
+        } else {
+            *color = COMBO_NO_COLOR;
+        }
+    }
+}
+
+fn combo_generated_color(idx: usize) -> u32 {
+    let hue = ((idx as f32 * 0.618_034) % 1.0 + 0.96) % 1.0;
+    hsl_to_rgb_u32(hue, 0.34, 0.60)
+}
+
+fn hsl_to_rgb_u32(h: f32, s: f32, l: f32) -> u32 {
+    let q = if l < 0.5 {
+        l * (1.0 + s)
+    } else {
+        l + s - l * s
+    };
+    let p = 2.0 * l - q;
+    let r = hue_to_rgb(p, q, h + 1.0 / 3.0);
+    let g = hue_to_rgb(p, q, h);
+    let b = hue_to_rgb(p, q, h - 1.0 / 3.0);
+    ((float_to_u8(r) as u32) << 16) | ((float_to_u8(g) as u32) << 8) | float_to_u8(b) as u32
+}
+
+fn hue_to_rgb(p: f32, q: f32, mut t: f32) -> f32 {
+    if t < 0.0 {
+        t += 1.0;
+    }
+    if t > 1.0 {
+        t -= 1.0;
+    }
+    if t < 1.0 / 6.0 {
+        p + (q - p) * 6.0 * t
+    } else if t < 1.0 / 2.0 {
+        q
+    } else if t < 2.0 / 3.0 {
+        p + (q - p) * (2.0 / 3.0 - t) * 6.0
+    } else {
+        p
+    }
+}
+
+fn float_to_u8(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

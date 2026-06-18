@@ -309,6 +309,18 @@ impl EntropyApp {
                     .get(combo_idx)
                     .copied()
                     .unwrap_or_else(|| combo_default_color(combo_idx));
+                let color_palette = combo_color_palette(self.combo_entries.len());
+                let color_dropdown_width = metrics.value(218.0);
+                let selected_color_text = combo_color_dropdown_label(
+                    self.app_settings.language,
+                    selected_color,
+                    &color_palette,
+                );
+                let selected_color_text_color = if selected_color == COMBO_NO_COLOR {
+                    app_muted_text(dark)
+                } else {
+                    ui.visuals().text_color()
+                };
                 crate::ui_style::settings_list_row_with_tooltip(
                     ui,
                     row_content_width,
@@ -319,48 +331,123 @@ impl EntropyApp {
                         self.app_settings.language,
                         "combo_editor.local_color_for_combo_slot",
                     )),
-                    metrics.value(218.0),
+                    color_dropdown_width,
                     |ui| {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = metrics.value(7.0);
-                            for color_value in COMBO_COLOR_PALETTE {
-                                let color = combo_color32(color_value);
-                                let selected = color_value == selected_color;
-                                let (rect, resp) = ui.allocate_exact_size(
-                                    metrics.size(26.0, 26.0),
-                                    egui::Sense::click(),
-                                );
-                                if resp.hovered() {
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                                }
-                                if resp.clicked()
-                                    && self.combo_colors.get(combo_idx).copied()
-                                        != Some(color_value)
-                                {
-                                    self.combo_undo_stack.push(combo_undo_snapshot.clone());
-                                    if let Some(slot_color) = self.combo_colors.get_mut(combo_idx) {
-                                        *slot_color = color_value;
-                                    }
-                                    self.combo_colors_dirty = true;
-                                }
-                                let stroke = if selected {
-                                    Stroke::new(metrics.value(2.0), color)
-                                } else {
-                                    crate::ui_style::modal_outline_stroke(dark)
-                                };
-                                ui.painter().circle_filled(
-                                    rect.center(),
-                                    metrics.value(8.5),
-                                    color,
-                                );
-                                ui.painter().circle_stroke(
-                                    rect.center(),
-                                    metrics.value(11.0),
-                                    stroke,
-                                );
-                                resp.on_hover_text(format!("#{color_value:06X}"));
-                            }
-                        });
+                        let dropdown_id = ui.make_persistent_id("combo_color_dropdown");
+                        let dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
+                            ui,
+                            dropdown_id,
+                            selected_color_text.as_str(),
+                            selected_color_text_color,
+                            color_dropdown_width,
+                            control_height,
+                            control_font_size,
+                        );
+                        paint_combo_color_dropdown_swatch(
+                            ui,
+                            dropdown_resp.rect,
+                            selected_color,
+                            dark,
+                            metrics.value(1.0),
+                        );
+                        ui.style_mut().visuals.window_stroke =
+                            crate::ui_style::modal_outline_stroke(dark);
+                        ui.style_mut().visuals.window_fill = app_surface_fill(dark);
+                        egui::popup_below_widget(
+                            ui,
+                            dropdown_id,
+                            &dropdown_resp,
+                            egui::PopupCloseBehavior::CloseOnClickOutside,
+                            |ui| {
+                                ui.set_min_width(color_dropdown_width);
+                                ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
+                                egui::ScrollArea::vertical()
+                                    .id_salt("combo_color_dropdown_scroll")
+                                    .max_height(metrics.value(180.0))
+                                    .auto_shrink([false, true])
+                                    .show(ui, |ui| {
+                                        let mut options =
+                                            Vec::with_capacity(color_palette.len() + 1);
+                                        options.push(COMBO_NO_COLOR);
+                                        options.extend(color_palette.iter().copied());
+                                        for color_value in options {
+                                            let selected = color_value == selected_color;
+                                            let used_by_other = color_value != COMBO_NO_COLOR
+                                                && self.combo_colors.iter().enumerate().any(
+                                                    |(idx, value)| {
+                                                        idx != combo_idx && *value == color_value
+                                                    },
+                                                );
+                                            let enabled = selected || !used_by_other;
+                                            let (option_rect, option_resp) = ui
+                                                .allocate_exact_size(
+                                                    Vec2::new(
+                                                        color_dropdown_width,
+                                                        metrics.value(30.0),
+                                                    ),
+                                                    Sense::click(),
+                                                );
+                                            if enabled && option_resp.hovered() {
+                                                ui.ctx().set_cursor_icon(
+                                                    egui::CursorIcon::PointingHand,
+                                                );
+                                            }
+                                            let option_fill = if selected {
+                                                if dark {
+                                                    Color32::from_rgb(58, 58, 61)
+                                                } else {
+                                                    Color32::from_rgb(236, 236, 238)
+                                                }
+                                            } else if enabled && option_resp.hovered() {
+                                                crate::ui_style::hover_fill(dark)
+                                            } else {
+                                                Color32::TRANSPARENT
+                                            };
+                                            ui.painter().rect_filled(
+                                                option_rect,
+                                                metrics.value(7.0),
+                                                option_fill,
+                                            );
+                                            paint_combo_color_option(
+                                                ui,
+                                                option_rect,
+                                                color_value,
+                                                combo_color_dropdown_label(
+                                                    self.app_settings.language,
+                                                    color_value,
+                                                    &color_palette,
+                                                )
+                                                .as_str(),
+                                                selected,
+                                                enabled,
+                                                dark,
+                                                scale,
+                                            );
+                                            if enabled
+                                                && option_resp.clicked()
+                                                && self.combo_colors.get(combo_idx).copied()
+                                                    != Some(color_value)
+                                            {
+                                                self.combo_undo_stack
+                                                    .push(combo_undo_snapshot.clone());
+                                                if let Some(slot_color) =
+                                                    self.combo_colors.get_mut(combo_idx)
+                                                {
+                                                    *slot_color = color_value;
+                                                }
+                                                self.combo_colors_dirty = true;
+                                                ui.memory_mut(|m| m.close_popup());
+                                            }
+                                            if !enabled {
+                                                option_resp.on_hover_text(crate::i18n::tr_catalog(
+                                                    self.app_settings.language,
+                                                    "combo_editor.color_used",
+                                                ));
+                                            }
+                                        }
+                                    });
+                            },
+                        );
                     },
                 );
 
@@ -629,4 +716,114 @@ impl EntropyApp {
         ui.allocate_space(Vec2::new(1.0, action_size.y));
         combo_keycap_hovered
     }
+}
+
+fn combo_color_dropdown_label(
+    lang: crate::i18n::Language,
+    color_value: u32,
+    palette: &[u32],
+) -> String {
+    if color_value == COMBO_NO_COLOR {
+        crate::i18n::tr_catalog(lang, "combo_editor.no_color").to_owned()
+    } else if let Some(idx) = palette.iter().position(|color| *color == color_value) {
+        crate::i18n::tr_catalog_format(
+            lang,
+            "combo_editor.color_number",
+            &[("number", &(idx + 1).to_string())],
+        )
+    } else {
+        format!("#{color_value:06X}")
+    }
+}
+
+fn paint_combo_color_dropdown_swatch(
+    ui: &mut egui::Ui,
+    dropdown_rect: egui::Rect,
+    color_value: u32,
+    dark: bool,
+    scale: f32,
+) {
+    let center = egui::pos2(
+        dropdown_rect.right() - 34.0 * scale,
+        dropdown_rect.center().y,
+    );
+    paint_combo_color_swatch(ui, center, color_value, false, true, dark, scale);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_combo_color_option(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    color_value: u32,
+    label: &str,
+    selected: bool,
+    enabled: bool,
+    dark: bool,
+    scale: f32,
+) {
+    let swatch_center = egui::pos2(rect.left() + 16.0 * scale, rect.center().y);
+    paint_combo_color_swatch(
+        ui,
+        swatch_center,
+        color_value,
+        !enabled,
+        selected,
+        dark,
+        scale,
+    );
+    let text_color = if !enabled {
+        app_inactive_entry_text(dark)
+    } else if selected {
+        ui.visuals().text_color()
+    } else {
+        app_muted_text(dark)
+    };
+    ui.painter().text(
+        egui::pos2(rect.left() + 34.0 * scale, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        FontId::proportional(12.0 * scale),
+        text_color,
+    );
+}
+
+fn paint_combo_color_swatch(
+    ui: &mut egui::Ui,
+    center: egui::Pos2,
+    color_value: u32,
+    disabled: bool,
+    selected: bool,
+    dark: bool,
+    scale: f32,
+) {
+    let radius = 7.5 * scale;
+    let stroke_color = if selected {
+        if color_value == COMBO_NO_COLOR {
+            app_muted_text(dark)
+        } else {
+            combo_color32(color_value).gamma_multiply(0.78)
+        }
+    } else {
+        crate::ui_style::modal_outline_stroke(dark).color
+    };
+    let stroke = Stroke::new(if selected { 1.8 } else { 1.0 } * scale, stroke_color);
+    if color_value == COMBO_NO_COLOR {
+        ui.painter().circle_stroke(center, radius, stroke);
+        let slash = Stroke::new(1.2 * scale, app_muted_text(dark));
+        ui.painter().line_segment(
+            [
+                egui::pos2(center.x - radius * 0.55, center.y + radius * 0.55),
+                egui::pos2(center.x + radius * 0.55, center.y - radius * 0.55),
+            ],
+            slash,
+        );
+        return;
+    }
+
+    let mut color = combo_color32(color_value).gamma_multiply(0.92);
+    if disabled {
+        color = color.gamma_multiply(0.42);
+    }
+    ui.painter().circle_filled(center, radius * 0.72, color);
+    ui.painter().circle_stroke(center, radius, stroke);
 }
