@@ -179,7 +179,8 @@ impl EntropyApp {
             })
             .count();
 
-        crate::ui_style::allocate_ui_at_rect(ui, 
+        crate::ui_style::allocate_ui_at_rect(
+            ui,
             egui::Rect::from_min_max(
                 egui::pos2(content_rect.left(), content_rect.top()),
                 egui::pos2(content_rect.right(), desc_y + 10.0),

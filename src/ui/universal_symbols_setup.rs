@@ -336,20 +336,20 @@ impl EntropyApp {
                     self.open_macos_input_monitoring_settings(lang);
                 }
             }
-            10
-                if draw_universal_symbols_action_row_with_tooltip_state(
-                    ui,
-                    metrics,
-                    row_content_width,
-                    row_height,
-                    lang,
-                    "universal_symbols_setup.restart_event_tap",
-                    "universal_symbols_setup.restart_event_tap_tooltip",
-                    "universal_symbols_setup.restart_event_tap_button",
-                    suppress_tooltips,
-                ) => {
-                    self.restart_macos_event_tap(lang);
-                }
+            10 if draw_universal_symbols_action_row_with_tooltip_state(
+                ui,
+                metrics,
+                row_content_width,
+                row_height,
+                lang,
+                "universal_symbols_setup.restart_event_tap",
+                "universal_symbols_setup.restart_event_tap_tooltip",
+                "universal_symbols_setup.restart_event_tap_button",
+                suppress_tooltips,
+            ) =>
+            {
+                self.restart_macos_event_tap(lang);
+            }
             _ => {}
         }
     }

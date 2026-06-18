@@ -90,7 +90,8 @@ impl EntropyApp {
 
     fn open_alt_repeat_picker(&mut self, target: AltRepeatPickField) {
         self.alt_repeat_pick_target = Some(target);
-        self.keycode_picker.open_regular_key_picker_with_mod_key(true);
+        self.keycode_picker
+            .open_regular_key_picker_with_mod_key(true);
     }
 
     pub(super) fn open_alt_repeat_window_compact(&mut self) {
@@ -381,12 +382,18 @@ impl EntropyApp {
                                                 name,
                                                 control_width,
                                                 metrics.settings_control_height(),
-                                                crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.name"),
+                                                crate::i18n::tr_catalog(
+                                                    self.app_settings.language,
+                                                    "alt_repeat_editor.name",
+                                                ),
                                                 12,
                                                 egui::Align::Center,
                                             );
                                             name_changed = resp.changed();
-                                            resp.clone().on_hover_text(crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.stored_locally_in_entropy"));
+                                            resp.clone().on_hover_text(crate::i18n::tr_catalog(
+                                                self.app_settings.language,
+                                                "alt_repeat_editor.stored_locally_in_entropy",
+                                            ));
                                         }
                                     },
                                 );
@@ -463,19 +470,28 @@ impl EntropyApp {
                             4..=7 => {
                                 let (row_label, left_bit, right_bit) = match row_idx {
                                     4 => (
-                                        crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.ctrl_mods")
+                                        crate::i18n::tr_catalog(
+                                            self.app_settings.language,
+                                            "alt_repeat_editor.ctrl_mods",
+                                        )
                                         .to_string(),
                                         0,
                                         4,
                                     ),
                                     5 => (
-                                        crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.shift_mods")
+                                        crate::i18n::tr_catalog(
+                                            self.app_settings.language,
+                                            "alt_repeat_editor.shift_mods",
+                                        )
                                         .to_string(),
                                         1,
                                         5,
                                     ),
                                     6 => (
-                                        crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.alt_mods")
+                                        crate::i18n::tr_catalog(
+                                            self.app_settings.language,
+                                            "alt_repeat_editor.alt_mods",
+                                        )
                                         .to_string(),
                                         2,
                                         6,
@@ -500,10 +516,22 @@ impl EntropyApp {
                                     row_label.as_str(),
                                     true,
                                     Some(match row_idx {
-                                        4 => crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.allowed_ctrl_modifiers"),
-                                        5 => crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.allowed_shift_modifiers"),
-                                        6 => crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.allowed_alt_modifiers"),
-                                        _ => crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.allowed_os_modifiers"),
+                                        4 => crate::i18n::tr_catalog(
+                                            self.app_settings.language,
+                                            "alt_repeat_editor.allowed_ctrl_modifiers",
+                                        ),
+                                        5 => crate::i18n::tr_catalog(
+                                            self.app_settings.language,
+                                            "alt_repeat_editor.allowed_shift_modifiers",
+                                        ),
+                                        6 => crate::i18n::tr_catalog(
+                                            self.app_settings.language,
+                                            "alt_repeat_editor.allowed_alt_modifiers",
+                                        ),
+                                        _ => crate::i18n::tr_catalog(
+                                            self.app_settings.language,
+                                            "alt_repeat_editor.allowed_os_modifiers",
+                                        ),
                                     }),
                                     mod_control_width,
                                     |ui| {
@@ -537,7 +565,10 @@ impl EntropyApp {
                                                         .set_cursor_icon(egui::CursorIcon::Help);
                                                 }
                                                 right_label_resp.on_hover_text(
-                                                    crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.right_side_modifier"),
+                                                    crate::i18n::tr_catalog(
+                                                        self.app_settings.language,
+                                                        "alt_repeat_editor.right_side_modifier",
+                                                    ),
                                                 );
                                                 ui.add_space(metrics.value(10.0));
                                                 let mut left_checked =
@@ -567,7 +598,10 @@ impl EntropyApp {
                                                         .set_cursor_icon(egui::CursorIcon::Help);
                                                 }
                                                 left_label_resp.on_hover_text(
-                                                    crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.left_side_modifier"),
+                                                    crate::i18n::tr_catalog(
+                                                        self.app_settings.language,
+                                                        "alt_repeat_editor.left_side_modifier",
+                                                    ),
                                                 );
                                             },
                                         );
@@ -579,9 +613,15 @@ impl EntropyApp {
                                     ui,
                                     row_content_width,
                                     row_height,
-                                    crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.default_alt_key"),
+                                    crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "alt_repeat_editor.default_alt_key",
+                                    ),
                                     true,
-                                    Some(crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.use_this_alt_key_by_default")),
+                                    Some(crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "alt_repeat_editor.use_this_alt_key_by_default",
+                                    )),
                                     metrics.value(46.0),
                                     |ui| {
                                         crate::ui_style::settings_switch_sized(
@@ -597,9 +637,15 @@ impl EntropyApp {
                                     ui,
                                     row_content_width,
                                     row_height,
-                                    crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.bidirectional"),
+                                    crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "alt_repeat_editor.bidirectional",
+                                    ),
                                     true,
-                                    Some(crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.allow_both_keys_to_alternate_each_other")),
+                                    Some(crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "alt_repeat_editor.allow_both_keys_to_alternate_each_other",
+                                    )),
                                     metrics.value(46.0),
                                     |ui| {
                                         crate::ui_style::settings_switch_sized(

@@ -469,7 +469,7 @@ impl EntropyApp {
                     ui.set_min_size(list.content_rect.size());
                     ui.spacing_mut().item_spacing.y = 0.0;
                     for row_idx in list.first_visible_row..list.last_visible_row {
-                                    match row_idx {
+                        match row_idx {
                                         0 => {
                                             crate::ui_style::settings_list_row_with_tooltip(
                                                 ui,
@@ -720,7 +720,7 @@ impl EntropyApp {
                                         13 => crate::ui_style::settings_list_row_with_tooltip(ui, row_content_width, row_height, crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.stay_active"), true, Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.stay_active_when_another_key_is_pressed")), switch_width, |ui| { crate::ui_style::settings_switch_sized_stable(ui, ("key_override_settings", "stay_active"), &mut edited.options.no_unregister_on_other_key_down, switch_size); }),
                                         _ => {}
                                     }
-                                }
+                    }
                 });
 
                 if list.has_scrollbar {
