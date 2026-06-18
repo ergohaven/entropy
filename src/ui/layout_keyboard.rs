@@ -288,7 +288,6 @@ impl EntropyApp {
             self.combo_entries.as_slice(),
             self.combo_colors.as_slice(),
         );
-        let emphasize_selected_combo = matches!(self.settings_tab, SettingsTab::Combo);
         for (ki, rect, _) in &rects {
             let key = &layout.keys[*ki];
             let is_selected = self.selected_key == Some((layer, *ki));
@@ -415,19 +414,17 @@ impl EntropyApp {
 
             if let Some(colors) = combo_key_colors.get(*ki) {
                 if !colors.is_empty() {
-                    if emphasize_selected_combo {
-                        if let Some((_, selected_color)) = colors
-                            .iter()
-                            .find(|(combo_idx, _)| *combo_idx == self.selected_combo)
-                        {
-                            paint_layout_keycap(
-                                painter,
-                                draw_rect.shrink(1.5),
-                                key.rotation,
-                                Color32::TRANSPARENT,
-                                Stroke::new(2.0, selected_color.gamma_multiply(0.95)),
-                            );
-                        }
+                    if let Some((_, selected_color)) = colors
+                        .iter()
+                        .find(|(combo_idx, _)| *combo_idx == self.selected_combo)
+                    {
+                        paint_layout_keycap(
+                            painter,
+                            draw_rect.shrink(1.5),
+                            key.rotation,
+                            Color32::TRANSPARENT,
+                            Stroke::new(2.0, selected_color.gamma_multiply(0.95)),
+                        );
                     }
                     paint_combo_color_markers(painter, draw_rect, colors, dark);
                 }
@@ -972,26 +969,36 @@ fn paint_combo_color_markers(
     colors: &[(usize, Color32)],
     dark: bool,
 ) {
-    let marker_count = colors.len().min(4);
-    if marker_count == 0 {
+    let marker_colors = combo_conflict_marker_colors(colors);
+    let marker_count = marker_colors.len().min(4);
+    if marker_count < 2 {
         return;
     }
 
     let radius = (rect.width().min(rect.height()) * 0.06).clamp(2.2, 4.0);
     let gap = radius * 0.85;
-    let total_width = marker_count as f32 * radius * 2.0 + (marker_count - 1) as f32 * gap;
-    let mut x = rect.center().x - total_width * 0.5 + radius;
-    let y = rect.top() + radius + rect.height() * 0.08;
+    let x = rect.left() + radius + rect.width() * 0.08;
+    let mut y = rect.top() + radius + rect.height() * 0.08;
     let outline = if dark {
         Color32::from_rgb(38, 38, 40)
     } else {
         Color32::from_rgb(255, 255, 255)
     };
 
-    for (_, color) in colors.iter().take(marker_count) {
+    for color in marker_colors.iter().take(marker_count) {
         let center = egui::pos2(x, y);
         painter.circle_filled(center, radius + 1.0, outline);
         painter.circle_filled(center, radius, color.gamma_multiply(0.9));
-        x += radius * 2.0 + gap;
+        y += radius * 2.0 + gap;
     }
+}
+
+fn combo_conflict_marker_colors(colors: &[(usize, Color32)]) -> Vec<Color32> {
+    let mut marker_colors = Vec::new();
+    for (_, color) in colors {
+        if !marker_colors.contains(color) {
+            marker_colors.push(*color);
+        }
+    }
+    marker_colors
 }
