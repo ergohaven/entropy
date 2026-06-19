@@ -26,6 +26,19 @@ pub(crate) fn macos_hid_operation_lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 #[cfg(target_os = "macos")]
+pub(crate) fn initialize_macos_hid_on_main_thread() {
+    if macos_hid_scan_disabled_for_rosetta() {
+        return;
+    }
+
+    // hidapi's Darwin backend binds its global IOHIDManager to the first hid_init run loop.
+    let _hid_lock = macos_hid_operation_lock();
+    if let Err(error) = hidapi::HidApi::new() {
+        log::warn!("macOS HID initialization failed: {error}");
+    }
+}
+
+#[cfg(target_os = "macos")]
 pub(crate) fn macos_hid_scan_disabled_for_rosetta() -> bool {
     macos_running_under_rosetta()
 }
