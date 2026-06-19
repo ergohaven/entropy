@@ -106,6 +106,7 @@ jobs:
           cat > RELEASE_NOTES.md <<'EOF'
           ## What's new
 
+          - Fixed Windows Universal Symbols input in Thunderbird and browser form fields.
           - Fixed Windows Universal Symbols modifier release.
           - Fixed the slash key picker label.
           - Fixed top tab overlap at scaled widths.
