@@ -133,6 +133,47 @@ fn layer_export_label(
     }
 }
 
+fn export_safe_key_label(label: String) -> String {
+    match label.as_str() {
+        "⏻\nPower" => "Power".to_string(),
+        "🌙\nSleep" => "Sleep".to_string(),
+        "☀\nWake" => "Wake".to_string(),
+        "🔇\nMute" => "Mute".to_string(),
+        "🔊\nVol+" => "Vol\n+".to_string(),
+        "🔉\nVol-" => "Vol\n-".to_string(),
+        "⏭\nNext" => "Next\nTrack".to_string(),
+        "⏮\nPrev" => "Prev\nTrack".to_string(),
+        "⏹\nStop" => "Stop".to_string(),
+        "⏯\nPlay" => "Play\nPause".to_string(),
+        "🎵\nMedia" => "Media".to_string(),
+        "⏏\nEject" => "Eject".to_string(),
+        "✉\nMail" => "Mail".to_string(),
+        "🖩\nCalc" => "Calc".to_string(),
+        "💻\nFiles" => "Files".to_string(),
+        "🔍\nSearch" => "Search".to_string(),
+        "🏠\nHome" => "Home".to_string(),
+        _ => label,
+    }
+}
+
+fn export_keycode_label_with_macro_names(
+    value: u16,
+    custom: &[crate::keyboard::CustomKeycode],
+    layer_names: &[String],
+    macro_names: &[String],
+    tap_dance_names: &[String],
+    key_legend_layout: KeyLegendLayout,
+) -> String {
+    export_safe_key_label(keycode_label_with_macro_names(
+        value,
+        custom,
+        layer_names,
+        macro_names,
+        tap_dance_names,
+        key_legend_layout,
+    ))
+}
+
 fn draw_format_dropdown(
     ui: &mut egui::Ui,
     metrics: crate::ui_style::ResponsiveMetrics,
@@ -811,7 +852,7 @@ impl EntropyApp {
                         .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
                     match fallback {
                         Some(fallback_kc) => (
-                            keycode_label_with_macro_names(
+                            export_keycode_label_with_macro_names(
                                 fallback_kc,
                                 &layout.custom_keycodes,
                                 &self.layer_names,
@@ -825,7 +866,7 @@ impl EntropyApp {
                     }
                 }
                 value => (
-                    keycode_label_with_macro_names(
+                    export_keycode_label_with_macro_names(
                         value,
                         &layout.custom_keycodes,
                         &self.layer_names,
@@ -968,7 +1009,7 @@ impl EntropyApp {
                         .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
                     match fallback {
                         Some(fallback_kc) => (
-                            keycode_label_with_macro_names(
+                            export_keycode_label_with_macro_names(
                                 fallback_kc,
                                 &layout.custom_keycodes,
                                 &self.layer_names,
@@ -982,7 +1023,7 @@ impl EntropyApp {
                     }
                 }
                 value => (
-                    keycode_label_with_macro_names(
+                    export_keycode_label_with_macro_names(
                         value,
                         &layout.custom_keycodes,
                         &self.layer_names,
@@ -1274,7 +1315,7 @@ fn draw_encoder_export(
     );
 
     let encoder_value_label = |kc: u16| -> String {
-        keycode_label_with_macro_names(
+        export_keycode_label_with_macro_names(
             kc,
             &layout.custom_keycodes,
             &app.layer_names,
@@ -1405,7 +1446,7 @@ fn write_encoder_svg(
     )?;
 
     let encoder_value_label = |kc: u16| -> String {
-        keycode_label_with_macro_names(
+        export_keycode_label_with_macro_names(
             kc,
             &layout.custom_keycodes,
             &app.layer_names,
