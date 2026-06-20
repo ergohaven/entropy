@@ -1,6 +1,6 @@
 [package]
 name = "ergohaven-entropy"
-version = "1.14.23"
+version = "1.14.24"
 edition = "2021"
 description = "Desktop app for configuring Vial-QMK and Vial-RMK programmable keyboards and input devices"
 authors = ["Ergohaven"]
