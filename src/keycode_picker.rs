@@ -615,13 +615,6 @@ impl KeycodePicker {
                     .max_height(key_picker_popup_scroll_height(popup_size))
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        if let Some(value) = show_grouped_popup_choice_buttons(
-                            ui,
-                            vec![("Layers", layer_choices)],
-                            self.language,
-                        ) {
-                            self.set_macro_key_pick_value(macro_idx, action_idx, value);
-                        }
                         if self.macro_key_pick.is_some() {
                             if let Some(value) = show_grouped_popup_key_buttons(
                                 ui,
@@ -630,6 +623,15 @@ impl KeycodePicker {
                                 true,
                                 self.language,
                                 self.key_legend_layout,
+                            ) {
+                                self.set_macro_key_pick_value(macro_idx, action_idx, value);
+                            }
+                        }
+                        if self.macro_key_pick.is_some() {
+                            if let Some(value) = show_grouped_popup_choice_buttons(
+                                ui,
+                                vec![("Layers", layer_choices)],
+                                self.language,
                             ) {
                                 self.set_macro_key_pick_value(macro_idx, action_idx, value);
                             }
