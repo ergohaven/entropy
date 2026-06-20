@@ -49,11 +49,31 @@ impl EntropyApp {
     }
 
     pub(super) fn save_text_expander_settings(&mut self) {
+        self.text_expander_settings_save_pending = false;
         save_text_expansion_rules(&self.app_settings.text_expansion_rules);
         self.text_expander_rules_signature =
             text_expander_rules_signature(&self.app_settings.text_expander_rule_files);
         save_app_settings(&self.app_settings);
         self.sync_text_expander_runtime();
+    }
+
+    pub(super) fn queue_text_expander_settings_save(&mut self, now: f64) {
+        self.text_expander_settings_save_pending = true;
+        self.text_expander_settings_last_edit_at = now;
+    }
+
+    pub(super) fn flush_pending_text_expander_settings(&mut self) {
+        if self.text_expander_settings_save_pending {
+            self.save_text_expander_settings();
+        }
+    }
+
+    pub(super) fn poll_text_expander_deferred_save(&mut self, now: f64) {
+        if self.text_expander_settings_save_pending
+            && now - self.text_expander_settings_last_edit_at >= TEXT_EXPANDER_SAVE_DEBOUNCE_SECS
+        {
+            self.save_text_expander_settings();
+        }
     }
 
     pub(super) fn add_text_expander_blacklist_app(&mut self, app_name: &str) -> bool {
@@ -125,6 +145,9 @@ impl EntropyApp {
     }
 
     pub(super) fn auto_reload_text_expander_rules_file(&mut self, now: f64) {
+        if self.text_expander_settings_save_pending {
+            return;
+        }
         if now - self.text_expander_rules_last_check_at < 1.0 {
             return;
         }

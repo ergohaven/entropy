@@ -9,6 +9,7 @@ pub(crate) const MATRIX_TESTER_LOCK_CHECK_INTERVAL: std::time::Duration =
 pub(crate) const UI_SCALE_MIN: f32 = 0.5;
 pub(crate) const UI_SCALE_MAX: f32 = 2.0;
 pub(crate) const UI_SCALE_STEP: f32 = 0.1;
+pub(crate) const TEXT_EXPANDER_SAVE_DEBOUNCE_SECS: f64 = 0.45;
 pub(crate) const ONBOARDING_TOUR_VERSION: u16 = 1;
 pub(crate) const COMBO_NO_COLOR: u32 = 0x000000;
 pub(crate) const COMBO_COLOR_SEED_PALETTE: [u32; 16] = [
@@ -1369,6 +1370,8 @@ pub struct EntropyApp {
     pub(crate) app_settings: AppSettings,
     pub(crate) text_expander_rules_signature: Vec<(String, Option<std::time::SystemTime>)>,
     pub(crate) text_expander_rules_last_check_at: f64,
+    pub(crate) text_expander_settings_save_pending: bool,
+    pub(crate) text_expander_settings_last_edit_at: f64,
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub(crate) tray_icon: Option<tray_icon::TrayIcon>,
     #[cfg(target_os = "windows")]

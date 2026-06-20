@@ -246,6 +246,7 @@ impl eframe::App for EntropyApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         #[cfg(not(target_arch = "wasm32"))]
         self.fallback_entropy_display_presets_before_exit();
+        self.flush_pending_text_expander_settings();
         save_app_settings(&self.app_settings);
     }
 
@@ -315,6 +316,7 @@ impl eframe::App for EntropyApp {
         let now = ctx.input(|i| i.time);
         #[cfg(not(target_arch = "wasm32"))]
         self.handle_pending_imports(ctx, now);
+        self.poll_text_expander_deferred_save(now);
         self.auto_reload_text_expander_rules_file(now);
         let is_connecting = matches!(self.connect_state, ConnectState::Loading { .. });
         #[cfg(target_os = "macos")]

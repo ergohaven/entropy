@@ -82,10 +82,10 @@ impl EntropyApp {
                 continue;
             }
 
-            let blacklist_entries =
-                parse_text_expander_blacklist(&self.app_settings.text_expander_app_blacklist);
-            let window_candidates = self.text_expander_window_candidates(&blacklist_entries);
             if row_idx == 1 {
+                let blacklist_entries =
+                    parse_text_expander_blacklist(&self.app_settings.text_expander_app_blacklist);
+                let window_candidates = self.text_expander_window_candidates(&blacklist_entries);
                 let control_width = metrics.value(250.0);
                 let mut add_app: Option<String> = None;
                 let mut remove_app: Option<String> = None;
@@ -972,6 +972,7 @@ impl EntropyApp {
             let mut rule = original_rule.clone();
             let mut delete_rule = false;
             let mut changed = false;
+            let mut should_flush_save = false;
             let issue = self.text_expander_rule_issue(idx, &rule);
             let label = format!(
                 "{}{} {}",
@@ -1062,8 +1063,13 @@ impl EntropyApp {
                             )),
                         );
                     });
-                    if trigger_resp.is_some_and(|resp| resp.changed()) {
-                        changed = true;
+                    if let Some(resp) = trigger_resp {
+                        if resp.changed() {
+                            changed = true;
+                        }
+                        if resp.lost_focus() {
+                            should_flush_save = true;
+                        }
                     }
 
                     let mut replacement_resp = None;
@@ -1085,8 +1091,13 @@ impl EntropyApp {
                             )),
                         );
                     });
-                    if replacement_resp.is_some_and(|resp| resp.changed()) {
-                        changed = true;
+                    if let Some(resp) = replacement_resp {
+                        if resp.changed() {
+                            changed = true;
+                        }
+                        if resp.lost_focus() {
+                            should_flush_save = true;
+                        }
                     }
 
                     let mut delete_clicked = false;
@@ -1108,7 +1119,11 @@ impl EntropyApp {
                 if let Some(stored_rule) = self.app_settings.text_expansion_rules.get_mut(idx) {
                     *stored_rule = rule;
                 }
-                self.save_text_expander_settings();
+                let now = ui.input(|input| input.time);
+                self.queue_text_expander_settings_save(now);
+                if should_flush_save {
+                    self.flush_pending_text_expander_settings();
+                }
             }
         }
     }
