@@ -14,6 +14,13 @@ fn entlayout_export_label(lang: crate::i18n::Language) -> &'static str {
     }
 }
 
+fn layout_image_export_label(lang: crate::i18n::Language) -> &'static str {
+    match lang {
+        crate::i18n::Language::Russian => "Экспорт картинки",
+        crate::i18n::Language::English => "Export image",
+    }
+}
+
 impl EntropyApp {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_layout_device_dropdown(
@@ -39,7 +46,7 @@ impl EntropyApp {
             let devices_h = 12.0 + device_rows * 30.0;
             let sticky_layout_h = 36.0;
             #[cfg(not(target_arch = "wasm32"))]
-            let import_export_h = 72.0;
+            let import_export_h = 102.0;
             #[cfg(target_arch = "wasm32")]
             let import_export_h = 0.0;
             let show_key_legend_switcher = self.app_settings.key_legend_layout.is_multilingual();
@@ -67,6 +74,7 @@ impl EntropyApp {
             {
                 device_menu_labels.push(entlayout_import_label(lang).to_owned());
                 device_menu_labels.push(entlayout_export_label(lang).to_owned());
+                device_menu_labels.push(layout_image_export_label(lang).to_owned());
             }
             device_menu_labels
                 .push(crate::i18n::tr_catalog(lang, "ui.sticky_layout_window_label").to_owned());
@@ -206,6 +214,19 @@ impl EntropyApp {
                                     {
                                         self.close_top_dropdowns(ctx);
                                         self.export_entlayout_dialog();
+                                        ctx.request_repaint();
+                                    }
+                                    if top_dropdown_item(
+                                        ui,
+                                        dropdown_size.x - 16.0,
+                                        layout_image_export_label(lang),
+                                        self.layout.is_some(),
+                                        false,
+                                    )
+                                    .clicked()
+                                    {
+                                        self.close_top_dropdowns(ctx);
+                                        self.open_layout_image_export_page();
                                         ctx.request_repaint();
                                     }
                                 }

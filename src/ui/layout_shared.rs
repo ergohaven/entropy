@@ -128,7 +128,7 @@ pub(crate) fn layout_keycap_rect(
     )
 }
 
-fn rotate_layout_point(
+pub(crate) fn rotate_layout_point(
     x: f32,
     y: f32,
     origin_x: f32,
@@ -159,7 +159,7 @@ fn rotated_item_center(
     rotate_layout_point(x + w * 0.5, y + h * 0.5, rotation_x, rotation_y, rotation)
 }
 
-fn rotated_item_aabb(
+pub(crate) fn rotated_item_aabb(
     x: f32,
     y: f32,
     w: f32,

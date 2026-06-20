@@ -1301,6 +1301,38 @@ pub(crate) enum SettingsTab {
     KeyOverrides,
     AltRepeat,
     MouseKeys,
+    LayoutImageExport,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LayoutImageExportTheme {
+    Current,
+    Light,
+    Dark,
+}
+
+impl Default for LayoutImageExportTheme {
+    fn default() -> Self {
+        Self::Current
+    }
+}
+
+pub(crate) struct LayoutImageExportState {
+    pub(crate) theme: LayoutImageExportTheme,
+    pub(crate) key_legend_layout: KeyLegendLayout,
+    pub(crate) show_layer_names: bool,
+    pub(crate) selected_layers: Vec<bool>,
+}
+
+impl Default for LayoutImageExportState {
+    fn default() -> Self {
+        Self {
+            theme: LayoutImageExportTheme::Current,
+            key_legend_layout: KeyLegendLayout::default(),
+            show_layer_names: true,
+            selected_layers: Vec::new(),
+        }
+    }
 }
 
 pub(crate) const LAYOUT_BASE_UNIT: f32 = 54.0_f32 * 1.15;
@@ -1371,6 +1403,7 @@ pub struct EntropyApp {
     pub(crate) jump_back_stack: Vec<usize>,
     pub(crate) dark_mode: bool,
     pub(crate) app_settings: AppSettings,
+    pub(crate) layout_image_export: LayoutImageExportState,
     pub(crate) text_expander_rules_signature: Vec<(String, Option<std::time::SystemTime>)>,
     pub(crate) text_expander_rules_last_check_at: f64,
     pub(crate) text_expander_settings_save_pending: bool,

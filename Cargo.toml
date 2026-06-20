@@ -1,6 +1,6 @@
 [package]
 name = "ergohaven-entropy"
-version = "1.14.26"
+version = "1.14.27"
 edition = "2021"
 description = "Desktop app for configuring Vial-QMK and Vial-RMK programmable keyboards and input devices"
 authors = ["Ergohaven"]
@@ -44,6 +44,8 @@ lzma-rs = "0.3"
 anyhow = "1"
 chrono = "0.4"
 base64 = "0.21"
+ab_glyph = "0.2"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = "0.15"

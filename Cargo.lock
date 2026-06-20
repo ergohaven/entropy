@@ -1311,8 +1311,9 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "ergohaven-entropy"
-version = "1.14.26"
+version = "1.14.27"
 dependencies = [
+ "ab_glyph",
  "anyhow",
  "base64",
  "chrono",
@@ -1323,6 +1324,7 @@ dependencies = [
  "flate2",
  "getrandom 0.2.17",
  "hidapi",
+ "image",
  "log",
  "lzma-rs",
  "objc",

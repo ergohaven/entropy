@@ -1,0 +1,1313 @@
+use super::*;
+
+#[cfg(not(target_arch = "wasm32"))]
+use ab_glyph::{point, Font, FontArc, ScaleFont};
+#[cfg(not(target_arch = "wasm32"))]
+use image::{Rgba, RgbaImage};
+
+const EXPORT_LAYOUT_UNIT: f32 = 74.0;
+const EXPORT_KEY_PADDING: f32 = 3.5;
+const EXPORT_MARGIN: f32 = 48.0;
+const EXPORT_LAYER_HEADER_H: f32 = 44.0;
+const EXPORT_LAYER_HEADER_H_HIDDEN: f32 = 16.0;
+const EXPORT_LAYER_GAP: f32 = 42.0;
+const EXPORT_MAX_SIDE: f32 = 12_000.0;
+
+fn export_text(lang: crate::i18n::Language, key: &str) -> &'static str {
+    match (lang, key) {
+        (crate::i18n::Language::Russian, "title") => "Экспорт картинки раскладки",
+        (crate::i18n::Language::English, "title") => "Export layout image",
+        (crate::i18n::Language::Russian, "description") => {
+            "PNG с выбранными слоями, темой и легендами клавиш"
+        }
+        (crate::i18n::Language::English, "description") => {
+            "PNG with selected layers, theme, and key legends"
+        }
+        (crate::i18n::Language::Russian, "theme") => "Тема",
+        (crate::i18n::Language::English, "theme") => "Theme",
+        (crate::i18n::Language::Russian, "theme_tooltip") => "Выбрать тему экспортируемой картинки",
+        (crate::i18n::Language::English, "theme_tooltip") => "Choose exported image theme",
+        (crate::i18n::Language::Russian, "legends") => "Легенды клавиш",
+        (crate::i18n::Language::English, "legends") => "Key legends",
+        (crate::i18n::Language::Russian, "legends_tooltip") => {
+            "Выбрать английские или русские подписи клавиш"
+        }
+        (crate::i18n::Language::English, "legends_tooltip") => {
+            "Choose English or Russian key labels"
+        }
+        (crate::i18n::Language::Russian, "layer_names") => "Названия слоёв",
+        (crate::i18n::Language::English, "layer_names") => "Layer names",
+        (crate::i18n::Language::Russian, "layer_names_tooltip") => {
+            "Показывать заголовок над каждым экспортируемым слоем"
+        }
+        (crate::i18n::Language::English, "layer_names_tooltip") => {
+            "Show a title above each exported layer"
+        }
+        (crate::i18n::Language::Russian, "layer_tooltip") => {
+            "Добавить слой в экспортируемую картинку"
+        }
+        (crate::i18n::Language::English, "layer_tooltip") => {
+            "Include this layer in the exported image"
+        }
+        (crate::i18n::Language::Russian, "export") => "Экспорт PNG",
+        (crate::i18n::Language::English, "export") => "Export PNG",
+        (crate::i18n::Language::Russian, "select_layer") => {
+            "Выберите хотя бы один слой для экспорта"
+        }
+        (crate::i18n::Language::English, "select_layer") => "Select at least one layer to export",
+        (crate::i18n::Language::Russian, "saved") => "Картинка раскладки экспортирована",
+        (crate::i18n::Language::English, "saved") => "Layout image exported",
+        (crate::i18n::Language::Russian, "failed") => "Не удалось экспортировать картинку",
+        (crate::i18n::Language::English, "failed") => "Failed to export layout image",
+        _ => "",
+    }
+}
+
+fn export_theme_label(lang: crate::i18n::Language, theme: LayoutImageExportTheme) -> &'static str {
+    match (lang, theme) {
+        (crate::i18n::Language::Russian, LayoutImageExportTheme::Current) => "Текущая",
+        (crate::i18n::Language::English, LayoutImageExportTheme::Current) => "Current",
+        (crate::i18n::Language::Russian, LayoutImageExportTheme::Light) => "Светлая",
+        (crate::i18n::Language::English, LayoutImageExportTheme::Light) => "Light",
+        (crate::i18n::Language::Russian, LayoutImageExportTheme::Dark) => "Тёмная",
+        (crate::i18n::Language::English, LayoutImageExportTheme::Dark) => "Dark",
+    }
+}
+
+fn export_key_legend_label(
+    lang: crate::i18n::Language,
+    key_legend_layout: KeyLegendLayout,
+) -> &'static str {
+    match (lang, key_legend_layout) {
+        (crate::i18n::Language::Russian, KeyLegendLayout::English) => "English",
+        (crate::i18n::Language::English, KeyLegendLayout::English) => "English",
+        (crate::i18n::Language::Russian, KeyLegendLayout::Russian) => "Русская: EN сверху",
+        (crate::i18n::Language::English, KeyLegendLayout::Russian) => "Russian: EN first",
+        (crate::i18n::Language::Russian, KeyLegendLayout::RussianPrimary) => "Русская: RU сверху",
+        (crate::i18n::Language::English, KeyLegendLayout::RussianPrimary) => "Russian: RU first",
+    }
+}
+
+fn layer_export_label(
+    lang: crate::i18n::Language,
+    layer_names: &[String],
+    layer_idx: usize,
+) -> String {
+    let raw = layer_names
+        .get(layer_idx)
+        .map(|name| name.trim())
+        .unwrap_or("");
+    if !raw.is_empty() && raw != layer_idx.to_string() {
+        return format!("{layer_idx}. {raw}");
+    }
+
+    match lang {
+        crate::i18n::Language::Russian => format!("Слой {layer_idx}"),
+        crate::i18n::Language::English => format!("Layer {layer_idx}"),
+    }
+}
+
+fn draw_theme_dropdown(
+    ui: &mut egui::Ui,
+    metrics: crate::ui_style::ResponsiveMetrics,
+    dark: bool,
+    lang: crate::i18n::Language,
+    selected_theme: &mut LayoutImageExportTheme,
+) {
+    let dropdown_id = ui.make_persistent_id("layout_image_export_theme_dropdown");
+    let dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
+        ui,
+        dropdown_id,
+        export_theme_label(lang, *selected_theme),
+        ui.visuals().text_color(),
+        metrics.settings_control_width(),
+        metrics.settings_control_height(),
+        metrics.settings_control_font_size(),
+    );
+    egui::popup_below_widget(
+        ui,
+        dropdown_id,
+        &dropdown_resp,
+        egui::PopupCloseBehavior::CloseOnClickOutside,
+        |ui| {
+            ui.set_min_width(metrics.settings_control_width());
+            ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
+            for theme in [
+                LayoutImageExportTheme::Current,
+                LayoutImageExportTheme::Light,
+                LayoutImageExportTheme::Dark,
+            ] {
+                let selected = theme == *selected_theme;
+                let (option_rect, option_resp) =
+                    ui.allocate_exact_size(metrics.size(168.0, 28.0), Sense::click());
+                if option_resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                let option_fill = if selected {
+                    if dark {
+                        Color32::from_rgb(58, 58, 61)
+                    } else {
+                        Color32::from_rgb(236, 236, 238)
+                    }
+                } else if option_resp.hovered() {
+                    crate::ui_style::hover_fill(dark)
+                } else {
+                    Color32::TRANSPARENT
+                };
+                ui.painter().rect_filled(option_rect, 7.0, option_fill);
+                ui.painter().text(
+                    egui::pos2(
+                        option_rect.left() + metrics.value(10.0),
+                        option_rect.center().y,
+                    ),
+                    egui::Align2::LEFT_CENTER,
+                    export_theme_label(lang, theme),
+                    FontId::proportional(metrics.value(12.0)),
+                    if selected {
+                        ui.visuals().text_color()
+                    } else {
+                        app_muted_text(dark)
+                    },
+                );
+                if option_resp.clicked() {
+                    *selected_theme = theme;
+                    ui.memory_mut(|m| m.close_popup());
+                }
+            }
+        },
+    );
+}
+
+fn draw_key_legend_dropdown(
+    ui: &mut egui::Ui,
+    metrics: crate::ui_style::ResponsiveMetrics,
+    dark: bool,
+    lang: crate::i18n::Language,
+    selected_layout: &mut KeyLegendLayout,
+) {
+    let dropdown_id = ui.make_persistent_id("layout_image_export_legends_dropdown");
+    let dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
+        ui,
+        dropdown_id,
+        export_key_legend_label(lang, *selected_layout),
+        ui.visuals().text_color(),
+        metrics.settings_control_width(),
+        metrics.settings_control_height(),
+        metrics.settings_control_font_size(),
+    );
+    egui::popup_below_widget(
+        ui,
+        dropdown_id,
+        &dropdown_resp,
+        egui::PopupCloseBehavior::CloseOnClickOutside,
+        |ui| {
+            ui.set_min_width(metrics.settings_control_width());
+            ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
+            for layout in [
+                KeyLegendLayout::English,
+                KeyLegendLayout::Russian,
+                KeyLegendLayout::RussianPrimary,
+            ] {
+                let selected = layout == *selected_layout;
+                let (option_rect, option_resp) =
+                    ui.allocate_exact_size(metrics.size(168.0, 28.0), Sense::click());
+                if option_resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                let option_fill = if selected {
+                    if dark {
+                        Color32::from_rgb(58, 58, 61)
+                    } else {
+                        Color32::from_rgb(236, 236, 238)
+                    }
+                } else if option_resp.hovered() {
+                    crate::ui_style::hover_fill(dark)
+                } else {
+                    Color32::TRANSPARENT
+                };
+                ui.painter().rect_filled(option_rect, 7.0, option_fill);
+                ui.painter().text(
+                    egui::pos2(
+                        option_rect.left() + metrics.value(10.0),
+                        option_rect.center().y,
+                    ),
+                    egui::Align2::LEFT_CENTER,
+                    export_key_legend_label(lang, layout),
+                    FontId::proportional(metrics.value(12.0)),
+                    if selected {
+                        ui.visuals().text_color()
+                    } else {
+                        app_muted_text(dark)
+                    },
+                );
+                if option_resp.clicked() {
+                    *selected_layout = layout;
+                    ui.memory_mut(|m| m.close_popup());
+                }
+            }
+        },
+    );
+}
+
+impl EntropyApp {
+    pub(super) fn open_layout_image_export_page(&mut self) {
+        let layer_count = self.layer_count.max(1);
+        self.ensure_layout_image_export_layers(layer_count);
+        self.layout_image_export.key_legend_layout = self.app_settings.key_legend_layout;
+        self.settings_tab = SettingsTab::LayoutImageExport;
+        self.main_menu_tab = MainMenuTab::Settings;
+    }
+
+    pub(super) fn draw_layout_image_export_page(
+        &mut self,
+        ui: &mut egui::Ui,
+        layout: &KeyboardLayout,
+        content_rect: egui::Rect,
+    ) {
+        let lang = self.app_settings.language;
+        let dark = ui.visuals().dark_mode;
+        let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
+        let layer_count = self.layer_count.max(layout.layers.len()).max(1);
+        self.ensure_layout_image_export_layers(layer_count);
+
+        ui.allocate_ui_at_rect(content_rect, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(metrics.value(18.0));
+                ui.label(
+                    RichText::new(export_text(lang, "title"))
+                        .size(metrics.value(18.0))
+                        .strong(),
+                );
+                ui.add_space(metrics.value(6.0));
+                ui.label(
+                    RichText::new(export_text(lang, "description"))
+                        .size(metrics.value(13.0))
+                        .color(app_muted_text(dark)),
+                );
+                ui.add_space(metrics.value(24.0));
+
+                let total_rows = 3 + layer_count;
+                let list = allocate_adaptive_settings_list_viewport(
+                    ui,
+                    "layout_image_export",
+                    metrics,
+                    total_rows,
+                    metrics.value(44.0),
+                );
+
+                ui.allocate_ui_at_rect(list.content_rect, |ui| {
+                    ui.set_clip_rect(list.viewport);
+                    ui.set_min_size(list.content_rect.size());
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    self.draw_layout_image_export_rows(
+                        ui,
+                        list.first_visible_row..list.last_visible_row,
+                        list.row_content_width,
+                        list.row_height,
+                        metrics,
+                        dark,
+                        list.suppress_tooltips,
+                    );
+                });
+
+                if list.has_scrollbar {
+                    crate::ui_style::paint_floating_scrollbar_handle(
+                        ui,
+                        list.track_rect,
+                        list.handle_height,
+                        list.scroll_ratio,
+                        list.track_hovered,
+                    );
+                }
+
+                let selected_layers = self
+                    .layout_image_export
+                    .selected_layers
+                    .iter()
+                    .take(layer_count)
+                    .filter(|selected| **selected)
+                    .count();
+                let export_enabled = selected_layers > 0;
+                let button_size = metrics.size(168.0, 32.0);
+                let button_rect = egui::Rect::from_center_size(
+                    egui::pos2(
+                        list.viewport.center().x,
+                        list.viewport.bottom() + metrics.value(34.0),
+                    ),
+                    button_size,
+                );
+                ui.allocate_ui_at_rect(button_rect, |ui| {
+                    ui.set_min_size(button_rect.size());
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if crate::ui_style::modern_button(
+                        ui,
+                        export_text(lang, "export"),
+                        button_size,
+                        export_enabled,
+                    )
+                    .clicked()
+                    {
+                        self.export_layout_image_dialog(layout);
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        let _ = crate::ui_style::modern_button(
+                            ui,
+                            export_text(lang, "export"),
+                            button_size,
+                            false,
+                        );
+                    }
+                });
+            });
+        });
+    }
+
+    fn ensure_layout_image_export_layers(&mut self, layer_count: usize) {
+        let previous_len = self.layout_image_export.selected_layers.len();
+        if previous_len < layer_count {
+            self.layout_image_export
+                .selected_layers
+                .resize(layer_count, true);
+        } else if previous_len > layer_count {
+            self.layout_image_export
+                .selected_layers
+                .truncate(layer_count);
+        }
+    }
+
+    fn draw_layout_image_export_rows(
+        &mut self,
+        ui: &mut egui::Ui,
+        row_range: std::ops::Range<usize>,
+        content_width: f32,
+        row_height: f32,
+        metrics: crate::ui_style::ResponsiveMetrics,
+        dark: bool,
+        suppress_tooltips: bool,
+    ) {
+        let lang = self.app_settings.language;
+        let tooltip = |text: &'static str| (!suppress_tooltips).then_some(text);
+        let switch_width = metrics.value(46.0);
+        let switch_size = metrics.size(46.0, 24.0);
+
+        for row_idx in row_range {
+            match row_idx {
+                0 => {
+                    let mut theme = self.layout_image_export.theme;
+                    crate::ui_style::settings_list_row_with_tooltip(
+                        ui,
+                        content_width,
+                        row_height,
+                        export_text(lang, "theme"),
+                        true,
+                        tooltip(export_text(lang, "theme_tooltip")),
+                        metrics.settings_control_width(),
+                        |ui| draw_theme_dropdown(ui, metrics, dark, lang, &mut theme),
+                    );
+                    self.layout_image_export.theme = theme;
+                }
+                1 => {
+                    let mut key_legend_layout = self.layout_image_export.key_legend_layout;
+                    crate::ui_style::settings_list_row_with_tooltip(
+                        ui,
+                        content_width,
+                        row_height,
+                        export_text(lang, "legends"),
+                        true,
+                        tooltip(export_text(lang, "legends_tooltip")),
+                        metrics.settings_control_width(),
+                        |ui| {
+                            draw_key_legend_dropdown(
+                                ui,
+                                metrics,
+                                dark,
+                                lang,
+                                &mut key_legend_layout,
+                            )
+                        },
+                    );
+                    self.layout_image_export.key_legend_layout = key_legend_layout;
+                }
+                2 => {
+                    let mut show_layer_names = self.layout_image_export.show_layer_names;
+                    crate::ui_style::settings_list_row_with_tooltip(
+                        ui,
+                        content_width,
+                        row_height,
+                        export_text(lang, "layer_names"),
+                        true,
+                        tooltip(export_text(lang, "layer_names_tooltip")),
+                        switch_width,
+                        |ui| {
+                            let _ = crate::ui_style::settings_switch_sized_stable(
+                                ui,
+                                "layout_image_export_layer_names",
+                                &mut show_layer_names,
+                                switch_size,
+                            );
+                        },
+                    );
+                    self.layout_image_export.show_layer_names = show_layer_names;
+                }
+                layer_row => {
+                    let layer_idx = layer_row - 3;
+                    let Some(selected) = self
+                        .layout_image_export
+                        .selected_layers
+                        .get(layer_idx)
+                        .copied()
+                    else {
+                        continue;
+                    };
+                    let mut selected = selected;
+                    let label = layer_export_label(lang, &self.layer_names, layer_idx);
+                    crate::ui_style::settings_list_row_with_tooltip(
+                        ui,
+                        content_width,
+                        row_height,
+                        label.as_str(),
+                        true,
+                        tooltip(export_text(lang, "layer_tooltip")),
+                        switch_width,
+                        |ui| {
+                            let _ = crate::ui_style::settings_switch_sized_stable(
+                                ui,
+                                ("layout_image_export_layer", layer_idx),
+                                &mut selected,
+                                switch_size,
+                            );
+                        },
+                    );
+                    if let Some(slot) = self.layout_image_export.selected_layers.get_mut(layer_idx)
+                    {
+                        *slot = selected;
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn export_layout_image_dialog(&mut self, layout: &KeyboardLayout) {
+        let lang = self.app_settings.language;
+        let selected_layers: Vec<usize> = self
+            .layout_image_export
+            .selected_layers
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, selected)| selected.then_some(idx))
+            .collect();
+        if selected_layers.is_empty() {
+            self.status_msg = export_text(lang, "select_layer").into();
+            return;
+        }
+
+        let file_name = format!("{}-layout.png", device_id_slug(&layout.name));
+        let Some(mut path) = rfd::FileDialog::new()
+            .add_filter("PNG image", &["png"])
+            .set_file_name(&file_name)
+            .save_file()
+        else {
+            return;
+        };
+        if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| !ext.eq_ignore_ascii_case("png"))
+            .unwrap_or(true)
+        {
+            path.set_extension("png");
+        }
+
+        match self.render_layout_image(layout, &selected_layers) {
+            Ok(image) => match image.save(&path) {
+                Ok(()) => {
+                    self.status_msg = format!("{}: {}", export_text(lang, "saved"), path.display());
+                }
+                Err(e) => {
+                    self.status_msg = format!("{}: {e}", export_text(lang, "failed"));
+                }
+            },
+            Err(e) => {
+                self.status_msg = format!("{}: {e}", export_text(lang, "failed"));
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn render_layout_image(
+        &self,
+        layout: &KeyboardLayout,
+        selected_layers: &[usize],
+    ) -> anyhow::Result<RgbaImage> {
+        let font = FontArc::try_from_slice(include_bytes!("../../assets/DejaVuSans.ttf"))
+            .map_err(|_| anyhow::anyhow!("failed to load export font"))?;
+        let bounds =
+            export_layout_bounds(layout, self.layout_options_value, &self.encoder_visibility)
+                .ok_or_else(|| anyhow::anyhow!("layout has no visible keys"))?;
+        let span_x = (bounds.right() - bounds.left()).max(1.0);
+        let span_y = (bounds.bottom() - bounds.top()).max(1.0);
+        let header_h = if self.layout_image_export.show_layer_names {
+            EXPORT_LAYER_HEADER_H
+        } else {
+            EXPORT_LAYER_HEADER_H_HIDDEN
+        };
+        let layout_w = span_x * EXPORT_LAYOUT_UNIT;
+        let layout_h = span_y * EXPORT_LAYOUT_UNIT;
+        let width = (layout_w + EXPORT_MARGIN * 2.0)
+            .ceil()
+            .clamp(1.0, EXPORT_MAX_SIDE);
+        let height = (EXPORT_MARGIN * 2.0
+            + selected_layers.len() as f32 * (header_h + layout_h)
+            + selected_layers.len().saturating_sub(1) as f32 * EXPORT_LAYER_GAP)
+            .ceil()
+            .clamp(1.0, EXPORT_MAX_SIDE);
+        if width >= EXPORT_MAX_SIDE || height >= EXPORT_MAX_SIDE {
+            anyhow::bail!("export image would be too large");
+        }
+
+        let dark = match self.layout_image_export.theme {
+            LayoutImageExportTheme::Current => self.dark_mode,
+            LayoutImageExportTheme::Light => false,
+            LayoutImageExportTheme::Dark => true,
+        };
+        let palette = ExportPalette::new(dark);
+        let mut image = RgbaImage::from_pixel(width as u32, height as u32, palette.background);
+
+        for (section_idx, layer_idx) in selected_layers.iter().copied().enumerate() {
+            let section_y =
+                EXPORT_MARGIN + section_idx as f32 * (header_h + layout_h + EXPORT_LAYER_GAP);
+            if self.layout_image_export.show_layer_names {
+                let title =
+                    layer_export_label(self.app_settings.language, &self.layer_names, layer_idx);
+                draw_text_centered_rotated(
+                    &mut image,
+                    &font,
+                    &title,
+                    width * 0.5,
+                    section_y + 18.0,
+                    18.0,
+                    palette.title_text,
+                    0.0,
+                );
+            }
+            let layout_y = section_y + header_h;
+            self.draw_export_layer(
+                &mut image, &font, layout, bounds, layer_idx, layout_y, palette,
+            );
+        }
+
+        Ok(image)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_export_layer(
+        &self,
+        image: &mut RgbaImage,
+        font: &FontArc,
+        layout: &KeyboardLayout,
+        bounds: egui::Rect,
+        layer_idx: usize,
+        layout_y: f32,
+        palette: ExportPalette,
+    ) {
+        let encoder_groups = export_encoder_groups(
+            layout,
+            bounds,
+            layout_y,
+            self.layout_options_value,
+            &self.encoder_visibility,
+        );
+
+        for (key_idx, key) in layout.keys.iter().enumerate() {
+            if !Self::layout_condition_visible(
+                layout,
+                key.layout_condition,
+                self.layout_options_value,
+            ) {
+                continue;
+            }
+            let rect = export_item_rect(
+                key.x,
+                key.y,
+                key.w,
+                key.h,
+                key.rotation,
+                key.rotation_x,
+                key.rotation_y,
+                bounds,
+                layout_y,
+            );
+            draw_rotated_rounded_rect(
+                image,
+                rect.center(),
+                rect.size(),
+                key.rotation.to_radians(),
+                7.0,
+                palette.key_fill,
+                palette.key_stroke,
+                1.4,
+            );
+
+            let kc = layout.get_keycode(layer_idx, key_idx);
+            let (label, dimmed) = match kc {
+                0x0000 => (String::new(), false),
+                0x0001 => {
+                    let fallback = (0..layer_idx)
+                        .rev()
+                        .map(|fallback_layer| layout.get_keycode(fallback_layer, key_idx))
+                        .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
+                    match fallback {
+                        Some(fallback_kc) => (
+                            keycode_label_with_macro_names(
+                                fallback_kc,
+                                &layout.custom_keycodes,
+                                &self.layer_names,
+                                &self.keycode_picker.macro_names,
+                                &self.keycode_picker.tap_dance_names,
+                                self.layout_image_export.key_legend_layout,
+                            ),
+                            true,
+                        ),
+                        None => (String::new(), false),
+                    }
+                }
+                value => (
+                    keycode_label_with_macro_names(
+                        value,
+                        &layout.custom_keycodes,
+                        &self.layer_names,
+                        &self.keycode_picker.macro_names,
+                        &self.keycode_picker.tap_dance_names,
+                        self.layout_image_export.key_legend_layout,
+                    ),
+                    false,
+                ),
+            };
+            if !label.is_empty() {
+                let label = number_row_shifted_label(
+                    label,
+                    self.app_settings.show_shifted_number_symbols,
+                    self.layout_image_export.key_legend_layout,
+                );
+                draw_key_label_export(
+                    image,
+                    font,
+                    rect,
+                    key.rotation.to_radians(),
+                    &label,
+                    palette,
+                    dimmed,
+                );
+            }
+        }
+
+        for group in encoder_groups {
+            draw_encoder_export(image, font, layout, layer_idx, &group, self, palette);
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy)]
+struct ExportPalette {
+    background: Rgba<u8>,
+    key_fill: Rgba<u8>,
+    key_stroke: Rgba<u8>,
+    text: Rgba<u8>,
+    top_text: Rgba<u8>,
+    dim_text: Rgba<u8>,
+    title_text: Rgba<u8>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ExportPalette {
+    fn new(dark: bool) -> Self {
+        if dark {
+            Self {
+                background: rgba(26, 26, 29),
+                key_fill: rgba(48, 48, 52),
+                key_stroke: rgba(68, 68, 74),
+                text: rgba(239, 233, 232),
+                top_text: rgba(142, 142, 158),
+                dim_text: rgba(86, 82, 88),
+                title_text: rgba(239, 233, 232),
+            }
+        } else {
+            Self {
+                background: rgba(246, 245, 244),
+                key_fill: rgba(255, 255, 255),
+                key_stroke: rgba(222, 222, 226),
+                text: rgba(28, 28, 32),
+                top_text: rgba(118, 118, 136),
+                dim_text: rgba(188, 188, 196),
+                title_text: rgba(32, 32, 36),
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+struct ExportEncoderGroup {
+    rect: egui::Rect,
+    ccw: Option<usize>,
+    cw: Option<usize>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn rgba(r: u8, g: u8, b: u8) -> Rgba<u8> {
+    Rgba([r, g, b, 255])
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn export_layout_bounds(
+    layout: &KeyboardLayout,
+    layout_options_value: Option<u32>,
+    encoder_visibility: &[bool],
+) -> Option<egui::Rect> {
+    let mut rect: Option<egui::Rect> = None;
+    for key in &layout.keys {
+        if !EntropyApp::layout_condition_visible(layout, key.layout_condition, layout_options_value)
+        {
+            continue;
+        }
+        let item_rect = layout_aabb_rect(
+            key.x,
+            key.y,
+            key.w,
+            key.h,
+            key.rotation,
+            key.rotation_x,
+            key.rotation_y,
+        );
+        rect = Some(rect.map(|rect| rect.union(item_rect)).unwrap_or(item_rect));
+    }
+    for encoder in &layout.encoders {
+        if !EntropyApp::layout_condition_visible(
+            layout,
+            encoder.layout_condition,
+            layout_options_value,
+        ) || !encoder_visibility
+            .get(encoder.encoder_idx as usize)
+            .copied()
+            .unwrap_or(true)
+        {
+            continue;
+        }
+        let item_rect = layout_aabb_rect(
+            encoder.x,
+            encoder.y,
+            encoder.w,
+            encoder.h,
+            encoder.rotation,
+            encoder.rotation_x,
+            encoder.rotation_y,
+        );
+        rect = Some(rect.map(|rect| rect.union(item_rect)).unwrap_or(item_rect));
+    }
+    rect
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn layout_aabb_rect(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    rotation: f32,
+    rotation_x: f32,
+    rotation_y: f32,
+) -> egui::Rect {
+    let (x1, y1, x2, y2) = rotated_item_aabb(x, y, w, h, rotation, rotation_x, rotation_y);
+    egui::Rect::from_min_max(egui::pos2(x1, y1), egui::pos2(x2, y2))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn export_item_rect(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    rotation: f32,
+    rotation_x: f32,
+    rotation_y: f32,
+    bounds: egui::Rect,
+    layout_y: f32,
+) -> egui::Rect {
+    let (center_x, center_y) =
+        rotate_layout_point(x + w * 0.5, y + h * 0.5, rotation_x, rotation_y, rotation);
+    let size = egui::vec2(
+        (w * EXPORT_LAYOUT_UNIT - EXPORT_KEY_PADDING * 2.0).max(1.0),
+        (h * EXPORT_LAYOUT_UNIT - EXPORT_KEY_PADDING * 2.0).max(1.0),
+    );
+    egui::Rect::from_center_size(
+        egui::pos2(
+            EXPORT_MARGIN + (center_x - bounds.left()) * EXPORT_LAYOUT_UNIT,
+            layout_y + (center_y - bounds.top()) * EXPORT_LAYOUT_UNIT,
+        ),
+        size,
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn export_encoder_groups(
+    layout: &KeyboardLayout,
+    bounds: egui::Rect,
+    layout_y: f32,
+    layout_options_value: Option<u32>,
+    encoder_visibility: &[bool],
+) -> Vec<ExportEncoderGroup> {
+    let mut groups: Vec<(u8, ExportEncoderGroup)> = Vec::new();
+    for (encoder_idx, encoder) in layout.encoders.iter().enumerate() {
+        if !EntropyApp::layout_condition_visible(
+            layout,
+            encoder.layout_condition,
+            layout_options_value,
+        ) || !encoder_visibility
+            .get(encoder.encoder_idx as usize)
+            .copied()
+            .unwrap_or(true)
+        {
+            continue;
+        }
+        let layout_rect = layout_aabb_rect(
+            encoder.x,
+            encoder.y,
+            encoder.w,
+            encoder.h,
+            encoder.rotation,
+            encoder.rotation_x,
+            encoder.rotation_y,
+        );
+        let rect = egui::Rect::from_min_max(
+            egui::pos2(
+                EXPORT_MARGIN + (layout_rect.left() - bounds.left()) * EXPORT_LAYOUT_UNIT,
+                layout_y + (layout_rect.top() - bounds.top()) * EXPORT_LAYOUT_UNIT,
+            ),
+            egui::pos2(
+                EXPORT_MARGIN + (layout_rect.right() - bounds.left()) * EXPORT_LAYOUT_UNIT,
+                layout_y + (layout_rect.bottom() - bounds.top()) * EXPORT_LAYOUT_UNIT,
+            ),
+        );
+        if let Some((_, group)) = groups
+            .iter_mut()
+            .find(|(idx, _)| *idx == encoder.encoder_idx)
+        {
+            group.rect = group.rect.union(rect);
+            if encoder.direction == 0 {
+                group.ccw = Some(encoder_idx);
+            } else {
+                group.cw = Some(encoder_idx);
+            }
+        } else {
+            groups.push((
+                encoder.encoder_idx,
+                ExportEncoderGroup {
+                    rect,
+                    ccw: if encoder.direction == 0 {
+                        Some(encoder_idx)
+                    } else {
+                        None
+                    },
+                    cw: if encoder.direction == 0 {
+                        None
+                    } else {
+                        Some(encoder_idx)
+                    },
+                },
+            ));
+        }
+    }
+    groups.into_iter().map(|(_, group)| group).collect()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn draw_encoder_export(
+    image: &mut RgbaImage,
+    font: &FontArc,
+    layout: &KeyboardLayout,
+    layer_idx: usize,
+    group: &ExportEncoderGroup,
+    app: &EntropyApp,
+    palette: ExportPalette,
+) {
+    let center = group.rect.center();
+    let radius = group.rect.width().min(group.rect.height()) * LAYOUT_ENCODER_RADIUS_FACTOR;
+    draw_circle(
+        image,
+        center.x,
+        center.y,
+        radius,
+        palette.key_fill,
+        palette.key_stroke,
+        1.4,
+    );
+    draw_line_segment(
+        image,
+        center.x - radius * 0.58,
+        center.y,
+        center.x + radius * 0.58,
+        center.y,
+        1.2,
+        palette.key_stroke,
+    );
+
+    let encoder_value_label = |kc: u16| -> String {
+        keycode_label_with_macro_names(
+            kc,
+            &layout.custom_keycodes,
+            &app.layer_names,
+            &app.keycode_picker.macro_names,
+            &app.keycode_picker.tap_dance_names,
+            app.layout_image_export.key_legend_layout,
+        )
+        .replace('\n', " ")
+    };
+    let encoder_label = |visual_idx: usize, kc: u16| -> (String, bool) {
+        match kc {
+            0x0000 => (String::new(), false),
+            0x0001 => {
+                let fallback = (0..layer_idx)
+                    .rev()
+                    .map(|fallback_layer| layout.get_encoder_keycode(fallback_layer, visual_idx))
+                    .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
+                match fallback {
+                    Some(fallback_kc) => (encoder_value_label(fallback_kc), true),
+                    None => ("▽".to_string(), false),
+                }
+            }
+            value => (encoder_value_label(value), false),
+        }
+    };
+
+    if let Some(visual_idx) = group.cw {
+        let (label, dimmed) = encoder_label(
+            visual_idx,
+            layout.get_encoder_keycode(layer_idx, visual_idx),
+        );
+        draw_text_centered_rotated(
+            image,
+            font,
+            &label,
+            center.x,
+            center.y - radius * 0.34,
+            fit_text_size(font, &label, 10.5, radius * 1.35, 6.5),
+            if dimmed {
+                palette.dim_text
+            } else {
+                palette.text
+            },
+            0.0,
+        );
+    }
+    if let Some(visual_idx) = group.ccw {
+        let (label, dimmed) = encoder_label(
+            visual_idx,
+            layout.get_encoder_keycode(layer_idx, visual_idx),
+        );
+        draw_text_centered_rotated(
+            image,
+            font,
+            &label,
+            center.x,
+            center.y + radius * 0.38,
+            fit_text_size(font, &label, 10.5, radius * 1.35, 6.5),
+            if dimmed {
+                palette.dim_text
+            } else {
+                palette.text
+            },
+            0.0,
+        );
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn draw_key_label_export(
+    image: &mut RgbaImage,
+    font: &FontArc,
+    rect: egui::Rect,
+    rotation: f32,
+    label: &str,
+    palette: ExportPalette,
+    dimmed: bool,
+) {
+    let lines: Vec<&str> = label
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if lines.is_empty() {
+        return;
+    }
+    let center = rect.center();
+    let scale = (rect.width().min(rect.height()) / 54.0).clamp(0.82, 1.35);
+    let available_width = (rect.width() - 11.0 * scale).max(1.0);
+    let main = if dimmed {
+        palette.dim_text
+    } else {
+        palette.text
+    };
+    let top = if dimmed {
+        palette.dim_text
+    } else {
+        palette.top_text
+    };
+
+    match lines.as_slice() {
+        [only] => {
+            let base = if *only == "↵" { 20.0 } else { 12.4 } * scale;
+            let size = fit_text_size(font, only, base, available_width, 7.0 * scale);
+            draw_text_centered_rotated(image, font, only, center.x, center.y, size, main, rotation);
+        }
+        [upper, lower] => {
+            let upper_size = fit_text_size(font, upper, 9.0 * scale, available_width, 5.8 * scale);
+            let lower_size = fit_text_size(font, lower, 12.0 * scale, available_width, 6.8 * scale);
+            let upper_offset = rotated_offset(0.0, -7.0 * scale, rotation);
+            let lower_offset = rotated_offset(0.0, 6.0 * scale, rotation);
+            draw_text_centered_rotated(
+                image,
+                font,
+                upper,
+                center.x + upper_offset.x,
+                center.y + upper_offset.y,
+                upper_size,
+                top,
+                rotation,
+            );
+            draw_text_centered_rotated(
+                image,
+                font,
+                lower,
+                center.x + lower_offset.x,
+                center.y + lower_offset.y,
+                lower_size,
+                main,
+                rotation,
+            );
+        }
+        _ => {
+            let line_count = lines.len().min(3);
+            for (idx, line) in lines.into_iter().take(3).enumerate() {
+                let y_offset = (idx as f32 - (line_count as f32 - 1.0) * 0.5) * 11.0 * scale;
+                let offset = rotated_offset(0.0, y_offset, rotation);
+                let base = if idx == 0 { 8.3 } else { 9.5 } * scale;
+                let size = fit_text_size(font, line, base, available_width, 5.5 * scale);
+                draw_text_centered_rotated(
+                    image,
+                    font,
+                    line,
+                    center.x + offset.x,
+                    center.y + offset.y,
+                    size,
+                    if idx == 0 { top } else { main },
+                    rotation,
+                );
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fit_text_size(
+    font: &FontArc,
+    text: &str,
+    base_size: f32,
+    available_width: f32,
+    min_size: f32,
+) -> f32 {
+    let width = measure_text(font, text, base_size).max(1.0);
+    if width <= available_width {
+        base_size
+    } else {
+        (base_size * available_width.max(1.0) / width).clamp(min_size, base_size)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn measure_text(font: &FontArc, text: &str, size: f32) -> f32 {
+    let scaled = font.as_scaled(size);
+    text.chars()
+        .map(|ch| scaled.h_advance(font.glyph_id(ch)))
+        .sum()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn draw_text_centered_rotated(
+    image: &mut RgbaImage,
+    font: &FontArc,
+    text: &str,
+    center_x: f32,
+    center_y: f32,
+    size: f32,
+    color: Rgba<u8>,
+    rotation: f32,
+) {
+    if text.trim().is_empty() {
+        return;
+    }
+    let scaled = font.as_scaled(size);
+    let width = measure_text(font, text, size);
+    let mut cursor_x = center_x - width * 0.5;
+    let baseline_y = center_y + size * 0.36;
+    let cos = rotation.cos();
+    let sin = rotation.sin();
+    for ch in text.chars() {
+        let glyph_id = font.glyph_id(ch);
+        let advance = scaled.h_advance(glyph_id);
+        let glyph = glyph_id.with_scale_and_position(size, point(cursor_x, baseline_y));
+        if let Some(outlined) = font.outline_glyph(glyph) {
+            let bounds = outlined.px_bounds();
+            outlined.draw(|x, y, coverage| {
+                let src_x = bounds.min.x + x as f32;
+                let src_y = bounds.min.y + y as f32;
+                let dx = src_x - center_x;
+                let dy = src_y - center_y;
+                let dst_x = center_x + dx * cos - dy * sin;
+                let dst_y = center_y + dx * sin + dy * cos;
+                blend_pixel(
+                    image,
+                    dst_x.round() as i32,
+                    dst_y.round() as i32,
+                    color,
+                    coverage,
+                );
+            });
+        }
+        cursor_x += advance;
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn draw_rotated_rounded_rect(
+    image: &mut RgbaImage,
+    center: egui::Pos2,
+    size: egui::Vec2,
+    rotation: f32,
+    radius: f32,
+    fill: Rgba<u8>,
+    stroke: Rgba<u8>,
+    stroke_width: f32,
+) {
+    let half_w = size.x * 0.5;
+    let half_h = size.y * 0.5;
+    let extent = (half_w * half_w + half_h * half_h).sqrt() + stroke_width + 2.0;
+    let min_x = (center.x - extent).floor() as i32;
+    let max_x = (center.x + extent).ceil() as i32;
+    let min_y = (center.y - extent).floor() as i32;
+    let max_y = (center.y + extent).ceil() as i32;
+    let cos = rotation.cos();
+    let sin = rotation.sin();
+    let radius = radius.min(half_w).min(half_h).max(0.0);
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let px = x as f32 + 0.5;
+            let py = y as f32 + 0.5;
+            let dx = px - center.x;
+            let dy = py - center.y;
+            let local_x = dx * cos + dy * sin;
+            let local_y = -dx * sin + dy * cos;
+            let dist = rounded_rect_sdf(local_x, local_y, half_w, half_h, radius);
+            if dist <= 0.75 {
+                let coverage = (0.75 - dist).clamp(0.0, 1.0);
+                let color = if dist > -stroke_width { stroke } else { fill };
+                blend_pixel(image, x, y, color, coverage);
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn rounded_rect_sdf(x: f32, y: f32, half_w: f32, half_h: f32, radius: f32) -> f32 {
+    let qx = x.abs() - (half_w - radius);
+    let qy = y.abs() - (half_h - radius);
+    let ox = qx.max(0.0);
+    let oy = qy.max(0.0);
+    (ox * ox + oy * oy).sqrt() + qx.max(qy).min(0.0) - radius
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn draw_circle(
+    image: &mut RgbaImage,
+    center_x: f32,
+    center_y: f32,
+    radius: f32,
+    fill: Rgba<u8>,
+    stroke: Rgba<u8>,
+    stroke_width: f32,
+) {
+    let extent = radius + stroke_width + 2.0;
+    let min_x = (center_x - extent).floor() as i32;
+    let max_x = (center_x + extent).ceil() as i32;
+    let min_y = (center_y - extent).floor() as i32;
+    let max_y = (center_y + extent).ceil() as i32;
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let dx = x as f32 + 0.5 - center_x;
+            let dy = y as f32 + 0.5 - center_y;
+            let dist = (dx * dx + dy * dy).sqrt() - radius;
+            if dist <= 0.75 {
+                let coverage = (0.75 - dist).clamp(0.0, 1.0);
+                let color = if dist > -stroke_width { stroke } else { fill };
+                blend_pixel(image, x, y, color, coverage);
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn draw_line_segment(
+    image: &mut RgbaImage,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    width: f32,
+    color: Rgba<u8>,
+) {
+    let min_x = x1.min(x2).floor() as i32 - width.ceil() as i32 - 1;
+    let max_x = x1.max(x2).ceil() as i32 + width.ceil() as i32 + 1;
+    let min_y = y1.min(y2).floor() as i32 - width.ceil() as i32 - 1;
+    let max_y = y1.max(y2).ceil() as i32 + width.ceil() as i32 + 1;
+    let vx = x2 - x1;
+    let vy = y2 - y1;
+    let len2 = (vx * vx + vy * vy).max(1.0);
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let px = x as f32 + 0.5;
+            let py = y as f32 + 0.5;
+            let t = (((px - x1) * vx + (py - y1) * vy) / len2).clamp(0.0, 1.0);
+            let cx = x1 + vx * t;
+            let cy = y1 + vy * t;
+            let dx = px - cx;
+            let dy = py - cy;
+            let dist = (dx * dx + dy * dy).sqrt() - width * 0.5;
+            if dist <= 0.75 {
+                blend_pixel(image, x, y, color, (0.75 - dist).clamp(0.0, 1.0));
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn blend_pixel(image: &mut RgbaImage, x: i32, y: i32, color: Rgba<u8>, coverage: f32) {
+    if x < 0 || y < 0 {
+        return;
+    }
+    let (x, y) = (x as u32, y as u32);
+    if x >= image.width() || y >= image.height() {
+        return;
+    }
+    let alpha = (color[3] as f32 / 255.0) * coverage.clamp(0.0, 1.0);
+    if alpha <= 0.0 {
+        return;
+    }
+    let dst = image.get_pixel_mut(x, y);
+    let inv = 1.0 - alpha;
+    dst[0] = (color[0] as f32 * alpha + dst[0] as f32 * inv).round() as u8;
+    dst[1] = (color[1] as f32 * alpha + dst[1] as f32 * inv).round() as u8;
+    dst[2] = (color[2] as f32 * alpha + dst[2] as f32 * inv).round() as u8;
+    dst[3] = 255;
+}

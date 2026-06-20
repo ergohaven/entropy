@@ -101,6 +101,10 @@ impl EntropyApp {
                 self.draw_mouse_keys_settings_page(ui, content_rect);
                 false
             }
+            SettingsTab::LayoutImageExport => {
+                self.draw_layout_image_export_page(ui, layout, content_rect);
+                false
+            }
         };
 
         if self.settings_tab != SettingsTab::MatrixTester {

@@ -92,6 +92,8 @@ mod layout_device_dropdown;
 mod layout_dropdowns;
 #[path = "ui/layout_hints.rs"]
 mod layout_hints;
+#[path = "ui/layout_image_export.rs"]
+mod layout_image_export;
 #[path = "ui/layout_keyboard.rs"]
 mod layout_keyboard;
 #[path = "ui/layout_layer_switcher.rs"]
