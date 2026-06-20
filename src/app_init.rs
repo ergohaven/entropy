@@ -24,7 +24,6 @@ impl EntropyApp {
 
         let text_expander_rules_signature =
             text_expander_rules_signature(&app_settings.text_expander_rule_files);
-        let initial_key_legend_layout = app_settings.key_legend_layout;
 
         let mut app = Self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -62,10 +61,6 @@ impl EntropyApp {
             import_progress_title: String::new(),
             import_progress_body: String::new(),
             dark_mode: false,
-            layout_image_export: LayoutImageExportState {
-                key_legend_layout: initial_key_legend_layout,
-                ..Default::default()
-            },
             app_settings,
             text_expander_rules_signature,
             text_expander_rules_last_check_at: 0.0,

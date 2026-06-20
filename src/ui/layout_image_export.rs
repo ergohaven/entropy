@@ -387,7 +387,6 @@ impl EntropyApp {
     pub(super) fn open_layout_image_export_page(&mut self) {
         let layer_count = self.layer_count.max(1);
         self.ensure_layout_image_export_layers(layer_count);
-        self.layout_image_export.key_legend_layout = self.app_settings.key_legend_layout;
         self.settings_tab = SettingsTab::LayoutImageExport;
         self.main_menu_tab = MainMenuTab::Settings;
     }
@@ -455,6 +454,7 @@ impl EntropyApp {
                 }
 
                 let selected_layers = self
+                    .app_settings
                     .layout_image_export
                     .selected_layers
                     .iter()
@@ -475,7 +475,7 @@ impl EntropyApp {
                     #[cfg(not(target_arch = "wasm32"))]
                     if crate::ui_style::modern_button(
                         ui,
-                        &export_button_label(lang, self.layout_image_export.format),
+                        &export_button_label(lang, self.app_settings.layout_image_export.format),
                         button_size,
                         export_enabled,
                     )
@@ -487,7 +487,10 @@ impl EntropyApp {
                     {
                         let _ = crate::ui_style::modern_button(
                             ui,
-                            &export_button_label(lang, self.layout_image_export.format),
+                            &export_button_label(
+                                lang,
+                                self.app_settings.layout_image_export.format,
+                            ),
                             button_size,
                             false,
                         );
@@ -498,15 +501,11 @@ impl EntropyApp {
     }
 
     fn ensure_layout_image_export_layers(&mut self, layer_count: usize) {
-        let previous_len = self.layout_image_export.selected_layers.len();
+        let selected_layers = &mut self.app_settings.layout_image_export.selected_layers;
+        let previous_len = selected_layers.len();
         if previous_len < layer_count {
-            self.layout_image_export
-                .selected_layers
-                .resize(layer_count, true);
-        } else if previous_len > layer_count {
-            self.layout_image_export
-                .selected_layers
-                .truncate(layer_count);
+            selected_layers.extend((previous_len..layer_count).map(|layer_idx| layer_idx == 0));
+            save_app_settings(&self.app_settings);
         }
     }
 
@@ -528,7 +527,8 @@ impl EntropyApp {
         for row_idx in row_range {
             match row_idx {
                 0 => {
-                    let mut format = self.layout_image_export.format;
+                    let before = self.app_settings.layout_image_export.format;
+                    let mut format = before;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
                         content_width,
@@ -539,10 +539,14 @@ impl EntropyApp {
                         metrics.settings_control_width(),
                         |ui| draw_format_dropdown(ui, metrics, dark, lang, &mut format),
                     );
-                    self.layout_image_export.format = format;
+                    if format != before {
+                        self.app_settings.layout_image_export.format = format;
+                        save_app_settings(&self.app_settings);
+                    }
                 }
                 1 => {
-                    let mut theme = self.layout_image_export.theme;
+                    let before = self.app_settings.layout_image_export.theme;
+                    let mut theme = before;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
                         content_width,
@@ -553,10 +557,14 @@ impl EntropyApp {
                         metrics.settings_control_width(),
                         |ui| draw_theme_dropdown(ui, metrics, dark, lang, &mut theme),
                     );
-                    self.layout_image_export.theme = theme;
+                    if theme != before {
+                        self.app_settings.layout_image_export.theme = theme;
+                        save_app_settings(&self.app_settings);
+                    }
                 }
                 2 => {
-                    let mut key_legend_layout = self.layout_image_export.key_legend_layout;
+                    let before = self.app_settings.layout_image_export.key_legend_layout;
+                    let mut key_legend_layout = before;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
                         content_width,
@@ -575,10 +583,14 @@ impl EntropyApp {
                             )
                         },
                     );
-                    self.layout_image_export.key_legend_layout = key_legend_layout;
+                    if key_legend_layout != before {
+                        self.app_settings.layout_image_export.key_legend_layout = key_legend_layout;
+                        save_app_settings(&self.app_settings);
+                    }
                 }
                 3 => {
-                    let mut show_layer_names = self.layout_image_export.show_layer_names;
+                    let before = self.app_settings.layout_image_export.show_layer_names;
+                    let mut show_layer_names = before;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
                         content_width,
@@ -596,11 +608,15 @@ impl EntropyApp {
                             );
                         },
                     );
-                    self.layout_image_export.show_layer_names = show_layer_names;
+                    if show_layer_names != before {
+                        self.app_settings.layout_image_export.show_layer_names = show_layer_names;
+                        save_app_settings(&self.app_settings);
+                    }
                 }
                 layer_row => {
                     let layer_idx = layer_row - 4;
                     let Some(selected) = self
+                        .app_settings
                         .layout_image_export
                         .selected_layers
                         .get(layer_idx)
@@ -627,9 +643,16 @@ impl EntropyApp {
                             );
                         },
                     );
-                    if let Some(slot) = self.layout_image_export.selected_layers.get_mut(layer_idx)
+                    if let Some(slot) = self
+                        .app_settings
+                        .layout_image_export
+                        .selected_layers
+                        .get_mut(layer_idx)
                     {
-                        *slot = selected;
+                        if selected != *slot {
+                            *slot = selected;
+                            save_app_settings(&self.app_settings);
+                        }
                     }
                 }
             }
@@ -639,10 +662,13 @@ impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn export_layout_image_dialog(&mut self, layout: &KeyboardLayout) {
         let lang = self.app_settings.language;
+        let layer_count = self.layer_count.max(layout.layers.len()).max(1);
         let selected_layers: Vec<usize> = self
+            .app_settings
             .layout_image_export
             .selected_layers
             .iter()
+            .take(layer_count)
             .enumerate()
             .filter_map(|(idx, selected)| selected.then_some(idx))
             .collect();
@@ -651,7 +677,7 @@ impl EntropyApp {
             return;
         }
 
-        let format = self.layout_image_export.format;
+        let format = self.app_settings.layout_image_export.format;
         let extension = match format {
             LayoutImageExportFormat::Png => "png",
             LayoutImageExportFormat::Svg => "svg",
@@ -712,7 +738,7 @@ impl EntropyApp {
                 .ok_or_else(|| anyhow::anyhow!("layout has no visible keys"))?;
         let span_x = (bounds.right() - bounds.left()).max(1.0);
         let span_y = (bounds.bottom() - bounds.top()).max(1.0);
-        let header_h = if self.layout_image_export.show_layer_names {
+        let header_h = if self.app_settings.layout_image_export.show_layer_names {
             EXPORT_LAYER_HEADER_H
         } else {
             EXPORT_LAYER_HEADER_H_HIDDEN
@@ -731,7 +757,7 @@ impl EntropyApp {
             anyhow::bail!("export image would be too large");
         }
 
-        let dark = match self.layout_image_export.theme {
+        let dark = match self.app_settings.layout_image_export.theme {
             LayoutImageExportTheme::Current => self.dark_mode,
             LayoutImageExportTheme::Light => false,
             LayoutImageExportTheme::Dark => true,
@@ -773,7 +799,7 @@ impl EntropyApp {
         for (section_idx, layer_idx) in selected_layers.iter().copied().enumerate() {
             let section_y = EXPORT_MARGIN
                 + section_idx as f32 * (geometry.header_h + geometry.layout_h + EXPORT_LAYER_GAP);
-            if self.layout_image_export.show_layer_names {
+            if self.app_settings.layout_image_export.show_layer_names {
                 let title =
                     layer_export_label(self.app_settings.language, &self.layer_names, layer_idx);
                 svg_text_centered_rotated(
@@ -858,7 +884,7 @@ impl EntropyApp {
                                 &self.layer_names,
                                 &self.keycode_picker.macro_names,
                                 &self.keycode_picker.tap_dance_names,
-                                self.layout_image_export.key_legend_layout,
+                                self.app_settings.layout_image_export.key_legend_layout,
                             ),
                             true,
                         ),
@@ -872,7 +898,7 @@ impl EntropyApp {
                         &self.layer_names,
                         &self.keycode_picker.macro_names,
                         &self.keycode_picker.tap_dance_names,
-                        self.layout_image_export.key_legend_layout,
+                        self.app_settings.layout_image_export.key_legend_layout,
                     ),
                     false,
                 ),
@@ -881,7 +907,7 @@ impl EntropyApp {
                 let label = number_row_shifted_label(
                     label,
                     self.app_settings.show_shifted_number_symbols,
-                    self.layout_image_export.key_legend_layout,
+                    self.app_settings.layout_image_export.key_legend_layout,
                 );
                 write_key_label_svg(
                     svg,
@@ -921,7 +947,7 @@ impl EntropyApp {
         for (section_idx, layer_idx) in selected_layers.iter().copied().enumerate() {
             let section_y = EXPORT_MARGIN
                 + section_idx as f32 * (geometry.header_h + geometry.layout_h + EXPORT_LAYER_GAP);
-            if self.layout_image_export.show_layer_names {
+            if self.app_settings.layout_image_export.show_layer_names {
                 let title =
                     layer_export_label(self.app_settings.language, &self.layer_names, layer_idx);
                 draw_text_centered_rotated(
@@ -1015,7 +1041,7 @@ impl EntropyApp {
                                 &self.layer_names,
                                 &self.keycode_picker.macro_names,
                                 &self.keycode_picker.tap_dance_names,
-                                self.layout_image_export.key_legend_layout,
+                                self.app_settings.layout_image_export.key_legend_layout,
                             ),
                             true,
                         ),
@@ -1029,7 +1055,7 @@ impl EntropyApp {
                         &self.layer_names,
                         &self.keycode_picker.macro_names,
                         &self.keycode_picker.tap_dance_names,
-                        self.layout_image_export.key_legend_layout,
+                        self.app_settings.layout_image_export.key_legend_layout,
                     ),
                     false,
                 ),
@@ -1038,7 +1064,7 @@ impl EntropyApp {
                 let label = number_row_shifted_label(
                     label,
                     self.app_settings.show_shifted_number_symbols,
-                    self.layout_image_export.key_legend_layout,
+                    self.app_settings.layout_image_export.key_legend_layout,
                 );
                 draw_key_label_export(
                     image,
@@ -1321,7 +1347,7 @@ fn draw_encoder_export(
             &app.layer_names,
             &app.keycode_picker.macro_names,
             &app.keycode_picker.tap_dance_names,
-            app.layout_image_export.key_legend_layout,
+            app.app_settings.layout_image_export.key_legend_layout,
         )
         .replace('\n', " ")
     };
@@ -1452,7 +1478,7 @@ fn write_encoder_svg(
             &app.layer_names,
             &app.keycode_picker.macro_names,
             &app.keycode_picker.tap_dance_names,
-            app.layout_image_export.key_legend_layout,
+            app.app_settings.layout_image_export.key_legend_layout,
         )
         .replace('\n', " ")
     };

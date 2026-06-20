@@ -54,6 +54,8 @@ pub(crate) struct AppSettings {
     pub(crate) show_made_by_signature: bool,
     #[serde(default)]
     pub(crate) key_legend_layout: KeyLegendLayout,
+    #[serde(default)]
+    pub(crate) layout_image_export: LayoutImageExportState,
     #[serde(default = "default_app_accent_color")]
     pub(crate) accent_color: AppAccentColor,
     #[serde(default = "default_ui_scale")]
@@ -148,6 +150,7 @@ impl Default for AppSettings {
             encoder_hover_enlarge: default_encoder_hover_enlarge(),
             show_made_by_signature: default_show_made_by_signature(),
             key_legend_layout: KeyLegendLayout::default(),
+            layout_image_export: LayoutImageExportState::default(),
             accent_color: default_app_accent_color(),
             ui_scale: default_ui_scale(),
             diagnostics_enabled: false,
@@ -1304,7 +1307,8 @@ pub(crate) enum SettingsTab {
     LayoutImageExport,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum LayoutImageExportTheme {
     Current,
     Light,
@@ -1317,7 +1321,8 @@ impl Default for LayoutImageExportTheme {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum LayoutImageExportFormat {
     Png,
     Svg,
@@ -1329,12 +1334,22 @@ impl Default for LayoutImageExportFormat {
     }
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct LayoutImageExportState {
+    #[serde(default)]
     pub(crate) format: LayoutImageExportFormat,
+    #[serde(default)]
     pub(crate) theme: LayoutImageExportTheme,
+    #[serde(default)]
     pub(crate) key_legend_layout: KeyLegendLayout,
+    #[serde(default = "default_layout_image_export_show_layer_names")]
     pub(crate) show_layer_names: bool,
+    #[serde(default)]
     pub(crate) selected_layers: Vec<bool>,
+}
+
+fn default_layout_image_export_show_layer_names() -> bool {
+    true
 }
 
 impl Default for LayoutImageExportState {
@@ -1417,7 +1432,6 @@ pub struct EntropyApp {
     pub(crate) jump_back_stack: Vec<usize>,
     pub(crate) dark_mode: bool,
     pub(crate) app_settings: AppSettings,
-    pub(crate) layout_image_export: LayoutImageExportState,
     pub(crate) text_expander_rules_signature: Vec<(String, Option<std::time::SystemTime>)>,
     pub(crate) text_expander_rules_last_check_at: f64,
     pub(crate) text_expander_settings_save_pending: bool,

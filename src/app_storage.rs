@@ -297,6 +297,13 @@ pub(super) fn load_app_settings() -> AppSettings {
     settings.minimize_to_tray_on_close =
         matches!(settings.close_to_tray_behavior, CloseToTrayBehavior::Tray);
 
+    let has_layout_image_export = settings_data
+        .as_deref()
+        .is_some_and(|data| data.contains("layout_image_export"));
+    if !has_layout_image_export {
+        settings.layout_image_export.key_legend_layout = settings.key_legend_layout;
+    }
+
     settings
 }
 
