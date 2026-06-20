@@ -1,6 +1,6 @@
 [package]
 name = "ergohaven-entropy"
-version = "1.14.25"
+version = "1.14.26"
 edition = "2021"
 description = "Desktop app for configuring Vial-QMK and Vial-RMK programmable keyboards and input devices"
 authors = ["Ergohaven"]
@@ -58,6 +58,8 @@ windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Globali
 windows = { version = "0.56", features = ["Foundation", "Media_Control", "Win32_Media_Audio_Endpoints", "Win32_System_Com_StructuredStorage"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
+raw-window-handle = "0.6"
 tray-icon = "0.22"
 
 [target.'cfg(target_os = "linux")'.dependencies]

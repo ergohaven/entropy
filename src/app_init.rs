@@ -70,6 +70,14 @@ impl EntropyApp {
             tray_icon: None,
             #[cfg(target_os = "windows")]
             windows_hwnd: None,
+            #[cfg(target_os = "macos")]
+            macos_ns_window: None,
+            #[cfg(target_os = "macos")]
+            macos_window_hidden_to_menu_bar: false,
+            #[cfg(target_os = "macos")]
+            macos_app_was_hidden: false,
+            #[cfg(target_os = "macos")]
+            macos_hidden_to_menu_bar_at: None,
             close_to_tray_prompt_open: false,
             close_to_tray_prompt_remember: false,
             force_close_requested: false,

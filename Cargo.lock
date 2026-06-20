@@ -1311,7 +1311,7 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "ergohaven-entropy"
-version = "1.14.25"
+version = "1.14.26"
 dependencies = [
  "anyhow",
  "base64",
@@ -1325,6 +1325,7 @@ dependencies = [
  "hidapi",
  "log",
  "lzma-rs",
+ "objc",
  "raw-window-handle",
  "rfd",
  "serde",

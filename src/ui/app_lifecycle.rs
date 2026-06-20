@@ -257,11 +257,17 @@ impl eframe::App for EntropyApp {
 
         #[cfg(target_os = "windows")]
         self.cache_windows_hwnd(frame);
+        #[cfg(target_os = "macos")]
+        self.cache_macos_ns_window(frame);
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         self.handle_tray_quit_request(ctx);
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        self.handle_tray_restore_request(ctx);
         self.handle_close_to_tray(ctx);
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         self.poll_tray_events(ctx);
+        #[cfg(target_os = "macos")]
+        self.handle_macos_dock_reopen(ctx);
 
         self.tour_target_rects.clear();
 

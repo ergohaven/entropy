@@ -1,6 +1,9 @@
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub(crate) static TRAY_QUIT_REQUESTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+pub(crate) static TRAY_RESTORE_REQUESTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 pub(crate) const MATRIX_TESTER_POLL_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(16);
@@ -1376,6 +1379,14 @@ pub struct EntropyApp {
     pub(crate) tray_icon: Option<tray_icon::TrayIcon>,
     #[cfg(target_os = "windows")]
     pub(crate) windows_hwnd: Option<isize>,
+    #[cfg(target_os = "macos")]
+    pub(crate) macos_ns_window: Option<usize>,
+    #[cfg(target_os = "macos")]
+    pub(crate) macos_window_hidden_to_menu_bar: bool,
+    #[cfg(target_os = "macos")]
+    pub(crate) macos_app_was_hidden: bool,
+    #[cfg(target_os = "macos")]
+    pub(crate) macos_hidden_to_menu_bar_at: Option<std::time::Instant>,
     pub(crate) close_to_tray_prompt_open: bool,
     pub(crate) close_to_tray_prompt_remember: bool,
     pub(crate) force_close_requested: bool,

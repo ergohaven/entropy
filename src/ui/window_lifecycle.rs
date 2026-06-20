@@ -1,4 +1,9 @@
+#![cfg_attr(target_os = "macos", allow(unexpected_cfgs))]
+
 use super::*;
+
+#[cfg(target_os = "macos")]
+use objc::{msg_send, sel, sel_impl};
 
 impl EntropyApp {
     pub(super) fn remember_main_window_size(&mut self, ctx: &egui::Context) {
@@ -52,6 +57,13 @@ impl EntropyApp {
                 SetForegroundWindow(hwnd);
             }
         }
+        #[cfg(target_os = "macos")]
+        {
+            restore_macos_app_window(self.macos_ns_window);
+            self.macos_window_hidden_to_menu_bar = false;
+            self.macos_hidden_to_menu_bar_at = None;
+            self.macos_app_was_hidden = false;
+        }
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -66,6 +78,19 @@ impl EntropyApp {
         if let Ok(handle) = frame.window_handle() {
             if let RawWindowHandle::Win32(win32) = handle.as_raw() {
                 self.windows_hwnd = Some(win32.hwnd.get());
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn cache_macos_ns_window(&mut self, frame: &eframe::Frame) {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        if self.macos_ns_window.is_some() {
+            return;
+        }
+        if let Ok(handle) = frame.window_handle() {
+            if let RawWindowHandle::AppKit(appkit) = handle.as_raw() {
+                self.macos_ns_window = macos_ns_window_from_view(appkit.ns_view.as_ptr());
             }
         }
     }
@@ -138,9 +163,17 @@ impl EntropyApp {
             self.status_msg = background_status.into();
             return;
         }
+        #[cfg(target_os = "macos")]
+        {
+            self.macos_window_hidden_to_menu_bar = true;
+            self.macos_hidden_to_menu_bar_at = Some(std::time::Instant::now());
+            self.macos_app_was_hidden = true;
+        }
         #[cfg(not(any(target_os = "windows", target_os = "linux")))]
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            #[cfg(target_os = "macos")]
+            hide_macos_app();
             self.status_msg = background_status.into();
         }
     }
@@ -553,6 +586,7 @@ impl EntropyApp {
                     button: MouseButton::Left,
                     ..
                 } => {
+                    TRAY_RESTORE_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
                     #[cfg(target_os = "windows")]
                     if let Some(hwnd) = hwnd_for_handler {
                         unsafe {
@@ -634,6 +668,33 @@ impl EntropyApp {
     }
 
     #[cfg(any(target_os = "windows", target_os = "macos"))]
+    pub(super) fn handle_tray_restore_request(&mut self, ctx: &egui::Context) {
+        if TRAY_RESTORE_REQUESTED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            self.restore_from_tray(ctx);
+            ctx.request_repaint();
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn handle_macos_dock_reopen(&mut self, ctx: &egui::Context) {
+        let app_is_hidden = macos_app_is_hidden();
+        if self.macos_window_hidden_to_menu_bar {
+            let recently_hidden = self.macos_hidden_to_menu_bar_at.is_some_and(|hidden_at| {
+                hidden_at.elapsed() < std::time::Duration::from_millis(500)
+            });
+            if recently_hidden {
+                self.macos_app_was_hidden = true;
+                return;
+            }
+            if !app_is_hidden && self.macos_app_was_hidden {
+                self.restore_from_tray(ctx);
+                ctx.request_repaint();
+            }
+        }
+        self.macos_app_was_hidden = app_is_hidden;
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub(super) fn poll_tray_events(&mut self, ctx: &egui::Context) {
         use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
         while let Ok(event) = TrayIconEvent::receiver().try_recv() {
@@ -665,6 +726,71 @@ fn request_windows_window_close_from_tray(hwnd: isize) {
         ShowWindow(hwnd, SW_RESTORE);
         SetForegroundWindow(hwnd);
         PostMessageW(hwnd, WM_CLOSE, 0, 0);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_shared_application() -> Option<*mut objc::runtime::Object> {
+    unsafe {
+        let ns_application = objc::runtime::Class::get("NSApplication")?;
+        let app: *mut objc::runtime::Object = msg_send![ns_application, sharedApplication];
+        (!app.is_null()).then_some(app)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_ns_window_from_view(ns_view: *mut std::ffi::c_void) -> Option<usize> {
+    unsafe {
+        let ns_view = ns_view.cast::<objc::runtime::Object>();
+        if ns_view.is_null() {
+            return None;
+        }
+        let window: *mut objc::runtime::Object = msg_send![ns_view, window];
+        (!window.is_null()).then_some(window as usize)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn restore_macos_app_window(ns_window: Option<usize>) {
+    unsafe {
+        let Some(app) = macos_shared_application() else {
+            return;
+        };
+        let nil: *mut objc::runtime::Object = std::ptr::null_mut();
+        let _: () = msg_send![app, unhide: nil];
+        let _: () = msg_send![app, activateIgnoringOtherApps: objc::runtime::YES];
+
+        let Some(ns_window) = ns_window else {
+            return;
+        };
+        let window = ns_window as *mut objc::runtime::Object;
+        if window.is_null() {
+            return;
+        }
+        let _: () = msg_send![window, makeKeyAndOrderFront: nil];
+        let _: () = msg_send![window, orderFrontRegardless];
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn hide_macos_app() {
+    unsafe {
+        let Some(app) = macos_shared_application() else {
+            return;
+        };
+        let nil: *mut objc::runtime::Object = std::ptr::null_mut();
+        let _: () = msg_send![app, hide: nil];
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_app_is_hidden() -> bool {
+    unsafe {
+        let Some(app) = macos_shared_application() else {
+            return false;
+        };
+        let hidden: objc::runtime::BOOL = msg_send![app, isHidden];
+        hidden == objc::runtime::YES
     }
 }
 
