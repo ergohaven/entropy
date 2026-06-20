@@ -100,6 +100,13 @@ pub enum MacroAction {
     Delay(u16), // milliseconds
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MacroKeyPickKind {
+    Tap,
+    Down,
+    Up,
+}
+
 pub struct KeycodePicker {
     pub open: bool,
     pub selected_tab: KeycodeTab,
@@ -332,6 +339,83 @@ impl KeycodePicker {
         self.open = false;
     }
 
+    fn macro_key_pick_kind(&self, macro_idx: usize, action_idx: usize) -> Option<MacroKeyPickKind> {
+        self.macro_actions
+            .get(macro_idx)
+            .and_then(|actions| actions.get(action_idx))
+            .and_then(|action| match action {
+                MacroAction::Tap(_) => Some(MacroKeyPickKind::Tap),
+                MacroAction::Down(_) => Some(MacroKeyPickKind::Down),
+                MacroAction::Up(_) => Some(MacroKeyPickKind::Up),
+                _ => None,
+            })
+    }
+
+    fn set_macro_key_pick_value(&mut self, macro_idx: usize, action_idx: usize, value: u16) {
+        let mut changed = false;
+        if let Some(action) = self
+            .macro_actions
+            .get_mut(macro_idx)
+            .and_then(|actions| actions.get_mut(action_idx))
+        {
+            match action {
+                MacroAction::Tap(kc) | MacroAction::Down(kc) | MacroAction::Up(kc) => {
+                    changed = *kc != value;
+                    *kc = value;
+                }
+                _ => {}
+            }
+        }
+        if changed {
+            self.encode_macro(macro_idx);
+            self.macros_dirty = true;
+        }
+        self.macro_key_pick = None;
+    }
+
+    fn macro_layer_key_choices(&self, kind: MacroKeyPickKind) -> Vec<(u16, String, String)> {
+        if !self.supports_macro_ext_keycodes {
+            return Vec::new();
+        }
+
+        let ops: Vec<(u16, &str)> = match kind {
+            MacroKeyPickKind::Tap => {
+                let mut ops = vec![
+                    (0x5260, "TG"),
+                    (0x5200, "TO"),
+                    (0x5240, "DF"),
+                    (0x5280, "OSL"),
+                ];
+                if self.supports_persistent_default_layer {
+                    ops.push((0x52E0, "PDF"));
+                }
+                ops
+            }
+            MacroKeyPickKind::Down | MacroKeyPickKind::Up => vec![(0x5220, "MO")],
+        };
+
+        let count = self.layer_count.max(1);
+        ops.into_iter()
+            .flat_map(|(base, op)| {
+                (0..count).map(move |layer| {
+                    let value = base | layer as u16;
+                    let label = self.macro_layer_key_label(op, layer);
+                    let tooltip = keycode_tooltip(value, &[], &self.layer_names);
+                    (value, label, tooltip)
+                })
+            })
+            .collect()
+    }
+
+    fn macro_layer_key_label(&self, op: &str, layer: usize) -> String {
+        match self.layer_names.get(layer) {
+            Some(name) if !name.is_empty() && name != &layer.to_string() => {
+                format!("{op}({layer})\n{name}")
+            }
+            _ => format!("{op}({layer})"),
+        }
+    }
+
     fn finish_quantum_pending_key(&mut self, base: u16, key_value: u16, is_mt: bool) {
         let _ = is_mt;
         self.result = Some(base | key_value);
@@ -497,33 +581,7 @@ impl KeycodePicker {
                             }
                             if let Some(qmk) = egui_key_to_qmk(*key, *modifiers) {
                                 if qmk > 0 && (qmk < 0x0100 || self.supports_macro_ext_keycodes) {
-                                    let mut changed = false;
-                                    if let Some(action) = self
-                                        .macro_actions
-                                        .get_mut(macro_idx)
-                                        .and_then(|a| a.get_mut(action_idx))
-                                    {
-                                        match action {
-                                            MacroAction::Tap(kc) => {
-                                                changed = *kc != qmk;
-                                                *kc = qmk;
-                                            }
-                                            MacroAction::Down(kc) => {
-                                                changed = *kc != qmk;
-                                                *kc = qmk;
-                                            }
-                                            MacroAction::Up(kc) => {
-                                                changed = *kc != qmk;
-                                                *kc = qmk;
-                                            }
-                                            _ => {}
-                                        }
-                                    }
-                                    if changed {
-                                        self.encode_macro(macro_idx);
-                                        self.macros_dirty = true;
-                                    }
-                                    self.macro_key_pick = None;
+                                    self.set_macro_key_pick_value(macro_idx, action_idx, qmk);
                                 }
                             }
                         }
@@ -538,35 +596,13 @@ impl KeycodePicker {
                 )
                 .clicked()
                 {
-                    let mut changed = false;
-                    if let Some(action) = self
-                        .macro_actions
-                        .get_mut(macro_idx)
-                        .and_then(|a| a.get_mut(action_idx))
-                    {
-                        match action {
-                            MacroAction::Tap(kc) => {
-                                changed = *kc != 0;
-                                *kc = 0;
-                            }
-                            MacroAction::Down(kc) => {
-                                changed = *kc != 0;
-                                *kc = 0;
-                            }
-                            MacroAction::Up(kc) => {
-                                changed = *kc != 0;
-                                *kc = 0;
-                            }
-                            _ => {}
-                        }
-                    }
-                    if changed {
-                        self.encode_macro(macro_idx);
-                        self.macros_dirty = true;
-                    }
-                    self.macro_key_pick = None;
+                    self.set_macro_key_pick_value(macro_idx, action_idx, 0);
                 }
                 ui.add_space(4.0);
+                let layer_choices = self
+                    .macro_key_pick_kind(macro_idx, action_idx)
+                    .map(|kind| self.macro_layer_key_choices(kind))
+                    .unwrap_or_default();
                 let supports_macro_ext_keycodes = self.supports_macro_ext_keycodes;
                 let key_choices: Vec<&'static crate::keycode::Keycode> = KEYCODES
                     .iter()
@@ -579,41 +615,24 @@ impl KeycodePicker {
                     .max_height(key_picker_popup_scroll_height(popup_size))
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        if let Some(value) = show_grouped_popup_key_buttons(
+                        if let Some(value) = show_grouped_popup_choice_buttons(
                             ui,
-                            key_choices,
-                            &self.layer_names,
-                            true,
+                            vec![("Layers", layer_choices)],
                             self.language,
-                            self.key_legend_layout,
                         ) {
-                            let mut changed = false;
-                            if let Some(action) = self
-                                .macro_actions
-                                .get_mut(macro_idx)
-                                .and_then(|a| a.get_mut(action_idx))
-                            {
-                                match action {
-                                    MacroAction::Tap(k) => {
-                                        changed = *k != value;
-                                        *k = value;
-                                    }
-                                    MacroAction::Down(k) => {
-                                        changed = *k != value;
-                                        *k = value;
-                                    }
-                                    MacroAction::Up(k) => {
-                                        changed = *k != value;
-                                        *k = value;
-                                    }
-                                    _ => {}
-                                }
+                            self.set_macro_key_pick_value(macro_idx, action_idx, value);
+                        }
+                        if self.macro_key_pick.is_some() {
+                            if let Some(value) = show_grouped_popup_key_buttons(
+                                ui,
+                                key_choices,
+                                &self.layer_names,
+                                true,
+                                self.language,
+                                self.key_legend_layout,
+                            ) {
+                                self.set_macro_key_pick_value(macro_idx, action_idx, value);
                             }
-                            if changed {
-                                self.encode_macro(macro_idx);
-                                self.macros_dirty = true;
-                            }
-                            self.macro_key_pick = None;
                         }
                     });
             });
