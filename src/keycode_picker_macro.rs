@@ -118,6 +118,7 @@ impl KeycodePicker {
 
         let scale = responsive_picker_element_scale(ui.ctx());
         let macro_font_size = 14.0 * scale;
+        let custom_pairs = self.custom_keycode_pairs();
         ui.add_space(4.0 * scale);
         if let Some(name) = self.macro_names.get_mut(n) {
             let resp = crate::ui_style::modern_text_field_sized(
@@ -245,7 +246,7 @@ impl KeycodePicker {
                         MacroAction::Tap(kc) => {
                             let label = keycode_label_with_names_and_layout(
                                 *kc as u16,
-                                &[],
+                                &custom_pairs,
                                 &self.layer_names,
                                 self.key_legend_layout,
                             );
@@ -268,7 +269,7 @@ impl KeycodePicker {
                         MacroAction::Down(kc) => {
                             let label = keycode_label_with_names_and_layout(
                                 *kc as u16,
-                                &[],
+                                &custom_pairs,
                                 &self.layer_names,
                                 self.key_legend_layout,
                             );
@@ -291,7 +292,7 @@ impl KeycodePicker {
                         MacroAction::Up(kc) => {
                             let label = keycode_label_with_names_and_layout(
                                 *kc as u16,
-                                &[],
+                                &custom_pairs,
                                 &self.layer_names,
                                 self.key_legend_layout,
                             );

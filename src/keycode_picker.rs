@@ -640,6 +640,11 @@ impl KeycodePicker {
                                 self.set_macro_key_pick_value(macro_idx, action_idx, value);
                             }
                         }
+                        if self.macro_key_pick.is_some() && supports_macro_ext_keycodes {
+                            if let Some(value) = self.show_custom_keycode_choice_section(ui) {
+                                self.set_macro_key_pick_value(macro_idx, action_idx, value);
+                            }
+                        }
                     });
             });
             if !pick_open {
@@ -1264,10 +1269,7 @@ impl KeycodePicker {
             KeycodeTab::Rgb => self.supports_rgb,
             KeycodeTab::Macro => self.supports_macro,
             KeycodeTab::TapDance => self.supports_tap_dance,
-            KeycodeTab::Custom => self
-                .custom_keycodes
-                .iter()
-                .any(|(_, label, _, _)| !label.trim().is_empty()),
+            KeycodeTab::Custom => self.has_visible_custom_keycodes(),
             _ => true,
         }
     }

@@ -185,6 +185,7 @@ impl KeycodePicker {
                         self.show_tap_dance_mod_key_section(ui, td_idx, field);
                         self.show_tap_dance_universal_symbol_sections(ui, td_idx, field);
                         self.show_tap_dance_layer_section(ui, td_idx, field);
+                        self.show_tap_dance_custom_keycode_section(ui, td_idx, field);
                     }
                 });
         });
@@ -267,6 +268,21 @@ impl KeycodePicker {
         self.show_tap_dance_mod_key_section(ui, td_idx, field);
         self.show_tap_dance_universal_symbol_sections(ui, td_idx, field);
         self.show_tap_dance_layer_section(ui, td_idx, field);
+    }
+
+    fn show_tap_dance_custom_keycode_section(
+        &mut self,
+        ui: &mut egui::Ui,
+        td_idx: usize,
+        field: u8,
+    ) {
+        if !matches!(field, 0 | 2) {
+            return;
+        }
+        if let Some(value) = self.show_custom_keycode_choice_section(ui) {
+            self.set_tap_dance_field(td_idx, field, value);
+            self.td_key_pick = None;
+        }
     }
 
     fn show_tap_dance_layer_section(&mut self, ui: &mut egui::Ui, td_idx: usize, field: u8) {

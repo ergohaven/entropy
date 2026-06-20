@@ -1,16 +1,67 @@
 use super::*;
 
 impl KeycodePicker {
-    pub(super) fn show_vial_symbols(&mut self, ui: &mut egui::Ui) {
-        let custom_pairs: Vec<crate::keyboard::CustomKeycode> = self
-            .custom_keycodes
+    pub(super) fn custom_keycode_pairs(&self) -> Vec<crate::keyboard::CustomKeycode> {
+        self.custom_keycodes
             .iter()
             .map(|(name, label, title, _)| crate::keyboard::CustomKeycode {
                 name: name.clone(),
                 label: label.clone(),
                 title: title.clone(),
             })
-            .collect();
+            .collect()
+    }
+
+    pub(super) fn has_visible_custom_keycodes(&self) -> bool {
+        self.custom_keycodes
+            .iter()
+            .any(|(_, label, _, _)| !label.trim().is_empty())
+    }
+
+    pub(super) fn show_custom_keycode_choice_section(&self, ui: &mut egui::Ui) -> Option<u16> {
+        if !self.has_visible_custom_keycodes() {
+            return None;
+        }
+
+        let custom_keycodes = self.custom_keycodes.clone();
+        let mut selected = None;
+        ui.add_space(2.0);
+        ui.label(
+            RichText::new(tr_picker(
+                self.language,
+                "key_picker.section_custom_keycodes",
+            ))
+            .size(11.0)
+            .color(Color32::from_gray(150)),
+        );
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            for (name, label, title, value) in custom_keycodes {
+                if label.trim().is_empty() {
+                    continue;
+                }
+                let tip = if title.trim().is_empty() {
+                    name.as_str()
+                } else {
+                    title.as_str()
+                };
+                let resp = ui
+                    .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                Self::paint_compact_picker_label(ui, &resp, &label);
+                if resp.clicked() {
+                    selected = Some(value);
+                }
+                resp.on_hover_text(crate::i18n::tr_text(self.language, tip));
+            }
+        });
+        ui.add_space(8.0);
+
+        selected
+    }
+
+    pub(super) fn show_vial_symbols(&mut self, ui: &mut egui::Ui) {
+        let custom_pairs = self.custom_keycode_pairs();
 
         if let Some(value) = show_universal_symbol_section(
             ui,
@@ -72,15 +123,7 @@ impl KeycodePicker {
     }
 
     pub(super) fn show_vial_generic(&mut self, ui: &mut egui::Ui) {
-        let custom_pairs: Vec<crate::keyboard::CustomKeycode> = self
-            .custom_keycodes
-            .iter()
-            .map(|(name, label, title, _)| crate::keyboard::CustomKeycode {
-                name: name.clone(),
-                label: label.clone(),
-                title: title.clone(),
-            })
-            .collect();
+        let custom_pairs = self.custom_keycode_pairs();
         ui.horizontal_wrapped(|ui| {
             for kc in KEYCODES.iter() {
                 if !self.selected_tab.vial_matches(kc) || !self.vial_keycode_supported(kc) {
@@ -110,36 +153,9 @@ impl KeycodePicker {
     }
 
     pub(super) fn show_vial_custom(&mut self, ui: &mut egui::Ui) {
-        let custom_keycodes = self.custom_keycodes.clone();
-        ui.label(
-            RichText::new(tr_picker(
-                self.language,
-                "key_picker.section_custom_keycodes",
-            ))
-            .size(11.0)
-            .color(Color32::from_gray(150)),
-        );
-        ui.add_space(4.0);
-        ui.horizontal_wrapped(|ui| {
-            for (name, label, title, value) in custom_keycodes {
-                if label.trim().is_empty() {
-                    continue;
-                }
-                let tip = if title.trim().is_empty() {
-                    name.as_str()
-                } else {
-                    title.as_str()
-                };
-                let resp = ui
-                    .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                Self::paint_compact_picker_label(ui, &resp, &label);
-                if resp.clicked() {
-                    self.assign_keycode_value(value);
-                }
-                resp.on_hover_text(crate::i18n::tr_text(self.language, &tip));
-            }
-        });
+        if let Some(value) = self.show_custom_keycode_choice_section(ui) {
+            self.assign_keycode_value(value);
+        }
     }
 
     pub(super) fn show_vial_layers(&mut self, ui: &mut egui::Ui) {

@@ -81,6 +81,7 @@ impl KeycodePicker {
         self.ensure_tap_dance_name_len(n);
         let scale = responsive_picker_element_scale(ui.ctx());
         let td_font_size = 14.0 * scale;
+        let custom_pairs = self.custom_keycode_pairs();
         ui.add_space(4.0 * scale);
         let prev_name = self.tap_dance_names.get(n).cloned().unwrap_or_default();
         let mut edited_name = prev_name.clone();
@@ -148,7 +149,7 @@ impl KeycodePicker {
                     let kc_label = if kc == 0 {
                         "None".to_string()
                     } else {
-                        crate::keycode::keycode_label_with_names_and_layout(kc, &[], &self.layer_names, self.key_legend_layout)
+                        crate::keycode::keycode_label_with_names_and_layout(kc, &custom_pairs, &self.layer_names, self.key_legend_layout)
                     };
                     if picker_button(ui, &kc_label, Vec2::new(120.0, 30.0), true, false)
                         .on_hover_text(if kc == 0 {
@@ -160,7 +161,7 @@ impl KeycodePicker {
                         } else {
                             crate::i18n::tr_text(
                                 self.language,
-                                &keycode_tooltip(kc, &[], &self.layer_names),
+                                &keycode_tooltip(kc, &custom_pairs, &self.layer_names),
                             )
                         })
                         .clicked()
@@ -386,6 +387,7 @@ impl KeycodePicker {
 
             let scale = responsive_picker_element_scale(ui.ctx());
             let n = active_td as usize;
+            let custom_pairs = self.custom_keycode_pairs();
             ui.label(
                 RichText::new(format!("TD{}", n))
                     .size(18.0 * scale)
@@ -445,7 +447,7 @@ impl KeycodePicker {
                         let kc_label = if kc == 0 {
                             "None".to_string()
                         } else {
-                            crate::keycode::keycode_label_with_names_and_layout(kc, &[], &self.layer_names, self.key_legend_layout)
+                            crate::keycode::keycode_label_with_names_and_layout(kc, &custom_pairs, &self.layer_names, self.key_legend_layout)
                         };
                         if ui
                             .add(
@@ -461,7 +463,7 @@ impl KeycodePicker {
                             } else {
                                 crate::i18n::tr_text(
                                     self.language,
-                                    &keycode_tooltip(kc, &[], &self.layer_names),
+                                    &keycode_tooltip(kc, &custom_pairs, &self.layer_names),
                                 )
                             })
                             .clicked()
