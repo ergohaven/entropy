@@ -378,6 +378,10 @@ impl KeycodePicker {
             return Vec::new();
         }
 
+        self.layer_action_key_choices(kind)
+    }
+
+    fn layer_action_key_choices(&self, kind: MacroKeyPickKind) -> Vec<(u16, String, String)> {
         let ops: Vec<(u16, &str)> = match kind {
             MacroKeyPickKind::Tap => {
                 let mut ops = vec![
@@ -399,7 +403,7 @@ impl KeycodePicker {
             .flat_map(|(base, op)| {
                 (0..count).map(move |layer| {
                     let value = base | layer as u16;
-                    let label = self.macro_layer_key_label(op, layer);
+                    let label = self.layer_action_key_label(op, layer);
                     let tooltip = keycode_tooltip(value, &[], &self.layer_names);
                     (value, label, tooltip)
                 })
@@ -407,7 +411,7 @@ impl KeycodePicker {
             .collect()
     }
 
-    fn macro_layer_key_label(&self, op: &str, layer: usize) -> String {
+    fn layer_action_key_label(&self, op: &str, layer: usize) -> String {
         match self.layer_names.get(layer) {
             Some(name) if !name.is_empty() && name != &layer.to_string() => {
                 format!("{op}({layer})\n{name}")

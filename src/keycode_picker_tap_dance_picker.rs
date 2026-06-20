@@ -184,6 +184,7 @@ impl KeycodePicker {
                         }
                         self.show_tap_dance_mod_key_section(ui, td_idx, field);
                         self.show_tap_dance_universal_symbol_sections(ui, td_idx, field);
+                        self.show_tap_dance_layer_section(ui, td_idx, field);
                     }
                 });
         });
@@ -265,27 +266,14 @@ impl KeycodePicker {
 
         self.show_tap_dance_mod_key_section(ui, td_idx, field);
         self.show_tap_dance_universal_symbol_sections(ui, td_idx, field);
+        self.show_tap_dance_layer_section(ui, td_idx, field);
+    }
 
-        let layer_choices: Vec<(u16, String, String)> = self
-            .tap_dance_layer_choices()
-            .into_iter()
-            .map(|(value, _label)| {
-                let layer = (value & 0x1F) as usize;
-                let layer_name = self
-                    .layer_names
-                    .get(layer)
-                    .cloned()
-                    .unwrap_or_else(|| layer.to_string());
-                (
-                    value,
-                    format!("MO({})\n{}", layer, layer_name),
-                    crate::i18n::tr_text(
-                        self.language,
-                        &format!("Momentarily activate layer {} while held", layer_name),
-                    ),
-                )
-            })
-            .collect();
+    fn show_tap_dance_layer_section(&mut self, ui: &mut egui::Ui, td_idx: usize, field: u8) {
+        let Some(kind) = Self::tap_dance_layer_key_pick_kind(field) else {
+            return;
+        };
+        let layer_choices = self.layer_action_key_choices(kind);
         if let Some(value) =
             show_grouped_popup_choice_buttons(ui, vec![("Layers", layer_choices)], self.language)
         {
@@ -387,18 +375,12 @@ impl KeycodePicker {
             .any(|kc| kc.value == value)
     }
 
-    fn tap_dance_layer_choices(&self) -> Vec<(u16, String)> {
-        let count = self.layer_count.max(1);
-        (0..count)
-            .map(|layer| {
-                let name = self
-                    .layer_names
-                    .get(layer)
-                    .cloned()
-                    .unwrap_or_else(|| layer.to_string());
-                (0x5220 | layer as u16, format!("MO({})", name))
-            })
-            .collect()
+    fn tap_dance_layer_key_pick_kind(field: u8) -> Option<MacroKeyPickKind> {
+        match field {
+            0 | 2 => Some(MacroKeyPickKind::Tap),
+            1 | 3 => Some(MacroKeyPickKind::Down),
+            _ => None,
+        }
     }
 
     fn set_tap_dance_field(&mut self, n: usize, field: u8, value: u16) {
