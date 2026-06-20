@@ -106,16 +106,16 @@ jobs:
           cat > RELEASE_NOTES.md <<'EOF'
           ## What's new
 
-          - Fixed Windows Universal Symbols input in Thunderbird and browser form fields.
-          - Fixed Windows Universal Symbols modifier release.
-          - Fixed the slash key picker label.
-          - Fixed top tab overlap at scaled widths.
-          - Fixed a macOS Apple Silicon release startup crash.
-          - Added combo color highlights on the keyboard layout.
-          - Matched the combo color picker to the Layer LED palette, including scroll.
-          - Made new combo colors default to No color and migrated auto-assigned colors from the previous test build.
-          - Aligned single combo outlines with the key border and made the outline heavier.
-          - Kept circle markers only for keys with multiple colored combos.
+          - Added layout image export with PNG and SVG formats.
+          - Added export options for theme, key legends, selected layers, layer names, and current layout options.
+          - Persisted layout image export settings, with only layer 0 enabled by default.
+          - Fixed media key labels in layout image exports so volume and track keys render without broken glyphs.
+          - Added layer actions to macro and tap dance pickers.
+          - Added custom keycodes to macro and tap dance pickers while hiding reserved Ergohaven keycodes.
+          - Fixed Windows Universal Symbols Alt-menu activation in apps such as Firefox, RAD Studio, and SQL Server Management Studio.
+          - Fixed RMK live matrix mapping for Layout Indicator and Matrix Tester.
+          - Fixed macOS Dock restore when Entropy is hidden to the menu bar.
+          - Fixed text expander editor typing lag.
 
           ## Downloads
 
