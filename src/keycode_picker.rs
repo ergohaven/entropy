@@ -1264,7 +1264,10 @@ impl KeycodePicker {
             KeycodeTab::Rgb => self.supports_rgb,
             KeycodeTab::Macro => self.supports_macro,
             KeycodeTab::TapDance => self.supports_tap_dance,
-            KeycodeTab::Custom => !self.custom_keycodes.is_empty(),
+            KeycodeTab::Custom => self
+                .custom_keycodes
+                .iter()
+                .any(|(_, label, _, _)| !label.trim().is_empty()),
             _ => true,
         }
     }

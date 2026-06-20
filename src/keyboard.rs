@@ -481,18 +481,20 @@ impl KeyboardLayout {
                             .unwrap_or("")
                             .trim()
                             .to_string();
-                        let short_raw = c.get("shortName").and_then(|v| v.as_str()).unwrap_or("");
-                        let label = if short_raw.is_empty() {
-                            name.clone()
-                        } else {
-                            let parts: Vec<&str> =
-                                short_raw.lines().filter(|l| !l.is_empty()).collect();
-                            match parts.len() {
-                                0 => name.clone(),
-                                1 => parts[0].to_string(),
-                                _ => format!("{}\n{}", parts[0], parts[1..].join(" ")),
-                            }
-                        };
+                        let label =
+                            if let Some(short_raw) = c.get("shortName").and_then(|v| v.as_str()) {
+                                // Vial keeps an explicitly empty shortName empty; Ergohaven uses
+                                // that for reserved EH_RSRV slots that should not show in pickers.
+                                let parts: Vec<&str> =
+                                    short_raw.lines().filter(|l| !l.trim().is_empty()).collect();
+                                match parts.len() {
+                                    0 => String::new(),
+                                    1 => parts[0].to_string(),
+                                    _ => format!("{}\n{}", parts[0], parts[1..].join(" ")),
+                                }
+                            } else {
+                                name.clone()
+                            };
                         let title = if title.is_empty() {
                             name.clone()
                         } else {

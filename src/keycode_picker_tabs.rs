@@ -122,7 +122,7 @@ impl KeycodePicker {
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
             for (name, label, title, value) in custom_keycodes {
-                if label.is_empty() {
+                if label.trim().is_empty() {
                     continue;
                 }
                 let tip = if title.trim().is_empty() {
