@@ -4,6 +4,8 @@ use super::*;
 use ab_glyph::{point, Font, FontArc, ScaleFont};
 #[cfg(not(target_arch = "wasm32"))]
 use image::{Rgba, RgbaImage};
+#[cfg(not(target_arch = "wasm32"))]
+use std::fmt::Write as _;
 
 const EXPORT_LAYOUT_UNIT: f32 = 74.0;
 const EXPORT_KEY_PADDING: f32 = 3.5;
@@ -18,11 +20,17 @@ fn export_text(lang: crate::i18n::Language, key: &str) -> &'static str {
         (crate::i18n::Language::Russian, "title") => "Экспорт картинки раскладки",
         (crate::i18n::Language::English, "title") => "Export layout image",
         (crate::i18n::Language::Russian, "description") => {
-            "PNG с выбранными слоями, темой и легендами клавиш"
+            "PNG или SVG с выбранными слоями, темой и легендами клавиш"
         }
         (crate::i18n::Language::English, "description") => {
-            "PNG with selected layers, theme, and key legends"
+            "PNG or SVG with selected layers, theme, and key legends"
         }
+        (crate::i18n::Language::Russian, "format") => "Формат",
+        (crate::i18n::Language::English, "format") => "Format",
+        (crate::i18n::Language::Russian, "format_tooltip") => {
+            "Выбрать формат экспортируемого файла"
+        }
+        (crate::i18n::Language::English, "format_tooltip") => "Choose exported file format",
         (crate::i18n::Language::Russian, "theme") => "Тема",
         (crate::i18n::Language::English, "theme") => "Theme",
         (crate::i18n::Language::Russian, "theme_tooltip") => "Выбрать тему экспортируемой картинки",
@@ -49,8 +57,8 @@ fn export_text(lang: crate::i18n::Language, key: &str) -> &'static str {
         (crate::i18n::Language::English, "layer_tooltip") => {
             "Include this layer in the exported image"
         }
-        (crate::i18n::Language::Russian, "export") => "Экспорт PNG",
-        (crate::i18n::Language::English, "export") => "Export PNG",
+        (crate::i18n::Language::Russian, "export") => "Экспорт",
+        (crate::i18n::Language::English, "export") => "Export",
         (crate::i18n::Language::Russian, "select_layer") => {
             "Выберите хотя бы один слой для экспорта"
         }
@@ -61,6 +69,24 @@ fn export_text(lang: crate::i18n::Language, key: &str) -> &'static str {
         (crate::i18n::Language::English, "failed") => "Failed to export layout image",
         _ => "",
     }
+}
+
+fn export_format_label(
+    _lang: crate::i18n::Language,
+    format: LayoutImageExportFormat,
+) -> &'static str {
+    match format {
+        LayoutImageExportFormat::Png => "PNG",
+        LayoutImageExportFormat::Svg => "SVG",
+    }
+}
+
+fn export_button_label(lang: crate::i18n::Language, format: LayoutImageExportFormat) -> String {
+    format!(
+        "{} {}",
+        export_text(lang, "export"),
+        export_format_label(lang, format)
+    )
 }
 
 fn export_theme_label(lang: crate::i18n::Language, theme: LayoutImageExportTheme) -> &'static str {
@@ -105,6 +131,73 @@ fn layer_export_label(
         crate::i18n::Language::Russian => format!("Слой {layer_idx}"),
         crate::i18n::Language::English => format!("Layer {layer_idx}"),
     }
+}
+
+fn draw_format_dropdown(
+    ui: &mut egui::Ui,
+    metrics: crate::ui_style::ResponsiveMetrics,
+    dark: bool,
+    lang: crate::i18n::Language,
+    selected_format: &mut LayoutImageExportFormat,
+) {
+    let dropdown_id = ui.make_persistent_id("layout_image_export_format_dropdown");
+    let dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
+        ui,
+        dropdown_id,
+        export_format_label(lang, *selected_format),
+        ui.visuals().text_color(),
+        metrics.settings_control_width(),
+        metrics.settings_control_height(),
+        metrics.settings_control_font_size(),
+    );
+    egui::popup_below_widget(
+        ui,
+        dropdown_id,
+        &dropdown_resp,
+        egui::PopupCloseBehavior::CloseOnClickOutside,
+        |ui| {
+            ui.set_min_width(metrics.settings_control_width());
+            ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
+            for format in [LayoutImageExportFormat::Png, LayoutImageExportFormat::Svg] {
+                let selected = format == *selected_format;
+                let (option_rect, option_resp) =
+                    ui.allocate_exact_size(metrics.size(168.0, 28.0), Sense::click());
+                if option_resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                let option_fill = if selected {
+                    if dark {
+                        Color32::from_rgb(58, 58, 61)
+                    } else {
+                        Color32::from_rgb(236, 236, 238)
+                    }
+                } else if option_resp.hovered() {
+                    crate::ui_style::hover_fill(dark)
+                } else {
+                    Color32::TRANSPARENT
+                };
+                ui.painter().rect_filled(option_rect, 7.0, option_fill);
+                ui.painter().text(
+                    egui::pos2(
+                        option_rect.left() + metrics.value(10.0),
+                        option_rect.center().y,
+                    ),
+                    egui::Align2::LEFT_CENTER,
+                    export_format_label(lang, format),
+                    FontId::proportional(metrics.value(12.0)),
+                    if selected {
+                        ui.visuals().text_color()
+                    } else {
+                        app_muted_text(dark)
+                    },
+                );
+                if option_resp.clicked() {
+                    *selected_format = format;
+                    ui.memory_mut(|m| m.close_popup());
+                }
+            }
+        },
+    );
 }
 
 fn draw_theme_dropdown(
@@ -286,7 +379,7 @@ impl EntropyApp {
                 );
                 ui.add_space(metrics.value(24.0));
 
-                let total_rows = 3 + layer_count;
+                let total_rows = 4 + layer_count;
                 let list = allocate_adaptive_settings_list_viewport(
                     ui,
                     "layout_image_export",
@@ -341,7 +434,7 @@ impl EntropyApp {
                     #[cfg(not(target_arch = "wasm32"))]
                     if crate::ui_style::modern_button(
                         ui,
-                        export_text(lang, "export"),
+                        &export_button_label(lang, self.layout_image_export.format),
                         button_size,
                         export_enabled,
                     )
@@ -353,7 +446,7 @@ impl EntropyApp {
                     {
                         let _ = crate::ui_style::modern_button(
                             ui,
-                            export_text(lang, "export"),
+                            &export_button_label(lang, self.layout_image_export.format),
                             button_size,
                             false,
                         );
@@ -394,6 +487,20 @@ impl EntropyApp {
         for row_idx in row_range {
             match row_idx {
                 0 => {
+                    let mut format = self.layout_image_export.format;
+                    crate::ui_style::settings_list_row_with_tooltip(
+                        ui,
+                        content_width,
+                        row_height,
+                        export_text(lang, "format"),
+                        true,
+                        tooltip(export_text(lang, "format_tooltip")),
+                        metrics.settings_control_width(),
+                        |ui| draw_format_dropdown(ui, metrics, dark, lang, &mut format),
+                    );
+                    self.layout_image_export.format = format;
+                }
+                1 => {
                     let mut theme = self.layout_image_export.theme;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -407,7 +514,7 @@ impl EntropyApp {
                     );
                     self.layout_image_export.theme = theme;
                 }
-                1 => {
+                2 => {
                     let mut key_legend_layout = self.layout_image_export.key_legend_layout;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -429,7 +536,7 @@ impl EntropyApp {
                     );
                     self.layout_image_export.key_legend_layout = key_legend_layout;
                 }
-                2 => {
+                3 => {
                     let mut show_layer_names = self.layout_image_export.show_layer_names;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -451,7 +558,7 @@ impl EntropyApp {
                     self.layout_image_export.show_layer_names = show_layer_names;
                 }
                 layer_row => {
-                    let layer_idx = layer_row - 3;
+                    let layer_idx = layer_row - 4;
                     let Some(selected) = self
                         .layout_image_export
                         .selected_layers
@@ -503,9 +610,18 @@ impl EntropyApp {
             return;
         }
 
-        let file_name = format!("{}-layout.png", device_id_slug(&layout.name));
+        let format = self.layout_image_export.format;
+        let extension = match format {
+            LayoutImageExportFormat::Png => "png",
+            LayoutImageExportFormat::Svg => "svg",
+        };
+        let filter_label = match format {
+            LayoutImageExportFormat::Png => "PNG image",
+            LayoutImageExportFormat::Svg => "SVG image",
+        };
+        let file_name = format!("{}-layout.{extension}", device_id_slug(&layout.name));
         let Some(mut path) = rfd::FileDialog::new()
-            .add_filter("PNG image", &["png"])
+            .add_filter(filter_label, &[extension])
             .set_file_name(&file_name)
             .save_file()
         else {
@@ -514,21 +630,30 @@ impl EntropyApp {
         if path
             .extension()
             .and_then(|ext| ext.to_str())
-            .map(|ext| !ext.eq_ignore_ascii_case("png"))
+            .map(|ext| !ext.eq_ignore_ascii_case(extension))
             .unwrap_or(true)
         {
-            path.set_extension("png");
+            path.set_extension(extension);
         }
 
-        match self.render_layout_image(layout, &selected_layers) {
-            Ok(image) => match image.save(&path) {
-                Ok(()) => {
-                    self.status_msg = format!("{}: {}", export_text(lang, "saved"), path.display());
-                }
-                Err(e) => {
-                    self.status_msg = format!("{}: {e}", export_text(lang, "failed"));
-                }
-            },
+        let result = match format {
+            LayoutImageExportFormat::Png => self
+                .render_layout_image(layout, &selected_layers)
+                .and_then(|image| {
+                    image
+                        .save(&path)
+                        .map_err(|e| anyhow::anyhow!("{e}"))
+                        .map(|_| ())
+                }),
+            LayoutImageExportFormat::Svg => self
+                .render_layout_svg(layout, &selected_layers)
+                .and_then(|svg| std::fs::write(&path, svg).map_err(|e| anyhow::anyhow!("{e}"))),
+        };
+
+        match result {
+            Ok(()) => {
+                self.status_msg = format!("{}: {}", export_text(lang, "saved"), path.display());
+            }
             Err(e) => {
                 self.status_msg = format!("{}: {e}", export_text(lang, "failed"));
             }
@@ -536,13 +661,11 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn render_layout_image(
+    fn export_layout_geometry(
         &self,
         layout: &KeyboardLayout,
         selected_layers: &[usize],
-    ) -> anyhow::Result<RgbaImage> {
-        let font = FontArc::try_from_slice(include_bytes!("../../assets/DejaVuSans.ttf"))
-            .map_err(|_| anyhow::anyhow!("failed to load export font"))?;
+    ) -> anyhow::Result<ExportGeometry> {
         let bounds =
             export_layout_bounds(layout, self.layout_options_value, &self.encoder_visibility)
                 .ok_or_else(|| anyhow::anyhow!("layout has no visible keys"))?;
@@ -572,12 +695,191 @@ impl EntropyApp {
             LayoutImageExportTheme::Light => false,
             LayoutImageExportTheme::Dark => true,
         };
-        let palette = ExportPalette::new(dark);
-        let mut image = RgbaImage::from_pixel(width as u32, height as u32, palette.background);
+        Ok(ExportGeometry {
+            bounds,
+            width,
+            height,
+            layout_h,
+            header_h,
+            palette: ExportPalette::new(dark),
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn render_layout_svg(
+        &self,
+        layout: &KeyboardLayout,
+        selected_layers: &[usize],
+    ) -> anyhow::Result<String> {
+        let font = FontArc::try_from_slice(include_bytes!("../../assets/DejaVuSans.ttf"))
+            .map_err(|_| anyhow::anyhow!("failed to load export font"))?;
+        let geometry = self.export_layout_geometry(layout, selected_layers)?;
+        let palette = geometry.palette;
+
+        let mut svg = String::new();
+        writeln!(svg, r#"<?xml version="1.0" encoding="UTF-8"?>"#)?;
+        writeln!(
+            svg,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="{:.0}" height="{:.0}" viewBox="0 0 {:.0} {:.0}">"#,
+            geometry.width, geometry.height, geometry.width, geometry.height
+        )?;
+        writeln!(
+            svg,
+            r#"<rect width="100%" height="100%" fill="{}"/>"#,
+            svg_color(palette.background)
+        )?;
 
         for (section_idx, layer_idx) in selected_layers.iter().copied().enumerate() {
-            let section_y =
-                EXPORT_MARGIN + section_idx as f32 * (header_h + layout_h + EXPORT_LAYER_GAP);
+            let section_y = EXPORT_MARGIN
+                + section_idx as f32 * (geometry.header_h + geometry.layout_h + EXPORT_LAYER_GAP);
+            if self.layout_image_export.show_layer_names {
+                let title =
+                    layer_export_label(self.app_settings.language, &self.layer_names, layer_idx);
+                svg_text_centered_rotated(
+                    &mut svg,
+                    &title,
+                    geometry.width * 0.5,
+                    section_y + 18.0,
+                    18.0,
+                    palette.title_text,
+                    0.0,
+                )?;
+            }
+            let layout_y = section_y + geometry.header_h;
+            self.write_export_layer_svg(
+                &mut svg,
+                &font,
+                layout,
+                geometry.bounds,
+                layer_idx,
+                layout_y,
+                palette,
+            )?;
+        }
+
+        writeln!(svg, "</svg>")?;
+        Ok(svg)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn write_export_layer_svg(
+        &self,
+        svg: &mut String,
+        font: &FontArc,
+        layout: &KeyboardLayout,
+        bounds: egui::Rect,
+        layer_idx: usize,
+        layout_y: f32,
+        palette: ExportPalette,
+    ) -> anyhow::Result<()> {
+        let encoder_groups = export_encoder_groups(
+            layout,
+            bounds,
+            layout_y,
+            self.layout_options_value,
+            &self.encoder_visibility,
+        );
+
+        for (key_idx, key) in layout.keys.iter().enumerate() {
+            if !Self::layout_condition_visible(
+                layout,
+                key.layout_condition,
+                self.layout_options_value,
+            ) {
+                continue;
+            }
+            let rect = export_item_rect(
+                key.x,
+                key.y,
+                key.w,
+                key.h,
+                key.rotation,
+                key.rotation_x,
+                key.rotation_y,
+                bounds,
+                layout_y,
+            );
+            write_rotated_rect_svg(svg, rect, key.rotation, palette)?;
+
+            let kc = layout.get_keycode(layer_idx, key_idx);
+            let (label, dimmed) = match kc {
+                0x0000 => (String::new(), false),
+                0x0001 => {
+                    let fallback = (0..layer_idx)
+                        .rev()
+                        .map(|fallback_layer| layout.get_keycode(fallback_layer, key_idx))
+                        .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
+                    match fallback {
+                        Some(fallback_kc) => (
+                            keycode_label_with_macro_names(
+                                fallback_kc,
+                                &layout.custom_keycodes,
+                                &self.layer_names,
+                                &self.keycode_picker.macro_names,
+                                &self.keycode_picker.tap_dance_names,
+                                self.layout_image_export.key_legend_layout,
+                            ),
+                            true,
+                        ),
+                        None => (String::new(), false),
+                    }
+                }
+                value => (
+                    keycode_label_with_macro_names(
+                        value,
+                        &layout.custom_keycodes,
+                        &self.layer_names,
+                        &self.keycode_picker.macro_names,
+                        &self.keycode_picker.tap_dance_names,
+                        self.layout_image_export.key_legend_layout,
+                    ),
+                    false,
+                ),
+            };
+            if !label.is_empty() {
+                let label = number_row_shifted_label(
+                    label,
+                    self.app_settings.show_shifted_number_symbols,
+                    self.layout_image_export.key_legend_layout,
+                );
+                write_key_label_svg(
+                    svg,
+                    font,
+                    rect,
+                    key.rotation.to_radians(),
+                    &label,
+                    palette,
+                    dimmed,
+                )?;
+            }
+        }
+
+        for group in encoder_groups {
+            write_encoder_svg(svg, font, layout, layer_idx, &group, self, palette)?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn render_layout_image(
+        &self,
+        layout: &KeyboardLayout,
+        selected_layers: &[usize],
+    ) -> anyhow::Result<RgbaImage> {
+        let font = FontArc::try_from_slice(include_bytes!("../../assets/DejaVuSans.ttf"))
+            .map_err(|_| anyhow::anyhow!("failed to load export font"))?;
+        let geometry = self.export_layout_geometry(layout, selected_layers)?;
+        let palette = geometry.palette;
+        let mut image = RgbaImage::from_pixel(
+            geometry.width as u32,
+            geometry.height as u32,
+            palette.background,
+        );
+
+        for (section_idx, layer_idx) in selected_layers.iter().copied().enumerate() {
+            let section_y = EXPORT_MARGIN
+                + section_idx as f32 * (geometry.header_h + geometry.layout_h + EXPORT_LAYER_GAP);
             if self.layout_image_export.show_layer_names {
                 let title =
                     layer_export_label(self.app_settings.language, &self.layer_names, layer_idx);
@@ -585,16 +887,22 @@ impl EntropyApp {
                     &mut image,
                     &font,
                     &title,
-                    width * 0.5,
+                    geometry.width * 0.5,
                     section_y + 18.0,
                     18.0,
                     palette.title_text,
                     0.0,
                 );
             }
-            let layout_y = section_y + header_h;
+            let layout_y = section_y + geometry.header_h;
             self.draw_export_layer(
-                &mut image, &font, layout, bounds, layer_idx, layout_y, palette,
+                &mut image,
+                &font,
+                layout,
+                geometry.bounds,
+                layer_idx,
+                layout_y,
+                palette,
             );
         }
 
@@ -746,6 +1054,17 @@ impl ExportPalette {
             }
         }
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy)]
+struct ExportGeometry {
+    bounds: egui::Rect,
+    width: f32,
+    height: f32,
+    layout_h: f32,
+    header_h: f32,
+    palette: ExportPalette,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1022,6 +1341,270 @@ fn draw_encoder_export(
             0.0,
         );
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_rotated_rect_svg(
+    svg: &mut String,
+    rect: egui::Rect,
+    rotation_deg: f32,
+    palette: ExportPalette,
+) -> anyhow::Result<()> {
+    let center = rect.center();
+    let transform = if rotation_deg.abs() > 0.001 {
+        format!(
+            r#" transform="rotate({:.3} {:.2} {:.2})""#,
+            rotation_deg, center.x, center.y
+        )
+    } else {
+        String::new()
+    };
+    writeln!(
+        svg,
+        r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="7" ry="7" fill="{}" stroke="{}" stroke-width="1.4"{} />"#,
+        rect.left(),
+        rect.top(),
+        rect.width(),
+        rect.height(),
+        svg_color(palette.key_fill),
+        svg_color(palette.key_stroke),
+        transform
+    )?;
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_encoder_svg(
+    svg: &mut String,
+    font: &FontArc,
+    layout: &KeyboardLayout,
+    layer_idx: usize,
+    group: &ExportEncoderGroup,
+    app: &EntropyApp,
+    palette: ExportPalette,
+) -> anyhow::Result<()> {
+    let center = group.rect.center();
+    let radius = group.rect.width().min(group.rect.height()) * LAYOUT_ENCODER_RADIUS_FACTOR;
+    writeln!(
+        svg,
+        r#"<circle cx="{:.2}" cy="{:.2}" r="{:.2}" fill="{}" stroke="{}" stroke-width="1.4"/>"#,
+        center.x,
+        center.y,
+        radius,
+        svg_color(palette.key_fill),
+        svg_color(palette.key_stroke)
+    )?;
+    writeln!(
+        svg,
+        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.2" stroke-linecap="round"/>"#,
+        center.x - radius * 0.58,
+        center.y,
+        center.x + radius * 0.58,
+        center.y,
+        svg_color(palette.key_stroke)
+    )?;
+
+    let encoder_value_label = |kc: u16| -> String {
+        keycode_label_with_macro_names(
+            kc,
+            &layout.custom_keycodes,
+            &app.layer_names,
+            &app.keycode_picker.macro_names,
+            &app.keycode_picker.tap_dance_names,
+            app.layout_image_export.key_legend_layout,
+        )
+        .replace('\n', " ")
+    };
+    let encoder_label = |visual_idx: usize, kc: u16| -> (String, bool) {
+        match kc {
+            0x0000 => (String::new(), false),
+            0x0001 => {
+                let fallback = (0..layer_idx)
+                    .rev()
+                    .map(|fallback_layer| layout.get_encoder_keycode(fallback_layer, visual_idx))
+                    .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
+                match fallback {
+                    Some(fallback_kc) => (encoder_value_label(fallback_kc), true),
+                    None => ("▽".to_string(), false),
+                }
+            }
+            value => (encoder_value_label(value), false),
+        }
+    };
+
+    if let Some(visual_idx) = group.cw {
+        let (label, dimmed) = encoder_label(
+            visual_idx,
+            layout.get_encoder_keycode(layer_idx, visual_idx),
+        );
+        svg_text_centered_rotated(
+            svg,
+            &label,
+            center.x,
+            center.y - radius * 0.34,
+            fit_text_size(font, &label, 10.5, radius * 1.35, 6.5),
+            if dimmed {
+                palette.dim_text
+            } else {
+                palette.text
+            },
+            0.0,
+        )?;
+    }
+    if let Some(visual_idx) = group.ccw {
+        let (label, dimmed) = encoder_label(
+            visual_idx,
+            layout.get_encoder_keycode(layer_idx, visual_idx),
+        );
+        svg_text_centered_rotated(
+            svg,
+            &label,
+            center.x,
+            center.y + radius * 0.38,
+            fit_text_size(font, &label, 10.5, radius * 1.35, 6.5),
+            if dimmed {
+                palette.dim_text
+            } else {
+                palette.text
+            },
+            0.0,
+        )?;
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_key_label_svg(
+    svg: &mut String,
+    font: &FontArc,
+    rect: egui::Rect,
+    rotation: f32,
+    label: &str,
+    palette: ExportPalette,
+    dimmed: bool,
+) -> anyhow::Result<()> {
+    let lines: Vec<&str> = label
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if lines.is_empty() {
+        return Ok(());
+    }
+    let center = rect.center();
+    let scale = (rect.width().min(rect.height()) / 54.0).clamp(0.82, 1.35);
+    let available_width = (rect.width() - 11.0 * scale).max(1.0);
+    let main = if dimmed {
+        palette.dim_text
+    } else {
+        palette.text
+    };
+    let top = if dimmed {
+        palette.dim_text
+    } else {
+        palette.top_text
+    };
+
+    match lines.as_slice() {
+        [only] => {
+            let base = if *only == "↵" { 20.0 } else { 12.4 } * scale;
+            let size = fit_text_size(font, only, base, available_width, 7.0 * scale);
+            svg_text_centered_rotated(svg, only, center.x, center.y, size, main, rotation)?;
+        }
+        [upper, lower] => {
+            let upper_size = fit_text_size(font, upper, 9.0 * scale, available_width, 5.8 * scale);
+            let lower_size = fit_text_size(font, lower, 12.0 * scale, available_width, 6.8 * scale);
+            let upper_offset = rotated_offset(0.0, -7.0 * scale, rotation);
+            let lower_offset = rotated_offset(0.0, 6.0 * scale, rotation);
+            svg_text_centered_rotated(
+                svg,
+                upper,
+                center.x + upper_offset.x,
+                center.y + upper_offset.y,
+                upper_size,
+                top,
+                rotation,
+            )?;
+            svg_text_centered_rotated(
+                svg,
+                lower,
+                center.x + lower_offset.x,
+                center.y + lower_offset.y,
+                lower_size,
+                main,
+                rotation,
+            )?;
+        }
+        _ => {
+            let line_count = lines.len().min(3);
+            for (idx, line) in lines.into_iter().take(3).enumerate() {
+                let y_offset = (idx as f32 - (line_count as f32 - 1.0) * 0.5) * 11.0 * scale;
+                let offset = rotated_offset(0.0, y_offset, rotation);
+                let base = if idx == 0 { 8.3 } else { 9.5 } * scale;
+                let size = fit_text_size(font, line, base, available_width, 5.5 * scale);
+                svg_text_centered_rotated(
+                    svg,
+                    line,
+                    center.x + offset.x,
+                    center.y + offset.y,
+                    size,
+                    if idx == 0 { top } else { main },
+                    rotation,
+                )?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn svg_text_centered_rotated(
+    svg: &mut String,
+    text: &str,
+    center_x: f32,
+    center_y: f32,
+    size: f32,
+    color: Rgba<u8>,
+    rotation: f32,
+) -> anyhow::Result<()> {
+    if text.trim().is_empty() {
+        return Ok(());
+    }
+    let transform = if rotation.abs() > 0.001 {
+        format!(
+            r#" transform="rotate({:.3} {:.2} {:.2})""#,
+            rotation.to_degrees(),
+            center_x,
+            center_y
+        )
+    } else {
+        String::new()
+    };
+    writeln!(
+        svg,
+        r#"<text x="{:.2}" y="{:.2}" text-anchor="middle" dominant-baseline="central" font-family="Inter, Arial, sans-serif" font-size="{:.2}" fill="{}"{}>{}</text>"#,
+        center_x,
+        center_y,
+        size,
+        svg_color(color),
+        transform,
+        escape_xml_text(text)
+    )?;
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn svg_color(color: Rgba<u8>) -> String {
+    format!("#{:02X}{:02X}{:02X}", color[0], color[1], color[2])
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn escape_xml_text(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -1317,7 +1317,20 @@ impl Default for LayoutImageExportTheme {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LayoutImageExportFormat {
+    Png,
+    Svg,
+}
+
+impl Default for LayoutImageExportFormat {
+    fn default() -> Self {
+        Self::Png
+    }
+}
+
 pub(crate) struct LayoutImageExportState {
+    pub(crate) format: LayoutImageExportFormat,
     pub(crate) theme: LayoutImageExportTheme,
     pub(crate) key_legend_layout: KeyLegendLayout,
     pub(crate) show_layer_names: bool,
@@ -1327,6 +1340,7 @@ pub(crate) struct LayoutImageExportState {
 impl Default for LayoutImageExportState {
     fn default() -> Self {
         Self {
+            format: LayoutImageExportFormat::Png,
             theme: LayoutImageExportTheme::Current,
             key_legend_layout: KeyLegendLayout::default(),
             show_layer_names: true,
