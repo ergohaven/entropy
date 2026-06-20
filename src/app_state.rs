@@ -1422,6 +1422,7 @@ pub struct EntropyApp {
     pub(crate) key_override_pick_target: Option<KeyOverridePickField>,
     pub(crate) matrix_tester_pressed: Vec<bool>,
     pub(crate) matrix_tester_ever_pressed: Vec<bool>,
+    pub(crate) matrix_tester_rmk_byte_order: bool,
     pub(crate) sticky_layout_prev_pressed: Vec<bool>,
     pub(crate) sticky_layout_pressed_key_layers: Vec<Option<usize>>,
     pub(crate) sticky_layout_toggled_layers: Vec<bool>,

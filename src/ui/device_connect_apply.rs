@@ -72,6 +72,7 @@ impl EntropyApp {
                 self.firmware = r.layout.firmware;
                 self.current_device_name = r.device_name.clone();
                 self.current_keyboard_id = Some(r.keyboard_id);
+                self.matrix_tester_rmk_byte_order = self.current_device_is_likely_rmk();
                 self.current_encoder_visibility_id =
                     encoder_visibility_id(&r.device_name, r.keyboard_id);
                 if let Some(dev) = self

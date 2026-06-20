@@ -652,7 +652,7 @@ impl EntropyApp {
         }
     }
 
-    fn current_device_is_likely_rmk(&self) -> bool {
+    pub(crate) fn current_device_is_likely_rmk(&self) -> bool {
         let selected_device = self
             .selected_device
             .and_then(|idx| self.device_manager.devices().get(idx));

@@ -100,14 +100,25 @@ pub(crate) fn parse_tap_dance_response(resp: &[u8]) -> Result<(u16, u16, u16, u1
     ))
 }
 
-pub(crate) fn parse_switch_matrix_payload(data: &[u8], rows: usize, cols: usize) -> Vec<bool> {
+fn parse_switch_matrix_payload_inner(
+    data: &[u8],
+    rows: usize,
+    cols: usize,
+    reverse_row_bytes: bool,
+) -> Vec<bool> {
     let total = rows * cols;
     let bytes_per_row = cols.div_ceil(8);
     let mut pressed = vec![false; total];
 
     for row in 0..rows {
         for col in 0..cols {
-            let byte_idx = row * bytes_per_row + col / 8;
+            let col_byte = col / 8;
+            let row_byte = if reverse_row_bytes {
+                bytes_per_row.saturating_sub(1).saturating_sub(col_byte)
+            } else {
+                col_byte
+            };
+            let byte_idx = row * bytes_per_row + row_byte;
             let bit_idx = col % 8;
             if byte_idx < data.len() {
                 pressed[row * cols + col] = ((data[byte_idx] >> bit_idx) & 1) != 0;
@@ -116,6 +127,15 @@ pub(crate) fn parse_switch_matrix_payload(data: &[u8], rows: usize, cols: usize)
     }
 
     pressed
+}
+
+pub(crate) fn parse_switch_matrix_payload(data: &[u8], rows: usize, cols: usize) -> Vec<bool> {
+    parse_switch_matrix_payload_inner(data, rows, cols, false)
+}
+
+pub(crate) fn parse_rmk_switch_matrix_payload(data: &[u8], rows: usize, cols: usize) -> Vec<bool> {
+    // RMK MatrixState::read_all emits each row's byte chunks in reverse order.
+    parse_switch_matrix_payload_inner(data, rows, cols, true)
 }
 
 pub(crate) fn parse_vialrgb_supported_effects_payload(
@@ -250,6 +270,19 @@ mod tests {
             pressed,
             vec![true, false, true, false, false, true, false, false]
         );
+    }
+
+    #[test]
+    fn parses_rmk_switch_matrix_reversed_row_bytes() {
+        let pressed = parse_rmk_switch_matrix_payload(
+            &[0b0000_0010, 0b0000_0100, 0b0000_0001, 0b0000_0000],
+            2,
+            12,
+        );
+        assert!(pressed[2]);
+        assert!(pressed[9]);
+        assert!(pressed[20]);
+        assert_eq!(pressed.iter().filter(|&&pressed| pressed).count(), 3);
     }
 
     #[test]

@@ -95,7 +95,11 @@ impl EntropyApp {
         let poll_interval = self.matrix_tester_poll_interval();
         if now.duration_since(self.matrix_tester_last_poll) >= poll_interval {
             self.matrix_tester_last_poll = now;
-            let poll_result = hid.get_switch_matrix(rows, cols);
+            let poll_result = hid.get_switch_matrix_with_rmk_byte_order(
+                rows,
+                cols,
+                self.matrix_tester_rmk_byte_order,
+            );
             match poll_result {
                 Ok(pressed) => {
                     if remember_ever_pressed {
