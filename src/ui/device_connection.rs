@@ -20,6 +20,7 @@ impl EntropyApp {
         self.current_encoder_visibility_id.clear();
         self.mouse_keys_settings = MouseKeysSettingsState::default();
         self.touchpad_settings = TouchpadSettingsState::default();
+        self.bluetooth_settings = BluetoothSettingsState::default();
         self.module_settings = ModuleSettingsState::default();
         self.tap_hold_settings = TapHoldSettingsState::default();
         self.magic_settings = MagicSettingsState::default();

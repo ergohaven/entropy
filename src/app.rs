@@ -46,6 +46,8 @@ mod app_lifecycle;
 mod app_settings_ui;
 #[path = "ui/auto_shift_settings.rs"]
 mod auto_shift_settings_ui;
+#[path = "ui/bluetooth_settings.rs"]
+mod bluetooth_settings_ui;
 #[path = "ui/combo_settings.rs"]
 mod combo_settings_ui;
 #[path = "ui/device_connect_apply.rs"]

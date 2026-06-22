@@ -84,6 +84,10 @@ impl EntropyApp {
                 self.draw_touchpad_settings_page(ui, content_rect);
                 false
             }
+            SettingsTab::Bluetooth => {
+                self.draw_bluetooth_settings_page(ui, content_rect);
+                false
+            }
             SettingsTab::LiveFeatures => {
                 self.draw_live_features_settings_page(ui, content_rect);
                 false

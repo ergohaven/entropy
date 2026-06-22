@@ -117,6 +117,7 @@ impl EntropyApp {
                     .unwrap_or_default();
                 self.mouse_keys_settings = r.mouse_keys_settings;
                 self.touchpad_settings = r.touchpad_settings;
+                self.bluetooth_settings = r.bluetooth_settings;
                 self.module_settings = r.module_settings;
                 self.tap_hold_settings = r.tap_hold_settings;
                 self.magic_settings = r.magic_settings;

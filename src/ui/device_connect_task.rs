@@ -124,6 +124,7 @@ impl EntropyApp {
         self.auto_shift_timeout_text.clear();
         self.mouse_keys_settings = MouseKeysSettingsState::default();
         self.touchpad_settings = TouchpadSettingsState::default();
+        self.bluetooth_settings = BluetoothSettingsState::default();
         self.tap_hold_settings = TapHoldSettingsState::default();
         self.magic_settings = MagicSettingsState::default();
         self.one_shot_settings = OneShotSettingsState::default();
@@ -548,6 +549,10 @@ impl EntropyApp {
                     tp
                 };
 
+                progress("Reading Bluetooth settings…");
+                let bluetooth_settings =
+                    Self::read_bluetooth_settings(&json, &supported_qmk_settings, &dev_conn);
+
                 progress("Reading module settings…");
                 let module_settings =
                     Self::read_module_settings(&json, &supported_qmk_settings, &dev_conn);
@@ -779,6 +784,7 @@ impl EntropyApp {
                     auto_shift_timeout,
                     mouse_keys_settings,
                     touchpad_settings,
+                    bluetooth_settings,
                     module_settings,
                     tap_hold_settings,
                     magic_settings,

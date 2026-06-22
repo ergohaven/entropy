@@ -95,6 +95,7 @@ impl EntropyApp {
             auto_shift_timeout_text: String::new(),
             mouse_keys_settings: MouseKeysSettingsState::default(),
             touchpad_settings: TouchpadSettingsState::default(),
+            bluetooth_settings: BluetoothSettingsState::default(),
             module_settings: ModuleSettingsState::default(),
             tap_hold_settings: TapHoldSettingsState::default(),
             magic_settings: MagicSettingsState::default(),

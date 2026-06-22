@@ -302,6 +302,128 @@ impl EntropyApp {
         })
     }
 
+    fn bluetooth_setting_variants(field: &serde_json::Value) -> Vec<String> {
+        field
+            .get("variants")
+            .and_then(|value| value.as_array())
+            .map(|variants| {
+                variants
+                    .iter()
+                    .filter_map(|value| value.as_str().map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_bluetooth_select_setting(
+        dev_conn: &crate::hid::HidDevice,
+        field: &serde_json::Value,
+        qsid: u16,
+        label: &str,
+    ) -> Option<BluetoothSelectSetting> {
+        let variants = Self::bluetooth_setting_variants(field);
+        if variants.is_empty() {
+            return None;
+        }
+        let width = Self::layer_led_field_width(field);
+        let value = if width > 1 {
+            dev_conn.get_qmk_setting_u16(qsid)
+        } else {
+            dev_conn.get_qmk_setting_u8(qsid).map(|value| value as u16)
+        }
+        .unwrap_or_else(|e| {
+            log::warn!("get_qmk_setting({label} qsid {qsid}): {e}");
+            0
+        })
+        .min(variants.len().saturating_sub(1) as u16);
+
+        Some(BluetoothSelectSetting {
+            qsid,
+            width,
+            value,
+            variants,
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn read_bluetooth_settings(
+        json: &serde_json::Value,
+        supported_qmk_settings: &[u16],
+        dev_conn: &crate::hid::HidDevice,
+    ) -> BluetoothSettingsState {
+        let has_qmk_setting = |qsid: u16| supported_qmk_settings.contains(&qsid);
+        let mut sleep_timeout = None;
+        let mut profile_colors = Vec::<(usize, BluetoothSelectSetting)>::new();
+
+        if let Some(tabs) = json.get("settings").and_then(|value| value.as_array()) {
+            for field in tabs
+                .iter()
+                .filter(|tab| {
+                    tab.get("name")
+                        .and_then(|value| value.as_str())
+                        .map(|name| name.to_ascii_lowercase().contains("bluetooth"))
+                        .unwrap_or(false)
+                })
+                .filter_map(|tab| tab.get("fields").and_then(|value| value.as_array()))
+                .flatten()
+            {
+                let Some(qsid) = field
+                    .get("qsid")
+                    .and_then(|value| value.as_u64())
+                    .map(|value| value as u16)
+                else {
+                    continue;
+                };
+                if !has_qmk_setting(qsid) {
+                    continue;
+                }
+                let title = field
+                    .get("title")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                let lower_title = title.to_ascii_lowercase();
+
+                if lower_title.contains("sleep") && lower_title.contains("timeout") {
+                    sleep_timeout = Self::read_bluetooth_select_setting(
+                        dev_conn,
+                        field,
+                        qsid,
+                        "bluetooth sleep timeout",
+                    );
+                } else if lower_title.contains("bt profile") && lower_title.contains("color") {
+                    if let Some(profile) =
+                        Self::parse_trailing_setting_index(&lower_title, "bt profile", "color")
+                    {
+                        if let Some(setting) = Self::read_bluetooth_select_setting(
+                            dev_conn,
+                            field,
+                            qsid,
+                            "bluetooth profile color",
+                        ) {
+                            profile_colors.push((profile, setting));
+                        }
+                    }
+                }
+            }
+        }
+
+        profile_colors.sort_by_key(|(profile, _)| *profile);
+        let profile_colors = profile_colors
+            .into_iter()
+            .filter(|(profile, _)| *profile <= 4)
+            .map(|(profile, setting)| BluetoothProfileColorSetting { profile, setting })
+            .collect::<Vec<_>>();
+        let supported = sleep_timeout.is_some() || !profile_colors.is_empty();
+
+        BluetoothSettingsState {
+            sleep_timeout,
+            profile_colors,
+            supported,
+        }
+    }
+
     fn parse_trailing_setting_index(
         lower_title: &str,
         prefix: &str,
@@ -891,6 +1013,11 @@ impl EntropyApp {
 
     pub(super) fn open_touchpad_settings_page(&mut self) {
         self.settings_tab = SettingsTab::Touchpad;
+        self.main_menu_tab = MainMenuTab::Settings;
+    }
+
+    pub(super) fn open_bluetooth_settings_page(&mut self) {
+        self.settings_tab = SettingsTab::Bluetooth;
         self.main_menu_tab = MainMenuTab::Settings;
     }
 

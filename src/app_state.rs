@@ -247,6 +247,8 @@ pub(crate) struct ConnectResult {
     pub(crate) mouse_keys_settings: MouseKeysSettingsState,
     /// Ergohaven K:03 Pro touchpad settings from QMK settings, if supported
     pub(crate) touchpad_settings: TouchpadSettingsState,
+    /// Bluetooth settings from RMK/Vial QMK settings, if supported
+    pub(crate) bluetooth_settings: BluetoothSettingsState,
     /// Keyboard-specific module settings from QMK Settings, if supported
     pub(crate) module_settings: ModuleSettingsState,
     /// Tap-Hold settings from QMK settings, if supported
@@ -664,6 +666,37 @@ impl TouchpadSettingsState {
 
     pub(crate) fn row_count(&self) -> usize {
         7 + self.auto_layer_enable_supported as usize + self.auto_layer_supported() as usize
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BluetoothSelectSetting {
+    pub(crate) qsid: u16,
+    pub(crate) width: u8,
+    pub(crate) value: u16,
+    pub(crate) variants: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BluetoothProfileColorSetting {
+    pub(crate) profile: usize,
+    pub(crate) setting: BluetoothSelectSetting,
+}
+
+/// RMK wireless settings exposed by the Bluetooth settings tab in Vial.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct BluetoothSettingsState {
+    /// Sleep timeout before the keyboard enters Bluetooth sleep mode
+    pub(crate) sleep_timeout: Option<BluetoothSelectSetting>,
+    /// Palette color index for each firmware-supported Bluetooth profile
+    pub(crate) profile_colors: Vec<BluetoothProfileColorSetting>,
+    /// Whether any Bluetooth setting was readable and advertised by firmware
+    pub(crate) supported: bool,
+}
+
+impl BluetoothSettingsState {
+    pub(crate) fn row_count(&self) -> usize {
+        self.sleep_timeout.is_some() as usize + self.profile_colors.len()
     }
 }
 
@@ -1299,6 +1332,7 @@ pub(crate) enum SettingsTab {
     LayoutOptions,
     Modules,
     Touchpad,
+    Bluetooth,
     LiveFeatures,
     Combo,
     KeyOverrides,
@@ -1465,6 +1499,7 @@ pub struct EntropyApp {
     pub(crate) auto_shift_timeout_text: String,
     pub(crate) mouse_keys_settings: MouseKeysSettingsState,
     pub(crate) touchpad_settings: TouchpadSettingsState,
+    pub(crate) bluetooth_settings: BluetoothSettingsState,
     pub(crate) module_settings: ModuleSettingsState,
     pub(crate) tap_hold_settings: TapHoldSettingsState,
     pub(crate) magic_settings: MagicSettingsState,

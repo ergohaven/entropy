@@ -31,6 +31,7 @@ impl EntropyApp {
                 .any(|option| !Self::is_encoder_layout_option(option));
             let show_modules_item = self.module_settings.supported;
             let show_touchpad_item = self.touchpad_settings.supported;
+            let show_bluetooth_item = self.bluetooth_settings.supported;
             let show_live_features_item = self.live_features_available_for_selected_device();
             let show_magic_item = self.magic_settings.supported;
             let show_tap_hold_item =
@@ -49,6 +50,7 @@ impl EntropyApp {
                 + show_layout_options_item as usize
                 + show_modules_item as usize
                 + show_touchpad_item as usize
+                + show_bluetooth_item as usize
                 + show_live_features_item as usize
                 + show_magic_item as usize
                 + show_tap_hold_item as usize
@@ -80,6 +82,10 @@ impl EntropyApp {
             }
             if show_touchpad_item {
                 settings_menu_labels.push(crate::i18n::tr(lang, TrKey::TouchpadTitle));
+            }
+            if show_bluetooth_item {
+                settings_menu_labels
+                    .push(crate::i18n::tr_catalog(lang, "bluetooth_settings.title"));
             }
             if show_live_features_item {
                 settings_menu_labels.push(crate::i18n::tr(lang, TrKey::LiveFeaturesTitle));
@@ -147,6 +153,7 @@ impl EntropyApp {
                         layout_options_hovered,
                         modules_hovered,
                         touchpad_hovered,
+                        bluetooth_hovered,
                         live_features_hovered,
                         magic_hovered,
                         tap_hold_hovered,
@@ -249,6 +256,19 @@ impl EntropyApp {
                                                 && self.settings_tab == SettingsTab::Touchpad,
                                         )
                                     });
+                                    let bluetooth_resp = show_bluetooth_item.then(|| {
+                                        top_dropdown_item(
+                                            ui,
+                                            item_width,
+                                            crate::i18n::tr_catalog(
+                                                lang,
+                                                "bluetooth_settings.title",
+                                            ),
+                                            true,
+                                            self.main_menu_tab == MainMenuTab::Settings
+                                                && self.settings_tab == SettingsTab::Bluetooth,
+                                        )
+                                    });
                                     let live_features_resp = show_live_features_item.then(|| {
                                         top_dropdown_item(
                                             ui,
@@ -343,6 +363,14 @@ impl EntropyApp {
                                         self.close_top_dropdowns(ui.ctx());
                                         self.open_touchpad_settings_page();
                                     }
+                                    if bluetooth_resp
+                                        .as_ref()
+                                        .map(|r| r.clicked())
+                                        .unwrap_or(false)
+                                    {
+                                        self.close_top_dropdowns(ui.ctx());
+                                        self.open_bluetooth_settings_page();
+                                    }
                                     if live_features_resp
                                         .as_ref()
                                         .map(|r| r.clicked())
@@ -416,6 +444,10 @@ impl EntropyApp {
                                             .as_ref()
                                             .map(|r| r.hovered())
                                             .unwrap_or(false),
+                                        bluetooth_resp
+                                            .as_ref()
+                                            .map(|r| r.hovered())
+                                            .unwrap_or(false),
                                         live_features_resp
                                             .as_ref()
                                             .map(|r| r.hovered())
@@ -456,6 +488,10 @@ impl EntropyApp {
                                                 .as_ref()
                                                 .map(|r| r.clicked())
                                                 .unwrap_or(false)
+                                            || bluetooth_resp
+                                                .as_ref()
+                                                .map(|r| r.clicked())
+                                                .unwrap_or(false)
                                             || live_features_resp
                                                 .as_ref()
                                                 .map(|r| r.clicked())
@@ -488,6 +524,7 @@ impl EntropyApp {
                                 || layout_options_hovered
                                 || modules_hovered
                                 || touchpad_hovered
+                                || bluetooth_hovered
                                 || live_features_hovered
                                 || magic_hovered
                                 || tap_hold_hovered
