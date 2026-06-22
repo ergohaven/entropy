@@ -834,6 +834,7 @@ impl EntropyApp {
         let mut settings = ModuleSettingsState {
             fields,
             groups,
+            selected_module_group: 0,
             values: std::collections::BTreeMap::new(),
             supported: true,
         };

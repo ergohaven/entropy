@@ -2,6 +2,7 @@ use super::*;
 
 #[derive(Clone, Copy)]
 enum ModuleSettingsRow {
+    SideSelector,
     Section(usize),
     Field { group_idx: usize, field_idx: usize },
 }
@@ -265,16 +266,54 @@ impl EntropyApp {
 
     fn module_settings_rows(&self) -> Vec<ModuleSettingsRow> {
         let mut rows = Vec::new();
+        let side_groups = self.module_settings_side_group_indices();
+        let selected_side_group = self.module_settings.selected_module_group();
+        if side_groups.len() > 1 {
+            rows.push(ModuleSettingsRow::SideSelector);
+        }
+        if let Some(group_idx) = selected_side_group {
+            rows.extend(self.module_settings_field_rows(group_idx));
+        }
         for (group_idx, group) in self.module_settings.groups.iter().enumerate() {
+            if matches!(
+                group.kind,
+                ModuleSettingsGroupKind::Left | ModuleSettingsGroupKind::Right
+            ) {
+                continue;
+            }
             rows.push(ModuleSettingsRow::Section(group_idx));
-            rows.extend(
-                (0..group.fields.len()).map(|field_idx| ModuleSettingsRow::Field {
-                    group_idx,
-                    field_idx,
-                }),
-            );
+            rows.extend(self.module_settings_field_rows(group_idx));
         }
         rows
+    }
+
+    fn module_settings_field_rows(&self, group_idx: usize) -> Vec<ModuleSettingsRow> {
+        self.module_settings
+            .groups
+            .get(group_idx)
+            .into_iter()
+            .flat_map(move |group| {
+                (0..group.fields.len()).map(move |field_idx| ModuleSettingsRow::Field {
+                    group_idx,
+                    field_idx,
+                })
+            })
+            .collect()
+    }
+
+    fn module_settings_side_group_indices(&self) -> Vec<usize> {
+        self.module_settings
+            .groups
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, group)| {
+                matches!(
+                    group.kind,
+                    ModuleSettingsGroupKind::Left | ModuleSettingsGroupKind::Right
+                )
+                .then_some(idx)
+            })
+            .collect()
     }
 
     fn module_settings_group_label(&self, group: &ModuleSettingsGroup) -> String {
@@ -322,6 +361,62 @@ impl EntropyApp {
         );
     }
 
+    fn draw_module_settings_side_selector(
+        &mut self,
+        ui: &mut egui::Ui,
+        content_width: f32,
+        row_height: f32,
+        suppress_tooltips: bool,
+    ) {
+        let side_groups = self.module_settings_side_group_indices();
+        if side_groups.len() <= 1 {
+            return;
+        }
+        let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
+        let dark = ui.visuals().dark_mode;
+        let lang = self.app_settings.language;
+        let selected_group = self
+            .module_settings
+            .selected_module_group()
+            .unwrap_or(side_groups[0]);
+        let selected_idx = side_groups
+            .iter()
+            .position(|group_idx| *group_idx == selected_group)
+            .unwrap_or(0);
+        let labels = side_groups
+            .iter()
+            .filter_map(|group_idx| self.module_settings.groups.get(*group_idx))
+            .map(|group| self.module_settings_group_label(group))
+            .collect::<Vec<_>>();
+        let dropdown_width = metrics.value(156.0);
+        let tooltip = (!suppress_tooltips).then(|| {
+            crate::i18n::tr_catalog(lang, "modules_settings.module_side_tooltip").to_owned()
+        });
+        crate::ui_style::settings_list_row_with_tooltip(
+            ui,
+            content_width,
+            row_height,
+            crate::i18n::tr_catalog(lang, "modules_settings.module_side"),
+            true,
+            tooltip.as_deref(),
+            dropdown_width,
+            |ui| {
+                let dropdown_id = ui.make_persistent_id("module_settings_side_dropdown");
+                let (_, picked) = Self::draw_touchpad_select_control(
+                    ui,
+                    dark,
+                    dropdown_id,
+                    selected_idx,
+                    &labels,
+                    dropdown_width,
+                );
+                if let Some(picked) = picked.and_then(|idx| side_groups.get(idx).copied()) {
+                    self.module_settings.set_selected_module_group(picked);
+                }
+            },
+        );
+    }
+
     fn draw_module_settings_row_entry(
         &mut self,
         ui: &mut egui::Ui,
@@ -331,6 +426,12 @@ impl EntropyApp {
         suppress_tooltips: bool,
     ) {
         match row {
+            ModuleSettingsRow::SideSelector => self.draw_module_settings_side_selector(
+                ui,
+                content_width,
+                row_height,
+                suppress_tooltips,
+            ),
             ModuleSettingsRow::Section(group_idx) => {
                 self.draw_module_settings_section(ui, content_width, row_height, group_idx)
             }

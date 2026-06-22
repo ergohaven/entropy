@@ -739,11 +739,41 @@ pub(crate) struct ModuleSettingsGroup {
 pub(crate) struct ModuleSettingsState {
     pub(crate) fields: Vec<ModuleSettingField>,
     pub(crate) groups: Vec<ModuleSettingsGroup>,
+    pub(crate) selected_module_group: usize,
     pub(crate) values: std::collections::BTreeMap<u16, u16>,
     pub(crate) supported: bool,
 }
 
 impl ModuleSettingsState {
+    pub(crate) fn selected_module_group(&self) -> Option<usize> {
+        let selected = self.groups.get(self.selected_module_group)?;
+        if matches!(
+            selected.kind,
+            ModuleSettingsGroupKind::Left | ModuleSettingsGroupKind::Right
+        ) {
+            Some(self.selected_module_group)
+        } else {
+            self.groups.iter().position(|group| {
+                matches!(
+                    group.kind,
+                    ModuleSettingsGroupKind::Left | ModuleSettingsGroupKind::Right
+                )
+            })
+        }
+    }
+
+    pub(crate) fn set_selected_module_group(&mut self, group_idx: usize) {
+        let Some(group) = self.groups.get(group_idx) else {
+            return;
+        };
+        if matches!(
+            group.kind,
+            ModuleSettingsGroupKind::Left | ModuleSettingsGroupKind::Right
+        ) {
+            self.selected_module_group = group_idx;
+        }
+    }
+
     pub(crate) fn value(&self, qsid: u16) -> u16 {
         self.values.get(&qsid).copied().unwrap_or(0)
     }
