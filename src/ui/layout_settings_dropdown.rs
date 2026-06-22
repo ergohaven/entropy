@@ -42,7 +42,7 @@ impl EntropyApp {
                 && !self.vial_unlock_polling
                 && !self.unlock_open;
             let default_lock_label = crate::i18n::tr_catalog(lang, "ui.unlock_keyboard_action");
-            let settings_item_count = 2
+            let settings_item_count = 3
                 + show_matrix_item as usize
                 + show_rgb_item as usize
                 + show_layer_leds_item as usize
@@ -60,6 +60,7 @@ impl EntropyApp {
             let dropdown_height = settings_item_count as f32 * 30.0 + 12.0;
             let mut settings_menu_labels = vec![
                 crate::i18n::tr(lang, TrKey::AppSettingsTitle),
+                crate::i18n::tr_catalog(lang, "notifications.title"),
                 crate::i18n::tr(lang, TrKey::UniversalSymbolsTitle),
             ];
             if show_matrix_item {
@@ -145,6 +146,7 @@ impl EntropyApp {
                 let item_width = dropdown_rect.width() - 16.0;
                 let (
                         app_hovered,
+                        notifications_hovered,
                         matrix_hovered,
                         universal_symbols_hovered,
                         rgb_hovered,
@@ -174,6 +176,14 @@ impl EntropyApp {
                                         true,
                                         self.main_menu_tab == MainMenuTab::Settings
                                             && self.settings_tab == SettingsTab::AppSettings,
+                                    );
+                                    let notifications_resp = top_dropdown_item(
+                                        ui,
+                                        item_width,
+                                        crate::i18n::tr_catalog(lang, "notifications.title"),
+                                        true,
+                                        self.main_menu_tab == MainMenuTab::Settings
+                                            && self.settings_tab == SettingsTab::Notifications,
                                     );
                                     let matrix_resp = show_matrix_item.then(|| {
                                         top_dropdown_item(
@@ -306,6 +316,10 @@ impl EntropyApp {
                                         self.close_top_dropdowns(ui.ctx());
                                         self.open_app_settings_page();
                                     }
+                                    if notifications_resp.clicked() {
+                                        self.close_top_dropdowns(ui.ctx());
+                                        self.open_notifications_settings_page();
+                                    }
                                     if matrix_resp.as_ref().map(|r| r.clicked()).unwrap_or(false) {
                                         self.close_top_dropdowns(ui.ctx());
                                         self.settings_tab = SettingsTab::MatrixTester;
@@ -421,6 +435,7 @@ impl EntropyApp {
                                     }
                                     (
                                         app_resp.hovered(),
+                                        notifications_resp.hovered(),
                                         matrix_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
                                         universal_symbols_resp.hovered(),
                                         rgb_resp
@@ -459,6 +474,7 @@ impl EntropyApp {
                                             .unwrap_or(false),
                                         lock_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
                                         app_resp.clicked()
+                                            || notifications_resp.clicked()
                                             || matrix_resp
                                                 .as_ref()
                                                 .map(|r| r.clicked())
@@ -516,6 +532,7 @@ impl EntropyApp {
                         !settings_clicked
                             && (settings_tab_hovered
                                 || app_hovered
+                                || notifications_hovered
                                 || matrix_hovered
                                 || universal_symbols_hovered
                                 || rgb_hovered

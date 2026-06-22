@@ -95,8 +95,16 @@ fn sticky_layout_active_layer(
 }
 
 impl EntropyApp {
+    fn layer_key_osd_layer_enabled(&self, target_layer: usize) -> bool {
+        self.app_settings
+            .layer_key_osd_layers
+            .get(target_layer)
+            .copied()
+            .unwrap_or(true)
+    }
+
     fn queue_layer_key_osd(&mut self, kind: LayerKeyOsdKind, target_layer: usize) {
-        if !self.app_settings.layer_key_osd {
+        if !self.app_settings.layer_key_osd || !self.layer_key_osd_layer_enabled(target_layer) {
             return;
         }
 
@@ -126,8 +134,9 @@ impl EntropyApp {
         } else {
             String::new()
         };
+        let timeout_ms = clamp_notification_timeout_ms(self.app_settings.layer_key_osd_timeout_ms);
         self.layer_key_osd_until =
-            Some(std::time::Instant::now() + std::time::Duration::from_millis(950));
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms as u64));
     }
 
     pub(super) fn sync_sticky_layout_layer_state(&mut self, layout: &KeyboardLayout) -> usize {

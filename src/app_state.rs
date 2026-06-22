@@ -12,6 +12,8 @@ pub(crate) const MATRIX_TESTER_LOCK_CHECK_INTERVAL: std::time::Duration =
 pub(crate) const UI_SCALE_MIN: f32 = 0.5;
 pub(crate) const UI_SCALE_MAX: f32 = 2.0;
 pub(crate) const UI_SCALE_STEP: f32 = 0.1;
+pub(crate) const NOTIFICATION_TIMEOUT_MIN_MS: u32 = 250;
+pub(crate) const NOTIFICATION_TIMEOUT_MAX_MS: u32 = 10_000;
 pub(crate) const TEXT_EXPANDER_SAVE_DEBOUNCE_SECS: f64 = 0.45;
 pub(crate) const ONBOARDING_TOUR_VERSION: u16 = 1;
 pub(crate) const COMBO_NO_COLOR: u32 = 0x000000;
@@ -36,6 +38,12 @@ pub(crate) struct AppSettings {
     pub(crate) layer_hover_preview: bool,
     #[serde(default = "default_layer_key_osd")]
     pub(crate) layer_key_osd: bool,
+    #[serde(default = "default_layer_key_osd_timeout_ms")]
+    pub(crate) layer_key_osd_timeout_ms: u32,
+    #[serde(default)]
+    pub(crate) layer_key_osd_layers: Vec<bool>,
+    #[serde(default)]
+    pub(crate) notifications_theme: NotificationTheme,
     #[serde(default)]
     pub(crate) sticky_layout_window: bool,
     #[serde(default = "default_sticky_layout_always_on_top")]
@@ -99,7 +107,15 @@ pub(crate) fn default_layer_hover_preview() -> bool {
 }
 
 pub(crate) fn default_layer_key_osd() -> bool {
-    true
+    false
+}
+
+pub(crate) fn default_layer_key_osd_timeout_ms() -> u32 {
+    1_000
+}
+
+pub(crate) fn clamp_notification_timeout_ms(timeout_ms: u32) -> u32 {
+    timeout_ms.clamp(NOTIFICATION_TIMEOUT_MIN_MS, NOTIFICATION_TIMEOUT_MAX_MS)
 }
 
 pub(crate) fn default_encoder_hover_enlarge() -> bool {
@@ -147,6 +163,9 @@ impl Default for AppSettings {
             show_shifted_number_symbols: default_show_shifted_number_symbols(),
             layer_hover_preview: default_layer_hover_preview(),
             layer_key_osd: default_layer_key_osd(),
+            layer_key_osd_timeout_ms: default_layer_key_osd_timeout_ms(),
+            layer_key_osd_layers: Vec::new(),
+            notifications_theme: NotificationTheme::default(),
             sticky_layout_window: false,
             sticky_layout_always_on_top: default_sticky_layout_always_on_top(),
             sticky_layout_opacity: default_sticky_layout_opacity(),
@@ -1324,6 +1343,7 @@ pub(crate) enum ComboPickField {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsTab {
     AppSettings,
+    Notifications,
     MatrixTester,
     UniversalSymbolsSetup,
     TextExpander,
@@ -1344,6 +1364,19 @@ pub(crate) enum SettingsTab {
     AltRepeat,
     MouseKeys,
     LayoutImageExport,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NotificationTheme {
+    Dark,
+    Light,
+}
+
+impl Default for NotificationTheme {
+    fn default() -> Self {
+        Self::Dark
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

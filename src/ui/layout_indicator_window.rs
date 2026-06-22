@@ -295,6 +295,7 @@ impl EntropyApp {
         let size = egui::vec2(LAYER_KEY_OSD_W, LAYER_KEY_OSD_H);
         let title = self.layer_key_osd_title.clone();
         let detail = self.layer_key_osd_detail.clone();
+        let theme = self.app_settings.notifications_theme;
         let fade = if remaining < LAYER_KEY_OSD_FADE {
             remaining.as_secs_f32() / LAYER_KEY_OSD_FADE.as_secs_f32()
         } else {
@@ -325,8 +326,20 @@ impl EntropyApp {
                 .frame(egui::Frame::NONE.fill(Color32::TRANSPARENT))
                 .show(viewport_ctx, |ui| {
                     let rect = ui.max_rect().shrink(4.0);
-                    let fill = Color32::from_rgba_unmultiplied(30, 30, 34, alpha(226));
-                    let stroke = Color32::from_rgba_unmultiplied(255, 255, 255, alpha(28));
+                    let (fill, stroke, title_color, detail_color) = match theme {
+                        NotificationTheme::Dark => (
+                            Color32::from_rgba_unmultiplied(30, 30, 34, alpha(226)),
+                            Color32::from_rgba_unmultiplied(255, 255, 255, alpha(28)),
+                            Color32::from_rgba_unmultiplied(248, 248, 248, alpha(244)),
+                            Color32::from_rgba_unmultiplied(210, 210, 214, alpha(210)),
+                        ),
+                        NotificationTheme::Light => (
+                            Color32::from_rgba_unmultiplied(246, 246, 248, alpha(232)),
+                            Color32::from_rgba_unmultiplied(28, 28, 32, alpha(32)),
+                            Color32::from_rgba_unmultiplied(24, 24, 28, alpha(244)),
+                            Color32::from_rgba_unmultiplied(92, 92, 98, alpha(216)),
+                        ),
+                    };
                     ui.painter().rect(
                         rect,
                         18.0,
@@ -340,7 +353,7 @@ impl EntropyApp {
                         egui::Align2::CENTER_CENTER,
                         title.as_str(),
                         FontId::proportional(22.0),
-                        Color32::from_rgba_unmultiplied(248, 248, 248, alpha(244)),
+                        title_color,
                     );
                     if !detail.is_empty() {
                         ui.painter().text(
@@ -348,7 +361,7 @@ impl EntropyApp {
                             egui::Align2::CENTER_CENTER,
                             detail.as_str(),
                             FontId::proportional(13.0),
-                            Color32::from_rgba_unmultiplied(210, 210, 214, alpha(210)),
+                            detail_color,
                         );
                     }
                 });

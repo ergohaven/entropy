@@ -1267,6 +1267,20 @@ touch = "Touch"
 encoder = "Encoder"
 disabled = "Disabled"
 
+[notifications]
+title = "Notifications"
+description = "Configure lightweight on-screen Entropy popups"
+layer_keys_label = "Layer keys"
+layer_keys_tooltip = "Show a small on-screen popup when layer keys are pressed"
+timeout_label = "Timeout"
+timeout_tooltip = "How long a notification stays visible, in milliseconds from 250 to 10000"
+theme_label = "Theme"
+theme_tooltip = "Choose the notification popup color theme"
+theme_dark = "Dark"
+theme_light = "Light"
+layer_label = "Layer {layer}"
+layer_tooltip = "Show layer key notifications for {layer}"
+
 [live_features]
 entropy_background = "Entropy background"
 keep_entropy_running_in_the_background_for_live_firmware_data = "Keep Entropy running in the background for live firmware data"
