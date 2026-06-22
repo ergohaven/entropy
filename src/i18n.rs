@@ -875,6 +875,7 @@ fn static_catalog_key(text: &str) -> Option<&'static str> {
         "Auto layer in Sniper" => Some("modules_settings.auto_layer_in_sniper"),
         "Auto layer in Scroll" => Some("modules_settings.auto_layer_in_scroll"),
         "Auto layer in Text" => Some("modules_settings.auto_layer_in_text"),
+        "Auto layer timeout" => Some("modules_settings.auto_layer_timeout"),
         "Normal" => Some("modules_settings.normal"),
         "Sniper" => Some("modules_settings.sniper"),
         "Scroll" => Some("modules_settings.scroll"),

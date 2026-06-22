@@ -96,6 +96,7 @@ impl EntropyApp {
             "Auto layer in Sniper" => "modules_settings.auto_layer_sniper_tooltip",
             "Auto layer in Scroll" => "modules_settings.auto_layer_scroll_tooltip",
             "Auto layer in Text" => "modules_settings.auto_layer_text_tooltip",
+            "Auto layer timeout" => "modules_settings.auto_layer_timeout_tooltip",
             _ => "modules_settings.generic_tooltip",
         };
         let field_label = self.module_setting_label(group_kind, &field.title);
