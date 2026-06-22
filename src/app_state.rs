@@ -739,43 +739,11 @@ pub(crate) struct ModuleSettingsGroup {
 pub(crate) struct ModuleSettingsState {
     pub(crate) fields: Vec<ModuleSettingField>,
     pub(crate) groups: Vec<ModuleSettingsGroup>,
-    pub(crate) active_group: usize,
     pub(crate) values: std::collections::BTreeMap<u16, u16>,
     pub(crate) supported: bool,
 }
 
 impl ModuleSettingsState {
-    pub(crate) fn active_group(&self) -> Option<&ModuleSettingsGroup> {
-        self.groups
-            .get(self.active_group.min(self.groups.len().saturating_sub(1)))
-    }
-
-    pub(crate) fn active_group_kind(&self) -> ModuleSettingsGroupKind {
-        self.active_group()
-            .map(|group| group.kind)
-            .unwrap_or(ModuleSettingsGroupKind::Other)
-    }
-
-    pub(crate) fn active_fields(&self) -> &[ModuleSettingField] {
-        self.active_group()
-            .map(|group| group.fields.as_slice())
-            .unwrap_or(self.fields.as_slice())
-    }
-
-    pub(crate) fn row_count(&self) -> usize {
-        self.active_fields().len()
-    }
-
-    pub(crate) fn field(&self, row_idx: usize) -> Option<&ModuleSettingField> {
-        self.active_fields().get(row_idx)
-    }
-
-    pub(crate) fn set_active_group(&mut self, group_idx: usize) {
-        if !self.groups.is_empty() {
-            self.active_group = group_idx.min(self.groups.len() - 1);
-        }
-    }
-
     pub(crate) fn value(&self, qsid: u16) -> u16 {
         self.values.get(&qsid).copied().unwrap_or(0)
     }

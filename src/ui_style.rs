@@ -218,6 +218,7 @@ pub fn modern_keycap_button(ui: &mut Ui, label: &str, size: Vec2, enabled: bool)
     resp
 }
 
+#[allow(dead_code)]
 pub fn settings_segmented_control(
     ui: &mut Ui,
     id_source: impl std::hash::Hash,

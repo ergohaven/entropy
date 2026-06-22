@@ -1,9 +1,19 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+enum ModuleSettingsRow {
+    Section(usize),
+    Field { group_idx: usize, field_idx: usize },
+}
+
 impl EntropyApp {
-    fn module_setting_display_title<'a>(&self, title: &'a str) -> &'a str {
+    fn module_setting_display_title<'a>(
+        &self,
+        group_kind: ModuleSettingsGroupKind,
+        title: &'a str,
+    ) -> &'a str {
         if !matches!(
-            self.module_settings.active_group_kind(),
+            group_kind,
             ModuleSettingsGroupKind::Left | ModuleSettingsGroupKind::Right
         ) {
             return title;
@@ -14,9 +24,12 @@ impl EntropyApp {
             .unwrap_or(title)
     }
 
-    fn module_setting_label(&self, title: &str) -> String {
+    fn module_setting_label(&self, group_kind: ModuleSettingsGroupKind, title: &str) -> String {
         let lang = self.app_settings.language;
-        match self.module_setting_display_title(title) {
+        match self.module_setting_display_title(group_kind, title) {
+            "Module" | "module" => {
+                crate::i18n::tr_catalog(lang, "modules_settings.module").to_owned()
+            }
             "Mode" | "mode" => crate::i18n::tr_catalog(lang, "modules_settings.mode").to_owned(),
             "Ball axis" | "ball axis" => {
                 crate::i18n::tr_catalog(lang, "modules_settings.ball_axis").to_owned()
@@ -39,6 +52,9 @@ impl EntropyApp {
             "Text sens" | "text sens" => {
                 crate::i18n::tr_catalog(lang, "modules_settings.text_sens").to_owned()
             }
+            "Touch gestures" | "touch gestures" => {
+                crate::i18n::tr_catalog(lang, "modules_settings.touch_gestures").to_owned()
+            }
             "Invert scroll" | "invert scroll" => {
                 crate::i18n::tr_catalog(lang, "modules_settings.invert_scroll").to_owned()
             }
@@ -52,9 +68,14 @@ impl EntropyApp {
         }
     }
 
-    fn module_setting_tooltip(&self, field: &ModuleSettingField) -> String {
+    fn module_setting_tooltip(
+        &self,
+        group_kind: ModuleSettingsGroupKind,
+        field: &ModuleSettingField,
+    ) -> String {
         let lang = self.app_settings.language;
-        let key = match self.module_setting_display_title(&field.title) {
+        let key = match self.module_setting_display_title(group_kind, &field.title) {
+            "Module" | "module" => "modules_settings.module_tooltip",
             "Mode" | "mode" => "modules_settings.mode_tooltip",
             "Ball axis" | "ball axis" => "modules_settings.ball_axis_tooltip",
             "Touch axis" | "touch axis" => "modules_settings.touch_axis_tooltip",
@@ -63,6 +84,7 @@ impl EntropyApp {
             "Scroll sens" | "scroll sens" => "modules_settings.scroll_sens_tooltip",
             "Sniper sens" | "sniper sens" => "modules_settings.sniper_sens_tooltip",
             "Text sens" | "text sens" => "modules_settings.text_sens_tooltip",
+            "Touch gestures" | "touch gestures" => "modules_settings.touch_gestures_tooltip",
             "Invert scroll" | "invert scroll" => "modules_settings.invert_scroll_tooltip",
             "Invert text" | "invert text" => "modules_settings.invert_text_tooltip",
             "Acceleration" | "acceleration" => "modules_settings.acceleration_tooltip",
@@ -75,7 +97,7 @@ impl EntropyApp {
             "Auto layer in Text" => "modules_settings.auto_layer_text_tooltip",
             _ => "modules_settings.generic_tooltip",
         };
-        let field_label = self.module_setting_label(&field.title);
+        let field_label = self.module_setting_label(group_kind, &field.title);
         crate::i18n::tr_catalog_format(lang, key, &[("field", field_label.as_str())])
     }
 
@@ -95,25 +117,29 @@ impl EntropyApp {
         }
     }
 
-    fn draw_module_settings_row(
+    fn draw_module_settings_field_row(
         &mut self,
         ui: &mut egui::Ui,
-        row_idx: usize,
+        group_idx: usize,
+        field_idx: usize,
         content_width: f32,
         row_height: f32,
         suppress_tooltips: bool,
     ) {
-        let active_group = self.module_settings.active_group;
-        let Some(field) = self.module_settings.field(row_idx).cloned() else {
+        let Some(group) = self.module_settings.groups.get(group_idx) else {
+            return;
+        };
+        let group_kind = group.kind;
+        let Some(field) = group.fields.get(field_idx).cloned() else {
             return;
         };
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
         let dark = ui.visuals().dark_mode;
-        let label = self.module_setting_label(&field.title);
+        let label = self.module_setting_label(group_kind, &field.title);
         let tooltip = if suppress_tooltips {
             None
         } else {
-            Some(self.module_setting_tooltip(&field))
+            Some(self.module_setting_tooltip(group_kind, &field))
         };
         let raw_value = self.module_settings.value(field.qsid);
         match field.kind {
@@ -133,7 +159,7 @@ impl EntropyApp {
                     |ui| {
                         let resp = crate::ui_style::settings_switch_sized_stable(
                             ui,
-                            ("module_settings", active_group, field.qsid, field.bit),
+                            ("module_settings", group_idx, field.qsid, field.bit),
                             &mut checked,
                             switch_size,
                         );
@@ -159,8 +185,7 @@ impl EntropyApp {
                     tooltip.as_deref(),
                     field_width,
                     |ui| {
-                        let edit_id =
-                            egui::Id::new(("module_setting_edit", active_group, field.qsid));
+                        let edit_id = egui::Id::new(("module_setting_edit", group_idx, field.qsid));
                         let current = raw_value.clamp(field.min, field.max);
                         let mut text = ui.ctx().data_mut(|d| {
                             d.get_temp::<String>(edit_id)
@@ -218,7 +243,7 @@ impl EntropyApp {
                     |ui| {
                         let dropdown_id = ui.make_persistent_id((
                             "module_setting_dropdown",
-                            active_group,
+                            group_idx,
                             field.qsid,
                         ));
                         let (_, picked) = Self::draw_touchpad_select_control(
@@ -238,6 +263,20 @@ impl EntropyApp {
         }
     }
 
+    fn module_settings_rows(&self) -> Vec<ModuleSettingsRow> {
+        let mut rows = Vec::new();
+        for (group_idx, group) in self.module_settings.groups.iter().enumerate() {
+            rows.push(ModuleSettingsRow::Section(group_idx));
+            rows.extend(
+                (0..group.fields.len()).map(|field_idx| ModuleSettingsRow::Field {
+                    group_idx,
+                    field_idx,
+                }),
+            );
+        }
+        rows
+    }
+
     fn module_settings_group_label(&self, group: &ModuleSettingsGroup) -> String {
         let lang = self.app_settings.language;
         match group.kind {
@@ -248,33 +287,64 @@ impl EntropyApp {
                 crate::i18n::tr_catalog(lang, "modules_settings.right_half").to_owned()
             }
             ModuleSettingsGroupKind::AutoLayer => {
-                crate::i18n::tr_catalog(lang, "modules_settings.auto_layer").to_owned()
+                crate::i18n::tr_catalog(lang, "modules_settings.auto_layer_section").to_owned()
             }
             ModuleSettingsGroupKind::Other => crate::i18n::tr_text(lang, &group.title),
         }
     }
 
-    fn draw_module_settings_group_switcher(&mut self, ui: &mut egui::Ui) {
-        if self.module_settings.groups.len() <= 1 {
+    fn draw_module_settings_section(
+        &self,
+        ui: &mut egui::Ui,
+        content_width: f32,
+        row_height: f32,
+        group_idx: usize,
+    ) {
+        let Some(group) = self.module_settings.groups.get(group_idx) else {
             return;
-        }
-        let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
-        let labels = self
-            .module_settings
-            .groups
-            .iter()
-            .map(|group| self.module_settings_group_label(group))
-            .collect::<Vec<_>>();
-        let width = metrics.value((labels.len() as f32 * 112.0).clamp(224.0, 360.0));
-        let size = metrics.size(width / metrics.scale, 34.0);
-        if let Some(picked) = crate::ui_style::settings_segmented_control(
-            ui,
-            "module_settings_group_switcher",
-            &labels,
-            self.module_settings.active_group,
-            size,
-        ) {
-            self.module_settings.set_active_group(picked);
+        };
+        let dark = ui.visuals().dark_mode;
+        let title = self.module_settings_group_label(group);
+        let (row_rect, _) =
+            ui.allocate_exact_size(egui::vec2(content_width, row_height), egui::Sense::hover());
+        let separator =
+            crate::ui_style::border_color(dark).gamma_multiply(if dark { 0.72 } else { 0.9 });
+        ui.painter().line_segment(
+            [row_rect.left_bottom(), row_rect.right_bottom()],
+            egui::Stroke::new(1.0, separator),
+        );
+        ui.painter().text(
+            row_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            title,
+            egui::FontId::proportional(12.5),
+            app_muted_text(dark),
+        );
+    }
+
+    fn draw_module_settings_row_entry(
+        &mut self,
+        ui: &mut egui::Ui,
+        row: ModuleSettingsRow,
+        content_width: f32,
+        row_height: f32,
+        suppress_tooltips: bool,
+    ) {
+        match row {
+            ModuleSettingsRow::Section(group_idx) => {
+                self.draw_module_settings_section(ui, content_width, row_height, group_idx)
+            }
+            ModuleSettingsRow::Field {
+                group_idx,
+                field_idx,
+            } => self.draw_module_settings_field_row(
+                ui,
+                group_idx,
+                field_idx,
+                content_width,
+                row_height,
+                suppress_tooltips,
+            ),
         }
     }
 
@@ -317,16 +387,12 @@ impl EntropyApp {
                     return;
                 }
 
-                self.draw_module_settings_group_switcher(ui);
-                if self.module_settings.groups.len() > 1 {
-                    ui.add_space(14.0);
-                }
-
+                let rows = self.module_settings_rows();
                 let list = allocate_adaptive_settings_list_viewport(
                     ui,
                     "module_settings",
                     metrics,
-                    self.module_settings.row_count(),
+                    rows.len(),
                     0.0,
                 );
                 ui.allocate_ui_at_rect(list.content_rect, |ui| {
@@ -334,13 +400,15 @@ impl EntropyApp {
                     ui.set_min_size(list.content_rect.size());
                     ui.spacing_mut().item_spacing.y = 0.0;
                     for row_idx in list.first_visible_row..list.last_visible_row {
-                        self.draw_module_settings_row(
-                            ui,
-                            row_idx,
-                            list.row_content_width,
-                            list.row_height,
-                            list.suppress_tooltips,
-                        );
+                        if let Some(row) = rows.get(row_idx).copied() {
+                            self.draw_module_settings_row_entry(
+                                ui,
+                                row,
+                                list.row_content_width,
+                                list.row_height,
+                                list.suppress_tooltips,
+                            );
+                        }
                     }
                 });
 
