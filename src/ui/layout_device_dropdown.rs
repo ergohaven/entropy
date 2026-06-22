@@ -44,7 +44,7 @@ impl EntropyApp {
             let device_count = self.device_manager.devices().len();
             let device_rows = device_count.max(1) as f32;
             let devices_h = 12.0 + device_rows * 30.0;
-            let sticky_layout_h = 36.0;
+            let sticky_layout_h = 72.0;
             #[cfg(not(target_arch = "wasm32"))]
             let import_export_h = 102.0;
             #[cfg(target_arch = "wasm32")]
@@ -78,6 +78,8 @@ impl EntropyApp {
             }
             device_menu_labels
                 .push(crate::i18n::tr_catalog(lang, "ui.sticky_layout_window_label").to_owned());
+            device_menu_labels
+                .push(crate::i18n::tr_catalog(lang, "ui.layer_key_osd_label").to_owned());
             let dropdown_size = Vec2::new(
                 adaptive_top_dropdown_width(
                     ui,
@@ -259,6 +261,36 @@ impl EntropyApp {
                                         self.sticky_layout_last_size = None;
                                         save_app_settings(&self.app_settings);
                                     }
+                                    ctx.request_repaint();
+                                    device_clicked = true;
+                                }
+                                if top_dropdown_item(
+                                    ui,
+                                    dropdown_size.x - 16.0,
+                                    crate::i18n::tr_catalog(lang, "ui.layer_key_osd_label"),
+                                    true,
+                                    self.app_settings.layer_key_osd,
+                                )
+                                .clicked()
+                                {
+                                    self.app_settings.layer_key_osd = !self.app_settings.layer_key_osd;
+                                    if !self.app_settings.layer_key_osd {
+                                        self.layer_key_osd_until = None;
+                                        let viewport_id =
+                                            egui::ViewportId::from_hash_of("entropy_layer_key_osd");
+                                        ctx.send_viewport_cmd_to(
+                                            viewport_id,
+                                            egui::ViewportCommand::Close,
+                                        );
+                                    } else if self.is_vial_locked() {
+                                        self.unlock_open = true;
+                                        self.status_msg = crate::i18n::tr_catalog(
+                                            self.app_settings.language,
+                                            "matrix_tester.keyboard_is_locked_unlock_it_to_use_matrix_tester",
+                                        )
+                                        .into();
+                                    }
+                                    save_app_settings(&self.app_settings);
                                     ctx.request_repaint();
                                     device_clicked = true;
                                 }

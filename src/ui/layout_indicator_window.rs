@@ -65,6 +65,9 @@ const STICKY_LAYOUT_WINDOW_H: f32 = 360.0_f32;
 const STICKY_LAYOUT_WINDOW_MARGIN: f32 = 1.0_f32;
 const STICKY_LAYOUT_WINDOW_TITLE_H: f32 = 42.0_f32;
 const STICKY_LAYOUT_WINDOW_FOOTER_H: f32 = 34.0_f32;
+const LAYER_KEY_OSD_W: f32 = 300.0_f32;
+const LAYER_KEY_OSD_H: f32 = 86.0_f32;
+const LAYER_KEY_OSD_FADE: std::time::Duration = std::time::Duration::from_millis(180);
 
 #[derive(Clone, Copy)]
 enum StickyLayoutWindowButton {
@@ -243,6 +246,115 @@ fn sticky_layout_saved_window_size(settings: &AppSettings) -> Vec2 {
 }
 
 impl EntropyApp {
+    pub(super) fn draw_layer_key_osd_window(&mut self, ctx: &egui::Context) {
+        let viewport_id = egui::ViewportId::from_hash_of("entropy_layer_key_osd");
+
+        if !self.app_settings.layer_key_osd {
+            if self.layer_key_osd_until.take().is_some() {
+                ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Close);
+            }
+            return;
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if !self.app_settings.sticky_layout_window {
+            if let Some((rows, cols)) = self
+                .layout
+                .as_ref()
+                .map(|layout| (layout.rows, layout.cols))
+            {
+                self.poll_switch_matrix_state(ctx, rows, cols, false);
+                if let Some(layout) = self.layout.clone() {
+                    self.sync_sticky_layout_layer_state(&layout);
+                }
+            }
+        }
+
+        let Some(until) = self.layer_key_osd_until else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        if now >= until {
+            self.layer_key_osd_until = None;
+            self.layer_key_osd_title.clear();
+            self.layer_key_osd_detail.clear();
+            ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Close);
+            return;
+        }
+
+        let remaining = until.saturating_duration_since(now);
+        ctx.request_repaint_after(remaining.min(std::time::Duration::from_millis(16)));
+
+        let monitor_size = ctx
+            .input(|i| i.viewport().monitor_size)
+            .unwrap_or_else(|| egui::vec2(1920.0, 1080.0));
+        let position = egui::pos2(
+            ((monitor_size.x - LAYER_KEY_OSD_W) * 0.5).max(0.0),
+            (monitor_size.y - LAYER_KEY_OSD_H - 92.0).max(0.0),
+        );
+        let size = egui::vec2(LAYER_KEY_OSD_W, LAYER_KEY_OSD_H);
+        let title = self.layer_key_osd_title.clone();
+        let detail = self.layer_key_osd_detail.clone();
+        let fade = if remaining < LAYER_KEY_OSD_FADE {
+            remaining.as_secs_f32() / LAYER_KEY_OSD_FADE.as_secs_f32()
+        } else {
+            1.0
+        }
+        .clamp(0.0, 1.0);
+        let alpha = |value: u8| ((value as f32) * fade).round().clamp(0.0, 255.0) as u8;
+
+        let viewport_builder = egui::ViewportBuilder::default()
+            .with_title("Entropy Layer OSD")
+            .with_inner_size(size)
+            .with_min_inner_size(size)
+            .with_max_inner_size(size)
+            .with_position(position)
+            .with_resizable(false)
+            .with_decorations(false)
+            .with_taskbar(false)
+            .with_transparent(true)
+            .with_mouse_passthrough(true)
+            .with_window_type(egui::X11WindowType::Utility)
+            .with_window_level(egui::WindowLevel::AlwaysOnTop);
+
+        ctx.show_viewport_immediate(viewport_id, viewport_builder, move |viewport_ctx, _| {
+            if viewport_ctx.input(|i| i.viewport().close_requested()) {
+                return;
+            }
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE.fill(Color32::TRANSPARENT))
+                .show(viewport_ctx, |ui| {
+                    let rect = ui.max_rect().shrink(4.0);
+                    let fill = Color32::from_rgba_unmultiplied(30, 30, 34, alpha(226));
+                    let stroke = Color32::from_rgba_unmultiplied(255, 255, 255, alpha(28));
+                    ui.painter().rect(
+                        rect,
+                        18.0,
+                        fill,
+                        Stroke::new(1.0, stroke),
+                        egui::StrokeKind::Inside,
+                    );
+
+                    ui.painter().text(
+                        egui::pos2(rect.center().x, rect.center().y - 8.0),
+                        egui::Align2::CENTER_CENTER,
+                        title.as_str(),
+                        FontId::proportional(22.0),
+                        Color32::from_rgba_unmultiplied(248, 248, 248, alpha(244)),
+                    );
+                    if !detail.is_empty() {
+                        ui.painter().text(
+                            egui::pos2(rect.center().x, rect.center().y + 19.0),
+                            egui::Align2::CENTER_CENTER,
+                            detail.as_str(),
+                            FontId::proportional(13.0),
+                            Color32::from_rgba_unmultiplied(210, 210, 214, alpha(210)),
+                        );
+                    }
+                });
+        });
+    }
+
     pub(super) fn draw_sticky_layout_window(&mut self, ctx: &egui::Context) {
         if !self.app_settings.sticky_layout_window {
             self.sticky_layout_last_size = None;

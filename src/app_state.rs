@@ -34,6 +34,8 @@ pub(crate) struct AppSettings {
     pub(crate) show_shifted_number_symbols: bool,
     #[serde(default = "default_layer_hover_preview")]
     pub(crate) layer_hover_preview: bool,
+    #[serde(default = "default_layer_key_osd")]
+    pub(crate) layer_key_osd: bool,
     #[serde(default)]
     pub(crate) sticky_layout_window: bool,
     #[serde(default = "default_sticky_layout_always_on_top")]
@@ -96,6 +98,10 @@ pub(crate) fn default_layer_hover_preview() -> bool {
     true
 }
 
+pub(crate) fn default_layer_key_osd() -> bool {
+    true
+}
+
 pub(crate) fn default_encoder_hover_enlarge() -> bool {
     true
 }
@@ -140,6 +146,7 @@ impl Default for AppSettings {
             launch_at_startup: false,
             show_shifted_number_symbols: default_show_shifted_number_symbols(),
             layer_hover_preview: default_layer_hover_preview(),
+            layer_key_osd: default_layer_key_osd(),
             sticky_layout_window: false,
             sticky_layout_always_on_top: default_sticky_layout_always_on_top(),
             sticky_layout_opacity: default_sticky_layout_opacity(),
@@ -1532,9 +1539,13 @@ pub struct EntropyApp {
     pub(crate) sticky_layout_pressed_key_layers: Vec<Option<usize>>,
     pub(crate) sticky_layout_toggled_layers: Vec<bool>,
     pub(crate) sticky_layout_base_layer: usize,
+    pub(crate) sticky_layout_active_layer: usize,
     pub(crate) sticky_layout_last_size: Option<Vec2>,
     pub(crate) sticky_layout_resize_opacity_hold_frames: u8,
     pub(crate) pending_layout_indicator_open_after_unlock: bool,
+    pub(crate) layer_key_osd_title: String,
+    pub(crate) layer_key_osd_detail: String,
+    pub(crate) layer_key_osd_until: Option<std::time::Instant>,
     pub(crate) matrix_tester_last_poll: std::time::Instant,
     pub(crate) matrix_tester_last_lock_check: std::time::Instant,
     pub(crate) matrix_tester_unlock_prompted: bool,

@@ -34,6 +34,8 @@ impl EntropyApp {
         self.sticky_layout_pressed_key_layers.clear();
         self.sticky_layout_toggled_layers.clear();
         self.sticky_layout_base_layer = 0;
+        self.sticky_layout_active_layer = 0;
+        self.layer_key_osd_until = None;
         self.status_msg = status_msg.into();
     }
 }

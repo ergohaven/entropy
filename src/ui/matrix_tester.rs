@@ -22,6 +22,8 @@ impl EntropyApp {
         self.sticky_layout_pressed_key_layers.clear();
         self.sticky_layout_toggled_layers.clear();
         self.sticky_layout_base_layer = 0;
+        self.sticky_layout_active_layer = 0;
+        self.layer_key_osd_until = None;
         self.matrix_tester_last_poll = std::time::Instant::now() - MATRIX_TESTER_POLL_INTERVAL;
         self.matrix_tester_last_lock_check =
             std::time::Instant::now() - MATRIX_TESTER_LOCK_CHECK_INTERVAL;
