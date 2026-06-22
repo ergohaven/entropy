@@ -27,7 +27,7 @@ impl EntropyApp {
                 ui.add_space(24.0);
 
                 let layer_count = layout.layers.len().max(1);
-                let total_rows = 3 + layer_count;
+                let total_rows = 5 + layer_count;
                 let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
                 let list = allocate_adaptive_settings_list_viewport(
                     ui,
@@ -104,8 +104,26 @@ impl EntropyApp {
                     metrics.settings_control_font_size(),
                     suppress_tooltips,
                 ),
+                3 => self.draw_notifications_size_row(
+                    ui,
+                    content_width,
+                    row_height,
+                    metrics.settings_control_width(),
+                    control_height,
+                    metrics.settings_control_font_size(),
+                    suppress_tooltips,
+                ),
+                4 => self.draw_notifications_position_row(
+                    ui,
+                    content_width,
+                    row_height,
+                    metrics.settings_control_width(),
+                    control_height,
+                    metrics.settings_control_font_size(),
+                    suppress_tooltips,
+                ),
                 _ => {
-                    let layer_idx = row_idx - 3;
+                    let layer_idx = row_idx - 5;
                     if layer_idx < layout.layers.len().max(1) {
                         self.draw_notifications_layer_row(
                             ui,
@@ -262,69 +280,119 @@ impl EntropyApp {
                 .then_some(crate::i18n::tr_catalog(lang, "notifications.theme_tooltip")),
             dropdown_width,
             |ui| {
-                let dropdown_id = ui.make_persistent_id("notifications_theme_dropdown");
-                let selected_text = notification_theme_label(lang, selected);
-                let dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
+                draw_notifications_dropdown_control(
                     ui,
-                    dropdown_id,
-                    selected_text,
-                    ui.visuals().text_color(),
+                    lang,
+                    "notifications_theme_dropdown",
+                    &mut selected,
+                    &[NotificationTheme::Dark, NotificationTheme::Light],
+                    notification_theme_label,
                     dropdown_width,
                     control_height,
                     font_size,
-                );
-                egui::popup_below_widget(
-                    ui,
-                    dropdown_id,
-                    &dropdown_resp,
-                    egui::PopupCloseBehavior::CloseOnClickOutside,
-                    |ui| {
-                        ui.set_min_width(dropdown_width);
-                        ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
-                        for theme in [NotificationTheme::Dark, NotificationTheme::Light] {
-                            let option_text = notification_theme_label(lang, theme);
-                            let selected_theme = theme == selected;
-                            let (option_rect, option_resp) = ui.allocate_exact_size(
-                                egui::vec2(dropdown_width, 28.0),
-                                Sense::click(),
-                            );
-                            if option_resp.hovered() {
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                            }
-                            let option_fill = if selected_theme {
-                                if ui.visuals().dark_mode {
-                                    Color32::from_rgb(58, 58, 61)
-                                } else {
-                                    Color32::from_rgb(236, 236, 238)
-                                }
-                            } else if option_resp.hovered() {
-                                crate::ui_style::hover_fill(ui.visuals().dark_mode)
-                            } else {
-                                Color32::TRANSPARENT
-                            };
-                            ui.painter().rect_filled(option_rect, 7.0, option_fill);
-                            ui.painter().text(
-                                egui::pos2(option_rect.left() + 10.0, option_rect.center().y),
-                                egui::Align2::LEFT_CENTER,
-                                option_text,
-                                FontId::proportional(12.0),
-                                if selected_theme {
-                                    ui.visuals().text_color()
-                                } else {
-                                    app_muted_text(ui.visuals().dark_mode)
-                                },
-                            );
-                            if option_resp.clicked() {
-                                selected = theme;
-                                ui.memory_mut(|m| m.close_popup());
-                            }
-                        }
-                    },
                 );
             },
         );
         if selected != self.app_settings.notifications_theme {
             self.app_settings.notifications_theme = selected;
+            save_app_settings(&self.app_settings);
+        }
+    }
+
+    fn draw_notifications_size_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        content_width: f32,
+        row_height: f32,
+        dropdown_width: f32,
+        control_height: f32,
+        font_size: f32,
+        suppress_tooltips: bool,
+    ) {
+        let lang = self.app_settings.language;
+        let mut selected = self.app_settings.notifications_size;
+        crate::ui_style::settings_list_row_with_tooltip(
+            ui,
+            content_width,
+            row_height,
+            crate::i18n::tr_catalog(lang, "notifications.size_label"),
+            true,
+            (!suppress_tooltips)
+                .then_some(crate::i18n::tr_catalog(lang, "notifications.size_tooltip")),
+            dropdown_width,
+            |ui| {
+                draw_notifications_dropdown_control(
+                    ui,
+                    lang,
+                    "notifications_size_dropdown",
+                    &mut selected,
+                    &[
+                        NotificationSize::Small,
+                        NotificationSize::Medium,
+                        NotificationSize::Large,
+                    ],
+                    notification_size_label,
+                    dropdown_width,
+                    control_height,
+                    font_size,
+                );
+            },
+        );
+        if selected != self.app_settings.notifications_size {
+            self.app_settings.notifications_size = selected;
+            save_app_settings(&self.app_settings);
+        }
+    }
+
+    fn draw_notifications_position_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        content_width: f32,
+        row_height: f32,
+        dropdown_width: f32,
+        control_height: f32,
+        font_size: f32,
+        suppress_tooltips: bool,
+    ) {
+        let lang = self.app_settings.language;
+        let mut selected = self.app_settings.notifications_position;
+        crate::ui_style::settings_list_row_with_tooltip(
+            ui,
+            content_width,
+            row_height,
+            crate::i18n::tr_catalog(lang, "notifications.position_label"),
+            true,
+            (!suppress_tooltips).then_some(crate::i18n::tr_catalog(
+                lang,
+                "notifications.position_tooltip",
+            )),
+            dropdown_width,
+            |ui| {
+                draw_notifications_dropdown_control(
+                    ui,
+                    lang,
+                    "notifications_position_dropdown",
+                    &mut selected,
+                    &[
+                        NotificationPosition::TopLeft,
+                        NotificationPosition::TopCenter,
+                        NotificationPosition::TopRight,
+                        NotificationPosition::CenterLeft,
+                        NotificationPosition::Center,
+                        NotificationPosition::CenterRight,
+                        NotificationPosition::BottomLeft,
+                        NotificationPosition::BottomCenter,
+                        NotificationPosition::BottomRight,
+                    ],
+                    notification_position_label,
+                    dropdown_width,
+                    control_height,
+                    font_size,
+                );
+            },
+        );
+        if selected != self.app_settings.notifications_position {
+            self.app_settings.notifications_position = selected;
             save_app_settings(&self.app_settings);
         }
     }
@@ -388,10 +456,129 @@ impl EntropyApp {
     }
 }
 
+fn draw_notifications_dropdown_control<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    lang: crate::i18n::Language,
+    id_source: &'static str,
+    selected: &mut T,
+    options: &[T],
+    label_fn: fn(crate::i18n::Language, T) -> &'static str,
+    dropdown_width: f32,
+    control_height: f32,
+    font_size: f32,
+) {
+    let dropdown_id = ui.make_persistent_id(id_source);
+    let selected_text = label_fn(lang, *selected);
+    let dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
+        ui,
+        dropdown_id,
+        selected_text,
+        ui.visuals().text_color(),
+        dropdown_width,
+        control_height,
+        font_size,
+    );
+    egui::popup_below_widget(
+        ui,
+        dropdown_id,
+        &dropdown_resp,
+        egui::PopupCloseBehavior::CloseOnClickOutside,
+        |ui| {
+            ui.set_min_width(dropdown_width);
+            ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
+            egui::ScrollArea::vertical()
+                .id_salt((id_source, "scroll"))
+                .max_height(170.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    for option in options {
+                        let option_text = label_fn(lang, *option);
+                        let selected_option = *option == *selected;
+                        let (option_rect, option_resp) = ui
+                            .allocate_exact_size(egui::vec2(dropdown_width, 28.0), Sense::click());
+                        if option_resp.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        let option_fill = if selected_option {
+                            if ui.visuals().dark_mode {
+                                Color32::from_rgb(58, 58, 61)
+                            } else {
+                                Color32::from_rgb(236, 236, 238)
+                            }
+                        } else if option_resp.hovered() {
+                            crate::ui_style::hover_fill(ui.visuals().dark_mode)
+                        } else {
+                            Color32::TRANSPARENT
+                        };
+                        ui.painter().rect_filled(option_rect, 7.0, option_fill);
+                        ui.painter().text(
+                            egui::pos2(option_rect.left() + 10.0, option_rect.center().y),
+                            egui::Align2::LEFT_CENTER,
+                            option_text,
+                            FontId::proportional(12.0),
+                            if selected_option {
+                                ui.visuals().text_color()
+                            } else {
+                                app_muted_text(ui.visuals().dark_mode)
+                            },
+                        );
+                        if option_resp.clicked() {
+                            *selected = *option;
+                            ui.memory_mut(|m| m.close_popup());
+                        }
+                    }
+                });
+        },
+    );
+}
+
 fn notification_theme_label(lang: crate::i18n::Language, theme: NotificationTheme) -> &'static str {
     match theme {
         NotificationTheme::Dark => crate::i18n::tr_catalog(lang, "notifications.theme_dark"),
         NotificationTheme::Light => crate::i18n::tr_catalog(lang, "notifications.theme_light"),
+    }
+}
+
+fn notification_size_label(lang: crate::i18n::Language, size: NotificationSize) -> &'static str {
+    match size {
+        NotificationSize::Small => crate::i18n::tr_catalog(lang, "notifications.size_small"),
+        NotificationSize::Medium => crate::i18n::tr_catalog(lang, "notifications.size_medium"),
+        NotificationSize::Large => crate::i18n::tr_catalog(lang, "notifications.size_large"),
+    }
+}
+
+fn notification_position_label(
+    lang: crate::i18n::Language,
+    position: NotificationPosition,
+) -> &'static str {
+    match position {
+        NotificationPosition::TopLeft => {
+            crate::i18n::tr_catalog(lang, "notifications.position_top_left")
+        }
+        NotificationPosition::TopCenter => {
+            crate::i18n::tr_catalog(lang, "notifications.position_top_center")
+        }
+        NotificationPosition::TopRight => {
+            crate::i18n::tr_catalog(lang, "notifications.position_top_right")
+        }
+        NotificationPosition::CenterLeft => {
+            crate::i18n::tr_catalog(lang, "notifications.position_center_left")
+        }
+        NotificationPosition::Center => {
+            crate::i18n::tr_catalog(lang, "notifications.position_center")
+        }
+        NotificationPosition::CenterRight => {
+            crate::i18n::tr_catalog(lang, "notifications.position_center_right")
+        }
+        NotificationPosition::BottomLeft => {
+            crate::i18n::tr_catalog(lang, "notifications.position_bottom_left")
+        }
+        NotificationPosition::BottomCenter => {
+            crate::i18n::tr_catalog(lang, "notifications.position_bottom_center")
+        }
+        NotificationPosition::BottomRight => {
+            crate::i18n::tr_catalog(lang, "notifications.position_bottom_right")
+        }
     }
 }
 

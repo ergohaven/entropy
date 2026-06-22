@@ -45,6 +45,10 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) notifications_theme: NotificationTheme,
     #[serde(default)]
+    pub(crate) notifications_size: NotificationSize,
+    #[serde(default)]
+    pub(crate) notifications_position: NotificationPosition,
+    #[serde(default)]
     pub(crate) sticky_layout_window: bool,
     #[serde(default = "default_sticky_layout_always_on_top")]
     pub(crate) sticky_layout_always_on_top: bool,
@@ -166,6 +170,8 @@ impl Default for AppSettings {
             layer_key_osd_timeout_ms: default_layer_key_osd_timeout_ms(),
             layer_key_osd_layers: Vec::new(),
             notifications_theme: NotificationTheme::default(),
+            notifications_size: NotificationSize::default(),
+            notifications_position: NotificationPosition::default(),
             sticky_layout_window: false,
             sticky_layout_always_on_top: default_sticky_layout_always_on_top(),
             sticky_layout_opacity: default_sticky_layout_opacity(),
@@ -1376,6 +1382,40 @@ pub(crate) enum NotificationTheme {
 impl Default for NotificationTheme {
     fn default() -> Self {
         Self::Dark
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NotificationSize {
+    Small,
+    Medium,
+    Large,
+}
+
+impl Default for NotificationSize {
+    fn default() -> Self {
+        Self::Medium
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NotificationPosition {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    CenterLeft,
+    Center,
+    CenterRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+}
+
+impl Default for NotificationPosition {
+    fn default() -> Self {
+        Self::BottomCenter
     }
 }
 

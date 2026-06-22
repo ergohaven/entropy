@@ -65,9 +65,78 @@ const STICKY_LAYOUT_WINDOW_H: f32 = 360.0_f32;
 const STICKY_LAYOUT_WINDOW_MARGIN: f32 = 1.0_f32;
 const STICKY_LAYOUT_WINDOW_TITLE_H: f32 = 42.0_f32;
 const STICKY_LAYOUT_WINDOW_FOOTER_H: f32 = 34.0_f32;
-const LAYER_KEY_OSD_W: f32 = 300.0_f32;
-const LAYER_KEY_OSD_H: f32 = 86.0_f32;
 const LAYER_KEY_OSD_FADE: std::time::Duration = std::time::Duration::from_millis(180);
+const LAYER_KEY_OSD_EDGE_MARGIN_X: f32 = 48.0_f32;
+const LAYER_KEY_OSD_EDGE_MARGIN_Y: f32 = 72.0_f32;
+
+#[derive(Clone, Copy)]
+struct LayerKeyOsdMetrics {
+    size: Vec2,
+    corner_radius: f32,
+    title_font: f32,
+    detail_font: f32,
+    title_offset_y: f32,
+    detail_offset_y: f32,
+}
+
+fn layer_key_osd_metrics(size: NotificationSize) -> LayerKeyOsdMetrics {
+    match size {
+        NotificationSize::Small => LayerKeyOsdMetrics {
+            size: egui::vec2(240.0, 70.0),
+            corner_radius: 15.0,
+            title_font: 18.0,
+            detail_font: 12.0,
+            title_offset_y: -6.0,
+            detail_offset_y: 15.0,
+        },
+        NotificationSize::Medium => LayerKeyOsdMetrics {
+            size: egui::vec2(300.0, 86.0),
+            corner_radius: 18.0,
+            title_font: 22.0,
+            detail_font: 13.0,
+            title_offset_y: -8.0,
+            detail_offset_y: 19.0,
+        },
+        NotificationSize::Large => LayerKeyOsdMetrics {
+            size: egui::vec2(380.0, 110.0),
+            corner_radius: 22.0,
+            title_font: 28.0,
+            detail_font: 15.0,
+            title_offset_y: -11.0,
+            detail_offset_y: 25.0,
+        },
+    }
+}
+
+fn layer_key_osd_position(
+    monitor_size: Vec2,
+    osd_size: Vec2,
+    position: NotificationPosition,
+) -> egui::Pos2 {
+    let left = LAYER_KEY_OSD_EDGE_MARGIN_X;
+    let center_x = (monitor_size.x - osd_size.x) * 0.5;
+    let right = monitor_size.x - osd_size.x - LAYER_KEY_OSD_EDGE_MARGIN_X;
+    let top = LAYER_KEY_OSD_EDGE_MARGIN_Y;
+    let center_y = (monitor_size.y - osd_size.y) * 0.5;
+    let bottom = monitor_size.y - osd_size.y - LAYER_KEY_OSD_EDGE_MARGIN_Y;
+
+    let (x, y) = match position {
+        NotificationPosition::TopLeft => (left, top),
+        NotificationPosition::TopCenter => (center_x, top),
+        NotificationPosition::TopRight => (right, top),
+        NotificationPosition::CenterLeft => (left, center_y),
+        NotificationPosition::Center => (center_x, center_y),
+        NotificationPosition::CenterRight => (right, center_y),
+        NotificationPosition::BottomLeft => (left, bottom),
+        NotificationPosition::BottomCenter => (center_x, bottom),
+        NotificationPosition::BottomRight => (right, bottom),
+    };
+
+    egui::pos2(
+        x.clamp(0.0, (monitor_size.x - osd_size.x).max(0.0)),
+        y.clamp(0.0, (monitor_size.y - osd_size.y).max(0.0)),
+    )
+}
 
 #[derive(Clone, Copy)]
 enum StickyLayoutWindowButton {
@@ -288,11 +357,13 @@ impl EntropyApp {
         let monitor_size = ctx
             .input(|i| i.viewport().monitor_size)
             .unwrap_or_else(|| egui::vec2(1920.0, 1080.0));
-        let position = egui::pos2(
-            ((monitor_size.x - LAYER_KEY_OSD_W) * 0.5).max(0.0),
-            (monitor_size.y - LAYER_KEY_OSD_H - 92.0).max(0.0),
+        let metrics = layer_key_osd_metrics(self.app_settings.notifications_size);
+        let position = layer_key_osd_position(
+            monitor_size,
+            metrics.size,
+            self.app_settings.notifications_position,
         );
-        let size = egui::vec2(LAYER_KEY_OSD_W, LAYER_KEY_OSD_H);
+        let size = metrics.size;
         let title = self.layer_key_osd_title.clone();
         let detail = self.layer_key_osd_detail.clone();
         let theme = self.app_settings.notifications_theme;
@@ -342,25 +413,25 @@ impl EntropyApp {
                     };
                     ui.painter().rect(
                         rect,
-                        18.0,
+                        metrics.corner_radius,
                         fill,
                         Stroke::new(1.0, stroke),
                         egui::StrokeKind::Inside,
                     );
 
                     ui.painter().text(
-                        egui::pos2(rect.center().x, rect.center().y - 8.0),
+                        egui::pos2(rect.center().x, rect.center().y + metrics.title_offset_y),
                         egui::Align2::CENTER_CENTER,
                         title.as_str(),
-                        FontId::proportional(22.0),
+                        FontId::proportional(metrics.title_font),
                         title_color,
                     );
                     if !detail.is_empty() {
                         ui.painter().text(
-                            egui::pos2(rect.center().x, rect.center().y + 19.0),
+                            egui::pos2(rect.center().x, rect.center().y + metrics.detail_offset_y),
                             egui::Align2::CENTER_CENTER,
                             detail.as_str(),
-                            FontId::proportional(13.0),
+                            FontId::proportional(metrics.detail_font),
                             detail_color,
                         );
                     }
