@@ -1,6 +1,6 @@
 [package]
 name = "ergohaven-entropy"
-version = "1.14.40"
+version = "1.14.41"
 edition = "2021"
 description = "Desktop app for configuring Vial-QMK and Vial-RMK programmable keyboards and input devices"
 authors = ["Ergohaven"]
@@ -67,6 +67,8 @@ tray-icon = "0.22"
 [target.'cfg(target_os = "linux")'.dependencies]
 hidapi = { version = "2.6", default-features = false, features = ["linux-native-basic-udev"] }
 x11-dl = "2"
+smithay-client-toolkit = { version = "0.20", default-features = false }
+wayland-client = "0.31"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"

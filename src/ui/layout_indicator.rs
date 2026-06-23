@@ -135,8 +135,22 @@ impl EntropyApp {
             String::new()
         };
         let timeout_ms = clamp_notification_timeout_ms(self.app_settings.layer_key_osd_timeout_ms);
-        self.layer_key_osd_until =
-            Some(std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms as u64));
+        let system_osd_shown = layer_key_osd_platform::show_layer_key_osd(
+            layer_key_osd_platform::LayerKeyOsdRequest {
+                title: self.layer_key_osd_title.clone(),
+                detail: self.layer_key_osd_detail.clone(),
+                size: self.app_settings.notifications_size,
+                position: self.app_settings.notifications_position,
+                theme: self.app_settings.notifications_theme,
+                opacity: self.app_settings.notifications_opacity,
+                timeout_ms,
+            },
+        );
+        self.layer_key_osd_until = if system_osd_shown {
+            None
+        } else {
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms as u64))
+        };
     }
 
     pub(super) fn sync_sticky_layout_layer_state(&mut self, layout: &KeyboardLayout) -> usize {
