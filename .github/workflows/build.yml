@@ -16,14 +16,23 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
+            kind: linux
             artifact: entropy-linux
             binary: target/release/entropy
           - os: windows-latest
+            kind: windows
             artifact: entropy-windows
             binary: target/release/entropy.exe
-          - os: macos-latest
-            artifact: entropy-macos
+          - os: macos-15
+            kind: macos
+            artifact: entropy-macos-arm64
             binary: dist/macos/*.app.zip
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            kind: macos
+            artifact: entropy-macos-x86_64
+            binary: dist/macos/*.app.zip
+            target: x86_64-apple-darwin
 
     steps:
       - uses: actions/checkout@v4
@@ -33,6 +42,10 @@ jobs:
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
+
+      - name: Install macOS Rust target
+        if: matrix.kind == 'macos'
+        run: rustup target add ${{ matrix.target }}
 
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
@@ -49,12 +62,12 @@ jobs:
             libgtk-3-dev
 
       - name: Build
-        if: matrix.os != 'macos-latest'
+        if: matrix.kind != 'macos'
         run: cargo build --release
 
       - name: Build macOS app bundle
-        if: matrix.os == 'macos-latest'
-        run: scripts/build_macos_app.sh
+        if: matrix.kind == 'macos'
+        run: TARGET="${{ matrix.target }}" scripts/build_macos_app.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
