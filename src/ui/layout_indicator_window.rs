@@ -386,7 +386,6 @@ impl EntropyApp {
             .with_decorations(false)
             .with_taskbar(false)
             .with_transparent(true)
-            .with_mouse_passthrough(true)
             .with_window_type(egui::X11WindowType::Utility)
             .with_window_level(egui::WindowLevel::AlwaysOnTop);
 
