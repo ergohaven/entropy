@@ -595,7 +595,7 @@ fn read_response(
         last_error = Some(anyhow::anyhow!(
             "HID stale or unrelated BLE report for command {:02X}: {:02X?}",
             command.first().copied().unwrap_or(0),
-            &resp[..command.len().min(8).max(3)]
+            &resp[..command.len().clamp(3, 8)]
         ));
     }
 

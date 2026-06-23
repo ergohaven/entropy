@@ -147,19 +147,19 @@ impl EntropyApp {
                                     | 0x52B8
                             );
                         let is_mod = is_plain_mod
-                            || (kc >= 0x2000 && kc < 0x4000)
-                            || (kc >= 0x0100 && kc < 0x2000 && (kc & 0xFF) != 0);
+                            || (0x2000..0x4000).contains(&kc)
+                            || ((0x0100..0x2000).contains(&kc) && (kc & 0xFF) != 0);
                         let can_swap_side = toggle_handed_modifier(kc).is_some();
-                        let is_macro = kc >= 0x7700 && kc <= 0x77FF;
-                        let is_tap_dance = kc >= 0x5700 && kc <= 0x57FF;
+                        let is_macro = (0x7700..=0x77FF).contains(&kc);
+                        let is_tap_dance = (0x5700..=0x57FF).contains(&kc);
                         let is_mouse = is_mouse_keycode(kc);
                         let is_alt_repeat = is_alt_repeat_keycode(kc);
                         let is_grave_escape = kc == 0x7C16;
                         let is_layer = vial_layer_target(kc).is_some();
                         let is_lt = kc & 0xF000 == 0x4000;
                         let can_retarget_mod_key = !is_layer
-                            && ((kc >= 0x2000 && kc < 0x4000)
-                                || (kc >= 0x0100 && kc < 0x2000 && (kc & 0xFF) != 0));
+                            && ((0x2000..0x4000).contains(&kc)
+                                || ((0x0100..0x2000).contains(&kc) && (kc & 0xFF) != 0));
                         (
                             is_mod,
                             can_swap_side,

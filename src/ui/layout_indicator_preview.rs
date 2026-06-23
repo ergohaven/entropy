@@ -180,7 +180,7 @@ fn draw_sticky_key_label(
         );
         paint_centered_text_rotated(
             &clipped,
-            center + rotated_offset(0.0, -1.0 * rect_scale, rotation),
+            center + rotated_offset(0.0, -rect_scale, rotation),
             middle,
             FontId::proportional(middle_font),
             top_color,
@@ -286,10 +286,7 @@ impl EntropyApp {
             .keys
             .iter()
             .enumerate()
-            .filter_map(|(ki, key)| {
-                Self::layout_condition_visible(layout, key.layout_condition, layout_options_value)
-                    .then(|| (ki, layout_physical_key_rect(key, geometry)))
-            })
+            .filter(|&(_ki, key)| Self::layout_condition_visible(layout, key.layout_condition, layout_options_value)).map(|(ki, key)| (ki, layout_physical_key_rect(key, geometry)))
             .collect();
 
         let mut encoder_groups: Vec<(u8, egui::Rect, Option<(usize, u16)>, Option<(usize, u16)>)> =

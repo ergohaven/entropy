@@ -45,8 +45,8 @@ impl HidDevice {
         cmd[1] = CMD_VIAL_DYNAMIC_ENTRY_OP;
         cmd[2] = DYNAMIC_VIAL_COMBO_SET;
         cmd[3] = idx;
-        for i in 0..4 {
-            let [lo, hi] = keys[i].to_le_bytes();
+        for (i, key) in keys.iter().enumerate() {
+            let [lo, hi] = key.to_le_bytes();
             let off = 4 + i * 2;
             cmd[off] = lo;
             cmd[off + 1] = hi;

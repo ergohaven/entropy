@@ -353,18 +353,13 @@ impl KeycodePicker {
 
     fn set_macro_key_pick_value(&mut self, macro_idx: usize, action_idx: usize, value: u16) {
         let mut changed = false;
-        if let Some(action) = self
+        if let Some(MacroAction::Tap(kc) | MacroAction::Down(kc) | MacroAction::Up(kc)) = self
             .macro_actions
             .get_mut(macro_idx)
             .and_then(|actions| actions.get_mut(action_idx))
         {
-            match action {
-                MacroAction::Tap(kc) | MacroAction::Down(kc) | MacroAction::Up(kc) => {
-                    changed = *kc != value;
-                    *kc = value;
-                }
-                _ => {}
-            }
+            changed = *kc != value;
+            *kc = value;
         }
         if changed {
             self.encode_macro(macro_idx);
@@ -855,14 +850,12 @@ impl KeycodePicker {
                                 self.finish_regular_key_pick(base | qmk);
                             }
                         } else if qmk > 0 && qmk < 0x0100 {
-                            if self.regular_key_pick_allow_mod_key || !modifiers.any() {
-                                if self.is_regular_key_pick_value(qmk) {
+                            if (self.regular_key_pick_allow_mod_key || !modifiers.any())
+                                && self.is_regular_key_pick_value(qmk) {
                                     self.finish_regular_key_pick(qmk);
                                 }
-                            }
                         } else if self.regular_key_pick_allow_mod_key
-                            && qmk >= 0x0100
-                            && qmk < 0x2000
+                            && (0x0100..0x2000).contains(&qmk)
                             && self.is_regular_key_pick_value(qmk & 0x00FF)
                         {
                             self.finish_regular_key_pick(qmk);
@@ -1070,7 +1063,7 @@ impl KeycodePicker {
                 }
             });
             let mut still_open = true;
-            let resp_win = crate::ui_style::centered_modal_window(
+            let _resp_win = crate::ui_style::centered_modal_window(
                 ctx,
                 tr_picker(self.language, "key_picker.pick_layer_title"),
                 self.popup_state.id(PopupKey::PickLayerWindow),
@@ -1173,7 +1166,7 @@ impl KeycodePicker {
             };
             let mut still_open = true;
             let popup_size = key_picker_popup_size(ctx);
-            let resp_win = crate::ui_style::centered_modal_window(
+            let _resp_win = crate::ui_style::centered_modal_window(
                 ctx,
                 title,
                 self.popup_state.id(PopupKey::PendingKeyPickWindow),

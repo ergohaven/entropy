@@ -178,6 +178,7 @@ fn try_acquire_single_instance() -> bool {
 
     let Ok(file) = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(dir.join("single_instance.lock"))

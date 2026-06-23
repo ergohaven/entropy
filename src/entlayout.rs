@@ -2121,45 +2121,6 @@ fn entmacro_bytecode(macros: &EntMacroData) -> Result<Vec<Vec<u8>>> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn entmacro_bytecode_prefers_base64() {
-        let bytes = vec![0x01, 0x05, 0xA0, 0xFF];
-        let macros = EntMacroData {
-            bytecode_base64: vec![BASE64_STANDARD.encode(&bytes)],
-            texts: vec!["legacy".to_owned()],
-            names: Vec::new(),
-        };
-
-        assert_eq!(entmacro_bytecode(&macros).unwrap(), vec![bytes]);
-    }
-
-    #[test]
-    fn entmacro_bytecode_reads_legacy_texts() {
-        let macros = EntMacroData {
-            bytecode_base64: Vec::new(),
-            texts: vec!["abc".to_owned()],
-            names: Vec::new(),
-        };
-
-        assert_eq!(entmacro_bytecode(&macros).unwrap(), vec![b"abc".to_vec()]);
-    }
-
-    #[test]
-    fn entmacro_bytecode_rejects_invalid_base64() {
-        let macros = EntMacroData {
-            bytecode_base64: vec!["not base64".to_owned()],
-            texts: Vec::new(),
-            names: Vec::new(),
-        };
-
-        assert!(entmacro_bytecode(&macros).is_err());
-    }
-}
-
 fn entlayout_hash(layout: &KeyboardLayout) -> String {
     let mut hash = 0xcbf29ce484222325u64;
     fn feed(hash: &mut u64, bytes: &[u8]) {
@@ -2197,4 +2158,43 @@ fn entlayout_hash(layout: &KeyboardLayout) -> String {
         }
     }
     format!("fnv1a64:{hash:016x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn entmacro_bytecode_prefers_base64() {
+        let bytes = vec![0x01, 0x05, 0xA0, 0xFF];
+        let macros = EntMacroData {
+            bytecode_base64: vec![BASE64_STANDARD.encode(&bytes)],
+            texts: vec!["legacy".to_owned()],
+            names: Vec::new(),
+        };
+
+        assert_eq!(entmacro_bytecode(&macros).unwrap(), vec![bytes]);
+    }
+
+    #[test]
+    fn entmacro_bytecode_reads_legacy_texts() {
+        let macros = EntMacroData {
+            bytecode_base64: Vec::new(),
+            texts: vec!["abc".to_owned()],
+            names: Vec::new(),
+        };
+
+        assert_eq!(entmacro_bytecode(&macros).unwrap(), vec![b"abc".to_vec()]);
+    }
+
+    #[test]
+    fn entmacro_bytecode_rejects_invalid_base64() {
+        let macros = EntMacroData {
+            bytecode_base64: vec!["not base64".to_owned()],
+            texts: Vec::new(),
+            names: Vec::new(),
+        };
+
+        assert!(entmacro_bytecode(&macros).is_err());
+    }
 }

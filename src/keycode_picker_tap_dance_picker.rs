@@ -49,13 +49,10 @@ impl KeycodePicker {
                     } = event
                     {
                         if let Some(qmk) = egui_key_to_qmk(*key, *modifiers) {
-                            if qmk > 0 && qmk < 0x0100 {
-                                self.set_tap_dance_field(td_idx, field, qmk);
-                                self.td_key_pick = None;
-                            } else if qmk >= 0x0100
-                                && qmk < 0x2000
-                                && self.is_tap_dance_regular_key(qmk & 0x00FF)
-                            {
+                            let is_basic_key = qmk > 0 && qmk < 0x0100;
+                            let is_regular_key = (0x0100..0x2000).contains(&qmk)
+                                && self.is_tap_dance_regular_key(qmk & 0x00FF);
+                            if is_basic_key || is_regular_key {
                                 self.set_tap_dance_field(td_idx, field, qmk);
                                 self.td_key_pick = None;
                             }

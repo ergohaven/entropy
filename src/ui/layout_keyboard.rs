@@ -360,7 +360,7 @@ impl EntropyApp {
                         self.app_settings.key_legend_layout,
                     );
                     draw_key_label_dimmed(
-                        &painter,
+                        painter,
                         draw_rect,
                         &label,
                         dark,
@@ -383,7 +383,7 @@ impl EntropyApp {
                     self.app_settings.show_shifted_number_symbols,
                     self.app_settings.key_legend_layout,
                 );
-                draw_key_label(&painter, draw_rect, &label, dark, key.rotation.to_radians());
+                draw_key_label(painter, draw_rect, &label, dark, key.rotation.to_radians());
             }
 
             if let Some(colors) = combo_colors {

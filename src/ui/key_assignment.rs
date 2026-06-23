@@ -192,7 +192,7 @@ impl EntropyApp {
                 return;
             }
         }
-        if kc >= 0x7700 && kc <= 0x77FF {
+        if (0x7700..=0x77FF).contains(&kc) {
             let macro_n = (kc - 0x7700) as u8;
             self.open_picker_for_target(key_target, encoder_target);
             self.keycode_picker.selected_tab = crate::keycode_picker::KeycodeTab::Macro;
@@ -200,7 +200,7 @@ impl EntropyApp {
             self.secondary_click_handled = true;
             return;
         }
-        if kc >= 0x5700 && kc <= 0x57FF {
+        if (0x5700..=0x57FF).contains(&kc) {
             let td_n = (kc - 0x5700) as u8;
             self.open_picker_for_target(key_target, encoder_target);
             self.keycode_picker.selected_tab = crate::keycode_picker::KeycodeTab::TapDance;
@@ -221,9 +221,9 @@ impl EntropyApp {
         let is_layer_key = vial_layer_target(kc).is_some();
         let pending_base: Option<u16> = if is_layer_key {
             None
-        } else if kc >= 0x2000 && kc < 0x4000 {
+        } else if (0x2000..0x4000).contains(&kc) {
             Some(kc & 0xFF00)
-        } else if kc >= 0x0100 && kc < 0x2000 && (kc & 0xFF) != 0 {
+        } else if (0x0100..0x2000).contains(&kc) && (kc & 0xFF) != 0 {
             Some(kc & 0xFF00)
         } else {
             None

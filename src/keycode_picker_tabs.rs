@@ -339,7 +339,7 @@ impl KeycodePicker {
                 .color(Color32::from_gray(150)),
         );
         ui.add_space(4.0);
-        let mut mt: Vec<(String, u16, Option<u16>, String)> = vec![
+        let mt: Vec<(String, u16, Option<u16>, String)> = vec![
             (
                 picker_mod_tap_label(0x2100),
                 0x2100,
@@ -428,7 +428,7 @@ impl KeycodePicker {
                 .color(Color32::from_gray(150)),
         );
         ui.add_space(4.0);
-        let mut osm: Vec<(String, u16, Option<u16>, String)> = vec![
+        let osm: Vec<(String, u16, Option<u16>, String)> = vec![
             ("OSM\nCtrl".into(), 0x52A1, Some(0x52B1), "Ctrl".into()),
             ("OSM\nShift".into(), 0x52A2, Some(0x52B2), "Shift".into()),
             ("OSM\nAlt".into(), 0x52A4, Some(0x52B4), "Alt".into()),

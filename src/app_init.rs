@@ -25,7 +25,7 @@ impl EntropyApp {
         let text_expander_rules_signature =
             text_expander_rules_signature(&app_settings.text_expander_rule_files);
 
-        let mut app = Self {
+        Self {
             #[cfg(not(target_arch = "wasm32"))]
             hid_device: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -162,8 +162,7 @@ impl EntropyApp {
             connect_state: ConnectState::Idle,
             #[cfg(not(target_arch = "wasm32"))]
             device_scan_state: DeviceScanState::Idle,
-        };
-        app
+        }
     }
 
     /// Assign keycode and immediately write to device (blocking, but single HID op — fast).

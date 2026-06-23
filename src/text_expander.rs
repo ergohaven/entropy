@@ -60,7 +60,7 @@ impl TextExpansionEngine {
         Self {
             rules,
             buffer: String::new(),
-            max_buffer_chars: max_trigger_chars.max(64).min(128),
+            max_buffer_chars: max_trigger_chars.clamp(64, 128),
         }
     }
 

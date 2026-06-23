@@ -1577,7 +1577,6 @@ pub fn tr_text(language: Language, text: &str) -> String {
             )
         }
         other if other.starts_with("One-Shot ") => other
-            .replace("One-Shot ", "One-Shot ")
             .replace(
                 " — active for the next keypress only",
                 tr_catalog(language, "dynamic_tooltips.one_shot_active_next"),
@@ -1977,7 +1976,6 @@ pub fn tr_text(language: Language, text: &str) -> String {
                 tr_catalog(language, "dynamic_tooltips.hold_for"),
             ),
         other if other.starts_with("Universal Cyrillic ") => other
-            .replace("Universal Cyrillic", "Universal Cyrillic")
             .replace("types", tr_catalog(language, "dynamic_tooltips.types"))
             .replace(
                 "consistently regardless of the active keyboard language",

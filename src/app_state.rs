@@ -76,17 +76,14 @@ pub(crate) struct AppSettings {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub(crate) enum CloseToTrayBehavior {
+    #[default]
     Ask,
     Close,
     Tray,
 }
 
-impl Default for CloseToTrayBehavior {
-    fn default() -> Self {
-        Self::Ask
-    }
-}
 
 pub(crate) fn default_show_shifted_number_symbols() -> bool {
     true
@@ -505,7 +502,7 @@ impl KeyOverrideOptionsState {
     }
 
     pub(crate) fn bits(&self) -> u8 {
-        (self.activation_trigger_down as u8) << 0
+        (self.activation_trigger_down as u8)
             | (self.activation_required_mod_down as u8) << 1
             | (self.activation_negative_mod_up as u8) << 2
             | (self.one_mod as u8) << 3
@@ -1341,30 +1338,24 @@ pub(crate) enum SettingsTab {
 
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub(crate) enum LayoutImageExportTheme {
+    #[default]
     Current,
     Light,
     Dark,
 }
 
-impl Default for LayoutImageExportTheme {
-    fn default() -> Self {
-        Self::Current
-    }
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub(crate) enum LayoutImageExportFormat {
+    #[default]
     Png,
     Svg,
 }
 
-impl Default for LayoutImageExportFormat {
-    fn default() -> Self {
-        Self::Png
-    }
-}
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct LayoutImageExportState {
