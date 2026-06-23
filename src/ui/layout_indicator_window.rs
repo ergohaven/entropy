@@ -60,108 +60,6 @@ fn set_windows_window_opacity_by_title(title: &str, opacity: f32) {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn configure_layer_key_osd_x11(
-    title: &str,
-    position: egui::Pos2,
-    size: Vec2,
-    pixels_per_point: f32,
-) {
-    use std::ffi::CStr;
-    use std::os::raw::{c_char, c_void};
-    use x11_dl::xlib;
-
-    unsafe fn x11_window_title_matches(
-        xlib: &xlib::Xlib,
-        display: *mut xlib::Display,
-        window: xlib::Window,
-        expected_title: &str,
-    ) -> bool {
-        let mut name: *mut c_char = std::ptr::null_mut();
-        if (xlib.XFetchName)(display, window, &mut name) <= 0 || name.is_null() {
-            return false;
-        }
-        let matches = CStr::from_ptr(name).to_string_lossy() == expected_title;
-        (xlib.XFree)(name as *mut c_void);
-        matches
-    }
-
-    unsafe fn find_x11_window_by_title(
-        xlib: &xlib::Xlib,
-        display: *mut xlib::Display,
-        window: xlib::Window,
-        expected_title: &str,
-        depth: u8,
-    ) -> Option<xlib::Window> {
-        if x11_window_title_matches(xlib, display, window, expected_title) {
-            return Some(window);
-        }
-        if depth >= 4 {
-            return None;
-        }
-
-        let mut root: xlib::Window = 0;
-        let mut parent: xlib::Window = 0;
-        let mut children: *mut xlib::Window = std::ptr::null_mut();
-        let mut child_count: u32 = 0;
-        let ok = (xlib.XQueryTree)(
-            display,
-            window,
-            &mut root,
-            &mut parent,
-            &mut children,
-            &mut child_count,
-        );
-        if ok == 0 || children.is_null() {
-            return None;
-        }
-
-        let child_slice = std::slice::from_raw_parts(children, child_count as usize);
-        let found = child_slice.iter().rev().find_map(|child| {
-            find_x11_window_by_title(xlib, display, *child, expected_title, depth + 1)
-        });
-        (xlib.XFree)(children as *mut c_void);
-        found
-    }
-
-    let Ok(xlib) = xlib::Xlib::open() else {
-        return;
-    };
-
-    unsafe {
-        let display = (xlib.XOpenDisplay)(std::ptr::null());
-        if display.is_null() {
-            return;
-        }
-
-        let root = (xlib.XDefaultRootWindow)(display);
-        if let Some(window) = find_x11_window_by_title(&xlib, display, root, title, 0) {
-            let hints = (xlib.XGetWMHints)(display, window);
-            let hints = if hints.is_null() {
-                (xlib.XAllocWMHints)()
-            } else {
-                hints
-            };
-            if !hints.is_null() {
-                (*hints).flags |= xlib::InputHint;
-                (*hints).input = xlib::False;
-                (xlib.XSetWMHints)(display, window, hints);
-                (xlib.XFree)(hints as *mut c_void);
-            }
-
-            let scale = pixels_per_point.max(0.1);
-            let x = (position.x * scale).round() as i32;
-            let y = (position.y * scale).round() as i32;
-            let w = (size.x * scale).round().max(1.0) as u32;
-            let h = (size.y * scale).round().max(1.0) as u32;
-            (xlib.XMoveResizeWindow)(display, window, x, y, w, h);
-        }
-
-        (xlib.XFlush)(display);
-        (xlib.XCloseDisplay)(display);
-    }
-}
-
 const STICKY_LAYOUT_WINDOW_W: f32 = 720.0_f32;
 const STICKY_LAYOUT_WINDOW_H: f32 = 360.0_f32;
 const STICKY_LAYOUT_WINDOW_MARGIN: f32 = 1.0_f32;
@@ -418,12 +316,8 @@ fn sticky_layout_saved_window_size(settings: &AppSettings) -> Vec2 {
 
 impl EntropyApp {
     pub(super) fn draw_layer_key_osd_window(&mut self, ctx: &egui::Context) {
-        let viewport_id = egui::ViewportId::from_hash_of("entropy_layer_key_osd");
-
         if !self.app_settings.layer_key_osd {
-            if self.layer_key_osd_until.take().is_some() {
-                ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Close);
-            }
+            self.layer_key_osd_until = None;
             return;
         }
 
@@ -449,28 +343,20 @@ impl EntropyApp {
             self.layer_key_osd_until = None;
             self.layer_key_osd_title.clear();
             self.layer_key_osd_detail.clear();
-            ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Close);
             return;
         }
 
         let remaining = until.saturating_duration_since(now);
         ctx.request_repaint_after(remaining.min(std::time::Duration::from_millis(16)));
 
-        let monitor_size = ctx
-            .input(|i| i.viewport().monitor_size)
-            .unwrap_or_else(|| egui::vec2(1920.0, 1080.0));
+        let screen_rect = ctx.screen_rect();
         let metrics = layer_key_osd_metrics(self.app_settings.notifications_size);
         let position = layer_key_osd_position(
-            monitor_size,
+            screen_rect.size(),
             metrics.size,
             self.app_settings.notifications_position,
         );
         let size = metrics.size;
-        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::OuterPosition(position));
-        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::InnerSize(size));
-        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::MinInnerSize(size));
-        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::MaxInnerSize(size));
-        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::MousePassthrough(true));
         let title = self.layer_key_osd_title.clone();
         let detail = self.layer_key_osd_detail.clone();
         let theme = self.app_settings.notifications_theme;
@@ -483,91 +369,52 @@ impl EntropyApp {
         .clamp(0.0, 1.0);
         let alpha = |value: u8| ((value as f32) * fade * opacity).round().clamp(0.0, 255.0) as u8;
 
-        const LAYER_KEY_OSD_WINDOW_TITLE: &str = "Entropy Layer OSD";
-
-        let viewport_builder = egui::ViewportBuilder::default()
-            .with_title(LAYER_KEY_OSD_WINDOW_TITLE)
-            .with_inner_size(size)
-            .with_min_inner_size(size)
-            .with_max_inner_size(size)
-            .with_position(position)
-            .with_resizable(false)
-            .with_decorations(false)
-            .with_taskbar(false)
-            .with_active(false)
-            .with_visible(false)
-            .with_transparent(true)
-            .with_mouse_passthrough(true)
-            .with_window_type(egui::X11WindowType::Notification)
-            .with_window_level(egui::WindowLevel::AlwaysOnTop);
-
-        ctx.show_viewport_immediate(viewport_id, viewport_builder, move |viewport_ctx, _| {
-            if viewport_ctx.input(|i| i.viewport().close_requested()) {
-                return;
-            }
-            viewport_ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(position));
-            viewport_ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
-            viewport_ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(size));
-            viewport_ctx.send_viewport_cmd(egui::ViewportCommand::MaxInnerSize(size));
-            viewport_ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(true));
-            #[cfg(target_os = "linux")]
-            {
-                let pixels_per_point = viewport_ctx
-                    .input(|i| i.viewport().native_pixels_per_point)
-                    .unwrap_or(1.0);
-                configure_layer_key_osd_x11(
-                    LAYER_KEY_OSD_WINDOW_TITLE,
-                    position,
-                    size,
-                    pixels_per_point,
+        egui::Area::new(egui::Id::new("entropy_layer_key_osd_overlay"))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(screen_rect.min + position.to_vec2())
+            .interactable(false)
+            .show(ctx, |ui| {
+                let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+                let rect = rect.shrink(4.0);
+                let (fill, stroke, title_color, detail_color) = match theme {
+                    NotificationTheme::Dark => (
+                        Color32::from_rgba_unmultiplied(30, 30, 34, alpha(226)),
+                        Color32::from_rgba_unmultiplied(255, 255, 255, alpha(28)),
+                        Color32::from_rgba_unmultiplied(248, 248, 248, alpha(244)),
+                        Color32::from_rgba_unmultiplied(210, 210, 214, alpha(210)),
+                    ),
+                    NotificationTheme::Light => (
+                        Color32::from_rgba_unmultiplied(246, 246, 248, alpha(232)),
+                        Color32::from_rgba_unmultiplied(28, 28, 32, alpha(32)),
+                        Color32::from_rgba_unmultiplied(24, 24, 28, alpha(244)),
+                        Color32::from_rgba_unmultiplied(92, 92, 98, alpha(216)),
+                    ),
+                };
+                ui.painter().rect(
+                    rect,
+                    metrics.corner_radius,
+                    fill,
+                    Stroke::new(1.0, stroke),
+                    egui::StrokeKind::Inside,
                 );
-            }
-            viewport_ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
 
-            egui::CentralPanel::default()
-                .frame(egui::Frame::NONE.fill(Color32::TRANSPARENT))
-                .show(viewport_ctx, |ui| {
-                    let rect = ui.max_rect().shrink(4.0);
-                    let (fill, stroke, title_color, detail_color) = match theme {
-                        NotificationTheme::Dark => (
-                            Color32::from_rgba_unmultiplied(30, 30, 34, alpha(226)),
-                            Color32::from_rgba_unmultiplied(255, 255, 255, alpha(28)),
-                            Color32::from_rgba_unmultiplied(248, 248, 248, alpha(244)),
-                            Color32::from_rgba_unmultiplied(210, 210, 214, alpha(210)),
-                        ),
-                        NotificationTheme::Light => (
-                            Color32::from_rgba_unmultiplied(246, 246, 248, alpha(232)),
-                            Color32::from_rgba_unmultiplied(28, 28, 32, alpha(32)),
-                            Color32::from_rgba_unmultiplied(24, 24, 28, alpha(244)),
-                            Color32::from_rgba_unmultiplied(92, 92, 98, alpha(216)),
-                        ),
-                    };
-                    ui.painter().rect(
-                        rect,
-                        metrics.corner_radius,
-                        fill,
-                        Stroke::new(1.0, stroke),
-                        egui::StrokeKind::Inside,
-                    );
-
+                ui.painter().text(
+                    egui::pos2(rect.center().x, rect.center().y + metrics.title_offset_y),
+                    egui::Align2::CENTER_CENTER,
+                    title.as_str(),
+                    FontId::proportional(metrics.title_font),
+                    title_color,
+                );
+                if !detail.is_empty() {
                     ui.painter().text(
-                        egui::pos2(rect.center().x, rect.center().y + metrics.title_offset_y),
+                        egui::pos2(rect.center().x, rect.center().y + metrics.detail_offset_y),
                         egui::Align2::CENTER_CENTER,
-                        title.as_str(),
-                        FontId::proportional(metrics.title_font),
-                        title_color,
+                        detail.as_str(),
+                        FontId::proportional(metrics.detail_font),
+                        detail_color,
                     );
-                    if !detail.is_empty() {
-                        ui.painter().text(
-                            egui::pos2(rect.center().x, rect.center().y + metrics.detail_offset_y),
-                            egui::Align2::CENTER_CENTER,
-                            detail.as_str(),
-                            FontId::proportional(metrics.detail_font),
-                            detail_color,
-                        );
-                    }
-                });
-        });
+                }
+            });
     }
 
     pub(super) fn draw_sticky_layout_window(&mut self, ctx: &egui::Context) {
