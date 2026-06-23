@@ -112,11 +112,6 @@ impl EntropyApp {
             Some(visible_until + std::time::Duration::from_millis(fade_ms as u64));
     }
 
-    fn dismiss_layer_key_osd_now(&mut self) {
-        self.layer_key_osd_visible_until = None;
-        self.layer_key_osd_until = Some(std::time::Instant::now());
-    }
-
     fn layer_key_osd_layer_enabled(&self, target_layer: usize) -> bool {
         self.app_settings
             .layer_key_osd_layers
@@ -174,8 +169,6 @@ impl EntropyApp {
         }
         self.sticky_layout_base_layer = self.sticky_layout_base_layer.min(layer_count - 1);
 
-        let mut dismiss_osd = false;
-
         for (key_idx, key) in layout.keys.iter().enumerate() {
             let matrix_idx = key.row as usize * layout.cols + key.col as usize;
             let is_pressed = pressed.get(matrix_idx).copied().unwrap_or(false);
@@ -210,8 +203,6 @@ impl EntropyApp {
                 {
                     *source_layer = Some(layer_before);
                 }
-            } else if self.layer_key_osd_until.is_some() {
-                dismiss_osd = true;
             }
             if let Some((kind, target)) =
                 layer_key_osd_momentary_kind(kc).filter(|(_, target)| *target < layer_count)
@@ -237,20 +228,6 @@ impl EntropyApp {
                 self.sticky_layout_toggled_layers.fill(false);
                 self.queue_layer_key_osd(LayerKeyOsdKind::Default, target);
             }
-        }
-
-        let layer_key_held = self
-            .sticky_layout_pressed_key_layers
-            .iter()
-            .enumerate()
-            .any(|(matrix_idx, source_layer)| {
-                source_layer.is_some() && pressed.get(matrix_idx).copied().unwrap_or(false)
-            });
-
-        if dismiss_osd || (self.layer_key_osd_until.is_some() && !layer_key_held) {
-            self.dismiss_layer_key_osd_now();
-        } else if self.layer_key_osd_until.is_some() && layer_key_held {
-            self.keep_layer_key_osd_alive_from(std::time::Instant::now());
         }
 
         self.sticky_layout_prev_pressed = pressed;

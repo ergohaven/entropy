@@ -137,6 +137,106 @@ fn layer_key_osd_position(
     )
 }
 
+#[cfg(target_os = "linux")]
+fn force_layer_key_osd_x11_no_input() {
+    const LAYER_KEY_OSD_TITLE: &str = "Entropy Layer OSD";
+    const SHAPE_INPUT: i32 = 2;
+
+    unsafe {
+        let Ok(xlib) = x11_dl::xlib::Xlib::open() else {
+            return;
+        };
+        let display = (xlib.XOpenDisplay)(std::ptr::null());
+        if display.is_null() {
+            return;
+        }
+
+        let root = (xlib.XDefaultRootWindow)(display);
+        let title = std::ffi::CString::new(LAYER_KEY_OSD_TITLE).expect("static title has no nul");
+        if let Some(window) = find_x11_window_by_title(&xlib, display, root, &title) {
+            let mut hints = x11_dl::xlib::XWMHints {
+                flags: x11_dl::xlib::InputHint,
+                input: x11_dl::xlib::False,
+                initial_state: 0,
+                icon_pixmap: 0,
+                icon_window: 0,
+                icon_x: 0,
+                icon_y: 0,
+                icon_mask: 0,
+                window_group: 0,
+            };
+            (xlib.XSetWMHints)(display, window, &mut hints);
+
+            if let Ok(xfixes) = x11_dl::xfixes::Xlib::open() {
+                let empty_region = (xfixes.XFixesCreateRegion)(display, std::ptr::null_mut(), 0);
+                if empty_region != 0 {
+                    (xfixes.XFixesSetWindowShapeRegion)(
+                        display,
+                        window,
+                        SHAPE_INPUT,
+                        0,
+                        0,
+                        empty_region,
+                    );
+                    (xfixes.XFixesDestroyRegion)(display, empty_region);
+                }
+            }
+
+            (xlib.XFlush)(display);
+        }
+
+        (xlib.XCloseDisplay)(display);
+    }
+}
+
+#[cfg(target_os = "linux")]
+unsafe fn find_x11_window_by_title(
+    xlib: &x11_dl::xlib::Xlib,
+    display: *mut x11_dl::xlib::Display,
+    window: x11_dl::xlib::Window,
+    title: &std::ffi::CStr,
+) -> Option<x11_dl::xlib::Window> {
+    let mut name: *mut std::os::raw::c_char = std::ptr::null_mut();
+    if (xlib.XFetchName)(display, window, &mut name) != 0 && !name.is_null() {
+        let is_match = std::ffi::CStr::from_ptr(name).to_bytes() == title.to_bytes();
+        (xlib.XFree)(name.cast());
+        if is_match {
+            return Some(window);
+        }
+    }
+
+    let mut root: x11_dl::xlib::Window = 0;
+    let mut parent: x11_dl::xlib::Window = 0;
+    let mut children: *mut x11_dl::xlib::Window = std::ptr::null_mut();
+    let mut child_count: std::os::raw::c_uint = 0;
+    if (xlib.XQueryTree)(
+        display,
+        window,
+        &mut root,
+        &mut parent,
+        &mut children,
+        &mut child_count,
+    ) == 0
+    {
+        return None;
+    }
+
+    let result = if children.is_null() || child_count == 0 {
+        None
+    } else {
+        std::slice::from_raw_parts(children, child_count as usize)
+            .iter()
+            .rev()
+            .find_map(|child| find_x11_window_by_title(xlib, display, *child, title))
+    };
+
+    if !children.is_null() {
+        (xlib.XFree)(children.cast());
+    }
+
+    result
+}
+
 #[derive(Clone, Copy)]
 enum StickyLayoutWindowButton {
     Pin,
@@ -399,6 +499,8 @@ impl EntropyApp {
             if viewport_ctx.input(|i| i.viewport().close_requested()) {
                 return;
             }
+            #[cfg(target_os = "linux")]
+            force_layer_key_osd_x11_no_input();
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE.fill(Color32::TRANSPARENT))
                 .show(viewport_ctx, |ui| {
