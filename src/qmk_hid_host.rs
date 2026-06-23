@@ -14,6 +14,10 @@ const DATA_TIME: u8 = 0xAA;
 const DATA_VOLUME: u8 = 0xAB;
 const DATA_MEDIA_ARTIST: u8 = 0xAD;
 const DATA_MEDIA_TITLE: u8 = 0xAE;
+#[cfg(target_os = "macos")]
+const MACOS_AUTOMATION_COMMAND_TIMEOUT: Duration = Duration::from_millis(1_500);
+#[cfg(not(target_os = "windows"))]
+const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HostDataMode {
@@ -343,11 +347,8 @@ fn current_volume_percent() -> Option<u8> {
 
 #[cfg(target_os = "macos")]
 fn current_volume_percent() -> Option<u8> {
-    command_stdout(
-        "osascript",
-        &["-e", "output volume of (get volume settings)"],
-    )
-    .and_then(|out| out.trim().parse::<u8>().ok())
+    macos_automation_stdout(&["-e", "output volume of (get volume settings)"])
+        .and_then(|out| out.trim().parse::<u8>().ok())
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
@@ -406,7 +407,7 @@ tell application "System Events"
 end tell
 return mediaArtist & tab & mediaTitle
 "#;
-    command_stdout("osascript", &["-e", script]).and_then(|out| split_media_line(&out))
+    macos_automation_stdout(&["-e", script]).and_then(|out| split_media_line(&out))
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
@@ -416,14 +417,44 @@ fn current_media_info() -> Option<(String, String)> {
 
 #[cfg(not(target_os = "windows"))]
 fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new(program)
+    command_stdout_timeout(program, args, Duration::from_secs(10))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_automation_stdout(args: &[&str]) -> Option<String> {
+    command_stdout_timeout("osascript", args, MACOS_AUTOMATION_COMMAND_TIMEOUT)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn command_stdout_timeout(program: &str, args: &[&str], timeout: Duration) -> Option<String> {
+    use std::io::Read;
+
+    let mut child = std::process::Command::new(program)
         .args(args)
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
         .ok()?;
-    if !output.status.success() {
-        return None;
+
+    let started_at = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().ok()? {
+            let mut stdout = Vec::new();
+            if let Some(mut pipe) = child.stdout.take() {
+                pipe.read_to_end(&mut stdout).ok()?;
+            }
+            return status.success().then(|| String::from_utf8(stdout).ok())?;
+        }
+
+        if started_at.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            log::warn!("{program} timed out after {} ms", timeout.as_millis());
+            return None;
+        }
+
+        thread::sleep(COMMAND_POLL_INTERVAL);
     }
-    String::from_utf8(output.stdout).ok()
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -433,6 +464,32 @@ fn split_media_line(line: &str) -> Option<(String, String)> {
     let artist = parts.next().unwrap_or_default().trim().to_string();
     let title = parts.next().unwrap_or_default().trim().to_string();
     (!artist.is_empty() || !title.is_empty()).then_some((artist, title))
+}
+
+#[cfg(all(test, not(target_os = "windows")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_stdout_timeout_returns_successful_output() {
+        let output =
+            command_stdout_timeout("/bin/sh", &["-c", "printf entropy"], Duration::from_secs(1));
+
+        assert_eq!(output.as_deref(), Some("entropy"));
+    }
+
+    #[test]
+    fn command_stdout_timeout_stops_slow_command() {
+        let started_at = Instant::now();
+        let output = command_stdout_timeout(
+            "/bin/sh",
+            &["-c", "sleep 2; printf late"],
+            Duration::from_millis(50),
+        );
+
+        assert!(output.is_none());
+        assert!(started_at.elapsed() < Duration::from_secs(1));
+    }
 }
 
 #[cfg(target_os = "linux")]
