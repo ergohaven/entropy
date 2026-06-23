@@ -21,10 +21,39 @@ pub(super) fn show_layer_key_osd(request: LayerKeyOsdRequest) -> bool {
         if std::env::var_os("WAYLAND_DISPLAY").is_some() && wayland_layer::show(request.clone()) {
             return true;
         }
+
+        if desktop_notification::show(&request) {
+            return true;
+        }
     }
 
     let _ = request;
     false
+}
+
+#[cfg(target_os = "linux")]
+mod desktop_notification {
+    use super::*;
+
+    pub(super) fn show(request: &LayerKeyOsdRequest) -> bool {
+        let mut notification = notify_rust::Notification::new();
+        notification
+            .appname("Entropy")
+            .summary(&request.title)
+            .timeout(clamp_notification_timeout_ms(request.timeout_ms) as i32);
+
+        if !request.detail.trim().is_empty() {
+            notification.body(&request.detail);
+        }
+
+        match notification.show() {
+            Ok(_) => true,
+            Err(err) => {
+                log::debug!("Desktop notification failed: {err:?}");
+                false
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
