@@ -60,6 +60,108 @@ fn set_windows_window_opacity_by_title(title: &str, opacity: f32) {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn configure_layer_key_osd_x11(
+    title: &str,
+    position: egui::Pos2,
+    size: Vec2,
+    pixels_per_point: f32,
+) {
+    use std::ffi::CStr;
+    use std::os::raw::{c_char, c_void};
+    use x11_dl::xlib;
+
+    unsafe fn x11_window_title_matches(
+        xlib: &xlib::Xlib,
+        display: *mut xlib::Display,
+        window: xlib::Window,
+        expected_title: &str,
+    ) -> bool {
+        let mut name: *mut c_char = std::ptr::null_mut();
+        if (xlib.XFetchName)(display, window, &mut name) <= 0 || name.is_null() {
+            return false;
+        }
+        let matches = CStr::from_ptr(name).to_string_lossy() == expected_title;
+        (xlib.XFree)(name as *mut c_void);
+        matches
+    }
+
+    unsafe fn find_x11_window_by_title(
+        xlib: &xlib::Xlib,
+        display: *mut xlib::Display,
+        window: xlib::Window,
+        expected_title: &str,
+        depth: u8,
+    ) -> Option<xlib::Window> {
+        if x11_window_title_matches(xlib, display, window, expected_title) {
+            return Some(window);
+        }
+        if depth >= 4 {
+            return None;
+        }
+
+        let mut root: xlib::Window = 0;
+        let mut parent: xlib::Window = 0;
+        let mut children: *mut xlib::Window = std::ptr::null_mut();
+        let mut child_count: u32 = 0;
+        let ok = (xlib.XQueryTree)(
+            display,
+            window,
+            &mut root,
+            &mut parent,
+            &mut children,
+            &mut child_count,
+        );
+        if ok == 0 || children.is_null() {
+            return None;
+        }
+
+        let child_slice = std::slice::from_raw_parts(children, child_count as usize);
+        let found = child_slice.iter().rev().find_map(|child| {
+            find_x11_window_by_title(xlib, display, *child, expected_title, depth + 1)
+        });
+        (xlib.XFree)(children as *mut c_void);
+        found
+    }
+
+    let Ok(xlib) = xlib::Xlib::open() else {
+        return;
+    };
+
+    unsafe {
+        let display = (xlib.XOpenDisplay)(std::ptr::null());
+        if display.is_null() {
+            return;
+        }
+
+        let root = (xlib.XDefaultRootWindow)(display);
+        if let Some(window) = find_x11_window_by_title(&xlib, display, root, title, 0) {
+            let hints = (xlib.XGetWMHints)(display, window);
+            let hints = if hints.is_null() {
+                (xlib.XAllocWMHints)()
+            } else {
+                hints
+            };
+            if !hints.is_null() {
+                (*hints).flags |= xlib::InputHint;
+                (*hints).input = xlib::False;
+                (xlib.XSetWMHints)(display, window, hints);
+                (xlib.XFree)(hints as *mut c_void);
+            }
+
+            let scale = pixels_per_point.max(0.1);
+            let x = (position.x * scale).round() as i32;
+            let y = (position.y * scale).round() as i32;
+            let w = (size.x * scale).round().max(1.0) as u32;
+            let h = (size.y * scale).round().max(1.0) as u32;
+            (xlib.XMoveResizeWindow)(display, window, x, y, w, h);
+        }
+
+        (xlib.XFlush)(display);
+        (xlib.XCloseDisplay)(display);
+    }
+}
+
 const STICKY_LAYOUT_WINDOW_W: f32 = 720.0_f32;
 const STICKY_LAYOUT_WINDOW_H: f32 = 360.0_f32;
 const STICKY_LAYOUT_WINDOW_MARGIN: f32 = 1.0_f32;
@@ -381,8 +483,10 @@ impl EntropyApp {
         .clamp(0.0, 1.0);
         let alpha = |value: u8| ((value as f32) * fade * opacity).round().clamp(0.0, 255.0) as u8;
 
+        const LAYER_KEY_OSD_WINDOW_TITLE: &str = "Entropy Layer OSD";
+
         let viewport_builder = egui::ViewportBuilder::default()
-            .with_title("Entropy Layer OSD")
+            .with_title(LAYER_KEY_OSD_WINDOW_TITLE)
             .with_inner_size(size)
             .with_min_inner_size(size)
             .with_max_inner_size(size)
@@ -391,6 +495,7 @@ impl EntropyApp {
             .with_decorations(false)
             .with_taskbar(false)
             .with_active(false)
+            .with_visible(false)
             .with_transparent(true)
             .with_mouse_passthrough(true)
             .with_window_type(egui::X11WindowType::Notification)
@@ -400,6 +505,25 @@ impl EntropyApp {
             if viewport_ctx.input(|i| i.viewport().close_requested()) {
                 return;
             }
+            viewport_ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(position));
+            viewport_ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+            viewport_ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(size));
+            viewport_ctx.send_viewport_cmd(egui::ViewportCommand::MaxInnerSize(size));
+            viewport_ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(true));
+            #[cfg(target_os = "linux")]
+            {
+                let pixels_per_point = viewport_ctx
+                    .input(|i| i.viewport().native_pixels_per_point)
+                    .unwrap_or(1.0);
+                configure_layer_key_osd_x11(
+                    LAYER_KEY_OSD_WINDOW_TITLE,
+                    position,
+                    size,
+                    pixels_per_point,
+                );
+            }
+            viewport_ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE.fill(Color32::TRANSPARENT))
                 .show(viewport_ctx, |ui| {
