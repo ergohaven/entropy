@@ -364,16 +364,22 @@ impl EntropyApp {
             self.app_settings.notifications_position,
         );
         let size = metrics.size;
+        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::OuterPosition(position));
+        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::InnerSize(size));
+        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::MinInnerSize(size));
+        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::MaxInnerSize(size));
+        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::MousePassthrough(true));
         let title = self.layer_key_osd_title.clone();
         let detail = self.layer_key_osd_detail.clone();
         let theme = self.app_settings.notifications_theme;
+        let opacity = clamp_notification_opacity(self.app_settings.notifications_opacity);
         let fade = if remaining < LAYER_KEY_OSD_FADE {
             remaining.as_secs_f32() / LAYER_KEY_OSD_FADE.as_secs_f32()
         } else {
             1.0
         }
         .clamp(0.0, 1.0);
-        let alpha = |value: u8| ((value as f32) * fade).round().clamp(0.0, 255.0) as u8;
+        let alpha = |value: u8| ((value as f32) * fade * opacity).round().clamp(0.0, 255.0) as u8;
 
         let viewport_builder = egui::ViewportBuilder::default()
             .with_title("Entropy Layer OSD")
@@ -384,9 +390,10 @@ impl EntropyApp {
             .with_resizable(false)
             .with_decorations(false)
             .with_taskbar(false)
+            .with_active(false)
             .with_transparent(true)
             .with_mouse_passthrough(true)
-            .with_window_type(egui::X11WindowType::Utility)
+            .with_window_type(egui::X11WindowType::Notification)
             .with_window_level(egui::WindowLevel::AlwaysOnTop);
 
         ctx.show_viewport_immediate(viewport_id, viewport_builder, move |viewport_ctx, _| {
