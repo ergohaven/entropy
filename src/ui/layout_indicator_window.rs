@@ -319,9 +319,10 @@ impl EntropyApp {
         let viewport_id = egui::ViewportId::from_hash_of("entropy_layer_key_osd");
 
         if !self.app_settings.layer_key_osd {
-            if self.layer_key_osd_until.take().is_some() {
-                ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Close);
-            }
+            self.layer_key_osd_until = None;
+            self.layer_key_osd_title.clear();
+            self.layer_key_osd_detail.clear();
+            ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Close);
             return;
         }
 
@@ -357,18 +358,28 @@ impl EntropyApp {
             .input(|i| i.viewport().monitor_size)
             .unwrap_or_else(|| egui::vec2(1920.0, 1080.0));
         let metrics = layer_key_osd_metrics(self.app_settings.notifications_size);
-        let position = layer_key_osd_position(
+        let shown_position = layer_key_osd_position(
             monitor_size,
             metrics.size,
             self.app_settings.notifications_position,
         );
-        let size = metrics.size;
+        let hidden_size = egui::vec2(1.0, 1.0);
+        let hidden_position = egui::pos2(monitor_size.x + 64.0, monitor_size.y + 64.0);
+        let position = if is_visible {
+            shown_position
+        } else {
+            hidden_position
+        };
+        let size = if is_visible {
+            metrics.size
+        } else {
+            hidden_size
+        };
         ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::OuterPosition(position));
         ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::InnerSize(size));
         ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::MinInnerSize(size));
         ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::MaxInnerSize(size));
         ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::MousePassthrough(true));
-        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Visible(is_visible));
         let title = self.layer_key_osd_title.clone();
         let detail = self.layer_key_osd_detail.clone();
         let theme = self.app_settings.notifications_theme;
@@ -395,7 +406,7 @@ impl EntropyApp {
             .with_decorations(false)
             .with_taskbar(false)
             .with_active(false)
-            .with_visible(is_visible)
+            .with_visible(true)
             .with_transparent(true)
             .with_mouse_passthrough(true)
             .with_window_type(egui::X11WindowType::Notification)
