@@ -1294,6 +1294,8 @@ position_center_right = "По центру справа"
 position_bottom_left = "Снизу слева"
 position_bottom_center = "Снизу по центру"
 position_bottom_right = "Снизу справа"
+opacity_label = "Видимость"
+opacity_tooltip = "Выбрать видимость уведомления от 50 до 100 процентов"
 layer_label = "Слой {layer}"
 layer_tooltip = "Показывать уведомления клавиш слоя для {layer}"
 

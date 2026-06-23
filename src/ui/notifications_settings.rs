@@ -122,8 +122,17 @@ impl EntropyApp {
                     metrics.settings_control_font_size(),
                     suppress_tooltips,
                 ),
+                5 => self.draw_notifications_opacity_row(
+                    ui,
+                    content_width,
+                    row_height,
+                    metrics.settings_control_width(),
+                    control_height,
+                    metrics.settings_control_font_size(),
+                    suppress_tooltips,
+                ),
                 _ => {
-                    let layer_idx = row_idx - 5;
+                    let layer_idx = row_idx - 6;
                     if layer_idx < layout.layers.len().max(1) {
                         self.draw_notifications_layer_row(
                             ui,
@@ -397,6 +406,47 @@ impl EntropyApp {
         }
     }
 
+    fn draw_notifications_opacity_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        content_width: f32,
+        row_height: f32,
+        dropdown_width: f32,
+        control_height: f32,
+        font_size: f32,
+        suppress_tooltips: bool,
+    ) {
+        let lang = self.app_settings.language;
+        let mut selected = clamp_notification_opacity(self.app_settings.notifications_opacity);
+        crate::ui_style::settings_list_row_with_tooltip(
+            ui,
+            content_width,
+            row_height,
+            crate::i18n::tr_catalog(lang, "notifications.opacity_label"),
+            true,
+            (!suppress_tooltips).then_some(crate::i18n::tr_catalog(
+                lang,
+                "notifications.opacity_tooltip",
+            )),
+            dropdown_width,
+            |ui| {
+                draw_notifications_opacity_dropdown_control(
+                    ui,
+                    lang,
+                    "notifications_opacity_dropdown",
+                    &mut selected,
+                    dropdown_width,
+                    control_height,
+                    font_size,
+                );
+            },
+        );
+        if (selected - self.app_settings.notifications_opacity).abs() > f32::EPSILON {
+            self.app_settings.notifications_opacity = selected;
+            save_app_settings(&self.app_settings);
+        }
+    }
+
     fn draw_notifications_layer_row(
         &mut self,
         ui: &mut egui::Ui,
@@ -528,6 +578,93 @@ fn draw_notifications_dropdown_control<T: Copy + PartialEq>(
                         }
                     }
                 });
+        },
+    );
+}
+
+fn notification_opacity_label(lang: crate::i18n::Language, opacity: f32) -> String {
+    let label_prefix = crate::i18n::tr_catalog(lang, "ui.sticky_layout_transparency_short");
+    format!("{} {}%", label_prefix, (opacity * 100.0).round() as i32)
+}
+
+fn draw_notifications_opacity_dropdown_control(
+    ui: &mut egui::Ui,
+    lang: crate::i18n::Language,
+    id_source: &'static str,
+    selected: &mut f32,
+    dropdown_width: f32,
+    control_height: f32,
+    font_size: f32,
+) {
+    const OPACITY_VALUES: [f32; 6] = [1.0, 0.90, 0.80, 0.70, 0.60, 0.50];
+
+    let current = clamp_notification_opacity(*selected);
+    let selected_idx = OPACITY_VALUES
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| {
+            (*a - current)
+                .abs()
+                .partial_cmp(&(*b - current).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(idx, _)| idx)
+        .unwrap_or(0);
+    let dropdown_id = ui.make_persistent_id(id_source);
+    let selected_text = notification_opacity_label(lang, OPACITY_VALUES[selected_idx]);
+    let dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
+        ui,
+        dropdown_id,
+        &selected_text,
+        ui.visuals().text_color(),
+        dropdown_width,
+        control_height,
+        font_size,
+    );
+    egui::popup_below_widget(
+        ui,
+        dropdown_id,
+        &dropdown_resp,
+        egui::PopupCloseBehavior::CloseOnClickOutside,
+        |ui| {
+            ui.set_min_width(dropdown_width);
+            ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
+            for (idx, value) in OPACITY_VALUES.iter().copied().enumerate() {
+                let option_text = notification_opacity_label(lang, value);
+                let selected_option = idx == selected_idx;
+                let (option_rect, option_resp) =
+                    ui.allocate_exact_size(egui::vec2(dropdown_width, 28.0), Sense::click());
+                if option_resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                let option_fill = if selected_option {
+                    if ui.visuals().dark_mode {
+                        Color32::from_rgb(58, 58, 61)
+                    } else {
+                        Color32::from_rgb(236, 236, 238)
+                    }
+                } else if option_resp.hovered() {
+                    crate::ui_style::hover_fill(ui.visuals().dark_mode)
+                } else {
+                    Color32::TRANSPARENT
+                };
+                ui.painter().rect_filled(option_rect, 7.0, option_fill);
+                ui.painter().text(
+                    egui::pos2(option_rect.left() + 10.0, option_rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    option_text,
+                    FontId::proportional(12.0),
+                    if selected_option {
+                        ui.visuals().text_color()
+                    } else {
+                        app_muted_text(ui.visuals().dark_mode)
+                    },
+                );
+                if option_resp.clicked() {
+                    *selected = value;
+                    ui.memory_mut(|m| m.close_popup());
+                }
+            }
         },
     );
 }
