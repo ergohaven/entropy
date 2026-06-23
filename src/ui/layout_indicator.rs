@@ -135,8 +135,6 @@ impl EntropyApp {
             String::new()
         };
         let timeout_ms = clamp_notification_timeout_ms(self.app_settings.layer_key_osd_timeout_ms);
-        self.layer_key_osd_refocus_at =
-            Some(std::time::Instant::now() + std::time::Duration::from_millis(1));
         self.layer_key_osd_until =
             Some(std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms as u64));
     }

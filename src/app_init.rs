@@ -137,7 +137,6 @@ impl EntropyApp {
             layer_key_osd_title: String::new(),
             layer_key_osd_detail: String::new(),
             layer_key_osd_until: None,
-            layer_key_osd_refocus_at: None,
             matrix_tester_last_poll: std::time::Instant::now(),
             matrix_tester_last_lock_check: std::time::Instant::now()
                 - MATRIX_TESTER_LOCK_CHECK_INTERVAL,

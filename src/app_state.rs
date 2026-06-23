@@ -1619,7 +1619,6 @@ pub struct EntropyApp {
     pub(crate) layer_key_osd_title: String,
     pub(crate) layer_key_osd_detail: String,
     pub(crate) layer_key_osd_until: Option<std::time::Instant>,
-    pub(crate) layer_key_osd_refocus_at: Option<std::time::Instant>,
     pub(crate) matrix_tester_last_poll: std::time::Instant,
     pub(crate) matrix_tester_last_lock_check: std::time::Instant,
     pub(crate) matrix_tester_unlock_prompted: bool,

@@ -343,17 +343,8 @@ impl EntropyApp {
             return;
         };
         let now = std::time::Instant::now();
-        if let Some(refocus_at) = self.layer_key_osd_refocus_at {
-            if now >= refocus_at {
-                self.layer_key_osd_refocus_at = None;
-                ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
-            } else {
-                ctx.request_repaint_after(refocus_at.saturating_duration_since(now));
-            }
-        }
         if now >= until {
             self.layer_key_osd_until = None;
-            self.layer_key_osd_refocus_at = None;
             self.layer_key_osd_title.clear();
             self.layer_key_osd_detail.clear();
             ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Close);
