@@ -135,8 +135,12 @@ impl EntropyApp {
             String::new()
         };
         let timeout_ms = clamp_notification_timeout_ms(self.app_settings.layer_key_osd_timeout_ms);
+        let fade_ms = clamp_notification_fade_ms(self.app_settings.layer_key_osd_fade_ms);
+        let now = std::time::Instant::now();
+        let visible_until = now + std::time::Duration::from_millis(timeout_ms as u64);
+        self.layer_key_osd_visible_until = Some(visible_until);
         self.layer_key_osd_until =
-            Some(std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms as u64));
+            Some(visible_until + std::time::Duration::from_millis(fade_ms as u64));
     }
 
     pub(super) fn sync_sticky_layout_layer_state(&mut self, layout: &KeyboardLayout) -> usize {

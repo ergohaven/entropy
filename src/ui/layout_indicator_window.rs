@@ -65,7 +65,6 @@ const STICKY_LAYOUT_WINDOW_H: f32 = 360.0_f32;
 const STICKY_LAYOUT_WINDOW_MARGIN: f32 = 1.0_f32;
 const STICKY_LAYOUT_WINDOW_TITLE_H: f32 = 42.0_f32;
 const STICKY_LAYOUT_WINDOW_FOOTER_H: f32 = 34.0_f32;
-const LAYER_KEY_OSD_FADE: std::time::Duration = std::time::Duration::from_millis(180);
 const LAYER_KEY_OSD_EDGE_MARGIN_X: f32 = 48.0_f32;
 const LAYER_KEY_OSD_EDGE_MARGIN_Y: f32 = 72.0_f32;
 
@@ -320,6 +319,7 @@ impl EntropyApp {
 
         if !self.app_settings.layer_key_osd {
             if self.layer_key_osd_until.take().is_some() {
+                self.layer_key_osd_visible_until = None;
                 ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Close);
             }
             return;
@@ -344,6 +344,7 @@ impl EntropyApp {
         };
         let now = std::time::Instant::now();
         if now >= until {
+            self.layer_key_osd_visible_until = None;
             self.layer_key_osd_until = None;
             self.layer_key_osd_title.clear();
             self.layer_key_osd_detail.clear();
@@ -368,10 +369,13 @@ impl EntropyApp {
         let detail = self.layer_key_osd_detail.clone();
         let theme = self.app_settings.notifications_theme;
         let opacity = clamp_notification_opacity(self.app_settings.notifications_opacity);
-        let fade = if remaining < LAYER_KEY_OSD_FADE {
-            remaining.as_secs_f32() / LAYER_KEY_OSD_FADE.as_secs_f32()
-        } else {
+        let visible_until = self.layer_key_osd_visible_until.unwrap_or(until);
+        let fade_ms = clamp_notification_fade_ms(self.app_settings.layer_key_osd_fade_ms);
+        let fade_duration = std::time::Duration::from_millis(fade_ms as u64);
+        let fade = if fade_duration.is_zero() || now <= visible_until {
             1.0
+        } else {
+            until.saturating_duration_since(now).as_secs_f32() / fade_duration.as_secs_f32()
         }
         .clamp(0.0, 1.0);
         let alpha = |value: u8| ((value as f32) * fade * opacity).round().clamp(0.0, 255.0) as u8;

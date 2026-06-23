@@ -27,7 +27,7 @@ impl EntropyApp {
                 ui.add_space(24.0);
 
                 let layer_count = layout.layers.len().max(1);
-                let total_rows = 5 + layer_count;
+                let total_rows = 7 + layer_count;
                 let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
                 let list = allocate_adaptive_settings_list_viewport(
                     ui,
@@ -95,7 +95,15 @@ impl EntropyApp {
                     control_height,
                     suppress_tooltips,
                 ),
-                2 => self.draw_notifications_theme_row(
+                2 => self.draw_notifications_fade_row(
+                    ui,
+                    content_width,
+                    row_height,
+                    metrics.value(96.0),
+                    control_height,
+                    suppress_tooltips,
+                ),
+                3 => self.draw_notifications_theme_row(
                     ui,
                     content_width,
                     row_height,
@@ -104,7 +112,7 @@ impl EntropyApp {
                     metrics.settings_control_font_size(),
                     suppress_tooltips,
                 ),
-                3 => self.draw_notifications_size_row(
+                4 => self.draw_notifications_size_row(
                     ui,
                     content_width,
                     row_height,
@@ -113,7 +121,7 @@ impl EntropyApp {
                     metrics.settings_control_font_size(),
                     suppress_tooltips,
                 ),
-                4 => self.draw_notifications_position_row(
+                5 => self.draw_notifications_position_row(
                     ui,
                     content_width,
                     row_height,
@@ -122,7 +130,7 @@ impl EntropyApp {
                     metrics.settings_control_font_size(),
                     suppress_tooltips,
                 ),
-                5 => self.draw_notifications_opacity_row(
+                6 => self.draw_notifications_opacity_row(
                     ui,
                     content_width,
                     row_height,
@@ -132,7 +140,7 @@ impl EntropyApp {
                     suppress_tooltips,
                 ),
                 _ => {
-                    let layer_idx = row_idx - 6;
+                    let layer_idx = row_idx - 7;
                     if layer_idx < layout.layers.len().max(1) {
                         self.draw_notifications_layer_row(
                             ui,
@@ -183,6 +191,7 @@ impl EntropyApp {
         if enabled != self.app_settings.layer_key_osd {
             self.app_settings.layer_key_osd = enabled;
             if !enabled {
+                self.layer_key_osd_visible_until = None;
                 self.layer_key_osd_until = None;
                 let viewport_id = egui::ViewportId::from_hash_of("entropy_layer_key_osd");
                 ui.ctx()
@@ -306,6 +315,79 @@ impl EntropyApp {
             self.app_settings.notifications_theme = selected;
             save_app_settings(&self.app_settings);
         }
+    }
+
+    fn draw_notifications_fade_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        content_width: f32,
+        row_height: f32,
+        field_width: f32,
+        control_height: f32,
+        suppress_tooltips: bool,
+    ) {
+        let lang = self.app_settings.language;
+        let current = clamp_notification_fade_ms(self.app_settings.layer_key_osd_fade_ms);
+        crate::ui_style::settings_list_row_with_tooltip(
+            ui,
+            content_width,
+            row_height,
+            crate::i18n::tr_catalog(lang, "notifications.fade_label"),
+            true,
+            (!suppress_tooltips)
+                .then_some(crate::i18n::tr_catalog(lang, "notifications.fade_tooltip")),
+            field_width,
+            |ui| {
+                let edit_id = egui::Id::new("notifications_fade_ms");
+                let mut text = ui.ctx().data_mut(|d| {
+                    d.get_temp::<String>(edit_id)
+                        .unwrap_or_else(|| current.to_string())
+                });
+                if text.parse::<u32>().ok() != Some(current) && !ui.memory(|m| m.has_focus(edit_id))
+                {
+                    text = current.to_string();
+                }
+                let resp = crate::ui_style::modern_text_field_sized(
+                    ui,
+                    edit_id,
+                    &mut text,
+                    field_width,
+                    control_height,
+                    "",
+                    4,
+                    egui::Align::RIGHT,
+                );
+                let resp = settings_field_unit_tooltip(
+                    resp,
+                    lang,
+                    suppress_tooltips,
+                    SettingsFieldUnit::Milliseconds,
+                );
+                if resp.changed() {
+                    let filtered: String =
+                        text.chars().filter(|c: &char| c.is_ascii_digit()).collect();
+                    if filtered != text {
+                        text = filtered;
+                    }
+                }
+                let commit = resp.lost_focus()
+                    || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                if commit {
+                    match text.trim().parse::<u32>() {
+                        Ok(value) => {
+                            let clamped = clamp_notification_fade_ms(value);
+                            if clamped != self.app_settings.layer_key_osd_fade_ms {
+                                self.app_settings.layer_key_osd_fade_ms = clamped;
+                                save_app_settings(&self.app_settings);
+                            }
+                            text = clamped.to_string();
+                        }
+                        Err(_) => text = current.to_string(),
+                    }
+                }
+                ui.ctx().data_mut(|d| d.insert_temp(edit_id, text));
+            },
+        );
     }
 
     fn draw_notifications_size_row(

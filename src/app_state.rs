@@ -12,8 +12,10 @@ pub(crate) const MATRIX_TESTER_LOCK_CHECK_INTERVAL: std::time::Duration =
 pub(crate) const UI_SCALE_MIN: f32 = 0.5;
 pub(crate) const UI_SCALE_MAX: f32 = 2.0;
 pub(crate) const UI_SCALE_STEP: f32 = 0.1;
-pub(crate) const NOTIFICATION_TIMEOUT_MIN_MS: u32 = 250;
+pub(crate) const NOTIFICATION_TIMEOUT_MIN_MS: u32 = 100;
 pub(crate) const NOTIFICATION_TIMEOUT_MAX_MS: u32 = 10_000;
+pub(crate) const NOTIFICATION_FADE_MIN_MS: u32 = 0;
+pub(crate) const NOTIFICATION_FADE_MAX_MS: u32 = 2_000;
 pub(crate) const TEXT_EXPANDER_SAVE_DEBOUNCE_SECS: f64 = 0.45;
 pub(crate) const ONBOARDING_TOUR_VERSION: u16 = 1;
 pub(crate) const COMBO_NO_COLOR: u32 = 0x000000;
@@ -40,6 +42,8 @@ pub(crate) struct AppSettings {
     pub(crate) layer_key_osd: bool,
     #[serde(default = "default_layer_key_osd_timeout_ms")]
     pub(crate) layer_key_osd_timeout_ms: u32,
+    #[serde(default = "default_layer_key_osd_fade_ms")]
+    pub(crate) layer_key_osd_fade_ms: u32,
     #[serde(default)]
     pub(crate) layer_key_osd_layers: Vec<bool>,
     #[serde(default)]
@@ -124,6 +128,14 @@ pub(crate) fn clamp_notification_timeout_ms(timeout_ms: u32) -> u32 {
     timeout_ms.clamp(NOTIFICATION_TIMEOUT_MIN_MS, NOTIFICATION_TIMEOUT_MAX_MS)
 }
 
+pub(crate) fn default_layer_key_osd_fade_ms() -> u32 {
+    400
+}
+
+pub(crate) fn clamp_notification_fade_ms(fade_ms: u32) -> u32 {
+    fade_ms.clamp(NOTIFICATION_FADE_MIN_MS, NOTIFICATION_FADE_MAX_MS)
+}
+
 pub(crate) fn default_notification_opacity() -> f32 {
     1.0
 }
@@ -182,6 +194,7 @@ impl Default for AppSettings {
             layer_hover_preview: default_layer_hover_preview(),
             layer_key_osd: default_layer_key_osd(),
             layer_key_osd_timeout_ms: default_layer_key_osd_timeout_ms(),
+            layer_key_osd_fade_ms: default_layer_key_osd_fade_ms(),
             layer_key_osd_layers: Vec::new(),
             notifications_theme: NotificationTheme::default(),
             notifications_size: NotificationSize::default(),
@@ -1633,6 +1646,7 @@ pub struct EntropyApp {
     pub(crate) pending_layout_indicator_open_after_unlock: bool,
     pub(crate) layer_key_osd_title: String,
     pub(crate) layer_key_osd_detail: String,
+    pub(crate) layer_key_osd_visible_until: Option<std::time::Instant>,
     pub(crate) layer_key_osd_until: Option<std::time::Instant>,
     pub(crate) matrix_tester_last_poll: std::time::Instant,
     pub(crate) matrix_tester_last_lock_check: std::time::Instant,

@@ -136,6 +136,7 @@ impl EntropyApp {
             pending_layout_indicator_open_after_unlock: false,
             layer_key_osd_title: String::new(),
             layer_key_osd_detail: String::new(),
+            layer_key_osd_visible_until: None,
             layer_key_osd_until: None,
             matrix_tester_last_poll: std::time::Instant::now(),
             matrix_tester_last_lock_check: std::time::Instant::now()
