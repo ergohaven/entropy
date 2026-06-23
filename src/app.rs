@@ -68,8 +68,6 @@ mod grave_escape_settings_ui;
 mod key_assignment;
 #[path = "ui/key_override_settings.rs"]
 mod key_override_settings_ui;
-#[path = "ui/layer_key_osd_platform.rs"]
-mod layer_key_osd_platform;
 #[path = "ui/layer_led_settings.rs"]
 mod layer_led_settings_ui;
 #[path = "ui/layout_indicator.rs"]

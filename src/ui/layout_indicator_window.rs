@@ -66,20 +66,20 @@ const STICKY_LAYOUT_WINDOW_MARGIN: f32 = 1.0_f32;
 const STICKY_LAYOUT_WINDOW_TITLE_H: f32 = 42.0_f32;
 const STICKY_LAYOUT_WINDOW_FOOTER_H: f32 = 34.0_f32;
 const LAYER_KEY_OSD_FADE: std::time::Duration = std::time::Duration::from_millis(180);
-pub(super) const LAYER_KEY_OSD_EDGE_MARGIN_X: f32 = 48.0_f32;
-pub(super) const LAYER_KEY_OSD_EDGE_MARGIN_Y: f32 = 72.0_f32;
+const LAYER_KEY_OSD_EDGE_MARGIN_X: f32 = 48.0_f32;
+const LAYER_KEY_OSD_EDGE_MARGIN_Y: f32 = 72.0_f32;
 
 #[derive(Clone, Copy)]
-pub(super) struct LayerKeyOsdMetrics {
-    pub(super) size: Vec2,
-    pub(super) corner_radius: f32,
-    pub(super) title_font: f32,
-    pub(super) detail_font: f32,
-    pub(super) title_offset_y: f32,
-    pub(super) detail_offset_y: f32,
+struct LayerKeyOsdMetrics {
+    size: Vec2,
+    corner_radius: f32,
+    title_font: f32,
+    detail_font: f32,
+    title_offset_y: f32,
+    detail_offset_y: f32,
 }
 
-pub(super) fn layer_key_osd_metrics(size: NotificationSize) -> LayerKeyOsdMetrics {
+fn layer_key_osd_metrics(size: NotificationSize) -> LayerKeyOsdMetrics {
     match size {
         NotificationSize::Small => LayerKeyOsdMetrics {
             size: egui::vec2(240.0, 70.0),
