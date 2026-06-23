@@ -386,6 +386,8 @@ impl EntropyApp {
             .with_decorations(false)
             .with_taskbar(false)
             .with_transparent(true)
+            .with_active(false)
+            .with_mouse_passthrough(true)
             .with_window_type(egui::X11WindowType::Utility)
             .with_window_level(egui::WindowLevel::AlwaysOnTop);
 
@@ -437,7 +439,6 @@ impl EntropyApp {
                     }
                 });
         });
-        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
 
     pub(super) fn draw_sticky_layout_window(&mut self, ctx: &egui::Context) {
