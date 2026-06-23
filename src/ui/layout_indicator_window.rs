@@ -316,8 +316,12 @@ fn sticky_layout_saved_window_size(settings: &AppSettings) -> Vec2 {
 
 impl EntropyApp {
     pub(super) fn draw_layer_key_osd_window(&mut self, ctx: &egui::Context) {
+        let viewport_id = egui::ViewportId::from_hash_of("entropy_layer_key_osd");
+
         if !self.app_settings.layer_key_osd {
-            self.layer_key_osd_until = None;
+            if self.layer_key_osd_until.take().is_some() {
+                ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Close);
+            }
             return;
         }
 
@@ -343,20 +347,28 @@ impl EntropyApp {
             self.layer_key_osd_until = None;
             self.layer_key_osd_title.clear();
             self.layer_key_osd_detail.clear();
+            ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Close);
             return;
         }
 
         let remaining = until.saturating_duration_since(now);
         ctx.request_repaint_after(remaining.min(std::time::Duration::from_millis(16)));
 
-        let screen_rect = ctx.screen_rect();
+        let monitor_size = ctx
+            .input(|i| i.viewport().monitor_size)
+            .unwrap_or_else(|| egui::vec2(1920.0, 1080.0));
         let metrics = layer_key_osd_metrics(self.app_settings.notifications_size);
         let position = layer_key_osd_position(
-            screen_rect.size(),
+            monitor_size,
             metrics.size,
             self.app_settings.notifications_position,
         );
         let size = metrics.size;
+        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::OuterPosition(position));
+        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::InnerSize(size));
+        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::MinInnerSize(size));
+        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::MaxInnerSize(size));
+        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::MousePassthrough(true));
         let title = self.layer_key_osd_title.clone();
         let detail = self.layer_key_osd_detail.clone();
         let theme = self.app_settings.notifications_theme;
@@ -369,52 +381,69 @@ impl EntropyApp {
         .clamp(0.0, 1.0);
         let alpha = |value: u8| ((value as f32) * fade * opacity).round().clamp(0.0, 255.0) as u8;
 
-        egui::Area::new(egui::Id::new("entropy_layer_key_osd_overlay"))
-            .order(egui::Order::Tooltip)
-            .fixed_pos(screen_rect.min + position.to_vec2())
-            .interactable(false)
-            .show(ctx, |ui| {
-                let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-                let rect = rect.shrink(4.0);
-                let (fill, stroke, title_color, detail_color) = match theme {
-                    NotificationTheme::Dark => (
-                        Color32::from_rgba_unmultiplied(30, 30, 34, alpha(226)),
-                        Color32::from_rgba_unmultiplied(255, 255, 255, alpha(28)),
-                        Color32::from_rgba_unmultiplied(248, 248, 248, alpha(244)),
-                        Color32::from_rgba_unmultiplied(210, 210, 214, alpha(210)),
-                    ),
-                    NotificationTheme::Light => (
-                        Color32::from_rgba_unmultiplied(246, 246, 248, alpha(232)),
-                        Color32::from_rgba_unmultiplied(28, 28, 32, alpha(32)),
-                        Color32::from_rgba_unmultiplied(24, 24, 28, alpha(244)),
-                        Color32::from_rgba_unmultiplied(92, 92, 98, alpha(216)),
-                    ),
-                };
-                ui.painter().rect(
-                    rect,
-                    metrics.corner_radius,
-                    fill,
-                    Stroke::new(1.0, stroke),
-                    egui::StrokeKind::Inside,
-                );
+        let viewport_builder = egui::ViewportBuilder::default()
+            .with_title("Entropy Layer OSD")
+            .with_inner_size(size)
+            .with_min_inner_size(size)
+            .with_max_inner_size(size)
+            .with_position(position)
+            .with_resizable(false)
+            .with_decorations(false)
+            .with_taskbar(false)
+            .with_active(false)
+            .with_transparent(true)
+            .with_mouse_passthrough(true)
+            .with_window_type(egui::X11WindowType::Notification)
+            .with_window_level(egui::WindowLevel::AlwaysOnTop);
 
-                ui.painter().text(
-                    egui::pos2(rect.center().x, rect.center().y + metrics.title_offset_y),
-                    egui::Align2::CENTER_CENTER,
-                    title.as_str(),
-                    FontId::proportional(metrics.title_font),
-                    title_color,
-                );
-                if !detail.is_empty() {
-                    ui.painter().text(
-                        egui::pos2(rect.center().x, rect.center().y + metrics.detail_offset_y),
-                        egui::Align2::CENTER_CENTER,
-                        detail.as_str(),
-                        FontId::proportional(metrics.detail_font),
-                        detail_color,
+        ctx.show_viewport_immediate(viewport_id, viewport_builder, move |viewport_ctx, _| {
+            if viewport_ctx.input(|i| i.viewport().close_requested()) {
+                return;
+            }
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE.fill(Color32::TRANSPARENT))
+                .show(viewport_ctx, |ui| {
+                    let rect = ui.max_rect().shrink(4.0);
+                    let (fill, stroke, title_color, detail_color) = match theme {
+                        NotificationTheme::Dark => (
+                            Color32::from_rgba_unmultiplied(30, 30, 34, alpha(226)),
+                            Color32::from_rgba_unmultiplied(255, 255, 255, alpha(28)),
+                            Color32::from_rgba_unmultiplied(248, 248, 248, alpha(244)),
+                            Color32::from_rgba_unmultiplied(210, 210, 214, alpha(210)),
+                        ),
+                        NotificationTheme::Light => (
+                            Color32::from_rgba_unmultiplied(246, 246, 248, alpha(232)),
+                            Color32::from_rgba_unmultiplied(28, 28, 32, alpha(32)),
+                            Color32::from_rgba_unmultiplied(24, 24, 28, alpha(244)),
+                            Color32::from_rgba_unmultiplied(92, 92, 98, alpha(216)),
+                        ),
+                    };
+                    ui.painter().rect(
+                        rect,
+                        metrics.corner_radius,
+                        fill,
+                        Stroke::new(1.0, stroke),
+                        egui::StrokeKind::Inside,
                     );
-                }
-            });
+
+                    ui.painter().text(
+                        egui::pos2(rect.center().x, rect.center().y + metrics.title_offset_y),
+                        egui::Align2::CENTER_CENTER,
+                        title.as_str(),
+                        FontId::proportional(metrics.title_font),
+                        title_color,
+                    );
+                    if !detail.is_empty() {
+                        ui.painter().text(
+                            egui::pos2(rect.center().x, rect.center().y + metrics.detail_offset_y),
+                            egui::Align2::CENTER_CENTER,
+                            detail.as_str(),
+                            FontId::proportional(metrics.detail_font),
+                            detail_color,
+                        );
+                    }
+                });
+        });
     }
 
     pub(super) fn draw_sticky_layout_window(&mut self, ctx: &egui::Context) {

@@ -184,6 +184,9 @@ impl EntropyApp {
             self.app_settings.layer_key_osd = enabled;
             if !enabled {
                 self.layer_key_osd_until = None;
+                let viewport_id = egui::ViewportId::from_hash_of("entropy_layer_key_osd");
+                ui.ctx()
+                    .send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Close);
             }
             save_app_settings(&self.app_settings);
         }
