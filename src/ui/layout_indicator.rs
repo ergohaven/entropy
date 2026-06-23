@@ -23,40 +23,6 @@ fn sticky_base_layer_target(kc: u16) -> Option<usize> {
     vial_layer_op_target(kc).and_then(|(op, target)| matches!(op, 0 | 2 | 7).then_some(target))
 }
 
-#[derive(Clone, Copy)]
-enum LayerKeyOsdKind {
-    Hold,
-    OneShot,
-    ToggleOn,
-    ToggleOff,
-    Default,
-}
-
-fn layer_key_osd_momentary_kind(kc: u16) -> Option<(LayerKeyOsdKind, usize)> {
-    if let Some((op, target)) = vial_layer_op_target(kc) {
-        return match op {
-            1 | 6 => Some((LayerKeyOsdKind::Hold, target)),
-            4 => Some((LayerKeyOsdKind::OneShot, target)),
-            _ => None,
-        };
-    }
-    if kc & 0xF000 == 0x4000 {
-        return Some((LayerKeyOsdKind::Hold, ((kc >> 8) & 0xF) as usize));
-    }
-    if (0x5000..0x5200).contains(&kc) {
-        return Some((LayerKeyOsdKind::Hold, ((kc >> 4) & 0xF) as usize));
-    }
-    None
-}
-
-fn layer_key_osd_any_kind(kc: u16) -> Option<(LayerKeyOsdKind, usize)> {
-    layer_key_osd_momentary_kind(kc)
-        .or_else(|| {
-            sticky_toggle_layer_target(kc).map(|target| (LayerKeyOsdKind::ToggleOn, target))
-        })
-        .or_else(|| sticky_base_layer_target(kc).map(|target| (LayerKeyOsdKind::Default, target)))
-}
-
 fn layout_effective_keycode(layout: &KeyboardLayout, layer: usize, key_idx: usize) -> u16 {
     let kc = layout.get_keycode(layer, key_idx);
     if kc != 0x0001 {
@@ -103,57 +69,6 @@ fn sticky_layout_active_layer(
 }
 
 impl EntropyApp {
-    fn keep_layer_key_osd_alive_from(&mut self, now: std::time::Instant) {
-        let timeout_ms = clamp_notification_timeout_ms(self.app_settings.layer_key_osd_timeout_ms);
-        let fade_ms = clamp_notification_fade_ms(self.app_settings.layer_key_osd_fade_ms);
-        let visible_until = now + std::time::Duration::from_millis(timeout_ms as u64);
-        self.layer_key_osd_visible_until = Some(visible_until);
-        self.layer_key_osd_until =
-            Some(visible_until + std::time::Duration::from_millis(fade_ms as u64));
-    }
-
-    fn layer_key_osd_layer_enabled(&self, target_layer: usize) -> bool {
-        self.app_settings
-            .layer_key_osd_layers
-            .get(target_layer)
-            .copied()
-            .unwrap_or(true)
-    }
-
-    fn queue_layer_key_osd(&mut self, kind: LayerKeyOsdKind, target_layer: usize) {
-        if !self.app_settings.layer_key_osd || !self.layer_key_osd_layer_enabled(target_layer) {
-            return;
-        }
-
-        let lang = self.app_settings.language;
-        let fallback_layer = crate::i18n::tr_catalog_format(
-            lang,
-            "ui.layer_key_osd_layer",
-            &[("layer", &target_layer.to_string())],
-        );
-        let custom_layer_name = self
-            .layer_names
-            .get(target_layer)
-            .map(|name| name.trim())
-            .filter(|name| !name.is_empty() && *name != target_layer.to_string());
-        let layer_name = custom_layer_name.unwrap_or(fallback_layer.as_str());
-        let title_key = match kind {
-            LayerKeyOsdKind::Hold => "ui.layer_key_osd_hold",
-            LayerKeyOsdKind::OneShot => "ui.layer_key_osd_one_shot",
-            LayerKeyOsdKind::ToggleOn => "ui.layer_key_osd_toggle",
-            LayerKeyOsdKind::ToggleOff => "ui.layer_key_osd_toggle_off",
-            LayerKeyOsdKind::Default => "ui.layer_key_osd_default",
-        };
-        self.layer_key_osd_title =
-            crate::i18n::tr_catalog_format(lang, title_key, &[("layer", layer_name)]);
-        self.layer_key_osd_detail = if custom_layer_name.is_some() {
-            fallback_layer
-        } else {
-            String::new()
-        };
-        self.keep_layer_key_osd_alive_from(std::time::Instant::now());
-    }
-
     pub(super) fn sync_sticky_layout_layer_state(&mut self, layout: &KeyboardLayout) -> usize {
         let layer_count = layout.layers.len().max(1);
         let pressed = self.matrix_tester_pressed.clone();
@@ -196,47 +111,36 @@ impl EntropyApp {
                 self.sticky_layout_base_layer,
             );
             let kc = layout_effective_keycode(layout, layer_before, key_idx);
-            let is_layer_key = layer_key_osd_any_kind(kc).is_some();
-            if is_layer_key {
+            if sticky_momentary_layer_target(kc).is_some()
+                || sticky_toggle_layer_target(kc).is_some()
+                || sticky_base_layer_target(kc).is_some()
+            {
                 if let Some(source_layer) =
                     self.sticky_layout_pressed_key_layers.get_mut(matrix_idx)
                 {
                     *source_layer = Some(layer_before);
                 }
             }
-            if let Some((kind, target)) =
-                layer_key_osd_momentary_kind(kc).filter(|(_, target)| *target < layer_count)
-            {
-                self.queue_layer_key_osd(kind, target);
-            }
             if let Some(target) =
                 sticky_toggle_layer_target(kc).filter(|target| *target < layer_count)
             {
                 if let Some(enabled) = self.sticky_layout_toggled_layers.get_mut(target) {
                     *enabled = !*enabled;
-                    let kind = if *enabled {
-                        LayerKeyOsdKind::ToggleOn
-                    } else {
-                        LayerKeyOsdKind::ToggleOff
-                    };
-                    self.queue_layer_key_osd(kind, target);
                 }
             } else if let Some(target) =
                 sticky_base_layer_target(kc).filter(|target| *target < layer_count)
             {
                 self.sticky_layout_base_layer = target;
                 self.sticky_layout_toggled_layers.fill(false);
-                self.queue_layer_key_osd(LayerKeyOsdKind::Default, target);
             }
         }
 
         self.sticky_layout_prev_pressed = pressed;
-        self.sticky_layout_active_layer = sticky_layout_active_layer(
+        sticky_layout_active_layer(
             layout,
             &self.matrix_tester_pressed,
             &self.sticky_layout_toggled_layers,
             self.sticky_layout_base_layer,
-        );
-        self.sticky_layout_active_layer
+        )
     }
 }

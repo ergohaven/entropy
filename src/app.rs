@@ -116,8 +116,6 @@ mod matrix_tester;
 mod module_settings_ui;
 #[path = "ui/mouse_keys_settings.rs"]
 mod mouse_keys_settings_ui;
-#[path = "ui/notifications_settings.rs"]
-mod notifications_settings_ui;
 #[path = "ui/onboarding_tour.rs"]
 mod onboarding_tour;
 #[path = "ui/rgb_settings.rs"]

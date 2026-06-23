@@ -12,10 +12,6 @@ pub(crate) const MATRIX_TESTER_LOCK_CHECK_INTERVAL: std::time::Duration =
 pub(crate) const UI_SCALE_MIN: f32 = 0.5;
 pub(crate) const UI_SCALE_MAX: f32 = 2.0;
 pub(crate) const UI_SCALE_STEP: f32 = 0.1;
-pub(crate) const NOTIFICATION_TIMEOUT_MIN_MS: u32 = 100;
-pub(crate) const NOTIFICATION_TIMEOUT_MAX_MS: u32 = 10_000;
-pub(crate) const NOTIFICATION_FADE_MIN_MS: u32 = 0;
-pub(crate) const NOTIFICATION_FADE_MAX_MS: u32 = 2_000;
 pub(crate) const TEXT_EXPANDER_SAVE_DEBOUNCE_SECS: f64 = 0.45;
 pub(crate) const ONBOARDING_TOUR_VERSION: u16 = 1;
 pub(crate) const COMBO_NO_COLOR: u32 = 0x000000;
@@ -38,22 +34,6 @@ pub(crate) struct AppSettings {
     pub(crate) show_shifted_number_symbols: bool,
     #[serde(default = "default_layer_hover_preview")]
     pub(crate) layer_hover_preview: bool,
-    #[serde(default = "default_layer_key_osd")]
-    pub(crate) layer_key_osd: bool,
-    #[serde(default = "default_layer_key_osd_timeout_ms")]
-    pub(crate) layer_key_osd_timeout_ms: u32,
-    #[serde(default = "default_layer_key_osd_fade_ms")]
-    pub(crate) layer_key_osd_fade_ms: u32,
-    #[serde(default)]
-    pub(crate) layer_key_osd_layers: Vec<bool>,
-    #[serde(default)]
-    pub(crate) notifications_theme: NotificationTheme,
-    #[serde(default)]
-    pub(crate) notifications_size: NotificationSize,
-    #[serde(default)]
-    pub(crate) notifications_position: NotificationPosition,
-    #[serde(default = "default_notification_opacity")]
-    pub(crate) notifications_opacity: f32,
     #[serde(default)]
     pub(crate) sticky_layout_window: bool,
     #[serde(default = "default_sticky_layout_always_on_top")]
@@ -116,38 +96,6 @@ pub(crate) fn default_layer_hover_preview() -> bool {
     true
 }
 
-pub(crate) fn default_layer_key_osd() -> bool {
-    false
-}
-
-pub(crate) fn default_layer_key_osd_timeout_ms() -> u32 {
-    1_000
-}
-
-pub(crate) fn clamp_notification_timeout_ms(timeout_ms: u32) -> u32 {
-    timeout_ms.clamp(NOTIFICATION_TIMEOUT_MIN_MS, NOTIFICATION_TIMEOUT_MAX_MS)
-}
-
-pub(crate) fn default_layer_key_osd_fade_ms() -> u32 {
-    400
-}
-
-pub(crate) fn clamp_notification_fade_ms(fade_ms: u32) -> u32 {
-    fade_ms.clamp(NOTIFICATION_FADE_MIN_MS, NOTIFICATION_FADE_MAX_MS)
-}
-
-pub(crate) fn default_notification_opacity() -> f32 {
-    1.0
-}
-
-pub(crate) fn clamp_notification_opacity(opacity: f32) -> f32 {
-    if opacity.is_finite() {
-        opacity.clamp(0.50, 1.0)
-    } else {
-        default_notification_opacity()
-    }
-}
-
 pub(crate) fn default_encoder_hover_enlarge() -> bool {
     true
 }
@@ -192,14 +140,6 @@ impl Default for AppSettings {
             launch_at_startup: false,
             show_shifted_number_symbols: default_show_shifted_number_symbols(),
             layer_hover_preview: default_layer_hover_preview(),
-            layer_key_osd: default_layer_key_osd(),
-            layer_key_osd_timeout_ms: default_layer_key_osd_timeout_ms(),
-            layer_key_osd_fade_ms: default_layer_key_osd_fade_ms(),
-            layer_key_osd_layers: Vec::new(),
-            notifications_theme: NotificationTheme::default(),
-            notifications_size: NotificationSize::default(),
-            notifications_position: NotificationPosition::default(),
-            notifications_opacity: default_notification_opacity(),
             sticky_layout_window: false,
             sticky_layout_always_on_top: default_sticky_layout_always_on_top(),
             sticky_layout_opacity: default_sticky_layout_opacity(),
@@ -1377,7 +1317,6 @@ pub(crate) enum ComboPickField {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsTab {
     AppSettings,
-    Notifications,
     MatrixTester,
     UniversalSymbolsSetup,
     TextExpander,
@@ -1398,53 +1337,6 @@ pub(crate) enum SettingsTab {
     AltRepeat,
     MouseKeys,
     LayoutImageExport,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum NotificationTheme {
-    Dark,
-    Light,
-}
-
-impl Default for NotificationTheme {
-    fn default() -> Self {
-        Self::Dark
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum NotificationSize {
-    Small,
-    Medium,
-    Large,
-}
-
-impl Default for NotificationSize {
-    fn default() -> Self {
-        Self::Medium
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum NotificationPosition {
-    TopLeft,
-    TopCenter,
-    TopRight,
-    CenterLeft,
-    Center,
-    CenterRight,
-    BottomLeft,
-    BottomCenter,
-    BottomRight,
-}
-
-impl Default for NotificationPosition {
-    fn default() -> Self {
-        Self::BottomCenter
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1640,14 +1532,9 @@ pub struct EntropyApp {
     pub(crate) sticky_layout_pressed_key_layers: Vec<Option<usize>>,
     pub(crate) sticky_layout_toggled_layers: Vec<bool>,
     pub(crate) sticky_layout_base_layer: usize,
-    pub(crate) sticky_layout_active_layer: usize,
     pub(crate) sticky_layout_last_size: Option<Vec2>,
     pub(crate) sticky_layout_resize_opacity_hold_frames: u8,
     pub(crate) pending_layout_indicator_open_after_unlock: bool,
-    pub(crate) layer_key_osd_title: String,
-    pub(crate) layer_key_osd_detail: String,
-    pub(crate) layer_key_osd_visible_until: Option<std::time::Instant>,
-    pub(crate) layer_key_osd_until: Option<std::time::Instant>,
     pub(crate) matrix_tester_last_poll: std::time::Instant,
     pub(crate) matrix_tester_last_lock_check: std::time::Instant,
     pub(crate) matrix_tester_unlock_prompted: bool,

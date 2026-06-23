@@ -603,7 +603,6 @@ impl eframe::App for EntropyApp {
         });
 
         self.draw_sticky_layout_window(ctx);
-        self.draw_layer_key_osd_window(ctx);
 
         if self.app_settings.show_made_by_signature {
             egui::Area::new(egui::Id::new("made_by_signature"))

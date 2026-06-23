@@ -32,10 +32,6 @@ impl EntropyApp {
                 self.draw_app_settings_page(ui, content_rect);
                 false
             }
-            SettingsTab::Notifications => {
-                self.draw_notifications_settings_page(ui, layout, content_rect);
-                false
-            }
             SettingsTab::MatrixTester => {
                 self.draw_matrix_tester_settings(ui, layout, content_rect, dark);
                 false
@@ -169,11 +165,6 @@ impl EntropyApp {
 
     pub(super) fn open_app_settings_page(&mut self) {
         self.settings_tab = SettingsTab::AppSettings;
-        self.main_menu_tab = MainMenuTab::Settings;
-    }
-
-    pub(super) fn open_notifications_settings_page(&mut self) {
-        self.settings_tab = SettingsTab::Notifications;
         self.main_menu_tab = MainMenuTab::Settings;
     }
 
