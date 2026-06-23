@@ -77,3 +77,6 @@ getrandom = { version = "0.2", features = ["js"] }
 opt-level = 3
 lto = true
 strip = true
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
