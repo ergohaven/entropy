@@ -1631,6 +1631,7 @@ pub struct EntropyApp {
     pub(crate) sticky_layout_last_size: Option<Vec2>,
     pub(crate) sticky_layout_resize_opacity_hold_frames: u8,
     pub(crate) pending_layout_indicator_open_after_unlock: bool,
+    pub(crate) layer_key_osd_viewport_created: bool,
     pub(crate) layer_key_osd_title: String,
     pub(crate) layer_key_osd_detail: String,
     pub(crate) layer_key_osd_until: Option<std::time::Instant>,

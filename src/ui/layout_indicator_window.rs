@@ -322,7 +322,10 @@ impl EntropyApp {
             self.layer_key_osd_until = None;
             self.layer_key_osd_title.clear();
             self.layer_key_osd_detail.clear();
-            ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Close);
+            if self.layer_key_osd_viewport_created {
+                self.layer_key_osd_viewport_created = false;
+                ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Close);
+            }
             return;
         }
 
@@ -350,6 +353,11 @@ impl EntropyApp {
         }
         let remaining = visible_until.map(|until| until.saturating_duration_since(now));
         let is_visible = remaining.is_some();
+        if is_visible {
+            self.layer_key_osd_viewport_created = true;
+        } else if !self.layer_key_osd_viewport_created {
+            return;
+        }
         if let Some(remaining) = remaining {
             ctx.request_repaint_after(remaining.min(std::time::Duration::from_millis(16)));
         }
@@ -363,18 +371,8 @@ impl EntropyApp {
             metrics.size,
             self.app_settings.notifications_position,
         );
-        let hidden_size = egui::vec2(1.0, 1.0);
-        let hidden_position = egui::pos2(monitor_size.x + 64.0, monitor_size.y + 64.0);
-        let position = if is_visible {
-            shown_position
-        } else {
-            hidden_position
-        };
-        let size = if is_visible {
-            metrics.size
-        } else {
-            hidden_size
-        };
+        let position = shown_position;
+        let size = metrics.size;
         ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::OuterPosition(position));
         ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::InnerSize(size));
         ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::MinInnerSize(size));

@@ -134,6 +134,7 @@ impl EntropyApp {
             sticky_layout_last_size: None,
             sticky_layout_resize_opacity_hold_frames: 0,
             pending_layout_indicator_open_after_unlock: false,
+            layer_key_osd_viewport_created: false,
             layer_key_osd_title: String::new(),
             layer_key_osd_detail: String::new(),
             layer_key_osd_until: None,
