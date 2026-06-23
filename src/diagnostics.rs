@@ -72,6 +72,11 @@ pub(crate) fn init(enabled: bool) {
         std::env::consts::OS,
         std::env::consts::ARCH
     );
+    #[cfg(target_os = "macos")]
+    log::info!(
+        "macOS runtime architecture: {}",
+        crate::hid::macos_runtime_architecture_status()
+    );
     if enabled {
         log::info!("Diagnostics log: {}", display_path(&active_log_path()));
         log::info!("Config dir: {}", display_path(&entropy_config_dir()));

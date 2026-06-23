@@ -30,6 +30,24 @@ pub(crate) fn macos_hid_scan_disabled_for_rosetta() -> bool {
     macos_running_under_rosetta()
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn macos_runtime_architecture_status() -> &'static str {
+    if macos_running_under_rosetta() {
+        "x86_64 translated by Rosetta on Apple Silicon"
+    } else if cfg!(target_arch = "aarch64") {
+        "native arm64 Apple Silicon"
+    } else if cfg!(target_arch = "x86_64") {
+        "native x86_64 Intel"
+    } else {
+        "native macOS architecture"
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn macos_rosetta_hid_status_message() -> &'static str {
+    "Entropy is running under Rosetta. Install the macOS arm64 build to enable HID access on Apple Silicon."
+}
+
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 fn macos_running_under_rosetta() -> bool {
     use std::os::raw::{c_char, c_int, c_void};

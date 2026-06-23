@@ -141,8 +141,10 @@ pub fn universal_output_status() -> String {
 
 #[cfg(target_os = "macos")]
 pub fn universal_output_status() -> String {
-    "Universal output backend: macOS native — requires Accessibility/Input Monitoring permission"
-        .to_owned()
+    format!(
+        "Universal output backend: macOS native ({}) — requires Accessibility/Input Monitoring permission",
+        crate::hid::macos_runtime_architecture_status(),
+    )
 }
 
 #[cfg(target_os = "linux")]
