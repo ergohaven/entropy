@@ -25,6 +25,7 @@ use app::EntropyApp;
 
 const APP_TITLE: &str = concat!("Entropy (v", env!("CARGO_PKG_VERSION"), ")");
 const APP_ID: &str = "entropy";
+const SINGLE_INSTANCE_ENV: &str = "ENTROPY_SINGLE_INSTANCE";
 
 #[cfg(target_os = "windows")]
 struct SingleInstanceGuard(*mut core::ffi::c_void);
@@ -92,6 +93,18 @@ fn notify_existing_instance() {
         .map(|d| d.as_millis().to_string())
         .unwrap_or_else(|_| "0".to_string());
     let _ = std::fs::write(signal_path, now_ms);
+}
+
+fn single_instance_enabled_from_env(value: Option<&str>) -> bool {
+    !matches!(
+        value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
+        Some("0" | "false" | "off" | "no")
+    )
+}
+
+fn single_instance_enabled() -> bool {
+    let value = std::env::var(SINGLE_INSTANCE_ENV).ok();
+    single_instance_enabled_from_env(value.as_deref())
 }
 
 #[cfg(target_os = "windows")]
@@ -256,11 +269,17 @@ fn main() -> eframe::Result<()> {
     diagnostics::init(diagnostics::settings_file_enabled());
 
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-    if !try_acquire_single_instance() {
-        notify_existing_instance();
-        #[cfg(target_os = "windows")]
-        restore_existing_instance_window();
-        return Ok(());
+    {
+        if single_instance_enabled() {
+            if !try_acquire_single_instance() {
+                notify_existing_instance();
+                #[cfg(target_os = "windows")]
+                restore_existing_instance_window();
+                return Ok(());
+            }
+        } else {
+            log::info!("Single-instance guard disabled by {SINGLE_INSTANCE_ENV}");
+        }
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
@@ -326,4 +345,28 @@ fn main() -> eframe::Result<()> {
             Ok(Box::new(EntropyApp::new(cc)))
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_instance_is_enabled_by_default() {
+        assert!(single_instance_enabled_from_env(None));
+    }
+
+    #[test]
+    fn single_instance_can_be_disabled_for_debugging() {
+        for value in ["0", "false", "off", "no", " FALSE "] {
+            assert!(!single_instance_enabled_from_env(Some(value)));
+        }
+    }
+
+    #[test]
+    fn single_instance_stays_enabled_for_other_values() {
+        for value in ["1", "true", "yes", "anything"] {
+            assert!(single_instance_enabled_from_env(Some(value)));
+        }
+    }
 }

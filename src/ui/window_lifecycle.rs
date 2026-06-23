@@ -40,7 +40,10 @@ impl EntropyApp {
         self.last_single_instance_signal = signal;
         self.status_msg = "Entropy refreshed from a repeated launch".into();
         self.restore_from_tray(ctx);
-        self.start_device_scan();
+        if self.hid_device.is_none() && !matches!(self.connect_state, ConnectState::Loading { .. })
+        {
+            self.start_device_scan();
+        }
         ctx.request_repaint();
     }
 
