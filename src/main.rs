@@ -266,6 +266,9 @@ fn main() -> eframe::Result<()> {
     #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     let _single_instance_available = try_acquire_single_instance();
 
+    #[cfg(target_os = "macos")]
+    hid::initialize_macos_hid_on_main_thread();
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(APP_TITLE)
