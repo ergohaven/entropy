@@ -49,6 +49,14 @@ fn layer_key_osd_momentary_kind(kc: u16) -> Option<(LayerKeyOsdKind, usize)> {
     None
 }
 
+fn layer_key_osd_any_kind(kc: u16) -> Option<(LayerKeyOsdKind, usize)> {
+    layer_key_osd_momentary_kind(kc)
+        .or_else(|| {
+            sticky_toggle_layer_target(kc).map(|target| (LayerKeyOsdKind::ToggleOn, target))
+        })
+        .or_else(|| sticky_base_layer_target(kc).map(|target| (LayerKeyOsdKind::Default, target)))
+}
+
 fn layout_effective_keycode(layout: &KeyboardLayout, layer: usize, key_idx: usize) -> u16 {
     let kc = layout.get_keycode(layer, key_idx);
     if kc != 0x0001 {
@@ -95,6 +103,20 @@ fn sticky_layout_active_layer(
 }
 
 impl EntropyApp {
+    fn keep_layer_key_osd_alive_from(&mut self, now: std::time::Instant) {
+        let timeout_ms = clamp_notification_timeout_ms(self.app_settings.layer_key_osd_timeout_ms);
+        let fade_ms = clamp_notification_fade_ms(self.app_settings.layer_key_osd_fade_ms);
+        let visible_until = now + std::time::Duration::from_millis(timeout_ms as u64);
+        self.layer_key_osd_visible_until = Some(visible_until);
+        self.layer_key_osd_until =
+            Some(visible_until + std::time::Duration::from_millis(fade_ms as u64));
+    }
+
+    fn dismiss_layer_key_osd_now(&mut self) {
+        self.layer_key_osd_visible_until = None;
+        self.layer_key_osd_until = Some(std::time::Instant::now());
+    }
+
     fn layer_key_osd_layer_enabled(&self, target_layer: usize) -> bool {
         self.app_settings
             .layer_key_osd_layers
@@ -134,13 +156,7 @@ impl EntropyApp {
         } else {
             String::new()
         };
-        let timeout_ms = clamp_notification_timeout_ms(self.app_settings.layer_key_osd_timeout_ms);
-        let fade_ms = clamp_notification_fade_ms(self.app_settings.layer_key_osd_fade_ms);
-        let now = std::time::Instant::now();
-        let visible_until = now + std::time::Duration::from_millis(timeout_ms as u64);
-        self.layer_key_osd_visible_until = Some(visible_until);
-        self.layer_key_osd_until =
-            Some(visible_until + std::time::Duration::from_millis(fade_ms as u64));
+        self.keep_layer_key_osd_alive_from(std::time::Instant::now());
     }
 
     pub(super) fn sync_sticky_layout_layer_state(&mut self, layout: &KeyboardLayout) -> usize {
@@ -157,6 +173,8 @@ impl EntropyApp {
             self.sticky_layout_toggled_layers = vec![false; layer_count];
         }
         self.sticky_layout_base_layer = self.sticky_layout_base_layer.min(layer_count - 1);
+
+        let mut dismiss_osd = false;
 
         for (key_idx, key) in layout.keys.iter().enumerate() {
             let matrix_idx = key.row as usize * layout.cols + key.col as usize;
@@ -185,15 +203,15 @@ impl EntropyApp {
                 self.sticky_layout_base_layer,
             );
             let kc = layout_effective_keycode(layout, layer_before, key_idx);
-            if sticky_momentary_layer_target(kc).is_some()
-                || sticky_toggle_layer_target(kc).is_some()
-                || sticky_base_layer_target(kc).is_some()
-            {
+            let is_layer_key = layer_key_osd_any_kind(kc).is_some();
+            if is_layer_key {
                 if let Some(source_layer) =
                     self.sticky_layout_pressed_key_layers.get_mut(matrix_idx)
                 {
                     *source_layer = Some(layer_before);
                 }
+            } else if self.layer_key_osd_until.is_some() {
+                dismiss_osd = true;
             }
             if let Some((kind, target)) =
                 layer_key_osd_momentary_kind(kc).filter(|(_, target)| *target < layer_count)
@@ -219,6 +237,20 @@ impl EntropyApp {
                 self.sticky_layout_toggled_layers.fill(false);
                 self.queue_layer_key_osd(LayerKeyOsdKind::Default, target);
             }
+        }
+
+        let layer_key_held = self
+            .sticky_layout_pressed_key_layers
+            .iter()
+            .enumerate()
+            .any(|(matrix_idx, source_layer)| {
+                source_layer.is_some() && pressed.get(matrix_idx).copied().unwrap_or(false)
+            });
+
+        if dismiss_osd || (self.layer_key_osd_until.is_some() && !layer_key_held) {
+            self.dismiss_layer_key_osd_now();
+        } else if self.layer_key_osd_until.is_some() && layer_key_held {
+            self.keep_layer_key_osd_alive_from(std::time::Instant::now());
         }
 
         self.sticky_layout_prev_pressed = pressed;
