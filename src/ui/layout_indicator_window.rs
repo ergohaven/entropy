@@ -319,11 +319,7 @@ impl EntropyApp {
         let viewport_id = egui::ViewportId::from_hash_of("entropy_layer_key_osd");
 
         if !self.app_settings.layer_key_osd {
-            self.layer_key_osd_until = None;
-            self.layer_key_osd_title.clear();
-            self.layer_key_osd_detail.clear();
-            if self.layer_key_osd_viewport_created {
-                self.layer_key_osd_viewport_created = false;
+            if self.layer_key_osd_until.take().is_some() {
                 ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Close);
             }
             return;
@@ -343,56 +339,41 @@ impl EntropyApp {
             }
         }
 
+        let Some(until) = self.layer_key_osd_until else {
+            return;
+        };
         let now = std::time::Instant::now();
-        let mut visible_until = self.layer_key_osd_until;
-        if visible_until.is_some_and(|until| now >= until) {
+        if now >= until {
             self.layer_key_osd_until = None;
             self.layer_key_osd_title.clear();
             self.layer_key_osd_detail.clear();
-            visible_until = None;
-        }
-        let remaining = visible_until.map(|until| until.saturating_duration_since(now));
-        let is_visible = remaining.is_some();
-        if is_visible {
-            self.layer_key_osd_viewport_created = true;
-        } else if !self.layer_key_osd_viewport_created {
+            ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Close);
             return;
         }
-        if let Some(remaining) = remaining {
-            ctx.request_repaint_after(remaining.min(std::time::Duration::from_millis(16)));
-        }
+
+        let remaining = until.saturating_duration_since(now);
+        ctx.request_repaint_after(remaining.min(std::time::Duration::from_millis(16)));
 
         let monitor_size = ctx
             .input(|i| i.viewport().monitor_size)
             .unwrap_or_else(|| egui::vec2(1920.0, 1080.0));
         let metrics = layer_key_osd_metrics(self.app_settings.notifications_size);
-        let shown_position = layer_key_osd_position(
+        let position = layer_key_osd_position(
             monitor_size,
             metrics.size,
             self.app_settings.notifications_position,
         );
-        let position = shown_position;
         let size = metrics.size;
-        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::OuterPosition(position));
-        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::InnerSize(size));
-        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::MinInnerSize(size));
-        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::MaxInnerSize(size));
-        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::MousePassthrough(true));
         let title = self.layer_key_osd_title.clone();
         let detail = self.layer_key_osd_detail.clone();
         let theme = self.app_settings.notifications_theme;
-        let opacity = clamp_notification_opacity(self.app_settings.notifications_opacity);
-        let fade = if let Some(remaining) = remaining {
-            if remaining < LAYER_KEY_OSD_FADE {
-                remaining.as_secs_f32() / LAYER_KEY_OSD_FADE.as_secs_f32()
-            } else {
-                1.0
-            }
+        let fade = if remaining < LAYER_KEY_OSD_FADE {
+            remaining.as_secs_f32() / LAYER_KEY_OSD_FADE.as_secs_f32()
         } else {
-            0.0
+            1.0
         }
         .clamp(0.0, 1.0);
-        let alpha = |value: u8| ((value as f32) * fade * opacity).round().clamp(0.0, 255.0) as u8;
+        let alpha = |value: u8| ((value as f32) * fade).round().clamp(0.0, 255.0) as u8;
 
         let viewport_builder = egui::ViewportBuilder::default()
             .with_title("Entropy Layer OSD")
@@ -403,11 +384,9 @@ impl EntropyApp {
             .with_resizable(false)
             .with_decorations(false)
             .with_taskbar(false)
-            .with_active(false)
-            .with_visible(true)
             .with_transparent(true)
             .with_mouse_passthrough(true)
-            .with_window_type(egui::X11WindowType::Notification)
+            .with_window_type(egui::X11WindowType::Utility)
             .with_window_level(egui::WindowLevel::AlwaysOnTop);
 
         ctx.show_viewport_immediate(viewport_id, viewport_builder, move |viewport_ctx, _| {
@@ -417,9 +396,6 @@ impl EntropyApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE.fill(Color32::TRANSPARENT))
                 .show(viewport_ctx, |ui| {
-                    if !is_visible {
-                        return;
-                    }
                     let rect = ui.max_rect().shrink(4.0);
                     let (fill, stroke, title_color, detail_color) = match theme {
                         NotificationTheme::Dark => (

@@ -1294,8 +1294,6 @@ position_center_right = "Center right"
 position_bottom_left = "Bottom left"
 position_bottom_center = "Bottom center"
 position_bottom_right = "Bottom right"
-opacity_label = "Opacity"
-opacity_tooltip = "Choose notification opacity from 50 to 100 percent"
 layer_label = "Layer {layer}"
 layer_tooltip = "Show layer key notifications for {layer}"
 

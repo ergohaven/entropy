@@ -48,8 +48,6 @@ pub(crate) struct AppSettings {
     pub(crate) notifications_size: NotificationSize,
     #[serde(default)]
     pub(crate) notifications_position: NotificationPosition,
-    #[serde(default = "default_notification_opacity")]
-    pub(crate) notifications_opacity: f32,
     #[serde(default)]
     pub(crate) sticky_layout_window: bool,
     #[serde(default = "default_sticky_layout_always_on_top")]
@@ -124,18 +122,6 @@ pub(crate) fn clamp_notification_timeout_ms(timeout_ms: u32) -> u32 {
     timeout_ms.clamp(NOTIFICATION_TIMEOUT_MIN_MS, NOTIFICATION_TIMEOUT_MAX_MS)
 }
 
-pub(crate) fn default_notification_opacity() -> f32 {
-    1.0
-}
-
-pub(crate) fn clamp_notification_opacity(opacity: f32) -> f32 {
-    if opacity.is_finite() {
-        opacity.clamp(0.50, 1.0)
-    } else {
-        default_notification_opacity()
-    }
-}
-
 pub(crate) fn default_encoder_hover_enlarge() -> bool {
     true
 }
@@ -186,7 +172,6 @@ impl Default for AppSettings {
             notifications_theme: NotificationTheme::default(),
             notifications_size: NotificationSize::default(),
             notifications_position: NotificationPosition::default(),
-            notifications_opacity: default_notification_opacity(),
             sticky_layout_window: false,
             sticky_layout_always_on_top: default_sticky_layout_always_on_top(),
             sticky_layout_opacity: default_sticky_layout_opacity(),
@@ -1631,7 +1616,6 @@ pub struct EntropyApp {
     pub(crate) sticky_layout_last_size: Option<Vec2>,
     pub(crate) sticky_layout_resize_opacity_hold_frames: u8,
     pub(crate) pending_layout_indicator_open_after_unlock: bool,
-    pub(crate) layer_key_osd_viewport_created: bool,
     pub(crate) layer_key_osd_title: String,
     pub(crate) layer_key_osd_detail: String,
     pub(crate) layer_key_osd_until: Option<std::time::Instant>,
