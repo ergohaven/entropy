@@ -39,6 +39,7 @@ fn layout_effective_keycode(layout: &KeyboardLayout, layer: usize, key_idx: usiz
 fn sticky_layout_active_layer(
     layout: &KeyboardLayout,
     matrix_pressed: &[bool],
+    pressed_key_layers: &[Option<usize>],
     toggled_layers: &[bool],
     base_layer: usize,
 ) -> usize {
@@ -55,7 +56,15 @@ fn sticky_layout_active_layer(
             if !layout_matrix_key_pressed(layout, matrix_pressed, key.row, key.col) {
                 return None;
             }
-            sticky_momentary_layer_target(layout_effective_keycode(layout, active_layer, key_idx))
+
+            let matrix_idx = key.row as usize * layout.cols + key.col as usize;
+            let source_layer = pressed_key_layers
+                .get(matrix_idx)
+                .and_then(|layer| *layer)
+                .filter(|layer| *layer < layer_count)
+                .unwrap_or(active_layer);
+
+            sticky_momentary_layer_target(layout_effective_keycode(layout, source_layer, key_idx))
                 .filter(|target| *target < layer_count)
         });
 
@@ -107,6 +116,7 @@ impl EntropyApp {
             let layer_before = sticky_layout_active_layer(
                 layout,
                 &self.sticky_layout_prev_pressed,
+                &self.sticky_layout_pressed_key_layers,
                 &self.sticky_layout_toggled_layers,
                 self.sticky_layout_base_layer,
             );
@@ -139,8 +149,63 @@ impl EntropyApp {
         sticky_layout_active_layer(
             layout,
             &self.matrix_tester_pressed,
+            &self.sticky_layout_pressed_key_layers,
             &self.sticky_layout_toggled_layers,
             self.sticky_layout_base_layer,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::firmware::FirmwareProtocol;
+    use crate::keyboard::PhysicalKey;
+
+    fn mo(layer: u16) -> u16 {
+        0x5200 | (1 << 5) | layer
+    }
+
+    fn one_key_layout(layers: Vec<Vec<u16>>) -> KeyboardLayout {
+        KeyboardLayout {
+            name: "test".to_string(),
+            rows: 1,
+            cols: 1,
+            keys: vec![PhysicalKey {
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+                row: 0,
+                col: 0,
+                label: "0,0".to_string(),
+                rotation: 0.0,
+                rotation_x: 0.0,
+                rotation_y: 0.0,
+                layout_condition: None,
+            }],
+            encoders: vec![],
+            layers,
+            encoder_layers: vec![],
+            layer_names: vec![],
+            custom_keycodes: vec![],
+            layout_options: vec![],
+            supports_rgb: false,
+            lighting_mode: None,
+            firmware: FirmwareProtocol::Vial,
+        }
+    }
+
+    #[test]
+    fn held_momentary_key_uses_the_layer_where_it_was_pressed() {
+        let layout = one_key_layout(vec![vec![mo(2)], vec![0], vec![mo(3)], vec![0]]);
+        let pressed = vec![true];
+        let pressed_key_layers = vec![Some(0)];
+        let toggled_layers = vec![false; 4];
+
+        assert_eq!(
+            sticky_layout_active_layer(&layout, &pressed, &pressed_key_layers, &toggled_layers, 0),
+            2
+        );
     }
 }
