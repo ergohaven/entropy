@@ -8,6 +8,31 @@ fn is_default_layer_name(index: usize, name: &str) -> bool {
         || trimmed.eq_ignore_ascii_case(&format!("layer {index}"))
 }
 
+fn decode_macro_delay_ms(lo: u8, hi: u8) -> Option<u16> {
+    let low = (lo as u16).checked_sub(1)?;
+    let high = (hi as u16).checked_sub(1)?;
+    Some(low + high * 255)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn macro_delay_decoder_rejects_zero_encoded_delay_bytes() {
+        assert_eq!(decode_macro_delay_ms(0, 0), None);
+        assert_eq!(decode_macro_delay_ms(1, 0), None);
+        assert_eq!(decode_macro_delay_ms(0, 1), None);
+    }
+
+    #[test]
+    fn macro_delay_decoder_preserves_valid_delay_bytes() {
+        assert_eq!(decode_macro_delay_ms(1, 1), Some(0));
+        assert_eq!(decode_macro_delay_ms(2, 1), Some(1));
+        assert_eq!(decode_macro_delay_ms(1, 2), Some(255));
+    }
+}
+
 fn has_firmware_layer_names(names: &[String]) -> bool {
     names
         .iter()
@@ -184,9 +209,13 @@ impl EntropyApp {
                                     }
                                     4 if i + 3 < bytes.len() => {
                                         // SS_DELAY
-                                        let ms = (bytes[i + 2] as u16 - 1)
-                                            + (bytes[i + 3] as u16 - 1) * 255;
-                                        actions.push(crate::keycode_picker::MacroAction::Delay(ms));
+                                        if let Some(ms) =
+                                            decode_macro_delay_ms(bytes[i + 2], bytes[i + 3])
+                                        {
+                                            actions.push(
+                                                crate::keycode_picker::MacroAction::Delay(ms),
+                                            );
+                                        }
                                         i += 4;
                                     }
                                     5..=7 if i + 3 < bytes.len() => {
