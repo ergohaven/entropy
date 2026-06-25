@@ -41,6 +41,8 @@ pub(crate) struct AppSettings {
     #[serde(default = "default_sticky_layout_opacity")]
     pub(crate) sticky_layout_opacity: f32,
     #[serde(default)]
+    pub(crate) sticky_layout_visibility_mode: StickyLayoutVisibilityMode,
+    #[serde(default)]
     pub(crate) sticky_layout_dark_mode: bool,
     #[serde(default)]
     pub(crate) sticky_layout_window_size: Option<[f32; 2]>,
@@ -85,6 +87,19 @@ pub(crate) enum CloseToTrayBehavior {
 impl Default for CloseToTrayBehavior {
     fn default() -> Self {
         Self::Ask
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StickyLayoutVisibilityMode {
+    LayoutAndPresses,
+    PressedOnly,
+}
+
+impl Default for StickyLayoutVisibilityMode {
+    fn default() -> Self {
+        Self::LayoutAndPresses
     }
 }
 
@@ -143,6 +158,7 @@ impl Default for AppSettings {
             sticky_layout_window: false,
             sticky_layout_always_on_top: default_sticky_layout_always_on_top(),
             sticky_layout_opacity: default_sticky_layout_opacity(),
+            sticky_layout_visibility_mode: StickyLayoutVisibilityMode::default(),
             sticky_layout_dark_mode: false,
             sticky_layout_window_size: None,
             window_size: None,

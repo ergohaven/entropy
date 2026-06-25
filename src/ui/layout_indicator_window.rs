@@ -77,6 +77,7 @@ fn draw_sticky_layout_transparency_dropdown(
     lang: crate::i18n::Language,
     dark: bool,
     opacity: &mut f32,
+    visibility_mode: &mut StickyLayoutVisibilityMode,
 ) -> bool {
     const OPACITY_VALUES: [f32; 6] = [1.0, 0.90, 0.80, 0.70, 0.60, 0.50];
 
@@ -93,13 +94,18 @@ fn draw_sticky_layout_transparency_dropdown(
         .map(|(idx, _)| idx)
         .unwrap_or(0);
     let label_prefix = crate::i18n::tr_catalog(lang, "ui.sticky_layout_transparency_short");
-    let selected_text = format!(
-        "{} {}%",
-        label_prefix,
-        (OPACITY_VALUES[selected_idx] * 100.0).round() as i32
-    );
+    let pressed_only_text = crate::i18n::tr_catalog(lang, "ui.sticky_layout_pressed_only");
+    let selected_text = if matches!(visibility_mode, StickyLayoutVisibilityMode::PressedOnly) {
+        pressed_only_text.to_string()
+    } else {
+        format!(
+            "{} {}%",
+            label_prefix,
+            (OPACITY_VALUES[selected_idx] * 100.0).round() as i32
+        )
+    };
     let dropdown_id = ui.id().with("sticky_layout_transparency_dropdown");
-    let width = 128.0;
+    let width = 136.0;
     let dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
         ui,
         dropdown_id,
@@ -128,10 +134,48 @@ fn draw_sticky_layout_transparency_dropdown(
                 .show(ui, |ui| {
                     ui.set_min_width(width);
                     ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
+                    let (pressed_rect, pressed_resp) =
+                        ui.allocate_exact_size(Vec2::new(width, 24.0), Sense::click());
+                    if pressed_resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    let pressed_selected =
+                        matches!(visibility_mode, StickyLayoutVisibilityMode::PressedOnly);
+                    let pressed_fill = if pressed_selected || pressed_resp.hovered() {
+                        app_hover_fill(dark)
+                    } else {
+                        app_surface_fill(dark)
+                    };
+                    ui.painter().rect_filled(pressed_rect, 7.0, pressed_fill);
+                    ui.painter().text(
+                        egui::pos2(pressed_rect.left() + 10.0, pressed_rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        pressed_only_text.to_string(),
+                        FontId::proportional(11.0),
+                        if pressed_selected {
+                            if dark {
+                                Color32::from_rgb(235, 235, 235)
+                            } else {
+                                Color32::from_rgb(42, 42, 44)
+                            }
+                        } else {
+                            app_muted_text(dark)
+                        },
+                    );
+                    if pressed_resp.clicked() {
+                        *visibility_mode = StickyLayoutVisibilityMode::PressedOnly;
+                        changed = true;
+                        ui.memory_mut(|m| m.close_popup());
+                    }
+
                     for (idx, value) in OPACITY_VALUES.iter().copied().enumerate() {
                         let option_text =
                             format!("{} {}%", label_prefix, (value * 100.0).round() as i32);
-                        let selected = idx == selected_idx;
+                        let selected = idx == selected_idx
+                            && matches!(
+                                visibility_mode,
+                                StickyLayoutVisibilityMode::LayoutAndPresses
+                            );
                         let (option_rect, option_resp) =
                             ui.allocate_exact_size(Vec2::new(width, 24.0), Sense::click());
                         if option_resp.hovered() {
@@ -159,6 +203,7 @@ fn draw_sticky_layout_transparency_dropdown(
                             },
                         );
                         if option_resp.clicked() {
+                            *visibility_mode = StickyLayoutVisibilityMode::LayoutAndPresses;
                             *opacity = value;
                             changed = true;
                             ui.memory_mut(|m| m.close_popup());
@@ -314,6 +359,7 @@ impl EntropyApp {
         let mut sticky_dark_mode = self.app_settings.sticky_layout_dark_mode;
         let mut sticky_opacity =
             clamp_sticky_layout_opacity(self.app_settings.sticky_layout_opacity);
+        let mut sticky_visibility_mode = self.app_settings.sticky_layout_visibility_mode;
         let mut sticky_always_on_top = self.app_settings.sticky_layout_always_on_top;
         let sticky_window_size = sticky_layout_saved_window_size(&self.app_settings);
         let mut observed_sticky_size: Option<Vec2> = None;
@@ -536,6 +582,7 @@ impl EntropyApp {
                             &encoder_visibility,
                             &matrix_pressed,
                             &pressed_key_layers,
+                            sticky_visibility_mode,
                             1.0,
                             dark,
                             rect,
@@ -567,6 +614,7 @@ impl EntropyApp {
                             lang,
                             dark,
                             &mut sticky_opacity,
+                            &mut sticky_visibility_mode,
                         ) {
                             should_save_settings = true;
                         }
@@ -667,6 +715,10 @@ impl EntropyApp {
         sticky_opacity = clamp_sticky_layout_opacity(sticky_opacity);
         if (self.app_settings.sticky_layout_opacity - sticky_opacity).abs() > f32::EPSILON {
             self.app_settings.sticky_layout_opacity = sticky_opacity;
+            should_save_settings = true;
+        }
+        if self.app_settings.sticky_layout_visibility_mode != sticky_visibility_mode {
+            self.app_settings.sticky_layout_visibility_mode = sticky_visibility_mode;
             should_save_settings = true;
         }
         if self.app_settings.sticky_layout_always_on_top != sticky_always_on_top {
