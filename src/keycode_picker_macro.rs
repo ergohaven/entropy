@@ -26,6 +26,166 @@ fn append_macro_key_action(encoded: &mut Vec<u8>, basic_opcode: u8, ext_opcode: 
     encoded.extend_from_slice(&wire_keycode.to_le_bytes());
 }
 
+pub(crate) fn decode_macro_actions(bytes: &[u8]) -> Vec<MacroAction> {
+    let mut actions = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == SS_QMK_PREFIX {
+            if i + 1 >= bytes.len() {
+                actions.push(MacroAction::Raw(bytes[i..].to_vec()));
+                break;
+            }
+
+            match bytes[i + 1] {
+                SS_TAP_CODE => {
+                    if i + 2 < bytes.len() {
+                        let keycode = bytes[i + 2];
+                        if is_send_string_keycode(keycode) {
+                            actions.push(MacroAction::Tap(keycode as u16));
+                        } else {
+                            actions.push(MacroAction::Raw(bytes[i..i + 3].to_vec()));
+                        }
+                        i += 3;
+                    } else {
+                        actions.push(MacroAction::Raw(bytes[i..].to_vec()));
+                        break;
+                    }
+                }
+                SS_DOWN_CODE => {
+                    if i + 2 < bytes.len() {
+                        let keycode = bytes[i + 2];
+                        if is_send_string_keycode(keycode) {
+                            actions.push(MacroAction::Down(keycode as u16));
+                        } else {
+                            actions.push(MacroAction::Raw(bytes[i..i + 3].to_vec()));
+                        }
+                        i += 3;
+                    } else {
+                        actions.push(MacroAction::Raw(bytes[i..].to_vec()));
+                        break;
+                    }
+                }
+                SS_UP_CODE => {
+                    if i + 2 < bytes.len() {
+                        let keycode = bytes[i + 2];
+                        if is_send_string_keycode(keycode) {
+                            actions.push(MacroAction::Up(keycode as u16));
+                        } else {
+                            actions.push(MacroAction::Raw(bytes[i..i + 3].to_vec()));
+                        }
+                        i += 3;
+                    } else {
+                        actions.push(MacroAction::Raw(bytes[i..].to_vec()));
+                        break;
+                    }
+                }
+                SS_DELAY_CODE => {
+                    if i + 3 < bytes.len() && bytes[i + 2] != 0 && bytes[i + 3] != 0 {
+                        let ms = (bytes[i + 2] as u16 - 1) + (bytes[i + 3] as u16 - 1) * 255;
+                        actions.push(MacroAction::Delay(ms));
+                        i += 4;
+                    } else {
+                        actions.push(MacroAction::Raw(bytes[i..].to_vec()));
+                        break;
+                    }
+                }
+                VIAL_MACRO_EXT_TAP..=VIAL_MACRO_EXT_UP => {
+                    if i + 3 < bytes.len() {
+                        let mut keycode = u16::from_le_bytes([bytes[i + 2], bytes[i + 3]]);
+                        // Matches Vial GUI's workaround for QMK decode_keycode():
+                        // values whose low byte is zero are serialized as FFxx.
+                        if keycode > 0xFF00 {
+                            keycode = (keycode & 0xFF) << 8;
+                        }
+                        match bytes[i + 1] {
+                            VIAL_MACRO_EXT_TAP => actions.push(MacroAction::Tap(keycode)),
+                            VIAL_MACRO_EXT_DOWN => actions.push(MacroAction::Down(keycode)),
+                            VIAL_MACRO_EXT_UP => actions.push(MacroAction::Up(keycode)),
+                            _ => {}
+                        }
+                        i += 4;
+                    } else {
+                        actions.push(MacroAction::Raw(bytes[i..].to_vec()));
+                        break;
+                    }
+                }
+                _ => {
+                    let end = (i + 2).min(bytes.len());
+                    actions.push(MacroAction::Raw(bytes[i..end].to_vec()));
+                    i = end;
+                }
+            }
+        } else {
+            let start = i;
+            while i < bytes.len() && bytes[i] != SS_QMK_PREFIX {
+                i += 1;
+            }
+            push_macro_text_or_raw(&mut actions, &bytes[start..i]);
+        }
+    }
+    actions
+}
+
+fn is_send_string_keycode(keycode: u8) -> bool {
+    matches!(keycode, 0x04..=0xC0 | 0xCD..=0xE7)
+}
+
+pub(crate) fn encode_macro_actions(actions: &[MacroAction]) -> Vec<u8> {
+    let mut encoded = Vec::new();
+    for action in actions {
+        match action {
+            MacroAction::Text(s) => encoded.extend_from_slice(s.as_bytes()),
+            MacroAction::Tap(kc) => {
+                append_macro_key_action(&mut encoded, SS_TAP_CODE, VIAL_MACRO_EXT_TAP, *kc);
+            }
+            MacroAction::Down(kc) => {
+                append_macro_key_action(&mut encoded, SS_DOWN_CODE, VIAL_MACRO_EXT_DOWN, *kc);
+            }
+            MacroAction::Up(kc) => {
+                append_macro_key_action(&mut encoded, SS_UP_CODE, VIAL_MACRO_EXT_UP, *kc);
+            }
+            MacroAction::Delay(ms) => {
+                let hi = (*ms / 255 + 1) as u8;
+                let lo = (*ms % 255 + 1) as u8;
+                encoded.push(SS_QMK_PREFIX);
+                encoded.push(SS_DELAY_CODE);
+                encoded.push(lo);
+                encoded.push(hi);
+            }
+            MacroAction::Raw(bytes) => encoded.extend_from_slice(bytes),
+        }
+    }
+    encoded
+}
+
+fn push_macro_text_or_raw(actions: &mut Vec<MacroAction>, bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        actions.push(MacroAction::Text(s.to_string()));
+    } else {
+        actions.push(MacroAction::Raw(bytes.to_vec()));
+    }
+}
+
+fn format_raw_macro_bytes(bytes: &[u8]) -> String {
+    let mut label = bytes
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if bytes.len() > 8 {
+        label.push_str(" ...");
+    }
+    if label.is_empty() {
+        "empty".to_string()
+    } else {
+        label
+    }
+}
+
 impl KeycodePicker {
     fn show_macro_editor_contents(
         &mut self,
@@ -204,6 +364,11 @@ impl KeycodePicker {
                                 "macro_editor.wait_before_next_action",
                             ),
                         ),
+                        MacroAction::Raw(_) => (
+                            "Raw",
+                            Color32::from_rgb(190, 110, 90),
+                            "Raw macro bytes preserved for compatibility",
+                        ),
                     };
                     ui.allocate_ui(picker_scaled_size(ui.ctx(), 55.0, 30.0), |ui| {
                         ui.add(
@@ -337,6 +502,22 @@ impl KeycodePicker {
                                     }
                                 }
                             }
+                        }
+                        MacroAction::Raw(bytes) => {
+                            let label = format_raw_macro_bytes(bytes);
+                            ui.allocate_ui(picker_scaled_size(ui.ctx(), 170.0, 30.0), |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(label)
+                                            .size(macro_font_size)
+                                            .color(Color32::from_gray(160)),
+                                    )
+                                    .sense(egui::Sense::hover()),
+                                )
+                                .on_hover_text(
+                                    "Entropy cannot edit these macro bytes yet, but will save them unchanged",
+                                );
+                            });
                         }
                     }
 
@@ -603,30 +784,7 @@ impl KeycodePicker {
         while self.macro_actions.len() <= n {
             self.macro_actions.push(vec![]);
         }
-        let mut encoded = Vec::new();
-        for action in &self.macro_actions[n] {
-            match action {
-                MacroAction::Text(s) => encoded.extend_from_slice(s.as_bytes()),
-                MacroAction::Tap(kc) => {
-                    append_macro_key_action(&mut encoded, SS_TAP_CODE, VIAL_MACRO_EXT_TAP, *kc);
-                }
-                MacroAction::Down(kc) => {
-                    append_macro_key_action(&mut encoded, SS_DOWN_CODE, VIAL_MACRO_EXT_DOWN, *kc);
-                }
-                MacroAction::Up(kc) => {
-                    append_macro_key_action(&mut encoded, SS_UP_CODE, VIAL_MACRO_EXT_UP, *kc);
-                }
-                MacroAction::Delay(ms) => {
-                    let hi = (*ms / 255 + 1) as u8;
-                    let lo = (*ms % 255 + 1) as u8;
-                    encoded.push(SS_QMK_PREFIX);
-                    encoded.push(SS_DELAY_CODE);
-                    encoded.push(lo);
-                    encoded.push(hi);
-                }
-            }
-        }
-        self.macro_texts[n] = encoded;
+        self.macro_texts[n] = encode_macro_actions(&self.macro_actions[n]);
     }
 
     pub(super) fn show_vial_macros(&mut self, ui: &mut egui::Ui) {
@@ -677,5 +835,66 @@ mod tests {
         append_macro_key_action(&mut encoded, SS_TAP_CODE, VIAL_MACRO_EXT_TAP, 0xA000);
 
         assert_eq!(encoded, [0x01, 0x05, 0xA0, 0xFF]);
+    }
+
+    #[test]
+    fn preserves_raw_macro_bytes_that_cannot_be_decoded() {
+        let raw_macro = [
+            0xEF,
+            SS_QMK_PREFIX,
+            0x99,
+            0xAA,
+            SS_QMK_PREFIX,
+            SS_DELAY_CODE,
+            0x10,
+        ];
+
+        let actions = decode_macro_actions(&raw_macro);
+
+        assert!(matches!(actions[0], MacroAction::Raw(_)));
+        assert_eq!(encode_macro_actions(&actions), raw_macro);
+    }
+
+    #[test]
+    fn preserves_unsupported_send_string_keycodes_as_raw() {
+        let raw_macro = [
+            SS_QMK_PREFIX,
+            SS_DOWN_CODE,
+            0xEF,
+            SS_QMK_PREFIX,
+            SS_UP_CODE,
+            0xEF,
+        ];
+
+        let actions = decode_macro_actions(&raw_macro);
+
+        assert_eq!(
+            actions,
+            vec![
+                MacroAction::Raw(vec![SS_QMK_PREFIX, SS_DOWN_CODE, 0xEF]),
+                MacroAction::Raw(vec![SS_QMK_PREFIX, SS_UP_CODE, 0xEF]),
+            ]
+        );
+        assert_eq!(encode_macro_actions(&actions), raw_macro);
+    }
+
+    #[test]
+    fn decodes_supported_send_string_modifiers() {
+        let raw_macro = [
+            SS_QMK_PREFIX,
+            SS_DOWN_CODE,
+            0xE0,
+            SS_QMK_PREFIX,
+            SS_UP_CODE,
+            0xE0,
+        ];
+
+        let actions = decode_macro_actions(&raw_macro);
+
+        assert_eq!(
+            actions,
+            vec![MacroAction::Down(0xE0), MacroAction::Up(0xE0)]
+        );
+        assert_eq!(encode_macro_actions(&actions), raw_macro);
     }
 }

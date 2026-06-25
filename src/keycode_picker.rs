@@ -24,6 +24,7 @@ mod keycode_picker_basic;
 mod keycode_picker_lighting_quantum;
 #[path = "keycode_picker_macro.rs"]
 mod keycode_picker_macro;
+pub(crate) use keycode_picker_macro::decode_macro_actions;
 #[path = "keycode_picker_special.rs"]
 mod keycode_picker_special;
 #[path = "keycode_picker_tabs.rs"]
@@ -91,13 +92,14 @@ pub struct TapDanceEntry {
     pub tapping_term: u16,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MacroAction {
     Text(String),
     Tap(u16),   // QMK/Vial keycode
     Down(u16),  // key press
     Up(u16),    // key release
     Delay(u16), // milliseconds
+    Raw(Vec<u8>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
