@@ -238,6 +238,36 @@ impl EntropyApp {
     }
 }
 
+fn should_write_combo_entries(
+    combo_dirty: bool,
+    keycode_picker_open: bool,
+    _active_hid_is_bluetooth: bool,
+) -> bool {
+    combo_dirty && !keycode_picker_open
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dirty_combo_entries_write_over_bluetooth() {
+        assert!(should_write_combo_entries(true, false, true));
+    }
+
+    #[test]
+    fn combo_entries_wait_while_key_picker_is_open() {
+        assert!(!should_write_combo_entries(true, true, true));
+        assert!(!should_write_combo_entries(true, true, false));
+    }
+
+    #[test]
+    fn clean_combo_entries_do_not_write() {
+        assert!(!should_write_combo_entries(false, false, true));
+        assert!(!should_write_combo_entries(false, false, false));
+    }
+}
+
 impl eframe::App for EntropyApp {
     fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
         app_panel_fill(visuals.dark_mode).to_normalized_gamma_f32()
@@ -835,7 +865,11 @@ impl eframe::App for EntropyApp {
         }
 
         // Write combos to device if changed
-        if self.combo_dirty && !self.keycode_picker.open && !active_hid_is_bluetooth {
+        if should_write_combo_entries(
+            self.combo_dirty,
+            self.keycode_picker.open,
+            active_hid_is_bluetooth,
+        ) {
             let mut combo_save_ok = true;
             if let Some(hid) = &self.hid_device {
                 for (i, combo) in self.combo_entries.iter().enumerate() {
