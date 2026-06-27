@@ -139,6 +139,10 @@ def _symbol_entries():
     for idx, symbol in enumerate(["б", "ю", "ж", "э", "х", "ъ", "ё"]):
         add(idx, symbol, MOD_CTRL | MOD_ALT)
 
+    # Ctrl+Alt+F20..F24
+    for idx, symbol in enumerate(["🙂", "😀", "😂", "😉", "😅"], start=7):
+        add(idx, symbol, MOD_CTRL | MOD_ALT)
+
     # Ctrl+Alt+Shift+F13..F19
     for idx, symbol in enumerate(["Б", "Ю", "Ж", "Э", "Х", "Ъ", "Ё"]):
         add(idx, symbol, MOD_CTRL | MOD_ALT | MOD_SHIFT)

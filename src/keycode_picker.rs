@@ -179,7 +179,8 @@ const UNIVERSAL_MAIN_SYMBOL_ORDER: &[char] = &[
 
 const UNIVERSAL_EXTRA_SYMBOL_ORDER: &[char] = &[
     '₽', '€', '«', '»', '‘', '’', '„', '“', '”', '—', '–', '←', '↑', '→', '↓', '↔', '•', '×', '±',
-    '≠', '≈', '✓', '§', '°', '‰', '′', '″', '™', '№',
+    '≠', '≈', '✓', '§', '°', '‰', '′', '″', '™', '№', '🙂', '😀', '😂', '😉',
+    '😅',
 ];
 
 #[cfg(test)]
@@ -189,6 +190,13 @@ mod tests {
     #[test]
     fn universal_extra_symbols_include_common_arrows() {
         for symbol in ['←', '↑', '→', '↓', '↔'] {
+            assert!(UNIVERSAL_EXTRA_SYMBOL_ORDER.contains(&symbol));
+        }
+    }
+
+    #[test]
+    fn universal_extra_symbols_include_common_smileys() {
+        for symbol in ['🙂', '😀', '😂', '😉', '😅'] {
             assert!(UNIVERSAL_EXTRA_SYMBOL_ORDER.contains(&symbol));
         }
     }

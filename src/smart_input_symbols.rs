@@ -291,6 +291,32 @@ pub const SMART_SYMBOLS: &[SmartSymbol] = &[
         symbol: 'ё',
         name: "Cyrillic yo",
     },
+    // Ctrl+Alt+F20..F24
+    SmartSymbol {
+        trigger_keycode: MOD_CTRL | MOD_ALT | (KC_F13 + 7),
+        symbol: '🙂',
+        name: "Slightly smiling face",
+    },
+    SmartSymbol {
+        trigger_keycode: MOD_CTRL | MOD_ALT | (KC_F13 + 8),
+        symbol: '😀',
+        name: "Grinning face",
+    },
+    SmartSymbol {
+        trigger_keycode: MOD_CTRL | MOD_ALT | (KC_F13 + 9),
+        symbol: '😂',
+        name: "Face with tears of joy",
+    },
+    SmartSymbol {
+        trigger_keycode: MOD_CTRL | MOD_ALT | (KC_F13 + 10),
+        symbol: '😉',
+        name: "Winking face",
+    },
+    SmartSymbol {
+        trigger_keycode: MOD_CTRL | MOD_ALT | (KC_F13 + 11),
+        symbol: '😅',
+        name: "Grinning face with sweat",
+    },
     // Ctrl+Alt+Shift+F13..F19
     SmartSymbol {
         trigger_keycode: MOD_CTRL | MOD_ALT | MOD_SHIFT | KC_F13,
@@ -425,6 +451,41 @@ mod tests {
         let fcitx5_backend = include_str!("../linux/fcitx5/src/entropyuniversalsymbols.cpp");
 
         for symbol in ["←", "↑", "→", "↓", "↔"] {
+            assert!(
+                ibus_backend.contains(symbol),
+                "IBus backend is missing {symbol}"
+            );
+            assert!(
+                fcitx5_backend.contains(symbol),
+                "Fcitx5 backend is missing {symbol}"
+            );
+        }
+    }
+
+    #[test]
+    fn common_smiley_symbols_use_remaining_ctrl_alt_slots() {
+        let expected = [
+            (MOD_CTRL | MOD_ALT | (KC_F13 + 7), '🙂'),
+            (MOD_CTRL | MOD_ALT | (KC_F13 + 8), '😀'),
+            (MOD_CTRL | MOD_ALT | (KC_F13 + 9), '😂'),
+            (MOD_CTRL | MOD_ALT | (KC_F13 + 10), '😉'),
+            (MOD_CTRL | MOD_ALT | (KC_F13 + 11), '😅'),
+        ];
+
+        for (keycode, symbol) in expected {
+            assert_eq!(
+                smart_symbol_for_keycode(keycode).map(|smart_symbol| smart_symbol.symbol),
+                Some(symbol)
+            );
+        }
+    }
+
+    #[test]
+    fn linux_input_method_backends_include_common_smiley_symbols() {
+        let ibus_backend = include_str!("../linux/ibus/entropy-ibus-engine");
+        let fcitx5_backend = include_str!("../linux/fcitx5/src/entropyuniversalsymbols.cpp");
+
+        for symbol in ["🙂", "😀", "😂", "😉", "😅"] {
             assert!(
                 ibus_backend.contains(symbol),
                 "IBus backend is missing {symbol}"
