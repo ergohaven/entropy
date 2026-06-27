@@ -584,26 +584,8 @@ unsafe fn send_unicode_char(symbol: char, trigger_keycode: u16) {
 fn should_paste_universal_symbol_for_foreground_app() -> bool {
     foreground_process_name_lower()
         .as_deref()
-        .map(app_prefers_clipboard_unicode_input)
+        .map(super::app_prefers_clipboard_unicode_input)
         .unwrap_or(false)
-}
-
-#[cfg(target_os = "windows")]
-fn app_prefers_clipboard_unicode_input(exe: &str) -> bool {
-    matches!(
-        exe.strip_suffix(".exe").unwrap_or(exe),
-        "brave"
-            | "chrome"
-            | "firefox"
-            | "librewolf"
-            | "msedge"
-            | "opera"
-            | "opera_gx"
-            | "thunderbird"
-            | "vivaldi"
-            | "waterfox"
-            | "yandex"
-    )
 }
 
 #[cfg(target_os = "windows")]
