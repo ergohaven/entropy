@@ -148,6 +148,7 @@ impl EntropyApp {
             current_keyboard_id: None,
             current_encoder_visibility_id: String::new(),
             device_display_names: std::collections::HashMap::new(),
+            device_about_info: None,
             tour_state: TourState::default(),
             tour_target_rects: Vec::new(),
             unlock_open: false,

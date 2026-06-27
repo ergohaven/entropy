@@ -99,6 +99,39 @@ fn normalize_reported_layer_count(reported_layer_count: usize) -> usize {
     reported_layer_count.max(1)
 }
 
+fn json_string_value(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(text) => {
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_owned())
+        }
+        serde_json::Value::Number(number) => Some(number.to_string()),
+        _ => None,
+    }
+}
+
+fn json_path_string(json: &serde_json::Value, path: &[&str]) -> Option<String> {
+    let mut value = json;
+    for key in path {
+        value = value.get(*key)?;
+    }
+    json_string_value(value)
+}
+
+fn firmware_version_from_vial_json(json: &serde_json::Value) -> Option<String> {
+    [
+        &["firmware", "version"][..],
+        &["firmware", "firmware_version"][..],
+        &["firmware", "firmwareVersion"][..],
+        &["firmware_version"][..],
+        &["firmwareVersion"][..],
+        &["qmk_firmware_version"][..],
+        &["qmkFirmwareVersion"][..],
+    ]
+    .into_iter()
+    .find_map(|path| json_path_string(json, path))
+}
+
 impl EntropyApp {
     pub(super) fn start_connect(&mut self, device_idx: usize) {
         let dev = match self.device_manager.devices().get(device_idx) {
@@ -115,6 +148,7 @@ impl EntropyApp {
         self.selected_encoder = None;
         self.selected_layer = 0;
         self.hid_device = None;
+        self.device_about_info = None;
         self.qmk_hid_hosts.clear();
         self.combo_visible_count = 1;
         self.combo_undo_stack.clear();
@@ -347,29 +381,30 @@ impl EntropyApp {
                 };
 
                 progress("Reading macros…");
-                let macro_texts = match dev_conn.get_macro_count() {
+                let (macro_texts, macro_memory_bytes) = match dev_conn.get_macro_count() {
                     Ok(count) => {
                         log::info!("Macro count: {count}");
                         match dev_conn.get_macro_buffer_size() {
                             Ok(size) => {
                                 log::info!("Macro buffer size: {size}");
-                                match dev_conn.get_macro_buffer(size, count) {
+                                let macro_texts = match dev_conn.get_macro_buffer(size, count) {
                                     Ok(buf) => crate::hid::HidDevice::parse_macros(&buf, count),
                                     Err(e) => {
                                         log::warn!("get_macro_buffer: {e}");
                                         vec![Vec::new(); count as usize]
                                     }
-                                }
+                                };
+                                (macro_texts, Some(size))
                             }
                             Err(e) => {
                                 log::warn!("get_macro_buffer_size: {e}");
-                                vec![Vec::new(); count as usize]
+                                (vec![Vec::new(); count as usize], None)
                             }
                         }
                     }
                     Err(e) => {
                         log::warn!("get_macro_count: {e}");
-                        Vec::new()
+                        (Vec::new(), None)
                     }
                 };
 
@@ -780,11 +815,35 @@ impl EntropyApp {
                     entries
                 };
 
+                let about_info = DeviceAboutInfo {
+                    manufacturer: dev.manufacturer.clone(),
+                    product: dev.name.clone(),
+                    vendor_id: dev.vendor_id,
+                    product_id: dev.product_id,
+                    path: dev.path.clone(),
+                    firmware_version: firmware_version_from_vial_json(&json),
+                    via_protocol,
+                    vial_protocol,
+                    keyboard_id,
+                    macro_entries: macro_texts.len(),
+                    macro_memory_bytes,
+                    supports_macro_delays: !macro_texts.is_empty(),
+                    supports_macro_ext_keycodes: vial_protocol >= 5,
+                    tap_dance_entries: tap_dance_entries.len(),
+                    combo_entries: combo_entries.len(),
+                    key_override_entries: key_override_entries.len(),
+                    alt_repeat_entries: alt_repeat_entries.len(),
+                    caps_word: vial_features.caps_word,
+                    layer_lock: vial_features.layer_lock,
+                    qmk_settings: !supported_qmk_settings.is_empty(),
+                };
+
                 progress("Applying keyboard layout…");
                 Ok(ConnectResult {
                     device_name: dev.name.clone(),
                     keyboard_id,
                     hid_device: Some(dev_conn),
+                    about_info,
                     macro_texts,
                     supports_macro_ext_keycodes: vial_protocol >= 5,
                     tap_dance_entries,

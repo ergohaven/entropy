@@ -18,6 +18,7 @@ impl EntropyApp {
         self.current_device_name.clear();
         self.current_keyboard_id = None;
         self.current_encoder_visibility_id.clear();
+        self.device_about_info = None;
         self.mouse_keys_settings = MouseKeysSettingsState::default();
         self.touchpad_settings = TouchpadSettingsState::default();
         self.bluetooth_settings = BluetoothSettingsState::default();

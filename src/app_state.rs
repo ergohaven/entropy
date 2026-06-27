@@ -86,7 +86,6 @@ pub(crate) enum CloseToTrayBehavior {
     Tray,
 }
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum StickyLayoutVisibilityMode {
@@ -232,6 +231,30 @@ pub(crate) struct VialFeatureSupport {
     pub(crate) repeat_key: bool,
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DeviceAboutInfo {
+    pub(crate) manufacturer: String,
+    pub(crate) product: String,
+    pub(crate) vendor_id: u16,
+    pub(crate) product_id: u16,
+    pub(crate) path: String,
+    pub(crate) firmware_version: Option<String>,
+    pub(crate) via_protocol: u16,
+    pub(crate) vial_protocol: u32,
+    pub(crate) keyboard_id: u64,
+    pub(crate) macro_entries: usize,
+    pub(crate) macro_memory_bytes: Option<u16>,
+    pub(crate) supports_macro_delays: bool,
+    pub(crate) supports_macro_ext_keycodes: bool,
+    pub(crate) tap_dance_entries: usize,
+    pub(crate) combo_entries: usize,
+    pub(crate) key_override_entries: usize,
+    pub(crate) alt_repeat_entries: usize,
+    pub(crate) caps_word: bool,
+    pub(crate) layer_lock: bool,
+    pub(crate) qmk_settings: bool,
+}
+
 /// Result sent back from the background connect thread.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct ConnectResult {
@@ -242,6 +265,8 @@ pub(crate) struct ConnectResult {
     pub(crate) hid_device: Option<crate::hid::HidDevice>,
     pub(crate) layout: KeyboardLayout,
     pub(crate) layer_count: usize,
+    /// Device/protocol summary shown by the About Device page.
+    pub(crate) about_info: DeviceAboutInfo,
     /// Macro bytecode entries read from device
     pub(crate) macro_texts: Vec<Vec<u8>>,
     /// Vial protocol >= 5 supports 2-byte keycodes in macros.
@@ -1368,6 +1393,7 @@ pub(crate) enum SettingsTab {
     Touchpad,
     Bluetooth,
     LiveFeatures,
+    AboutDevice,
     Combo,
     KeyOverrides,
     AltRepeat,
@@ -1385,7 +1411,6 @@ pub(crate) enum LayoutImageExportTheme {
     Dark,
 }
 
-
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
@@ -1394,7 +1419,6 @@ pub(crate) enum LayoutImageExportFormat {
     Png,
     Svg,
 }
-
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct LayoutImageExportState {
@@ -1584,6 +1608,7 @@ pub struct EntropyApp {
     pub(crate) current_encoder_visibility_id: String,
     /// Friendly names learned from firmware/device info, keyed by device path.
     pub(crate) device_display_names: std::collections::HashMap<String, String>,
+    pub(crate) device_about_info: Option<DeviceAboutInfo>,
     pub(crate) tour_state: TourState,
     pub(crate) tour_target_rects: Vec<(TourTarget, egui::Rect)>,
     /// Vial unlock dialog open

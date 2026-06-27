@@ -92,6 +92,10 @@ impl EntropyApp {
                 self.draw_live_features_settings_page(ui, content_rect);
                 false
             }
+            SettingsTab::AboutDevice => {
+                self.draw_about_device_page(ui, content_rect);
+                false
+            }
             SettingsTab::Combo => self.draw_combo_settings_page(ui, ctx, content_rect),
             SettingsTab::KeyOverrides => {
                 self.draw_key_override_settings_page(ui, content_rect);
@@ -170,6 +174,11 @@ impl EntropyApp {
 
     pub(super) fn open_universal_symbols_setup_page(&mut self) {
         self.settings_tab = SettingsTab::UniversalSymbolsSetup;
+        self.main_menu_tab = MainMenuTab::Settings;
+    }
+
+    pub(super) fn open_about_device_page(&mut self) {
+        self.settings_tab = SettingsTab::AboutDevice;
         self.main_menu_tab = MainMenuTab::Settings;
     }
 

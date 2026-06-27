@@ -38,6 +38,8 @@ use settings_viewport::*;
 #[path = "ui/onboarding_tour_state.rs"]
 mod onboarding_tour_state;
 use onboarding_tour_state::*;
+#[path = "ui/about_device.rs"]
+mod about_device_ui;
 #[path = "ui/alt_repeat_settings.rs"]
 mod alt_repeat_settings_ui;
 #[path = "ui/app_lifecycle.rs"]
