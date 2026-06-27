@@ -95,6 +95,10 @@ fn save_cached_qmk_settings(cache_key: &str, settings: &[u16]) {
     }
 }
 
+fn normalize_reported_layer_count(reported_layer_count: usize) -> usize {
+    reported_layer_count.max(1)
+}
+
 impl EntropyApp {
     pub(super) fn start_connect(&mut self, device_idx: usize) {
         let dev = match self.device_manager.devices().get(device_idx) {
@@ -246,10 +250,16 @@ impl EntropyApp {
 
                 progress("Reading layer count…");
                 log::info!("Getting layer count…");
-                let layer_count = dev_conn
+                let reported_layer_count = dev_conn
                     .get_layer_count()
                     .map(|c| c as usize)
                     .map_err(|e| format!("Layer count read failed: {e}"))?;
+                let layer_count = normalize_reported_layer_count(reported_layer_count);
+                if layer_count != reported_layer_count {
+                    log::warn!(
+                        "Device reported invalid layer count {reported_layer_count}; using {layer_count}"
+                    );
+                }
                 log::info!("Layer count: {layer_count}");
 
                 let num_keys = layout.keys.len();
@@ -803,5 +813,16 @@ impl EntropyApp {
 
             let _ = tx.send(ConnectTaskMessage::Done(result));
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reported_layer_count_is_never_zero() {
+        assert_eq!(normalize_reported_layer_count(0), 1);
+        assert_eq!(normalize_reported_layer_count(4), 4);
     }
 }
