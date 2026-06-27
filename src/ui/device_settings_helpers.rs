@@ -65,6 +65,92 @@ impl EntropyApp {
         }
     }
 
+    fn module_setting_base_title<'a>(
+        group_kind: ModuleSettingsGroupKind,
+        title: &'a str,
+    ) -> &'a str {
+        if matches!(
+            group_kind,
+            ModuleSettingsGroupKind::Left | ModuleSettingsGroupKind::Right
+        ) {
+            title
+                .strip_prefix("Left ")
+                .or_else(|| title.strip_prefix("Right "))
+                .unwrap_or(title)
+        } else {
+            title
+        }
+    }
+
+    fn module_setting_variant_is_encoder(variant: &str) -> bool {
+        variant.trim().eq_ignore_ascii_case("encoder")
+    }
+
+    fn module_group_encoder_field(group: &ModuleSettingsGroup) -> Option<&ModuleSettingField> {
+        group.fields.iter().find(|field| {
+            matches!(field.kind, ModuleSettingKind::Select)
+                && Self::module_setting_base_title(group.kind, &field.title)
+                    .trim()
+                    .eq_ignore_ascii_case("module")
+                && field
+                    .variants
+                    .iter()
+                    .any(|variant| Self::module_setting_variant_is_encoder(variant))
+        })
+    }
+
+    fn module_settings_encoder_visible_for_position(
+        module_settings: &ModuleSettingsState,
+        encoder_position: usize,
+    ) -> bool {
+        if !module_settings.supported {
+            return true;
+        }
+        let module_groups = module_settings
+            .groups
+            .iter()
+            .filter(|group| {
+                matches!(
+                    group.kind,
+                    ModuleSettingsGroupKind::Left | ModuleSettingsGroupKind::Right
+                ) && Self::module_group_encoder_field(group).is_some()
+            })
+            .collect::<Vec<_>>();
+        let Some(group) = module_groups.get(encoder_position) else {
+            return true;
+        };
+        let Some(field) = Self::module_group_encoder_field(group) else {
+            return true;
+        };
+        let selected_idx = module_settings.value(field.qsid) as usize;
+        field
+            .variants
+            .get(selected_idx)
+            .map(|variant| Self::module_setting_variant_is_encoder(variant))
+            .unwrap_or(true)
+    }
+
+    pub(super) fn module_settings_encoder_visible(
+        module_settings: &ModuleSettingsState,
+        layout: &KeyboardLayout,
+        encoder_idx: u8,
+    ) -> bool {
+        let encoder_indices = layout
+            .encoders
+            .iter()
+            .map(|encoder| encoder.encoder_idx)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let Some(encoder_position) = encoder_indices
+            .iter()
+            .position(|candidate| *candidate == encoder_idx)
+        else {
+            return true;
+        };
+        Self::module_settings_encoder_visible_for_position(module_settings, encoder_position)
+    }
+
     pub(super) fn display_preset_choice_label(
         language: crate::i18n::Language,
         label: &str,
@@ -1148,5 +1234,112 @@ mod tests {
         assert_eq!(groups[0].fields[0].title, "Ball DPI");
         assert_eq!(groups[0].fields[0].qsid, 120);
         assert_eq!(groups[0].fields[0].kind, ModuleSettingKind::Integer);
+    }
+
+    fn test_module_field(title: &str, qsid: u16) -> ModuleSettingField {
+        ModuleSettingField {
+            title: title.to_string(),
+            qsid,
+            kind: ModuleSettingKind::Select,
+            bit: 0,
+            width: 1,
+            min: 0,
+            max: 2,
+            variants: vec![
+                "Trackball".to_string(),
+                "Touchpad".to_string(),
+                "Encoder".to_string(),
+            ],
+        }
+    }
+
+    fn test_layout_with_encoders(indices: &[u8]) -> KeyboardLayout {
+        KeyboardLayout {
+            name: "Test".to_string(),
+            rows: 1,
+            cols: 1,
+            keys: Vec::new(),
+            encoders: indices
+                .iter()
+                .map(|encoder_idx| PhysicalEncoder {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 1.0,
+                    h: 1.0,
+                    label: String::new(),
+                    encoder_idx: *encoder_idx,
+                    direction: 0,
+                    rotation: 0.0,
+                    rotation_x: 0.0,
+                    rotation_y: 0.0,
+                    layout_condition: None,
+                })
+                .collect(),
+            layers: Vec::new(),
+            encoder_layers: Vec::new(),
+            layer_names: Vec::new(),
+            custom_keycodes: Vec::new(),
+            layout_options: Vec::new(),
+            supports_rgb: false,
+            lighting_mode: None,
+            firmware: FirmwareProtocol::Vial,
+        }
+    }
+
+    #[test]
+    fn module_settings_hide_encoder_when_side_module_is_not_encoder() {
+        let layout = test_layout_with_encoders(&[0, 1]);
+        let settings = ModuleSettingsState {
+            groups: vec![
+                ModuleSettingsGroup {
+                    title: "Left Module".to_string(),
+                    kind: ModuleSettingsGroupKind::Left,
+                    fields: vec![test_module_field("Left Module", 300)],
+                },
+                ModuleSettingsGroup {
+                    title: "Right Module".to_string(),
+                    kind: ModuleSettingsGroupKind::Right,
+                    fields: vec![test_module_field("Right Module", 301)],
+                },
+            ],
+            values: std::collections::BTreeMap::from([(300, 0), (301, 2)]),
+            supported: true,
+            ..Default::default()
+        };
+
+        assert!(!EntropyApp::module_settings_encoder_visible(
+            &settings, &layout, 0
+        ));
+        assert!(EntropyApp::module_settings_encoder_visible(
+            &settings, &layout, 1
+        ));
+    }
+
+    #[test]
+    fn module_settings_do_not_filter_keyboards_without_encoder_module_choice() {
+        let layout = test_layout_with_encoders(&[0]);
+        let settings = ModuleSettingsState {
+            groups: vec![ModuleSettingsGroup {
+                title: "Left Module".to_string(),
+                kind: ModuleSettingsGroupKind::Left,
+                fields: vec![ModuleSettingField {
+                    title: "Left Module".to_string(),
+                    qsid: 300,
+                    kind: ModuleSettingKind::Select,
+                    bit: 0,
+                    width: 1,
+                    min: 0,
+                    max: 1,
+                    variants: vec!["Trackball".to_string(), "Touchpad".to_string()],
+                }],
+            }],
+            values: std::collections::BTreeMap::from([(300, 0)]),
+            supported: true,
+            ..Default::default()
+        };
+
+        assert!(EntropyApp::module_settings_encoder_visible(
+            &settings, &layout, 0
+        ));
     }
 }

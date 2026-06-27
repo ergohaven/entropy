@@ -733,9 +733,13 @@ impl EntropyApp {
         layout: &KeyboardLayout,
         selected_layers: &[usize],
     ) -> anyhow::Result<ExportGeometry> {
-        let bounds =
-            export_layout_bounds(layout, self.layout_options_value, &self.encoder_visibility)
-                .ok_or_else(|| anyhow::anyhow!("layout has no visible keys"))?;
+        let bounds = export_layout_bounds(
+            layout,
+            self.layout_options_value,
+            &self.encoder_visibility,
+            &self.module_settings,
+        )
+        .ok_or_else(|| anyhow::anyhow!("layout has no visible keys"))?;
         let span_x = (bounds.right() - bounds.left()).max(1.0);
         let span_y = (bounds.bottom() - bounds.top()).max(1.0);
         let header_h = if self.app_settings.layout_image_export.show_layer_names {
@@ -845,6 +849,7 @@ impl EntropyApp {
             layout_y,
             self.layout_options_value,
             &self.encoder_visibility,
+            &self.module_settings,
         );
 
         for (key_idx, key) in layout.keys.iter().enumerate() {
@@ -993,6 +998,7 @@ impl EntropyApp {
             layout_y,
             self.layout_options_value,
             &self.encoder_visibility,
+            &self.module_settings,
         );
 
         for (key_idx, key) in layout.keys.iter().enumerate() {
@@ -1152,6 +1158,7 @@ fn export_layout_bounds(
     layout: &KeyboardLayout,
     layout_options_value: Option<u32>,
     encoder_visibility: &[bool],
+    module_settings: &ModuleSettingsState,
 ) -> Option<egui::Rect> {
     let mut rect: Option<egui::Rect> = None;
     for key in &layout.keys {
@@ -1175,6 +1182,10 @@ fn export_layout_bounds(
             layout,
             encoder.layout_condition,
             layout_options_value,
+        ) || !EntropyApp::module_settings_encoder_visible(
+            module_settings,
+            layout,
+            encoder.encoder_idx,
         ) || !encoder_visibility
             .get(encoder.encoder_idx as usize)
             .copied()
@@ -1244,6 +1255,7 @@ fn export_encoder_groups(
     layout_y: f32,
     layout_options_value: Option<u32>,
     encoder_visibility: &[bool],
+    module_settings: &ModuleSettingsState,
 ) -> Vec<ExportEncoderGroup> {
     let mut groups: Vec<(u8, ExportEncoderGroup)> = Vec::new();
     for (encoder_idx, encoder) in layout.encoders.iter().enumerate() {
@@ -1251,6 +1263,10 @@ fn export_encoder_groups(
             layout,
             encoder.layout_condition,
             layout_options_value,
+        ) || !EntropyApp::module_settings_encoder_visible(
+            module_settings,
+            layout,
+            encoder.encoder_idx,
         ) || !encoder_visibility
             .get(encoder.encoder_idx as usize)
             .copied()

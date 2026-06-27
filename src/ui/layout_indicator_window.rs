@@ -353,6 +353,7 @@ impl EntropyApp {
         let show_shifted_number_symbols = self.app_settings.show_shifted_number_symbols;
         let layout_options_value = self.layout_options_value;
         let encoder_visibility = self.encoder_visibility.clone();
+        let module_settings = self.module_settings.clone();
         let matrix_pressed = self.matrix_tester_pressed.clone();
         let pressed_key_layers = self.sticky_layout_pressed_key_layers.clone();
         let dark = self.app_settings.sticky_layout_dark_mode;
@@ -580,6 +581,7 @@ impl EntropyApp {
                             show_shifted_number_symbols,
                             layout_options_value,
                             &encoder_visibility,
+                            &module_settings,
                             &matrix_pressed,
                             &pressed_key_layers,
                             sticky_visibility_mode,

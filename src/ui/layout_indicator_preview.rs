@@ -275,6 +275,7 @@ impl EntropyApp {
         show_shifted_number_symbols: bool,
         layout_options_value: Option<u32>,
         encoder_visibility: &[bool],
+        module_settings: &ModuleSettingsState,
         matrix_pressed: &[bool],
         pressed_key_layers: &[Option<usize>],
         visibility_mode: StickyLayoutVisibilityMode,
@@ -299,7 +300,10 @@ impl EntropyApp {
             .keys
             .iter()
             .enumerate()
-            .filter(|&(_ki, key)| Self::layout_condition_visible(layout, key.layout_condition, layout_options_value)).map(|(ki, key)| (ki, layout_physical_key_rect(key, geometry)))
+            .filter(|&(_ki, key)| {
+                Self::layout_condition_visible(layout, key.layout_condition, layout_options_value)
+            })
+            .map(|(ki, key)| (ki, layout_physical_key_rect(key, geometry)))
             .collect();
 
         let mut encoder_groups: Vec<EncoderGroup> = Vec::new();
@@ -308,6 +312,10 @@ impl EntropyApp {
                 layout,
                 encoder.layout_condition,
                 layout_options_value,
+            ) || !Self::module_settings_encoder_visible(
+                module_settings,
+                layout,
+                encoder.encoder_idx,
             ) {
                 continue;
             }

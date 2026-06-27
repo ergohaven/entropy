@@ -48,6 +48,10 @@ impl EntropyApp {
                     layout,
                     encoder.layout_condition,
                     self.layout_options_value,
+                ) || !Self::module_settings_encoder_visible(
+                    &self.module_settings,
+                    layout,
+                    encoder.encoder_idx,
                 ) {
                     return None;
                 }
@@ -80,7 +84,11 @@ impl EntropyApp {
         let mut encoder_groups: Vec<EncoderGroup> = Vec::new();
         for (ei, rect) in &encoder_rects {
             let encoder = &layout.encoders[*ei];
-            if !self
+            if !Self::module_settings_encoder_visible(
+                &self.module_settings,
+                layout,
+                encoder.encoder_idx,
+            ) || !self
                 .encoder_visibility
                 .get(encoder.encoder_idx as usize)
                 .copied()

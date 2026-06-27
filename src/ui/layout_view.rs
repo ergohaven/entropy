@@ -12,11 +12,23 @@ impl EntropyApp {
             ui.min_rect().min,
             egui::pos2(ui.min_rect().left() + avail.x, ui.max_rect().bottom()),
         );
-        let geometry = layout_geometry(
+        let geometry = layout_geometry_with_reserved_and_filter(
             ui.ctx(),
             layout,
             viewport,
             clamp_ui_scale(self.app_settings.ui_scale),
+            LAYOUT_TOP_RESERVED_H,
+            LAYOUT_BOTTOM_RESERVED_H,
+            LAYOUT_FIT_MARGIN,
+            None,
+            |_| true,
+            |encoder| {
+                Self::module_settings_encoder_visible(
+                    &self.module_settings,
+                    layout,
+                    encoder.encoder_idx,
+                )
+            },
         );
         let offset_x = geometry.offset_x;
         let offset_y = geometry.offset_y;
