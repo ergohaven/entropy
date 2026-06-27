@@ -321,7 +321,7 @@ impl EntropyApp {
                     egui::pos2(rect.center().x, rect.top() + 72.0),
                     Vec2::new(400.0, 28.0),
                 );
-                ui.allocate_ui_at_rect(body_rect, |ui| {
+                crate::ui_style::allocate_ui_at_rect(ui, body_rect, |ui| {
                     ui.add_sized(
                         body_rect.size(),
                         egui::Label::new(
@@ -412,17 +412,17 @@ impl EntropyApp {
                 left += tray_size.x + gap;
                 let cancel_rect = egui::Rect::from_min_size(egui::pos2(left, top), cancel_size);
 
-                ui.allocate_ui_at_rect(close_button_rect, |ui| {
+                crate::ui_style::allocate_ui_at_rect(ui, close_button_rect, |ui| {
                     if crate::ui_style::modern_button(ui, close_label, close_size, true).clicked() {
                         close_app = true;
                     }
                 });
-                ui.allocate_ui_at_rect(tray_rect, |ui| {
+                crate::ui_style::allocate_ui_at_rect(ui, tray_rect, |ui| {
                     if crate::ui_style::modern_button(ui, tray_label, tray_size, true).clicked() {
                         minimize_to_tray = true;
                     }
                 });
-                ui.allocate_ui_at_rect(cancel_rect, |ui| {
+                crate::ui_style::allocate_ui_at_rect(ui, cancel_rect, |ui| {
                     if crate::ui_style::modern_button(ui, cancel_label, cancel_size, true).clicked()
                     {
                         cancel = true;

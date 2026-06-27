@@ -223,7 +223,7 @@ impl EntropyApp {
             }
         };
 
-        ui.allocate_ui_at_rect(content_rect, |ui| {
+        crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(18.0);
                 ui.label(

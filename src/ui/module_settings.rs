@@ -448,7 +448,7 @@ impl EntropyApp {
         let lang = self.app_settings.language;
         let dark = ui.visuals().dark_mode;
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
-        ui.allocate_ui_at_rect(content_rect, |ui| {
+        crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(18.0);
                 ui.label(
@@ -487,7 +487,7 @@ impl EntropyApp {
                     rows.len(),
                     0.0,
                 );
-                ui.allocate_ui_at_rect(list.content_rect, |ui| {
+                crate::ui_style::allocate_ui_at_rect(ui, list.content_rect, |ui| {
                     ui.set_clip_rect(list.viewport);
                     ui.set_min_size(list.content_rect.size());
                     ui.spacing_mut().item_spacing.y = 0.0;

@@ -403,7 +403,7 @@ impl EntropyApp {
         let layer_count = self.layer_count.max(layout.layers.len()).max(1);
         self.ensure_layout_image_export_layers(layer_count);
 
-        ui.allocate_ui_at_rect(content_rect, |ui| {
+        crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(metrics.value(18.0));
                 ui.label(
@@ -428,7 +428,7 @@ impl EntropyApp {
                     metrics.value(44.0),
                 );
 
-                ui.allocate_ui_at_rect(list.content_rect, |ui| {
+                crate::ui_style::allocate_ui_at_rect(ui, list.content_rect, |ui| {
                     ui.set_clip_rect(list.viewport);
                     ui.set_min_size(list.content_rect.size());
                     ui.spacing_mut().item_spacing.y = 0.0;
@@ -470,7 +470,7 @@ impl EntropyApp {
                     ),
                     button_size,
                 );
-                ui.allocate_ui_at_rect(button_rect, |ui| {
+                crate::ui_style::allocate_ui_at_rect(ui, button_rect, |ui| {
                     ui.set_min_size(button_rect.size());
                     #[cfg(not(target_arch = "wasm32"))]
                     if crate::ui_style::modern_button(

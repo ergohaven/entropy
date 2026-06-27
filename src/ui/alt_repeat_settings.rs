@@ -43,7 +43,7 @@ impl EntropyApp {
             app_muted_text(dark),
         );
 
-        ui.allocate_ui_at_rect(block_rect, |ui| {
+        crate::ui_style::allocate_ui_at_rect(ui, block_rect, |ui| {
             self.draw_alt_repeat_editor_content(ui);
         });
     }
@@ -209,7 +209,7 @@ impl EntropyApp {
                     TOTAL_ROWS,
                     metrics.value(86.0),
                 );
-                ui.allocate_ui_at_rect(list.content_rect, |ui| {
+                crate::ui_style::allocate_ui_at_rect(ui, list.content_rect, |ui| {
                     ui.set_clip_rect(list.viewport);
                     ui.set_min_size(list.content_rect.size());
                     ui.spacing_mut().item_spacing.y = 0.0;
@@ -649,7 +649,7 @@ impl EntropyApp {
                     egui::pos2(list.viewport.left(), list.viewport.bottom() + 24.0),
                     egui::vec2(content_width, action_size.y),
                 );
-                ui.allocate_ui_at_rect(actions_rect, |ui| {
+                crate::ui_style::allocate_ui_at_rect(ui, actions_rect, |ui| {
                     ui.horizontal(|ui| {
                         ui.add_space(((content_width - action_width) / 2.0).max(0.0));
                         let clear_enabled =

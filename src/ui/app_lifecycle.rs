@@ -457,7 +457,7 @@ impl eframe::App for EntropyApp {
                         rect.center(),
                         egui::vec2(rect.width().min(520.0), 210.0),
                     );
-                    ui.allocate_ui_at_rect(empty_rect, |ui| {
+                    crate::ui_style::allocate_ui_at_rect(ui, empty_rect, |ui| {
                         ui.vertical_centered(|ui| {
                             ui.add_space(4.0);
                             ui.label(RichText::new("✦").size(28.0).color(app_accent()));
@@ -513,7 +513,7 @@ impl eframe::App for EntropyApp {
                     rect.center(),
                     egui::vec2(rect.width().min(520.0), 150.0),
                 );
-                ui.allocate_ui_at_rect(empty_rect, |ui| {
+                crate::ui_style::allocate_ui_at_rect(ui, empty_rect, |ui| {
                     ui.vertical_centered(|ui| {
                         ui.add_space(4.0);
                         ui.label(RichText::new("✦").size(28.0).color(app_accent()));
@@ -690,7 +690,7 @@ impl eframe::App for EntropyApp {
                     button_size,
                 );
 
-                ui.allocate_ui_at_rect(content_rect, |ui| {
+                crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
                     egui::ScrollArea::vertical()
                         .max_height(content_rect.height())
                         .auto_shrink([false, false])
@@ -700,7 +700,7 @@ impl eframe::App for EntropyApp {
                         });
                 });
 
-                ui.allocate_ui_at_rect(button_rect, |ui| {
+                crate::ui_style::allocate_ui_at_rect(ui, button_rect, |ui| {
                     if crate::ui_style::modern_button(ui, "OK", button_size, true).clicked() {
                         close_clicked = true;
                     }

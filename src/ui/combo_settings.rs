@@ -12,7 +12,7 @@ impl EntropyApp {
         let dark = ui.visuals().dark_mode;
         let mut combo_keycap_hovered = false;
 
-        ui.allocate_ui_at_rect(content_rect, |ui| {
+        crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
                 let scale = responsive_settings_editor_scale(ui.ctx());
                 ui.add_space(18.0 * scale);
@@ -657,7 +657,7 @@ impl EntropyApp {
             egui::pos2(page_center_x - action_width / 2.0, ui.cursor().min.y),
             Vec2::new(action_width, action_size.y),
         );
-        ui.allocate_ui_at_rect(action_rect, |ui| {
+        crate::ui_style::allocate_ui_at_rect(ui, action_rect, |ui| {
             ui.set_min_size(action_rect.size());
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 8.0 * scale;

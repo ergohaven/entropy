@@ -490,7 +490,7 @@ impl EntropyApp {
                         );
                     }
 
-                    ui.allocate_ui_at_rect(title_rect.shrink2(Vec2::new(6.0, 4.0)), |ui| {
+                    crate::ui_style::allocate_ui_at_rect(ui, title_rect.shrink2(Vec2::new(6.0, 4.0)), |ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if sticky_layout_window_icon_button(
                                 ui,
@@ -608,7 +608,7 @@ impl EntropyApp {
                         egui::pos2(footer_rect.left() + 8.0, footer_rect.center().y - 12.0),
                         egui::vec2(132.0, 24.0),
                     );
-                    ui.allocate_ui_at_rect(transparency_rect, |ui| {
+                    crate::ui_style::allocate_ui_at_rect(ui, transparency_rect, |ui| {
                         if draw_sticky_layout_transparency_dropdown(
                             ui,
                             lang,
@@ -624,7 +624,7 @@ impl EntropyApp {
                         egui::pos2(footer_rect.right() - 150.0, footer_rect.center().y - 11.0),
                         egui::vec2(118.0, 22.0),
                     );
-                    ui.allocate_ui_at_rect(theme_rect, |ui| {
+                    crate::ui_style::allocate_ui_at_rect(ui, theme_rect, |ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             draw_theme_selector_labels(ui, lang, &mut sticky_dark_mode, true);
                         });
