@@ -27,42 +27,31 @@ impl EntropyApp {
 
     fn module_setting_label(&self, group_kind: ModuleSettingsGroupKind, title: &str) -> String {
         let lang = self.app_settings.language;
-        match self.module_setting_display_title(group_kind, title) {
-            "Module" | "module" => {
-                crate::i18n::tr_catalog(lang, "modules_settings.module").to_owned()
-            }
-            "Mode" | "mode" => crate::i18n::tr_catalog(lang, "modules_settings.mode").to_owned(),
-            "Ball axis" | "ball axis" => {
-                crate::i18n::tr_catalog(lang, "modules_settings.ball_axis").to_owned()
-            }
-            "Touch axis" | "touch axis" => {
-                crate::i18n::tr_catalog(lang, "modules_settings.touch_axis").to_owned()
-            }
-            "Ball DPI" | "ball DPI" => {
-                crate::i18n::tr_catalog(lang, "modules_settings.ball_dpi").to_owned()
-            }
-            "Touch DPI" | "touch DPI" => {
-                crate::i18n::tr_catalog(lang, "modules_settings.touch_dpi").to_owned()
-            }
-            "Scroll sens" | "scroll sens" => {
+        let display_title = self.module_setting_display_title(group_kind, title);
+        match display_title.to_ascii_lowercase().as_str() {
+            "module" => crate::i18n::tr_catalog(lang, "modules_settings.module").to_owned(),
+            "mode" => crate::i18n::tr_catalog(lang, "modules_settings.mode").to_owned(),
+            "ball axis" => crate::i18n::tr_catalog(lang, "modules_settings.ball_axis").to_owned(),
+            "touch axis" => crate::i18n::tr_catalog(lang, "modules_settings.touch_axis").to_owned(),
+            "ball dpi" => crate::i18n::tr_catalog(lang, "modules_settings.ball_dpi").to_owned(),
+            "touch dpi" => crate::i18n::tr_catalog(lang, "modules_settings.touch_dpi").to_owned(),
+            "scroll sens" => {
                 crate::i18n::tr_catalog(lang, "modules_settings.scroll_sens").to_owned()
             }
-            "Sniper sens" | "sniper sens" => {
+            "sniper sens" => {
                 crate::i18n::tr_catalog(lang, "modules_settings.sniper_sens").to_owned()
             }
-            "Text sens" | "text sens" => {
-                crate::i18n::tr_catalog(lang, "modules_settings.text_sens").to_owned()
-            }
-            "Touch gestures" | "touch gestures" => {
+            "text sens" => crate::i18n::tr_catalog(lang, "modules_settings.text_sens").to_owned(),
+            "touch gestures" => {
                 crate::i18n::tr_catalog(lang, "modules_settings.touch_gestures").to_owned()
             }
-            "Invert scroll" | "invert scroll" => {
+            "invert scroll" => {
                 crate::i18n::tr_catalog(lang, "modules_settings.invert_scroll").to_owned()
             }
-            "Invert text" | "invert text" => {
+            "invert text" => {
                 crate::i18n::tr_catalog(lang, "modules_settings.invert_text").to_owned()
             }
-            "Acceleration" | "acceleration" => {
+            "acceleration" => {
                 crate::i18n::tr_catalog(lang, "modules_settings.acceleration").to_owned()
             }
             title => crate::i18n::tr_text(lang, title),
@@ -75,28 +64,29 @@ impl EntropyApp {
         field: &ModuleSettingField,
     ) -> String {
         let lang = self.app_settings.language;
-        let key = match self.module_setting_display_title(group_kind, &field.title) {
-            "Module" | "module" => "modules_settings.module_tooltip",
-            "Mode" | "mode" => "modules_settings.mode_tooltip",
-            "Ball axis" | "ball axis" => "modules_settings.ball_axis_tooltip",
-            "Touch axis" | "touch axis" => "modules_settings.touch_axis_tooltip",
-            "Ball DPI" | "ball DPI" => "modules_settings.ball_dpi_tooltip",
-            "Touch DPI" | "touch DPI" => "modules_settings.touch_dpi_tooltip",
-            "Scroll sens" | "scroll sens" => "modules_settings.scroll_sens_tooltip",
-            "Sniper sens" | "sniper sens" => "modules_settings.sniper_sens_tooltip",
-            "Text sens" | "text sens" => "modules_settings.text_sens_tooltip",
-            "Touch gestures" | "touch gestures" => "modules_settings.touch_gestures_tooltip",
-            "Invert scroll" | "invert scroll" => "modules_settings.invert_scroll_tooltip",
-            "Invert text" | "invert text" => "modules_settings.invert_text_tooltip",
-            "Acceleration" | "acceleration" => "modules_settings.acceleration_tooltip",
-            "Sticky mode" => "modules_settings.sticky_mode_tooltip",
-            "LED blinks" => "modules_settings.led_blinks_tooltip",
-            "Auto layer in Normal" => "modules_settings.auto_layer_normal_tooltip",
-            "Auto layer" => "modules_settings.auto_layer_tooltip",
-            "Auto layer in Sniper" => "modules_settings.auto_layer_sniper_tooltip",
-            "Auto layer in Scroll" => "modules_settings.auto_layer_scroll_tooltip",
-            "Auto layer in Text" => "modules_settings.auto_layer_text_tooltip",
-            "Auto layer timeout" => "modules_settings.auto_layer_timeout_tooltip",
+        let display_title = self.module_setting_display_title(group_kind, &field.title);
+        let key = match display_title.to_ascii_lowercase().as_str() {
+            "module" => "modules_settings.module_tooltip",
+            "mode" => "modules_settings.mode_tooltip",
+            "ball axis" => "modules_settings.ball_axis_tooltip",
+            "touch axis" => "modules_settings.touch_axis_tooltip",
+            "ball dpi" => "modules_settings.ball_dpi_tooltip",
+            "touch dpi" => "modules_settings.touch_dpi_tooltip",
+            "scroll sens" => "modules_settings.scroll_sens_tooltip",
+            "sniper sens" => "modules_settings.sniper_sens_tooltip",
+            "text sens" => "modules_settings.text_sens_tooltip",
+            "touch gestures" => "modules_settings.touch_gestures_tooltip",
+            "invert scroll" => "modules_settings.invert_scroll_tooltip",
+            "invert text" => "modules_settings.invert_text_tooltip",
+            "acceleration" => "modules_settings.acceleration_tooltip",
+            "sticky mode" => "modules_settings.sticky_mode_tooltip",
+            "led blinks" => "modules_settings.led_blinks_tooltip",
+            "auto layer in normal" => "modules_settings.auto_layer_normal_tooltip",
+            "auto layer" => "modules_settings.auto_layer_tooltip",
+            "auto layer in sniper" => "modules_settings.auto_layer_sniper_tooltip",
+            "auto layer in scroll" => "modules_settings.auto_layer_scroll_tooltip",
+            "auto layer in text" => "modules_settings.auto_layer_text_tooltip",
+            "auto layer timeout" => "modules_settings.auto_layer_timeout_tooltip",
             _ => "modules_settings.generic_tooltip",
         };
         let field_label = self.module_setting_label(group_kind, &field.title);
