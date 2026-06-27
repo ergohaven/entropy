@@ -132,7 +132,7 @@ def _symbol_entries():
         add(idx, symbol, MOD_CTRL)
 
     # Alt+F13..F24
-    for idx, symbol in enumerate([".", ",", ";", ":", "/", "`", "^"]):
+    for idx, symbol in enumerate([".", ",", ";", ":", "/", "`", "^", "←", "↑", "→", "↓", "↔"]):
         add(idx, symbol, MOD_ALT)
 
     # Ctrl+Alt+F13..F19

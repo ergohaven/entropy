@@ -30,7 +30,7 @@ struct SmartSymbol {
     const char *symbol;
 };
 
-const std::array<SmartSymbol, 69> SMART_SYMBOLS{{
+const std::array<SmartSymbol, 74> SMART_SYMBOLS{{
     // F13..F24
     {KC_F13, "{"},
     {uint16_t(KC_F13 + 1), "}"},
@@ -81,6 +81,11 @@ const std::array<SmartSymbol, 69> SMART_SYMBOLS{{
     {uint16_t(MOD_ALT | (KC_F13 + 4)), "/"},
     {uint16_t(MOD_ALT | (KC_F13 + 5)), "`"},
     {uint16_t(MOD_ALT | (KC_F13 + 6)), "^"},
+    {uint16_t(MOD_ALT | (KC_F13 + 7)), "←"},
+    {uint16_t(MOD_ALT | (KC_F13 + 8)), "↑"},
+    {uint16_t(MOD_ALT | (KC_F13 + 9)), "→"},
+    {uint16_t(MOD_ALT | (KC_F13 + 10)), "↓"},
+    {uint16_t(MOD_ALT | (KC_F13 + 11)), "↔"},
 
     // Ctrl+Alt+F13..F19
     {uint16_t(MOD_CTRL | MOD_ALT | KC_F13), "б"},
