@@ -795,6 +795,12 @@ impl EntropyApp {
         }
     }
 
+    fn is_module_settings_tab(normalized_title: &str) -> bool {
+        normalized_title.contains("module")
+            || normalized_title.contains("trackball")
+            || (normalized_title.contains("auto") && normalized_title.contains("layer"))
+    }
+
     pub(super) fn module_settings_groups(
         json: &serde_json::Value,
         supported_qmk_settings: &[u16],
@@ -808,10 +814,7 @@ impl EntropyApp {
             .filter_map(|tab| {
                 let title = tab.get("name")?.as_str()?.trim().to_string();
                 let normalized_title = title.to_ascii_lowercase();
-                let is_modules_tab = normalized_title.contains("module");
-                let is_auto_layer_tab =
-                    normalized_title.contains("auto") && normalized_title.contains("layer");
-                if !is_modules_tab && !is_auto_layer_tab {
+                if !Self::is_module_settings_tab(&normalized_title) {
                     return None;
                 }
                 let fields = tab
@@ -1114,5 +1117,36 @@ mod tests {
         );
 
         assert_eq!(groups, vec![(0, vec![300]), (1, vec![301])]);
+    }
+
+    #[test]
+    fn module_settings_groups_include_trackball_settings_tabs() {
+        let json = serde_json::json!({
+            "settings": [
+                {
+                    "name": "Trackball",
+                    "fields": [
+                        {
+                            "title": "Ball DPI",
+                            "qsid": 120,
+                            "type": "integer",
+                            "width": 2,
+                            "min": 100,
+                            "max": 16000
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let groups = EntropyApp::module_settings_groups(&json, &[120]);
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].title, "Trackball");
+        assert_eq!(groups[0].kind, ModuleSettingsGroupKind::Other);
+        assert_eq!(groups[0].fields.len(), 1);
+        assert_eq!(groups[0].fields[0].title, "Ball DPI");
+        assert_eq!(groups[0].fields[0].qsid, 120);
+        assert_eq!(groups[0].fields[0].kind, ModuleSettingKind::Integer);
     }
 }
