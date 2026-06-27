@@ -1,5 +1,7 @@
 use super::*;
 
+type EncoderGroup = (u8, egui::Rect, Option<(usize, u16)>, Option<(usize, u16)>);
+
 impl EntropyApp {
     pub(super) fn draw_layout_keyboard_canvas(
         &mut self,
@@ -75,8 +77,7 @@ impl EntropyApp {
                 Vec2::new(ui.max_rect().width().min(560.0), 52.0),
             ),
         );
-        let mut encoder_groups: Vec<(u8, egui::Rect, Option<(usize, u16)>, Option<(usize, u16)>)> =
-            Vec::new();
+        let mut encoder_groups: Vec<EncoderGroup> = Vec::new();
         for (ei, rect) in &encoder_rects {
             let encoder = &layout.encoders[*ei];
             if !self

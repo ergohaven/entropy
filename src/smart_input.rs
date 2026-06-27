@@ -16,6 +16,8 @@ pub struct TextExpanderAppCandidate {
     pub title: String,
 }
 
+type ForegroundCacheState = Option<(std::time::Instant, Option<TextExpanderAppCandidate>)>;
+
 static TEXT_EXPANDER_CONFIG: OnceLock<RwLock<TextExpansionConfig>> = OnceLock::new();
 static TEXT_EXPANDER_ENGINE: OnceLock<Mutex<TextExpansionEngine>> = OnceLock::new();
 static RECENT_FOREGROUND_APPS: OnceLock<Mutex<Vec<TextExpanderAppCandidate>>> = OnceLock::new();
@@ -491,8 +493,7 @@ mod macos {
     const MAC_KEY_UP: u16 = 0x7E;
 
     static MACOS_EXPANDING_TEXT: AtomicBool = AtomicBool::new(false);
-    static FOREGROUND_CACHE: OnceLock<Mutex<Option<(Instant, Option<TextExpanderAppCandidate>)>>> =
-        OnceLock::new();
+    static FOREGROUND_CACHE: OnceLock<Mutex<ForegroundCacheState>> = OnceLock::new();
     static TAP_THREAD_RUNNING: AtomicBool = AtomicBool::new(false);
     static EVENT_TAP_ACTIVE: AtomicBool = AtomicBool::new(false);
     static TAP_PORT_ADDR: AtomicUsize = AtomicUsize::new(0);

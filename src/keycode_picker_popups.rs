@@ -1,5 +1,8 @@
 use super::*;
 
+type PopupChoice = (u16, String, String);
+type PopupChoiceGroup = (&'static str, Vec<PopupChoice>);
+
 pub(super) fn popup_group_i18n_key(title: &str) -> Option<&'static str> {
     match title {
         "Letters" => Some("key_picker.group_letters"),
@@ -305,7 +308,7 @@ pub(super) fn show_grouped_popup_key_buttons(
 
 pub(super) fn show_grouped_popup_choice_buttons(
     ui: &mut egui::Ui,
-    groups: Vec<(&'static str, Vec<(u16, String, String)>)>,
+    groups: Vec<PopupChoiceGroup>,
     language: crate::i18n::Language,
 ) -> Option<u16> {
     let mut selected = None;
