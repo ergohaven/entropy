@@ -387,6 +387,25 @@ fn smart_symbol_for_transport(
     smart_symbol_for_keycode(trigger_keycode).map(|symbol| (symbol.symbol, trigger_keycode))
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn app_prefers_clipboard_unicode_input(exe: &str) -> bool {
+    matches!(
+        exe.strip_suffix(".exe").unwrap_or(exe),
+        "brave"
+            | "chrome"
+            | "editplus"
+            | "firefox"
+            | "librewolf"
+            | "msedge"
+            | "opera"
+            | "opera_gx"
+            | "thunderbird"
+            | "vivaldi"
+            | "waterfox"
+            | "yandex"
+    )
+}
+
 #[cfg(target_os = "windows")]
 pub fn start() {
     smart_input_windows::start();
@@ -1175,5 +1194,10 @@ mod tests {
         set_text_expander_config(false, vec![rule(":hello", "Привет")], Vec::new());
 
         assert!(!text_expander_enabled());
+    }
+
+    #[test]
+    fn editplus_uses_clipboard_fallback_for_universal_symbols() {
+        assert!(app_prefers_clipboard_unicode_input("editplus.exe"));
     }
 }
