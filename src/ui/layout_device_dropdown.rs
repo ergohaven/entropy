@@ -249,22 +249,6 @@ impl EntropyApp {
                                 if top_dropdown_item(
                                     ui,
                                     dropdown_size.x - 16.0,
-                                    about_device_label(lang),
-                                    self.layout.is_some(),
-                                    self.main_menu_tab == MainMenuTab::Settings
-                                        && self.settings_tab == SettingsTab::AboutDevice,
-                                )
-                                .clicked()
-                                {
-                                    self.close_top_dropdowns(ctx);
-                                    self.open_about_device_page();
-                                    ctx.request_repaint();
-                                    device_clicked = true;
-                                }
-
-                                if top_dropdown_item(
-                                    ui,
-                                    dropdown_size.x - 16.0,
                                     crate::i18n::tr_catalog(lang, "ui.sticky_layout_window_label"),
                                     true,
                                     self.app_settings.sticky_layout_window,
@@ -289,6 +273,22 @@ impl EntropyApp {
                                         self.sticky_layout_last_size = None;
                                         save_app_settings(&self.app_settings);
                                     }
+                                    ctx.request_repaint();
+                                    device_clicked = true;
+                                }
+
+                                if top_dropdown_item(
+                                    ui,
+                                    dropdown_size.x - 16.0,
+                                    about_device_label(lang),
+                                    self.layout.is_some(),
+                                    self.main_menu_tab == MainMenuTab::Settings
+                                        && self.settings_tab == SettingsTab::AboutDevice,
+                                )
+                                .clicked()
+                                {
+                                    self.close_top_dropdowns(ctx);
+                                    self.open_about_device_page();
                                     ctx.request_repaint();
                                     device_clicked = true;
                                 }

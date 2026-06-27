@@ -1,10 +1,11 @@
 use super::*;
 
-fn yes_no(value: bool) -> &'static str {
-    if value {
-        "yes"
-    } else {
-        "no"
+fn yes_no(lang: crate::i18n::Language, value: bool) -> &'static str {
+    match (lang, value) {
+        (crate::i18n::Language::Russian, true) => "да",
+        (crate::i18n::Language::Russian, false) => "нет",
+        (crate::i18n::Language::English, true) => "yes",
+        (crate::i18n::Language::English, false) => "no",
     }
 }
 
@@ -39,61 +40,337 @@ fn about_empty_detail(lang: crate::i18n::Language) -> &'static str {
     }
 }
 
-fn device_about_text(info: &DeviceAboutInfo) -> String {
+fn about_entropy_title(lang: crate::i18n::Language) -> &'static str {
+    match lang {
+        crate::i18n::Language::Russian => "Об Entropy",
+        crate::i18n::Language::English => "About Entropy",
+    }
+}
+
+fn about_entropy_description(lang: crate::i18n::Language) -> &'static str {
+    match lang {
+        crate::i18n::Language::Russian => "Версия приложения и сведения о сборке",
+        crate::i18n::Language::English => "Application version and build information",
+    }
+}
+
+fn device_about_description(lang: crate::i18n::Language) -> &'static str {
+    match lang {
+        crate::i18n::Language::Russian => "Информация от выбранной подключенной клавиатуры",
+        crate::i18n::Language::English => "Information reported by the selected connected keyboard",
+    }
+}
+
+struct AboutRow {
+    label: &'static str,
+    tooltip: &'static str,
+    value: String,
+    monospace: bool,
+}
+
+fn localized_row(
+    lang: crate::i18n::Language,
+    ru_label: &'static str,
+    en_label: &'static str,
+    ru_tooltip: &'static str,
+    en_tooltip: &'static str,
+    value: impl Into<String>,
+) -> AboutRow {
+    match lang {
+        crate::i18n::Language::Russian => AboutRow {
+            label: ru_label,
+            tooltip: ru_tooltip,
+            value: value.into(),
+            monospace: false,
+        },
+        crate::i18n::Language::English => AboutRow {
+            label: en_label,
+            tooltip: en_tooltip,
+            value: value.into(),
+            monospace: false,
+        },
+    }
+}
+
+fn localized_monospace_row(
+    lang: crate::i18n::Language,
+    ru_label: &'static str,
+    en_label: &'static str,
+    ru_tooltip: &'static str,
+    en_tooltip: &'static str,
+    value: impl Into<String>,
+) -> AboutRow {
+    let mut row = localized_row(lang, ru_label, en_label, ru_tooltip, en_tooltip, value);
+    row.monospace = true;
+    row
+}
+
+fn not_reported(lang: crate::i18n::Language) -> &'static str {
+    match lang {
+        crate::i18n::Language::Russian => "не сообщается",
+        crate::i18n::Language::English => "not reported",
+    }
+}
+
+fn bytes_label(lang: crate::i18n::Language, bytes: u16) -> String {
+    match lang {
+        crate::i18n::Language::Russian => format!("{bytes} байт"),
+        crate::i18n::Language::English => format!("{bytes} bytes"),
+    }
+}
+
+fn device_about_rows(lang: crate::i18n::Language, info: &DeviceAboutInfo) -> Vec<AboutRow> {
     let firmware_version = info
         .firmware_version
         .as_deref()
         .map(text_or_unknown)
-        .unwrap_or("not reported");
+        .unwrap_or_else(|| not_reported(lang));
     let macro_memory = info
         .macro_memory_bytes
-        .map(|bytes| format!("{bytes} bytes"))
-        .unwrap_or_else(|| "not reported".to_owned());
+        .map(|bytes| bytes_label(lang, bytes))
+        .unwrap_or_else(|| not_reported(lang).to_owned());
 
-    format!(
-        "Manufacturer: {manufacturer}\n\
-Product: {product}\n\
-Firmware version: {firmware_version}\n\
-VID: {vendor_id:04X}\n\
-PID: {product_id:04X}\n\
-Device: {path}\n\
-\n\
-VIA protocol: {via_protocol}\n\
-Vial protocol: {vial_protocol}\n\
-Vial keyboard ID: {keyboard_id:016X}\n\
-\n\
-Macro entries: {macro_entries}\n\
-Macro memory: {macro_memory}\n\
-Macro delays: {macro_delays}\n\
-Complex (2-byte) macro keycodes: {macro_ext}\n\
-\n\
-Tap Dance entries: {tap_dance_entries}\n\
-Combo entries: {combo_entries}\n\
-Key Override entries: {key_override_entries}\n\
-Alt Repeat Key entries: {alt_repeat_entries}\n\
-Caps Word: {caps_word}\n\
-Layer Lock: {layer_lock}\n\
-\n\
-QMK Settings: {qmk_settings}",
-        manufacturer = text_or_unknown(&info.manufacturer),
-        product = text_or_unknown(&info.product),
-        vendor_id = info.vendor_id,
-        product_id = info.product_id,
-        path = text_or_unknown(&info.path),
-        via_protocol = info.via_protocol,
-        vial_protocol = info.vial_protocol,
-        keyboard_id = info.keyboard_id,
-        macro_entries = info.macro_entries,
-        macro_delays = yes_no(info.supports_macro_delays),
-        macro_ext = yes_no(info.supports_macro_ext_keycodes),
-        tap_dance_entries = info.tap_dance_entries,
-        combo_entries = info.combo_entries,
-        key_override_entries = info.key_override_entries,
-        alt_repeat_entries = info.alt_repeat_entries,
-        caps_word = yes_no(info.caps_word),
-        layer_lock = yes_no(info.layer_lock),
-        qmk_settings = yes_no(info.qmk_settings),
-    )
+    vec![
+        localized_row(
+            lang,
+            "Производитель",
+            "Manufacturer",
+            "USB manufacturer string",
+            "USB manufacturer string",
+            text_or_unknown(&info.manufacturer),
+        ),
+        localized_row(
+            lang,
+            "Устройство",
+            "Product",
+            "USB product string",
+            "USB product string",
+            text_or_unknown(&info.product),
+        ),
+        localized_row(
+            lang,
+            "Версия прошивки",
+            "Firmware version",
+            "Версия из Vial JSON metadata",
+            "Version from Vial JSON metadata",
+            firmware_version,
+        ),
+        localized_monospace_row(
+            lang,
+            "VID",
+            "VID",
+            "USB vendor ID",
+            "USB vendor ID",
+            format!("{:04X}", info.vendor_id),
+        ),
+        localized_monospace_row(
+            lang,
+            "PID",
+            "PID",
+            "USB product ID",
+            "USB product ID",
+            format!("{:04X}", info.product_id),
+        ),
+        localized_monospace_row(
+            lang,
+            "Путь устройства",
+            "Device path",
+            "Текущий HID path выбранной клавиатуры",
+            "Current HID path of the selected keyboard",
+            text_or_unknown(&info.path),
+        ),
+        localized_row(
+            lang,
+            "VIA protocol",
+            "VIA protocol",
+            "Версия VIA protocol",
+            "VIA protocol version",
+            info.via_protocol.to_string(),
+        ),
+        localized_row(
+            lang,
+            "Vial protocol",
+            "Vial protocol",
+            "Версия Vial protocol",
+            "Vial protocol version",
+            info.vial_protocol.to_string(),
+        ),
+        localized_monospace_row(
+            lang,
+            "Vial keyboard ID",
+            "Vial keyboard ID",
+            "Идентификатор клавиатуры Vial",
+            "Vial keyboard identifier",
+            format!("{:016X}", info.keyboard_id),
+        ),
+        localized_row(
+            lang,
+            "Macro entries",
+            "Macro entries",
+            "Количество macro слотов",
+            "Number of macro slots",
+            info.macro_entries.to_string(),
+        ),
+        localized_row(
+            lang,
+            "Macro memory",
+            "Macro memory",
+            "Память, доступная для macro",
+            "Memory available for macros",
+            macro_memory,
+        ),
+        localized_row(
+            lang,
+            "Macro delays",
+            "Macro delays",
+            "Поддержка задержек в macro",
+            "Macro delay support",
+            yes_no(lang, info.supports_macro_delays),
+        ),
+        localized_row(
+            lang,
+            "2-byte macro keycodes",
+            "2-byte macro keycodes",
+            "Поддержка complex macro keycodes",
+            "Complex macro keycode support",
+            yes_no(lang, info.supports_macro_ext_keycodes),
+        ),
+        localized_row(
+            lang,
+            "Tap Dance",
+            "Tap Dance",
+            "Количество Tap Dance слотов",
+            "Number of Tap Dance slots",
+            info.tap_dance_entries.to_string(),
+        ),
+        localized_row(
+            lang,
+            "Combos",
+            "Combos",
+            "Количество Combo слотов",
+            "Number of Combo slots",
+            info.combo_entries.to_string(),
+        ),
+        localized_row(
+            lang,
+            "Key Overrides",
+            "Key Overrides",
+            "Количество Key Override слотов",
+            "Number of Key Override slots",
+            info.key_override_entries.to_string(),
+        ),
+        localized_row(
+            lang,
+            "Alt Repeat",
+            "Alt Repeat",
+            "Количество Alt Repeat слотов",
+            "Number of Alt Repeat slots",
+            info.alt_repeat_entries.to_string(),
+        ),
+        localized_row(
+            lang,
+            "Caps Word",
+            "Caps Word",
+            "Поддержка Caps Word",
+            "Caps Word support",
+            yes_no(lang, info.caps_word),
+        ),
+        localized_row(
+            lang,
+            "Layer Lock",
+            "Layer Lock",
+            "Поддержка Layer Lock",
+            "Layer Lock support",
+            yes_no(lang, info.layer_lock),
+        ),
+        localized_row(
+            lang,
+            "QMK Settings",
+            "QMK Settings",
+            "Поддержка Vial QMK Settings",
+            "Vial QMK Settings support",
+            yes_no(lang, info.qmk_settings),
+        ),
+    ]
+}
+
+fn about_entropy_rows(lang: crate::i18n::Language) -> Vec<AboutRow> {
+    vec![
+        localized_row(
+            lang,
+            "Приложение",
+            "Application",
+            "Название программы",
+            "Application name",
+            "Entropy",
+        ),
+        localized_monospace_row(
+            lang,
+            "Версия",
+            "Version",
+            "Версия из Cargo package metadata",
+            "Version from Cargo package metadata",
+            env!("CARGO_PKG_VERSION"),
+        ),
+    ]
+}
+
+fn draw_about_rows(
+    ui: &mut egui::Ui,
+    id_salt: &'static str,
+    metrics: crate::ui_style::ResponsiveMetrics,
+    rows: &[AboutRow],
+) {
+    let list = allocate_adaptive_settings_list_viewport(
+        ui,
+        id_salt,
+        metrics,
+        rows.len(),
+        metrics.value(4.0),
+    );
+
+    crate::ui_style::allocate_ui_at_rect(ui, list.content_rect, |ui| {
+        ui.set_clip_rect(list.viewport);
+        ui.set_min_size(list.content_rect.size());
+        ui.spacing_mut().item_spacing.y = 0.0;
+        let tooltip_enabled = !list.suppress_tooltips;
+        let control_width = metrics.value(248.0);
+        for row in &rows[list.first_visible_row..list.last_visible_row] {
+            crate::ui_style::settings_list_row_with_tooltip(
+                ui,
+                list.row_content_width,
+                list.row_height,
+                row.label,
+                true,
+                tooltip_enabled.then_some(row.tooltip),
+                control_width,
+                |ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let mut text = RichText::new(row.value.as_str())
+                            .size(metrics.value(12.0))
+                            .color(ui.visuals().text_color());
+                        if row.monospace {
+                            text = text.monospace();
+                        }
+                        let resp = ui.add(egui::Label::new(text).truncate());
+                        if row.value.chars().count() > 20 {
+                            resp.on_hover_text(row.value.as_str());
+                        }
+                    });
+                },
+            );
+        }
+    });
+
+    if list.has_scrollbar {
+        crate::ui_style::paint_floating_scrollbar_handle(
+            ui,
+            list.track_rect,
+            list.handle_height,
+            list.scroll_ratio,
+            list.track_hovered,
+        );
+    }
 }
 
 impl EntropyApp {
@@ -113,52 +390,46 @@ impl EntropyApp {
         };
 
         let title = about_title(lang, &info.product);
-        let body = device_about_text(&info);
+        let rows = device_about_rows(lang, &info);
 
         crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(metrics.value(18.0));
                 ui.label(RichText::new(title).size(metrics.value(18.0)).strong());
+                ui.add_space(metrics.value(6.0));
+                ui.label(
+                    RichText::new(device_about_description(lang))
+                        .size(metrics.value(13.0))
+                        .color(app_muted_text(dark)),
+                );
+                ui.add_space(metrics.value(24.0));
+                draw_about_rows(ui, "about_device", metrics, &rows);
+            });
+        });
+    }
+
+    pub(super) fn draw_about_entropy_page(&mut self, ui: &mut egui::Ui, content_rect: egui::Rect) {
+        let lang = self.app_settings.language;
+        let dark = ui.visuals().dark_mode;
+        let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
+        let rows = about_entropy_rows(lang);
+
+        crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
+            ui.vertical_centered(|ui| {
                 ui.add_space(metrics.value(18.0));
-
-                let panel_width = metrics
-                    .value(560.0)
-                    .min((ui.available_width() - metrics.value(20.0)).max(metrics.value(320.0)));
-                let line_count = body.lines().count().max(1) as f32;
-                let desired_height = metrics.value(24.0) + line_count * metrics.value(18.0);
-                let panel_height = desired_height
-                    .min((ui.available_height() - metrics.value(8.0)).max(metrics.value(180.0)));
-
-                let (rect, _) = ui.allocate_exact_size(
-                    egui::vec2(panel_width, panel_height),
-                    egui::Sense::hover(),
+                ui.label(
+                    RichText::new(about_entropy_title(lang))
+                        .size(metrics.value(18.0))
+                        .strong(),
                 );
-                let fill = if dark {
-                    Color32::from_rgb(29, 29, 30)
-                } else {
-                    Color32::from_rgb(247, 247, 248)
-                };
-                ui.painter().rect_filled(rect, 2.0, fill);
-                ui.painter().rect_stroke(
-                    rect,
-                    2.0,
-                    crate::ui_style::modal_outline_stroke(dark),
-                    egui::StrokeKind::Outside,
+                ui.add_space(metrics.value(6.0));
+                ui.label(
+                    RichText::new(about_entropy_description(lang))
+                        .size(metrics.value(13.0))
+                        .color(app_muted_text(dark)),
                 );
-
-                let inner_rect = rect.shrink(metrics.value(12.0));
-                crate::ui_style::allocate_ui_at_rect(ui, inner_rect, |ui| {
-                    ui.set_clip_rect(inner_rect);
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(body)
-                                .monospace()
-                                .size(metrics.value(13.0))
-                                .color(ui.visuals().text_color()),
-                        )
-                        .wrap(),
-                    );
-                });
+                ui.add_space(metrics.value(24.0));
+                draw_about_rows(ui, "about_entropy", metrics, &rows);
             });
         });
     }

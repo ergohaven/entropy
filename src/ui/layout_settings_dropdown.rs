@@ -1,5 +1,12 @@
 use super::*;
 
+fn about_entropy_label(lang: crate::i18n::Language) -> &'static str {
+    match lang {
+        crate::i18n::Language::Russian => "Об Entropy",
+        crate::i18n::Language::English => "About Entropy",
+    }
+}
+
 impl EntropyApp {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_layout_settings_dropdown(
@@ -42,7 +49,7 @@ impl EntropyApp {
                 && !self.vial_unlock_polling
                 && !self.unlock_open;
             let default_lock_label = crate::i18n::tr_catalog(lang, "ui.unlock_keyboard_action");
-            let settings_item_count = 2
+            let settings_item_count = 3
                 + show_matrix_item as usize
                 + show_rgb_item as usize
                 + show_layer_leds_item as usize
@@ -99,6 +106,7 @@ impl EntropyApp {
             if show_lock_item {
                 settings_menu_labels.push(default_lock_label);
             }
+            settings_menu_labels.push(about_entropy_label(lang));
             let dropdown_width = adaptive_top_dropdown_width(ui, settings_menu_labels, 184.0);
             let dropdown_rect = egui::Rect::from_min_size(
                 egui::pos2(
@@ -158,6 +166,7 @@ impl EntropyApp {
                         magic_hovered,
                         tap_hold_hovered,
                         lock_hovered,
+                        about_entropy_hovered,
                         settings_clicked,
                     ) = egui::Area::new(egui::Id::new("settings_dropdown_area"))
                         .order(egui::Order::Foreground)
@@ -302,6 +311,14 @@ impl EntropyApp {
                                     let lock_resp = show_lock_item.then(|| {
                                         top_dropdown_item(ui, item_width, lock_label, true, false)
                                     });
+                                    let about_entropy_resp = top_dropdown_item(
+                                        ui,
+                                        item_width,
+                                        about_entropy_label(lang),
+                                        true,
+                                        self.main_menu_tab == MainMenuTab::Settings
+                                            && self.settings_tab == SettingsTab::AboutEntropy,
+                                    );
                                     if app_resp.clicked() {
                                         self.close_top_dropdowns(ui.ctx());
                                         self.open_app_settings_page();
@@ -419,6 +436,10 @@ impl EntropyApp {
                                             self.unlock_open = true;
                                         }
                                     }
+                                    if about_entropy_resp.clicked() {
+                                        self.close_top_dropdowns(ui.ctx());
+                                        self.open_about_entropy_page();
+                                    }
                                     (
                                         app_resp.hovered(),
                                         matrix_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
@@ -458,6 +479,7 @@ impl EntropyApp {
                                             .map(|r| r.hovered())
                                             .unwrap_or(false),
                                         lock_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
+                                        about_entropy_resp.hovered(),
                                         app_resp.clicked()
                                             || matrix_resp
                                                 .as_ref()
@@ -504,7 +526,8 @@ impl EntropyApp {
                                                 .as_ref()
                                                 .map(|r| r.clicked())
                                                 .unwrap_or(false)
-                                            || lock_resp.as_ref().map(|r| r.clicked()).unwrap_or(false),
+                                            || lock_resp.as_ref().map(|r| r.clicked()).unwrap_or(false)
+                                            || about_entropy_resp.clicked(),
                                     )
                                 })
                                 .inner
@@ -529,6 +552,7 @@ impl EntropyApp {
                                 || magic_hovered
                                 || tap_hold_hovered
                                 || lock_hovered
+                                || about_entropy_hovered
                                 || pointer_over_bridge),
                     )
                 });

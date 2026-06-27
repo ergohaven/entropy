@@ -1394,6 +1394,7 @@ pub(crate) enum SettingsTab {
     Bluetooth,
     LiveFeatures,
     AboutDevice,
+    AboutEntropy,
     Combo,
     KeyOverrides,
     AltRepeat,
