@@ -34,7 +34,7 @@ impl EntropyApp {
                     ctx.request_repaint();
                     return;
                 }
-                Ok(ConnectTaskMessage::Done(result)) => result,
+                Ok(ConnectTaskMessage::Done(result)) => *result,
                 Err(mpsc::TryRecvError::Empty) => {
                     let idle_timeout = last_progress_at.elapsed() > CONNECT_IDLE_TIMEOUT;
                     let total_timeout = started_at.elapsed() > CONNECT_TOTAL_TIMEOUT;
