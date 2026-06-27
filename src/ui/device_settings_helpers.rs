@@ -452,6 +452,27 @@ impl EntropyApp {
         }
     }
 
+    fn layer_led_color_qsid_groups(
+        mut entries: Vec<(usize, u16)>,
+        layer_count: usize,
+    ) -> Vec<(usize, Vec<u16>)> {
+        entries.sort_by_key(|(layer, qsid)| (*layer, *qsid));
+        let mut groups = Vec::<(usize, Vec<u16>)>::new();
+        for (layer, qsid) in entries {
+            if layer >= layer_count {
+                continue;
+            }
+            if let Some((_, qsids)) = groups.iter_mut().find(|(existing, _)| *existing == layer) {
+                if !qsids.contains(&qsid) {
+                    qsids.push(qsid);
+                }
+            } else {
+                groups.push((layer, vec![qsid]));
+            }
+        }
+        groups
+    }
+
     fn layer_led_field_width(field: &serde_json::Value) -> u8 {
         field
             .get("width")
@@ -606,24 +627,28 @@ impl EntropyApp {
         let bt_profile_colors = bt_profiles
             .into_iter()
             .filter(|(profile, _)| *profile <= 4)
-            .map(|(_, qsid)| LayerLedColorSetting {
-                qsid,
-                value: dev_conn.get_qmk_setting_u8(qsid).unwrap_or_else(|e| {
+            .map(|(_, qsid)| {
+                let value = dev_conn.get_qmk_setting_u8(qsid).unwrap_or_else(|e| {
                     log::warn!("get_qmk_setting_u8(layer_led bt profile qsid {qsid}): {e}");
                     0
-                }),
+                });
+                LayerLedColorSetting::new(qsid, value)
             })
             .collect::<Vec<_>>();
 
-        let layer_colors = layers
+        let layer_colors = Self::layer_led_color_qsid_groups(layers, layer_count)
             .into_iter()
-            .filter(|(layer, _)| *layer < layer_count)
-            .map(|(_, qsid)| LayerLedColorSetting {
-                qsid,
-                value: dev_conn.get_qmk_setting_u8(qsid).unwrap_or_else(|e| {
+            .filter_map(|(_, qsids)| {
+                let (&qsid, linked_qsids) = qsids.split_first()?;
+                let value = dev_conn.get_qmk_setting_u8(qsid).unwrap_or_else(|e| {
                     log::warn!("get_qmk_setting_u8(layer_led layer qsid {qsid}): {e}");
                     0
-                }),
+                });
+                Some(LayerLedColorSetting::with_linked_qsids(
+                    qsid,
+                    linked_qsids.to_vec(),
+                    value,
+                ))
             })
             .collect::<Vec<_>>();
 
@@ -666,7 +691,8 @@ impl EntropyApp {
                 log::warn!("get_qmk_setting_u8(layer_led qsid {qsid}): {e}");
                 0
             });
-            leds.layer_colors.push(LayerLedColorSetting { qsid, value });
+            leds.layer_colors
+                .push(LayerLedColorSetting::new(qsid, value));
         }
         leds.supported = !leds.layer_colors.is_empty();
         if leds.supported {
@@ -1063,5 +1089,30 @@ impl EntropyApp {
             packed = (packed << width.min(31)) | (values.get(idx).copied().unwrap_or(0) & mask);
         }
         packed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layer_led_color_qsid_groups_collapse_duplicate_layer_entries() {
+        let groups = EntropyApp::layer_led_color_qsid_groups(
+            vec![(0, 300), (1, 301), (0, 400), (1, 401)],
+            4,
+        );
+
+        assert_eq!(groups, vec![(0, vec![300, 400]), (1, vec![301, 401])]);
+    }
+
+    #[test]
+    fn layer_led_color_qsid_groups_ignore_out_of_range_layers_and_duplicate_qsids() {
+        let groups = EntropyApp::layer_led_color_qsid_groups(
+            vec![(0, 300), (2, 302), (1, 301), (1, 301)],
+            2,
+        );
+
+        assert_eq!(groups, vec![(0, vec![300]), (1, vec![301])]);
     }
 }

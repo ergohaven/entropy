@@ -864,7 +864,30 @@ impl GraveEscapeSettingsState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LayerLedColorSetting {
     pub(crate) qsid: u16,
+    pub(crate) linked_qsids: Vec<u16>,
     pub(crate) value: u8,
+}
+
+impl LayerLedColorSetting {
+    pub(crate) fn new(qsid: u16, value: u8) -> Self {
+        Self {
+            qsid,
+            linked_qsids: Vec::new(),
+            value,
+        }
+    }
+
+    pub(crate) fn with_linked_qsids(qsid: u16, linked_qsids: Vec<u16>, value: u8) -> Self {
+        Self {
+            qsid,
+            linked_qsids,
+            value,
+        }
+    }
+
+    pub(crate) fn all_qsids(&self) -> impl Iterator<Item = u16> + '_ {
+        std::iter::once(self.qsid).chain(self.linked_qsids.iter().copied())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

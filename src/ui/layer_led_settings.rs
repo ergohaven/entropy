@@ -439,7 +439,7 @@ impl EntropyApp {
         target: LayerLedColorTarget,
         setting: LayerLedColorSetting,
     ) {
-        let qsid = setting.qsid;
+        let qsids = setting.all_qsids().collect::<Vec<_>>();
         let current = setting.value;
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
@@ -594,7 +594,7 @@ impl EntropyApp {
                                                 }
                                             }
                                         }
-                                        self.write_layer_led_color(qsid, color_idx_u8);
+                                        self.write_layer_led_color(&qsids, color_idx_u8);
                                         ui.memory_mut(|m| m.close_popup());
                                     }
                                 }
@@ -606,13 +606,15 @@ impl EntropyApp {
         );
     }
 
-    fn write_layer_led_color(&mut self, qsid: u16, value: u8) {
+    fn write_layer_led_color(&mut self, qsids: &[u16], value: u8) {
         let Some(hid) = &self.hid_device else {
             return;
         };
-        if let Err(e) = hid.set_qmk_setting_u8(qsid, value) {
-            self.status_msg = format!("Failed to save Layer LED color: {}", e);
-            log::warn!("set_qmk_setting_u8(layer_led qsid {qsid}) failed: {e}");
+        for qsid in qsids {
+            if let Err(e) = hid.set_qmk_setting_u8(*qsid, value) {
+                self.status_msg = format!("Failed to save Layer LED color: {}", e);
+                log::warn!("set_qmk_setting_u8(layer_led qsid {qsid}) failed: {e}");
+            }
         }
     }
 
