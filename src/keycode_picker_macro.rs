@@ -9,6 +9,12 @@ const VIAL_MACRO_EXT_TAP: u8 = 5;
 const VIAL_MACRO_EXT_DOWN: u8 = 6;
 const VIAL_MACRO_EXT_UP: u8 = 7;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MacroEditorCommitMode {
+    AssignKeycodeAndClose,
+    SaveOnly,
+}
+
 fn append_macro_key_action(encoded: &mut Vec<u8>, basic_opcode: u8, ext_opcode: u8, keycode: u16) {
     encoded.push(SS_QMK_PREFIX);
     if keycode < 0x0100 {
@@ -194,6 +200,7 @@ impl KeycodePicker {
         grid_id: &'static str,
         _add_action_id: &'static str,
         _footer_text: &'static str,
+        commit_mode: MacroEditorCommitMode,
     ) -> u8 {
         let slot_count = self.macro_count.min(u8::MAX as usize + 1);
         let mut selected_macro = if slot_count > 0 && (raw_n as usize) < slot_count {
@@ -723,10 +730,7 @@ impl KeycodePicker {
                 )
                 .clicked()
                 {
-                    self.encode_macro(n);
-                    self.result = Some(0x7700 + n as u16);
-                    self.macros_dirty = true;
-                    self.open = false;
+                    self.commit_macro_editor(n, commit_mode);
                 }
             });
         });
@@ -787,6 +791,15 @@ impl KeycodePicker {
         self.macro_texts[n] = encode_macro_actions(&self.macro_actions[n]);
     }
 
+    fn commit_macro_editor(&mut self, n: usize, mode: MacroEditorCommitMode) {
+        self.encode_macro(n);
+        self.macros_dirty = true;
+        if mode == MacroEditorCommitMode::AssignKeycodeAndClose {
+            self.result = Some(0x7700 + n as u16);
+            self.open = false;
+        }
+    }
+
     pub(super) fn show_vial_macros(&mut self, ui: &mut egui::Ui) {
         let previous = self.macro_inline_selected.unwrap_or(0);
         let selected = self.show_macro_editor_contents(
@@ -795,6 +808,24 @@ impl KeycodePicker {
             "macro_grid_inline",
             "add_action_inline",
             "Saved to device when you close the keycode picker",
+            MacroEditorCommitMode::AssignKeycodeAndClose,
+        );
+        if selected != previous && (previous as usize) < self.macro_count {
+            self.encode_macro(previous as usize);
+            self.macros_dirty = true;
+        }
+        self.macro_inline_selected = Some(selected);
+    }
+
+    pub(crate) fn show_macro_settings_page(&mut self, ui: &mut egui::Ui) {
+        let previous = self.macro_inline_selected.unwrap_or(0);
+        let selected = self.show_macro_editor_contents(
+            ui,
+            previous,
+            "macro_grid_settings",
+            "add_action_settings",
+            "Saved to device when you return to the layout",
+            MacroEditorCommitMode::SaveOnly,
         );
         if selected != previous && (previous as usize) < self.macro_count {
             self.encode_macro(previous as usize);
@@ -900,5 +931,34 @@ mod tests {
             vec![MacroAction::Down(0xE0), MacroAction::Up(0xE0)]
         );
         assert_eq!(encode_macro_actions(&actions), raw_macro);
+    }
+
+    #[test]
+    fn standalone_macro_commit_saves_without_assigning_macro_keycode() {
+        let mut picker = KeycodePicker::default();
+        picker.open = true;
+        picker.result = Some(0x0004);
+        picker.macro_actions = vec![vec![MacroAction::Text("hi".into())]];
+
+        picker.commit_macro_editor(0, MacroEditorCommitMode::SaveOnly);
+
+        assert_eq!(picker.macro_texts[0].as_slice(), b"hi");
+        assert!(picker.macros_dirty);
+        assert_eq!(picker.result, Some(0x0004));
+        assert!(picker.open);
+    }
+
+    #[test]
+    fn picker_macro_commit_still_assigns_macro_keycode_and_closes() {
+        let mut picker = KeycodePicker::default();
+        picker.open = true;
+        picker.macro_actions = vec![vec![], vec![], vec![], vec![MacroAction::Text("ok".into())]];
+
+        picker.commit_macro_editor(3, MacroEditorCommitMode::AssignKeycodeAndClose);
+
+        assert_eq!(picker.macro_texts[3].as_slice(), b"ok");
+        assert!(picker.macros_dirty);
+        assert_eq!(picker.result, Some(0x7703));
+        assert!(!picker.open);
     }
 }

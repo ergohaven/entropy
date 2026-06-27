@@ -40,6 +40,10 @@ impl EntropyApp {
                 self.draw_universal_symbols_setup_page(ui, content_rect);
                 false
             }
+            SettingsTab::Macros => {
+                self.draw_macro_settings_page(ui, content_rect);
+                false
+            }
             SettingsTab::TextExpander => {
                 self.draw_text_expander_settings_page(ui, content_rect);
                 false
@@ -188,6 +192,11 @@ impl EntropyApp {
 
     pub(super) fn open_about_entropy_page(&mut self) {
         self.settings_tab = SettingsTab::AboutEntropy;
+        self.main_menu_tab = MainMenuTab::Settings;
+    }
+
+    pub(super) fn open_macro_settings_page(&mut self) {
+        self.settings_tab = SettingsTab::Macros;
         self.main_menu_tab = MainMenuTab::Settings;
     }
 

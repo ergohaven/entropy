@@ -1380,6 +1380,7 @@ pub(crate) enum SettingsTab {
     AppSettings,
     MatrixTester,
     UniversalSymbolsSetup,
+    Macros,
     TextExpander,
     AutoShift,
     Rgb,

@@ -40,6 +40,7 @@ impl EntropyApp {
             let show_touchpad_item = self.touchpad_settings.supported;
             let show_bluetooth_item = self.bluetooth_settings.supported;
             let show_live_features_item = self.live_features_available_for_selected_device();
+            let show_macros_item = self.keycode_picker.macro_count > 0;
             let show_magic_item = self.magic_settings.supported;
             let show_tap_hold_item =
                 self.tap_hold_settings.supported || self.one_shot_settings.supported;
@@ -59,6 +60,7 @@ impl EntropyApp {
                 + show_touchpad_item as usize
                 + show_bluetooth_item as usize
                 + show_live_features_item as usize
+                + show_macros_item as usize
                 + show_magic_item as usize
                 + show_tap_hold_item as usize
                 + show_lock_item as usize;
@@ -69,8 +71,12 @@ impl EntropyApp {
                 crate::i18n::tr(lang, TrKey::AppSettingsTitle),
                 crate::i18n::tr(lang, TrKey::UniversalSymbolsTitle),
             ];
+            let macros_label = crate::i18n::tr_text(lang, "Macros");
             if show_matrix_item {
                 settings_menu_labels.push(crate::i18n::tr(lang, TrKey::MatrixTesterTitle));
+            }
+            if show_macros_item {
+                settings_menu_labels.push(&macros_label);
             }
             if show_rgb_item {
                 settings_menu_labels.push(crate::i18n::tr(lang, TrKey::RgbTitle));
@@ -155,6 +161,7 @@ impl EntropyApp {
                         app_hovered,
                         matrix_hovered,
                         universal_symbols_hovered,
+                        macros_hovered,
                         rgb_hovered,
                         layer_leds_hovered,
                         encoders_hovered,
@@ -203,6 +210,16 @@ impl EntropyApp {
                                             && self.settings_tab
                                                 == SettingsTab::UniversalSymbolsSetup,
                                     );
+                                    let macros_resp = show_macros_item.then(|| {
+                                        top_dropdown_item(
+                                            ui,
+                                            item_width,
+                                            &macros_label,
+                                            true,
+                                            self.main_menu_tab == MainMenuTab::Settings
+                                                && self.settings_tab == SettingsTab::Macros,
+                                        )
+                                    });
                                     let rgb_resp = if show_rgb_item {
                                         Some(top_dropdown_item(
                                             ui,
@@ -337,6 +354,10 @@ impl EntropyApp {
                                         self.close_top_dropdowns(ui.ctx());
                                         self.open_universal_symbols_setup_page();
                                     }
+                                    if macros_resp.as_ref().map(|r| r.clicked()).unwrap_or(false) {
+                                        self.close_top_dropdowns(ui.ctx());
+                                        self.open_macro_settings_page();
+                                    }
                                     if let Some(rgb_resp) = &rgb_resp {
                                         if rgb_resp.clicked() && rgb_available {
                                             self.close_top_dropdowns(ui.ctx());
@@ -444,6 +465,10 @@ impl EntropyApp {
                                         app_resp.hovered(),
                                         matrix_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
                                         universal_symbols_resp.hovered(),
+                                        macros_resp
+                                            .as_ref()
+                                            .map(|r| r.hovered())
+                                            .unwrap_or(false),
                                         rgb_resp
                                             .as_ref()
                                             .map(|resp| resp.hovered())
@@ -486,6 +511,10 @@ impl EntropyApp {
                                                 .map(|r| r.clicked())
                                                 .unwrap_or(false)
                                             || universal_symbols_resp.clicked()
+                                            || macros_resp
+                                                .as_ref()
+                                                .map(|r| r.clicked())
+                                                .unwrap_or(false)
                                             || rgb_resp
                                                 .as_ref()
                                                 .map(|resp| resp.clicked() && rgb_available)
@@ -541,6 +570,7 @@ impl EntropyApp {
                                 || app_hovered
                                 || matrix_hovered
                                 || universal_symbols_hovered
+                                || macros_hovered
                                 || rgb_hovered
                                 || layer_leds_hovered
                                 || encoders_hovered

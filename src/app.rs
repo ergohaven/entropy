@@ -115,6 +115,8 @@ mod layout_view;
 mod live_features_settings_ui;
 #[path = "ui/magic_settings.rs"]
 mod magic_settings_ui;
+#[path = "ui/macro_settings.rs"]
+mod macro_settings_ui;
 #[path = "ui/matrix_tester.rs"]
 mod matrix_tester;
 #[path = "ui/module_settings.rs"]
