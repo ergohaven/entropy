@@ -230,6 +230,31 @@ pub const SMART_SYMBOLS: &[SmartSymbol] = &[
         symbol: '^',
         name: "Caret",
     },
+    SmartSymbol {
+        trigger_keycode: MOD_ALT | (KC_F13 + 7),
+        symbol: '←',
+        name: "Leftwards arrow",
+    },
+    SmartSymbol {
+        trigger_keycode: MOD_ALT | (KC_F13 + 8),
+        symbol: '↑',
+        name: "Upwards arrow",
+    },
+    SmartSymbol {
+        trigger_keycode: MOD_ALT | (KC_F13 + 9),
+        symbol: '→',
+        name: "Rightwards arrow",
+    },
+    SmartSymbol {
+        trigger_keycode: MOD_ALT | (KC_F13 + 10),
+        symbol: '↓',
+        name: "Downwards arrow",
+    },
+    SmartSymbol {
+        trigger_keycode: MOD_ALT | (KC_F13 + 11),
+        symbol: '↔',
+        name: "Left right arrow",
+    },
     // Ctrl+Alt+F13..F19
     SmartSymbol {
         trigger_keycode: MOD_CTRL | MOD_ALT | KC_F13,
@@ -370,4 +395,27 @@ pub fn smart_symbol_for_keycode(keycode: u16) -> Option<SmartSymbol> {
         .iter()
         .copied()
         .find(|symbol| symbol.trigger_keycode == keycode)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arrow_symbols_use_unused_alt_function_key_slots() {
+        let expected = [
+            (MOD_ALT | (KC_F13 + 7), '←'),
+            (MOD_ALT | (KC_F13 + 8), '↑'),
+            (MOD_ALT | (KC_F13 + 9), '→'),
+            (MOD_ALT | (KC_F13 + 10), '↓'),
+            (MOD_ALT | (KC_F13 + 11), '↔'),
+        ];
+
+        for (keycode, symbol) in expected {
+            assert_eq!(
+                smart_symbol_for_keycode(keycode).map(|smart_symbol| smart_symbol.symbol),
+                Some(symbol)
+            );
+        }
+    }
 }
