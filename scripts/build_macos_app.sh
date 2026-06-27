@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="${APP_NAME:-Entropy}"
 BUNDLE_ID="${BUNDLE_ID:-com.ergohaven.entropy}"
+CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-10.15}"
 export MACOSX_DEPLOYMENT_TARGET
 
@@ -72,6 +73,27 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 ZIP_PATH="$DIST_DIR/entropy-v$VERSION-macos-$ARCH.app.zip"
 DMG_PATH="$DIST_DIR/entropy-v$VERSION-macos-$ARCH.dmg"
 
+sign_app_bundle() {
+	if ! command -v plutil >/dev/null 2>&1; then
+		echo "plutil not found; skipped Info.plist validation"
+	else
+		plutil -lint "$CONTENTS_DIR/Info.plist"
+	fi
+
+	if ! command -v codesign >/dev/null 2>&1; then
+		echo "codesign not found; skipped app bundle signing"
+		return
+	fi
+
+	local codesign_args=(--force --sign "$CODESIGN_IDENTITY")
+	if [[ "$CODESIGN_IDENTITY" == "-" ]]; then
+		codesign_args+=(--timestamp=none)
+	fi
+
+	codesign "${codesign_args[@]}" "$APP_PATH"
+	codesign --verify --strict "$APP_PATH"
+}
+
 cd "$ROOT"
 cargo build "${BUILD_ARGS[@]}"
 validate_binary_arch
@@ -109,6 +131,8 @@ cat >"$CONTENTS_DIR/Info.plist" <<PLIST
     <string>$APP_NAME</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.utilities</string>
     <key>CFBundleShortVersionString</key>
     <string>$VERSION</string>
     <key>CFBundleVersion</key>
@@ -120,6 +144,8 @@ cat >"$CONTENTS_DIR/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+sign_app_bundle
 
 if command -v ditto >/dev/null 2>&1; then
 	ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
