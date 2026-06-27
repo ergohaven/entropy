@@ -208,7 +208,7 @@ Repeat"
                 if resp.clicked() {
                     self.assign_keycode_value(*value);
                 }
-                resp.on_hover_text(crate::i18n::tr_text(self.language, &tip));
+                resp.on_hover_text(crate::i18n::tr_text(self.language, tip));
             }
         });
 
@@ -431,7 +431,7 @@ Repeat"
                 if resp.clicked() {
                     self.assign_keycode_value(value);
                 }
-                resp.on_hover_text(crate::i18n::tr_text(self.language, &tip));
+                resp.on_hover_text(crate::i18n::tr_text(self.language, tip));
             }
         });
 
@@ -684,7 +684,7 @@ Repeat"
                 if resp.clicked() {
                     self.assign_keycode_value(*value);
                 }
-                resp = resp.on_hover_text(crate::i18n::tr_text(self.language, &tip));
+                resp = resp.on_hover_text(crate::i18n::tr_text(self.language, tip));
                 let _ = resp;
             }
         });
@@ -757,7 +757,7 @@ Repeat"
                 if resp.clicked() {
                     self.assign_keycode_value(*value);
                 }
-                resp = resp.on_hover_text(crate::i18n::tr_text(self.language, &tip));
+                resp = resp.on_hover_text(crate::i18n::tr_text(self.language, tip));
                 let _ = resp;
             }
         });

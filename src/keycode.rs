@@ -1,5 +1,5 @@
-/// QMK/Vial keycode definitions — protocol v6
-/// Reference: vial-gui/src/main/python/keycodes/keycodes_v6.py
+//! QMK/Vial keycode definitions — protocol v6
+//! Reference: vial-gui/src/main/python/keycodes/keycodes_v6.py
 
 /// Returns the platform-appropriate generic label for the GUI/Super/Win/Cmd key.
 /// Side-specific info belongs in tooltips, not the keycap label.
@@ -27,7 +27,9 @@ pub fn gui_mod_name() -> &'static str {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum KeyLegendLayout {
+    #[default]
     English,
     Russian,
     RussianPrimary,
@@ -64,11 +66,6 @@ impl KeyLegendLayout {
     }
 }
 
-impl Default for KeyLegendLayout {
-    fn default() -> Self {
-        KeyLegendLayout::English
-    }
-}
 
 fn osm_mod_bits(value: u16) -> Option<u16> {
     (0x52A0..=0x52BF).contains(&value).then_some(value & 0x1F)
@@ -645,21 +642,18 @@ pub fn keycode_label_with_names_and_layout(
 
 fn compact_compound_key_label(kc: &Keycode) -> String {
     let mut lines = kc.label.lines();
-    match (lines.next(), lines.next(), lines.next()) {
-        (Some(top), Some(bottom), None) => {
-            let is_short_symbol = |line: &str| {
-                let trimmed = line.trim();
-                !trimmed.is_empty()
-                    && trimmed.chars().count() <= 3
-                    && trimmed
-                        .chars()
-                        .all(|c| !c.is_alphanumeric() && !c.is_whitespace())
-            };
-            if is_short_symbol(top) || is_short_symbol(bottom) {
-                return kc.label.to_string();
-            }
+    if let (Some(top), Some(bottom), None) = (lines.next(), lines.next(), lines.next()) {
+        let is_short_symbol = |line: &str| {
+            let trimmed = line.trim();
+            !trimmed.is_empty()
+                && trimmed.chars().count() <= 3
+                && trimmed
+                    .chars()
+                    .all(|c| !c.is_alphanumeric() && !c.is_whitespace())
+        };
+        if is_short_symbol(top) || is_short_symbol(bottom) {
+            return kc.label.to_string();
         }
-        _ => {}
     }
 
     simple_key_name(kc)
@@ -735,7 +729,7 @@ pub fn keycode_label_with_names(value: u16, custom: &[CustomKeycode], layer_name
     // QK_ONE_SHOT_LAYER = 0x5280            → OSL(n)
     // QK_LAYER_TAP_TOG  = 0x52C0            → TT(n)
     // QK_PERSISTENT_DEF = 0x52E0            → PDF(n)
-    if value >= 0x5200 && value < 0x5300 {
+    if (0x5200..0x5300).contains(&value) {
         let sub = value & 0xFF;
         return match (value >> 5) & 0x7 {
             0 => layer_label("TO",  sub & 0x1F),
@@ -751,16 +745,16 @@ pub fn keycode_label_with_names(value: u16, custom: &[CustomKeycode], layer_name
     }
 
     // QK_LAYER_MOD: 0x5000 | (layer << 4) | mods
-    if value >= 0x5000 && value < 0x5200 {
+    if (0x5000..0x5200).contains(&value) {
         let layer = (value >> 4) & 0xF;
-        return format!("LM/{}", layer_name(layer as u16));
+        return format!("LM/{}", layer_name(layer));
     }
 
     // QK_LAYER_TAP: 0x4000 | (layer << 8) | kc  (checked AFTER all 0x5xxx ranges)
     if value & 0xF000 == 0x4000 {
         let layer = (value >> 8) & 0xF;
         let kc = value & 0xFF;
-        return compound_keycode_label(&format!("LT {}", layer_name(layer as u16)), kc as u16);
+        return compound_keycode_label(&format!("LT {}", layer_name(layer)), kc);
     }
 
     // QK_MOD_TAP: 0x2000 | (mods << 8) | kc
@@ -768,15 +762,15 @@ pub fn keycode_label_with_names(value: u16, custom: &[CustomKeycode], layer_name
         let kc = value & 0xFF;
         let mods = (value >> 8) & 0x1F;
         let right = (value >> 12) & 0x1 != 0;
-        let mod_str = decode_mods(mods as u16, right);
-        return compound_keycode_label(&mod_str, kc as u16);
+        let mod_str = decode_mods(mods, right);
+        return compound_keycode_label(&mod_str, kc);
     }
 
     // Modifier+key combos: 0x0100..0x1F00 | kc
     // LCTL=0x0100, LSFT=0x0200, LALT=0x0400, LGUI=0x0800
     // RCTL=0x1100, RSFT=0x1200, RALT=0x1400, RGUI=0x1800
     // MEH=0x0700, HYPR=0x0F00, LSA=0x0600, LCA=0x0500
-    if value >= 0x0100 && value < 0x2000 && (value & 0xFF) != 0 {
+    if (0x0100..0x2000).contains(&value) && (value & 0xFF) != 0 {
         let mods = value >> 8;
         let kc = value & 0xFF;
         let gui = gui_sym();
@@ -799,18 +793,18 @@ pub fn keycode_label_with_names(value: u16, custom: &[CustomKeycode], layer_name
             0x18 => format!("R{}", gui),
             _ => "Mod".into(),
         };
-        return compound_keycode_label(&mod_str, kc as u16);
+        return compound_keycode_label(&mod_str, kc);
     }
 
     if value == 0x0001 { return "▽".to_string(); }
     if value == 0x0000 { return "✕".to_string(); }
 
     // Macro keycodes: 0x7700..0x77FF
-    if value >= 0x7700 && value <= 0x77FF {
+    if (0x7700..=0x77FF).contains(&value) {
         return format!("M{}", value - 0x7700);
     }
     // Tap Dance keycodes: 0x5700..0x57FF
-    if value >= 0x5700 && value <= 0x57FF {
+    if (0x5700..=0x57FF).contains(&value) {
         return format!("TD{}", value - 0x5700);
     }
 
@@ -1009,7 +1003,7 @@ pub fn keycode_tooltip(value: u16, custom: &[CustomKeycode], layer_names: &[Stri
     }
 
     // ── Layer ops 0x5200..0x52FF ─────────────────────────────────────────────
-    if value >= 0x5200 && value < 0x5300 {
+    if (0x5200..0x5300).contains(&value) {
         let sub = value & 0xFF;
         return match (value >> 5) & 0x7 {
             0 => format!("TO({}) — switch to {} and stay there", sub & 0x1F, layer_display(sub & 0x1F)),
@@ -1018,7 +1012,7 @@ pub fn keycode_tooltip(value: u16, custom: &[CustomKeycode], layer_names: &[Stri
             3 => format!("TG({}) — toggle {} on/off", sub & 0x1F, layer_display(sub & 0x1F)),
             4 => format!("OSL({}) — activate {} for next keypress only", sub & 0x1F, layer_display(sub & 0x1F)),
             5 => {
-                let m = mod_name(sub as u16 & 0x1F, sub >= 0x10);
+                let m = mod_name(sub & 0x1F, sub >= 0x10);
                 format!("One-Shot {} — activates {} for the very next keypress only", m, m)
             }
             6 => format!("TT({}) — tap to toggle {}, hold to activate while held", sub & 0x1F, layer_display(sub & 0x1F)),
@@ -1028,21 +1022,21 @@ pub fn keycode_tooltip(value: u16, custom: &[CustomKeycode], layer_names: &[Stri
     }
 
     // ── QK_LAYER_MOD 0x5000..0x51FF ─────────────────────────────────────────
-    if value >= 0x5000 && value < 0x5200 {
+    if (0x5000..0x5200).contains(&value) {
         let layer = (value >> 4) & 0xF;
         let mods = value & 0xF;
-        let m = mod_name(mods as u16, false);
-        return format!("LM({}, {}) — activate {} with {} held while key is pressed", layer, m, layer_display(layer as u16), m);
+        let m = mod_name(mods, false);
+        return format!("LM({}, {}) — activate {} with {} held while key is pressed", layer, m, layer_display(layer), m);
     }
 
     // ── QK_LAYER_TAP 0x4000..0x4FFF ─────────────────────────────────────────
     if value & 0xF000 == 0x4000 {
         let layer = (value >> 8) & 0xF;
         let kc = value & 0xFF;
-        let kc_str = find_keycode(kc as u16)
-            .map(|k| simple_key_name(k))
+        let kc_str = find_keycode(kc)
+            .map(simple_key_name)
             .unwrap_or_else(|| format!("0x{:02X}", kc));
-        return format!("Layer Tap — tap for {}, hold to activate {}", kc_str, layer_display(layer as u16));
+        return format!("Layer Tap — tap for {}, hold to activate {}", kc_str, layer_display(layer));
     }
 
     // ── QK_MOD_TAP 0x2000..0x3FFF ───────────────────────────────────────────
@@ -1050,20 +1044,20 @@ pub fn keycode_tooltip(value: u16, custom: &[CustomKeycode], layer_names: &[Stri
         let kc = value & 0xFF;
         let mods = (value >> 8) & 0x1F;
         let right = (value >> 12) & 0x1 != 0;
-        let kc_str = find_keycode(kc as u16)
-            .map(|k| simple_key_name(k))
+        let kc_str = find_keycode(kc)
+            .map(simple_key_name)
             .unwrap_or_else(|| format!("0x{:02X}", kc));
-        let m = mod_name(mods as u16, right);
-        let side_str = side(mods as u16);
+        let m = mod_name(mods, right);
+        let side_str = side(mods);
         return format!("Mod Tap — tap for {}, hold for {}{}", kc_str, side_str, m);
     }
 
     // ── Modifier+key combos 0x0100..0x1FFF ──────────────────────────────────
-    if value >= 0x0100 && value < 0x2000 && (value & 0xFF) != 0 {
+    if (0x0100..0x2000).contains(&value) && (value & 0xFF) != 0 {
         let mods = value >> 8;
         let kc = value & 0xFF;
-        let kc_str = find_keycode(kc as u16)
-            .map(|k| simple_key_name(k))
+        let kc_str = find_keycode(kc)
+            .map(simple_key_name)
             .unwrap_or_else(|| format!("0x{:02X}", kc));
         let combo = match mods {
             0x01 => "Ctrl+",
@@ -1105,11 +1099,11 @@ pub fn keycode_tooltip(value: u16, custom: &[CustomKeycode], layer_names: &[Stri
     }
 
     // Macro keycodes
-    if value >= 0x7700 && value <= 0x77FF {
+    if (0x7700..=0x77FF).contains(&value) {
         return format!("Macro {} — sends a sequence of keystrokes", value - 0x7700);
     }
     // Tap Dance keycodes
-    if value >= 0x5700 && value <= 0x57FF {
+    if (0x5700..=0x57FF).contains(&value) {
         return format!("Tap Dance {} — different actions on tap, hold, double tap", value - 0x5700);
     }
 

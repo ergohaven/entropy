@@ -245,11 +245,11 @@ pub(super) fn open_path_in_system_editor(path: &std::path::Path) -> bool {
     }
     #[cfg(target_os = "macos")]
     {
-        return std::process::Command::new("open")
+        std::process::Command::new("open")
             .arg(path)
             .status()
             .map(|status| status.success())
-            .unwrap_or(false);
+            .unwrap_or(false)
     }
     #[cfg(target_os = "linux")]
     {

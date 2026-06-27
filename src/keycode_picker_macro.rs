@@ -92,7 +92,7 @@ impl KeycodePicker {
                                     self.ensure_macro_meta_len(i as usize);
                                     selected_macro = i;
                                 }
-                                if (i + 1) % 16 == 0 {
+                                if (i + 1).is_multiple_of(16) {
                                     ui.end_row();
                                 }
                             }
@@ -245,7 +245,7 @@ impl KeycodePicker {
                         }
                         MacroAction::Tap(kc) => {
                             let label = keycode_label_with_names_and_layout(
-                                *kc as u16,
+                                *kc ,
                                 &custom_pairs,
                                 &self.layer_names,
                                 self.key_legend_layout,
@@ -268,7 +268,7 @@ impl KeycodePicker {
                         }
                         MacroAction::Down(kc) => {
                             let label = keycode_label_with_names_and_layout(
-                                *kc as u16,
+                                *kc ,
                                 &custom_pairs,
                                 &self.layer_names,
                                 self.key_legend_layout,
@@ -291,7 +291,7 @@ impl KeycodePicker {
                         }
                         MacroAction::Up(kc) => {
                             let label = keycode_label_with_names_and_layout(
-                                *kc as u16,
+                                *kc ,
                                 &custom_pairs,
                                 &self.layer_names,
                                 self.key_legend_layout,
@@ -652,8 +652,10 @@ mod tests {
 
     #[test]
     fn encodes_basic_macro_tap_as_vial_short_action() {
-        let mut picker = KeycodePicker::default();
-        picker.macro_actions = vec![vec![MacroAction::Tap(0x0006)]];
+        let mut picker = KeycodePicker {
+            macro_actions: vec![vec![MacroAction::Tap(0x0006)]],
+            ..Default::default()
+        };
 
         picker.encode_macro(0);
 
@@ -662,8 +664,10 @@ mod tests {
 
     #[test]
     fn encodes_modified_macro_tap_as_vial_extended_action() {
-        let mut picker = KeycodePicker::default();
-        picker.macro_actions = vec![vec![MacroAction::Tap(0x0106)]];
+        let mut picker = KeycodePicker {
+            macro_actions: vec![vec![MacroAction::Tap(0x0106)]],
+            ..Default::default()
+        };
 
         picker.encode_macro(0);
 

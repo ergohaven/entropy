@@ -8,7 +8,7 @@ mod smart_input_symbols;
 #[cfg(target_os = "windows")]
 #[path = "smart_input_windows.rs"]
 mod smart_input_windows;
-pub use smart_input_symbols::{smart_symbol_for_keycode, SmartSymbol, SMART_SYMBOLS};
+pub use smart_input_symbols::{smart_symbol_for_keycode, SMART_SYMBOLS};
 use smart_input_symbols::{KC_F13, MOD_ALT, MOD_CTRL, MOD_SHIFT};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextExpanderAppCandidate {

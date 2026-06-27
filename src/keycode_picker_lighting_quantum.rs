@@ -190,7 +190,7 @@ impl KeycodePicker {
                 if resp.clicked() {
                     self.vial_quantum_pending_mod = Some(*base);
                 }
-                resp.on_hover_text(crate::i18n::tr_text(self.language, &tip));
+                resp.on_hover_text(crate::i18n::tr_text(self.language, tip));
             }
         });
 
@@ -247,7 +247,7 @@ impl KeycodePicker {
                 if resp.clicked() {
                     self.vial_quantum_pending_mt = Some(*base);
                 }
-                resp.on_hover_text(crate::i18n::tr_text(self.language, &tip));
+                resp.on_hover_text(crate::i18n::tr_text(self.language, tip));
             }
         });
     }

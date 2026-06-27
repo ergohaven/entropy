@@ -27,38 +27,36 @@ impl EntropyApp {
                 rx,
                 started_at,
                 last_progress_at,
-            } => loop {
-                match rx.try_recv() {
-                    Ok(ConnectTaskMessage::Progress(message)) => {
-                        self.status_msg = message;
-                        *last_progress_at = std::time::Instant::now();
-                        ctx.request_repaint();
-                        return;
-                    }
-                    Ok(ConnectTaskMessage::Done(result)) => break result,
-                    Err(mpsc::TryRecvError::Empty) => {
-                        let idle_timeout = last_progress_at.elapsed() > CONNECT_IDLE_TIMEOUT;
-                        let total_timeout = started_at.elapsed() > CONNECT_TOTAL_TIMEOUT;
-                        if idle_timeout || total_timeout {
-                            let stage = if self.status_msg.is_empty() {
-                                "unknown stage"
-                            } else {
-                                self.status_msg.as_str()
-                            };
-                            self.status_msg = format!(
-                                "Connect timeout — RMK/Vial device did not finish loading while: {stage}"
-                            );
-                            self.connect_state = ConnectState::Idle;
-                            return;
-                        }
-                        ctx.request_repaint(); // keep polling
-                        return;
-                    }
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        self.status_msg = "Connect thread died".into();
+            } => match rx.try_recv() {
+                Ok(ConnectTaskMessage::Progress(message)) => {
+                    self.status_msg = message;
+                    *last_progress_at = std::time::Instant::now();
+                    ctx.request_repaint();
+                    return;
+                }
+                Ok(ConnectTaskMessage::Done(result)) => result,
+                Err(mpsc::TryRecvError::Empty) => {
+                    let idle_timeout = last_progress_at.elapsed() > CONNECT_IDLE_TIMEOUT;
+                    let total_timeout = started_at.elapsed() > CONNECT_TOTAL_TIMEOUT;
+                    if idle_timeout || total_timeout {
+                        let stage = if self.status_msg.is_empty() {
+                            "unknown stage"
+                        } else {
+                            self.status_msg.as_str()
+                        };
+                        self.status_msg = format!(
+                            "Connect timeout — RMK/Vial device did not finish loading while: {stage}"
+                        );
                         self.connect_state = ConnectState::Idle;
                         return;
                     }
+                    ctx.request_repaint(); // keep polling
+                    return;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.status_msg = "Connect thread died".into();
+                    self.connect_state = ConnectState::Idle;
+                    return;
                 }
             },
             ConnectState::Idle => return,

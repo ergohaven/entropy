@@ -21,11 +21,8 @@ impl EntropyApp {
             if !self.vial_unlock_polling {
                 if let Some(hid) = &self.hid_device {
                     // Get unlock keys from get_unlock_status
-                    match hid.get_unlock_status() {
-                        Ok((_, keys)) => {
-                            self.vial_unlock_keys = keys;
-                        }
-                        Err(_) => {}
+                    if let Ok((_, keys)) = hid.get_unlock_status() {
+                        self.vial_unlock_keys = keys;
                     }
                     // Start the unlock process
                     match hid.unlock_start() {

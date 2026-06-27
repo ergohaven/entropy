@@ -434,7 +434,7 @@ fn draw_key_label_with_colors(
         );
         paint_centered_text_rotated(
             &clipped,
-            center + rotated_offset(0.0, -1.0 * scale, rotation),
+            center + rotated_offset(0.0, -scale, rotation),
             middle,
             FontId::proportional(middle_fit),
             top_color,
