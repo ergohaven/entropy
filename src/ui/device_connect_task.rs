@@ -801,7 +801,7 @@ impl EntropyApp {
                 })
             })();
 
-            let _ = tx.send(ConnectTaskMessage::Done(result));
+            let _ = tx.send(ConnectTaskMessage::Done(Box::new(result)));
         });
     }
 }

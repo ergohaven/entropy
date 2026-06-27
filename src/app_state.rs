@@ -289,7 +289,7 @@ pub(crate) struct ConnectResult {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) enum ConnectTaskMessage {
     Progress(String),
-    Done(Result<ConnectResult, String>),
+    Done(Box<Result<ConnectResult, String>>),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
