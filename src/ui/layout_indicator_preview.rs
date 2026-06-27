@@ -4,6 +4,16 @@ const STICKY_LAYOUT_KEYBOARD_MARGIN: f32 = 1.0_f32;
 const STICKY_LAYOUT_BASE_KEY_H: f32 = 44.0_f32;
 const STICKY_LAYOUT_BASE_ENCODER_R: f32 = 24.0_f32;
 
+fn sticky_layout_should_draw_key(
+    visibility_mode: StickyLayoutVisibilityMode,
+    is_pressed: bool,
+) -> bool {
+    matches!(
+        visibility_mode,
+        StickyLayoutVisibilityMode::LayoutAndPresses
+    ) || is_pressed
+}
+
 fn sticky_rect_text_scale(rect: egui::Rect) -> f32 {
     (rect.width().min(rect.height()) / STICKY_LAYOUT_BASE_KEY_H).clamp(0.52, 2.4)
 }
@@ -265,6 +275,7 @@ impl EntropyApp {
         encoder_visibility: &[bool],
         matrix_pressed: &[bool],
         pressed_key_layers: &[Option<usize>],
+        visibility_mode: StickyLayoutVisibilityMode,
         ui_scale: f32,
         dark: bool,
         rect: egui::Rect,
@@ -373,6 +384,9 @@ impl EntropyApp {
             let key = &layout.keys[*ki];
             let matrix_idx = key.row as usize * layout.cols + key.col as usize;
             let is_pressed = layout_matrix_key_pressed(layout, matrix_pressed, key.row, key.col);
+            if !sticky_layout_should_draw_key(visibility_mode, is_pressed) {
+                continue;
+            }
             let key_layer = if is_pressed {
                 pressed_key_layers
                     .get(matrix_idx)
@@ -496,6 +510,9 @@ impl EntropyApp {
                     layout_matrix_key_pressed(layout, matrix_pressed, key.row, key.col)
                 })
                 .unwrap_or(false);
+            if !sticky_layout_should_draw_key(visibility_mode, press_is_pressed) {
+                continue;
+            }
 
             let (top_rect, middle_rect, bottom_rect) = if let Some((_, press_rect)) = press_slot {
                 let divider_gap = radius * 0.06;
@@ -699,5 +716,30 @@ impl EntropyApp {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pressed_only_mode_draws_only_pressed_keys() {
+        assert!(sticky_layout_should_draw_key(
+            StickyLayoutVisibilityMode::LayoutAndPresses,
+            false,
+        ));
+        assert!(sticky_layout_should_draw_key(
+            StickyLayoutVisibilityMode::LayoutAndPresses,
+            true,
+        ));
+        assert!(!sticky_layout_should_draw_key(
+            StickyLayoutVisibilityMode::PressedOnly,
+            false,
+        ));
+        assert!(sticky_layout_should_draw_key(
+            StickyLayoutVisibilityMode::PressedOnly,
+            true,
+        ));
     }
 }
