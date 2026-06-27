@@ -174,7 +174,7 @@ impl EntropyApp {
                     Stroke::new(1.0, app_border_color(dark)),
                     egui::StrokeKind::Inside,
                 );
-                ui.allocate_ui_at_rect(card_rect.shrink2(Vec2::new(18.0, 16.0)), |ui| {
+                crate::ui_style::allocate_ui_at_rect(ui, card_rect.shrink2(Vec2::new(18.0, 16.0)), |ui| {
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
                             ui.label(

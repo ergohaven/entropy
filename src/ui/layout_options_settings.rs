@@ -36,7 +36,7 @@ impl EntropyApp {
             .filter_map(|(idx, option)| (!Self::is_encoder_layout_option(option)).then_some(idx))
             .collect();
 
-        ui.allocate_ui_at_rect(content_rect, |ui| {
+        crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(18.0);
                 ui.label(
@@ -85,7 +85,7 @@ impl EntropyApp {
                     &options,
                     self.layout_options_value.unwrap_or(0),
                 );
-                ui.allocate_ui_at_rect(list.content_rect, |ui| {
+                crate::ui_style::allocate_ui_at_rect(ui, list.content_rect, |ui| {
                     ui.set_clip_rect(list.viewport);
                     ui.set_min_size(list.content_rect.size());
                     ui.spacing_mut().item_spacing.y = 0.0;

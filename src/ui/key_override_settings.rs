@@ -17,7 +17,7 @@ impl EntropyApp {
         let scale = metrics.scale;
         let page_width = KEY_OVERRIDE_PAGE_WIDTH * scale;
 
-        ui.allocate_ui_at_rect(content_rect, |ui| {
+        crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(KEY_OVERRIDE_TITLE_Y_OFFSET * scale);
                 ui.label(
@@ -464,7 +464,7 @@ impl EntropyApp {
                     ROW_COUNT,
                     metrics.value(86.0),
                 );
-                ui.allocate_ui_at_rect(list.content_rect, |ui| {
+                crate::ui_style::allocate_ui_at_rect(ui, list.content_rect, |ui| {
                     ui.set_clip_rect(list.viewport);
                     ui.set_min_size(list.content_rect.size());
                     ui.spacing_mut().item_spacing.y = 0.0;
@@ -740,7 +740,7 @@ impl EntropyApp {
                     egui::pos2(page_center_x - action_width / 2.0, action_top),
                     Vec2::new(action_width, action_size.y),
                 );
-                ui.allocate_ui_at_rect(action_rect, |ui| {
+                crate::ui_style::allocate_ui_at_rect(ui, action_rect, |ui| {
                     ui.set_min_size(action_rect.size());
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 8.0 * scale;

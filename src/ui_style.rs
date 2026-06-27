@@ -84,6 +84,15 @@ pub fn modal_outline_stroke(dark: bool) -> Stroke {
     }
 }
 
+pub fn allocate_ui_at_rect<R>(
+    ui: &mut Ui,
+    rect: egui::Rect,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> egui::InnerResponse<R> {
+    #[allow(deprecated)]
+    ui.allocate_ui_at_rect(rect, add_contents)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ResponsiveMetrics {
     pub scale: f32,
@@ -492,23 +501,22 @@ fn modern_text_field_impl(
         egui::StrokeKind::Inside,
     );
 
-    let resp = ui
-        .allocate_ui_at_rect(field_rect.shrink2(Vec2::new(10.0, 0.0)), |ui| {
-            ui.add_sized(
-                [width - 20.0, height],
-                egui::TextEdit::singleline(text)
-                    .id(id)
-                    .desired_width(width - 20.0)
-                    .hint_text(hint)
-                    .font(FontId::proportional(font_size))
-                    .char_limit(char_limit)
-                    .frame(false)
-                    .interactive(interactive)
-                    .horizontal_align(horizontal_align)
-                    .vertical_align(egui::Align::Center),
-            )
-        })
-        .inner;
+    let resp = allocate_ui_at_rect(ui, field_rect.shrink2(Vec2::new(10.0, 0.0)), |ui| {
+        ui.add_sized(
+            [width - 20.0, height],
+            egui::TextEdit::singleline(text)
+                .id(id)
+                .desired_width(width - 20.0)
+                .hint_text(hint)
+                .font(FontId::proportional(font_size))
+                .char_limit(char_limit)
+                .frame(false)
+                .interactive(interactive)
+                .horizontal_align(horizontal_align)
+                .vertical_align(egui::Align::Center),
+        )
+    })
+    .inner;
     if resp.hovered() && interactive {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
     }
@@ -910,7 +918,7 @@ pub fn settings_list_row_with_tooltip(
         egui::pos2(row_rect.right() - control_width, row_rect.top()),
         egui::vec2(control_width, row_height),
     );
-    ui.allocate_ui_at_rect(control_rect, |ui| {
+    crate::ui_style::allocate_ui_at_rect(ui, control_rect, |ui| {
         ui.set_min_size(egui::vec2(control_width, row_height));
         ui.with_layout(
             egui::Layout::left_to_right(egui::Align::Center),

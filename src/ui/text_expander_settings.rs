@@ -9,7 +9,7 @@ impl EntropyApp {
         let lang = self.app_settings.language;
         let dark = ui.visuals().dark_mode;
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
-        ui.allocate_ui_at_rect(content_rect, |ui| {
+        crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(metrics.value(18.0));
                 ui.label(
@@ -51,7 +51,7 @@ impl EntropyApp {
                     row_count,
                     metrics.value(44.0),
                 );
-                ui.allocate_ui_at_rect(list.content_rect, |ui| {
+                crate::ui_style::allocate_ui_at_rect(ui, list.content_rect, |ui| {
                     ui.set_clip_rect(list.viewport);
                     ui.set_min_size(list.content_rect.size());
                     ui.spacing_mut().item_spacing.y = 0.0;
@@ -85,7 +85,7 @@ impl EntropyApp {
                     ),
                     egui::vec2(actions_width, button_size.y),
                 );
-                ui.allocate_ui_at_rect(actions_rect, |ui| {
+                crate::ui_style::allocate_ui_at_rect(ui, actions_rect, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = button_gap;
                         if crate::ui_style::modern_button(
@@ -164,7 +164,7 @@ impl EntropyApp {
             ),
             button_size,
         );
-        ui.allocate_ui_at_rect(label_rect, |ui| {
+        crate::ui_style::allocate_ui_at_rect(ui, label_rect, |ui| {
             ui.centered_and_justified(|ui| {
                 ui.add_sized(
                     label_rect.size(),
@@ -180,7 +180,7 @@ impl EntropyApp {
                 );
             });
         });
-        ui.allocate_ui_at_rect(button_rect, |ui| {
+        crate::ui_style::allocate_ui_at_rect(ui, button_rect, |ui| {
             if crate::ui_style::modern_button(
                 ui,
                 crate::i18n::tr_catalog(lang, "text_expander.open_universal_symbols_setup"),

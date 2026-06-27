@@ -1031,7 +1031,7 @@ impl EntropyApp {
 
                     let mut rule_enabled = rule.enabled;
                     let mut switch_resp = None;
-                    ui.allocate_ui_at_rect(switch_rect, |ui| {
+                    crate::ui_style::allocate_ui_at_rect(ui, switch_rect, |ui| {
                         switch_resp = Some(crate::ui_style::settings_switch_sized_stable(
                             ui,
                             ("text_expander_rule_enabled", idx),
@@ -1045,7 +1045,7 @@ impl EntropyApp {
                     }
 
                     let mut trigger_resp = None;
-                    ui.allocate_ui_at_rect(trigger_rect, |ui| {
+                    crate::ui_style::allocate_ui_at_rect(ui, trigger_rect, |ui| {
                         trigger_resp = Some(
                             crate::ui_style::modern_text_field_sized(
                                 ui,
@@ -1073,7 +1073,7 @@ impl EntropyApp {
                     }
 
                     let mut replacement_resp = None;
-                    ui.allocate_ui_at_rect(replacement_rect, |ui| {
+                    crate::ui_style::allocate_ui_at_rect(ui, replacement_rect, |ui| {
                         replacement_resp = Some(
                             crate::ui_style::modern_text_field_sized(
                                 ui,
@@ -1101,7 +1101,7 @@ impl EntropyApp {
                     }
 
                     let mut delete_clicked = false;
-                    ui.allocate_ui_at_rect(delete_rect, |ui| {
+                    crate::ui_style::allocate_ui_at_rect(ui, delete_rect, |ui| {
                         delete_clicked =
                             crate::ui_style::modern_button(ui, "×", delete_size, true).clicked();
                     });
