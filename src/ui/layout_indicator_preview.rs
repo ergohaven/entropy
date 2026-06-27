@@ -14,6 +14,8 @@ fn sticky_layout_should_draw_key(
     ) || is_pressed
 }
 
+type EncoderGroup = (u8, egui::Rect, Option<(usize, u16)>, Option<(usize, u16)>);
+
 fn sticky_rect_text_scale(rect: egui::Rect) -> f32 {
     (rect.width().min(rect.height()) / STICKY_LAYOUT_BASE_KEY_H).clamp(0.52, 2.4)
 }
@@ -300,8 +302,7 @@ impl EntropyApp {
             .filter(|&(_ki, key)| Self::layout_condition_visible(layout, key.layout_condition, layout_options_value)).map(|(ki, key)| (ki, layout_physical_key_rect(key, geometry)))
             .collect();
 
-        let mut encoder_groups: Vec<(u8, egui::Rect, Option<(usize, u16)>, Option<(usize, u16)>)> =
-            Vec::new();
+        let mut encoder_groups: Vec<EncoderGroup> = Vec::new();
         for (encoder_idx, encoder) in layout.encoders.iter().enumerate() {
             if !Self::layout_condition_visible(
                 layout,
