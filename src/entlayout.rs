@@ -1643,9 +1643,7 @@ fn universal_key_mapping(bundle: &EntLayoutFile, layout: &KeyboardLayout) -> Vec
                     best = Some((target_idx, score));
                 }
             }
-            let Some((target_idx, score)) = best else {
-                return None;
-            };
+            let (target_idx, score) = best?;
             let threshold = if source.keys.len() == layout.keys.len() {
                 0.045
             } else {
@@ -1699,9 +1697,7 @@ fn universal_encoder_mapping(
                     best = Some((target_idx, score));
                 }
             }
-            let Some((target_idx, score)) = best else {
-                return None;
-            };
+            let (target_idx, score) = best?;
             if score <= 0.05 {
                 used[target_idx] = true;
                 Some(target_idx)

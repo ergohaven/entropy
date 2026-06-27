@@ -411,9 +411,11 @@ impl EntropyApp {
                     let encoder_count = layout.encoder_count();
                     for layer in 0..layer_count {
                         let mut per_encoder = vec![(0u16, 0u16); encoder_count];
-                        for encoder_idx in 0..encoder_count {
+                        for (encoder_idx, encoder_values) in
+                            per_encoder.iter_mut().enumerate().take(encoder_count)
+                        {
                             match dev_conn.get_encoder(layer as u8, encoder_idx as u8) {
-                                Ok((ccw, cw)) => per_encoder[encoder_idx] = (ccw, cw),
+                                Ok((ccw, cw)) => *encoder_values = (ccw, cw),
                                 Err(e) => log::warn!(
                                     "get_encoder(layer={}, idx={}): {}",
                                     layer,

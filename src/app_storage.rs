@@ -353,7 +353,7 @@ pub(super) fn compact_dropdown_popup_height(
     option_height: f32,
     spacing_y: f32,
 ) -> f32 {
-    let visible = option_count.max(1).min(5) as f32;
+    let visible = option_count.clamp(1, 5) as f32;
     option_height * visible + spacing_y * (visible - 1.0).max(0.0)
 }
 
