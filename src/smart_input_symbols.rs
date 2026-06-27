@@ -418,4 +418,21 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn linux_input_method_backends_include_arrow_symbols() {
+        let ibus_backend = include_str!("../linux/ibus/entropy-ibus-engine");
+        let fcitx5_backend = include_str!("../linux/fcitx5/src/entropyuniversalsymbols.cpp");
+
+        for symbol in ["←", "↑", "→", "↓", "↔"] {
+            assert!(
+                ibus_backend.contains(symbol),
+                "IBus backend is missing {symbol}"
+            );
+            assert!(
+                fcitx5_backend.contains(symbol),
+                "Fcitx5 backend is missing {symbol}"
+            );
+        }
+    }
 }
