@@ -47,11 +47,40 @@ pub(crate) fn layout_geometry_with_reserved(
     fit_margin: f32,
     max_scale_override: Option<f32>,
 ) -> LayoutGeometry {
+    layout_geometry_with_reserved_and_filter(
+        ctx,
+        layout,
+        viewport,
+        ui_scale,
+        top_reserved,
+        bottom_reserved,
+        fit_margin,
+        max_scale_override,
+        |_| true,
+        |_| true,
+    )
+}
+
+pub(crate) fn layout_geometry_with_reserved_and_filter(
+    ctx: &egui::Context,
+    layout: &KeyboardLayout,
+    viewport: egui::Rect,
+    ui_scale: f32,
+    top_reserved: f32,
+    bottom_reserved: f32,
+    fit_margin: f32,
+    max_scale_override: Option<f32>,
+    include_key: impl Fn(&PhysicalKey) -> bool,
+    include_encoder: impl Fn(&PhysicalEncoder) -> bool,
+) -> LayoutGeometry {
     let mut min_x: f32 = f32::MAX;
     let mut min_y: f32 = f32::MAX;
     let mut max_x: f32 = f32::MIN;
     let mut max_y: f32 = f32::MIN;
     for key in &layout.keys {
+        if !include_key(key) {
+            continue;
+        }
         let (x1, y1, x2, y2) = rotated_item_aabb(
             key.x,
             key.y,
@@ -67,6 +96,9 @@ pub(crate) fn layout_geometry_with_reserved(
         max_y = max_y.max(y2);
     }
     for encoder in &layout.encoders {
+        if !include_encoder(encoder) {
+            continue;
+        }
         let (x1, y1, x2, y2) = rotated_item_aabb(
             encoder.x,
             encoder.y,

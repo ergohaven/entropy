@@ -92,13 +92,11 @@ impl EntropyApp {
                                 }
                             }
                             Err(e) => {
-                                self.stop_vial_unlock_with_status(
-                                    crate::i18n::tr_catalog_format(
-                                        self.app_settings.language,
-                                        "status_messages.unlock_interrupted_disconnected",
-                                        &[("error", &e.to_string())],
-                                    ),
-                                );
+                                self.stop_vial_unlock_with_status(crate::i18n::tr_catalog_format(
+                                    self.app_settings.language,
+                                    "status_messages.unlock_interrupted_disconnected",
+                                    &[("error", &e.to_string())],
+                                ));
                                 return;
                             }
                         }
@@ -116,6 +114,7 @@ impl EntropyApp {
             let unlock_keys = self.vial_unlock_keys.clone();
             let counter = self.vial_unlock_counter;
             let total = self.vial_unlock_total;
+            let layout_options_value = self.layout_options_value;
 
             egui::Area::new(egui::Id::new("unlock_overlay"))
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -219,13 +218,36 @@ impl EntropyApp {
                     // the normal layout viewport and can be stale or off-screen after switching
                     // from Settings/Advanced pages.
                     if let Some(layout) = &self.layout {
-                        let geometry = layout_geometry(
+                        let is_visible_key = |key: &PhysicalKey| {
+                            Self::layout_condition_visible(
+                                layout,
+                                key.layout_condition,
+                                layout_options_value,
+                            )
+                        };
+                        let is_visible_encoder = |encoder: &PhysicalEncoder| {
+                            Self::layout_condition_visible(
+                                layout,
+                                encoder.layout_condition,
+                                layout_options_value,
+                            )
+                        };
+                        let geometry = layout_geometry_with_reserved_and_filter(
                             ui.ctx(),
                             layout,
                             screen,
                             clamp_ui_scale(self.app_settings.ui_scale),
+                            LAYOUT_TOP_RESERVED_H,
+                            LAYOUT_BOTTOM_RESERVED_H,
+                            LAYOUT_FIT_MARGIN,
+                            None,
+                            is_visible_key,
+                            is_visible_encoder,
                         );
                         for key in &layout.keys {
+                            if !is_visible_key(key) {
+                                continue;
+                            }
                             let is_unlock = unlock_keys
                                 .iter()
                                 .any(|(r, c)| key.row == *r && key.col == *c);
