@@ -431,8 +431,15 @@ fn download_update_label(lang: crate::i18n::Language) -> &'static str {
 
 fn release_notes_label(lang: crate::i18n::Language) -> &'static str {
     match lang {
-        crate::i18n::Language::Russian => "Релиз",
-        crate::i18n::Language::English => "Release",
+        crate::i18n::Language::Russian => "Что нового",
+        crate::i18n::Language::English => "Release notes",
+    }
+}
+
+fn release_notes_tooltip(lang: crate::i18n::Language) -> &'static str {
+    match lang {
+        crate::i18n::Language::Russian => "Открывает страницу релиза GitHub с описанием изменений",
+        crate::i18n::Language::English => "Opens the GitHub release page with change notes",
     }
 }
 
@@ -448,7 +455,7 @@ fn draw_about_rows(
     id_salt: &'static str,
     metrics: crate::ui_style::ResponsiveMetrics,
     rows: &[AboutRow],
-) {
+) -> egui::Rect {
     let list = allocate_adaptive_settings_list_viewport(
         ui,
         id_salt,
@@ -499,6 +506,8 @@ fn draw_about_rows(
             list.track_hovered,
         );
     }
+
+    list.viewport
 }
 
 impl EntropyApp {
@@ -563,55 +572,70 @@ impl EntropyApp {
                         .color(app_muted_text(dark)),
                 );
                 ui.add_space(metrics.value(24.0));
-                draw_about_rows(ui, "about_entropy", metrics, &rows);
-                ui.add_space(metrics.value(16.0));
+                let list_viewport = draw_about_rows(ui, "about_entropy", metrics, &rows);
 
-                ui.horizontal_centered(|ui| {
-                    ui.spacing_mut().item_spacing.x = metrics.value(8.0);
-                    let checking = matches!(self.update_check, UpdateCheckState::Checking { .. });
-                    let button_size = egui::vec2(metrics.value(116.0), metrics.value(32.0));
-                    if crate::ui_style::modern_button(
-                        ui,
-                        check_updates_label(lang, checking),
-                        button_size,
-                        !checking,
-                    )
-                    .clicked()
-                    {
-                        self.update_check = crate::app::start_update_check();
-                    }
+                let checking = matches!(self.update_check, UpdateCheckState::Checking { .. });
+                let ready = match &self.update_check {
+                    UpdateCheckState::Ready(result) => Some(result.clone()),
+                    _ => None,
+                };
+                let has_asset = ready.as_ref().is_some_and(|result| result.asset.is_some());
+                let button_size = egui::vec2(metrics.value(132.0), metrics.value(32.0));
+                let button_gap = metrics.value(8.0);
+                let button_count = 1 + usize::from(has_asset) + usize::from(ready.is_some());
+                let actions_width = button_size.x * button_count as f32
+                    + button_gap * button_count.saturating_sub(1) as f32;
+                let actions_rect = egui::Rect::from_center_size(
+                    egui::pos2(
+                        list_viewport.center().x,
+                        list_viewport.bottom() + metrics.value(34.0),
+                    ),
+                    egui::vec2(actions_width, button_size.y),
+                );
+                crate::ui_style::allocate_ui_at_rect(ui, actions_rect, |ui| {
+                    ui.set_min_size(actions_rect.size());
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = button_gap;
+                        if crate::ui_style::modern_button(
+                            ui,
+                            check_updates_label(lang, checking),
+                            button_size,
+                            !checking,
+                        )
+                        .clicked()
+                        {
+                            self.update_check = crate::app::start_update_check();
+                        }
 
-                    let ready = match &self.update_check {
-                        UpdateCheckState::Ready(result) => Some(result.clone()),
-                        _ => None,
-                    };
-                    if let Some(result) = ready {
-                        if let Some(asset) = result.asset {
+                        if let Some(result) = ready {
+                            if let Some(asset) = result.asset {
+                                if crate::ui_style::modern_button(
+                                    ui,
+                                    download_update_label(lang),
+                                    button_size,
+                                    true,
+                                )
+                                .clicked()
+                                    && !crate::app::open_url_in_browser(&asset.url)
+                                {
+                                    self.status_msg = browser_open_failed(lang).to_owned();
+                                }
+                            }
+
                             if crate::ui_style::modern_button(
                                 ui,
-                                download_update_label(lang),
+                                release_notes_label(lang),
                                 button_size,
                                 true,
                             )
+                            .on_hover_text(release_notes_tooltip(lang))
                             .clicked()
-                                && !crate::app::open_url_in_browser(&asset.url)
+                                && !crate::app::open_url_in_browser(&result.release_url)
                             {
                                 self.status_msg = browser_open_failed(lang).to_owned();
                             }
                         }
-
-                        if crate::ui_style::modern_button(
-                            ui,
-                            release_notes_label(lang),
-                            button_size,
-                            true,
-                        )
-                        .clicked()
-                            && !crate::app::open_url_in_browser(&result.release_url)
-                        {
-                            self.status_msg = browser_open_failed(lang).to_owned();
-                        }
-                    }
+                    });
                 });
             });
         });
