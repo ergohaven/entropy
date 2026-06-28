@@ -45,15 +45,12 @@ impl KeycodePicker {
                     .color(Color32::from_gray(150)),
             );
             for tone in crate::emoji_catalog::EmojiSkinTone::ALL {
-                let label = if tone == crate::emoji_catalog::EmojiSkinTone::Default {
-                    tr_picker(self.language, "key_picker.emoji_skin_default")
-                } else {
-                    tone.swatch()
-                };
+                let label = emoji_skin_tone_label(self.language, tone);
+                let width = (label.chars().count() as f32 * 7.0 + 26.0).clamp(58.0, 108.0) * scale;
                 if picker_button(
                     ui,
                     label,
-                    Vec2::new(58.0 * scale, 30.0 * scale),
+                    Vec2::new(width, 30.0 * scale),
                     true,
                     self.emoji_skin_tone == tone,
                 )
@@ -117,8 +114,7 @@ impl KeycodePicker {
                 ui.spacing_mut().item_spacing = Vec2::new(5.0 * scale, 5.0 * scale);
                 for entry in results {
                     let active = self.emoji_selected == Some(entry);
-                    let label = crate::emoji_catalog::emoji_sequence(entry, self.emoji_skin_tone);
-                    let resp = emoji_cell_button(ui, &label, active, scale)
+                    let resp = emoji_cell_button(ui, entry.emoji, active, scale)
                         .on_hover_text(crate::i18n::tr_text(self.language, entry.name));
                     if resp.clicked() {
                         self.emoji_selected = Some(entry);
@@ -132,7 +128,7 @@ impl KeycodePicker {
         let Some(entry) = self.emoji_selected else {
             return;
         };
-        let emoji = crate::emoji_catalog::emoji_sequence(entry, self.emoji_skin_tone);
+        let output_preview = emoji_output_preview(self.language, entry, self.emoji_skin_tone);
 
         let height = 58.0 * scale;
         let (rect, _) = ui.allocate_exact_size(
@@ -154,7 +150,7 @@ impl KeycodePicker {
         ui.painter().text(
             emoji_rect.center(),
             egui::Align2::CENTER_CENTER,
-            &emoji,
+            entry.emoji,
             egui::FontId::proportional(28.0 * scale),
             ui.visuals().text_color(),
         );
@@ -179,7 +175,7 @@ impl KeycodePicker {
             format!(
                 "{}: {}",
                 tr_picker(self.language, "key_picker.emoji_output"),
-                emoji
+                output_preview
             ),
             egui::FontId::proportional(12.0 * scale),
             crate::ui_style::muted_text(dark),
@@ -237,4 +233,36 @@ fn emoji_category_label(
         crate::emoji_catalog::EmojiCategory::Symbols => "key_picker.emoji_category_symbols",
     };
     tr_picker(language, key)
+}
+
+fn emoji_skin_tone_label(
+    language: crate::i18n::Language,
+    tone: crate::emoji_catalog::EmojiSkinTone,
+) -> &'static str {
+    let key = match tone {
+        crate::emoji_catalog::EmojiSkinTone::Default => "key_picker.emoji_skin_default",
+        crate::emoji_catalog::EmojiSkinTone::Light => "key_picker.emoji_skin_light",
+        crate::emoji_catalog::EmojiSkinTone::MediumLight => "key_picker.emoji_skin_medium_light",
+        crate::emoji_catalog::EmojiSkinTone::Medium => "key_picker.emoji_skin_medium",
+        crate::emoji_catalog::EmojiSkinTone::MediumDark => "key_picker.emoji_skin_medium_dark",
+        crate::emoji_catalog::EmojiSkinTone::Dark => "key_picker.emoji_skin_dark",
+    };
+    tr_picker(language, key)
+}
+
+fn emoji_output_preview(
+    language: crate::i18n::Language,
+    entry: &crate::emoji_catalog::EmojiEntry,
+    tone: crate::emoji_catalog::EmojiSkinTone,
+) -> String {
+    let output_sequence = crate::emoji_catalog::emoji_sequence(entry, tone);
+    if entry.supports_skin_tone && tone != crate::emoji_catalog::EmojiSkinTone::Default {
+        format!(
+            "{} ({})",
+            entry.emoji,
+            emoji_skin_tone_label(language, tone)
+        )
+    } else {
+        output_sequence
+    }
 }

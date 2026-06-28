@@ -54,17 +54,6 @@ impl EmojiSkinTone {
             EmojiSkinTone::Dark => Some('\u{1F3FF}'),
         }
     }
-
-    pub fn swatch(self) -> &'static str {
-        match self {
-            EmojiSkinTone::Default => "●",
-            EmojiSkinTone::Light => "🏻",
-            EmojiSkinTone::MediumLight => "🏼",
-            EmojiSkinTone::Medium => "🏽",
-            EmojiSkinTone::MediumDark => "🏾",
-            EmojiSkinTone::Dark => "🏿",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
