@@ -112,16 +112,14 @@ jobs:
           cat > RELEASE_NOTES.md <<'EOF'
           ## What's new
 
-          - Added layout image export with PNG and SVG formats.
-          - Added export options for theme, key legends, selected layers, layer names, and current layout options.
-          - Persisted layout image export settings, with only layer 0 enabled by default.
-          - Fixed media key labels in layout image exports so volume and track keys render without broken glyphs.
-          - Added layer actions to macro and tap dance pickers.
-          - Added custom keycodes to macro and tap dance pickers while hiding reserved Ergohaven keycodes.
-          - Fixed Windows Universal Symbols Alt-menu activation in apps such as Firefox, RAD Studio, and SQL Server Management Studio.
-          - Fixed RMK live matrix mapping for Layout Indicator and Matrix Tester.
-          - Fixed macOS Dock restore when Entropy is hidden to the menu bar.
-          - Fixed text expander editor typing lag.
+          - Added About Entropy update checks through GitHub Releases for Linux, Windows, and macOS.
+          - Added platform-aware update downloads for AppImage, Windows executable, and macOS DMG assets.
+          - Added Changelog and Download actions to About Entropy after checking for updates.
+          - Added macro choices to Tap Dance assignment for On tap and On double tap.
+          - Tap Dance fields now show custom macro names when a macro keycode is assigned.
+          - Centered About Entropy update action buttons under the settings list.
+          - Removed the application version from the native window title bar.
+          - Switched the application package version back to the public GitHub release channel.
 
           ## Downloads
 

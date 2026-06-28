@@ -5,6 +5,22 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.1.5 - Public Beta
+
+### Main Features
+
+- Added About Entropy update checks through GitHub Releases for Linux, Windows, and macOS
+- Added platform-aware update asset selection for AppImage, Windows executable, and macOS DMG downloads
+- Added Changelog and Download actions to About Entropy after checking for updates
+- Added macro choices to Tap Dance assignment for `On tap` and `On double tap`
+- Tap Dance fields now show custom macro names when a macro keycode is assigned
+
+### Fixes
+
+- Centered About Entropy update action buttons under the settings list
+- Removed the application version from the native window title bar
+- Switched the application package version back to the public GitHub release channel
+
 ## v0.1.0-beta.1 - Public Beta
 
 Based on internal build `v1.13.153`.
