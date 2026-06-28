@@ -59,15 +59,6 @@ impl EmojiSection {
 }
 
 impl EmojiSkinTone {
-    pub const ALL: [EmojiSkinTone; 6] = [
-        EmojiSkinTone::Default,
-        EmojiSkinTone::Light,
-        EmojiSkinTone::MediumLight,
-        EmojiSkinTone::Medium,
-        EmojiSkinTone::MediumDark,
-        EmojiSkinTone::Dark,
-    ];
-
     pub fn modifier(self) -> Option<char> {
         match self {
             EmojiSkinTone::Default => None,
@@ -359,7 +350,14 @@ mod tests {
     #[test]
     fn skin_tone_cycles_back_to_default() {
         let mut tone = EmojiSkinTone::Default;
-        for _ in 0..EmojiSkinTone::ALL.len() {
+        for _ in [
+            EmojiSkinTone::Default,
+            EmojiSkinTone::Light,
+            EmojiSkinTone::MediumLight,
+            EmojiSkinTone::Medium,
+            EmojiSkinTone::MediumDark,
+            EmojiSkinTone::Dark,
+        ] {
             tone = tone.next();
         }
         assert_eq!(tone, EmojiSkinTone::Default);
