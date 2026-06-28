@@ -13,6 +13,7 @@ static LOGGER: DiagnosticsLogger = DiagnosticsLogger {
     enabled: AtomicBool::new(false),
     file: Mutex::new(None),
 };
+static PANIC_HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 struct DiagnosticsLogger {
     enabled: AtomicBool,
@@ -65,6 +66,7 @@ pub(crate) fn init(enabled: bool) {
     if log::set_logger(&LOGGER).is_ok() {
         log::set_max_level(LevelFilter::Info);
     }
+    install_panic_hook();
     set_enabled(enabled);
     log::info!(
         "Entropy v{} starting on {} {}",
@@ -120,6 +122,49 @@ pub(crate) fn set_enabled(enabled: bool) {
         "Diagnostics mode {}",
         if enabled { "enabled" } else { "disabled" }
     );
+}
+
+fn install_panic_hook() {
+    if PANIC_HOOK_INSTALLED
+        .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log::error!("{}", panic_hook_message(info));
+        previous_hook(info);
+    }));
+}
+
+fn panic_hook_message(info: &std::panic::PanicHookInfo<'_>) -> String {
+    let payload = if let Some(message) = info.payload().downcast_ref::<&str>() {
+        (*message).to_owned()
+    } else if let Some(message) = info.payload().downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "non-string panic payload".to_owned()
+    };
+    let location = info.location().map(|location| {
+        format!(
+            "{}:{}:{}",
+            location.file(),
+            location.line(),
+            location.column()
+        )
+    });
+
+    panic_log_message(&payload, location.as_deref())
+}
+
+fn panic_log_message(payload: &str, location: Option<&str>) -> String {
+    format!(
+        "panic at {}: {}",
+        location.unwrap_or("unknown location"),
+        payload
+    )
 }
 
 pub(crate) fn settings_file_enabled() -> bool {
@@ -215,4 +260,30 @@ fn display_path(path: &std::path::Path) -> String {
         }
     }
     raw.into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panic_log_message_includes_payload_and_location() {
+        let message = panic_log_message(
+            "connect failed",
+            Some("src/ui/device_connect_apply.rs:42:9"),
+        );
+
+        assert_eq!(
+            message,
+            "panic at src/ui/device_connect_apply.rs:42:9: connect failed"
+        );
+    }
+
+    #[test]
+    fn panic_log_message_handles_missing_location() {
+        assert_eq!(
+            panic_log_message("connect failed", None),
+            "panic at unknown location: connect failed"
+        );
+    }
 }

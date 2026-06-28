@@ -15,6 +15,39 @@ fn has_firmware_layer_names(names: &[String]) -> bool {
         .any(|(index, name)| !is_default_layer_name(index, name))
 }
 
+fn connect_apply_start_log(
+    device_name: &str,
+    layer_count: usize,
+    firmware: FirmwareProtocol,
+) -> String {
+    format!("Applying keyboard layout for {device_name} ({layer_count} layers, {firmware:?})")
+}
+
+fn connect_apply_error_log(error: &str) -> String {
+    format!("Connect failed before applying keyboard layout: {error}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connect_apply_start_log_includes_device_layer_count_and_firmware() {
+        assert_eq!(
+            connect_apply_start_log("HPD2", 4, FirmwareProtocol::Vial),
+            "Applying keyboard layout for HPD2 (4 layers, Vial)"
+        );
+    }
+
+    #[test]
+    fn connect_apply_error_log_includes_context() {
+        assert_eq!(
+            connect_apply_error_log("Layout parse failed: missing matrix"),
+            "Connect failed before applying keyboard layout: Layout parse failed: missing matrix"
+        );
+    }
+}
+
 impl EntropyApp {
     /// Poll background thread for connect result.
     #[cfg(not(target_arch = "wasm32"))]
@@ -40,13 +73,14 @@ impl EntropyApp {
                     let total_timeout = started_at.elapsed() > CONNECT_TOTAL_TIMEOUT;
                     if idle_timeout || total_timeout {
                         let stage = if self.status_msg.is_empty() {
-                            "unknown stage"
+                            "unknown stage".to_owned()
                         } else {
-                            self.status_msg.as_str()
+                            self.status_msg.clone()
                         };
                         self.status_msg = format!(
                             "Connect timeout — RMK/Vial device did not finish loading while: {stage}"
                         );
+                        log::warn!("Connect timeout while waiting for stage: {stage}");
                         self.connect_state = ConnectState::Idle;
                         return;
                     }
@@ -55,6 +89,7 @@ impl EntropyApp {
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.status_msg = "Connect thread died".into();
+                    log::error!("Connect thread died before returning a result");
                     self.connect_state = ConnectState::Idle;
                     return;
                 }
@@ -66,6 +101,10 @@ impl EntropyApp {
 
         match result {
             Ok(r) => {
+                log::info!(
+                    "{}",
+                    connect_apply_start_log(&r.device_name, r.layer_count, r.layout.firmware)
+                );
                 self.layer_count = r.layer_count;
                 self.firmware = r.layout.firmware;
                 self.current_device_name = r.device_name.clone();
@@ -254,6 +293,7 @@ impl EntropyApp {
                 );
             }
             Err(e) => {
+                log::error!("{}", connect_apply_error_log(&e));
                 self.status_msg = e;
             }
         }
