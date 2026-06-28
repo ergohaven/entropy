@@ -10,6 +10,17 @@ pub enum EmojiCategory {
     Symbols,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EmojiSection {
+    EmojiAndPeople,
+    Nature,
+    Food,
+    Travel,
+    Activities,
+    Objects,
+    Symbols,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EmojiSkinTone {
     #[default]
@@ -21,17 +32,30 @@ pub enum EmojiSkinTone {
     Dark,
 }
 
-impl EmojiCategory {
-    pub const ALL: [EmojiCategory; 8] = [
-        EmojiCategory::Smileys,
-        EmojiCategory::People,
-        EmojiCategory::Nature,
-        EmojiCategory::Food,
-        EmojiCategory::Travel,
-        EmojiCategory::Activities,
-        EmojiCategory::Objects,
-        EmojiCategory::Symbols,
+impl EmojiSection {
+    pub const ALL: [EmojiSection; 7] = [
+        EmojiSection::EmojiAndPeople,
+        EmojiSection::Nature,
+        EmojiSection::Food,
+        EmojiSection::Travel,
+        EmojiSection::Activities,
+        EmojiSection::Objects,
+        EmojiSection::Symbols,
     ];
+
+    fn includes_category(self, category: EmojiCategory) -> bool {
+        match self {
+            EmojiSection::EmojiAndPeople => {
+                matches!(category, EmojiCategory::Smileys | EmojiCategory::People)
+            }
+            EmojiSection::Nature => category == EmojiCategory::Nature,
+            EmojiSection::Food => category == EmojiCategory::Food,
+            EmojiSection::Travel => category == EmojiCategory::Travel,
+            EmojiSection::Activities => category == EmojiCategory::Activities,
+            EmojiSection::Objects => category == EmojiCategory::Objects,
+            EmojiSection::Symbols => category == EmojiCategory::Symbols,
+        }
+    }
 }
 
 impl EmojiSkinTone {
@@ -52,6 +76,17 @@ impl EmojiSkinTone {
             EmojiSkinTone::Medium => Some('\u{1F3FD}'),
             EmojiSkinTone::MediumDark => Some('\u{1F3FE}'),
             EmojiSkinTone::Dark => Some('\u{1F3FF}'),
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            EmojiSkinTone::Default => EmojiSkinTone::Light,
+            EmojiSkinTone::Light => EmojiSkinTone::MediumLight,
+            EmojiSkinTone::MediumLight => EmojiSkinTone::Medium,
+            EmojiSkinTone::Medium => EmojiSkinTone::MediumDark,
+            EmojiSkinTone::MediumDark => EmojiSkinTone::Dark,
+            EmojiSkinTone::Dark => EmojiSkinTone::Default,
         }
     }
 }
@@ -199,8 +234,8 @@ pub const EMOJI_CATALOG: &[EmojiEntry] = &[
     emoji_entry!("♻️", "Recycling symbol", Symbols, ["recycle", "green"]),
 ];
 
-pub fn emoji_categories() -> &'static [EmojiCategory] {
-    &EmojiCategory::ALL
+pub fn emoji_sections() -> &'static [EmojiSection] {
+    &EmojiSection::ALL
 }
 
 pub fn emoji_sequence(entry: &EmojiEntry, skin_tone: EmojiSkinTone) -> String {
@@ -213,12 +248,18 @@ pub fn emoji_sequence(entry: &EmojiEntry, skin_tone: EmojiSkinTone) -> String {
     sequence
 }
 
-pub fn filter_emoji(query: &str, category: Option<EmojiCategory>) -> Vec<&'static EmojiEntry> {
+pub fn filter_emoji(query: &str) -> Vec<&'static EmojiEntry> {
     let query = query.trim().to_lowercase();
     EMOJI_CATALOG
         .iter()
-        .filter(|entry| category.is_none_or(|category| entry.category == category))
         .filter(|entry| query.is_empty() || entry_matches_query(entry, &query))
+        .collect()
+}
+
+pub fn filter_emoji_section(query: &str, section: EmojiSection) -> Vec<&'static EmojiEntry> {
+    filter_emoji(query)
+        .into_iter()
+        .filter(|entry| section.includes_category(entry.category))
         .collect()
 }
 
@@ -249,8 +290,10 @@ mod tests {
             EmojiCategory::Symbols,
         ] {
             assert!(
-                emoji_categories().contains(&category),
-                "missing category {category:?}"
+                emoji_sections()
+                    .iter()
+                    .any(|section| section.includes_category(category)),
+                "missing section for {category:?}"
             );
             assert!(
                 EMOJI_CATALOG.iter().any(|entry| entry.category == category),
@@ -261,13 +304,13 @@ mod tests {
 
     #[test]
     fn search_matches_name_keywords_and_glyph() {
-        let heart_results = filter_emoji("heart", None);
+        let heart_results = filter_emoji("heart");
         assert!(heart_results.iter().any(|entry| entry.emoji == "❤️"));
 
-        let laugh_results = filter_emoji("laugh", None);
+        let laugh_results = filter_emoji("laugh");
         assert!(laugh_results.iter().any(|entry| entry.emoji == "😂"));
 
-        let glyph_results = filter_emoji("🚀", None);
+        let glyph_results = filter_emoji("🚀");
         assert_eq!(
             glyph_results.first().map(|entry| entry.name),
             Some("Rocket")
@@ -275,13 +318,27 @@ mod tests {
     }
 
     #[test]
-    fn category_filter_limits_results() {
-        let results = filter_emoji("heart", Some(EmojiCategory::Symbols));
+    fn section_filter_groups_related_emoji() {
+        let results = filter_emoji_section("", EmojiSection::EmojiAndPeople);
 
         assert!(!results.is_empty());
         assert!(results
             .iter()
-            .all(|entry| entry.category == EmojiCategory::Symbols));
+            .any(|entry| entry.category == EmojiCategory::Smileys));
+        assert!(results
+            .iter()
+            .any(|entry| entry.category == EmojiCategory::People));
+        assert!(!results
+            .iter()
+            .any(|entry| entry.category == EmojiCategory::Nature));
+    }
+
+    #[test]
+    fn section_order_starts_with_common_emoji() {
+        assert_eq!(
+            emoji_sections().first(),
+            Some(&EmojiSection::EmojiAndPeople)
+        );
     }
 
     #[test]
@@ -297,5 +354,14 @@ mod tests {
             .find(|entry| entry.name == "Rocket")
             .unwrap();
         assert_eq!(emoji_sequence(rocket, EmojiSkinTone::Medium), "🚀");
+    }
+
+    #[test]
+    fn skin_tone_cycles_back_to_default() {
+        let mut tone = EmojiSkinTone::Default;
+        for _ in 0..EmojiSkinTone::ALL.len() {
+            tone = tone.next();
+        }
+        assert_eq!(tone, EmojiSkinTone::Default);
     }
 }

@@ -25,7 +25,6 @@ impl KeycodePicker {
             KeycodeTab::Symbols | KeycodeTab::Special | KeycodeTab::Rgb | KeycodeTab::Custom => {
                 Self::key_grid_width(ui, 13, spacing)
             }
-            KeycodeTab::Emoji => 900.0,
             KeycodeTab::Modifiers => Self::key_grid_width(ui, 13, spacing),
             KeycodeTab::Macro | KeycodeTab::TapDance => Self::slot_grid_width(16, 4.0),
             _ => 840.0,
