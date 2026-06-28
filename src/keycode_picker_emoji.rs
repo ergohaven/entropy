@@ -24,6 +24,7 @@ impl KeycodePicker {
                 egui::Align::Min,
             );
 
+            ui.add_space(8.0 * scale);
             if picker_button(
                 ui,
                 tr_picker(self.language, "key_picker.emoji_clear"),
