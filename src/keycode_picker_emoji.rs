@@ -13,57 +13,6 @@ impl KeycodePicker {
         ui.add_space(6.0 * scale);
 
         ui.horizontal_wrapped(|ui| {
-            let search_width = (ui.available_width() * 0.42).clamp(260.0, 380.0);
-            crate::ui_style::modern_text_field(
-                ui,
-                ui.make_persistent_id("emoji_search_query"),
-                &mut self.emoji_search_query,
-                search_width,
-                tr_picker(self.language, "key_picker.emoji_search_placeholder"),
-                48,
-                egui::Align::Min,
-            );
-
-            ui.add_space(8.0 * scale);
-            if picker_button(
-                ui,
-                tr_picker(self.language, "key_picker.emoji_clear"),
-                Vec2::new(72.0 * scale, 32.0 * scale),
-                !self.emoji_search_query.is_empty(),
-                false,
-            )
-            .clicked()
-            {
-                self.emoji_search_query.clear();
-            }
-        });
-
-        ui.add_space(8.0 * scale);
-        ui.horizontal_wrapped(|ui| {
-            ui.label(
-                RichText::new(tr_picker(self.language, "key_picker.emoji_skin_tone"))
-                    .size(11.0 * scale)
-                    .color(Color32::from_gray(150)),
-            );
-            for tone in crate::emoji_catalog::EmojiSkinTone::ALL {
-                let label = emoji_skin_tone_label(self.language, tone);
-                let width = (label.chars().count() as f32 * 7.0 + 26.0).clamp(58.0, 108.0) * scale;
-                if picker_button(
-                    ui,
-                    label,
-                    Vec2::new(width, 30.0 * scale),
-                    true,
-                    self.emoji_skin_tone == tone,
-                )
-                .clicked()
-                {
-                    self.emoji_skin_tone = tone;
-                }
-            }
-        });
-
-        ui.add_space(8.0 * scale);
-        ui.horizontal_wrapped(|ui| {
             let all_active = self.emoji_category.is_none();
             if picker_button(
                 ui,
@@ -91,6 +40,58 @@ impl KeycodePicker {
                 {
                     self.emoji_category = Some(*category);
                 }
+            }
+        });
+
+        ui.add_space(8.0 * scale);
+        ui.label(
+            RichText::new(tr_picker(self.language, "key_picker.emoji_skin_tone"))
+                .size(11.0 * scale)
+                .color(Color32::from_gray(150)),
+        );
+        ui.add_space(4.0 * scale);
+        ui.horizontal_wrapped(|ui| {
+            for tone in crate::emoji_catalog::EmojiSkinTone::ALL {
+                let label = emoji_skin_tone_label(self.language, tone);
+                let width = (label.chars().count() as f32 * 7.0 + 26.0).clamp(58.0, 108.0) * scale;
+                if picker_button(
+                    ui,
+                    label,
+                    Vec2::new(width, 30.0 * scale),
+                    true,
+                    self.emoji_skin_tone == tone,
+                )
+                .clicked()
+                {
+                    self.emoji_skin_tone = tone;
+                }
+            }
+        });
+
+        ui.add_space(12.0 * scale);
+        ui.horizontal_wrapped(|ui| {
+            let search_width = (ui.available_width() * 0.42).clamp(260.0, 380.0);
+            crate::ui_style::modern_text_field(
+                ui,
+                ui.make_persistent_id("emoji_search_query"),
+                &mut self.emoji_search_query,
+                search_width,
+                tr_picker(self.language, "key_picker.emoji_search_placeholder"),
+                48,
+                egui::Align::Min,
+            );
+
+            ui.add_space(8.0 * scale);
+            if picker_button(
+                ui,
+                tr_picker(self.language, "key_picker.emoji_clear"),
+                Vec2::new(72.0 * scale, 32.0 * scale),
+                !self.emoji_search_query.is_empty(),
+                false,
+            )
+            .clicked()
+            {
+                self.emoji_search_query.clear();
             }
         });
 
