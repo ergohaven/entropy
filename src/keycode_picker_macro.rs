@@ -763,7 +763,7 @@ impl KeycodePicker {
         }
     }
 
-    fn macro_display_name(&self, n: usize) -> String {
+    pub(super) fn macro_display_name(&self, n: usize) -> String {
         match self.macro_names.get(n) {
             Some(name) if !name.trim().is_empty() => name.clone(),
             _ => format!("M{}", n),

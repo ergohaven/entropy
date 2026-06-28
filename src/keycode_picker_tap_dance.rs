@@ -146,11 +146,7 @@ impl KeycodePicker {
                         3 => self.tap_dance_entries[n].on_tap_hold,
                         _ => 0,
                     };
-                    let kc_label = if kc == 0 {
-                        "None".to_string()
-                    } else {
-                        crate::keycode::keycode_label_with_names_and_layout(kc, &custom_pairs, &self.layer_names, self.key_legend_layout)
-                    };
+                    let kc_label = self.tap_dance_field_label(kc, &custom_pairs);
                     if picker_button(ui, &kc_label, Vec2::new(120.0, 30.0), true, false)
                         .on_hover_text(if kc == 0 {
                             crate::i18n::tr_catalog(
@@ -444,11 +440,7 @@ impl KeycodePicker {
                             3 => self.tap_dance_entries[n].on_tap_hold,
                             _ => 0,
                         };
-                        let kc_label = if kc == 0 {
-                            "None".to_string()
-                        } else {
-                            crate::keycode::keycode_label_with_names_and_layout(kc, &custom_pairs, &self.layer_names, self.key_legend_layout)
-                        };
+                        let kc_label = self.tap_dance_field_label(kc, &custom_pairs);
                         if ui
                             .add(
                                 egui::Button::new(RichText::new(&kc_label).size(16.0))
@@ -538,6 +530,25 @@ impl KeycodePicker {
             Some(name) if !name.trim().is_empty() => name.clone(),
             _ => format!("TD{}", n),
         }
+    }
+
+    pub(super) fn tap_dance_field_label(
+        &self,
+        value: u16,
+        custom_pairs: &[crate::keyboard::CustomKeycode],
+    ) -> String {
+        if value == 0 {
+            return "None".to_string();
+        }
+        if (0x7700..=0x77FF).contains(&value) {
+            return self.macro_display_name((value - 0x7700) as usize);
+        }
+        crate::keycode::keycode_label_with_names_and_layout(
+            value,
+            custom_pairs,
+            &self.layer_names,
+            self.key_legend_layout,
+        )
     }
 
     pub(super) fn push_tap_dance_undo(&mut self, n: usize) {

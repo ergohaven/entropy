@@ -183,6 +183,7 @@ impl KeycodePicker {
                         self.show_tap_dance_universal_symbol_sections(ui, td_idx, field);
                         self.show_tap_dance_layer_section(ui, td_idx, field);
                         self.show_tap_dance_custom_keycode_section(ui, td_idx, field);
+                        self.show_tap_dance_macro_section(ui, td_idx, field);
                     }
                 });
         });
@@ -277,6 +278,32 @@ impl KeycodePicker {
             return;
         }
         if let Some(value) = self.show_custom_keycode_choice_section(ui) {
+            self.set_tap_dance_field(td_idx, field, value);
+            self.td_key_pick = None;
+        }
+    }
+
+    fn show_tap_dance_macro_section(&mut self, ui: &mut egui::Ui, td_idx: usize, field: u8) {
+        if !matches!(field, 0 | 2) || !self.supports_macro || self.macro_count == 0 {
+            return;
+        }
+
+        let choices: Vec<(u16, String, String)> = (0..self.macro_count.min(256))
+            .map(|idx| {
+                let id = format!("M{}", idx);
+                let display_name = self.macro_display_name(idx);
+                let tooltip = if display_name == id {
+                    format!("{id} — macro")
+                } else {
+                    format!("{id} — macro {display_name}")
+                };
+                (0x7700 + idx as u16, display_name, tooltip)
+            })
+            .collect();
+
+        if let Some(value) =
+            show_grouped_popup_choice_buttons(ui, vec![("Macros", choices)], self.language)
+        {
             self.set_tap_dance_field(td_idx, field, value);
             self.td_key_pick = None;
         }
