@@ -117,9 +117,20 @@ jobs:
           - Added Changelog and Download actions to About Entropy after checking for updates.
           - Added macro choices to Tap Dance assignment for On tap and On double tap.
           - Tap Dance fields now show custom macro names when a macro keycode is assigned.
+          - Added pressed-only Layout Indicator mode.
+          - Added Universal Symbols arrow key support, including Linux backend sync and EditPlus fallback handling.
+          - Exposed trackball module settings tabs.
+          - Added single-instance lock override and repeated-launch guard.
+          - Improved macOS packaging and CI with explicit release targets, package architecture validation, signed bundle metadata, Apple Silicon diagnostics, and arm64 PR coverage.
           - Centered About Entropy update action buttons under the settings list.
           - Removed the application version from the native window title bar.
           - Switched the application package version back to the public GitHub release channel.
+          - Fixed held MO layer state in Layout Indicator.
+          - Preserved unknown macro bytecode during macro round-trips.
+          - Synced duplicate Layer LED color settings.
+          - Guarded device connect against zero layer count.
+          - Stabilized macOS HID initialization and bounded macOS automation waits.
+          - Reduced clippy and deprecation noise around connect-task payloads, complex types, and egui rect allocation.
 
           ## Downloads
 
