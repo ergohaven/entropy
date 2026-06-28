@@ -24,6 +24,9 @@ mod app_init;
 #[path = "app_storage.rs"]
 mod app_storage;
 use app_storage::*;
+#[path = "app_update.rs"]
+mod app_update;
+use app_update::*;
 #[path = "entlayout.rs"]
 mod entlayout;
 #[path = "entsettings.rs"]

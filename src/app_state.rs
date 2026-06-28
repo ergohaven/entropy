@@ -1610,6 +1610,7 @@ pub struct EntropyApp {
     /// Friendly names learned from firmware/device info, keyed by device path.
     pub(crate) device_display_names: std::collections::HashMap<String, String>,
     pub(crate) device_about_info: Option<DeviceAboutInfo>,
+    pub(crate) update_check: UpdateCheckState,
     pub(crate) tour_state: TourState,
     pub(crate) tour_target_rects: Vec<(TourTarget, egui::Rect)>,
     /// Vial unlock dialog open

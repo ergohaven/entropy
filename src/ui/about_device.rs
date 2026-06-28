@@ -49,8 +49,8 @@ fn about_entropy_title(lang: crate::i18n::Language) -> &'static str {
 
 fn about_entropy_description(lang: crate::i18n::Language) -> &'static str {
     match lang {
-        crate::i18n::Language::Russian => "Версия приложения и сведения о сборке",
-        crate::i18n::Language::English => "Application version and build information",
+        crate::i18n::Language::Russian => "Версия приложения и обновления для вашей ОС",
+        crate::i18n::Language::English => "Application version and updates for your OS",
     }
 }
 
@@ -294,7 +294,10 @@ fn device_about_rows(lang: crate::i18n::Language, info: &DeviceAboutInfo) -> Vec
     ]
 }
 
-fn about_entropy_rows(lang: crate::i18n::Language) -> Vec<AboutRow> {
+fn about_entropy_update_rows(
+    lang: crate::i18n::Language,
+    update_check: &UpdateCheckState,
+) -> Vec<AboutRow> {
     vec![
         localized_row(
             lang,
@@ -312,7 +315,132 @@ fn about_entropy_rows(lang: crate::i18n::Language) -> Vec<AboutRow> {
             "Version from Cargo package metadata",
             env!("CARGO_PKG_VERSION"),
         ),
+        localized_row(
+            lang,
+            "Платформа",
+            "Platform",
+            "ОС и архитектура текущей сборки",
+            "OS and architecture of this build",
+            update_platform_text(update_check),
+        ),
+        localized_monospace_row(
+            lang,
+            "Последний релиз",
+            "Latest release",
+            "Последняя версия на GitHub Releases",
+            "Latest version on GitHub Releases",
+            latest_release_text(lang, update_check),
+        ),
+        localized_row(
+            lang,
+            "Статус обновления",
+            "Update status",
+            "Результат проверки обновлений",
+            "Update check result",
+            update_status_text(lang, update_check),
+        ),
+        localized_row(
+            lang,
+            "Файл обновления",
+            "Update file",
+            "Подходящий файл релиза для этой ОС",
+            "Release asset selected for this OS",
+            update_asset_text(lang, update_check),
+        ),
     ]
+}
+
+fn update_platform_text(update_check: &UpdateCheckState) -> String {
+    match update_check {
+        UpdateCheckState::Ready(result) => result.platform_label.clone(),
+        _ => crate::app::current_platform_label(),
+    }
+}
+
+fn latest_release_text(lang: crate::i18n::Language, update_check: &UpdateCheckState) -> String {
+    match update_check {
+        UpdateCheckState::Ready(result) => result.latest_version.clone(),
+        UpdateCheckState::Checking { .. } => match lang {
+            crate::i18n::Language::Russian => "проверяется".to_owned(),
+            crate::i18n::Language::English => "checking".to_owned(),
+        },
+        _ => not_reported(lang).to_owned(),
+    }
+}
+
+fn update_status_text(lang: crate::i18n::Language, update_check: &UpdateCheckState) -> String {
+    match update_check {
+        UpdateCheckState::Idle => match lang {
+            crate::i18n::Language::Russian => "не проверялось".to_owned(),
+            crate::i18n::Language::English => "not checked".to_owned(),
+        },
+        UpdateCheckState::Checking { .. } => match lang {
+            crate::i18n::Language::Russian => "проверяем GitHub Releases".to_owned(),
+            crate::i18n::Language::English => "checking GitHub Releases".to_owned(),
+        },
+        UpdateCheckState::Ready(result) => match result.relation {
+            VersionRelation::UpdateAvailable => match lang {
+                crate::i18n::Language::Russian => "доступно обновление".to_owned(),
+                crate::i18n::Language::English => "update available".to_owned(),
+            },
+            VersionRelation::UpToDate => match lang {
+                crate::i18n::Language::Russian => "актуальная версия".to_owned(),
+                crate::i18n::Language::English => "up to date".to_owned(),
+            },
+            VersionRelation::DevelopmentBuild => match lang {
+                crate::i18n::Language::Russian => "локальная сборка новее релиза".to_owned(),
+                crate::i18n::Language::English => "local build is newer than latest".to_owned(),
+            },
+        },
+        UpdateCheckState::Failed(error) => match lang {
+            crate::i18n::Language::Russian => format!("ошибка: {error}"),
+            crate::i18n::Language::English => format!("error: {error}"),
+        },
+    }
+}
+
+fn update_asset_text(lang: crate::i18n::Language, update_check: &UpdateCheckState) -> String {
+    match update_check {
+        UpdateCheckState::Ready(result) => result
+            .asset
+            .as_ref()
+            .map(|asset| asset.name.clone())
+            .unwrap_or_else(|| match lang {
+                crate::i18n::Language::Russian => "нет файла для этой ОС".to_owned(),
+                crate::i18n::Language::English => "no file for this OS".to_owned(),
+            }),
+        _ => not_reported(lang).to_owned(),
+    }
+}
+
+fn check_updates_label(lang: crate::i18n::Language, checking: bool) -> &'static str {
+    match (lang, checking) {
+        (crate::i18n::Language::Russian, true) => "Проверяем...",
+        (crate::i18n::Language::Russian, false) => "Проверить",
+        (crate::i18n::Language::English, true) => "Checking...",
+        (crate::i18n::Language::English, false) => "Check",
+    }
+}
+
+fn download_update_label(lang: crate::i18n::Language) -> &'static str {
+    match lang {
+        crate::i18n::Language::Russian => "Скачать",
+        crate::i18n::Language::English => "Download",
+    }
+}
+
+fn release_notes_label(lang: crate::i18n::Language) -> &'static str {
+    match lang {
+        crate::i18n::Language::Russian => "Релиз",
+        crate::i18n::Language::English => "Release",
+    }
+}
+
+fn browser_open_failed(lang: crate::i18n::Language) -> &'static str {
+    match lang {
+        crate::i18n::Language::Russian => "Не удалось открыть ссылку в браузере",
+        crate::i18n::Language::English => "Failed to open link in the browser",
+    }
 }
 
 fn draw_about_rows(
@@ -409,10 +537,16 @@ impl EntropyApp {
     }
 
     pub(super) fn draw_about_entropy_page(&mut self, ui: &mut egui::Ui, content_rect: egui::Rect) {
+        crate::app::poll_update_check(&mut self.update_check);
+        if matches!(self.update_check, UpdateCheckState::Checking { .. }) {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+        }
+
         let lang = self.app_settings.language;
         let dark = ui.visuals().dark_mode;
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
-        let rows = about_entropy_rows(lang);
+        let rows = about_entropy_update_rows(lang, &self.update_check);
 
         crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
@@ -430,6 +564,55 @@ impl EntropyApp {
                 );
                 ui.add_space(metrics.value(24.0));
                 draw_about_rows(ui, "about_entropy", metrics, &rows);
+                ui.add_space(metrics.value(16.0));
+
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing.x = metrics.value(8.0);
+                    let checking = matches!(self.update_check, UpdateCheckState::Checking { .. });
+                    let button_size = egui::vec2(metrics.value(116.0), metrics.value(32.0));
+                    if crate::ui_style::modern_button(
+                        ui,
+                        check_updates_label(lang, checking),
+                        button_size,
+                        !checking,
+                    )
+                    .clicked()
+                    {
+                        self.update_check = crate::app::start_update_check();
+                    }
+
+                    let ready = match &self.update_check {
+                        UpdateCheckState::Ready(result) => Some(result.clone()),
+                        _ => None,
+                    };
+                    if let Some(result) = ready {
+                        if let Some(asset) = result.asset {
+                            if crate::ui_style::modern_button(
+                                ui,
+                                download_update_label(lang),
+                                button_size,
+                                true,
+                            )
+                            .clicked()
+                                && !crate::app::open_url_in_browser(&asset.url)
+                            {
+                                self.status_msg = browser_open_failed(lang).to_owned();
+                            }
+                        }
+
+                        if crate::ui_style::modern_button(
+                            ui,
+                            release_notes_label(lang),
+                            button_size,
+                            true,
+                        )
+                        .clicked()
+                            && !crate::app::open_url_in_browser(&result.release_url)
+                        {
+                            self.status_msg = browser_open_failed(lang).to_owned();
+                        }
+                    }
+                });
             });
         });
     }
