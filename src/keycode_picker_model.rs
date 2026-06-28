@@ -199,6 +199,7 @@ impl BasicPickerLayout {
 pub enum KeycodeTab {
     Basic,
     Symbols,
+    Emoji,
     Function,
     Navigation,
     Modifiers,
@@ -224,12 +225,14 @@ impl KeycodeTab {
         KeycodeTab::Macro,
         KeycodeTab::TapDance,
         KeycodeTab::Custom,
+        KeycodeTab::Emoji,
     ];
 
     pub(super) fn i18n_key(self) -> &'static str {
         match self {
             KeycodeTab::Basic => "key_picker.tab_basic",
             KeycodeTab::Symbols => "key_picker.tab_symbols",
+            KeycodeTab::Emoji => "key_picker.tab_emoji",
             KeycodeTab::Function => "key_picker.tab_function",
             KeycodeTab::Navigation => "key_picker.tab_navigation",
             KeycodeTab::Modifiers => "key_picker.tab_modifiers",
@@ -254,6 +257,7 @@ impl KeycodeTab {
             KeycodeTab::Symbols => {
                 matches!(kc.category, KeycodeCategory::Basic) && is_symbol(kc.value)
             }
+            KeycodeTab::Emoji => false,
             KeycodeTab::Function => {
                 matches!(kc.category, KeycodeCategory::Function) && kc.value <= 0x0045
             }

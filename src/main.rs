@@ -4,6 +4,7 @@ mod app;
 pub(crate) mod app_icon;
 mod device;
 mod diagnostics;
+mod emoji_catalog;
 mod firmware;
 #[cfg(not(target_arch = "wasm32"))]
 mod hid;

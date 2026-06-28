@@ -21,6 +21,8 @@ mod keycode_picker_popups;
 use keycode_picker_popups::*;
 #[path = "keycode_picker_basic.rs"]
 mod keycode_picker_basic;
+#[path = "keycode_picker_emoji.rs"]
+mod keycode_picker_emoji;
 #[path = "keycode_picker_lighting_quantum.rs"]
 mod keycode_picker_lighting_quantum;
 #[path = "keycode_picker_macro.rs"]
@@ -172,6 +174,10 @@ pub struct KeycodePicker {
     macro_undo_stack: Vec<(usize, Vec<MacroAction>)>,
     /// Macro key picker: (macro_idx, action_idx) being edited
     macro_key_pick: Option<(usize, usize)>,
+    pub emoji_search_query: String,
+    pub emoji_category: Option<crate::emoji_catalog::EmojiCategory>,
+    pub emoji_skin_tone: crate::emoji_catalog::EmojiSkinTone,
+    pub emoji_selected: Option<&'static crate::emoji_catalog::EmojiEntry>,
     popup_state: PopupState,
     pub language: crate::i18n::Language,
     pub key_legend_layout: KeyLegendLayout,
@@ -359,6 +365,10 @@ impl Default for KeycodePicker {
             macro_actions: vec![vec![]; 16],
             macro_undo_stack: Vec::new(),
             macro_key_pick: None,
+            emoji_search_query: String::new(),
+            emoji_category: None,
+            emoji_skin_tone: crate::emoji_catalog::EmojiSkinTone::Default,
+            emoji_selected: None,
             macros_dirty: false,
             popup_state: PopupState::default(),
             language: crate::i18n::default_language(),
@@ -772,7 +782,9 @@ impl KeycodePicker {
         }
 
         // Physical key capture is disabled on inline macro editing tab and while text inputs are focused
-        if self.selected_tab != KeycodeTab::Macro && !ctx.wants_keyboard_input() {
+        if !matches!(self.selected_tab, KeycodeTab::Macro | KeycodeTab::Emoji)
+            && !ctx.wants_keyboard_input()
+        {
             ctx.input(|i| {
                 for event in &i.events {
                     if let egui::Event::Key {
@@ -1385,6 +1397,7 @@ impl KeycodePicker {
         match self.selected_tab {
             KeycodeTab::Basic => self.show_vial_basic(ui),
             KeycodeTab::Symbols => self.show_vial_symbols(ui),
+            KeycodeTab::Emoji => self.show_vial_emoji(ui),
             KeycodeTab::Layers => self.show_vial_layers(ui),
             KeycodeTab::Modifiers => self.show_vial_modifiers(ui),
             KeycodeTab::Quantum => self.show_vial_quantum(ui),
