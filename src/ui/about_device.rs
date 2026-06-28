@@ -429,17 +429,17 @@ fn download_update_label(lang: crate::i18n::Language) -> &'static str {
     }
 }
 
-fn release_notes_label(lang: crate::i18n::Language) -> &'static str {
+fn changelog_label(lang: crate::i18n::Language) -> &'static str {
     match lang {
-        crate::i18n::Language::Russian => "Что нового",
-        crate::i18n::Language::English => "Release notes",
+        crate::i18n::Language::Russian => "Changelog",
+        crate::i18n::Language::English => "Changelog",
     }
 }
 
-fn release_notes_tooltip(lang: crate::i18n::Language) -> &'static str {
+fn changelog_tooltip(lang: crate::i18n::Language) -> &'static str {
     match lang {
-        crate::i18n::Language::Russian => "Открывает страницу релиза GitHub с описанием изменений",
-        crate::i18n::Language::English => "Opens the GitHub release page with change notes",
+        crate::i18n::Language::Russian => "Открывает changelog релиза на GitHub",
+        crate::i18n::Language::English => "Opens the GitHub release changelog",
     }
 }
 
@@ -624,11 +624,11 @@ impl EntropyApp {
 
                             if crate::ui_style::modern_button(
                                 ui,
-                                release_notes_label(lang),
+                                changelog_label(lang),
                                 button_size,
                                 true,
                             )
-                            .on_hover_text(release_notes_tooltip(lang))
+                            .on_hover_text(changelog_tooltip(lang))
                             .clicked()
                                 && !crate::app::open_url_in_browser(&result.release_url)
                             {

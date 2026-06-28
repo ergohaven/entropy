@@ -23,7 +23,7 @@ mod ui_style;
 
 use app::EntropyApp;
 
-const APP_TITLE: &str = concat!("Entropy (v", env!("CARGO_PKG_VERSION"), ")");
+const APP_TITLE: &str = "Entropy";
 const APP_ID: &str = "entropy";
 const SINGLE_INSTANCE_ENV: &str = "ENTROPY_SINGLE_INSTANCE";
 
@@ -130,7 +130,7 @@ fn restore_existing_instance_window() {
         }
 
         let title = String::from_utf16_lossy(&title[..copied as usize]);
-        if title.starts_with("Entropy (v") {
+        if title == APP_TITLE || title.starts_with("Entropy (v") {
             let out = lparam as *mut HWND;
             if !out.is_null() {
                 unsafe {
