@@ -9,7 +9,7 @@ mod smart_input_symbols;
 #[path = "smart_input_windows.rs"]
 mod smart_input_windows;
 pub use smart_input_symbols::{smart_symbol_for_keycode, SMART_SYMBOLS};
-use smart_input_symbols::{KC_F13, MOD_ALT, MOD_CTRL, MOD_SHIFT};
+use smart_input_symbols::{KC_F13, MOD_ALT, MOD_CTRL, MOD_GUI, MOD_SHIFT};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextExpanderAppCandidate {
     pub exe: String,
@@ -375,6 +375,7 @@ fn smart_symbol_for_transport(
     ctrl: bool,
     shift: bool,
     alt: bool,
+    gui: bool,
 ) -> Option<(char, u16)> {
     let mut trigger_keycode = base_keycode;
     if ctrl {
@@ -385,6 +386,9 @@ fn smart_symbol_for_transport(
     }
     if alt {
         trigger_keycode |= MOD_ALT;
+    }
+    if gui {
+        trigger_keycode |= MOD_GUI;
     }
     smart_symbol_for_keycode(trigger_keycode).map(|symbol| (symbol.symbol, trigger_keycode))
 }
@@ -694,10 +698,11 @@ mod macos {
         let ctrl = flags & K_CG_EVENT_FLAG_MASK_CONTROL != 0;
         let shift = flags & K_CG_EVENT_FLAG_MASK_SHIFT != 0;
         let alt = flags & K_CG_EVENT_FLAG_MASK_ALTERNATE != 0;
+        let command = flags & K_CG_EVENT_FLAG_MASK_COMMAND != 0;
 
         if let Some(base_keycode) = mac_keycode_to_qmk_f_key(keycode) {
             if let Some((symbol, _trigger_keycode)) =
-                smart_symbol_for_transport(base_keycode, ctrl, shift, alt)
+                smart_symbol_for_transport(base_keycode, ctrl, shift, alt, command)
             {
                 if event_type == K_CG_EVENT_KEY_DOWN {
                     schedule_unicode_char(symbol);
@@ -943,12 +948,6 @@ end tell"#;
             0x4F => 5, // F18
             0x50 => 6, // F19
             0x5A => 7, // F20
-            // F21..F24 are not declared by HIToolbox, but external keyboards
-            // may still surface them through CGEvent with these adjacent codes.
-            0x5B => 8,
-            0x5C => 9,
-            0x5D => 10,
-            0x5E => 11,
             _ => return None,
         };
         Some(KC_F13 + offset)
@@ -1039,6 +1038,7 @@ mod linux_x11 {
     const LOCK_MASK: u32 = 2;
     const CONTROL_MASK: u32 = 4;
     const MOD1_MASK: u32 = 8;
+    const MOD4_MASK: u32 = 64;
     const KEY_PRESS: i32 = 2;
     const KEY_RELEASE: i32 = 3;
 
@@ -1092,8 +1092,9 @@ mod linux_x11 {
                 let ctrl = xkey.state & CONTROL_MASK != 0;
                 let shift = xkey.state & SHIFT_MASK != 0;
                 let alt = xkey.state & MOD1_MASK != 0;
+                let gui = xkey.state & MOD4_MASK != 0;
                 if let Some((symbol, _trigger_keycode)) =
-                    smart_symbol_for_transport(*base_keycode, ctrl, shift, alt)
+                    smart_symbol_for_transport(*base_keycode, ctrl, shift, alt, gui)
                 {
                     if event_type == KEY_PRESS {
                         type_unicode(symbol);
@@ -1113,6 +1114,14 @@ mod linux_x11 {
             CONTROL_MASK | MOD1_MASK,
             SHIFT_MASK | MOD1_MASK,
             CONTROL_MASK | SHIFT_MASK | MOD1_MASK,
+            MOD4_MASK,
+            SHIFT_MASK | MOD4_MASK,
+            CONTROL_MASK | MOD4_MASK,
+            MOD1_MASK | MOD4_MASK,
+            CONTROL_MASK | SHIFT_MASK | MOD4_MASK,
+            CONTROL_MASK | MOD1_MASK | MOD4_MASK,
+            SHIFT_MASK | MOD1_MASK | MOD4_MASK,
+            CONTROL_MASK | SHIFT_MASK | MOD1_MASK | MOD4_MASK,
         ];
         let lock_masks = [0, LOCK_MASK];
         let mut masks = Vec::with_capacity(base_masks.len() * lock_masks.len());

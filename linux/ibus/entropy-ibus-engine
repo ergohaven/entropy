@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """IBus engine for Entropy Universal Symbols and Text Expander.
 
-The backend consumes Entropy transport keys (F13..F24 plus Ctrl/Shift/Alt
+The backend consumes Entropy transport keys (F13..F20 plus Ctrl/Shift/Alt/Super
 banks) and can also expand configured Text Expander triggers through IBus.
 Other keys continue through the normal input stack.
 """
@@ -97,6 +97,7 @@ KC_F13 = 0x0068
 MOD_CTRL = 0x0100
 MOD_SHIFT = 0x0200
 MOD_ALT = 0x0400
+MOD_GUI = 0x0800
 EVDEV_F13_KEYCODE = 183
 XKB_F13_KEYCODE = EVDEV_F13_KEYCODE + 8
 TERMINAL_CLIENT_MARKERS = (
@@ -119,33 +120,45 @@ def _symbol_entries():
     def add(offset, symbol, modifiers=0):
         entries.append((KC_F13 + offset, modifiers, symbol))
 
-    # F13..F24
-    for idx, symbol in enumerate(["{", "}", "[", "]", "(", ")", "<", ">", "#", "@", "№", "₽"]):
+    # F13..F20
+    for idx, symbol in enumerate(["{", "}", "[", "]", "(", ")", "<", ">"]):
         add(idx, symbol)
 
-    # Shift+F13..F24
-    for idx, symbol in enumerate(["!", '"', "$", "%", "&", "'", "*", "+", "=", "?", "|", "\\"]):
+    # Shift+F13..F20
+    for idx, symbol in enumerate(["!", '"', "$", "%", "&", "'", "*", "+"]):
         add(idx, symbol, MOD_SHIFT)
 
-    # Ctrl+F13..F24
-    for idx, symbol in enumerate(["«", "»", "€", "—", "–", "•", "×", "±", "≠", "≈", "✓", "§"]):
+    # Ctrl+F13..F20
+    for idx, symbol in enumerate(["«", "»", "€", "—", "–", "•", "×", "±"]):
         add(idx, symbol, MOD_CTRL)
 
-    # Alt+F13..F24
-    for idx, symbol in enumerate([".", ",", ";", ":", "/", "`", "^", "←", "↑", "→", "↓", "↔"]):
+    # Alt+F13..F20
+    for idx, symbol in enumerate([".", ",", ";", ":", "/", "`", "^", "≠"]):
         add(idx, symbol, MOD_ALT)
 
-    # Ctrl+Alt+F13..F19
-    for idx, symbol in enumerate(["б", "ю", "ж", "э", "х", "ъ", "ё"]):
+    # Alt+Shift+F13..F20
+    for idx, symbol in enumerate(["#", "@", "№", "₽", "=", "?", "|", "\\"]):
+        add(idx, symbol, MOD_ALT | MOD_SHIFT)
+
+    # Ctrl+Alt+F13..F20
+    for idx, symbol in enumerate(["б", "ю", "ж", "э", "х", "ъ", "ё", "≈"]):
         add(idx, symbol, MOD_CTRL | MOD_ALT)
 
-    # Ctrl+Alt+Shift+F13..F19
-    for idx, symbol in enumerate(["Б", "Ю", "Ж", "Э", "Х", "Ъ", "Ё"]):
+    # Ctrl+Alt+Shift+F13..F20
+    for idx, symbol in enumerate(["Б", "Ю", "Ж", "Э", "Х", "Ъ", "Ё", "✓"]):
         add(idx, symbol, MOD_CTRL | MOD_ALT | MOD_SHIFT)
 
-    # Ctrl+Shift+F13..F24
-    for idx, symbol in enumerate(["°", "‰", "′", "″", "‘", "’", "„", "“", "”", "™", "~", "_"]):
+    # Ctrl+Shift+F13..F20
+    for idx, symbol in enumerate(["°", "‰", "′", "″", "‘", "’", "„", "“"]):
         add(idx, symbol, MOD_CTRL | MOD_SHIFT)
+
+    # Super+F13..F17
+    for idx, symbol in enumerate(["§", "”", "™", "~", "_"]):
+        add(idx, symbol, MOD_GUI)
+
+    # Super+Shift+F13..F17
+    for idx, symbol in enumerate(["←", "↑", "→", "↓", "↔"]):
+        add(idx, symbol, MOD_GUI | MOD_SHIFT)
 
     return entries
 
@@ -624,7 +637,7 @@ SHARED_TEXT_EXPANDER_RUNTIME = TextExpanderRuntime()
 
 
 def _transport_keycode_from_keyval(keyval):
-    if XK_F13 <= keyval <= XK_F13 + 11:
+    if XK_F13 <= keyval <= XK_F13 + 7:
         return KC_F13 + (keyval - XK_F13)
     return None
 
@@ -633,9 +646,9 @@ def _transport_keycode_from_event(keyval, keycode):
     by_keyval = _transport_keycode_from_keyval(keyval)
     if by_keyval is not None:
         return by_keyval, "keyval"
-    if EVDEV_F13_KEYCODE <= keycode <= EVDEV_F13_KEYCODE + 11:
+    if EVDEV_F13_KEYCODE <= keycode <= EVDEV_F13_KEYCODE + 7:
         return KC_F13 + (keycode - EVDEV_F13_KEYCODE), "evdev-keycode"
-    if XKB_F13_KEYCODE <= keycode <= XKB_F13_KEYCODE + 11:
+    if XKB_F13_KEYCODE <= keycode <= XKB_F13_KEYCODE + 7:
         return KC_F13 + (keycode - XKB_F13_KEYCODE), "xkb-keycode"
     return None, None
 
@@ -648,6 +661,8 @@ def _transport_modifiers(state):
         modifiers |= MOD_SHIFT
     if state & IBus.ModifierType.MOD1_MASK:
         modifiers |= MOD_ALT
+    if state & getattr(IBus.ModifierType, "SUPER_MASK", 0):
+        modifiers |= MOD_GUI
     return modifiers
 
 

@@ -24,6 +24,7 @@ constexpr uint16_t KC_F13 = 0x0068;
 constexpr uint16_t MOD_CTRL = 0x0100;
 constexpr uint16_t MOD_SHIFT = 0x0200;
 constexpr uint16_t MOD_ALT = 0x0400;
+constexpr uint16_t MOD_GUI = 0x0800;
 
 struct SmartSymbol {
     uint16_t trigger;
@@ -31,7 +32,7 @@ struct SmartSymbol {
 };
 
 const std::array<SmartSymbol, 74> SMART_SYMBOLS{{
-    // F13..F24
+    // F13..F20
     {KC_F13, "{"},
     {uint16_t(KC_F13 + 1), "}"},
     {uint16_t(KC_F13 + 2), "["},
@@ -40,12 +41,8 @@ const std::array<SmartSymbol, 74> SMART_SYMBOLS{{
     {uint16_t(KC_F13 + 5), ")"},
     {uint16_t(KC_F13 + 6), "<"},
     {uint16_t(KC_F13 + 7), ">"},
-    {uint16_t(KC_F13 + 8), "#"},
-    {uint16_t(KC_F13 + 9), "@"},
-    {uint16_t(KC_F13 + 10), "№"},
-    {uint16_t(KC_F13 + 11), "₽"},
 
-    // Shift+F13..F24
+    // Shift+F13..F20
     {uint16_t(MOD_SHIFT | KC_F13), "!"},
     {uint16_t(MOD_SHIFT | (KC_F13 + 1)), "\""},
     {uint16_t(MOD_SHIFT | (KC_F13 + 2)), "$"},
@@ -54,12 +51,8 @@ const std::array<SmartSymbol, 74> SMART_SYMBOLS{{
     {uint16_t(MOD_SHIFT | (KC_F13 + 5)), "'"},
     {uint16_t(MOD_SHIFT | (KC_F13 + 6)), "*"},
     {uint16_t(MOD_SHIFT | (KC_F13 + 7)), "+"},
-    {uint16_t(MOD_SHIFT | (KC_F13 + 8)), "="},
-    {uint16_t(MOD_SHIFT | (KC_F13 + 9)), "?"},
-    {uint16_t(MOD_SHIFT | (KC_F13 + 10)), "|"},
-    {uint16_t(MOD_SHIFT | (KC_F13 + 11)), "\\"},
 
-    // Ctrl+F13..F24
+    // Ctrl+F13..F20
     {uint16_t(MOD_CTRL | KC_F13), "«"},
     {uint16_t(MOD_CTRL | (KC_F13 + 1)), "»"},
     {uint16_t(MOD_CTRL | (KC_F13 + 2)), "€"},
@@ -68,12 +61,8 @@ const std::array<SmartSymbol, 74> SMART_SYMBOLS{{
     {uint16_t(MOD_CTRL | (KC_F13 + 5)), "•"},
     {uint16_t(MOD_CTRL | (KC_F13 + 6)), "×"},
     {uint16_t(MOD_CTRL | (KC_F13 + 7)), "±"},
-    {uint16_t(MOD_CTRL | (KC_F13 + 8)), "≠"},
-    {uint16_t(MOD_CTRL | (KC_F13 + 9)), "≈"},
-    {uint16_t(MOD_CTRL | (KC_F13 + 10)), "✓"},
-    {uint16_t(MOD_CTRL | (KC_F13 + 11)), "§"},
 
-    // Alt+F13..F24
+    // Alt+F13..F20
     {uint16_t(MOD_ALT | KC_F13), "."},
     {uint16_t(MOD_ALT | (KC_F13 + 1)), ","},
     {uint16_t(MOD_ALT | (KC_F13 + 2)), ";"},
@@ -81,13 +70,19 @@ const std::array<SmartSymbol, 74> SMART_SYMBOLS{{
     {uint16_t(MOD_ALT | (KC_F13 + 4)), "/"},
     {uint16_t(MOD_ALT | (KC_F13 + 5)), "`"},
     {uint16_t(MOD_ALT | (KC_F13 + 6)), "^"},
-    {uint16_t(MOD_ALT | (KC_F13 + 7)), "←"},
-    {uint16_t(MOD_ALT | (KC_F13 + 8)), "↑"},
-    {uint16_t(MOD_ALT | (KC_F13 + 9)), "→"},
-    {uint16_t(MOD_ALT | (KC_F13 + 10)), "↓"},
-    {uint16_t(MOD_ALT | (KC_F13 + 11)), "↔"},
+    {uint16_t(MOD_ALT | (KC_F13 + 7)), "≠"},
 
-    // Ctrl+Alt+F13..F19
+    // Alt+Shift+F13..F20
+    {uint16_t(MOD_ALT | MOD_SHIFT | KC_F13), "#"},
+    {uint16_t(MOD_ALT | MOD_SHIFT | (KC_F13 + 1)), "@"},
+    {uint16_t(MOD_ALT | MOD_SHIFT | (KC_F13 + 2)), "№"},
+    {uint16_t(MOD_ALT | MOD_SHIFT | (KC_F13 + 3)), "₽"},
+    {uint16_t(MOD_ALT | MOD_SHIFT | (KC_F13 + 4)), "="},
+    {uint16_t(MOD_ALT | MOD_SHIFT | (KC_F13 + 5)), "?"},
+    {uint16_t(MOD_ALT | MOD_SHIFT | (KC_F13 + 6)), "|"},
+    {uint16_t(MOD_ALT | MOD_SHIFT | (KC_F13 + 7)), "\\"},
+
+    // Ctrl+Alt+F13..F20
     {uint16_t(MOD_CTRL | MOD_ALT | KC_F13), "б"},
     {uint16_t(MOD_CTRL | MOD_ALT | (KC_F13 + 1)), "ю"},
     {uint16_t(MOD_CTRL | MOD_ALT | (KC_F13 + 2)), "ж"},
@@ -95,8 +90,9 @@ const std::array<SmartSymbol, 74> SMART_SYMBOLS{{
     {uint16_t(MOD_CTRL | MOD_ALT | (KC_F13 + 4)), "х"},
     {uint16_t(MOD_CTRL | MOD_ALT | (KC_F13 + 5)), "ъ"},
     {uint16_t(MOD_CTRL | MOD_ALT | (KC_F13 + 6)), "ё"},
+    {uint16_t(MOD_CTRL | MOD_ALT | (KC_F13 + 7)), "≈"},
 
-    // Ctrl+Alt+Shift+F13..F19
+    // Ctrl+Alt+Shift+F13..F20
     {uint16_t(MOD_CTRL | MOD_ALT | MOD_SHIFT | KC_F13), "Б"},
     {uint16_t(MOD_CTRL | MOD_ALT | MOD_SHIFT | (KC_F13 + 1)), "Ю"},
     {uint16_t(MOD_CTRL | MOD_ALT | MOD_SHIFT | (KC_F13 + 2)), "Ж"},
@@ -104,8 +100,9 @@ const std::array<SmartSymbol, 74> SMART_SYMBOLS{{
     {uint16_t(MOD_CTRL | MOD_ALT | MOD_SHIFT | (KC_F13 + 4)), "Х"},
     {uint16_t(MOD_CTRL | MOD_ALT | MOD_SHIFT | (KC_F13 + 5)), "Ъ"},
     {uint16_t(MOD_CTRL | MOD_ALT | MOD_SHIFT | (KC_F13 + 6)), "Ё"},
+    {uint16_t(MOD_CTRL | MOD_ALT | MOD_SHIFT | (KC_F13 + 7)), "✓"},
 
-    // Ctrl+Shift+F13..F24
+    // Ctrl+Shift+F13..F20
     {uint16_t(MOD_CTRL | MOD_SHIFT | KC_F13), "°"},
     {uint16_t(MOD_CTRL | MOD_SHIFT | (KC_F13 + 1)), "‰"},
     {uint16_t(MOD_CTRL | MOD_SHIFT | (KC_F13 + 2)), "′"},
@@ -114,14 +111,24 @@ const std::array<SmartSymbol, 74> SMART_SYMBOLS{{
     {uint16_t(MOD_CTRL | MOD_SHIFT | (KC_F13 + 5)), "’"},
     {uint16_t(MOD_CTRL | MOD_SHIFT | (KC_F13 + 6)), "„"},
     {uint16_t(MOD_CTRL | MOD_SHIFT | (KC_F13 + 7)), "“"},
-    {uint16_t(MOD_CTRL | MOD_SHIFT | (KC_F13 + 8)), "”"},
-    {uint16_t(MOD_CTRL | MOD_SHIFT | (KC_F13 + 9)), "™"},
-    {uint16_t(MOD_CTRL | MOD_SHIFT | (KC_F13 + 10)), "~"},
-    {uint16_t(MOD_CTRL | MOD_SHIFT | (KC_F13 + 11)), "_"},
+
+    // Super+F13..F17
+    {uint16_t(MOD_GUI | KC_F13), "§"},
+    {uint16_t(MOD_GUI | (KC_F13 + 1)), "”"},
+    {uint16_t(MOD_GUI | (KC_F13 + 2)), "™"},
+    {uint16_t(MOD_GUI | (KC_F13 + 3)), "~"},
+    {uint16_t(MOD_GUI | (KC_F13 + 4)), "_"},
+
+    // Super+Shift+F13..F17
+    {uint16_t(MOD_GUI | MOD_SHIFT | KC_F13), "←"},
+    {uint16_t(MOD_GUI | MOD_SHIFT | (KC_F13 + 1)), "↑"},
+    {uint16_t(MOD_GUI | MOD_SHIFT | (KC_F13 + 2)), "→"},
+    {uint16_t(MOD_GUI | MOD_SHIFT | (KC_F13 + 3)), "↓"},
+    {uint16_t(MOD_GUI | MOD_SHIFT | (KC_F13 + 4)), "↔"},
 }};
 
 std::optional<uint16_t> baseKeycodeForSym(KeySym sym) {
-    if (sym >= FcitxKey_F13 && sym <= FcitxKey_F24) {
+    if (sym >= FcitxKey_F13 && sym <= FcitxKey_F20) {
         return uint16_t(KC_F13 + (sym - FcitxKey_F13));
     }
     return std::nullopt;
@@ -137,6 +144,9 @@ uint16_t transportModifiers(KeyStates states) {
     }
     if (states.test(KeyState::Alt)) {
         modifiers |= MOD_ALT;
+    }
+    if (states.test(KeyState::Super)) {
+        modifiers |= MOD_GUI;
     }
     return modifiers;
 }
