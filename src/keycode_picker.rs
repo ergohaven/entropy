@@ -12,7 +12,7 @@ mod keycode_picker_keyboard;
 pub use keycode_picker_keyboard::egui_key_to_qmk;
 #[path = "keycode_picker_model.rs"]
 mod keycode_picker_model;
-pub use keycode_picker_model::{BasicPickerLayout, KeycodeTab};
+pub use keycode_picker_model::{BasicPickerLayout, KeycodeTab, PickerViewMode};
 #[path = "keycode_picker_ui.rs"]
 mod keycode_picker_ui;
 use keycode_picker_ui::*;
@@ -119,6 +119,7 @@ pub struct KeycodePicker {
     pub open: bool,
     pub selected_tab: KeycodeTab,
     pub basic_layout: BasicPickerLayout,
+    pub popup_view_mode: PickerViewMode,
     pub search_query: String,
     pub result: Option<u16>,
     pub custom_keycodes: Vec<(String, String, String, u16)>,
@@ -317,6 +318,7 @@ impl Default for KeycodePicker {
             open: false,
             selected_tab: KeycodeTab::Basic,
             basic_layout: BasicPickerLayout::Qwerty,
+            popup_view_mode: PickerViewMode::default(),
             search_query: String::new(),
             result: None,
             custom_keycodes: vec![],
@@ -622,6 +624,7 @@ impl KeycodePicker {
             )
             .show(ctx, |ui| {
                 apply_picker_button_visuals(ui);
+                self.show_popup_view_mode_header(ui);
                 crate::ui_style::modal_intro(
                     ui,
                     tr_picker(self.language, "key_picker.press_key_or_click"),
@@ -682,29 +685,47 @@ impl KeycodePicker {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         if self.macro_key_pick.is_some() {
-                            if let Some(value) = show_grouped_popup_key_buttons(
-                                ui,
-                                key_choices,
-                                &self.layer_names,
-                                true,
-                                self.language,
-                                self.key_legend_layout,
-                            ) {
-                                self.set_macro_key_pick_value(macro_idx, action_idx, value);
-                            }
-                        }
-                        if self.macro_key_pick.is_some() {
-                            if let Some(value) = show_grouped_popup_choice_buttons(
-                                ui,
-                                vec![("Layers", layer_choices)],
-                                self.language,
-                            ) {
-                                self.set_macro_key_pick_value(macro_idx, action_idx, value);
-                            }
-                        }
-                        if self.macro_key_pick.is_some() && supports_macro_ext_keycodes {
-                            if let Some(value) = self.show_custom_keycode_choice_section(ui) {
-                                self.set_macro_key_pick_value(macro_idx, action_idx, value);
+                            match self.popup_view_mode {
+                                PickerViewMode::Layout => {
+                                    if let Some(value) =
+                                        self.show_popup_key_choice_view(ui, key_choices, true)
+                                    {
+                                        self.set_macro_key_pick_value(macro_idx, action_idx, value);
+                                    }
+                                }
+                                PickerViewMode::List => {
+                                    if let Some(value) = show_grouped_popup_key_buttons(
+                                        ui,
+                                        key_choices,
+                                        &self.layer_names,
+                                        true,
+                                        self.language,
+                                        self.key_legend_layout,
+                                    ) {
+                                        self.set_macro_key_pick_value(macro_idx, action_idx, value);
+                                    }
+                                    if self.macro_key_pick.is_some() {
+                                        if let Some(value) = show_grouped_popup_choice_buttons(
+                                            ui,
+                                            vec![("Layers", layer_choices)],
+                                            self.language,
+                                        ) {
+                                            self.set_macro_key_pick_value(
+                                                macro_idx, action_idx, value,
+                                            );
+                                        }
+                                    }
+                                    if self.macro_key_pick.is_some() && supports_macro_ext_keycodes
+                                    {
+                                        if let Some(value) =
+                                            self.show_custom_keycode_choice_section(ui)
+                                        {
+                                            self.set_macro_key_pick_value(
+                                                macro_idx, action_idx, value,
+                                            );
+                                        }
+                                    }
+                                }
                             }
                         }
                     });
@@ -953,6 +974,7 @@ impl KeycodePicker {
         )
         .show(ctx, |ui| {
             apply_picker_button_visuals(ui);
+            self.show_popup_view_mode_header(ui);
             crate::ui_style::modal_intro(
                 ui,
                 tr_picker(self.language, "key_picker.press_key_or_click_cancel"),
@@ -971,32 +993,37 @@ impl KeycodePicker {
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     if let Some(base) = pending_mod_key {
-                        if let Some(value) = show_grouped_popup_key_buttons(
-                            ui,
-                            key_choices,
-                            &self.layer_names,
-                            false,
-                            self.language,
-                            self.key_legend_layout,
-                        ) {
+                        if let Some(value) = self.show_popup_key_choice_view(ui, key_choices, false)
+                        {
                             self.finish_regular_key_pick(base | value);
                         }
                     } else {
-                        self.show_regular_plain_modifier_section(ui);
+                        match self.popup_view_mode {
+                            PickerViewMode::Layout => {
+                                if let Some(value) =
+                                    self.show_popup_key_choice_view(ui, key_choices, false)
+                                {
+                                    self.finish_regular_key_pick(value);
+                                }
+                            }
+                            PickerViewMode::List => {
+                                self.show_regular_plain_modifier_section(ui);
 
-                        if self.regular_key_pick_allow_mod_key {
-                            self.show_regular_mod_key_section(ui);
-                        }
+                                if self.regular_key_pick_allow_mod_key {
+                                    self.show_regular_mod_key_section(ui);
+                                }
 
-                        if let Some(value) = show_grouped_popup_key_buttons(
-                            ui,
-                            key_choices,
-                            &self.layer_names,
-                            false,
-                            self.language,
-                            self.key_legend_layout,
-                        ) {
-                            self.finish_regular_key_pick(value);
+                                if let Some(value) = show_grouped_popup_key_buttons(
+                                    ui,
+                                    key_choices,
+                                    &self.layer_names,
+                                    false,
+                                    self.language,
+                                    self.key_legend_layout,
+                                ) {
+                                    self.finish_regular_key_pick(value);
+                                }
+                            }
                         }
                     }
                 });
@@ -1304,6 +1331,12 @@ impl KeycodePicker {
                             }
                         });
                         ui.add_space(crate::ui_style::modal_space_sm());
+
+                        if let Some(value) = self.show_qwerty_popup_key_grid(ui, |value| {
+                            key_choices.iter().any(|kc| kc.value == value)
+                        }) {
+                            self.finish_quantum_pending_key(base, value, is_mt);
+                        }
 
                         if let Some(value) = show_grouped_popup_key_buttons(
                             ui,

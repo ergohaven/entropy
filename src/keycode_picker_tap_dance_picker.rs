@@ -103,6 +103,7 @@ impl KeycodePicker {
         )
         .show(ctx, |ui| {
             apply_picker_button_visuals(ui);
+            self.show_popup_view_mode_header(ui);
             crate::ui_style::modal_intro(
                 ui,
                 tr_picker(self.language, "key_picker.press_key_or_click_cancel"),
@@ -147,14 +148,8 @@ impl KeycodePicker {
                 .show(ui, |ui| {
                     if let Some((pending_td_idx, pending_field, base)) = pending_mod_key {
                         let key_choices = self.tap_dance_regular_key_choices();
-                        if let Some(value) = show_grouped_popup_key_buttons(
-                            ui,
-                            key_choices,
-                            &self.layer_names,
-                            false,
-                            self.language,
-                            self.key_legend_layout,
-                        ) {
+                        if let Some(value) = self.show_popup_key_choice_view(ui, key_choices, false)
+                        {
                             self.set_tap_dance_field(pending_td_idx, pending_field, base | value);
                             self.td_mod_key_pick = None;
                             self.td_key_pick = None;
@@ -164,26 +159,36 @@ impl KeycodePicker {
                     } else {
                         let key_choices: Vec<&'static crate::keycode::Keycode> = KEYCODES
                             .iter()
-                            .filter(|kc| {
-                                is_8bit_tap_key_choice(kc) && !kc.name.starts_with("RGB_")
-                            })
+                            .filter(|kc| is_8bit_tap_key_choice(kc) && !kc.name.starts_with("RGB_"))
                             .collect();
-                        if let Some(value) = show_grouped_popup_key_buttons(
-                            ui,
-                            key_choices,
-                            &self.layer_names,
-                            true,
-                            self.language,
-                            self.key_legend_layout,
-                        ) {
-                            self.set_tap_dance_field(td_idx, field, value);
-                            self.td_key_pick = None;
+                        match self.popup_view_mode {
+                            PickerViewMode::Layout => {
+                                if let Some(value) =
+                                    self.show_popup_key_choice_view(ui, key_choices, true)
+                                {
+                                    self.set_tap_dance_field(td_idx, field, value);
+                                    self.td_key_pick = None;
+                                }
+                            }
+                            PickerViewMode::List => {
+                                if let Some(value) = show_grouped_popup_key_buttons(
+                                    ui,
+                                    key_choices,
+                                    &self.layer_names,
+                                    true,
+                                    self.language,
+                                    self.key_legend_layout,
+                                ) {
+                                    self.set_tap_dance_field(td_idx, field, value);
+                                    self.td_key_pick = None;
+                                }
+                                self.show_tap_dance_mod_key_section(ui, td_idx, field);
+                                self.show_tap_dance_universal_symbol_sections(ui, td_idx, field);
+                                self.show_tap_dance_layer_section(ui, td_idx, field);
+                                self.show_tap_dance_custom_keycode_section(ui, td_idx, field);
+                                self.show_tap_dance_macro_section(ui, td_idx, field);
+                            }
                         }
-                        self.show_tap_dance_mod_key_section(ui, td_idx, field);
-                        self.show_tap_dance_universal_symbol_sections(ui, td_idx, field);
-                        self.show_tap_dance_layer_section(ui, td_idx, field);
-                        self.show_tap_dance_custom_keycode_section(ui, td_idx, field);
-                        self.show_tap_dance_macro_section(ui, td_idx, field);
                     }
                 });
         });
@@ -193,12 +198,16 @@ impl KeycodePicker {
         }
     }
 
-    fn show_tap_dance_hold_picker_content(
-        &mut self,
-        ui: &mut egui::Ui,
-        td_idx: usize,
-        field: u8,
-    ) {
+    fn show_tap_dance_hold_picker_content(&mut self, ui: &mut egui::Ui, td_idx: usize, field: u8) {
+        if self.popup_view_mode == PickerViewMode::Layout {
+            let key_choices = self.tap_dance_regular_key_choices();
+            if let Some(value) = self.show_popup_key_choice_view(ui, key_choices, false) {
+                self.set_tap_dance_field(td_idx, field, value);
+                self.td_key_pick = None;
+            }
+            return;
+        }
+
         ui.label(
             RichText::new(tr_picker(
                 self.language,
@@ -212,12 +221,7 @@ impl KeycodePicker {
         ui.horizontal_wrapped(|ui| {
             let plain_modifiers = [
                 ("Ctrl".to_owned(), 0x00E0u16, 0x00E4u16, "Ctrl".to_owned()),
-                (
-                    "Shift".to_owned(),
-                    0x00E1u16,
-                    0x00E5u16,
-                    "Shift".to_owned(),
-                ),
+                ("Shift".to_owned(), 0x00E1u16, 0x00E5u16, "Shift".to_owned()),
                 ("Alt".to_owned(), 0x00E2u16, 0x00E6u16, "Alt".to_owned()),
                 (
                     gui_label(false).to_string(),
@@ -227,17 +231,12 @@ impl KeycodePicker {
                 ),
             ];
             for (label, left_value, right_value, mod_name) in plain_modifiers {
-                let resp = picker_keycap_button(
-                    ui,
-                    &label,
-                    Self::picker_key_size(ui.ctx()),
-                    true,
-                    false,
-                )
-                .on_hover_text(crate::i18n::tr_text(
-                    self.language,
-                    &plain_modifier_tooltip(&mod_name),
-                ));
+                let resp =
+                    picker_keycap_button(ui, &label, Self::picker_key_size(ui.ctx()), true, false)
+                        .on_hover_text(crate::i18n::tr_text(
+                            self.language,
+                            &plain_modifier_tooltip(&mod_name),
+                        ));
                 if resp.clicked_by(egui::PointerButton::Primary) {
                     self.set_tap_dance_field(td_idx, field, left_value);
                     self.td_key_pick = None;
@@ -367,12 +366,7 @@ impl KeycodePicker {
         ui.add_space(4.0);
         let shortcuts: Vec<(String, u16, u16, String)> = vec![
             (picker_mod_key_label(0x0100), 0x0100, 0x1100, "Ctrl".into()),
-            (
-                picker_mod_key_label(0x0200),
-                0x0200,
-                0x1200,
-                "Shift".into(),
-            ),
+            (picker_mod_key_label(0x0200), 0x0200, 0x1200, "Shift".into()),
             (picker_mod_key_label(0x0400), 0x0400, 0x1400, "Alt".into()),
             (
                 picker_mod_key_label(0x0800),
