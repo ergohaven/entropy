@@ -343,6 +343,14 @@ fn main() -> eframe::Result<()> {
             mono.push("dejavu".to_owned());
             mono.push("noto_symbols".to_owned());
             mono.push("noto_emoji".to_owned());
+            fonts.families.insert(
+                egui::FontFamily::Name("emoji_preview".into()),
+                vec![
+                    "noto_emoji".to_owned(),
+                    "noto_symbols".to_owned(),
+                    "dejavu".to_owned(),
+                ],
+            );
             cc.egui_ctx.set_fonts(fonts);
             Ok(Box::new(EntropyApp::new(cc)))
         }),

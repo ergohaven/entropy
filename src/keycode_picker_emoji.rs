@@ -134,7 +134,10 @@ fn emoji_cell_button(ui: &mut egui::Ui, emoji: &str, active: bool, scale: f32) -
         rect.center(),
         egui::Align2::CENTER_CENTER,
         emoji,
-        egui::FontId::proportional(26.0 * scale),
+        egui::FontId::new(
+            26.0 * scale,
+            egui::FontFamily::Name("emoji_preview".into()),
+        ),
         if active {
             Color32::WHITE
         } else {
