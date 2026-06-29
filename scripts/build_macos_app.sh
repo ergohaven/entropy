@@ -94,6 +94,37 @@ sign_app_bundle() {
 	codesign --verify --strict "$APP_PATH"
 }
 
+create_dmg_with_retries() {
+	local max_attempts=3
+	local attempt=1
+	local status=1
+
+	while ((attempt <= max_attempts)); do
+		rm -f "$DMG_PATH"
+		if hdiutil create \
+			-volname "$APP_NAME" \
+			-srcfolder "$APP_PATH" \
+			-ov \
+			-format UDZO \
+			"$DMG_PATH" >/dev/null; then
+			echo "Built $DMG_PATH"
+			return 0
+		fi
+
+		status=$?
+		if ((attempt == max_attempts)); then
+			echo "hdiutil create failed after $max_attempts attempts" >&2
+			return "$status"
+		fi
+
+		echo "hdiutil create failed (attempt $attempt/$max_attempts); retrying" >&2
+		sleep "$((attempt * 2))"
+		attempt=$((attempt + 1))
+	done
+
+	return "$status"
+}
+
 cd "$ROOT"
 cargo build "${BUILD_ARGS[@]}"
 validate_binary_arch
@@ -154,13 +185,7 @@ else
 fi
 
 if command -v hdiutil >/dev/null 2>&1; then
-	hdiutil create \
-		-volname "$APP_NAME" \
-		-srcfolder "$APP_PATH" \
-		-ov \
-		-format UDZO \
-		"$DMG_PATH" >/dev/null
-	echo "Built $DMG_PATH"
+	create_dmg_with_retries
 else
 	echo "hdiutil not found; skipped DMG build"
 fi
