@@ -325,7 +325,7 @@ fn main() -> eframe::Result<()> {
             );
             fonts.font_data.insert(
                 "noto_emoji".to_owned(),
-                egui::FontData::from_static(include_bytes!("../assets/NotoEmoji-subset.ttf"))
+                egui::FontData::from_static(include_bytes!("../assets/NotoEmoji-Regular.ttf"))
                     .into(),
             );
             let prop = fonts
