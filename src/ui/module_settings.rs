@@ -7,6 +7,8 @@ enum ModuleSettingsRow {
     Field { group_idx: usize, field_idx: usize },
 }
 
+const MODULE_SETTING_WRITEBACK_DELAY: std::time::Duration = std::time::Duration::from_millis(20);
+
 impl EntropyApp {
     fn module_setting_display_title<'a>(
         &self,
@@ -93,19 +95,84 @@ impl EntropyApp {
         crate::i18n::tr_catalog_format(lang, key, &[("field", field_label.as_str())])
     }
 
-    fn write_module_setting_value(&mut self, field: &ModuleSettingField, value: u16) {
-        self.module_settings.set_value(field.qsid, value);
-        let Some(hid) = &self.hid_device else {
+    fn module_setting_transport_value(field: &ModuleSettingField, value: u16) -> u16 {
+        if field.width > 1 {
+            value
+        } else {
+            value.min(u8::MAX as u16)
+        }
+    }
+
+    fn write_module_setting_value(
+        &mut self,
+        group_idx: usize,
+        field: &ModuleSettingField,
+        value: u16,
+    ) {
+        let group_title = self
+            .module_settings
+            .groups
+            .get(group_idx)
+            .map(|group| group.title.clone())
+            .unwrap_or_else(|| "Modules".to_owned());
+        let field_title = field.title.clone();
+        let old_value = self.module_settings.value(field.qsid);
+        let requested = Self::module_setting_transport_value(field, value);
+
+        let Some(hid) = self.hid_device.as_ref() else {
+            self.status_msg = format!(
+                "Failed to save module setting (qsid {}): device is not connected",
+                field.qsid
+            );
+            log::warn!(
+                "module setting write skipped: group={group_title:?} field={field_title:?} qsid={} old={} requested={} readback=unavailable error=device not connected",
+                field.qsid,
+                old_value,
+                requested,
+            );
             return;
         };
-        let result = if field.width > 1 {
-            hid.set_qmk_setting_u16(field.qsid, value)
-        } else {
-            hid.set_qmk_setting_u8(field.qsid, value.min(u8::MAX as u16) as u8)
-        };
-        if let Err(e) = result {
-            self.status_msg = format!("Failed to save module setting (qsid {}): {}", field.qsid, e);
-            log::warn!("set_qmk_setting(module qsid {}) failed: {e}", field.qsid);
+
+        let result = self.module_settings.write_verified_value(
+            field.qsid,
+            requested,
+            || {
+                if field.width > 1 {
+                    hid.set_qmk_setting_u16(field.qsid, requested)
+                } else {
+                    hid.set_qmk_setting_u8(field.qsid, requested as u8)
+                }
+                .map_err(|error| error.to_string())
+            },
+            || {
+                std::thread::sleep(MODULE_SETTING_WRITEBACK_DELAY);
+                if field.width > 1 {
+                    hid.get_qmk_setting_u16(field.qsid)
+                } else {
+                    hid.get_qmk_setting_u8(field.qsid)
+                        .map(|readback| readback as u16)
+                }
+                .map_err(|error| error.to_string())
+            },
+        );
+
+        if let Err(error) = result {
+            let readback = match &error {
+                ModuleSettingWritebackError::ReadbackMismatch { actual, .. } => actual.to_string(),
+                _ => "unavailable".to_owned(),
+            };
+            self.status_msg = format!(
+                "Failed to save module setting {} (qsid {}): {}",
+                field_title, field.qsid, error
+            );
+            log::warn!(
+                "module setting writeback failed: group={group_title:?} field={field_title:?} qsid={} old={} requested={} readback={} error={}",
+                field.qsid,
+                old_value,
+                requested,
+                readback,
+                error,
+            );
         }
     }
 
@@ -161,7 +228,7 @@ impl EntropyApp {
                             } else {
                                 raw_value & !mask
                             };
-                            self.write_module_setting_value(&field, new_value);
+                            self.write_module_setting_value(group_idx, &field, new_value);
                         }
                     },
                 );
@@ -205,7 +272,7 @@ impl EntropyApp {
                                 Ok(value) => {
                                     let value = value.clamp(field.min, field.max);
                                     if value != raw_value {
-                                        self.write_module_setting_value(&field, value);
+                                        self.write_module_setting_value(group_idx, &field, value);
                                     }
                                     text = value.to_string();
                                 }
@@ -247,7 +314,7 @@ impl EntropyApp {
                             dropdown_width,
                         );
                         if let Some(picked) = picked {
-                            self.write_module_setting_value(&field, picked as u16);
+                            self.write_module_setting_value(group_idx, &field, picked as u16);
                         }
                     },
                 );
