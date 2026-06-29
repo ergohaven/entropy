@@ -149,6 +149,8 @@ impl EntropyApp {
                 self.keycode_picker.macro_texts = r.macro_texts.clone();
                 self.keycode_picker.macro_names = vec![String::new(); r.macro_texts.len()];
                 self.keycode_picker.supports_macro_ext_keycodes = r.supports_macro_ext_keycodes;
+                self.keycode_picker.macro_ext_keycodes_disabled_reason =
+                    r.macro_ext_keycodes_disabled_reason;
                 // Parse macro texts into actions (Vial protocol v2+ bytecode).
                 self.keycode_picker.macro_actions = r
                     .macro_texts

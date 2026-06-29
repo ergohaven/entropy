@@ -132,6 +132,68 @@ fn firmware_version_from_vial_json(json: &serde_json::Value) -> Option<String> {
     .find_map(|path| json_path_string(json, path))
 }
 
+fn json_u16_value(value: &serde_json::Value) -> Option<u16> {
+    match value {
+        serde_json::Value::Number(number) => {
+            number.as_u64().and_then(|value| u16::try_from(value).ok())
+        }
+        serde_json::Value::String(text) => {
+            let trimmed = text.trim();
+            let hex = trimmed
+                .strip_prefix("0x")
+                .or_else(|| trimmed.strip_prefix("0X"));
+            if let Some(hex) = hex {
+                u16::from_str_radix(hex, 16).ok()
+            } else {
+                trimmed.parse::<u16>().ok()
+            }
+        }
+        _ => None,
+    }
+}
+
+fn json_path_u16(json: &serde_json::Value, path: &[&str]) -> Option<u16> {
+    let mut value = json;
+    for key in path {
+        value = value.get(*key)?;
+    }
+    json_u16_value(value)
+}
+
+fn json_path_contains_rmk(json: &serde_json::Value, path: &[&str]) -> bool {
+    json_path_string(json, path)
+        .map(|value| value.to_ascii_lowercase().contains("rmk"))
+        .unwrap_or(false)
+}
+
+fn is_rmk_vial_definition(json: &serde_json::Value) -> bool {
+    let text_marker = [
+        &["name"][..],
+        &["manufacturer"][..],
+        &["firmware", "name"][..],
+        &["firmware", "manufacturer"][..],
+    ]
+    .into_iter()
+    .any(|path| json_path_contains_rmk(json, path));
+    if text_marker {
+        return true;
+    }
+
+    json_path_u16(json, &["vendorId"]) == Some(0x4C4B)
+        && json_path_u16(json, &["productId"]) == Some(0x4643)
+}
+
+fn macro_ext_keycodes_disabled_reason(
+    json: &serde_json::Value,
+) -> Option<MacroExtKeycodesDisabledReason> {
+    is_rmk_vial_definition(json)
+        .then_some(MacroExtKeycodesDisabledReason::RmkVialMacroExtUnsupported)
+}
+
+fn supports_vial_macro_ext_keycodes(vial_protocol: u32, json: &serde_json::Value) -> bool {
+    vial_protocol >= 5 && macro_ext_keycodes_disabled_reason(json).is_none()
+}
+
 impl EntropyApp {
     pub(super) fn start_connect(&mut self, device_idx: usize) {
         let dev = match self.device_manager.devices().get(device_idx) {
@@ -815,6 +877,10 @@ impl EntropyApp {
                     entries
                 };
 
+                let macro_ext_keycodes_disabled_reason = macro_ext_keycodes_disabled_reason(&json);
+                let supports_macro_ext_keycodes =
+                    supports_vial_macro_ext_keycodes(vial_protocol, &json);
+
                 let about_info = DeviceAboutInfo {
                     manufacturer: dev.manufacturer.clone(),
                     product: dev.name.clone(),
@@ -828,7 +894,8 @@ impl EntropyApp {
                     macro_entries: macro_texts.len(),
                     macro_memory_bytes,
                     supports_macro_delays: !macro_texts.is_empty(),
-                    supports_macro_ext_keycodes: vial_protocol >= 5,
+                    supports_macro_ext_keycodes,
+                    macro_ext_keycodes_disabled_reason,
                     tap_dance_entries: tap_dance_entries.len(),
                     combo_entries: combo_entries.len(),
                     key_override_entries: key_override_entries.len(),
@@ -845,7 +912,8 @@ impl EntropyApp {
                     hid_device: Some(dev_conn),
                     about_info,
                     macro_texts,
-                    supports_macro_ext_keycodes: vial_protocol >= 5,
+                    supports_macro_ext_keycodes,
+                    macro_ext_keycodes_disabled_reason,
                     tap_dance_entries,
                     combo_entries,
                     combo_term,
@@ -883,5 +951,27 @@ mod tests {
     fn reported_layer_count_is_never_zero() {
         assert_eq!(normalize_reported_layer_count(0), 1);
         assert_eq!(normalize_reported_layer_count(4), 4);
+    }
+
+    #[test]
+    fn rmk_default_vial_definition_disables_macro_ext_keycodes() {
+        let json = serde_json::json!({
+            "name": "RMK Keyboard",
+            "vendorId": "0x4C4B",
+            "productId": "0x4643"
+        });
+
+        assert!(!supports_vial_macro_ext_keycodes(6, &json));
+    }
+
+    #[test]
+    fn non_rmk_vial_protocol_five_keeps_macro_ext_keycodes_enabled() {
+        let json = serde_json::json!({
+            "name": "Entropy Keyboard",
+            "vendorId": "0xFEED",
+            "productId": "0x0001"
+        });
+
+        assert!(supports_vial_macro_ext_keycodes(5, &json));
     }
 }

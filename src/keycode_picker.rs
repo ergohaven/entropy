@@ -1,4 +1,5 @@
 /// Keycode picker modal for Vial/QMK keycodes.
+use crate::app::MacroExtKeycodesDisabledReason;
 use crate::keycode::{
     gui_label, gui_mod_name, gui_sym, key_label_font_sizes, keycode_label_with_names_and_layout,
     keycode_tooltip, modifier_label_from_bits, KeyLegendLayout, KeycodeCategory, KEYCODES,
@@ -127,6 +128,7 @@ pub struct KeycodePicker {
     pub supports_layer_lock: bool,
     pub supports_persistent_default_layer: bool,
     pub supports_macro_ext_keycodes: bool,
+    pub macro_ext_keycodes_disabled_reason: Option<MacroExtKeycodesDisabledReason>,
     pub layer_names: Vec<String>,
     pub layer_count: usize,
     pub layer_has_content: Vec<bool>,
@@ -191,6 +193,22 @@ mod tests {
         for symbol in ['←', '↑', '→', '↓', '↔'] {
             assert!(UNIVERSAL_EXTRA_SYMBOL_ORDER.contains(&symbol));
         }
+    }
+
+    #[test]
+    fn rmk_macro_ext_guard_hides_layer_macro_choices_and_explains_why() {
+        let mut picker = KeycodePicker::default();
+        picker.supports_macro_ext_keycodes = false;
+        picker.macro_ext_keycodes_disabled_reason =
+            Some(MacroExtKeycodesDisabledReason::RmkVialMacroExtUnsupported);
+
+        assert!(picker
+            .macro_layer_key_choices(MacroKeyPickKind::Tap)
+            .is_empty());
+        assert!(picker
+            .macro_ext_keycodes_notice(crate::i18n::Language::English)
+            .expect("RMK notice should be present")
+            .contains("RMK"));
     }
 }
 
@@ -306,6 +324,7 @@ impl Default for KeycodePicker {
             supports_layer_lock: true,
             supports_persistent_default_layer: true,
             supports_macro_ext_keycodes: true,
+            macro_ext_keycodes_disabled_reason: None,
             layer_names: (0..16).map(|i| i.to_string()).collect(),
             layer_count: 4,
             layer_has_content: vec![true; 16],
@@ -388,6 +407,19 @@ impl KeycodePicker {
         }
 
         self.layer_action_key_choices(kind)
+    }
+
+    fn macro_ext_keycodes_notice(&self, language: crate::i18n::Language) -> Option<&'static str> {
+        match self.macro_ext_keycodes_disabled_reason? {
+            MacroExtKeycodesDisabledReason::RmkVialMacroExtUnsupported => match language {
+                crate::i18n::Language::Russian => Some(
+                    "RMK сейчас не выполняет Vial extended macro keycodes. Действия слоев в macro отключены, чтобы не сохранять macro, которые не сработают на клавиатуре.",
+                ),
+                crate::i18n::Language::English => Some(
+                    "RMK currently does not execute Vial extended macro keycodes. Layer actions in macros are disabled to avoid saving macros that will not work on the keyboard.",
+                ),
+            },
+        }
     }
 
     fn layer_action_key_choices(&self, kind: MacroKeyPickKind) -> Vec<(u16, String, String)> {
