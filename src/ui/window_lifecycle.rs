@@ -50,6 +50,7 @@ impl EntropyApp {
     pub(super) fn restore_from_tray(&mut self, ctx: &egui::Context) {
         #[cfg(target_os = "windows")]
         if let Some(hwnd) = self.windows_hwnd {
+            self.windows_window_hidden_to_tray = false;
             unsafe {
                 use windows_sys::Win32::UI::WindowsAndMessaging::{
                     SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
@@ -156,6 +157,7 @@ impl EntropyApp {
                     use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
                     ShowWindow(hwnd as windows_sys::Win32::Foundation::HWND, SW_HIDE);
                 }
+                self.windows_window_hidden_to_tray = true;
                 self.status_msg = background_status.into();
                 return;
             }

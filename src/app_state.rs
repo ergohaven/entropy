@@ -1527,6 +1527,8 @@ pub struct EntropyApp {
     pub(crate) tray_icon: Option<tray_icon::TrayIcon>,
     #[cfg(target_os = "windows")]
     pub(crate) windows_hwnd: Option<isize>,
+    #[cfg(target_os = "windows")]
+    pub(crate) windows_window_hidden_to_tray: bool,
     #[cfg(target_os = "macos")]
     pub(crate) macos_ns_window: Option<usize>,
     #[cfg(target_os = "macos")]
