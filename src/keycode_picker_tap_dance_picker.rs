@@ -266,6 +266,7 @@ impl KeycodePicker {
         self.show_tap_dance_mod_key_section(ui, td_idx, field);
         self.show_tap_dance_universal_symbol_sections(ui, td_idx, field);
         self.show_tap_dance_layer_section(ui, td_idx, field);
+        self.show_tap_dance_custom_keycode_section(ui, td_idx, field);
     }
 
     fn show_tap_dance_custom_keycode_section(
@@ -274,7 +275,7 @@ impl KeycodePicker {
         td_idx: usize,
         field: u8,
     ) {
-        if !matches!(field, 0 | 2) {
+        if !Self::tap_dance_custom_keycodes_allowed_in_field(field) {
             return;
         }
         if let Some(value) = self.show_custom_keycode_choice_section(ui) {
@@ -284,7 +285,10 @@ impl KeycodePicker {
     }
 
     fn show_tap_dance_macro_section(&mut self, ui: &mut egui::Ui, td_idx: usize, field: u8) {
-        if !matches!(field, 0 | 2) || !self.supports_macro || self.macro_count == 0 {
+        if !Self::tap_dance_macros_allowed_in_field(field)
+            || !self.supports_macro
+            || self.macro_count == 0
+        {
             return;
         }
 
@@ -423,6 +427,14 @@ impl KeycodePicker {
         }
     }
 
+    fn tap_dance_custom_keycodes_allowed_in_field(field: u8) -> bool {
+        matches!(field, 0..=3)
+    }
+
+    fn tap_dance_macros_allowed_in_field(field: u8) -> bool {
+        matches!(field, 0 | 2)
+    }
+
     fn set_tap_dance_field(&mut self, n: usize, field: u8, value: u16) {
         if n >= self.tap_dance_entries.len() {
             return;
@@ -452,5 +464,28 @@ impl KeycodePicker {
             }
         }
         self.tap_dance_dirty = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tap_dance_custom_keycodes_are_available_for_all_fields() {
+        for field in 0..=3 {
+            assert!(
+                KeycodePicker::tap_dance_custom_keycodes_allowed_in_field(field),
+                "field {field} should allow custom keycodes"
+            );
+        }
+    }
+
+    #[test]
+    fn tap_dance_macros_remain_tap_actions_only() {
+        assert!(KeycodePicker::tap_dance_macros_allowed_in_field(0));
+        assert!(!KeycodePicker::tap_dance_macros_allowed_in_field(1));
+        assert!(KeycodePicker::tap_dance_macros_allowed_in_field(2));
+        assert!(!KeycodePicker::tap_dance_macros_allowed_in_field(3));
     }
 }
