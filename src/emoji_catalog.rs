@@ -1,24 +1,14 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EmojiCategory {
-    Smileys,
-    People,
-    Nature,
-    Food,
-    Travel,
-    Activities,
-    Objects,
-    Symbols,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EmojiSection {
-    EmojiAndPeople,
-    Nature,
-    Food,
-    Travel,
+    SmileysAndEmotion,
+    PeopleAndBody,
+    AnimalsAndNature,
+    FoodAndDrink,
+    TravelAndPlaces,
     Activities,
     Objects,
     Symbols,
+    Flags,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -33,29 +23,17 @@ pub enum EmojiSkinTone {
 }
 
 impl EmojiSection {
-    pub const ALL: [EmojiSection; 7] = [
-        EmojiSection::EmojiAndPeople,
-        EmojiSection::Nature,
-        EmojiSection::Food,
-        EmojiSection::Travel,
+    pub const ALL: [EmojiSection; 9] = [
+        EmojiSection::SmileysAndEmotion,
+        EmojiSection::PeopleAndBody,
+        EmojiSection::AnimalsAndNature,
+        EmojiSection::FoodAndDrink,
+        EmojiSection::TravelAndPlaces,
         EmojiSection::Activities,
         EmojiSection::Objects,
         EmojiSection::Symbols,
+        EmojiSection::Flags,
     ];
-
-    fn includes_category(self, category: EmojiCategory) -> bool {
-        match self {
-            EmojiSection::EmojiAndPeople => {
-                matches!(category, EmojiCategory::Smileys | EmojiCategory::People)
-            }
-            EmojiSection::Nature => category == EmojiCategory::Nature,
-            EmojiSection::Food => category == EmojiCategory::Food,
-            EmojiSection::Travel => category == EmojiCategory::Travel,
-            EmojiSection::Activities => category == EmojiCategory::Activities,
-            EmojiSection::Objects => category == EmojiCategory::Objects,
-            EmojiSection::Symbols => category == EmojiCategory::Symbols,
-        }
-    }
 }
 
 impl EmojiSkinTone {
@@ -86,144 +64,15 @@ impl EmojiSkinTone {
 pub struct EmojiEntry {
     pub emoji: &'static str,
     pub name: &'static str,
-    pub category: EmojiCategory,
+    pub section: EmojiSection,
+    pub subgroup: &'static str,
     pub keywords: &'static [&'static str],
     pub supports_skin_tone: bool,
 }
 
-macro_rules! emoji_entry {
-    ($emoji:literal, $name:literal, $category:ident, [$($keyword:literal),* $(,)?]) => {
-        EmojiEntry {
-            emoji: $emoji,
-            name: $name,
-            category: EmojiCategory::$category,
-            keywords: &[$($keyword),*],
-            supports_skin_tone: false,
-        }
-    };
-}
-
-macro_rules! skin_emoji_entry {
-    ($emoji:literal, $name:literal, $category:ident, [$($keyword:literal),* $(,)?]) => {
-        EmojiEntry {
-            emoji: $emoji,
-            name: $name,
-            category: EmojiCategory::$category,
-            keywords: &[$($keyword),*],
-            supports_skin_tone: true,
-        }
-    };
-}
-
-pub const EMOJI_CATALOG: &[EmojiEntry] = &[
-    emoji_entry!("😀", "Grinning face", Smileys, ["happy", "smile"]),
-    emoji_entry!(
-        "😃",
-        "Grinning face with big eyes",
-        Smileys,
-        ["happy", "smile"]
-    ),
-    emoji_entry!(
-        "😄",
-        "Grinning face with smiling eyes",
-        Smileys,
-        ["happy", "smile"]
-    ),
-    emoji_entry!("😁", "Beaming face", Smileys, ["happy", "grin"]),
-    emoji_entry!("😆", "Squinting face", Smileys, ["laugh", "happy"]),
-    emoji_entry!(
-        "😅",
-        "Grinning face with sweat",
-        Smileys,
-        ["relief", "laugh"]
-    ),
-    emoji_entry!("😂", "Face with tears of joy", Smileys, ["laugh", "tears"]),
-    emoji_entry!("😉", "Winking face", Smileys, ["wink", "smile"]),
-    emoji_entry!(
-        "😊",
-        "Smiling face with smiling eyes",
-        Smileys,
-        ["smile", "blush"]
-    ),
-    emoji_entry!(
-        "😍",
-        "Smiling face with heart eyes",
-        Smileys,
-        ["love", "heart"]
-    ),
-    skin_emoji_entry!("👋", "Waving hand", People, ["hello", "bye"]),
-    skin_emoji_entry!("👍", "Thumbs up", People, ["yes", "approve"]),
-    skin_emoji_entry!("👎", "Thumbs down", People, ["no", "disapprove"]),
-    skin_emoji_entry!("🙏", "Folded hands", People, ["please", "thanks"]),
-    skin_emoji_entry!("👏", "Clapping hands", People, ["applause", "clap"]),
-    skin_emoji_entry!("💪", "Flexed biceps", People, ["strong", "power"]),
-    emoji_entry!("👀", "Eyes", People, ["look", "watch"]),
-    emoji_entry!("🐶", "Dog face", Nature, ["pet", "animal"]),
-    emoji_entry!("🐱", "Cat face", Nature, ["pet", "animal"]),
-    emoji_entry!("🐻", "Bear", Nature, ["animal", "wild"]),
-    emoji_entry!("🐼", "Panda", Nature, ["animal", "wild"]),
-    emoji_entry!("🐸", "Frog", Nature, ["animal", "green"]),
-    emoji_entry!("🌱", "Seedling", Nature, ["plant", "grow"]),
-    emoji_entry!("🌲", "Evergreen tree", Nature, ["tree", "forest"]),
-    emoji_entry!("🌵", "Cactus", Nature, ["plant", "desert"]),
-    emoji_entry!("🌻", "Sunflower", Nature, ["flower", "sun"]),
-    emoji_entry!("🌙", "Crescent moon", Nature, ["night", "moon"]),
-    emoji_entry!("⭐", "Star", Nature, ["favorite", "night"]),
-    emoji_entry!("🍎", "Red apple", Food, ["fruit", "apple"]),
-    emoji_entry!("🍌", "Banana", Food, ["fruit", "banana"]),
-    emoji_entry!("🍓", "Strawberry", Food, ["fruit", "berry"]),
-    emoji_entry!("🍒", "Cherries", Food, ["fruit", "cherry"]),
-    emoji_entry!("🍕", "Pizza", Food, ["food", "slice"]),
-    emoji_entry!("🍔", "Hamburger", Food, ["food", "burger"]),
-    emoji_entry!("🍣", "Sushi", Food, ["food", "fish"]),
-    emoji_entry!("🍜", "Steaming bowl", Food, ["noodles", "ramen"]),
-    emoji_entry!("🍰", "Shortcake", Food, ["dessert", "cake"]),
-    emoji_entry!("☕", "Hot beverage", Food, ["coffee", "tea"]),
-    emoji_entry!("🚗", "Car", Travel, ["auto", "drive"]),
-    emoji_entry!("🚕", "Taxi", Travel, ["cab", "drive"]),
-    emoji_entry!("🚌", "Bus", Travel, ["transport", "public"]),
-    emoji_entry!("🚆", "Train", Travel, ["rail", "transport"]),
-    emoji_entry!("✈️", "Airplane", Travel, ["flight", "travel"]),
-    emoji_entry!("🚀", "Rocket", Travel, ["launch", "space"]),
-    emoji_entry!("⛵", "Sailboat", Travel, ["boat", "sea"]),
-    emoji_entry!("🏠", "House", Travel, ["home", "building"]),
-    emoji_entry!("🏢", "Office building", Travel, ["work", "building"]),
-    emoji_entry!("🏝️", "Desert island", Travel, ["island", "vacation"]),
-    emoji_entry!("⚽", "Soccer ball", Activities, ["sport", "football"]),
-    emoji_entry!("🏀", "Basketball", Activities, ["sport", "ball"]),
-    emoji_entry!("🎾", "Tennis", Activities, ["sport", "ball"]),
-    emoji_entry!("🎮", "Video game", Activities, ["game", "controller"]),
-    emoji_entry!("🎲", "Game die", Activities, ["dice", "random"]),
-    emoji_entry!("🎯", "Bullseye", Activities, ["target", "goal"]),
-    emoji_entry!("🎧", "Headphones", Activities, ["music", "audio"]),
-    emoji_entry!("🎹", "Musical keyboard", Activities, ["music", "piano"]),
-    emoji_entry!("🎨", "Artist palette", Activities, ["art", "paint"]),
-    emoji_entry!("🎬", "Clapper board", Activities, ["movie", "video"]),
-    emoji_entry!("📚", "Books", Activities, ["read", "study"]),
-    emoji_entry!("💡", "Light bulb", Objects, ["idea", "light"]),
-    emoji_entry!("🔑", "Key", Objects, ["lock", "secret"]),
-    emoji_entry!("🔒", "Locked", Objects, ["secure", "lock"]),
-    emoji_entry!("🔔", "Bell", Objects, ["alert", "notification"]),
-    emoji_entry!("📌", "Pushpin", Objects, ["pin", "note"]),
-    emoji_entry!("✂️", "Scissors", Objects, ["cut", "tool"]),
-    emoji_entry!("🖊️", "Pen", Objects, ["write", "edit"]),
-    emoji_entry!("📱", "Mobile phone", Objects, ["phone", "device"]),
-    emoji_entry!("💻", "Laptop", Objects, ["computer", "device"]),
-    emoji_entry!("🖥️", "Desktop computer", Objects, ["computer", "screen"]),
-    emoji_entry!("📦", "Package", Objects, ["box", "ship"]),
-    emoji_entry!("❤️", "Red heart", Symbols, ["heart", "love"]),
-    emoji_entry!("💙", "Blue heart", Symbols, ["heart", "love"]),
-    emoji_entry!("💚", "Green heart", Symbols, ["heart", "love"]),
-    emoji_entry!("💛", "Yellow heart", Symbols, ["heart", "love"]),
-    emoji_entry!("💜", "Purple heart", Symbols, ["heart", "love"]),
-    emoji_entry!("✅", "Check mark button", Symbols, ["check", "done"]),
-    emoji_entry!("❌", "Cross mark", Symbols, ["x", "close"]),
-    emoji_entry!("⚠️", "Warning", Symbols, ["alert", "caution"]),
-    emoji_entry!("➡️", "Right arrow", Symbols, ["arrow", "right"]),
-    emoji_entry!("⬇️", "Down arrow", Symbols, ["arrow", "down"]),
-    emoji_entry!("⬆️", "Up arrow", Symbols, ["arrow", "up"]),
-    emoji_entry!("♻️", "Recycling symbol", Symbols, ["recycle", "green"]),
-];
+#[path = "emoji_catalog_data.rs"]
+mod emoji_catalog_data;
+pub use emoji_catalog_data::EMOJI_CATALOG;
 
 pub fn emoji_sections() -> &'static [EmojiSection] {
     &EmojiSection::ALL
@@ -241,26 +90,32 @@ pub fn emoji_sequence(entry: &EmojiEntry, skin_tone: EmojiSkinTone) -> String {
 
 pub fn filter_emoji(query: &str) -> Vec<&'static EmojiEntry> {
     let query = query.trim().to_lowercase();
-    EMOJI_CATALOG
+    let mut results: Vec<&EmojiEntry> = EMOJI_CATALOG
         .iter()
         .filter(|entry| query.is_empty() || entry_matches_query(entry, &query))
-        .collect()
+        .collect();
+    if !query.is_empty() {
+        results.sort_by_key(|entry| match entry.emoji {
+            emoji if emoji == query => 0,
+            emoji if emoji.contains(query.as_str()) => 1,
+            _ => 2,
+        });
+    }
+    results
 }
 
 pub fn filter_emoji_section(query: &str, section: EmojiSection) -> Vec<&'static EmojiEntry> {
     filter_emoji(query)
         .into_iter()
-        .filter(|entry| section.includes_category(entry.category))
+        .filter(|entry| entry.section == section)
         .collect()
 }
 
 fn entry_matches_query(entry: &EmojiEntry, query: &str) -> bool {
     entry.emoji.contains(query)
         || entry.name.to_lowercase().contains(query)
-        || entry
-            .keywords
-            .iter()
-            .any(|keyword| keyword.to_lowercase().contains(query))
+        || entry.subgroup.replace('-', " ").contains(query)
+        || entry.keywords.iter().any(|keyword| keyword.contains(query))
 }
 
 #[cfg(test)]
@@ -268,29 +123,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalog_has_broad_emoji_coverage() {
-        assert!(EMOJI_CATALOG.len() >= 80);
-        for category in [
-            EmojiCategory::Smileys,
-            EmojiCategory::People,
-            EmojiCategory::Nature,
-            EmojiCategory::Food,
-            EmojiCategory::Travel,
-            EmojiCategory::Activities,
-            EmojiCategory::Objects,
-            EmojiCategory::Symbols,
-        ] {
+    fn catalog_has_unicode_group_coverage() {
+        assert!(EMOJI_CATALOG.len() >= 1_800);
+        for section in emoji_sections() {
             assert!(
-                emoji_sections()
-                    .iter()
-                    .any(|section| section.includes_category(category)),
-                "missing section for {category:?}"
-            );
-            assert!(
-                EMOJI_CATALOG.iter().any(|entry| entry.category == category),
-                "catalog has no entries for {category:?}"
+                EMOJI_CATALOG.iter().any(|entry| entry.section == *section),
+                "catalog has no entries for {section:?}"
             );
         }
+    }
+
+    #[test]
+    fn catalog_includes_unicode_emoji_beyond_the_demo_subset() {
+        for (emoji, query) in [
+            ("🫠", "melting"),
+            ("🫨", "shaking"),
+            ("🪿", "goose"),
+            ("🩷", "pink heart"),
+            ("🇺🇦", "ukraine"),
+        ] {
+            assert!(
+                filter_emoji(query).iter().any(|entry| entry.emoji == emoji),
+                "missing {emoji} for query {query}"
+            );
+        }
+    }
+
+    #[test]
+    fn catalog_excludes_skin_tone_variant_rows() {
+        assert!(!EMOJI_CATALOG.iter().any(|entry| {
+            entry.name.contains("skin tone")
+                || entry
+                    .emoji
+                    .chars()
+                    .any(|char| (0x1F3FB..=0x1F3FF).contains(&(char as u32)))
+        }));
     }
 
     #[test]
@@ -304,31 +171,26 @@ mod tests {
         let glyph_results = filter_emoji("🚀");
         assert_eq!(
             glyph_results.first().map(|entry| entry.name),
-            Some("Rocket")
+            Some("rocket")
         );
     }
 
     #[test]
-    fn section_filter_groups_related_emoji() {
-        let results = filter_emoji_section("", EmojiSection::EmojiAndPeople);
+    fn section_filter_uses_unicode_groups() {
+        let smileys = filter_emoji_section("", EmojiSection::SmileysAndEmotion);
+        assert!(smileys.iter().any(|entry| entry.emoji == "😂"));
+        assert!(!smileys.iter().any(|entry| entry.emoji == "👍"));
 
-        assert!(!results.is_empty());
-        assert!(results
-            .iter()
-            .any(|entry| entry.category == EmojiCategory::Smileys));
-        assert!(results
-            .iter()
-            .any(|entry| entry.category == EmojiCategory::People));
-        assert!(!results
-            .iter()
-            .any(|entry| entry.category == EmojiCategory::Nature));
+        let people = filter_emoji_section("", EmojiSection::PeopleAndBody);
+        assert!(people.iter().any(|entry| entry.emoji == "👍"));
+        assert!(!people.iter().any(|entry| entry.emoji == "😂"));
     }
 
     #[test]
     fn section_order_starts_with_common_emoji() {
         assert_eq!(
             emoji_sections().first(),
-            Some(&EmojiSection::EmojiAndPeople)
+            Some(&EmojiSection::SmileysAndEmotion)
         );
     }
 
@@ -336,13 +198,13 @@ mod tests {
     fn skin_tone_modifier_applies_only_to_supported_emoji() {
         let thumbs_up = EMOJI_CATALOG
             .iter()
-            .find(|entry| entry.name == "Thumbs up")
+            .find(|entry| entry.name == "thumbs up")
             .unwrap();
         assert_eq!(emoji_sequence(thumbs_up, EmojiSkinTone::Medium), "👍🏽");
 
         let rocket = EMOJI_CATALOG
             .iter()
-            .find(|entry| entry.name == "Rocket")
+            .find(|entry| entry.name == "rocket")
             .unwrap();
         assert_eq!(emoji_sequence(rocket, EmojiSkinTone::Medium), "🚀");
     }

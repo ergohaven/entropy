@@ -152,13 +152,21 @@ fn emoji_section_label(
     section: crate::emoji_catalog::EmojiSection,
 ) -> &'static str {
     let key = match section {
-        crate::emoji_catalog::EmojiSection::EmojiAndPeople => "key_picker.emoji_section_people",
-        crate::emoji_catalog::EmojiSection::Nature => "key_picker.emoji_category_nature",
-        crate::emoji_catalog::EmojiSection::Food => "key_picker.emoji_category_food",
-        crate::emoji_catalog::EmojiSection::Travel => "key_picker.emoji_category_travel",
+        crate::emoji_catalog::EmojiSection::SmileysAndEmotion => {
+            "key_picker.emoji_section_smileys_emotion"
+        }
+        crate::emoji_catalog::EmojiSection::PeopleAndBody => "key_picker.emoji_section_people_body",
+        crate::emoji_catalog::EmojiSection::AnimalsAndNature => {
+            "key_picker.emoji_section_animals_nature"
+        }
+        crate::emoji_catalog::EmojiSection::FoodAndDrink => "key_picker.emoji_section_food_drink",
+        crate::emoji_catalog::EmojiSection::TravelAndPlaces => {
+            "key_picker.emoji_section_travel_places"
+        }
         crate::emoji_catalog::EmojiSection::Activities => "key_picker.emoji_category_activities",
         crate::emoji_catalog::EmojiSection::Objects => "key_picker.emoji_category_objects",
         crate::emoji_catalog::EmojiSection::Symbols => "key_picker.emoji_category_symbols",
+        crate::emoji_catalog::EmojiSection::Flags => "key_picker.emoji_section_flags",
     };
     tr_picker(language, key)
 }
