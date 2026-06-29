@@ -194,7 +194,7 @@ fn suppress_transport_modifier_keyups(trigger_keycode: u16) {
 
 #[cfg(target_os = "windows")]
 fn should_suppress_transport_modifier_keyup(vk: u32) -> bool {
-    let group = modifier_group_for_vk(vk);
+    let group = modifier_group_for_vk(vk) as u32;
     if group == 0 {
         return false;
     }
