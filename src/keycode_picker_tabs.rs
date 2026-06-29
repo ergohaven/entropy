@@ -1,5 +1,78 @@
 use super::*;
 
+#[derive(Clone, Debug, PartialEq)]
+struct OneShotModifierChoice {
+    label: String,
+    left_value: u16,
+    right_value: Option<u16>,
+    mod_name: String,
+}
+
+fn one_shot_modifier_choices(gui_label: &str, gui_mod_name: &str) -> Vec<OneShotModifierChoice> {
+    vec![
+        OneShotModifierChoice {
+            label: "OSM\nCtrl".into(),
+            left_value: 0x52A1,
+            right_value: Some(0x52B1),
+            mod_name: "Ctrl".into(),
+        },
+        OneShotModifierChoice {
+            label: "OSM\nShift".into(),
+            left_value: 0x52A2,
+            right_value: Some(0x52B2),
+            mod_name: "Shift".into(),
+        },
+        OneShotModifierChoice {
+            label: "OSM\nAlt".into(),
+            left_value: 0x52A4,
+            right_value: Some(0x52B4),
+            mod_name: "Alt".into(),
+        },
+        OneShotModifierChoice {
+            label: format!("OSM\n{gui_label}"),
+            left_value: 0x52A8,
+            right_value: Some(0x52B8),
+            mod_name: gui_label.to_owned(),
+        },
+        OneShotModifierChoice {
+            label: "OSM\nC+S".into(),
+            left_value: 0x52A3,
+            right_value: Some(0x52B3),
+            mod_name: "Ctrl+Shift".into(),
+        },
+        OneShotModifierChoice {
+            label: "OSM\nC+A".into(),
+            left_value: 0x52A5,
+            right_value: Some(0x52B5),
+            mod_name: "Ctrl+Alt".into(),
+        },
+        OneShotModifierChoice {
+            label: "OSM\nS+A".into(),
+            left_value: 0x52A6,
+            right_value: Some(0x52B6),
+            mod_name: "Shift+Alt".into(),
+        },
+        OneShotModifierChoice {
+            label: format!("OSM\nS+{gui_label}"),
+            left_value: 0x52AA,
+            right_value: Some(0x52BA),
+            mod_name: format!("Shift+{gui_label}"),
+        },
+        OneShotModifierChoice {
+            label: "OSM\nMeh".into(),
+            left_value: 0x52A7,
+            right_value: None,
+            mod_name: "Meh (Ctrl+Shift+Alt)".into(),
+        },
+        OneShotModifierChoice {
+            label: "OSM\nHyper".into(),
+            left_value: 0x52AF,
+            right_value: None,
+            mod_name: format!("Hyper (Ctrl+Shift+Alt+{gui_mod_name})"),
+        },
+    ]
+}
+
 impl KeycodePicker {
     pub(super) fn custom_keycode_pairs(&self) -> Vec<crate::keyboard::CustomKeycode> {
         self.custom_keycodes
@@ -428,53 +501,64 @@ impl KeycodePicker {
                 .color(Color32::from_gray(150)),
         );
         ui.add_space(4.0);
-        let osm: Vec<(String, u16, Option<u16>, String)> = vec![
-            ("OSM\nCtrl".into(), 0x52A1, Some(0x52B1), "Ctrl".into()),
-            ("OSM\nShift".into(), 0x52A2, Some(0x52B2), "Shift".into()),
-            ("OSM\nAlt".into(), 0x52A4, Some(0x52B4), "Alt".into()),
-            (
-                format!("OSM\n{lgui}"),
-                0x52A8,
-                Some(0x52B8),
-                lgui.to_string(),
-            ),
-            (
-                "OSM\nMeh".into(),
-                0x52A7,
-                None,
-                "Meh (Ctrl+Shift+Alt)".into(),
-            ),
-            (
-                "OSM\nHyper".into(),
-                0x52AF,
-                None,
-                format!("Hyper (Ctrl+Shift+Alt+{})", gui_mod_name()),
-            ),
-        ];
+        let osm = one_shot_modifier_choices(lgui, gui_mod_name());
         ui.horizontal_wrapped(|ui| {
-            for (label, left_value, right_value, mod_name) in &osm {
+            for choice in &osm {
                 let resp = ui
                     .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
-                Self::paint_compact_picker_label(ui, &resp, label);
+                Self::paint_compact_picker_label(ui, &resp, &choice.label);
                 if resp.clicked_by(egui::PointerButton::Primary) {
-                    self.assign_keycode_value(*left_value);
+                    self.assign_keycode_value(choice.left_value);
                 }
-                if let Some(right_value) = right_value {
+                if let Some(right_value) = choice.right_value {
                     if resp.clicked_by(egui::PointerButton::Secondary) {
-                        self.assign_keycode_value(*right_value);
+                        self.assign_keycode_value(right_value);
                     }
                     resp.on_hover_text(crate::i18n::tr_text(
                         self.language,
-                        &one_shot_modifier_tooltip(mod_name, true),
+                        &one_shot_modifier_tooltip(&choice.mod_name, true),
                     ));
                 } else {
                     resp.on_hover_text(crate::i18n::tr_text(
                         self.language,
-                        &one_shot_modifier_tooltip(mod_name, false),
+                        &one_shot_modifier_tooltip(&choice.mod_name, false),
                     ));
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_shot_modifier_choices_include_shift_gui_chord() {
+        let choices = one_shot_modifier_choices("GUI", "GUI");
+        let shift_gui = choices
+            .iter()
+            .find(|choice| choice.left_value == 0x52AA)
+            .expect("OS_LSG should be exposed as a one-shot modifier chord");
+
+        assert_eq!(shift_gui.right_value, Some(0x52BA));
+        assert_eq!(shift_gui.label, "OSM\nS+GUI");
+        assert_eq!(shift_gui.mod_name, "Shift+GUI");
+    }
+
+    #[test]
+    fn one_shot_modifier_choices_cover_mod_key_chords() {
+        let values: Vec<u16> = one_shot_modifier_choices("GUI", "GUI")
+            .iter()
+            .map(|choice| choice.left_value)
+            .collect();
+
+        for value in [0x52A3, 0x52A5, 0x52A6, 0x52AA, 0x52A7, 0x52AF] {
+            assert!(
+                values.contains(&value),
+                "missing one-shot modifier chord {value:#06X}"
+            );
+        }
     }
 }
