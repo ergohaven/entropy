@@ -422,6 +422,35 @@ pub struct MacosUniversalSymbolsStatus {
     pub failure_reason: Option<String>,
 }
 
+#[cfg(any(target_os = "macos", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MacosEventTapStartupDecision {
+    TryCreateTap,
+    WaitForPermission(&'static str),
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_event_tap_startup_decision(
+    _input_monitoring_preflight_granted: bool,
+    accessibility_granted: bool,
+) -> MacosEventTapStartupDecision {
+    if !accessibility_granted {
+        return MacosEventTapStartupDecision::WaitForPermission(
+            "Accessibility permission is required for Universal Symbols",
+        );
+    }
+
+    MacosEventTapStartupDecision::TryCreateTap
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_effective_input_monitoring_granted(
+    input_monitoring_preflight_granted: bool,
+    event_tap_active: bool,
+) -> bool {
+    input_monitoring_preflight_granted || event_tap_active
+}
+
 #[cfg(target_os = "macos")]
 pub fn macos_universal_symbols_status() -> MacosUniversalSymbolsStatus {
     macos::status_snapshot()
@@ -517,10 +546,14 @@ mod macos {
             .lock()
             .ok()
             .and_then(|guard| guard.as_ref().map(|at| at.elapsed().as_millis()));
+        let event_tap_active = EVENT_TAP_ACTIVE.load(Ordering::SeqCst);
         MacosUniversalSymbolsStatus {
             accessibility_granted: accessibility_granted(),
-            input_monitoring_granted: input_monitoring_granted(),
-            event_tap_active: EVENT_TAP_ACTIVE.load(Ordering::SeqCst),
+            input_monitoring_granted: macos_effective_input_monitoring_granted(
+                input_monitoring_granted(),
+                event_tap_active,
+            ),
+            event_tap_active,
             last_event_ms_ago,
             failure_reason: FAILURE_REASON.lock().ok().and_then(|guard| guard.clone()),
         }
@@ -597,22 +630,19 @@ mod macos {
         loop {
             clear_failure_reason();
 
-            if !input_monitoring_granted() {
-                set_failure_reason("Input Monitoring permission is required for Universal Symbols");
-                std::thread::sleep(Duration::from_secs(2));
-                if !RESTART_REQUESTED.swap(false, Ordering::SeqCst) {
-                    return;
+            match macos_event_tap_startup_decision(
+                input_monitoring_granted(),
+                accessibility_granted(),
+            ) {
+                MacosEventTapStartupDecision::TryCreateTap => {}
+                MacosEventTapStartupDecision::WaitForPermission(reason) => {
+                    set_failure_reason(reason);
+                    std::thread::sleep(Duration::from_secs(2));
+                    if !RESTART_REQUESTED.swap(false, Ordering::SeqCst) {
+                        return;
+                    }
+                    continue;
                 }
-                continue;
-            }
-
-            if !accessibility_granted() {
-                set_failure_reason("Accessibility permission is required for Universal Symbols");
-                std::thread::sleep(Duration::from_secs(2));
-                if !RESTART_REQUESTED.swap(false, Ordering::SeqCst) {
-                    return;
-                }
-                continue;
             }
 
             let mask = (1u64 << K_CG_EVENT_KEY_DOWN) | (1u64 << K_CG_EVENT_KEY_UP);
@@ -1200,5 +1230,18 @@ mod tests {
     #[test]
     fn editplus_uses_clipboard_fallback_for_universal_symbols() {
         assert!(app_prefers_clipboard_unicode_input("editplus.exe"));
+    }
+
+    #[test]
+    fn macos_input_monitoring_preflight_denied_still_attempts_event_tap() {
+        assert_eq!(
+            macos_event_tap_startup_decision(false, true),
+            MacosEventTapStartupDecision::TryCreateTap
+        );
+    }
+
+    #[test]
+    fn macos_active_event_tap_counts_as_input_monitoring_granted() {
+        assert!(macos_effective_input_monitoring_granted(false, true));
     }
 }
