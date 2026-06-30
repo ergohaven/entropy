@@ -608,6 +608,11 @@ impl EntropyApp {
                         Some(Ok(v)) => {
                             th.tapping_term = v;
                             th.supported = true;
+                            for qsid in [7u16, 18, 19, 20, 22, 23, 24, 25, 26, 27] {
+                                if has_qmk_setting(qsid) {
+                                    th.set_qsid_supported(qsid);
+                                }
+                            }
                             let read_bool = |qsid: u16| -> bool {
                                 if !has_qmk_setting(qsid) {
                                     return false;
