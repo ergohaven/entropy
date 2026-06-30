@@ -254,6 +254,15 @@ impl EntropyApp {
                 );
             }
             Err(e) => {
+                #[cfg(target_os = "linux")]
+                if e.starts_with("Open failed:")
+                    && !super::app_settings_ui::linux_vial_udev_rules_installed()
+                {
+                    self.selected_device = None;
+                    self.clear_connected_keyboard_state(e);
+                    return;
+                }
+
                 self.status_msg = e;
             }
         }

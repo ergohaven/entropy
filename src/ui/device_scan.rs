@@ -69,6 +69,16 @@ impl EntropyApp {
             return;
         }
 
+        #[cfg(target_os = "linux")]
+        if self.selected_device.is_none()
+            && self.layout.is_none()
+            && !was_loading
+            && !super::app_settings_ui::linux_vial_udev_rules_installed()
+        {
+            self.qmk_hid_hosts.clear();
+            return;
+        }
+
         if let Some(device_key) = previous_device_key {
             if let Some(idx) = self
                 .device_manager
