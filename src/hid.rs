@@ -119,6 +119,7 @@ mod hid_macros;
 
 #[path = "hid_keymap.rs"]
 mod hid_keymap;
+pub(crate) use hid_keymap::is_keycode_writeback_mismatch;
 
 #[path = "hid_settings.rs"]
 mod hid_settings;
@@ -623,6 +624,7 @@ fn response_matches_command(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
         CMD_VIA_GET_KEYBOARD_VALUE | CMD_VIA_LIGHTING_GET_VALUE => {
             command.len() >= 2 && resp[0] == cmd && resp[1] == command[1]
         }
+        CMD_VIA_GET_KEYCODE => command.len() >= 4 && resp[0] == cmd && resp[1..4] == command[1..4],
         CMD_VIA_SET_KEYBOARD_VALUE
         | CMD_VIA_SET_KEYCODE
         | CMD_VIA_LIGHTING_SET_VALUE

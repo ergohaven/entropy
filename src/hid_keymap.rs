@@ -3,6 +3,52 @@ use super::hid_protocol::*;
 use super::HidDevice;
 use anyhow::{bail, Context, Result};
 
+#[derive(Debug)]
+struct KeycodeWritebackMismatch {
+    layer: u8,
+    row: u8,
+    col: u8,
+    requested: u16,
+    readback: u16,
+}
+
+impl std::fmt::Display for KeycodeWritebackMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "keycode writeback mismatch at layer {}, row {}, col {}: wrote {:#06X}, read back {:#06X}",
+            self.layer, self.row, self.col, self.requested, self.readback
+        )
+    }
+}
+
+impl std::error::Error for KeycodeWritebackMismatch {}
+
+pub(crate) fn is_keycode_writeback_mismatch(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<KeycodeWritebackMismatch>().is_some()
+}
+
+fn verify_keycode_writeback(
+    layer: u8,
+    row: u8,
+    col: u8,
+    requested: u16,
+    readback: u16,
+) -> Result<()> {
+    if readback == requested {
+        return Ok(());
+    }
+
+    Err(KeycodeWritebackMismatch {
+        layer,
+        row,
+        col,
+        requested,
+        readback,
+    }
+    .into())
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl HidDevice {
     pub fn get_layer_count(&self) -> Result<u8> {
@@ -54,12 +100,23 @@ impl HidDevice {
         Ok(parse_keymap_u16_be(&keymap))
     }
 
+    pub fn get_keycode(&self, layer: u8, row: u8, col: u8) -> Result<u16> {
+        let resp = self
+            .usb_send(&[CMD_VIA_GET_KEYCODE, layer, row, col])
+            .with_context(|| {
+                format!("failed to read keycode at layer {layer}, row {row}, col {col}")
+            })?;
+        Ok(u16::from_be_bytes([resp[4], resp[5]]))
+    }
+
     pub fn set_keycode(&self, layer: u8, row: u8, col: u8, keycode: u16) -> Result<()> {
         let [hi, lo] = keycode.to_be_bytes();
         self.usb_send(&[CMD_VIA_SET_KEYCODE, layer, row, col, hi, lo])
             .with_context(|| {
                 format!("failed to set keycode at layer {layer}, row {row}, col {col}")
             })?;
+        let readback = self.get_keycode(layer, row, col)?;
+        verify_keycode_writeback(layer, row, col, keycode, readback)?;
         Ok(())
     }
 
@@ -92,5 +149,25 @@ impl HidDevice {
                 format!("failed to set encoder {idx} direction {direction} on layer {layer}")
             })?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keycode_writeback_accepts_matching_kc_no() {
+        assert!(verify_keycode_writeback(5, 3, 7, 0x0000, 0x0000).is_ok());
+    }
+
+    #[test]
+    fn keycode_writeback_rejects_stale_transparent_after_kc_no_write() {
+        let err = verify_keycode_writeback(5, 3, 7, 0x0000, 0x0001).unwrap_err();
+
+        assert!(
+            err.to_string().contains("read back 0x0001"),
+            "unexpected error: {err}"
+        );
     }
 }
