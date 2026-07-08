@@ -12,8 +12,10 @@ const RAW_HID_PACKET_LEN: usize = 32;
 const REPORT_PACKET_LEN: usize = RAW_HID_PACKET_LEN + 1;
 const DATA_TIME: u8 = 0xAA;
 const DATA_VOLUME: u8 = 0xAB;
+const DATA_LAYOUT: u8 = 0xAC;
 const DATA_MEDIA_ARTIST: u8 = 0xAD;
 const DATA_MEDIA_TITLE: u8 = 0xAE;
+const DEFAULT_LAYOUT_CODES: [&str; 2] = ["en", "ru"];
 #[cfg(target_os = "macos")]
 const MACOS_AUTOMATION_COMMAND_TIMEOUT: Duration = Duration::from_millis(1_500);
 #[cfg(not(target_os = "windows"))]
@@ -22,12 +24,13 @@ const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HostDataMode {
     pub clock_volume: bool,
+    pub layout: bool,
     pub media: bool,
 }
 
 impl HostDataMode {
     pub fn is_empty(self) -> bool {
-        !self.clock_volume && !self.media
+        !self.clock_volume && !self.layout && !self.media
     }
 }
 
@@ -44,6 +47,10 @@ pub fn volume_check() -> FeatureCheck {
 
 pub fn media_check() -> FeatureCheck {
     platform_media_check()
+}
+
+pub fn layout_check() -> FeatureCheck {
+    platform_layout_check()
 }
 
 #[cfg(target_os = "windows")]
@@ -147,6 +154,50 @@ fn platform_media_check() -> FeatureCheck {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn platform_layout_check() -> FeatureCheck {
+    FeatureCheck {
+        ok: true,
+        label: "native Windows input layout",
+        hint: "Uses the foreground window keyboard layout",
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn platform_layout_check() -> FeatureCheck {
+    if std::env::var_os("DISPLAY").is_some() && x11_dl::xlib::Xlib::open().is_ok() {
+        FeatureCheck {
+            ok: true,
+            label: "X11 / XKB",
+            hint: "Uses the active XKB keyboard group",
+        }
+    } else {
+        FeatureCheck {
+            ok: false,
+            label: "missing X11 / XKB",
+            hint: "Layout sync currently needs an X11 session",
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn platform_layout_check() -> FeatureCheck {
+    FeatureCheck {
+        ok: true,
+        label: "macOS input source",
+        hint: "Uses the current macOS keyboard input source",
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+fn platform_layout_check() -> FeatureCheck {
+    FeatureCheck {
+        ok: false,
+        label: "unsupported OS",
+        hint: "Layout sync is implemented for Windows, Linux X11 and macOS",
+    }
+}
+
 #[cfg(not(target_os = "windows"))]
 fn command_exists(program: &str) -> bool {
     let Some(paths) = std::env::var_os("PATH") else {
@@ -200,12 +251,16 @@ fn run_bridge(path: String, mode: HostDataMode, stop: Arc<AtomicBool>) {
     let mut last_open_attempt = Instant::now() - Duration::from_secs(5);
     let mut last_time = None;
     let mut last_volume = None;
+    let mut last_layout = None;
     let mut last_artist = String::new();
     let mut last_title = String::new();
     let mut last_time_poll = Instant::now() - Duration::from_secs(60);
     let mut last_volume_poll = Instant::now() - Duration::from_secs(60);
+    let mut last_layout_poll = Instant::now() - Duration::from_secs(60);
     let mut last_media_poll = Instant::now() - Duration::from_secs(60);
     let mut last_media_full_send = Instant::now() - Duration::from_secs(60);
+    let mut last_layout_tracker_attempt = Instant::now() - Duration::from_secs(60);
+    let mut layout_tracker = mode.layout.then(LayoutTracker::new).flatten();
 
     while !stop.load(Ordering::Relaxed) {
         if device.is_none() && last_open_attempt.elapsed() >= Duration::from_secs(2) {
@@ -249,6 +304,26 @@ fn run_bridge(path: String, mode: HostDataMode, stop: Arc<AtomicBool>) {
                 if last_volume != Some(volume) {
                     last_volume = Some(volume);
                     write_failed |= write_payload(dev, &[DATA_VOLUME, volume]).is_err();
+                    pause_between_packets();
+                }
+            }
+        }
+
+        if mode.layout && last_layout_poll.elapsed() >= Duration::from_millis(100) {
+            last_layout_poll = Instant::now();
+            if layout_tracker.is_none()
+                && last_layout_tracker_attempt.elapsed() >= Duration::from_secs(2)
+            {
+                last_layout_tracker_attempt = Instant::now();
+                layout_tracker = LayoutTracker::new();
+            }
+            if let Some(layout) = layout_tracker
+                .as_mut()
+                .and_then(LayoutTracker::current_layout_index)
+            {
+                if last_layout != Some(layout) {
+                    last_layout = Some(layout);
+                    write_failed |= write_payload(dev, &[DATA_LAYOUT, layout]).is_err();
                     pause_between_packets();
                 }
             }
@@ -321,6 +396,30 @@ fn current_time_payload() -> (u8, u8) {
     use chrono::Timelike;
     let now = chrono::Local::now();
     (now.hour() as u8, now.minute() as u8)
+}
+
+fn layout_code_index(raw: &str) -> Option<u8> {
+    let code = normalize_layout_code(raw)?;
+    DEFAULT_LAYOUT_CODES
+        .iter()
+        .position(|candidate| *candidate == code)
+        .map(|idx| idx as u8)
+}
+
+fn normalize_layout_code(raw: &str) -> Option<&'static str> {
+    let normalized = raw
+        .trim()
+        .trim_start_matches("com.apple.keylayout.")
+        .split(['-', '_', '.', ':', '(', '@'])
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match normalized.as_str() {
+        "en" | "us" | "gb" | "uk" | "au" | "ca" => Some("en"),
+        "ru" | "russian" => Some("ru"),
+        code if code.starts_with("russian") => Some("ru"),
+        _ => None,
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -410,6 +509,80 @@ return mediaArtist & tab & mediaTitle
     macos_automation_stdout(&["-e", script]).and_then(|out| split_media_line(&out))
 }
 
+#[cfg(target_os = "macos")]
+fn macos_layout_code() -> Option<String> {
+    use std::ffi::c_void;
+
+    type CFArrayRef = *const c_void;
+    type CFIndex = isize;
+    type CFStringRef = *const c_void;
+    type TISInputSourceRef = *const c_void;
+
+    const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+
+    #[link(name = "Carbon", kind = "framework")]
+    extern "C" {
+        static kTISPropertyInputSourceLanguages: CFStringRef;
+        fn TISCopyCurrentKeyboardInputSource() -> TISInputSourceRef;
+        fn TISGetInputSourceProperty(
+            input_source: TISInputSourceRef,
+            property_key: CFStringRef,
+        ) -> *const c_void;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFArrayGetCount(array: CFArrayRef) -> CFIndex;
+        fn CFArrayGetValueAtIndex(array: CFArrayRef, index: CFIndex) -> *const c_void;
+        fn CFStringGetCString(
+            the_string: CFStringRef,
+            buffer: *mut i8,
+            buffer_size: CFIndex,
+            encoding: u32,
+        ) -> bool;
+        fn CFRelease(cf: *const c_void);
+    }
+
+    unsafe {
+        let source = TISCopyCurrentKeyboardInputSource();
+        if source.is_null() {
+            return None;
+        }
+
+        let languages =
+            TISGetInputSourceProperty(source, kTISPropertyInputSourceLanguages) as CFArrayRef;
+        let code = if languages.is_null() || CFArrayGetCount(languages) <= 0 {
+            None
+        } else {
+            let value = CFArrayGetValueAtIndex(languages, 0) as CFStringRef;
+            cf_string_to_string(value)
+        };
+
+        CFRelease(source);
+        code
+    }
+
+    unsafe fn cf_string_to_string(value: CFStringRef) -> Option<String> {
+        if value.is_null() {
+            return None;
+        }
+        let mut buffer = [0i8; 64];
+        if !CFStringGetCString(
+            value,
+            buffer.as_mut_ptr(),
+            buffer.len() as isize,
+            K_CF_STRING_ENCODING_UTF8,
+        ) {
+            return None;
+        }
+        Some(
+            std::ffi::CStr::from_ptr(buffer.as_ptr())
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+}
+
 #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 fn current_media_info() -> Option<(String, String)> {
     None
@@ -471,6 +644,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn layout_code_index_maps_ru_en_aliases() {
+        assert_eq!(layout_code_index("en"), Some(0));
+        assert_eq!(layout_code_index("us"), Some(0));
+        assert_eq!(layout_code_index("gb"), Some(0));
+        assert_eq!(layout_code_index("ru"), Some(1));
+        assert_eq!(layout_code_index("com.apple.keylayout.RussianWin"), Some(1));
+        assert_eq!(layout_code_index("de"), None);
+    }
+
+    #[test]
     fn command_stdout_timeout_returns_successful_output() {
         let output =
             command_stdout_timeout("/bin/sh", &["-c", "printf entropy"], Duration::from_secs(1));
@@ -489,6 +672,158 @@ mod tests {
 
         assert!(output.is_none());
         assert!(started_at.elapsed() < Duration::from_secs(1));
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layout_code_index_maps_ru_en_aliases() {
+        assert_eq!(layout_code_index("en"), Some(0));
+        assert_eq!(layout_code_index("us"), Some(0));
+        assert_eq!(layout_code_index("gb"), Some(0));
+        assert_eq!(layout_code_index("ru"), Some(1));
+        assert_eq!(layout_code_index("com.apple.keylayout.RussianWin"), Some(1));
+        assert_eq!(layout_code_index("de"), None);
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct LayoutTracker {
+    xlib: x11_dl::xlib::Xlib,
+    display: *mut x11_dl::xlib::Display,
+    keyboard: x11_dl::xlib::XkbDescPtr,
+    symbols: Vec<String>,
+}
+
+#[cfg(target_os = "linux")]
+impl LayoutTracker {
+    fn new() -> Option<Self> {
+        unsafe {
+            let xlib = x11_dl::xlib::Xlib::open().ok()?;
+            let display = (xlib.XOpenDisplay)(std::ptr::null());
+            if display.is_null() {
+                return None;
+            }
+            let keyboard = (xlib.XkbAllocKeyboard)();
+            if keyboard.is_null() {
+                (xlib.XCloseDisplay)(display);
+                return None;
+            }
+            let Some(symbols) = linux_xkb_symbols(&xlib, display, keyboard) else {
+                (xlib.XkbFreeKeyboard)(keyboard, 0, 1);
+                (xlib.XCloseDisplay)(display);
+                return None;
+            };
+            Some(Self {
+                xlib,
+                display,
+                keyboard,
+                symbols,
+            })
+        }
+    }
+
+    fn current_layout_index(&mut self) -> Option<u8> {
+        const XKB_USE_CORE_KBD: u32 = 0x0100;
+
+        unsafe {
+            let mut state: x11_dl::xlib::XkbStateRec = std::mem::zeroed();
+            if (self.xlib.XkbGetState)(self.display, XKB_USE_CORE_KBD, &mut state) != 0 {
+                return None;
+            }
+            let group = state.group as usize;
+            let raw = self.symbols.get(group + 1)?;
+            let layout = raw.split([':', '(']).next().unwrap_or_default();
+            layout_code_index(layout)
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for LayoutTracker {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.keyboard.is_null() {
+                (self.xlib.XkbFreeKeyboard)(self.keyboard, 0, 1);
+            }
+            if !self.display.is_null() {
+                (self.xlib.XCloseDisplay)(self.display);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_xkb_symbols(
+    xlib: &x11_dl::xlib::Xlib,
+    display: *mut x11_dl::xlib::Display,
+    keyboard: x11_dl::xlib::XkbDescPtr,
+) -> Option<Vec<String>> {
+    const XKB_SYMBOLS_NAME_MASK: u32 = 1 << 2;
+
+    unsafe {
+        if (xlib.XkbGetNames)(display, XKB_SYMBOLS_NAME_MASK, keyboard) != 0 {
+            return None;
+        }
+        let names = (*keyboard).names;
+        if names.is_null() {
+            return None;
+        }
+        let symbols_atom = (*names).symbols;
+        let symbols_ptr = (xlib.XGetAtomName)(display, symbols_atom);
+        if symbols_ptr.is_null() {
+            return None;
+        }
+        let symbols = std::ffi::CStr::from_ptr(symbols_ptr)
+            .to_string_lossy()
+            .into_owned();
+        (xlib.XFree)(symbols_ptr.cast());
+        Some(symbols.split('+').map(str::to_owned).collect())
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct LayoutTracker;
+
+#[cfg(target_os = "windows")]
+impl LayoutTracker {
+    fn new() -> Option<Self> {
+        Some(Self)
+    }
+
+    fn current_layout_index(&mut self) -> Option<u8> {
+        windows_platform::layout_code().and_then(|code| layout_code_index(&code))
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct LayoutTracker;
+
+#[cfg(target_os = "macos")]
+impl LayoutTracker {
+    fn new() -> Option<Self> {
+        Some(Self)
+    }
+
+    fn current_layout_index(&mut self) -> Option<u8> {
+        macos_layout_code().and_then(|code| layout_code_index(&code))
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+struct LayoutTracker;
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+impl LayoutTracker {
+    fn new() -> Option<Self> {
+        None
+    }
+
+    fn current_layout_index(&mut self) -> Option<u8> {
+        None
     }
 }
 
@@ -629,6 +964,13 @@ mod windows_platform {
             },
         },
     };
+    use windows_sys::Win32::{
+        Globalization::{GetLocaleInfoW, LOCALE_SISO639LANGNAME},
+        UI::{
+            Input::KeyboardAndMouse::GetKeyboardLayout,
+            WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId},
+        },
+    };
 
     pub fn volume_percent() -> Option<u8> {
         unsafe {
@@ -658,5 +1000,25 @@ mod windows_platform {
         let artist = props.Artist().unwrap_or_default().to_string();
         let title = props.Title().unwrap_or_default().to_string();
         (!artist.is_empty() || !title.is_empty()).then_some((artist, title))
+    }
+
+    pub fn layout_code() -> Option<String> {
+        unsafe {
+            let focused_window = GetForegroundWindow();
+            let active_thread = GetWindowThreadProcessId(focused_window, std::ptr::null_mut());
+            let layout = GetKeyboardLayout(active_thread);
+            let locale_id = (layout as usize & 0xFFFF) as u32;
+            let mut buffer = [0u16; 9];
+            let len = GetLocaleInfoW(
+                locale_id,
+                LOCALE_SISO639LANGNAME,
+                buffer.as_mut_ptr(),
+                buffer.len() as i32,
+            );
+            if len <= 1 {
+                return None;
+            }
+            String::from_utf16(&buffer[..len as usize - 1]).ok()
+        }
     }
 }

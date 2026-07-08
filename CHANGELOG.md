@@ -9,6 +9,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 
 ### Main Features
 
+- Added Live Features layout sync for ru/en custom firmware keys, with an on/off switch
 - Added About Entropy update checks through GitHub Releases for Linux, Windows, and macOS
 - Added platform-aware update asset selection for AppImage, Windows executable, and macOS DMG downloads
 - Added Changelog and Download actions to About Entropy after checking for updates

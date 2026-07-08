@@ -74,6 +74,8 @@ pub(crate) struct AppSettings {
     pub(crate) text_expander_rule_files: Vec<String>,
     #[serde(default)]
     pub(crate) text_expansion_rules: Vec<crate::text_expander::TextExpansionRule>,
+    #[serde(default = "default_layout_sync_enabled")]
+    pub(crate) layout_sync_enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -131,6 +133,10 @@ pub(crate) fn default_ui_scale() -> f32 {
     1.0
 }
 
+pub(crate) fn default_layout_sync_enabled() -> bool {
+    true
+}
+
 pub(crate) fn clamp_ui_scale(scale: f32) -> f32 {
     let scale = if scale.is_finite() {
         scale
@@ -171,6 +177,7 @@ impl Default for AppSettings {
             text_expander_app_blacklist: String::new(),
             text_expander_rule_files: Vec::new(),
             text_expansion_rules: Vec::new(),
+            layout_sync_enabled: default_layout_sync_enabled(),
         }
     }
 }

@@ -1003,6 +1003,9 @@ impl EntropyApp {
             {
                 mode.clock_volume = true;
             }
+            if Self::display_preset_needs_entropy(selected) && selected_lower.contains("layout") {
+                mode.layout = true;
+            }
             if Self::display_preset_needs_entropy(selected) && selected_lower.contains("media") {
                 mode.media = true;
             }
@@ -1067,7 +1070,7 @@ impl EntropyApp {
         }
     }
 
-    #[cfg(all(not(target_arch = "wasm32"), target_os = "linux"))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn sync_qmk_hid_host_bridges(&mut self) {
         let selected_path = self
             .selected_device
@@ -1093,6 +1096,9 @@ impl EntropyApp {
                 mode.clock_volume = true;
                 mode.media = true;
             }
+            if !self.app_settings.layout_sync_enabled {
+                mode.layout = false;
+            }
 
             if !mode.is_empty() {
                 desired.insert(device.path.clone(), mode);
@@ -1107,13 +1113,6 @@ impl EntropyApp {
                 .entry(path.clone())
                 .or_insert_with(|| crate::qmk_hid_host::QmkHidHostBridge::start(path, mode));
         }
-    }
-
-    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
-    pub(super) fn sync_qmk_hid_host_bridges(&mut self) {
-        // Keep the single-owner HID path on platforms where a second Raw HID open
-        // can collide with the active Vial connection.
-        self.qmk_hid_hosts.clear();
     }
 
     pub(super) fn open_layout_options_settings_page(&mut self) {

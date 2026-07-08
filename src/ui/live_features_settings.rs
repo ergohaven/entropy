@@ -2,7 +2,7 @@ use super::*;
 
 impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
-    fn selected_live_features_path_and_mode(
+    fn selected_live_features_path_and_supported_mode(
         &self,
     ) -> Option<(String, crate::qmk_hid_host::HostDataMode)> {
         let selected = self
@@ -24,6 +24,24 @@ impl EntropyApp {
         (!mode.is_empty()).then_some((selected.path.clone(), mode))
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn selected_live_features_path_and_mode(
+        &self,
+    ) -> Option<(String, crate::qmk_hid_host::HostDataMode)> {
+        let (path, mut mode) = self.selected_live_features_path_and_supported_mode()?;
+        if !self.app_settings.layout_sync_enabled {
+            mode.layout = false;
+        }
+        (!mode.is_empty()).then_some((path, mode))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn selected_live_features_path_and_supported_mode(
+        &self,
+    ) -> Option<(String, crate::qmk_hid_host::HostDataMode)> {
+        None
+    }
+
     #[cfg(target_arch = "wasm32")]
     fn selected_live_features_path_and_mode(
         &self,
@@ -32,7 +50,8 @@ impl EntropyApp {
     }
 
     pub(super) fn live_features_available_for_selected_device(&self) -> bool {
-        self.selected_live_features_path_and_mode().is_some()
+        self.selected_live_features_path_and_supported_mode()
+            .is_some()
     }
 
     fn draw_live_feature_row(
@@ -75,6 +94,62 @@ impl EntropyApp {
         );
     }
 
+    fn draw_layout_sync_row(
+        ui: &mut egui::Ui,
+        metrics: crate::ui_style::ResponsiveMetrics,
+        lang: crate::i18n::Language,
+        enabled: &mut bool,
+        check: crate::qmk_hid_host::FeatureCheck,
+    ) -> bool {
+        let before = *enabled;
+        let dark = ui.visuals().dark_mode;
+        let status_color = if check.ok {
+            if dark {
+                Color32::from_rgb(205, 210, 205)
+            } else {
+                Color32::from_rgb(65, 70, 65)
+            }
+        } else if dark {
+            Color32::from_rgb(230, 188, 150)
+        } else {
+            Color32::from_rgb(150, 82, 44)
+        };
+        let switch_size = metrics.size(46.0, 24.0);
+        crate::ui_style::settings_list_row_with_tooltip(
+            ui,
+            metrics.settings_row_content_width(),
+            metrics.settings_row_height(),
+            crate::i18n::tr_catalog(lang, "live_features.layout_sync"),
+            true,
+            Some(crate::i18n::tr_catalog(
+                lang,
+                "live_features.layout_sync_tooltip",
+            )),
+            metrics.settings_control_width(),
+            |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let _ = crate::ui_style::settings_switch_sized_stable(
+                        ui,
+                        "live_features_layout_sync_enabled",
+                        enabled,
+                        switch_size,
+                    );
+                    ui.add_space(metrics.value(8.0));
+                    ui.label(
+                        RichText::new(if check.ok {
+                            crate::i18n::tr_catalog(lang, "live_features.ready")
+                        } else {
+                            crate::i18n::tr_catalog(lang, "live_features.needs_setup")
+                        })
+                        .size(metrics.value(12.0))
+                        .color(status_color),
+                    );
+                });
+            },
+        );
+        before != *enabled
+    }
+
     pub(super) fn draw_live_features_settings_page(
         &mut self,
         ui: &mut egui::Ui,
@@ -84,6 +159,7 @@ impl EntropyApp {
         let dark = ui.visuals().dark_mode;
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
         let content_width = metrics.settings_content_width();
+        let supported_path_and_mode = self.selected_live_features_path_and_supported_mode();
         let path_and_mode = self.selected_live_features_path_and_mode();
         let bridge_active = {
             #[cfg(not(target_arch = "wasm32"))]
@@ -121,7 +197,7 @@ impl EntropyApp {
                 );
                 ui.add_space(metrics.value(24.0));
 
-                let Some((_, mode)) = path_and_mode else {
+                let Some((_, supported_mode)) = supported_path_and_mode else {
                     crate::ui_style::modal_empty_state(
                         ui,
                         crate::i18n::tr(lang, crate::i18n::Key::LiveFeaturesInactive),
@@ -134,25 +210,44 @@ impl EntropyApp {
                 };
 
                 ui.set_width(content_width);
-                let status = if bridge_active {
-                    crate::i18n::tr_catalog(self.app_settings.language, "live_features.active")
-                } else {
-                    crate::i18n::tr_catalog(self.app_settings.language, "live_features.starting")
-                };
-                Self::draw_live_feature_row(
-                    ui,
-                    metrics,
-                    crate::i18n::tr_catalog(
-                        self.app_settings.language,
-                        "live_features.entropy_background",
-                    ),
-                    status,
-                    bridge_active,
-                    Some(crate::i18n::tr_catalog(
-                        self.app_settings.language,
-                        "live_features.keep_entropy_running_in_the_background_for_live_firmware_data",
-                    )),
-                );
+                let active_mode = path_and_mode.as_ref().map(|(_, mode)| *mode);
+                if active_mode.is_some() {
+                    let status = if bridge_active {
+                        crate::i18n::tr_catalog(self.app_settings.language, "live_features.active")
+                    } else {
+                        crate::i18n::tr_catalog(self.app_settings.language, "live_features.starting")
+                    };
+                    Self::draw_live_feature_row(
+                        ui,
+                        metrics,
+                        crate::i18n::tr_catalog(
+                            self.app_settings.language,
+                            "live_features.entropy_background",
+                        ),
+                        status,
+                        bridge_active,
+                        Some(crate::i18n::tr_catalog(
+                            self.app_settings.language,
+                            "live_features.keep_entropy_running_in_the_background_for_live_firmware_data",
+                        )),
+                    );
+                }
+                if supported_mode.layout {
+                    let layout = crate::qmk_hid_host::layout_check();
+                    let mut layout_sync_enabled = self.app_settings.layout_sync_enabled;
+                    if Self::draw_layout_sync_row(
+                        ui,
+                        metrics,
+                        lang,
+                        &mut layout_sync_enabled,
+                        layout,
+                    ) {
+                        self.app_settings.layout_sync_enabled = layout_sync_enabled;
+                        save_app_settings(&self.app_settings);
+                        self.sync_qmk_hid_host_bridges();
+                    }
+                }
+                let mode = active_mode.unwrap_or_default();
                 if mode.clock_volume {
                     Self::draw_live_feature_row(
                         ui,
