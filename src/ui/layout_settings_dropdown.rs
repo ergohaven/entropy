@@ -43,6 +43,7 @@ impl EntropyApp {
             let show_magic_item = self.magic_settings.supported;
             let show_tap_hold_item =
                 self.tap_hold_settings.supported || self.one_shot_settings.supported;
+            let show_update_indicator = crate::app::update_available(&self.update_check);
             let show_matrix_item = self.firmware == FirmwareProtocol::Vial;
             let show_lock_item = self.firmware == FirmwareProtocol::Vial
                 && self.layout.is_some()
@@ -311,13 +312,14 @@ impl EntropyApp {
                                     let lock_resp = show_lock_item.then(|| {
                                         top_dropdown_item(ui, item_width, lock_label, true, false)
                                     });
-                                    let about_entropy_resp = top_dropdown_item(
+                                    let about_entropy_resp = top_dropdown_item_with_indicator(
                                         ui,
                                         item_width,
                                         about_entropy_label(lang),
                                         true,
                                         self.main_menu_tab == MainMenuTab::Settings
                                             && self.settings_tab == SettingsTab::AboutEntropy,
+                                        show_update_indicator,
                                     );
                                     if app_resp.clicked() {
                                         self.close_top_dropdowns(ui.ctx());

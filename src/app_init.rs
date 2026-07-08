@@ -149,7 +149,7 @@ impl EntropyApp {
             current_encoder_visibility_id: String::new(),
             device_display_names: std::collections::HashMap::new(),
             device_about_info: None,
-            update_check: UpdateCheckState::default(),
+            update_check: start_update_check(),
             tour_state: TourState::default(),
             tour_target_rects: Vec::new(),
             unlock_open: false,

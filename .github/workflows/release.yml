@@ -112,6 +112,7 @@ jobs:
           cat > RELEASE_NOTES.md <<'EOF'
           ## What's new
 
+          - Added automatic update checks with an About Entropy menu indicator when a new version is available.
           - Added About Entropy update checks through GitHub Releases for Linux, Windows, and macOS.
           - Added platform-aware update downloads for AppImage, Windows executable, and macOS DMG assets.
           - Added Changelog and Download actions to About Entropy after checking for updates.

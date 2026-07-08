@@ -15,6 +15,17 @@ pub(super) fn top_dropdown_item(
     enabled: bool,
     selected: bool,
 ) -> egui::Response {
+    top_dropdown_item_with_indicator(ui, width, label, enabled, selected, false)
+}
+
+pub(super) fn top_dropdown_item_with_indicator(
+    ui: &mut egui::Ui,
+    width: f32,
+    label: &str,
+    enabled: bool,
+    selected: bool,
+    show_indicator: bool,
+) -> egui::Response {
     let dark = ui.visuals().dark_mode;
     let sense = if enabled {
         Sense::click()
@@ -52,6 +63,14 @@ pub(super) fn top_dropdown_item(
             egui::FontId::proportional(13.0),
             text_color,
         );
+
+        if show_indicator {
+            let label_width = top_menu_text_width(ui, label, 13.0);
+            let max_dot_x = rect.right() - if selected { 28.0 } else { 10.0 };
+            let dot_x = (rect.left() + 10.0 + label_width + 8.0).min(max_dot_x);
+            ui.painter()
+                .circle_filled(egui::pos2(dot_x, rect.center().y), 2.5, app_accent());
+        }
 
         if selected {
             ui.painter().circle_filled(

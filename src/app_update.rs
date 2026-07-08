@@ -105,6 +105,16 @@ pub(crate) fn poll_update_check(state: &mut UpdateCheckState) {
     }
 }
 
+pub(crate) fn update_available(state: &UpdateCheckState) -> bool {
+    matches!(
+        state,
+        UpdateCheckState::Ready(UpdateCheckResult {
+            relation: VersionRelation::UpdateAvailable,
+            ..
+        })
+    )
+}
+
 pub(crate) fn open_url_in_browser(url: &str) -> bool {
     #[cfg(target_os = "windows")]
     {

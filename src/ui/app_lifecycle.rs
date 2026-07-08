@@ -254,6 +254,10 @@ impl eframe::App for EntropyApp {
         self.apply_ui_scale(ctx);
         self.handle_ui_scale_shortcuts(ctx);
         self.remember_main_window_size(ctx);
+        crate::app::poll_update_check(&mut self.update_check);
+        if matches!(self.update_check, UpdateCheckState::Checking { .. }) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
 
         #[cfg(target_os = "windows")]
         self.cache_windows_hwnd(frame);

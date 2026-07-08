@@ -546,12 +546,6 @@ impl EntropyApp {
     }
 
     pub(super) fn draw_about_entropy_page(&mut self, ui: &mut egui::Ui, content_rect: egui::Rect) {
-        crate::app::poll_update_check(&mut self.update_check);
-        if matches!(self.update_check, UpdateCheckState::Checking { .. }) {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(100));
-        }
-
         let lang = self.app_settings.language;
         let dark = ui.visuals().dark_mode;
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
