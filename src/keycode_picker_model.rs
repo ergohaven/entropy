@@ -235,6 +235,45 @@ impl KeycodeTab {
             _ => false,
         }
     }
+
+    pub(super) fn preferred_for_vial_keycode(value: u16, is_custom_keycode: bool) -> KeycodeTab {
+        if is_custom_keycode {
+            return KeycodeTab::Custom;
+        }
+        if (0x7700..=0x77FF).contains(&value) {
+            return KeycodeTab::Macro;
+        }
+        if (0x5700..=0x57FF).contains(&value) {
+            return KeycodeTab::TapDance;
+        }
+        if crate::smart_input::smart_symbol_for_keycode(value).is_some() {
+            return KeycodeTab::Symbols;
+        }
+
+        if let Some(kc) = crate::keycode::find_keycode(value) {
+            if kc.name.starts_with("RGB_") {
+                return KeycodeTab::Rgb;
+            }
+
+            return match kc.category {
+                KeycodeCategory::Basic if is_symbol(kc.value) => KeycodeTab::Symbols,
+                KeycodeCategory::Basic
+                | KeycodeCategory::Function
+                | KeycodeCategory::Navigation => KeycodeTab::Basic,
+                KeycodeCategory::Modifier | KeycodeCategory::Layer => KeycodeTab::Modifiers,
+                KeycodeCategory::Media | KeycodeCategory::Mouse | KeycodeCategory::Numpad => {
+                    KeycodeTab::Special
+                }
+                KeycodeCategory::Special => KeycodeTab::Special,
+            };
+        }
+
+        if is_modifier_or_layer_action(value) {
+            return KeycodeTab::Modifiers;
+        }
+
+        KeycodeTab::Basic
+    }
 }
 
 fn is_symbol(value: u16) -> bool {
@@ -243,4 +282,52 @@ fn is_symbol(value: u16) -> bool {
         0x0064 |
         0x021E..=0x0238
     )
+}
+
+fn is_modifier_or_layer_action(value: u16) -> bool {
+    matches!(
+        value,
+        0x0100..=0x3FFF | 0x4000..=0x4FFF | 0x5000..=0x52FF
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preferred_tab_tracks_existing_keycode_groups() {
+        assert_eq!(
+            KeycodeTab::preferred_for_vial_keycode(0x0014, false),
+            KeycodeTab::Basic
+        );
+        assert_eq!(
+            KeycodeTab::preferred_for_vial_keycode(0x002D, false),
+            KeycodeTab::Symbols
+        );
+        assert_eq!(
+            KeycodeTab::preferred_for_vial_keycode(0x00E0, false),
+            KeycodeTab::Modifiers
+        );
+        assert_eq!(
+            KeycodeTab::preferred_for_vial_keycode(0x5220, false),
+            KeycodeTab::Modifiers
+        );
+        assert_eq!(
+            KeycodeTab::preferred_for_vial_keycode(0x7820, false),
+            KeycodeTab::Rgb
+        );
+        assert_eq!(
+            KeycodeTab::preferred_for_vial_keycode(0x7700, false),
+            KeycodeTab::Macro
+        );
+        assert_eq!(
+            KeycodeTab::preferred_for_vial_keycode(0x5700, false),
+            KeycodeTab::TapDance
+        );
+        assert_eq!(
+            KeycodeTab::preferred_for_vial_keycode(0x7E00, true),
+            KeycodeTab::Custom
+        );
+    }
 }

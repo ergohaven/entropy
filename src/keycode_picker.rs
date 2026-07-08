@@ -514,6 +514,19 @@ impl KeycodePicker {
         self.selected_tab = selected_tab;
     }
 
+    pub(crate) fn select_tab_for_keycode(&mut self, value: u16) {
+        let is_custom_keycode = self
+            .custom_keycodes
+            .iter()
+            .any(|(_, _, _, custom_value)| *custom_value == value);
+        let preferred_tab = KeycodeTab::preferred_for_vial_keycode(value, is_custom_keycode);
+        self.selected_tab = if self.vial_tab_supported(preferred_tab) {
+            preferred_tab
+        } else {
+            KeycodeTab::Basic
+        };
+    }
+
     pub fn show(&mut self, ctx: &egui::Context) {
         let macro_key_pick_open = self.macro_key_pick.is_some();
         let regular_key_pick_open = self.regular_key_pick || self.regular_mod_key_pick.is_some();

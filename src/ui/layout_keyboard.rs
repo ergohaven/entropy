@@ -180,17 +180,7 @@ impl EntropyApp {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
             if response.clicked() {
-                self.selected_key = Some((self.selected_layer, *ki));
-                self.keycode_picker.open = true;
-                self.keycode_picker.result = None;
-                self.keycode_picker.search_query.clear();
-                self.keycode_picker.layer_names = self.layer_names.clone();
-                self.keycode_picker.vial_quantum_pending_mod = None;
-                self.keycode_picker.vial_quantum_pending_mt = None;
-                self.keycode_picker.vial_layer_pending = None;
-                // Reset all editor states so picker opens normally
-                self.keycode_picker.tap_dance_editor_open = None;
-                self.keycode_picker.selected_tab = crate::keycode_picker::KeycodeTab::Basic;
+                self.open_picker_for_target(Some(*ki), None);
             }
 
             // Right-click actions: layer jump/retarget, modifier side swap, editors/settings.
@@ -581,10 +571,7 @@ impl EntropyApp {
             }
             if top_resp.clicked() {
                 if let Some((visual_idx, _)) = cw {
-                    self.selected_key = None;
-                    self.selected_encoder = Some((layer, *visual_idx));
-                    self.keycode_picker.open = true;
-                    self.keycode_picker.result = None;
+                    self.open_picker_for_target(None, Some(*visual_idx));
                 }
             }
             if let (Some((press_ki, _)), Some(middle_resp)) = (press_slot, middle_resp.as_ref()) {
@@ -634,10 +621,7 @@ impl EntropyApp {
             }
             if bottom_resp.clicked() {
                 if let Some((visual_idx, _)) = ccw {
-                    self.selected_key = None;
-                    self.selected_encoder = Some((self.selected_layer, *visual_idx));
-                    self.keycode_picker.open = true;
-                    self.keycode_picker.result = None;
+                    self.open_picker_for_target(None, Some(*visual_idx));
                 }
             }
 

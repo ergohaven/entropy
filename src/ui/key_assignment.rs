@@ -135,6 +135,13 @@ impl EntropyApp {
         key_target: Option<usize>,
         encoder_target: Option<usize>,
     ) {
+        let current_keycode = self.layout.as_ref().and_then(|layout| {
+            key_target
+                .map(|ki| layout.get_keycode(self.selected_layer, ki))
+                .or_else(|| {
+                    encoder_target.map(|ei| layout.get_encoder_keycode(self.selected_layer, ei))
+                })
+        });
         self.selected_key = key_target.map(|ki| (self.selected_layer, ki));
         self.selected_encoder = encoder_target.map(|ei| (self.selected_layer, ei));
         self.keycode_picker.open = true;
@@ -145,9 +152,14 @@ impl EntropyApp {
         self.keycode_picker.vial_quantum_pending_mt = None;
         self.keycode_picker.vial_layer_pending = None;
         self.keycode_picker.tap_dance_editor_open = None;
+        self.keycode_picker.macro_inline_selected = None;
         self.keycode_picker.td_key_pick = None;
         self.keycode_picker.td_mod_key_pick = None;
-        self.keycode_picker.selected_tab = crate::keycode_picker::KeycodeTab::Basic;
+        if let Some(current_keycode) = current_keycode {
+            self.keycode_picker.select_tab_for_keycode(current_keycode);
+        } else {
+            self.keycode_picker.selected_tab = crate::keycode_picker::KeycodeTab::Basic;
+        }
     }
 
     pub(super) fn handle_secondary_target(
