@@ -28,6 +28,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 
 ### Fixes
 
+- Hid the full Entropy chrome while Typing Trainer focus mode is active, keeping the text block in a stable position
 - Hid the Typing Trainer controls and stats while typing, restoring them on mouse movement or run finish
 - Limited the Typing Trainer text window to four visible typing lines
 - Paused the Typing Trainer timer while its page is inactive, resuming only when typing continues

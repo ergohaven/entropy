@@ -17,8 +17,6 @@ impl EntropyApp {
         ctx: &egui::Context,
         content_rect: egui::Rect,
     ) {
-        self.handle_typing_trainer_input(ctx);
-
         let lang = self.app_settings.language;
         let dark = ui.visuals().dark_mode;
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
@@ -38,7 +36,7 @@ impl EntropyApp {
         crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
                 if ui_hidden {
-                    ui.add_space(metrics.value(180.0));
+                    self.reserve_typing_trainer_chrome_space(ui, metrics);
                 } else {
                     ui.add_space(metrics.value(18.0));
                     ui.label(
@@ -68,7 +66,7 @@ impl EntropyApp {
         });
     }
 
-    fn handle_typing_trainer_input(&mut self, ctx: &egui::Context) {
+    pub(super) fn handle_typing_trainer_input(&mut self, ctx: &egui::Context) {
         if self.main_menu_tab != MainMenuTab::Advanced
             || self.settings_tab != SettingsTab::TypingTrainer
             || self.keycode_picker.open
@@ -122,6 +120,33 @@ impl EntropyApp {
         } else if typed_this_frame {
             self.typing_trainer.ui_hidden = true;
         }
+    }
+
+    fn reserve_typing_trainer_chrome_space(
+        &self,
+        ui: &mut egui::Ui,
+        metrics: crate::ui_style::ResponsiveMetrics,
+    ) {
+        let segment_size = metrics.size(244.0, 32.0);
+        let restart_size = metrics.size(96.0, 32.0);
+        let controls_width = segment_size.x + metrics.value(12.0) + restart_size.x;
+        let stats_width = metrics.value(92.0) * 4.0;
+
+        ui.add_space(metrics.value(18.0));
+        ui.allocate_exact_size(
+            egui::vec2(metrics.value(1.0), metrics.value(22.0)),
+            Sense::hover(),
+        );
+        ui.add_space(metrics.value(6.0));
+        ui.allocate_exact_size(
+            egui::vec2(metrics.value(1.0), metrics.value(16.0)),
+            Sense::hover(),
+        );
+        ui.add_space(metrics.value(18.0));
+        ui.allocate_exact_size(egui::vec2(controls_width, segment_size.y), Sense::hover());
+        ui.add_space(metrics.value(18.0));
+        ui.allocate_exact_size(egui::vec2(stats_width, metrics.value(42.0)), Sense::hover());
+        ui.add_space(metrics.value(24.0));
     }
 
     fn draw_typing_trainer_controls(

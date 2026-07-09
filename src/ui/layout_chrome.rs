@@ -11,6 +11,22 @@ impl EntropyApp {
         layer_bar_h: f32,
         top_reserved_h: f32,
     ) -> bool {
+        let typing_trainer_page = self.main_menu_tab == MainMenuTab::Advanced
+            && self.settings_tab == SettingsTab::TypingTrainer;
+        if typing_trainer_page {
+            let now = std::time::Instant::now();
+            self.typing_trainer.remaining_secs_at(now);
+            if self.typing_trainer.is_finished() {
+                self.typing_trainer.ui_hidden = false;
+            }
+            self.handle_typing_trainer_input(ctx);
+            if self.typing_trainer.ui_hidden && !self.typing_trainer.is_finished() {
+                self.close_top_dropdowns(ctx);
+                self.draw_settings_screen(ui, layout, ctx, ui.min_rect().top() + top_reserved_h);
+                return true;
+            }
+        }
+
         // ── Main menu tabs ────────────────────────────────────────────────
         {
             let top_tabs = self.draw_layout_top_tabs(
