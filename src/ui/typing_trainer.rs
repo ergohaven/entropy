@@ -39,6 +39,10 @@ impl EntropyApp {
                 self.draw_typing_trainer_stats(ui, metrics, lang, now, remaining_secs);
                 ui.add_space(metrics.value(24.0));
                 self.draw_typing_trainer_text(ui, metrics, dark);
+                if self.typing_trainer.is_finished() {
+                    ui.add_space(metrics.value(10.0));
+                    self.draw_typing_trainer_finished_status(ui, metrics, lang);
+                }
             });
         });
     }
@@ -290,21 +294,27 @@ impl EntropyApp {
                     .request_repaint_after(std::time::Duration::from_millis(500));
             }
         }
+    }
 
-        if self.typing_trainer.is_finished() {
-            let restart_rect = egui::Rect::from_center_size(
-                egui::pos2(rect.center().x, rect.bottom() - metrics.value(18.0)),
-                metrics.size(120.0, 32.0),
-            );
-            crate::ui_style::allocate_ui_at_rect(ui, restart_rect, |ui| {
+    fn draw_typing_trainer_finished_status(
+        &self,
+        ui: &mut egui::Ui,
+        metrics: crate::ui_style::ResponsiveMetrics,
+        lang: crate::i18n::Language,
+    ) {
+        let size = metrics.size(120.0, 32.0);
+        ui.allocate_ui_with_layout(
+            size,
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
                 let _ = crate::ui_style::modern_button(
                     ui,
-                    crate::i18n::tr_catalog(self.app_settings.language, "typing_trainer.finished"),
-                    restart_rect.size(),
+                    crate::i18n::tr_catalog(lang, "typing_trainer.finished"),
+                    size,
                     false,
                 );
-            });
-        }
+            },
+        );
     }
 }
 

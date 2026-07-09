@@ -28,6 +28,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 
 ### Fixes
 
+- Moved the Typing Trainer finished status below the text area so it no longer overlaps the final line
 - Centered About Entropy update action buttons under the settings list
 - Removed the application version from the native window title bar
 - Switched the application package version back to the public GitHub release channel
