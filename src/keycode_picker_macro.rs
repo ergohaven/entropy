@@ -293,6 +293,7 @@ impl KeycodePicker {
         ui.add_space(4.0 * scale);
         let language = self.language;
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 12.0 * scale;
             if let Some(name) = self.macro_names.get_mut(n) {
                 let resp = crate::ui_style::modern_text_field_sized(
                     ui,
