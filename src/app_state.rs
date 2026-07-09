@@ -1576,6 +1576,15 @@ impl TypingTrainerState {
         }
     }
 
+    pub(crate) fn extend_target_text(&mut self) {
+        self.text_seed = self.text_seed.wrapping_add(17);
+        if !self.target_text.is_empty() {
+            self.target_text.push(' ');
+        }
+        self.target_text
+            .push_str(&typing_trainer_text(self.text_seed));
+    }
+
     pub(crate) fn backspace(&mut self) {
         if self.is_finished() {
             return;
@@ -1741,6 +1750,21 @@ mod typing_trainer_tests {
         assert_eq!(state.completed_correct_chars, first_text.chars().count());
         assert_eq!(state.completed_errors, 0);
         assert_eq!(state.completed_typed_chars, first_text.chars().count());
+    }
+
+    #[test]
+    fn typing_trainer_extends_target_text_without_clearing_progress() {
+        let mut state = TypingTrainerState::default();
+        let first_text = state.target_text.clone();
+        state.typed_chars = "about".chars().collect();
+
+        state.extend_target_text();
+
+        assert!(state.target_text.starts_with(&format!("{first_text} ")));
+        assert!(state.target_text.chars().count() > first_text.chars().count());
+        assert_eq!(state.typed_chars, "about".chars().collect::<Vec<_>>());
+        assert!(state.started_at.is_none());
+        assert!(state.finished_at.is_none());
     }
 }
 

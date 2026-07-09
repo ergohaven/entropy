@@ -28,6 +28,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 
 ### Fixes
 
+- Kept Typing Trainer page updates filled with a uniform visible text block
 - Updated the Typing Trainer text window by full visible pages instead of shifting one line at a time
 - Kept the Typing Trainer text window following the caret so next words appear instead of typing into hidden text
 - Continued Typing Trainer runs with a fresh text when the current text is fully typed before time runs out

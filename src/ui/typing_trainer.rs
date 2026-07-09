@@ -204,7 +204,7 @@ impl EntropyApp {
     }
 
     fn draw_typing_trainer_text(
-        &self,
+        &mut self,
         ui: &mut egui::Ui,
         metrics: crate::ui_style::ResponsiveMetrics,
         dark: bool,
@@ -217,8 +217,6 @@ impl EntropyApp {
         }
 
         let text_rect = rect.shrink2(egui::vec2(metrics.value(8.0), 0.0));
-        let target_chars = self.typing_trainer.target_text.chars().collect::<Vec<_>>();
-        let typed_chars = &self.typing_trainer.typed_chars;
         let font_id = FontId::new(metrics.value(27.0), egui::FontFamily::Monospace);
         let char_width = ui
             .painter()
@@ -231,6 +229,12 @@ impl EntropyApp {
         let max_line_chars = (text_rect.width() / char_width).floor().max(1.0) as usize;
         let max_visible_lines =
             ((text_rect.height() - top_padding).max(0.0) / line_height).floor() as usize + 1;
+        if !self.typing_trainer.is_finished() {
+            self.ensure_typing_trainer_visible_text(max_line_chars, max_visible_lines);
+        }
+
+        let target_chars = self.typing_trainer.target_text.chars().collect::<Vec<_>>();
+        let typed_chars = &self.typing_trainer.typed_chars;
         let mut x = text_rect.left();
         let mut y = text_rect.top() + top_padding;
         let caret_idx = typed_chars.len().min(target_chars.len());
@@ -310,6 +314,28 @@ impl EntropyApp {
         }
     }
 
+    fn ensure_typing_trainer_visible_text(
+        &mut self,
+        max_line_chars: usize,
+        max_visible_lines: usize,
+    ) {
+        for _ in 0..4 {
+            let target_chars = self.typing_trainer.target_text.chars().collect::<Vec<_>>();
+            let caret_idx = self
+                .typing_trainer
+                .typed_chars
+                .len()
+                .min(target_chars.len());
+            let line_starts = typing_trainer_line_starts(&target_chars, max_line_chars);
+            let first_visible_line =
+                typing_trainer_first_visible_line(&line_starts, caret_idx, max_visible_lines);
+            if line_starts.len() >= first_visible_line + max_visible_lines.max(1) {
+                break;
+            }
+            self.typing_trainer.extend_target_text();
+        }
+    }
+
     fn draw_typing_trainer_finished_status(
         &self,
         ui: &mut egui::Ui,
@@ -339,12 +365,21 @@ fn typing_trainer_visible_start_index(
     max_visible_lines: usize,
 ) -> usize {
     let line_starts = typing_trainer_line_starts(target_chars, max_line_chars);
+    let first_visible_line =
+        typing_trainer_first_visible_line(&line_starts, caret_idx, max_visible_lines);
+    line_starts.get(first_visible_line).copied().unwrap_or(0)
+}
+
+fn typing_trainer_first_visible_line(
+    line_starts: &[usize],
+    caret_idx: usize,
+    max_visible_lines: usize,
+) -> usize {
     let caret_line = line_starts
         .partition_point(|start| *start <= caret_idx)
         .saturating_sub(1);
     let max_visible_lines = max_visible_lines.max(1);
-    let first_visible_line = caret_line / max_visible_lines * max_visible_lines;
-    line_starts.get(first_visible_line).copied().unwrap_or(0)
+    caret_line / max_visible_lines * max_visible_lines
 }
 
 fn typing_trainer_line_starts(target_chars: &[char], max_line_chars: usize) -> Vec<usize> {
