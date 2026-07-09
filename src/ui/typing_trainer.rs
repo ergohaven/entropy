@@ -354,16 +354,16 @@ impl EntropyApp {
         let stats = self.typing_trainer.stats_at(now);
         let labels = [
             (
-                crate::i18n::tr_catalog(lang, "typing_trainer.characters"),
-                stats.typed_chars.to_string(),
-            ),
-            (
                 crate::i18n::tr_catalog(lang, "typing_trainer.wpm"),
                 stats.wpm.to_string(),
             ),
             (
                 crate::i18n::tr_catalog(lang, "typing_trainer.accuracy"),
                 format!("{:.0}%", stats.accuracy),
+            ),
+            (
+                crate::i18n::tr_catalog(lang, "typing_trainer.characters"),
+                stats.typed_chars.to_string(),
             ),
             (
                 crate::i18n::tr_catalog(lang, "typing_trainer.errors"),
