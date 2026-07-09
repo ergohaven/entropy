@@ -1508,6 +1508,9 @@ pub(crate) struct TypingTrainerState {
     pub(crate) duration_secs: u32,
     pub(crate) started_at: Option<std::time::Instant>,
     pub(crate) finished_at: Option<std::time::Instant>,
+    pub(crate) completed_correct_chars: usize,
+    pub(crate) completed_errors: usize,
+    pub(crate) completed_typed_chars: usize,
     pub(crate) text_seed: usize,
 }
 
@@ -1529,6 +1532,9 @@ impl Default for TypingTrainerState {
             duration_secs: 30,
             started_at: None,
             finished_at: None,
+            completed_correct_chars: 0,
+            completed_errors: 0,
+            completed_typed_chars: 0,
             text_seed,
         }
     }
@@ -1541,6 +1547,9 @@ impl TypingTrainerState {
         self.typed_chars.clear();
         self.started_at = None;
         self.finished_at = None;
+        self.completed_correct_chars = 0;
+        self.completed_errors = 0;
+        self.completed_typed_chars = 0;
     }
 
     pub(crate) fn set_duration(&mut self, duration_secs: u32) {
@@ -1563,7 +1572,7 @@ impl TypingTrainerState {
             self.typed_chars.push(ch);
         }
         if self.typed_chars.len() >= self.target_text.chars().count() {
-            self.finished_at = Some(now);
+            self.advance_to_next_text();
         }
     }
 
@@ -1592,11 +1601,39 @@ impl TypingTrainerState {
     }
 
     pub(crate) fn stats_at(&self, now: std::time::Instant) -> TypingTrainerStats {
-        typing_trainer_stats(
+        let current_stats = typing_trainer_stats(
             &self.target_text,
             &self.typed_chars,
             self.elapsed_secs_at(now),
-        )
+        );
+        let typed_chars = self.completed_typed_chars + current_stats.typed_chars;
+        let correct_chars = self.completed_correct_chars + current_stats.correct_chars;
+        let errors = self.completed_errors + current_stats.errors;
+        let accuracy = if typed_chars == 0 {
+            100.0
+        } else {
+            correct_chars as f32 / typed_chars as f32 * 100.0
+        };
+        let minutes = (self.elapsed_secs_at(now) / 60.0).max(1.0 / 60.0);
+        let wpm = ((correct_chars as f32 / 5.0) / minutes).round() as u32;
+
+        TypingTrainerStats {
+            wpm,
+            accuracy,
+            errors,
+            correct_chars,
+            typed_chars,
+        }
+    }
+
+    fn advance_to_next_text(&mut self) {
+        let stats = typing_trainer_stats(&self.target_text, &self.typed_chars, 0.0);
+        self.completed_correct_chars += stats.correct_chars;
+        self.completed_errors += stats.errors;
+        self.completed_typed_chars += stats.typed_chars;
+        self.text_seed = self.text_seed.wrapping_add(17);
+        self.target_text = typing_trainer_text(self.text_seed);
+        self.typed_chars.clear();
     }
 }
 
@@ -1673,6 +1710,9 @@ mod typing_trainer_tests {
         let first_text = state.target_text.clone();
         state.typed_chars = "about".chars().collect();
         state.started_at = Some(std::time::Instant::now());
+        state.completed_correct_chars = 20;
+        state.completed_errors = 1;
+        state.completed_typed_chars = 21;
 
         state.reset();
 
@@ -1680,6 +1720,27 @@ mod typing_trainer_tests {
         assert!(state.typed_chars.is_empty());
         assert!(state.started_at.is_none());
         assert!(state.finished_at.is_none());
+        assert_eq!(state.completed_correct_chars, 0);
+        assert_eq!(state.completed_errors, 0);
+        assert_eq!(state.completed_typed_chars, 0);
+    }
+
+    #[test]
+    fn typing_trainer_generates_next_text_when_current_text_is_complete() {
+        let mut state = TypingTrainerState::default();
+        let first_text = state.target_text.clone();
+        let now = std::time::Instant::now();
+
+        for ch in first_text.chars() {
+            state.type_char(ch, now);
+        }
+
+        assert_ne!(state.target_text, first_text);
+        assert!(state.typed_chars.is_empty());
+        assert!(state.finished_at.is_none());
+        assert_eq!(state.completed_correct_chars, first_text.chars().count());
+        assert_eq!(state.completed_errors, 0);
+        assert_eq!(state.completed_typed_chars, first_text.chars().count());
     }
 }
 

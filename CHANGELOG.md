@@ -28,6 +28,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 
 ### Fixes
 
+- Continued Typing Trainer runs with a fresh text when the current text is fully typed before time runs out
 - Moved the Typing Trainer finished status below the text area so it no longer overlaps the final line
 - Centered About Entropy update action buttons under the settings list
 - Removed the application version from the native window title bar
