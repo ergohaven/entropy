@@ -7,6 +7,7 @@ impl EntropyApp {
         layout: &KeyboardLayout,
         ctx: &egui::Context,
         content_top: f32,
+        viewport: egui::Rect,
     ) {
         #[cfg(not(target_arch = "wasm32"))]
         if self.settings_tab == SettingsTab::MatrixTester {
@@ -20,7 +21,7 @@ impl EntropyApp {
         }
 
         let dark = ui.visuals().dark_mode;
-        let stable_rect = ui.max_rect();
+        let stable_rect = viewport;
         let stable_hint_center_x = stable_rect.center().x;
         let stable_hint_bottom = stable_rect.bottom();
         let content_rect = egui::Rect::from_min_max(

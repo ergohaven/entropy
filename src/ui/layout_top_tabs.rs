@@ -54,13 +54,14 @@ impl EntropyApp {
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
+        viewport: egui::Rect,
         top_base_y: f32,
         suppress_tooltips: bool,
     ) -> LayoutTopTabsState {
         use crate::i18n::Key as TrKey;
 
         let lang = self.app_settings.language;
-        let center_x = ui.min_rect().center().x;
+        let center_x = viewport.center().x;
         let tabs_y = top_base_y;
         let tab_height = 28.0;
         let tabs = [
@@ -93,11 +94,11 @@ impl EntropyApp {
             .x
         });
         let undo_rect = egui::Rect::from_min_size(
-            egui::pos2(ui.min_rect().left() + 24.0, tabs_y),
+            egui::pos2(viewport.left() + 24.0, tabs_y),
             Vec2::new(undo_text_w + 12.0, tab_height),
         );
         let zoom_width = 108.0;
-        let zoom_left_top = egui::pos2(ui.min_rect().right() - 18.0 - zoom_width, tabs_y);
+        let zoom_left_top = egui::pos2(viewport.right() - 18.0 - zoom_width, tabs_y);
         let side_gap = 12.0;
         let safe_left = undo_rect.right() + side_gap;
         let safe_right = zoom_left_top.x - side_gap;

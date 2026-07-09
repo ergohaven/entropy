@@ -7,11 +7,8 @@ impl EntropyApp {
         layout: &KeyboardLayout,
         ctx: &egui::Context,
     ) {
-        let avail = ui.available_size();
-        let viewport = egui::Rect::from_min_max(
-            ui.min_rect().min,
-            egui::pos2(ui.min_rect().left() + avail.x, ui.max_rect().bottom()),
-        );
+        let viewport = ui.max_rect();
+        let avail = viewport.size();
         let geometry = layout_geometry_with_reserved_and_filter(
             ui.ctx(),
             layout,
@@ -38,7 +35,7 @@ impl EntropyApp {
         let main_tabs_h = 32.0_f32;
         let layer_bar_h = 68.0_f32;
         let top_reserved_h = LAYOUT_TOP_RESERVED_H;
-        let top_base_y = ui.min_rect().top() + 6.0;
+        let top_base_y = viewport.top() + 6.0;
         self.last_layout_geometry = Some((offset_x, offset_y, unit, padding));
 
         if self.draw_layout_chrome(
@@ -49,6 +46,7 @@ impl EntropyApp {
             main_tabs_h,
             layer_bar_h,
             top_reserved_h,
+            viewport,
         ) {
             return;
         }

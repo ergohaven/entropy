@@ -10,6 +10,7 @@ impl EntropyApp {
         main_tabs_h: f32,
         layer_bar_h: f32,
         top_reserved_h: f32,
+        viewport: egui::Rect,
     ) -> bool {
         let typing_trainer_page = self.main_menu_tab == MainMenuTab::Advanced
             && self.settings_tab == SettingsTab::TypingTrainer;
@@ -31,7 +32,7 @@ impl EntropyApp {
 
         // ── Main menu tabs ────────────────────────────────────────────────
         {
-            let chrome_rect = ui.max_rect();
+            let chrome_rect = viewport;
             let top_tabs = crate::ui_style::allocate_ui_at_rect(ui, chrome_rect, |ui| {
                 ui.set_opacity(chrome_opacity);
                 if chrome_opacity <= 0.96 {
@@ -40,6 +41,7 @@ impl EntropyApp {
                 self.draw_layout_top_tabs(
                     ui,
                     ctx,
+                    chrome_rect,
                     top_base_y,
                     self.unlock_open || self.vial_unlock_polling || chrome_opacity < 0.96,
                 )
@@ -72,7 +74,13 @@ impl EntropyApp {
                 self.main_menu_tab,
                 MainMenuTab::Settings | MainMenuTab::Advanced
             ) {
-                self.draw_settings_screen(ui, layout, ctx, chrome_rect.top() + top_reserved_h);
+                self.draw_settings_screen(
+                    ui,
+                    layout,
+                    ctx,
+                    chrome_rect.top() + top_reserved_h,
+                    chrome_rect,
+                );
                 return true;
             }
 
