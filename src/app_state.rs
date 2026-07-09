@@ -1431,6 +1431,8 @@ pub(crate) struct TypingTrainerState {
     pub(crate) typed_chars: Vec<char>,
     pub(crate) language: TypingTrainerLanguage,
     pub(crate) mode: TypingTrainerMode,
+    pub(crate) punctuation_enabled: bool,
+    pub(crate) numbers_enabled: bool,
     pub(crate) duration_secs: u32,
     pub(crate) word_count: usize,
     pub(crate) started_at: Option<std::time::Instant>,
@@ -1460,6 +1462,8 @@ impl Default for TypingTrainerState {
             typed_chars: Vec::new(),
             language: TypingTrainerLanguage::English,
             mode: TypingTrainerMode::Time,
+            punctuation_enabled: false,
+            numbers_enabled: false,
             duration_secs: 30,
             word_count: 25,
             started_at: None,
@@ -1498,6 +1502,20 @@ impl TypingTrainerState {
     pub(crate) fn set_language(&mut self, language: TypingTrainerLanguage) {
         if self.language != language {
             self.language = language;
+            self.reset();
+        }
+    }
+
+    pub(crate) fn set_punctuation_enabled(&mut self, enabled: bool) {
+        if self.punctuation_enabled != enabled {
+            self.punctuation_enabled = enabled;
+            self.reset();
+        }
+    }
+
+    pub(crate) fn set_numbers_enabled(&mut self, enabled: bool) {
+        if self.numbers_enabled != enabled {
+            self.numbers_enabled = enabled;
             self.reset();
         }
     }
@@ -1582,6 +1600,8 @@ impl TypingTrainerState {
         self.target_text.push_str(&typing_trainer_text_for_language(
             self.text_seed,
             self.language,
+            self.punctuation_enabled,
+            self.numbers_enabled,
         ));
     }
 
@@ -1648,12 +1668,19 @@ impl TypingTrainerState {
 
     fn new_target_text(&self) -> String {
         match self.mode {
-            TypingTrainerMode::Time => {
-                typing_trainer_text_for_language(self.text_seed, self.language)
-            }
-            TypingTrainerMode::Words => {
-                typing_trainer_text_for_word_count(self.text_seed, self.word_count, self.language)
-            }
+            TypingTrainerMode::Time => typing_trainer_text_for_language(
+                self.text_seed,
+                self.language,
+                self.punctuation_enabled,
+                self.numbers_enabled,
+            ),
+            TypingTrainerMode::Words => typing_trainer_text_for_word_count(
+                self.text_seed,
+                self.word_count,
+                self.language,
+                self.punctuation_enabled,
+                self.numbers_enabled,
+            ),
         }
     }
 
@@ -1669,25 +1696,72 @@ impl TypingTrainerState {
 }
 
 pub(crate) fn typing_trainer_text(seed: usize) -> String {
-    typing_trainer_text_for_language(seed, TypingTrainerLanguage::English)
+    typing_trainer_text_for_language(seed, TypingTrainerLanguage::English, false, false)
 }
 
-fn typing_trainer_text_for_language(seed: usize, language: TypingTrainerLanguage) -> String {
-    typing_trainer_text_for_word_count(seed, TYPING_TRAINER_DEFAULT_TEXT_WORDS, language)
+fn typing_trainer_text_for_language(
+    seed: usize,
+    language: TypingTrainerLanguage,
+    punctuation_enabled: bool,
+    numbers_enabled: bool,
+) -> String {
+    typing_trainer_text_for_word_count(
+        seed,
+        TYPING_TRAINER_DEFAULT_TEXT_WORDS,
+        language,
+        punctuation_enabled,
+        numbers_enabled,
+    )
 }
 
 fn typing_trainer_text_for_word_count(
     seed: usize,
     word_count: usize,
     language: TypingTrainerLanguage,
+    punctuation_enabled: bool,
+    numbers_enabled: bool,
 ) -> String {
     let mut words = Vec::with_capacity(word_count);
     let len = super::typing_trainer_words::word_count(language);
     for i in 0..word_count {
-        let idx = seed.wrapping_add(i * 29).wrapping_add((i / 7) * 11) % len;
-        words.push(super::typing_trainer_words::word_at(language, idx));
+        let mut word = if numbers_enabled && typing_trainer_should_insert_number(seed, i) {
+            typing_trainer_number_token(seed, i)
+        } else {
+            let idx = seed.wrapping_add(i * 29).wrapping_add((i / 7) * 11) % len;
+            super::typing_trainer_words::word_at(language, idx).to_owned()
+        };
+        if punctuation_enabled && typing_trainer_should_append_punctuation(seed, i, word_count) {
+            word.push(typing_trainer_punctuation_mark(seed, i));
+        }
+        words.push(word);
     }
     words.join(" ")
+}
+
+fn typing_trainer_should_insert_number(seed: usize, idx: usize) -> bool {
+    idx > 0 && idx % 8 == seed % 8
+}
+
+fn typing_trainer_number_token(seed: usize, idx: usize) -> String {
+    let value = seed
+        .wrapping_mul(37)
+        .wrapping_add(idx.wrapping_mul(97))
+        .wrapping_add((idx / 5).wrapping_mul(19));
+    match seed.wrapping_add(idx) % 4 {
+        0 => (value % 10).to_string(),
+        1 => (10 + value % 90).to_string(),
+        2 => (100 + value % 900).to_string(),
+        _ => (1000 + value % 9000).to_string(),
+    }
+}
+
+fn typing_trainer_should_append_punctuation(seed: usize, idx: usize, word_count: usize) -> bool {
+    idx + 1 < word_count && seed.wrapping_add(idx * 17).wrapping_add(idx / 4) % 5 == 0
+}
+
+fn typing_trainer_punctuation_mark(seed: usize, idx: usize) -> char {
+    const MARKS: [char; 8] = [',', '.', '.', '?', '!', ';', ':', ','];
+    MARKS[seed.wrapping_add(idx * 7).wrapping_add(idx / 2) % MARKS.len()]
 }
 
 fn typing_trainer_completed_words(target_text: &str, typed_len: usize) -> usize {
@@ -1795,6 +1869,8 @@ mod typing_trainer_tests {
         assert_eq!(state.completed_correct_chars, 0);
         assert_eq!(state.completed_errors, 0);
         assert_eq!(state.completed_typed_chars, 0);
+        assert!(!state.punctuation_enabled);
+        assert!(!state.numbers_enabled);
         assert_eq!(state.language, TypingTrainerLanguage::English);
         assert_eq!(state.mode, TypingTrainerMode::Time);
         assert_eq!(state.word_count, 25);
@@ -1911,6 +1987,40 @@ mod typing_trainer_tests {
         assert!(typing_trainer_accepts_char('Я'));
         assert!(typing_trainer_accepts_char(' '));
         assert!(typing_trainer_accepts_char('.'));
+    }
+
+    #[test]
+    fn typing_trainer_punctuation_option_adds_punctuation() {
+        let text =
+            typing_trainer_text_for_word_count(0, 30, TypingTrainerLanguage::English, true, false);
+
+        assert!(text.chars().any(|ch| ch.is_ascii_punctuation()));
+        assert!(!text.chars().any(|ch| ch.is_ascii_digit()));
+    }
+
+    #[test]
+    fn typing_trainer_numbers_option_adds_numbers() {
+        let text =
+            typing_trainer_text_for_word_count(0, 30, TypingTrainerLanguage::English, false, true);
+
+        assert!(text.chars().any(|ch| ch.is_ascii_digit()));
+        assert!(!text.chars().any(|ch| ch.is_ascii_punctuation()));
+    }
+
+    #[test]
+    fn typing_trainer_modifier_toggles_regenerate_text() {
+        let mut state = TypingTrainerState::default();
+
+        state.set_punctuation_enabled(true);
+        assert!(state.punctuation_enabled);
+        assert!(state
+            .target_text
+            .chars()
+            .any(|ch| ch.is_ascii_punctuation()));
+
+        state.set_numbers_enabled(true);
+        assert!(state.numbers_enabled);
+        assert!(state.target_text.chars().any(|ch| ch.is_ascii_digit()));
     }
 
     #[test]

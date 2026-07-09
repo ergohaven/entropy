@@ -592,6 +592,67 @@ pub fn modern_dropdown_button_sized(
     dropdown_resp
 }
 
+pub fn modern_toggle_pill(
+    ui: &mut Ui,
+    icon: &str,
+    label: &str,
+    size: Vec2,
+    selected: bool,
+) -> egui::Response {
+    let dark = ui.visuals().dark_mode;
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
+    let fill = if selected {
+        if dark {
+            mix(surface_fill(dark), accent(), 0.18)
+        } else {
+            mix(surface_fill(dark), accent(), 0.12)
+        }
+    } else if resp.hovered() {
+        hover_fill(dark)
+    } else {
+        surface_fill(dark)
+    };
+    ui.painter().rect(
+        rect,
+        9.0,
+        fill,
+        modal_outline_stroke(dark),
+        egui::StrokeKind::Inside,
+    );
+
+    let text_color = if selected {
+        ui.visuals().text_color()
+    } else {
+        muted_text(dark)
+    };
+    let text = format!("{icon} {label}");
+    let text_rect = rect.shrink2(Vec2::new(14.0, 0.0));
+    let mut font_size = 12.5_f32;
+    let mut galley =
+        ui.painter()
+            .layout_no_wrap(text.clone(), FontId::proportional(font_size), text_color);
+    while galley.size().x > text_rect.width() && font_size > 8.5 {
+        font_size -= 0.5;
+        galley =
+            ui.painter()
+                .layout_no_wrap(text.clone(), FontId::proportional(font_size), text_color);
+    }
+    ui.painter().with_clip_rect(text_rect).galley(
+        egui::pos2(
+            text_rect.center().x - galley.size().x * 0.5,
+            text_rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
+        text_color,
+    );
+
+    resp
+}
+
 pub fn paint_floating_scrollbar_handle(
     ui: &mut Ui,
     track_rect: egui::Rect,

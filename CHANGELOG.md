@@ -28,6 +28,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 
 ### Fixes
 
+- Added Typing Trainer punctuation and numbers toggles, with generated punctuation marks and numeric tokens
 - Added English and Russian language packs to Typing Trainer with Unicode input support
 - Changed the Typing Trainer language selector from a segmented control to a dropdown
 - Finished the Typing Trainer run on Escape and restored time as the last final stat

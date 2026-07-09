@@ -316,6 +316,45 @@ impl EntropyApp {
                 }
             },
         );
+
+        ui.add_space(metrics.value(8.0));
+
+        let modifier_size = metrics.size(156.0, 32.0);
+        let modifier_gap = metrics.value(10.0);
+        let modifier_total_size = egui::vec2(modifier_size.x * 2.0 + modifier_gap, modifier_size.y);
+        let punctuation_label = crate::i18n::tr_catalog(lang, "typing_trainer.punctuation");
+        let numbers_label = crate::i18n::tr_catalog(lang, "typing_trainer.numbers");
+        ui.allocate_ui_with_layout(
+            modifier_total_size,
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                if crate::ui_style::modern_toggle_pill(
+                    ui,
+                    "@",
+                    punctuation_label,
+                    modifier_size,
+                    self.typing_trainer.punctuation_enabled,
+                )
+                .clicked()
+                {
+                    self.typing_trainer
+                        .set_punctuation_enabled(!self.typing_trainer.punctuation_enabled);
+                }
+                ui.add_space(modifier_gap);
+                if crate::ui_style::modern_toggle_pill(
+                    ui,
+                    "#",
+                    numbers_label,
+                    modifier_size,
+                    self.typing_trainer.numbers_enabled,
+                )
+                .clicked()
+                {
+                    self.typing_trainer
+                        .set_numbers_enabled(!self.typing_trainer.numbers_enabled);
+                }
+            },
+        );
     }
 
     fn reserve_typing_trainer_stats_slot(
