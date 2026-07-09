@@ -28,6 +28,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 
 ### Fixes
 
+- Brightened correctly typed Typing Trainer text in dark theme for stronger contrast against untyped text
 - Hid the mouse cursor while Typing Trainer focus mode hides the UI during typing
 - Moved Typing Trainer final character count before errors in the result stats
 - Raised the Typing Trainer final stats and added a typed character count

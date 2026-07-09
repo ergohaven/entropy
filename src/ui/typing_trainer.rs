@@ -523,7 +523,13 @@ fn typing_trainer_char_color(
     typed: Option<char>,
 ) -> Color32 {
     match typed {
-        Some(ch) if ch == target => ui.visuals().text_color(),
+        Some(ch) if ch == target => {
+            if dark {
+                Color32::from_gray(238)
+            } else {
+                ui.visuals().text_color()
+            }
+        }
         Some(_) => {
             if dark {
                 Color32::from_rgb(214, 106, 120)
