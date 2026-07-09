@@ -227,14 +227,24 @@ impl EntropyApp {
             .x
             .max(metrics.value(11.0));
         let line_height = metrics.value(42.0);
+        let top_padding = metrics.value(18.0);
+        let max_line_chars = (text_rect.width() / char_width).floor().max(1.0) as usize;
+        let max_visible_lines =
+            ((text_rect.height() - top_padding).max(0.0) / line_height).floor() as usize + 1;
         let mut x = text_rect.left();
-        let mut y = text_rect.top() + metrics.value(18.0);
-        let mut idx = 0;
+        let mut y = text_rect.top() + top_padding;
         let caret_idx = typed_chars.len().min(target_chars.len());
+        let mut idx = typing_trainer_visible_start_index(
+            &target_chars,
+            caret_idx,
+            max_line_chars,
+            max_visible_lines,
+        );
         let mut caret_pos = None;
         let target_len = target_chars.len();
+        let mut visible_lines = 1;
 
-        while idx < target_len && y <= text_rect.bottom() {
+        while idx < target_len && visible_lines <= max_visible_lines && y <= text_rect.bottom() {
             let word_end = target_chars[idx..]
                 .iter()
                 .position(|ch| *ch == ' ')
@@ -245,6 +255,10 @@ impl EntropyApp {
             if x > text_rect.left() && x + word_width > text_rect.right() {
                 x = text_rect.left();
                 y += line_height;
+                visible_lines += 1;
+                if visible_lines > max_visible_lines || y > text_rect.bottom() {
+                    break;
+                }
             }
 
             let draw_end = if word_end < target_len {
@@ -318,6 +332,53 @@ impl EntropyApp {
     }
 }
 
+fn typing_trainer_visible_start_index(
+    target_chars: &[char],
+    caret_idx: usize,
+    max_line_chars: usize,
+    max_visible_lines: usize,
+) -> usize {
+    let line_starts = typing_trainer_line_starts(target_chars, max_line_chars);
+    let caret_line = line_starts
+        .partition_point(|start| *start <= caret_idx)
+        .saturating_sub(1);
+    let first_visible_line = (caret_line + 1).saturating_sub(max_visible_lines.max(1));
+    line_starts.get(first_visible_line).copied().unwrap_or(0)
+}
+
+fn typing_trainer_line_starts(target_chars: &[char], max_line_chars: usize) -> Vec<usize> {
+    let target_len = target_chars.len();
+    if target_len == 0 {
+        return vec![0];
+    }
+
+    let max_line_chars = max_line_chars.max(1);
+    let mut line_starts = vec![0];
+    let mut line_chars = 0;
+    let mut idx = 0;
+    while idx < target_len {
+        let word_end = target_chars[idx..]
+            .iter()
+            .position(|ch| *ch == ' ')
+            .map(|offset| idx + offset)
+            .unwrap_or(target_len);
+        let visible_word_len = word_end.saturating_sub(idx).max(1);
+        if line_chars > 0 && line_chars + visible_word_len > max_line_chars {
+            line_starts.push(idx);
+            line_chars = 0;
+        }
+
+        let draw_end = if word_end < target_len {
+            word_end + 1
+        } else {
+            word_end
+        };
+        line_chars += draw_end.saturating_sub(idx);
+        idx = draw_end;
+    }
+    line_starts
+}
+
 fn typing_trainer_char_color(
     ui: &egui::Ui,
     dark: bool,
@@ -334,5 +395,28 @@ fn typing_trainer_char_color(
             }
         }
         None => app_muted_text(dark).gamma_multiply(0.72),
+    }
+}
+
+#[cfg(test)]
+mod typing_trainer_ui_tests {
+    use super::*;
+
+    #[test]
+    fn typing_trainer_visible_start_stays_at_first_line_near_start() {
+        let chars = "one two three four five six".chars().collect::<Vec<_>>();
+
+        assert_eq!(typing_trainer_visible_start_index(&chars, 3, 9, 2), 0);
+    }
+
+    #[test]
+    fn typing_trainer_visible_start_follows_caret_to_later_lines() {
+        let chars = "one two three four five six".chars().collect::<Vec<_>>();
+        let four_idx = "one two three ".chars().count();
+
+        assert_eq!(
+            typing_trainer_visible_start_index(&chars, four_idx, 9, 2),
+            "one two ".chars().count()
+        );
     }
 }

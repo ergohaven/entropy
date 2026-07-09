@@ -28,6 +28,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 
 ### Fixes
 
+- Kept the Typing Trainer text window following the caret so the next words appear instead of typing into hidden text
 - Continued Typing Trainer runs with a fresh text when the current text is fully typed before time runs out
 - Moved the Typing Trainer finished status below the text area so it no longer overlaps the final line
 - Centered About Entropy update action buttons under the settings list
