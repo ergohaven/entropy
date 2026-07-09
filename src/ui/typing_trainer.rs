@@ -73,8 +73,8 @@ impl EntropyApp {
                     self.draw_typing_trainer_controls(ui, metrics, lang);
                     ui.add_space(metrics.value(18.0));
                     self.draw_typing_trainer_stats(ui, metrics, lang, now, remaining_secs);
-                    ui.add_space(metrics.value(24.0));
                 });
+                self.draw_typing_trainer_focus_timer(ui, metrics, remaining_secs, chrome_opacity);
                 self.draw_typing_trainer_text(ui, metrics, dark);
                 if self.typing_trainer.is_finished() {
                     ui.add_space(metrics.value(10.0));
@@ -253,6 +253,39 @@ impl EntropyApp {
                     );
                 }
             },
+        );
+    }
+
+    fn draw_typing_trainer_focus_timer(
+        &self,
+        ui: &mut egui::Ui,
+        metrics: crate::ui_style::ResponsiveMetrics,
+        remaining_secs: u32,
+        chrome_opacity: f32,
+    ) {
+        let width = ui.available_width().min(metrics.value(860.0));
+        let height = metrics.value(24.0);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
+        let timer_opacity = if self.typing_trainer.ui_hidden && !self.typing_trainer.is_finished() {
+            (1.0 - chrome_opacity).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        if timer_opacity <= 0.01 {
+            return;
+        }
+
+        let timer_secs = if self.typing_trainer.started_at.is_some() {
+            remaining_secs
+        } else {
+            self.typing_trainer.duration_secs
+        };
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            timer_secs.to_string(),
+            FontId::proportional(metrics.value(22.0)),
+            typing_trainer_color_with_opacity(app_accent(), timer_opacity),
         );
     }
 
@@ -486,6 +519,11 @@ fn typing_trainer_char_color(
         }
         None => app_muted_text(dark).gamma_multiply(0.72),
     }
+}
+
+fn typing_trainer_color_with_opacity(color: Color32, opacity: f32) -> Color32 {
+    let alpha = (color.a() as f32 * opacity.clamp(0.0, 1.0)).round() as u8;
+    Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
 }
 
 #[cfg(test)]
