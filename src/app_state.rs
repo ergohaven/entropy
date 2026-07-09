@@ -1631,12 +1631,19 @@ impl TypingTrainerState {
         if self.typed_chars.len() >= self.target_text.chars().count() {
             match self.mode {
                 TypingTrainerMode::Time => self.advance_to_next_text(),
-                TypingTrainerMode::Words => {
-                    self.finished_at.get_or_insert(now);
-                    self.ui_hidden = false;
-                }
+                TypingTrainerMode::Words => self.finish(now),
             }
         }
+    }
+
+    pub(crate) fn finish(&mut self, now: std::time::Instant) {
+        if self.finished_at.is_some() {
+            return;
+        }
+        self.resume_if_paused(now);
+        self.started_at.get_or_insert(now);
+        self.finished_at = Some(now);
+        self.ui_hidden = false;
     }
 
     pub(crate) fn extend_target_text(&mut self) {
@@ -1956,6 +1963,29 @@ mod typing_trainer_tests {
         );
 
         assert!(!state.is_finished());
+    }
+
+    #[test]
+    fn typing_trainer_finish_keeps_partial_result() {
+        let mut state = TypingTrainerState::default();
+        let start = std::time::Instant::now();
+
+        state.type_char('a', start);
+        state.ui_hidden = true;
+        state.finish(start + std::time::Duration::from_secs(5));
+
+        assert!(state.is_finished());
+        assert!(!state.ui_hidden);
+        assert_eq!(
+            state.elapsed_secs_at(start + std::time::Duration::from_secs(30)),
+            5.0
+        );
+        assert_eq!(
+            state
+                .stats_at(start + std::time::Duration::from_secs(30))
+                .typed_chars,
+            1
+        );
     }
 }
 

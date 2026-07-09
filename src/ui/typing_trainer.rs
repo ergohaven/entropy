@@ -138,7 +138,7 @@ impl EntropyApp {
                     pressed: true,
                     ..
                 } => {
-                    self.typing_trainer.reset();
+                    self.typing_trainer.finish(now);
                 }
                 egui::Event::PointerMoved(_) => {
                     pointer_moved_this_frame = true;
@@ -419,6 +419,7 @@ impl EntropyApp {
         dark: bool,
     ) {
         let stats = self.typing_trainer.stats_at(now);
+        let elapsed_secs = self.typing_trainer.elapsed_secs_at(now).ceil() as u32;
         let labels = [
             (
                 crate::i18n::tr_catalog(lang, "typing_trainer.wpm"),
@@ -435,6 +436,10 @@ impl EntropyApp {
             (
                 crate::i18n::tr_catalog(lang, "typing_trainer.errors"),
                 stats.errors.to_string(),
+            ),
+            (
+                crate::i18n::tr_catalog(lang, "typing_trainer.time"),
+                elapsed_secs.to_string(),
             ),
         ];
         let item_width = metrics.value(92.0);

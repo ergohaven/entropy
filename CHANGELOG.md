@@ -28,6 +28,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 
 ### Fixes
 
+- Finished the Typing Trainer run on Escape and restored time as the last final stat
 - Added a Typing Trainer mode selector for timed runs or fixed word-count runs
 - Brightened correctly typed Typing Trainer text in dark theme for stronger contrast against untyped text
 - Hid the mouse cursor while Typing Trainer focus mode hides the UI during typing
