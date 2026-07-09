@@ -342,7 +342,8 @@ fn typing_trainer_visible_start_index(
     let caret_line = line_starts
         .partition_point(|start| *start <= caret_idx)
         .saturating_sub(1);
-    let first_visible_line = (caret_line + 1).saturating_sub(max_visible_lines.max(1));
+    let max_visible_lines = max_visible_lines.max(1);
+    let first_visible_line = caret_line / max_visible_lines * max_visible_lines;
     line_starts.get(first_visible_line).copied().unwrap_or(0)
 }
 
@@ -410,13 +411,28 @@ mod typing_trainer_ui_tests {
     }
 
     #[test]
-    fn typing_trainer_visible_start_follows_caret_to_later_lines() {
-        let chars = "one two three four five six".chars().collect::<Vec<_>>();
-        let four_idx = "one two three ".chars().count();
+    fn typing_trainer_visible_start_keeps_current_page_until_it_is_done() {
+        let chars = "one two three four five six seven eight"
+            .chars()
+            .collect::<Vec<_>>();
+        let three_idx = "one two ".chars().count();
 
         assert_eq!(
-            typing_trainer_visible_start_index(&chars, four_idx, 9, 2),
-            "one two ".chars().count()
+            typing_trainer_visible_start_index(&chars, three_idx, 9, 2),
+            0
+        );
+    }
+
+    #[test]
+    fn typing_trainer_visible_start_jumps_by_full_pages() {
+        let chars = "one two three four five six seven eight"
+            .chars()
+            .collect::<Vec<_>>();
+        let seven_idx = "one two three four five six ".chars().count();
+
+        assert_eq!(
+            typing_trainer_visible_start_index(&chars, seven_idx, 9, 2),
+            "one two three ".chars().count()
         );
     }
 }
