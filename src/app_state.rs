@@ -1417,91 +1417,7 @@ pub(crate) enum SettingsTab {
 pub(crate) const TYPING_TRAINER_DURATIONS: [u32; 4] = [15, 30, 60, 120];
 pub(crate) const TYPING_TRAINER_WORD_COUNTS: [usize; 4] = [10, 25, 50, 100];
 const TYPING_TRAINER_DEFAULT_TEXT_WORDS: usize = 72;
-
-const TYPING_TRAINER_WORDS: &[&str] = &[
-    "about",
-    "after",
-    "again",
-    "air",
-    "also",
-    "another",
-    "answer",
-    "around",
-    "back",
-    "because",
-    "before",
-    "between",
-    "build",
-    "change",
-    "clear",
-    "code",
-    "common",
-    "control",
-    "course",
-    "create",
-    "data",
-    "device",
-    "different",
-    "during",
-    "each",
-    "early",
-    "enough",
-    "even",
-    "every",
-    "example",
-    "first",
-    "found",
-    "great",
-    "group",
-    "hand",
-    "high",
-    "important",
-    "input",
-    "keep",
-    "keyboard",
-    "large",
-    "layer",
-    "learn",
-    "light",
-    "local",
-    "macro",
-    "main",
-    "make",
-    "matrix",
-    "might",
-    "never",
-    "number",
-    "open",
-    "order",
-    "other",
-    "place",
-    "point",
-    "press",
-    "quick",
-    "right",
-    "same",
-    "small",
-    "sound",
-    "speed",
-    "state",
-    "still",
-    "system",
-    "their",
-    "there",
-    "thing",
-    "think",
-    "through",
-    "timer",
-    "under",
-    "value",
-    "water",
-    "where",
-    "while",
-    "word",
-    "work",
-    "world",
-    "write",
-];
+pub(crate) use super::typing_trainer_words::{TypingTrainerLanguage, TYPING_TRAINER_LANGUAGES};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TypingTrainerMode {
@@ -1513,6 +1429,7 @@ pub(crate) enum TypingTrainerMode {
 pub(crate) struct TypingTrainerState {
     pub(crate) target_text: String,
     pub(crate) typed_chars: Vec<char>,
+    pub(crate) language: TypingTrainerLanguage,
     pub(crate) mode: TypingTrainerMode,
     pub(crate) duration_secs: u32,
     pub(crate) word_count: usize,
@@ -1541,6 +1458,7 @@ impl Default for TypingTrainerState {
         Self {
             target_text: typing_trainer_text(text_seed),
             typed_chars: Vec::new(),
+            language: TypingTrainerLanguage::English,
             mode: TypingTrainerMode::Time,
             duration_secs: 30,
             word_count: 25,
@@ -1573,6 +1491,13 @@ impl TypingTrainerState {
     pub(crate) fn set_mode(&mut self, mode: TypingTrainerMode) {
         if self.mode != mode {
             self.mode = mode;
+            self.reset();
+        }
+    }
+
+    pub(crate) fn set_language(&mut self, language: TypingTrainerLanguage) {
+        if self.language != language {
+            self.language = language;
             self.reset();
         }
     }
@@ -1654,8 +1579,10 @@ impl TypingTrainerState {
         if !self.target_text.is_empty() {
             self.target_text.push(' ');
         }
-        self.target_text
-            .push_str(&typing_trainer_text(self.text_seed));
+        self.target_text.push_str(&typing_trainer_text_for_language(
+            self.text_seed,
+            self.language,
+        ));
     }
 
     pub(crate) fn backspace(&mut self) {
@@ -1721,9 +1648,11 @@ impl TypingTrainerState {
 
     fn new_target_text(&self) -> String {
         match self.mode {
-            TypingTrainerMode::Time => typing_trainer_text(self.text_seed),
+            TypingTrainerMode::Time => {
+                typing_trainer_text_for_language(self.text_seed, self.language)
+            }
             TypingTrainerMode::Words => {
-                typing_trainer_text_for_word_count(self.text_seed, self.word_count)
+                typing_trainer_text_for_word_count(self.text_seed, self.word_count, self.language)
             }
         }
     }
@@ -1740,15 +1669,23 @@ impl TypingTrainerState {
 }
 
 pub(crate) fn typing_trainer_text(seed: usize) -> String {
-    typing_trainer_text_for_word_count(seed, TYPING_TRAINER_DEFAULT_TEXT_WORDS)
+    typing_trainer_text_for_language(seed, TypingTrainerLanguage::English)
 }
 
-fn typing_trainer_text_for_word_count(seed: usize, word_count: usize) -> String {
+fn typing_trainer_text_for_language(seed: usize, language: TypingTrainerLanguage) -> String {
+    typing_trainer_text_for_word_count(seed, TYPING_TRAINER_DEFAULT_TEXT_WORDS, language)
+}
+
+fn typing_trainer_text_for_word_count(
+    seed: usize,
+    word_count: usize,
+    language: TypingTrainerLanguage,
+) -> String {
     let mut words = Vec::with_capacity(word_count);
-    let len = TYPING_TRAINER_WORDS.len();
+    let len = super::typing_trainer_words::word_count(language);
     for i in 0..word_count {
         let idx = seed.wrapping_add(i * 29).wrapping_add((i / 7) * 11) % len;
-        words.push(TYPING_TRAINER_WORDS[idx]);
+        words.push(super::typing_trainer_words::word_at(language, idx));
     }
     words.join(" ")
 }
@@ -1778,7 +1715,10 @@ fn typing_trainer_completed_words(target_text: &str, typed_len: usize) -> usize 
 }
 
 pub(crate) fn typing_trainer_accepts_char(ch: char) -> bool {
-    ch == ' ' || ch.is_ascii_alphanumeric() || ch.is_ascii_punctuation()
+    ch == ' '
+        || ch.is_alphanumeric()
+        || ch.is_ascii_punctuation()
+        || matches!(ch, '«' | '»' | '—' | '–' | '…')
 }
 
 pub(crate) fn typing_trainer_stats(
@@ -1855,6 +1795,7 @@ mod typing_trainer_tests {
         assert_eq!(state.completed_correct_chars, 0);
         assert_eq!(state.completed_errors, 0);
         assert_eq!(state.completed_typed_chars, 0);
+        assert_eq!(state.language, TypingTrainerLanguage::English);
         assert_eq!(state.mode, TypingTrainerMode::Time);
         assert_eq!(state.word_count, 25);
         assert!(!state.ui_hidden);
@@ -1948,6 +1889,28 @@ mod typing_trainer_tests {
         assert_eq!(state.typed_chars.len(), target_text.chars().count());
         assert_eq!(state.stats_at(now).typed_chars, target_text.chars().count());
         assert_eq!(state.word_progress(), (10, 10));
+    }
+
+    #[test]
+    fn typing_trainer_language_changes_target_text() {
+        let mut state = TypingTrainerState::default();
+
+        state.set_language(TypingTrainerLanguage::Russian);
+
+        assert_eq!(state.language, TypingTrainerLanguage::Russian);
+        assert!(state
+            .target_text
+            .chars()
+            .any(|ch| ('а'..='я').contains(&ch)));
+        assert!(!state.target_text.chars().any(|ch| ch.is_ascii_alphabetic()));
+    }
+
+    #[test]
+    fn typing_trainer_accepts_russian_letters() {
+        assert!(typing_trainer_accepts_char('ф'));
+        assert!(typing_trainer_accepts_char('Я'));
+        assert!(typing_trainer_accepts_char(' '));
+        assert!(typing_trainer_accepts_char('.'));
     }
 
     #[test]

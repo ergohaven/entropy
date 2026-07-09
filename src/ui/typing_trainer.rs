@@ -159,6 +159,14 @@ impl EntropyApp {
         metrics: crate::ui_style::ResponsiveMetrics,
         lang: crate::i18n::Language,
     ) {
+        let language_labels = TYPING_TRAINER_LANGUAGES
+            .iter()
+            .map(|language| language.label().to_owned())
+            .collect::<Vec<_>>();
+        let selected_language = TYPING_TRAINER_LANGUAGES
+            .iter()
+            .position(|language| *language == self.typing_trainer.language)
+            .unwrap_or(0);
         let mode_labels = [
             crate::i18n::tr_catalog(lang, "typing_trainer.time").to_owned(),
             crate::i18n::tr_catalog(lang, "typing_trainer.words").to_owned(),
@@ -187,15 +195,32 @@ impl EntropyApp {
                 .position(|word_count| *word_count == self.typing_trainer.word_count)
                 .unwrap_or(1),
         };
+        let language_size = metrics.size(96.0, 32.0);
         let mode_size = metrics.size(164.0, 32.0);
         let value_size = metrics.size(244.0, 32.0);
         let gap = metrics.value(12.0);
-        let total_size = egui::vec2(mode_size.x + gap + value_size.x, mode_size.y);
+        let total_size = egui::vec2(
+            language_size.x + gap + mode_size.x + gap + value_size.x,
+            mode_size.y,
+        );
 
         ui.allocate_ui_with_layout(
             total_size,
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
+                if let Some(picked) = crate::ui_style::settings_segmented_control(
+                    ui,
+                    "typing_trainer_language",
+                    &language_labels,
+                    selected_language,
+                    language_size,
+                ) {
+                    self.typing_trainer
+                        .set_language(TYPING_TRAINER_LANGUAGES[picked]);
+                }
+
+                ui.add_space(gap);
+
                 if let Some(picked) = crate::ui_style::settings_segmented_control(
                     ui,
                     "typing_trainer_mode",
