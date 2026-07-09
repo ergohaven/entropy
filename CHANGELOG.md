@@ -28,6 +28,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 
 ### Fixes
 
+- Hid the mouse cursor while Typing Trainer focus mode hides the UI during typing
 - Moved Typing Trainer final character count before errors in the result stats
 - Raised the Typing Trainer final stats and added a typed character count
 - Centered the Typing Trainer final stats with the duration selector and Restart button, without showing time

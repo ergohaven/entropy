@@ -3,6 +3,10 @@ use super::*;
 const TYPING_TRAINER_VISIBLE_LINES: usize = 4;
 
 impl EntropyApp {
+    fn typing_trainer_focus_mode_active(&self) -> bool {
+        self.typing_trainer.ui_hidden && !self.typing_trainer.is_finished()
+    }
+
     pub(super) fn typing_trainer_chrome_opacity(&self, ctx: &egui::Context) -> f32 {
         let typing_trainer_page = self.main_menu_tab == MainMenuTab::Advanced
             && self.settings_tab == SettingsTab::TypingTrainer;
@@ -87,6 +91,10 @@ impl EntropyApp {
                 self.draw_typing_trainer_restart(ui, metrics, lang, chrome_opacity);
             });
         });
+
+        if self.typing_trainer_focus_mode_active() {
+            ctx.set_cursor_icon(egui::CursorIcon::None);
+        }
     }
 
     pub(super) fn handle_typing_trainer_input(&mut self, ctx: &egui::Context) {
@@ -237,7 +245,7 @@ impl EntropyApp {
         let width = ui.available_width().min(metrics.value(860.0));
         let height = metrics.value(214.0);
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, height), Sense::click());
-        if resp.hovered() {
+        if resp.hovered() && !self.typing_trainer_focus_mode_active() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
         }
 
