@@ -354,10 +354,6 @@ impl EntropyApp {
         let stats = self.typing_trainer.stats_at(now);
         let labels = [
             (
-                crate::i18n::tr_catalog(lang, "typing_trainer.time"),
-                self.typing_trainer.duration_secs.to_string(),
-            ),
-            (
                 crate::i18n::tr_catalog(lang, "typing_trainer.wpm"),
                 stats.wpm.to_string(),
             ),
@@ -370,9 +366,7 @@ impl EntropyApp {
                 stats.errors.to_string(),
             ),
         ];
-        let item_width = ((rect.width() - metrics.value(16.0)) / labels.len() as f32)
-            .min(metrics.value(132.0))
-            .max(metrics.value(72.0));
+        let item_width = metrics.value(92.0);
         let total_width = item_width * labels.len() as f32;
         let start_x = rect.center().x - total_width / 2.0;
         let label_y = rect.center().y - metrics.value(20.0);
