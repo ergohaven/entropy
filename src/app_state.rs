@@ -1507,6 +1507,7 @@ pub(crate) struct TypingTrainerState {
     pub(crate) typed_chars: Vec<char>,
     pub(crate) duration_secs: u32,
     pub(crate) started_at: Option<std::time::Instant>,
+    pub(crate) paused_at: Option<std::time::Instant>,
     pub(crate) finished_at: Option<std::time::Instant>,
     pub(crate) completed_correct_chars: usize,
     pub(crate) completed_errors: usize,
@@ -1531,6 +1532,7 @@ impl Default for TypingTrainerState {
             typed_chars: Vec::new(),
             duration_secs: 30,
             started_at: None,
+            paused_at: None,
             finished_at: None,
             completed_correct_chars: 0,
             completed_errors: 0,
@@ -1546,6 +1548,7 @@ impl TypingTrainerState {
         self.target_text = typing_trainer_text(self.text_seed);
         self.typed_chars.clear();
         self.started_at = None;
+        self.paused_at = None;
         self.finished_at = None;
         self.completed_correct_chars = 0;
         self.completed_errors = 0;
@@ -1561,10 +1564,35 @@ impl TypingTrainerState {
         self.finished_at.is_some()
     }
 
+    pub(crate) fn is_paused(&self) -> bool {
+        self.paused_at.is_some()
+    }
+
+    pub(crate) fn pause_if_running(&mut self, now: std::time::Instant) {
+        if self.started_at.is_none() || self.finished_at.is_some() || self.paused_at.is_some() {
+            return;
+        }
+        if self.elapsed_secs_at(now) >= self.duration_secs as f32 {
+            self.finished_at = Some(now);
+        } else {
+            self.paused_at = Some(now);
+        }
+    }
+
+    pub(crate) fn resume_if_paused(&mut self, now: std::time::Instant) {
+        let Some(paused_at) = self.paused_at.take() else {
+            return;
+        };
+        if let Some(started_at) = self.started_at {
+            self.started_at = Some(started_at + now.saturating_duration_since(paused_at));
+        }
+    }
+
     pub(crate) fn type_char(&mut self, ch: char, now: std::time::Instant) {
         if self.is_finished() || !typing_trainer_accepts_char(ch) {
             return;
         }
+        self.resume_if_paused(now);
         if self.started_at.is_none() {
             self.started_at = Some(now);
         }
@@ -1596,7 +1624,7 @@ impl TypingTrainerState {
         let Some(started_at) = self.started_at else {
             return 0.0;
         };
-        let end = self.finished_at.unwrap_or(now);
+        let end = self.finished_at.or(self.paused_at).unwrap_or(now);
         end.saturating_duration_since(started_at).as_secs_f32()
     }
 
@@ -1719,6 +1747,7 @@ mod typing_trainer_tests {
         let first_text = state.target_text.clone();
         state.typed_chars = "about".chars().collect();
         state.started_at = Some(std::time::Instant::now());
+        state.paused_at = Some(std::time::Instant::now());
         state.completed_correct_chars = 20;
         state.completed_errors = 1;
         state.completed_typed_chars = 21;
@@ -1728,6 +1757,7 @@ mod typing_trainer_tests {
         assert_ne!(state.target_text, first_text);
         assert!(state.typed_chars.is_empty());
         assert!(state.started_at.is_none());
+        assert!(state.paused_at.is_none());
         assert!(state.finished_at.is_none());
         assert_eq!(state.completed_correct_chars, 0);
         assert_eq!(state.completed_errors, 0);
@@ -1765,6 +1795,42 @@ mod typing_trainer_tests {
         assert_eq!(state.typed_chars, "about".chars().collect::<Vec<_>>());
         assert!(state.started_at.is_none());
         assert!(state.finished_at.is_none());
+    }
+
+    #[test]
+    fn typing_trainer_pause_freezes_elapsed_until_typing_resumes() {
+        let mut state = TypingTrainerState::default();
+        let start = std::time::Instant::now();
+        let pause_at = start + std::time::Duration::from_secs(5);
+        let resume_at = start + std::time::Duration::from_secs(20);
+
+        state.type_char('a', start);
+        state.pause_if_running(pause_at);
+
+        assert!(state.is_paused());
+        assert_eq!(state.elapsed_secs_at(resume_at), 5.0);
+        assert_eq!(state.remaining_secs_at(resume_at), state.duration_secs - 5);
+
+        state.type_char('b', resume_at);
+
+        assert!(!state.is_paused());
+        assert_eq!(state.elapsed_secs_at(resume_at), 5.0);
+        assert_eq!(
+            state.elapsed_secs_at(resume_at + std::time::Duration::from_secs(1)),
+            6.0
+        );
+    }
+
+    #[test]
+    fn typing_trainer_pause_can_finish_if_time_already_expired() {
+        let mut state = TypingTrainerState::default();
+        let start = std::time::Instant::now();
+
+        state.type_char('a', start);
+        state.pause_if_running(start + std::time::Duration::from_secs(31));
+
+        assert!(state.is_finished());
+        assert!(!state.is_paused());
     }
 }
 

@@ -973,5 +973,7 @@ impl eframe::App for EntropyApp {
                 }
             }
         }
+
+        self.pause_typing_trainer_if_inactive(std::time::Instant::now());
     }
 }

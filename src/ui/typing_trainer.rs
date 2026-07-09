@@ -1,6 +1,14 @@
 use super::*;
 
 impl EntropyApp {
+    pub(super) fn pause_typing_trainer_if_inactive(&mut self, now: std::time::Instant) {
+        if self.main_menu_tab != MainMenuTab::Advanced
+            || self.settings_tab != SettingsTab::TypingTrainer
+        {
+            self.typing_trainer.pause_if_running(now);
+        }
+    }
+
     pub(super) fn draw_typing_trainer_page(
         &mut self,
         ui: &mut egui::Ui,
@@ -14,7 +22,10 @@ impl EntropyApp {
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
         let now = std::time::Instant::now();
         let remaining_secs = self.typing_trainer.remaining_secs_at(now);
-        if self.typing_trainer.started_at.is_some() && !self.typing_trainer.is_finished() {
+        if self.typing_trainer.started_at.is_some()
+            && !self.typing_trainer.is_paused()
+            && !self.typing_trainer.is_finished()
+        {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
 
