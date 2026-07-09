@@ -28,6 +28,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 
 ### Fixes
 
+- Limited the Typing Trainer text window to four visible typing lines
 - Paused the Typing Trainer timer while its page is inactive, resuming only when typing continues
 - Kept Typing Trainer page updates filled with a uniform visible text block
 - Updated the Typing Trainer text window by full visible pages instead of shifting one line at a time

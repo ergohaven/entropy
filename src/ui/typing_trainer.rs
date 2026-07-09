@@ -1,5 +1,7 @@
 use super::*;
 
+const TYPING_TRAINER_VISIBLE_LINES: usize = 4;
+
 impl EntropyApp {
     pub(super) fn pause_typing_trainer_if_inactive(&mut self, now: std::time::Instant) {
         if self.main_menu_tab != MainMenuTab::Advanced
@@ -239,7 +241,8 @@ impl EntropyApp {
         let top_padding = metrics.value(18.0);
         let max_line_chars = (text_rect.width() / char_width).floor().max(1.0) as usize;
         let max_visible_lines =
-            ((text_rect.height() - top_padding).max(0.0) / line_height).floor() as usize + 1;
+            (((text_rect.height() - top_padding).max(0.0) / line_height).floor() as usize + 1)
+                .clamp(1, TYPING_TRAINER_VISIBLE_LINES);
         if !self.typing_trainer.is_finished() {
             self.ensure_typing_trainer_visible_text(max_line_chars, max_visible_lines);
         }
