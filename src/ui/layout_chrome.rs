@@ -31,25 +31,25 @@ impl EntropyApp {
 
         // ── Main menu tabs ────────────────────────────────────────────────
         {
-            let top_tabs = ui
-                .scope(|ui| {
-                    ui.set_opacity(chrome_opacity);
-                    if chrome_opacity <= 0.96 {
-                        ui.disable();
-                    }
-                    self.draw_layout_top_tabs(
-                        ui,
-                        ctx,
-                        top_base_y,
-                        self.unlock_open || self.vial_unlock_polling || chrome_opacity < 0.96,
-                    )
-                })
-                .inner;
+            let chrome_rect = ui.max_rect();
+            let top_tabs = crate::ui_style::allocate_ui_at_rect(ui, chrome_rect, |ui| {
+                ui.set_opacity(chrome_opacity);
+                if chrome_opacity <= 0.96 {
+                    ui.disable();
+                }
+                self.draw_layout_top_tabs(
+                    ui,
+                    ctx,
+                    top_base_y,
+                    self.unlock_open || self.vial_unlock_polling || chrome_opacity < 0.96,
+                )
+            })
+            .inner;
 
             if self.unlock_open || self.vial_unlock_polling {
                 self.close_top_dropdowns(ctx);
             } else if chrome_opacity > 0.01 {
-                ui.scope(|ui| {
+                crate::ui_style::allocate_ui_at_rect(ui, chrome_rect, |ui| {
                     ui.set_opacity(chrome_opacity);
                     if chrome_opacity <= 0.96 {
                         ui.disable();
@@ -72,11 +72,11 @@ impl EntropyApp {
                 self.main_menu_tab,
                 MainMenuTab::Settings | MainMenuTab::Advanced
             ) {
-                self.draw_settings_screen(ui, layout, ctx, ui.min_rect().top() + top_reserved_h);
+                self.draw_settings_screen(ui, layout, ctx, chrome_rect.top() + top_reserved_h);
                 return true;
             }
 
-            ui.scope(|ui| {
+            crate::ui_style::allocate_ui_at_rect(ui, chrome_rect, |ui| {
                 ui.set_opacity(chrome_opacity);
                 if chrome_opacity <= 0.96 {
                     ui.disable();

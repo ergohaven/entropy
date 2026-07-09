@@ -20,11 +20,12 @@ impl EntropyApp {
         }
 
         let dark = ui.visuals().dark_mode;
-        let stable_hint_center_x = ui.max_rect().center().x;
-        let stable_hint_bottom = ui.max_rect().bottom();
+        let stable_rect = ui.max_rect();
+        let stable_hint_center_x = stable_rect.center().x;
+        let stable_hint_bottom = stable_rect.bottom();
         let content_rect = egui::Rect::from_min_max(
-            egui::pos2(ui.min_rect().left() + 20.0, content_top),
-            egui::pos2(ui.min_rect().right() - 20.0, stable_hint_bottom - 76.0),
+            egui::pos2(stable_rect.left() + 20.0, content_top),
+            egui::pos2(stable_rect.right() - 20.0, stable_hint_bottom - 76.0),
         );
 
         let combo_keycap_hovered = match self.settings_tab {

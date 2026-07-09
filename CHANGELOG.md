@@ -28,6 +28,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 
 ### Fixes
 
+- Kept Typing Trainer chrome and page geometry anchored during focus-mode fade transitions
 - Smoothed Typing Trainer focus-mode fade-out and hid the bottom footer controls without moving the text
 - Hid the full Entropy chrome while Typing Trainer focus mode is active, keeping the text block in a stable position
 - Hid the Typing Trainer controls and stats while typing, restoring them on mouse movement or run finish
