@@ -210,6 +210,7 @@ impl EntropyApp {
                             &layout.custom_keycodes,
                             &self.layer_names,
                             &self.keycode_picker.macro_names,
+                            &self.keycode_picker.macro_descriptions,
                             &self.keycode_picker.tap_dance_names,
                         );
                         *response = response
@@ -230,6 +231,7 @@ impl EntropyApp {
                     &layout.custom_keycodes,
                     &self.layer_names,
                     &self.keycode_picker.macro_names,
+                    &self.keycode_picker.macro_descriptions,
                     &self.keycode_picker.tap_dance_names,
                 );
                 *response = response
@@ -557,6 +559,7 @@ impl EntropyApp {
                         &layout.custom_keycodes,
                         &self.layer_names,
                         &self.keycode_picker.macro_names,
+                        &self.keycode_picker.macro_descriptions,
                         &self.keycode_picker.tap_dance_names,
                     );
                     let _ = top_resp
@@ -584,6 +587,7 @@ impl EntropyApp {
                         &layout.custom_keycodes,
                         &self.layer_names,
                         &self.keycode_picker.macro_names,
+                        &self.keycode_picker.macro_descriptions,
                         &self.keycode_picker.tap_dance_names,
                     );
                     let _ = middle_resp
@@ -607,6 +611,7 @@ impl EntropyApp {
                         &layout.custom_keycodes,
                         &self.layer_names,
                         &self.keycode_picker.macro_names,
+                        &self.keycode_picker.macro_descriptions,
                         &self.keycode_picker.tap_dance_names,
                     );
                     let _ = bottom_resp

@@ -172,6 +172,7 @@ impl EntropyApp {
             custom,
             &self.layer_names,
             &self.keycode_picker.macro_names,
+            &self.keycode_picker.macro_descriptions,
             &self.keycode_picker.tap_dance_names,
         );
         let alt_key_tip = keycode_tooltip_with_macro_names(
@@ -179,6 +180,7 @@ impl EntropyApp {
             custom,
             &self.layer_names,
             &self.keycode_picker.macro_names,
+            &self.keycode_picker.macro_descriptions,
             &self.keycode_picker.tap_dance_names,
         );
         let selected_empty = !Self::alt_repeat_entry_exists(&edited)

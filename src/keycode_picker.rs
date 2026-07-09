@@ -102,6 +102,9 @@ pub enum MacroAction {
     Raw(Vec<u8>),
 }
 
+pub(crate) const MACRO_NAME_CHAR_LIMIT: usize = 7;
+pub(crate) const MACRO_DESCRIPTION_CHAR_LIMIT: usize = 120;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MacroKeyPickKind {
     Tap,
@@ -154,6 +157,8 @@ pub struct KeycodePicker {
     pub macro_texts: Vec<Vec<u8>>,
     /// User-visible names for macros (optional)
     pub macro_names: Vec<String>,
+    /// User-visible descriptions for macros (optional, local metadata)
+    pub macro_descriptions: Vec<String>,
     /// Macro actions for editor UI
     pub macro_actions: Vec<Vec<MacroAction>>,
     /// Flag: macro texts changed, need to write to device
@@ -327,6 +332,7 @@ impl Default for KeycodePicker {
             td_mod_key_pick: None,
             macro_texts: vec![Vec::new(); 16],
             macro_names: vec![String::new(); 16],
+            macro_descriptions: vec![String::new(); 16],
             macro_actions: vec![vec![]; 16],
             macro_undo_stack: Vec::new(),
             macro_key_pick: None,

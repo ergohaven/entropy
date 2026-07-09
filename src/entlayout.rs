@@ -245,7 +245,10 @@ struct EntMacroData {
     bytecode_base64: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     texts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     names: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    descriptions: Vec<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -421,6 +424,9 @@ impl EntropyApp {
                         .collect(),
                     texts: Vec::new(),
                     names: self.keycode_picker.macro_names.clone(),
+                    descriptions: trailing_non_empty_strings(
+                        &self.keycode_picker.macro_descriptions,
+                    ),
                 },
                 combos: EntComboData {
                     entries: self
@@ -1378,6 +1384,15 @@ impl EntropyApp {
         self.keycode_picker
             .macro_names
             .truncate(self.keycode_picker.macro_count);
+        self.keycode_picker.macro_descriptions = normalized_strings(
+            &bundle.data.macros.descriptions,
+            self.keycode_picker
+                .macro_count
+                .max(bundle.data.macros.descriptions.len()),
+        );
+        self.keycode_picker
+            .macro_descriptions
+            .truncate(self.keycode_picker.macro_count);
         self.keycode_picker.macros_dirty = false;
 
         if let Some(layout) = &self.layout {
@@ -2092,6 +2107,15 @@ fn normalized_strings(values: &[String], len: usize) -> Vec<String> {
     out
 }
 
+fn trailing_non_empty_strings(values: &[String]) -> Vec<String> {
+    let len = values
+        .iter()
+        .rposition(|value| !value.trim().is_empty())
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+    values[..len].to_vec()
+}
+
 fn entmacro_count(macros: &EntMacroData) -> usize {
     if !macros.bytecode_base64.is_empty() {
         macros.bytecode_base64.len()
@@ -2171,6 +2195,7 @@ mod tests {
             bytecode_base64: vec![BASE64_STANDARD.encode(&bytes)],
             texts: vec!["legacy".to_owned()],
             names: Vec::new(),
+            descriptions: Vec::new(),
         };
 
         assert_eq!(entmacro_bytecode(&macros).unwrap(), vec![bytes]);
@@ -2182,6 +2207,7 @@ mod tests {
             bytecode_base64: Vec::new(),
             texts: vec!["abc".to_owned()],
             names: Vec::new(),
+            descriptions: Vec::new(),
         };
 
         assert_eq!(entmacro_bytecode(&macros).unwrap(), vec![b"abc".to_vec()]);
@@ -2193,8 +2219,30 @@ mod tests {
             bytecode_base64: vec!["not base64".to_owned()],
             texts: Vec::new(),
             names: Vec::new(),
+            descriptions: Vec::new(),
         };
 
         assert!(entmacro_bytecode(&macros).is_err());
+    }
+
+    #[test]
+    fn trailing_non_empty_strings_keeps_indexed_metadata_sparse() {
+        let values = vec![
+            String::new(),
+            "first".to_owned(),
+            String::new(),
+            "last".to_owned(),
+            String::new(),
+        ];
+
+        assert_eq!(
+            trailing_non_empty_strings(&values),
+            vec![
+                String::new(),
+                "first".to_owned(),
+                String::new(),
+                "last".to_owned(),
+            ]
+        );
     }
 }

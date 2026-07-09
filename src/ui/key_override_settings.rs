@@ -442,6 +442,7 @@ impl EntropyApp {
             custom,
             &self.layer_names,
             &self.keycode_picker.macro_names,
+            &self.keycode_picker.macro_descriptions,
             &self.keycode_picker.tap_dance_names,
         );
         let replacement_tip = keycode_tooltip_with_macro_names(
@@ -449,6 +450,7 @@ impl EntropyApp {
             custom,
             &self.layer_names,
             &self.keycode_picker.macro_names,
+            &self.keycode_picker.macro_descriptions,
             &self.keycode_picker.tap_dance_names,
         );
 

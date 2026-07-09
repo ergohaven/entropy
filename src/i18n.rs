@@ -681,6 +681,8 @@ fn static_catalog_key(text: &str) -> Option<&'static str> {
         "Choose macro" => Some("macro_editor.choose_macro"),
         "Select a macro above to edit" => Some("macro_editor.select_a_macro_above_to_edit"),
         "Macro name" => Some("macro_editor.macro_name"),
+        "Macro description" => Some("macro_editor.macro_description"),
+        "Optional description for this macro" => Some("macro_editor.optional_description_for_this_macro"),
         "Move up" => Some("macro_editor.move_up"),
         "Move down" => Some("macro_editor.move_down"),
         "Text" => Some("macro_editor.text"),

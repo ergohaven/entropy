@@ -186,6 +186,13 @@ fn format_raw_macro_bytes(bytes: &[u8]) -> String {
     }
 }
 
+fn limit_chars(value: &mut String, limit: usize) {
+    let limited: String = value.chars().take(limit).collect();
+    if limited.len() != value.len() {
+        *value = limited;
+    }
+}
+
 impl KeycodePicker {
     fn show_macro_editor_contents(
         &mut self,
@@ -237,6 +244,7 @@ impl KeycodePicker {
                                 let is_active = i == selected_macro;
                                 let has_content = self.macro_has_content(i as usize);
                                 let display_name = self.macro_display_name(i as usize);
+                                let description = self.macro_description(i as usize);
                                 let id_text = format!("M{}", i);
                                 let mut resp = picker_slot_button(
                                     ui,
@@ -245,7 +253,10 @@ impl KeycodePicker {
                                     is_active,
                                     has_content,
                                 );
-                                if display_name != id_text {
+                                if let Some(description) = description {
+                                    resp = resp
+                                        .on_hover_text(format!("{display_name}\n{description}"));
+                                } else if display_name != id_text {
                                     resp = resp.on_hover_text(display_name.clone());
                                 }
                                 if resp.clicked() {
@@ -280,22 +291,45 @@ impl KeycodePicker {
         let macro_font_size = 14.0 * scale;
         let custom_pairs = self.custom_keycode_pairs();
         ui.add_space(4.0 * scale);
-        if let Some(name) = self.macro_names.get_mut(n) {
-            let resp = crate::ui_style::modern_text_field_sized(
-                ui,
-                ui.make_persistent_id(("macro_name", grid_id, n)),
-                name,
-                124.0 * scale,
-                32.0 * scale,
-                crate::i18n::tr_catalog(self.language, "macro_editor.macro_name"),
-                7,
-                egui::Align::Center,
-            );
-            if resp.changed() {
-                let trimmed: String = name.chars().take(7).collect();
-                *name = trimmed;
+        let language = self.language;
+        ui.horizontal(|ui| {
+            if let Some(name) = self.macro_names.get_mut(n) {
+                let resp = crate::ui_style::modern_text_field_sized(
+                    ui,
+                    ui.make_persistent_id(("macro_name", grid_id, n)),
+                    name,
+                    124.0 * scale,
+                    32.0 * scale,
+                    crate::i18n::tr_catalog(language, "macro_editor.macro_name"),
+                    MACRO_NAME_CHAR_LIMIT,
+                    egui::Align::Center,
+                );
+                if resp.changed() {
+                    limit_chars(name, MACRO_NAME_CHAR_LIMIT);
+                }
             }
-        }
+
+            if let Some(description) = self.macro_descriptions.get_mut(n) {
+                let description_w = ui.available_width().max(180.0 * scale).min(360.0 * scale);
+                let resp = crate::ui_style::modern_text_field_sized(
+                    ui,
+                    ui.make_persistent_id(("macro_description", grid_id, n)),
+                    description,
+                    description_w,
+                    32.0 * scale,
+                    crate::i18n::tr_catalog(language, "macro_editor.macro_description"),
+                    MACRO_DESCRIPTION_CHAR_LIMIT,
+                    egui::Align::Min,
+                )
+                .on_hover_text(crate::i18n::tr_catalog(
+                    language,
+                    "macro_editor.optional_description_for_this_macro",
+                ));
+                if resp.changed() {
+                    limit_chars(description, MACRO_DESCRIPTION_CHAR_LIMIT);
+                }
+            }
+        });
         ui.add_space(6.0);
 
         let mut remove_idx = None;
@@ -663,6 +697,11 @@ impl KeycodePicker {
                     .macro_names
                     .get(n)
                     .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false)
+                || self
+                    .macro_descriptions
+                    .get(n)
+                    .map(|s| !s.trim().is_empty())
                     .unwrap_or(false);
             if picker_button(
                 ui,
@@ -685,6 +724,9 @@ impl KeycodePicker {
                 }
                 if n < self.macro_names.len() {
                     self.macro_names[n].clear();
+                }
+                if n < self.macro_descriptions.len() {
+                    self.macro_descriptions[n].clear();
                 }
                 macro_changed = true;
             }
@@ -758,6 +800,9 @@ impl KeycodePicker {
         while self.macro_names.len() <= n {
             self.macro_names.push(String::new());
         }
+        while self.macro_descriptions.len() <= n {
+            self.macro_descriptions.push(String::new());
+        }
         while self.macro_actions.len() <= n {
             self.macro_actions.push(vec![]);
         }
@@ -768,6 +813,13 @@ impl KeycodePicker {
             Some(name) if !name.trim().is_empty() => name.clone(),
             _ => format!("M{}", n),
         }
+    }
+
+    fn macro_description(&self, n: usize) -> Option<String> {
+        self.macro_descriptions
+            .get(n)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
     }
 
     fn macro_custom_name(&self, n: usize) -> Option<String> {

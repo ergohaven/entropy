@@ -604,6 +604,14 @@ pub(super) fn macro_display_name(macro_names: &[String], idx: usize) -> String {
     macro_custom_name(macro_names, idx).unwrap_or_else(|| format!("M{}", idx))
 }
 
+pub(super) fn macro_description(macro_descriptions: &[String], idx: usize) -> Option<String> {
+    macro_descriptions
+        .get(idx)
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
 pub(super) fn tap_dance_custom_name(tap_dance_names: &[String], idx: usize) -> Option<String> {
     tap_dance_names
         .get(idx)

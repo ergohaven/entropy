@@ -212,11 +212,15 @@ pub(crate) fn keycode_tooltip_with_macro_names(
     custom: &[crate::keyboard::CustomKeycode],
     layer_names: &[String],
     macro_names: &[String],
+    macro_descriptions: &[String],
     tap_dance_names: &[String],
 ) -> String {
     if (0x7700..=0x77FF).contains(&value) {
         let idx = (value - 0x7700) as usize;
         let name = macro_display_name(macro_names, idx);
+        if let Some(description) = macro_description(macro_descriptions, idx) {
+            return format!("{} — macro {}\n{}", name, idx, description);
+        }
         return format!("{} — macro {}", name, idx);
     }
     if (0x5700..=0x57FF).contains(&value) {
