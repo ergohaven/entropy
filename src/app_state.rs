@@ -1392,6 +1392,7 @@ pub(crate) enum SettingsTab {
     MatrixTester,
     UniversalSymbolsSetup,
     TextExpander,
+    TypingTrainer,
     AutoShift,
     Rgb,
     LayerLeds,
@@ -1411,6 +1412,275 @@ pub(crate) enum SettingsTab {
     AltRepeat,
     MouseKeys,
     LayoutImageExport,
+}
+
+pub(crate) const TYPING_TRAINER_DURATIONS: [u32; 4] = [15, 30, 60, 120];
+
+const TYPING_TRAINER_WORDS: &[&str] = &[
+    "about",
+    "after",
+    "again",
+    "air",
+    "also",
+    "another",
+    "answer",
+    "around",
+    "back",
+    "because",
+    "before",
+    "between",
+    "build",
+    "change",
+    "clear",
+    "code",
+    "common",
+    "control",
+    "course",
+    "create",
+    "data",
+    "device",
+    "different",
+    "during",
+    "each",
+    "early",
+    "enough",
+    "even",
+    "every",
+    "example",
+    "first",
+    "found",
+    "great",
+    "group",
+    "hand",
+    "high",
+    "important",
+    "input",
+    "keep",
+    "keyboard",
+    "large",
+    "layer",
+    "learn",
+    "light",
+    "local",
+    "macro",
+    "main",
+    "make",
+    "matrix",
+    "might",
+    "never",
+    "number",
+    "open",
+    "order",
+    "other",
+    "place",
+    "point",
+    "press",
+    "quick",
+    "right",
+    "same",
+    "small",
+    "sound",
+    "speed",
+    "state",
+    "still",
+    "system",
+    "their",
+    "there",
+    "thing",
+    "think",
+    "through",
+    "timer",
+    "under",
+    "value",
+    "water",
+    "where",
+    "while",
+    "word",
+    "work",
+    "world",
+    "write",
+];
+
+#[derive(Clone)]
+pub(crate) struct TypingTrainerState {
+    pub(crate) target_text: String,
+    pub(crate) typed_chars: Vec<char>,
+    pub(crate) duration_secs: u32,
+    pub(crate) started_at: Option<std::time::Instant>,
+    pub(crate) finished_at: Option<std::time::Instant>,
+    pub(crate) text_seed: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TypingTrainerStats {
+    pub(crate) wpm: u32,
+    pub(crate) accuracy: f32,
+    pub(crate) errors: usize,
+    pub(crate) correct_chars: usize,
+    pub(crate) typed_chars: usize,
+}
+
+impl Default for TypingTrainerState {
+    fn default() -> Self {
+        let text_seed = 0;
+        Self {
+            target_text: typing_trainer_text(text_seed),
+            typed_chars: Vec::new(),
+            duration_secs: 30,
+            started_at: None,
+            finished_at: None,
+            text_seed,
+        }
+    }
+}
+
+impl TypingTrainerState {
+    pub(crate) fn reset(&mut self) {
+        self.text_seed = self.text_seed.wrapping_add(17);
+        self.target_text = typing_trainer_text(self.text_seed);
+        self.typed_chars.clear();
+        self.started_at = None;
+        self.finished_at = None;
+    }
+
+    pub(crate) fn set_duration(&mut self, duration_secs: u32) {
+        self.duration_secs = duration_secs;
+        self.reset();
+    }
+
+    pub(crate) fn is_finished(&self) -> bool {
+        self.finished_at.is_some()
+    }
+
+    pub(crate) fn type_char(&mut self, ch: char, now: std::time::Instant) {
+        if self.is_finished() || !typing_trainer_accepts_char(ch) {
+            return;
+        }
+        if self.started_at.is_none() {
+            self.started_at = Some(now);
+        }
+        if self.typed_chars.len() < self.target_text.chars().count() {
+            self.typed_chars.push(ch);
+        }
+        if self.typed_chars.len() >= self.target_text.chars().count() {
+            self.finished_at = Some(now);
+        }
+    }
+
+    pub(crate) fn backspace(&mut self) {
+        if self.is_finished() {
+            return;
+        }
+        self.typed_chars.pop();
+    }
+
+    pub(crate) fn elapsed_secs_at(&self, now: std::time::Instant) -> f32 {
+        let Some(started_at) = self.started_at else {
+            return 0.0;
+        };
+        let end = self.finished_at.unwrap_or(now);
+        end.saturating_duration_since(started_at).as_secs_f32()
+    }
+
+    pub(crate) fn remaining_secs_at(&mut self, now: std::time::Instant) -> u32 {
+        let elapsed = self.elapsed_secs_at(now);
+        if self.started_at.is_some() && elapsed >= self.duration_secs as f32 {
+            self.finished_at.get_or_insert(now);
+            return 0;
+        }
+        (self.duration_secs as f32 - elapsed).ceil().max(0.0) as u32
+    }
+
+    pub(crate) fn stats_at(&self, now: std::time::Instant) -> TypingTrainerStats {
+        typing_trainer_stats(
+            &self.target_text,
+            &self.typed_chars,
+            self.elapsed_secs_at(now),
+        )
+    }
+}
+
+pub(crate) fn typing_trainer_text(seed: usize) -> String {
+    let word_count = 72;
+    let mut words = Vec::with_capacity(word_count);
+    let len = TYPING_TRAINER_WORDS.len();
+    for i in 0..word_count {
+        let idx = seed.wrapping_add(i * 29).wrapping_add((i / 7) * 11) % len;
+        words.push(TYPING_TRAINER_WORDS[idx]);
+    }
+    words.join(" ")
+}
+
+pub(crate) fn typing_trainer_accepts_char(ch: char) -> bool {
+    ch == ' ' || ch.is_ascii_alphanumeric() || ch.is_ascii_punctuation()
+}
+
+pub(crate) fn typing_trainer_stats(
+    target_text: &str,
+    typed_chars: &[char],
+    elapsed_secs: f32,
+) -> TypingTrainerStats {
+    let mut correct_chars = 0;
+    let mut errors = 0;
+    for (typed, target) in typed_chars.iter().zip(target_text.chars()) {
+        if *typed == target {
+            correct_chars += 1;
+        } else {
+            errors += 1;
+        }
+    }
+    errors += typed_chars
+        .len()
+        .saturating_sub(target_text.chars().count());
+
+    let typed_count = typed_chars.len();
+    let accuracy = if typed_count == 0 {
+        100.0
+    } else {
+        correct_chars as f32 / typed_count as f32 * 100.0
+    };
+    let minutes = (elapsed_secs / 60.0).max(1.0 / 60.0);
+    let wpm = ((correct_chars as f32 / 5.0) / minutes).round() as u32;
+
+    TypingTrainerStats {
+        wpm,
+        accuracy,
+        errors,
+        correct_chars,
+        typed_chars: typed_count,
+    }
+}
+
+#[cfg(test)]
+mod typing_trainer_tests {
+    use super::*;
+
+    #[test]
+    fn typing_trainer_stats_count_wpm_accuracy_and_errors() {
+        let typed: Vec<char> = "hello worx".chars().collect();
+        let stats = typing_trainer_stats("hello world", &typed, 30.0);
+
+        assert_eq!(stats.correct_chars, 9);
+        assert_eq!(stats.typed_chars, 10);
+        assert_eq!(stats.errors, 1);
+        assert_eq!(stats.wpm, 4);
+        assert!((stats.accuracy - 90.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn typing_trainer_reset_generates_new_text_and_clears_progress() {
+        let mut state = TypingTrainerState::default();
+        let first_text = state.target_text.clone();
+        state.typed_chars = "about".chars().collect();
+        state.started_at = Some(std::time::Instant::now());
+
+        state.reset();
+
+        assert_ne!(state.target_text, first_text);
+        assert!(state.typed_chars.is_empty());
+        assert!(state.started_at.is_none());
+        assert!(state.finished_at.is_none());
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1589,6 +1859,7 @@ pub struct EntropyApp {
     pub(crate) key_override_visible_count: usize,
     pub(crate) key_override_undo_stack: Vec<(Vec<KeyOverrideEntry>, Vec<String>, usize, usize)>,
     pub(crate) text_expander_deleted_rules: Vec<(usize, crate::text_expander::TextExpansionRule)>,
+    pub(crate) typing_trainer: TypingTrainerState,
     pub(crate) selected_key_override: usize,
     pub(crate) key_override_pick_target: Option<KeyOverridePickField>,
     pub(crate) matrix_tester_pressed: Vec<bool>,

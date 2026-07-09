@@ -137,6 +137,8 @@ mod text_expander_runtime;
 mod text_expander_settings_ui;
 #[path = "ui/touchpad_settings.rs"]
 mod touchpad_settings_ui;
+#[path = "ui/typing_trainer.rs"]
+mod typing_trainer_ui;
 #[path = "ui/ui_scale.rs"]
 mod ui_scale;
 #[path = "ui/universal_symbols_setup.rs"]

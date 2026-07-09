@@ -10,6 +10,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 ### Main Features
 
 - Added Live Features layout sync for ru/en custom firmware keys, with an on/off switch
+- Added a local Typing Trainer under Advanced with timed runs, live WPM, accuracy, and errors
 - Added optional macro descriptions for picker tooltips and `.entlayout` export/import
 - Added About Entropy update checks through GitHub Releases for Linux, Windows, and macOS
 - Added platform-aware update asset selection for AppImage, Windows executable, and macOS DMG downloads

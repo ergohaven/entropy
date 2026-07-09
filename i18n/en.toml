@@ -1441,6 +1441,16 @@ backend_wayland_ibus_fcitx5 = "Universal output backend: Wayland via IBus/Fcitx5
 backend_linux_x11_native = "Universal output backend: Linux X11 native; Wayland uses IBus/Fcitx5"
 backend_linux_wayland_hint = "Universal output backend: Linux; use IBus/Fcitx5 for Wayland"
 
+[typing_trainer]
+title = "Typing Trainer"
+description = "Local typing speed benchmark"
+restart = "Restart"
+time = "time"
+wpm = "wpm"
+accuracy = "acc"
+errors = "err"
+finished = "finished"
+
 [mouse_keys_settings]
 delay_label = "Delay"
 delay_tooltip = "How long to wait after a mouse key is pressed before cursor movement starts"

@@ -22,12 +22,13 @@ impl EntropyApp {
             let combo_supported = !self.combo_entries.is_empty();
             let key_override_supported = !self.key_override_entries.is_empty();
             let auto_shift_supported = self.auto_shift_timeout.is_some();
-            let advanced_item_count = 1
+            let advanced_item_count = 2
                 + combo_supported as usize
                 + auto_shift_supported as usize
                 + key_override_supported as usize;
             let mut advanced_menu_labels =
                 vec![crate::i18n::tr_catalog(lang, "text_expander.title")];
+            advanced_menu_labels.push(crate::i18n::tr_catalog(lang, "typing_trainer.title"));
             if combo_supported {
                 advanced_menu_labels.push(crate::i18n::tr(lang, TrKey::ComboTitle));
             }
@@ -65,6 +66,7 @@ impl EntropyApp {
                 let item_width = dropdown_rect.width() - 16.0;
                 let (
                     text_expander_hovered,
+                    typing_trainer_hovered,
                     combo_hovered,
                     auto_shift_hovered,
                     key_override_hovered,
@@ -83,6 +85,14 @@ impl EntropyApp {
                                     true,
                                     self.main_menu_tab == MainMenuTab::Advanced
                                         && self.settings_tab == SettingsTab::TextExpander,
+                                );
+                                let typing_trainer_resp = top_dropdown_item(
+                                    ui,
+                                    item_width,
+                                    crate::i18n::tr_catalog(lang, "typing_trainer.title"),
+                                    true,
+                                    self.main_menu_tab == MainMenuTab::Advanced
+                                        && self.settings_tab == SettingsTab::TypingTrainer,
                                 );
                                 let combo_resp = combo_supported.then(|| {
                                     top_dropdown_item(
@@ -117,6 +127,10 @@ impl EntropyApp {
                                 if text_expander_resp.clicked() {
                                     self.close_top_dropdowns(ui.ctx());
                                     self.open_text_expander_settings_page();
+                                }
+                                if typing_trainer_resp.clicked() {
+                                    self.close_top_dropdowns(ui.ctx());
+                                    self.open_typing_trainer_page();
                                 }
 
                                 if combo_resp.as_ref().map(|r| r.clicked()).unwrap_or(false) {
@@ -161,6 +175,7 @@ impl EntropyApp {
                                 }
                                 (
                                     text_expander_resp.hovered(),
+                                    typing_trainer_resp.hovered(),
                                     combo_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
                                     auto_shift_resp
                                         .as_ref()
@@ -171,6 +186,7 @@ impl EntropyApp {
                                         .map(|r| r.hovered())
                                         .unwrap_or(false),
                                     text_expander_resp.clicked()
+                                        || typing_trainer_resp.clicked()
                                         || combo_resp
                                             .as_ref()
                                             .map(|r| r.clicked())
@@ -194,6 +210,7 @@ impl EntropyApp {
                         !advanced_clicked
                             && (advanced_tab_hovered
                                 || text_expander_hovered
+                                || typing_trainer_hovered
                                 || combo_hovered
                                 || auto_shift_hovered
                                 || key_override_hovered

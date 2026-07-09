@@ -44,6 +44,10 @@ impl EntropyApp {
                 self.draw_text_expander_settings_page(ui, content_rect);
                 false
             }
+            SettingsTab::TypingTrainer => {
+                self.draw_typing_trainer_page(ui, ctx, content_rect);
+                false
+            }
             SettingsTab::AutoShift => {
                 self.draw_auto_shift_settings_page(ui, content_rect, dark);
                 false
@@ -119,7 +123,9 @@ impl EntropyApp {
             }
         };
 
-        if self.settings_tab != SettingsTab::MatrixTester {
+        if self.settings_tab != SettingsTab::MatrixTester
+            && self.settings_tab != SettingsTab::TypingTrainer
+        {
             self.draw_settings_navigation_hint(
                 ui,
                 stable_hint_center_x,
@@ -196,6 +202,11 @@ impl EntropyApp {
         self.main_menu_tab = MainMenuTab::Advanced;
     }
 
+    pub(super) fn open_typing_trainer_page(&mut self) {
+        self.settings_tab = SettingsTab::TypingTrainer;
+        self.main_menu_tab = MainMenuTab::Advanced;
+    }
+
     pub(super) fn open_layer_led_settings_page(&mut self) {
         self.settings_tab = SettingsTab::LayerLeds;
         self.main_menu_tab = MainMenuTab::Settings;
@@ -226,6 +237,7 @@ impl EntropyApp {
             self.main_menu_tab,
             MainMenuTab::Settings | MainMenuTab::Advanced
         ) && self.settings_tab != SettingsTab::MatrixTester
+            && self.settings_tab != SettingsTab::TypingTrainer
             && !self.secondary_click_handled
             && !self.keycode_picker.open
             && !self.unlock_open

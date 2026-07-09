@@ -1,0 +1,328 @@
+use super::*;
+
+impl EntropyApp {
+    pub(super) fn draw_typing_trainer_page(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        content_rect: egui::Rect,
+    ) {
+        self.handle_typing_trainer_input(ctx);
+
+        let lang = self.app_settings.language;
+        let dark = ui.visuals().dark_mode;
+        let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
+        let now = std::time::Instant::now();
+        let remaining_secs = self.typing_trainer.remaining_secs_at(now);
+        if self.typing_trainer.started_at.is_some() && !self.typing_trainer.is_finished() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+
+        crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(metrics.value(18.0));
+                ui.label(
+                    RichText::new(crate::i18n::tr_catalog(lang, "typing_trainer.title"))
+                        .size(metrics.value(18.0))
+                        .strong(),
+                );
+                ui.add_space(metrics.value(6.0));
+                ui.label(
+                    RichText::new(crate::i18n::tr_catalog(lang, "typing_trainer.description"))
+                        .size(metrics.value(13.0))
+                        .color(app_muted_text(dark)),
+                );
+                ui.add_space(metrics.value(18.0));
+
+                self.draw_typing_trainer_controls(ui, metrics, lang);
+                ui.add_space(metrics.value(18.0));
+                self.draw_typing_trainer_stats(ui, metrics, lang, now, remaining_secs);
+                ui.add_space(metrics.value(24.0));
+                self.draw_typing_trainer_text(ui, metrics, dark);
+            });
+        });
+    }
+
+    fn handle_typing_trainer_input(&mut self, ctx: &egui::Context) {
+        if self.main_menu_tab != MainMenuTab::Advanced
+            || self.settings_tab != SettingsTab::TypingTrainer
+            || self.keycode_picker.open
+            || self.unlock_open
+            || ctx.memory(|m| m.any_popup_open())
+        {
+            return;
+        }
+
+        let now = std::time::Instant::now();
+        let command_modifier_down = ctx
+            .input(|input| input.modifiers.command || input.modifiers.ctrl || input.modifiers.alt);
+        let events = ctx.input(|input| input.events.clone());
+        for event in events {
+            match event {
+                egui::Event::Text(text) if !command_modifier_down => {
+                    for ch in text.chars() {
+                        self.typing_trainer.type_char(ch, now);
+                    }
+                }
+                egui::Event::Key {
+                    key: egui::Key::Backspace,
+                    pressed: true,
+                    ..
+                } => {
+                    self.typing_trainer.backspace();
+                }
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    pressed: true,
+                    ..
+                } => {
+                    self.typing_trainer.reset();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn draw_typing_trainer_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        metrics: crate::ui_style::ResponsiveMetrics,
+        lang: crate::i18n::Language,
+    ) {
+        let labels = TYPING_TRAINER_DURATIONS
+            .iter()
+            .map(|duration| duration.to_string())
+            .collect::<Vec<_>>();
+        let selected_duration = TYPING_TRAINER_DURATIONS
+            .iter()
+            .position(|duration| *duration == self.typing_trainer.duration_secs)
+            .unwrap_or(1);
+        let segment_size = metrics.size(244.0, 32.0);
+        let restart_size = metrics.size(96.0, 32.0);
+        let gap = metrics.value(12.0);
+        let controls_width = segment_size.x + gap + restart_size.x;
+
+        ui.allocate_ui_with_layout(
+            egui::vec2(controls_width, segment_size.y),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                if let Some(picked) = crate::ui_style::settings_segmented_control(
+                    ui,
+                    "typing_trainer_duration",
+                    &labels,
+                    selected_duration,
+                    segment_size,
+                ) {
+                    self.typing_trainer
+                        .set_duration(TYPING_TRAINER_DURATIONS[picked]);
+                }
+                ui.add_space(gap);
+                if crate::ui_style::modern_button(
+                    ui,
+                    crate::i18n::tr_catalog(lang, "typing_trainer.restart"),
+                    restart_size,
+                    true,
+                )
+                .clicked()
+                {
+                    self.typing_trainer.reset();
+                }
+            },
+        );
+    }
+
+    fn draw_typing_trainer_stats(
+        &self,
+        ui: &mut egui::Ui,
+        metrics: crate::ui_style::ResponsiveMetrics,
+        lang: crate::i18n::Language,
+        now: std::time::Instant,
+        remaining_secs: u32,
+    ) {
+        let stats = self.typing_trainer.stats_at(now);
+        let timer_secs = if self.typing_trainer.started_at.is_some() {
+            remaining_secs
+        } else {
+            self.typing_trainer.duration_secs
+        };
+        let labels = [
+            (
+                crate::i18n::tr_catalog(lang, "typing_trainer.time"),
+                timer_secs.to_string(),
+            ),
+            (
+                crate::i18n::tr_catalog(lang, "typing_trainer.wpm"),
+                stats.wpm.to_string(),
+            ),
+            (
+                crate::i18n::tr_catalog(lang, "typing_trainer.accuracy"),
+                format!("{:.0}%", stats.accuracy),
+            ),
+            (
+                crate::i18n::tr_catalog(lang, "typing_trainer.errors"),
+                stats.errors.to_string(),
+            ),
+        ];
+        let dark = ui.visuals().dark_mode;
+        let item_width = metrics.value(92.0);
+        let stat_height = metrics.value(42.0);
+        let total_width = item_width * labels.len() as f32;
+
+        ui.allocate_ui_with_layout(
+            egui::vec2(total_width, stat_height),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                for (label, value) in labels {
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(item_width, stat_height), Sense::hover());
+                    let value_color = if self.typing_trainer.is_finished() {
+                        app_accent()
+                    } else {
+                        ui.visuals().text_color()
+                    };
+                    ui.painter().text(
+                        egui::pos2(rect.center().x, rect.top() + metrics.value(10.0)),
+                        egui::Align2::CENTER_CENTER,
+                        label,
+                        FontId::proportional(metrics.value(11.0)),
+                        app_muted_text(dark),
+                    );
+                    ui.painter().text(
+                        egui::pos2(rect.center().x, rect.bottom() - metrics.value(11.0)),
+                        egui::Align2::CENTER_CENTER,
+                        value,
+                        FontId::proportional(metrics.value(17.0)),
+                        value_color,
+                    );
+                }
+            },
+        );
+    }
+
+    fn draw_typing_trainer_text(
+        &self,
+        ui: &mut egui::Ui,
+        metrics: crate::ui_style::ResponsiveMetrics,
+        dark: bool,
+    ) {
+        let width = ui.available_width().min(metrics.value(860.0));
+        let height = metrics.value(214.0);
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, height), Sense::click());
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+        }
+
+        let text_rect = rect.shrink2(egui::vec2(metrics.value(8.0), 0.0));
+        let target_chars = self.typing_trainer.target_text.chars().collect::<Vec<_>>();
+        let typed_chars = &self.typing_trainer.typed_chars;
+        let font_id = FontId::new(metrics.value(27.0), egui::FontFamily::Monospace);
+        let char_width = ui
+            .painter()
+            .layout_no_wrap("m".to_owned(), font_id.clone(), ui.visuals().text_color())
+            .size()
+            .x
+            .max(metrics.value(11.0));
+        let line_height = metrics.value(42.0);
+        let mut x = text_rect.left();
+        let mut y = text_rect.top() + metrics.value(18.0);
+        let mut idx = 0;
+        let caret_idx = typed_chars.len().min(target_chars.len());
+        let mut caret_pos = None;
+        let target_len = target_chars.len();
+
+        while idx < target_len && y <= text_rect.bottom() {
+            let word_end = target_chars[idx..]
+                .iter()
+                .position(|ch| *ch == ' ')
+                .map(|offset| idx + offset)
+                .unwrap_or(target_len);
+            let visible_word_len = word_end.saturating_sub(idx).max(1);
+            let word_width = visible_word_len as f32 * char_width;
+            if x > text_rect.left() && x + word_width > text_rect.right() {
+                x = text_rect.left();
+                y += line_height;
+            }
+
+            let draw_end = if word_end < target_len {
+                word_end + 1
+            } else {
+                word_end
+            };
+            while idx < draw_end && y <= text_rect.bottom() {
+                if idx == caret_idx {
+                    caret_pos = Some(egui::pos2(x, y));
+                }
+                let target = target_chars[idx];
+                let typed = typed_chars.get(idx).copied();
+                let color = typing_trainer_char_color(ui, dark, target, typed);
+                let glyph = if target == ' ' && typed.is_some_and(|ch| ch != ' ') {
+                    "·".to_owned()
+                } else {
+                    target.to_string()
+                };
+                ui.painter().text(
+                    egui::pos2(x, y),
+                    egui::Align2::LEFT_CENTER,
+                    glyph,
+                    font_id.clone(),
+                    color,
+                );
+                x += char_width;
+                idx += 1;
+            }
+        }
+
+        if caret_idx == target_len {
+            caret_pos = Some(egui::pos2(x, y));
+        }
+        if !self.typing_trainer.is_finished()
+            && ui.input(|input| ((input.time * 2.0) as i64) % 2 == 0)
+        {
+            if let Some(pos) = caret_pos {
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(pos.x, pos.y - metrics.value(16.0)),
+                        egui::pos2(pos.x, pos.y + metrics.value(16.0)),
+                    ],
+                    Stroke::new(metrics.value(1.6), app_accent()),
+                );
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(500));
+            }
+        }
+
+        if self.typing_trainer.is_finished() {
+            let restart_rect = egui::Rect::from_center_size(
+                egui::pos2(rect.center().x, rect.bottom() - metrics.value(18.0)),
+                metrics.size(120.0, 32.0),
+            );
+            crate::ui_style::allocate_ui_at_rect(ui, restart_rect, |ui| {
+                let _ = crate::ui_style::modern_button(
+                    ui,
+                    crate::i18n::tr_catalog(self.app_settings.language, "typing_trainer.finished"),
+                    restart_rect.size(),
+                    false,
+                );
+            });
+        }
+    }
+}
+
+fn typing_trainer_char_color(
+    ui: &egui::Ui,
+    dark: bool,
+    target: char,
+    typed: Option<char>,
+) -> Color32 {
+    match typed {
+        Some(ch) if ch == target => ui.visuals().text_color(),
+        Some(_) => {
+            if dark {
+                Color32::from_rgb(214, 106, 120)
+            } else {
+                Color32::from_rgb(184, 62, 76)
+            }
+        }
+        None => app_muted_text(dark).gamma_multiply(0.72),
+    }
+}

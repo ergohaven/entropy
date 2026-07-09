@@ -1441,6 +1441,16 @@ backend_wayland_ibus_fcitx5 = "Бэкенд универсального выв�
 backend_linux_x11_native = "Бэкенд универсального вывода: Linux X11 native; Wayland использует IBus/Fcitx5"
 backend_linux_wayland_hint = "Бэкенд универсального вывода: Linux; для Wayland используйте IBus/Fcitx5"
 
+[typing_trainer]
+title = "Тренажёр печати"
+description = "Локальный тест скорости печати"
+restart = "Заново"
+time = "время"
+wpm = "wpm"
+accuracy = "точн."
+errors = "ошиб."
+finished = "готово"
+
 [mouse_keys_settings]
 delay_label = "Задержка курсора"
 delay_tooltip = "Сколько ждать после нажатия клавиши мыши перед началом движения курсора"
