@@ -608,11 +608,20 @@ impl eframe::App for EntropyApp {
 
         self.draw_sticky_layout_window(ctx);
 
-        if self.app_settings.show_made_by_signature {
+        let chrome_opacity = self.typing_trainer_chrome_opacity(ctx);
+        if chrome_opacity > 0.0 && chrome_opacity < 1.0 {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+
+        if self.app_settings.show_made_by_signature && chrome_opacity > 0.01 {
             egui::Area::new(egui::Id::new("made_by_signature"))
                 .anchor(egui::Align2::LEFT_BOTTOM, [16.0, -12.0])
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
+                    ui.set_opacity(chrome_opacity);
+                    if chrome_opacity <= 0.96 {
+                        ui.disable();
+                    }
                     ui.horizontal(|ui| {
                         let muted = app_muted_text(self.dark_mode);
                         ui.spacing_mut().item_spacing.x = 3.0;
@@ -636,17 +645,23 @@ impl eframe::App for EntropyApp {
                 });
         }
 
-        egui::Area::new(egui::Id::new("theme_selector"))
-            .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -12.0])
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                draw_theme_selector_labels(
-                    ui,
-                    self.app_settings.language,
-                    &mut self.dark_mode,
-                    false,
-                );
-            });
+        if chrome_opacity > 0.01 {
+            egui::Area::new(egui::Id::new("theme_selector"))
+                .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -12.0])
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    ui.set_opacity(chrome_opacity);
+                    if chrome_opacity <= 0.96 {
+                        ui.disable();
+                    }
+                    draw_theme_selector_labels(
+                        ui,
+                        self.app_settings.language,
+                        &mut self.dark_mode,
+                        false,
+                    );
+                });
+        }
 
         #[cfg(not(target_arch = "wasm32"))]
         self.draw_import_progress_overlay(ctx);

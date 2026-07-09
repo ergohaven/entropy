@@ -3,6 +3,19 @@ use super::*;
 const TYPING_TRAINER_VISIBLE_LINES: usize = 4;
 
 impl EntropyApp {
+    pub(super) fn typing_trainer_chrome_opacity(&self, ctx: &egui::Context) -> f32 {
+        let typing_trainer_page = self.main_menu_tab == MainMenuTab::Advanced
+            && self.settings_tab == SettingsTab::TypingTrainer;
+        let visible = !typing_trainer_page
+            || !self.typing_trainer.ui_hidden
+            || self.typing_trainer.is_finished();
+        ctx.animate_bool_with_time(
+            egui::Id::new("typing_trainer_chrome_visible"),
+            visible,
+            0.18,
+        )
+    }
+
     pub(super) fn pause_typing_trainer_if_inactive(&mut self, now: std::time::Instant) {
         if self.main_menu_tab != MainMenuTab::Advanced
             || self.settings_tab != SettingsTab::TypingTrainer
@@ -25,19 +38,24 @@ impl EntropyApp {
         if self.typing_trainer.is_finished() {
             self.typing_trainer.ui_hidden = false;
         }
-        let ui_hidden = self.typing_trainer.ui_hidden;
+        let chrome_opacity = self.typing_trainer_chrome_opacity(ctx);
         if self.typing_trainer.started_at.is_some()
             && !self.typing_trainer.is_paused()
             && !self.typing_trainer.is_finished()
         {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
+        if chrome_opacity > 0.0 && chrome_opacity < 1.0 {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
 
         crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
-                if ui_hidden {
-                    self.reserve_typing_trainer_chrome_space(ui, metrics);
-                } else {
+                ui.scope(|ui| {
+                    ui.set_opacity(chrome_opacity);
+                    if chrome_opacity <= 0.96 {
+                        ui.disable();
+                    }
                     ui.add_space(metrics.value(18.0));
                     ui.label(
                         RichText::new(crate::i18n::tr_catalog(lang, "typing_trainer.title"))
@@ -56,7 +74,7 @@ impl EntropyApp {
                     ui.add_space(metrics.value(18.0));
                     self.draw_typing_trainer_stats(ui, metrics, lang, now, remaining_secs);
                     ui.add_space(metrics.value(24.0));
-                }
+                });
                 self.draw_typing_trainer_text(ui, metrics, dark);
                 if self.typing_trainer.is_finished() {
                     ui.add_space(metrics.value(10.0));
@@ -120,33 +138,6 @@ impl EntropyApp {
         } else if typed_this_frame {
             self.typing_trainer.ui_hidden = true;
         }
-    }
-
-    fn reserve_typing_trainer_chrome_space(
-        &self,
-        ui: &mut egui::Ui,
-        metrics: crate::ui_style::ResponsiveMetrics,
-    ) {
-        let segment_size = metrics.size(244.0, 32.0);
-        let restart_size = metrics.size(96.0, 32.0);
-        let controls_width = segment_size.x + metrics.value(12.0) + restart_size.x;
-        let stats_width = metrics.value(92.0) * 4.0;
-
-        ui.add_space(metrics.value(18.0));
-        ui.allocate_exact_size(
-            egui::vec2(metrics.value(1.0), metrics.value(22.0)),
-            Sense::hover(),
-        );
-        ui.add_space(metrics.value(6.0));
-        ui.allocate_exact_size(
-            egui::vec2(metrics.value(1.0), metrics.value(16.0)),
-            Sense::hover(),
-        );
-        ui.add_space(metrics.value(18.0));
-        ui.allocate_exact_size(egui::vec2(controls_width, segment_size.y), Sense::hover());
-        ui.add_space(metrics.value(18.0));
-        ui.allocate_exact_size(egui::vec2(stats_width, metrics.value(42.0)), Sense::hover());
-        ui.add_space(metrics.value(24.0));
     }
 
     fn draw_typing_trainer_controls(
