@@ -28,6 +28,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 
 ### Fixes
 
+- Moved Typing Trainer stats into the final result view so they replace the text only after the run ends
 - Moved the Typing Trainer restart button from the top controls into the former finished status position
 - Raised the Typing Trainer focus-mode timer to the same height as the normal time stat
 - Showed the Typing Trainer remaining time centered above the text while focus mode hides the chrome
