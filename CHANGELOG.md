@@ -28,7 +28,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 
 ### Fixes
 
-- Replaced the Typing Trainer finished status button with a restart button in the same position
+- Moved the Typing Trainer restart button from the top controls into the former finished status position
 - Raised the Typing Trainer focus-mode timer to the same height as the normal time stat
 - Showed the Typing Trainer remaining time centered above the text while focus mode hides the chrome
 - Anchored Typing Trainer focus-mode chrome to the original layout viewport so top navigation does not drift
