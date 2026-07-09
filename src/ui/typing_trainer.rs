@@ -75,7 +75,7 @@ impl EntropyApp {
                     );
                     ui.add_space(metrics.value(18.0));
 
-                    self.draw_typing_trainer_controls(ui, metrics);
+                    self.draw_typing_trainer_controls(ui, metrics, lang);
                     ui.add_space(metrics.value(18.0));
                     focus_timer_y = Some(self.reserve_typing_trainer_stats_slot(ui, metrics));
                 });
@@ -157,30 +157,77 @@ impl EntropyApp {
         &mut self,
         ui: &mut egui::Ui,
         metrics: crate::ui_style::ResponsiveMetrics,
+        lang: crate::i18n::Language,
     ) {
-        let labels = TYPING_TRAINER_DURATIONS
-            .iter()
-            .map(|duration| duration.to_string())
-            .collect::<Vec<_>>();
-        let selected_duration = TYPING_TRAINER_DURATIONS
-            .iter()
-            .position(|duration| *duration == self.typing_trainer.duration_secs)
-            .unwrap_or(1);
-        let segment_size = metrics.size(244.0, 32.0);
+        let mode_labels = [
+            crate::i18n::tr_catalog(lang, "typing_trainer.time").to_owned(),
+            crate::i18n::tr_catalog(lang, "typing_trainer.words").to_owned(),
+        ];
+        let selected_mode = match self.typing_trainer.mode {
+            TypingTrainerMode::Time => 0,
+            TypingTrainerMode::Words => 1,
+        };
+        let value_labels = match self.typing_trainer.mode {
+            TypingTrainerMode::Time => TYPING_TRAINER_DURATIONS
+                .iter()
+                .map(|duration| duration.to_string())
+                .collect::<Vec<_>>(),
+            TypingTrainerMode::Words => TYPING_TRAINER_WORD_COUNTS
+                .iter()
+                .map(|word_count| word_count.to_string())
+                .collect::<Vec<_>>(),
+        };
+        let selected_value = match self.typing_trainer.mode {
+            TypingTrainerMode::Time => TYPING_TRAINER_DURATIONS
+                .iter()
+                .position(|duration| *duration == self.typing_trainer.duration_secs)
+                .unwrap_or(1),
+            TypingTrainerMode::Words => TYPING_TRAINER_WORD_COUNTS
+                .iter()
+                .position(|word_count| *word_count == self.typing_trainer.word_count)
+                .unwrap_or(1),
+        };
+        let mode_size = metrics.size(164.0, 32.0);
+        let value_size = metrics.size(244.0, 32.0);
+        let gap = metrics.value(12.0);
+        let total_size = egui::vec2(mode_size.x + gap + value_size.x, mode_size.y);
 
         ui.allocate_ui_with_layout(
-            egui::vec2(segment_size.x, segment_size.y),
+            total_size,
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
                 if let Some(picked) = crate::ui_style::settings_segmented_control(
                     ui,
-                    "typing_trainer_duration",
-                    &labels,
-                    selected_duration,
-                    segment_size,
+                    "typing_trainer_mode",
+                    &mode_labels,
+                    selected_mode,
+                    mode_size,
                 ) {
-                    self.typing_trainer
-                        .set_duration(TYPING_TRAINER_DURATIONS[picked]);
+                    let mode = if picked == 0 {
+                        TypingTrainerMode::Time
+                    } else {
+                        TypingTrainerMode::Words
+                    };
+                    self.typing_trainer.set_mode(mode);
+                }
+
+                ui.add_space(gap);
+
+                if let Some(picked) = crate::ui_style::settings_segmented_control(
+                    ui,
+                    "typing_trainer_value",
+                    &value_labels,
+                    selected_value,
+                    value_size,
+                ) {
+                    match self.typing_trainer.mode {
+                        TypingTrainerMode::Time => self
+                            .typing_trainer
+                            .set_duration(TYPING_TRAINER_DURATIONS[picked]),
+                        TypingTrainerMode::Words => self
+                            .typing_trainer
+                            .set_word_count(TYPING_TRAINER_WORD_COUNTS[picked]),
+                    }
                 }
             },
         );
@@ -220,18 +267,30 @@ impl EntropyApp {
             return;
         }
 
-        let timer_secs = if self.typing_trainer.started_at.is_some() {
-            remaining_secs
-        } else {
-            self.typing_trainer.duration_secs
-        };
         ui.painter().text(
             egui::pos2(rect.center().x, focus_timer_y.unwrap_or(rect.center().y)),
             egui::Align2::CENTER_CENTER,
-            timer_secs.to_string(),
+            self.typing_trainer_focus_status(remaining_secs),
             FontId::proportional(metrics.value(22.0)),
             typing_trainer_color_with_opacity(app_accent(), timer_opacity),
         );
+    }
+
+    fn typing_trainer_focus_status(&self, remaining_secs: u32) -> String {
+        match self.typing_trainer.mode {
+            TypingTrainerMode::Time => {
+                let timer_secs = if self.typing_trainer.started_at.is_some() {
+                    remaining_secs
+                } else {
+                    self.typing_trainer.duration_secs
+                };
+                timer_secs.to_string()
+            }
+            TypingTrainerMode::Words => {
+                let (completed_words, target_words) = self.typing_trainer.word_progress();
+                format!("{completed_words}/{target_words}")
+            }
+        }
     }
 
     fn draw_typing_trainer_text(
@@ -409,6 +468,9 @@ impl EntropyApp {
         max_line_chars: usize,
         max_visible_lines: usize,
     ) {
+        if self.typing_trainer.mode == TypingTrainerMode::Words {
+            return;
+        }
         for _ in 0..4 {
             let target_chars = self.typing_trainer.target_text.chars().collect::<Vec<_>>();
             let caret_idx = self

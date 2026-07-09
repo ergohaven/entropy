@@ -1415,6 +1415,8 @@ pub(crate) enum SettingsTab {
 }
 
 pub(crate) const TYPING_TRAINER_DURATIONS: [u32; 4] = [15, 30, 60, 120];
+pub(crate) const TYPING_TRAINER_WORD_COUNTS: [usize; 4] = [10, 25, 50, 100];
+const TYPING_TRAINER_DEFAULT_TEXT_WORDS: usize = 72;
 
 const TYPING_TRAINER_WORDS: &[&str] = &[
     "about",
@@ -1501,11 +1503,19 @@ const TYPING_TRAINER_WORDS: &[&str] = &[
     "write",
 ];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TypingTrainerMode {
+    Time,
+    Words,
+}
+
 #[derive(Clone)]
 pub(crate) struct TypingTrainerState {
     pub(crate) target_text: String,
     pub(crate) typed_chars: Vec<char>,
+    pub(crate) mode: TypingTrainerMode,
     pub(crate) duration_secs: u32,
+    pub(crate) word_count: usize,
     pub(crate) started_at: Option<std::time::Instant>,
     pub(crate) paused_at: Option<std::time::Instant>,
     pub(crate) finished_at: Option<std::time::Instant>,
@@ -1531,7 +1541,9 @@ impl Default for TypingTrainerState {
         Self {
             target_text: typing_trainer_text(text_seed),
             typed_chars: Vec::new(),
+            mode: TypingTrainerMode::Time,
             duration_secs: 30,
+            word_count: 25,
             started_at: None,
             paused_at: None,
             finished_at: None,
@@ -1547,7 +1559,7 @@ impl Default for TypingTrainerState {
 impl TypingTrainerState {
     pub(crate) fn reset(&mut self) {
         self.text_seed = self.text_seed.wrapping_add(17);
-        self.target_text = typing_trainer_text(self.text_seed);
+        self.target_text = self.new_target_text();
         self.typed_chars.clear();
         self.started_at = None;
         self.paused_at = None;
@@ -1558,8 +1570,20 @@ impl TypingTrainerState {
         self.ui_hidden = false;
     }
 
+    pub(crate) fn set_mode(&mut self, mode: TypingTrainerMode) {
+        if self.mode != mode {
+            self.mode = mode;
+            self.reset();
+        }
+    }
+
     pub(crate) fn set_duration(&mut self, duration_secs: u32) {
         self.duration_secs = duration_secs;
+        self.reset();
+    }
+
+    pub(crate) fn set_word_count(&mut self, word_count: usize) {
+        self.word_count = word_count.max(1);
         self.reset();
     }
 
@@ -1575,7 +1599,9 @@ impl TypingTrainerState {
         if self.started_at.is_none() || self.finished_at.is_some() || self.paused_at.is_some() {
             return;
         }
-        if self.elapsed_secs_at(now) >= self.duration_secs as f32 {
+        if self.mode == TypingTrainerMode::Time
+            && self.elapsed_secs_at(now) >= self.duration_secs as f32
+        {
             self.finished_at = Some(now);
         } else {
             self.paused_at = Some(now);
@@ -1603,11 +1629,20 @@ impl TypingTrainerState {
             self.typed_chars.push(ch);
         }
         if self.typed_chars.len() >= self.target_text.chars().count() {
-            self.advance_to_next_text();
+            match self.mode {
+                TypingTrainerMode::Time => self.advance_to_next_text(),
+                TypingTrainerMode::Words => {
+                    self.finished_at.get_or_insert(now);
+                    self.ui_hidden = false;
+                }
+            }
         }
     }
 
     pub(crate) fn extend_target_text(&mut self) {
+        if self.mode == TypingTrainerMode::Words {
+            return;
+        }
         self.text_seed = self.text_seed.wrapping_add(17);
         if !self.target_text.is_empty() {
             self.target_text.push(' ');
@@ -1632,6 +1667,9 @@ impl TypingTrainerState {
     }
 
     pub(crate) fn remaining_secs_at(&mut self, now: std::time::Instant) -> u32 {
+        if self.mode == TypingTrainerMode::Words {
+            return self.duration_secs;
+        }
         let elapsed = self.elapsed_secs_at(now);
         if self.started_at.is_some() && elapsed >= self.duration_secs as f32 {
             self.finished_at.get_or_insert(now);
@@ -1666,19 +1704,39 @@ impl TypingTrainerState {
         }
     }
 
+    pub(crate) fn word_progress(&self) -> (usize, usize) {
+        (
+            typing_trainer_completed_words(&self.target_text, self.typed_chars.len())
+                .min(self.word_count),
+            self.word_count,
+        )
+    }
+
+    fn new_target_text(&self) -> String {
+        match self.mode {
+            TypingTrainerMode::Time => typing_trainer_text(self.text_seed),
+            TypingTrainerMode::Words => {
+                typing_trainer_text_for_word_count(self.text_seed, self.word_count)
+            }
+        }
+    }
+
     fn advance_to_next_text(&mut self) {
         let stats = typing_trainer_stats(&self.target_text, &self.typed_chars, 0.0);
         self.completed_correct_chars += stats.correct_chars;
         self.completed_errors += stats.errors;
         self.completed_typed_chars += stats.typed_chars;
         self.text_seed = self.text_seed.wrapping_add(17);
-        self.target_text = typing_trainer_text(self.text_seed);
+        self.target_text = self.new_target_text();
         self.typed_chars.clear();
     }
 }
 
 pub(crate) fn typing_trainer_text(seed: usize) -> String {
-    let word_count = 72;
+    typing_trainer_text_for_word_count(seed, TYPING_TRAINER_DEFAULT_TEXT_WORDS)
+}
+
+fn typing_trainer_text_for_word_count(seed: usize, word_count: usize) -> String {
     let mut words = Vec::with_capacity(word_count);
     let len = TYPING_TRAINER_WORDS.len();
     for i in 0..word_count {
@@ -1686,6 +1744,30 @@ pub(crate) fn typing_trainer_text(seed: usize) -> String {
         words.push(TYPING_TRAINER_WORDS[idx]);
     }
     words.join(" ")
+}
+
+fn typing_trainer_completed_words(target_text: &str, typed_len: usize) -> usize {
+    if typed_len == 0 {
+        return 0;
+    }
+    let mut completed_words = 0;
+    let mut in_word = false;
+    let mut word_end = 0;
+    for (idx, ch) in target_text.chars().enumerate() {
+        if ch.is_whitespace() {
+            if in_word && typed_len >= word_end {
+                completed_words += 1;
+            }
+            in_word = false;
+        } else {
+            in_word = true;
+            word_end = idx + 1;
+        }
+    }
+    if in_word && typed_len >= word_end {
+        completed_words += 1;
+    }
+    completed_words
 }
 
 pub(crate) fn typing_trainer_accepts_char(ch: char) -> bool {
@@ -1766,6 +1848,8 @@ mod typing_trainer_tests {
         assert_eq!(state.completed_correct_chars, 0);
         assert_eq!(state.completed_errors, 0);
         assert_eq!(state.completed_typed_chars, 0);
+        assert_eq!(state.mode, TypingTrainerMode::Time);
+        assert_eq!(state.word_count, 25);
         assert!(!state.ui_hidden);
     }
 
@@ -1836,6 +1920,42 @@ mod typing_trainer_tests {
 
         assert!(state.is_finished());
         assert!(!state.is_paused());
+    }
+
+    #[test]
+    fn typing_trainer_word_mode_finishes_after_selected_words() {
+        let mut state = TypingTrainerState::default();
+        state.set_mode(TypingTrainerMode::Words);
+        state.set_word_count(10);
+        let target_text = state.target_text.clone();
+        let now = std::time::Instant::now();
+
+        assert_eq!(target_text.split_whitespace().count(), 10);
+
+        for ch in target_text.chars() {
+            state.type_char(ch, now);
+        }
+
+        assert!(state.is_finished());
+        assert_eq!(state.target_text, target_text);
+        assert_eq!(state.typed_chars.len(), target_text.chars().count());
+        assert_eq!(state.stats_at(now).typed_chars, target_text.chars().count());
+        assert_eq!(state.word_progress(), (10, 10));
+    }
+
+    #[test]
+    fn typing_trainer_word_mode_does_not_finish_from_timer() {
+        let mut state = TypingTrainerState::default();
+        state.set_mode(TypingTrainerMode::Words);
+        let start = std::time::Instant::now();
+
+        state.type_char('a', start);
+        assert_eq!(
+            state.remaining_secs_at(start + std::time::Duration::from_secs(120)),
+            state.duration_secs
+        );
+
+        assert!(!state.is_finished());
     }
 }
 
