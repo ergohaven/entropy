@@ -86,7 +86,7 @@ impl EntropyApp {
                 self.draw_typing_trainer_text(ui, metrics, dark);
                 if self.typing_trainer.is_finished() {
                     ui.add_space(metrics.value(10.0));
-                    self.draw_typing_trainer_finished_status(ui, metrics, lang);
+                    self.draw_typing_trainer_finished_restart(ui, metrics, lang);
                 }
             });
         });
@@ -163,9 +163,14 @@ impl EntropyApp {
             .position(|duration| *duration == self.typing_trainer.duration_secs)
             .unwrap_or(1);
         let segment_size = metrics.size(244.0, 32.0);
+        let show_restart = !self.typing_trainer.is_finished();
         let restart_size = metrics.size(96.0, 32.0);
         let gap = metrics.value(12.0);
-        let controls_width = segment_size.x + gap + restart_size.x;
+        let controls_width = if show_restart {
+            segment_size.x + gap + restart_size.x
+        } else {
+            segment_size.x
+        };
 
         ui.allocate_ui_with_layout(
             egui::vec2(controls_width, segment_size.y),
@@ -181,16 +186,18 @@ impl EntropyApp {
                     self.typing_trainer
                         .set_duration(TYPING_TRAINER_DURATIONS[picked]);
                 }
-                ui.add_space(gap);
-                if crate::ui_style::modern_button(
-                    ui,
-                    crate::i18n::tr_catalog(lang, "typing_trainer.restart"),
-                    restart_size,
-                    true,
-                )
-                .clicked()
-                {
-                    self.typing_trainer.reset();
+                if show_restart {
+                    ui.add_space(gap);
+                    if crate::ui_style::modern_button(
+                        ui,
+                        crate::i18n::tr_catalog(lang, "typing_trainer.restart"),
+                        restart_size,
+                        true,
+                    )
+                    .clicked()
+                    {
+                        self.typing_trainer.reset();
+                    }
                 }
             },
         );
@@ -436,8 +443,8 @@ impl EntropyApp {
         }
     }
 
-    fn draw_typing_trainer_finished_status(
-        &self,
+    fn draw_typing_trainer_finished_restart(
+        &mut self,
         ui: &mut egui::Ui,
         metrics: crate::ui_style::ResponsiveMetrics,
         lang: crate::i18n::Language,
@@ -447,12 +454,16 @@ impl EntropyApp {
             size,
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
-                let _ = crate::ui_style::modern_button(
+                if crate::ui_style::modern_button(
                     ui,
-                    crate::i18n::tr_catalog(lang, "typing_trainer.finished"),
+                    crate::i18n::tr_catalog(lang, "typing_trainer.restart"),
                     size,
-                    false,
-                );
+                    true,
+                )
+                .clicked()
+                {
+                    self.typing_trainer.reset();
+                }
             },
         );
     }
