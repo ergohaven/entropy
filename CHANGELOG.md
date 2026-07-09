@@ -29,6 +29,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 ### Fixes
 
 - Added English and Russian language packs to Typing Trainer with Unicode input support
+- Changed the Typing Trainer language selector from a segmented control to a dropdown
 - Finished the Typing Trainer run on Escape and restored time as the last final stat
 - Added a Typing Trainer mode selector for timed runs or fixed word-count runs
 - Brightened correctly typed Typing Trainer text in dark theme for stronger contrast against untyped text

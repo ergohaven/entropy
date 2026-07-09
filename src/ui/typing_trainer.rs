@@ -208,13 +208,73 @@ impl EntropyApp {
             total_size,
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
-                if let Some(picked) = crate::ui_style::settings_segmented_control(
+                let language_dropdown_id =
+                    ui.make_persistent_id("typing_trainer_language_dropdown");
+                let selected_language_label = language_labels
+                    .get(selected_language)
+                    .map(|label| label.as_str())
+                    .unwrap_or("en");
+                let language_dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
                     ui,
-                    "typing_trainer_language",
-                    &language_labels,
-                    selected_language,
-                    language_size,
-                ) {
+                    language_dropdown_id,
+                    selected_language_label,
+                    ui.visuals().text_color(),
+                    language_size.x,
+                    language_size.y,
+                    metrics.value(12.5),
+                );
+                let mut picked_language = None;
+                egui::popup_below_widget(
+                    ui,
+                    language_dropdown_id,
+                    &language_dropdown_resp,
+                    egui::PopupCloseBehavior::CloseOnClickOutside,
+                    |ui| {
+                        ui.set_min_width(language_size.x);
+                        ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
+                        for (idx, label) in language_labels.iter().enumerate() {
+                            let selected = idx == selected_language;
+                            let (option_rect, option_resp) = ui.allocate_exact_size(
+                                egui::vec2(language_size.x, metrics.value(28.0)),
+                                Sense::click(),
+                            );
+                            if option_resp.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            let option_fill = if selected {
+                                if ui.visuals().dark_mode {
+                                    Color32::from_rgb(58, 58, 61)
+                                } else {
+                                    Color32::from_rgb(236, 236, 238)
+                                }
+                            } else if option_resp.hovered() {
+                                crate::ui_style::hover_fill(ui.visuals().dark_mode)
+                            } else {
+                                Color32::TRANSPARENT
+                            };
+                            ui.painter().rect_filled(option_rect, 7.0, option_fill);
+                            ui.painter().text(
+                                egui::pos2(
+                                    option_rect.left() + metrics.value(10.0),
+                                    option_rect.center().y,
+                                ),
+                                egui::Align2::LEFT_CENTER,
+                                label,
+                                FontId::proportional(metrics.value(12.0)),
+                                if selected {
+                                    ui.visuals().text_color()
+                                } else {
+                                    app_muted_text(ui.visuals().dark_mode)
+                                },
+                            );
+                            if option_resp.clicked() {
+                                picked_language = Some(idx);
+                                ui.memory_mut(|m| m.close_popup());
+                            }
+                        }
+                    },
+                );
+                if let Some(picked) = picked_language {
                     self.typing_trainer
                         .set_language(TYPING_TRAINER_LANGUAGES[picked]);
                 }
