@@ -28,6 +28,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 
 ### Fixes
 
+- Raised the Typing Trainer final stats and added a typed character count
 - Centered the Typing Trainer final stats with the duration selector and Restart button, without showing time
 - Moved Typing Trainer stats into the final result view so they replace the text only after the run ends
 - Moved the Typing Trainer restart button from the top controls into the former finished status position
