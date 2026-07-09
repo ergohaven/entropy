@@ -51,6 +51,7 @@ impl EntropyApp {
 
         crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
+                let mut focus_timer_y = None;
                 ui.scope(|ui| {
                     ui.set_opacity(chrome_opacity);
                     if chrome_opacity <= 0.96 {
@@ -72,9 +73,16 @@ impl EntropyApp {
 
                     self.draw_typing_trainer_controls(ui, metrics, lang);
                     ui.add_space(metrics.value(18.0));
-                    self.draw_typing_trainer_stats(ui, metrics, lang, now, remaining_secs);
+                    focus_timer_y =
+                        self.draw_typing_trainer_stats(ui, metrics, lang, now, remaining_secs);
                 });
-                self.draw_typing_trainer_focus_timer(ui, metrics, remaining_secs, chrome_opacity);
+                self.draw_typing_trainer_focus_timer(
+                    ui,
+                    metrics,
+                    remaining_secs,
+                    chrome_opacity,
+                    focus_timer_y,
+                );
                 self.draw_typing_trainer_text(ui, metrics, dark);
                 if self.typing_trainer.is_finished() {
                     ui.add_space(metrics.value(10.0));
@@ -195,7 +203,7 @@ impl EntropyApp {
         lang: crate::i18n::Language,
         now: std::time::Instant,
         remaining_secs: u32,
-    ) {
+    ) -> Option<f32> {
         let stats = self.typing_trainer.stats_at(now);
         let timer_secs = if self.typing_trainer.started_at.is_some() {
             remaining_secs
@@ -224,6 +232,7 @@ impl EntropyApp {
         let item_width = metrics.value(92.0);
         let stat_height = metrics.value(42.0);
         let total_width = item_width * labels.len() as f32;
+        let mut value_y = None;
 
         ui.allocate_ui_with_layout(
             egui::vec2(total_width, stat_height),
@@ -232,6 +241,8 @@ impl EntropyApp {
                 for (label, value) in labels {
                     let (rect, _) =
                         ui.allocate_exact_size(egui::vec2(item_width, stat_height), Sense::hover());
+                    let stat_value_y = rect.bottom() - metrics.value(11.0);
+                    value_y.get_or_insert(stat_value_y);
                     let value_color = if self.typing_trainer.is_finished() {
                         app_accent()
                     } else {
@@ -245,7 +256,7 @@ impl EntropyApp {
                         app_muted_text(dark),
                     );
                     ui.painter().text(
-                        egui::pos2(rect.center().x, rect.bottom() - metrics.value(11.0)),
+                        egui::pos2(rect.center().x, stat_value_y),
                         egui::Align2::CENTER_CENTER,
                         value,
                         FontId::proportional(metrics.value(17.0)),
@@ -254,6 +265,7 @@ impl EntropyApp {
                 }
             },
         );
+        value_y
     }
 
     fn draw_typing_trainer_focus_timer(
@@ -262,6 +274,7 @@ impl EntropyApp {
         metrics: crate::ui_style::ResponsiveMetrics,
         remaining_secs: u32,
         chrome_opacity: f32,
+        focus_timer_y: Option<f32>,
     ) {
         let width = ui.available_width().min(metrics.value(860.0));
         let height = metrics.value(24.0);
@@ -281,7 +294,7 @@ impl EntropyApp {
             self.typing_trainer.duration_secs
         };
         ui.painter().text(
-            rect.center(),
+            egui::pos2(rect.center().x, focus_timer_y.unwrap_or(rect.center().y)),
             egui::Align2::CENTER_CENTER,
             timer_secs.to_string(),
             FontId::proportional(metrics.value(22.0)),
