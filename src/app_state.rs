@@ -1513,6 +1513,7 @@ pub(crate) struct TypingTrainerState {
     pub(crate) completed_errors: usize,
     pub(crate) completed_typed_chars: usize,
     pub(crate) text_seed: usize,
+    pub(crate) ui_hidden: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1538,6 +1539,7 @@ impl Default for TypingTrainerState {
             completed_errors: 0,
             completed_typed_chars: 0,
             text_seed,
+            ui_hidden: false,
         }
     }
 }
@@ -1553,6 +1555,7 @@ impl TypingTrainerState {
         self.completed_correct_chars = 0;
         self.completed_errors = 0;
         self.completed_typed_chars = 0;
+        self.ui_hidden = false;
     }
 
     pub(crate) fn set_duration(&mut self, duration_secs: u32) {
@@ -1751,6 +1754,7 @@ mod typing_trainer_tests {
         state.completed_correct_chars = 20;
         state.completed_errors = 1;
         state.completed_typed_chars = 21;
+        state.ui_hidden = true;
 
         state.reset();
 
@@ -1762,6 +1766,7 @@ mod typing_trainer_tests {
         assert_eq!(state.completed_correct_chars, 0);
         assert_eq!(state.completed_errors, 0);
         assert_eq!(state.completed_typed_chars, 0);
+        assert!(!state.ui_hidden);
     }
 
     #[test]

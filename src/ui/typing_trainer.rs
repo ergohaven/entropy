@@ -24,6 +24,10 @@ impl EntropyApp {
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
         let now = std::time::Instant::now();
         let remaining_secs = self.typing_trainer.remaining_secs_at(now);
+        if self.typing_trainer.is_finished() {
+            self.typing_trainer.ui_hidden = false;
+        }
+        let ui_hidden = self.typing_trainer.ui_hidden;
         if self.typing_trainer.started_at.is_some()
             && !self.typing_trainer.is_paused()
             && !self.typing_trainer.is_finished()
@@ -33,24 +37,28 @@ impl EntropyApp {
 
         crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
-                ui.add_space(metrics.value(18.0));
-                ui.label(
-                    RichText::new(crate::i18n::tr_catalog(lang, "typing_trainer.title"))
-                        .size(metrics.value(18.0))
-                        .strong(),
-                );
-                ui.add_space(metrics.value(6.0));
-                ui.label(
-                    RichText::new(crate::i18n::tr_catalog(lang, "typing_trainer.description"))
-                        .size(metrics.value(13.0))
-                        .color(app_muted_text(dark)),
-                );
-                ui.add_space(metrics.value(18.0));
+                if ui_hidden {
+                    ui.add_space(metrics.value(180.0));
+                } else {
+                    ui.add_space(metrics.value(18.0));
+                    ui.label(
+                        RichText::new(crate::i18n::tr_catalog(lang, "typing_trainer.title"))
+                            .size(metrics.value(18.0))
+                            .strong(),
+                    );
+                    ui.add_space(metrics.value(6.0));
+                    ui.label(
+                        RichText::new(crate::i18n::tr_catalog(lang, "typing_trainer.description"))
+                            .size(metrics.value(13.0))
+                            .color(app_muted_text(dark)),
+                    );
+                    ui.add_space(metrics.value(18.0));
 
-                self.draw_typing_trainer_controls(ui, metrics, lang);
-                ui.add_space(metrics.value(18.0));
-                self.draw_typing_trainer_stats(ui, metrics, lang, now, remaining_secs);
-                ui.add_space(metrics.value(24.0));
+                    self.draw_typing_trainer_controls(ui, metrics, lang);
+                    ui.add_space(metrics.value(18.0));
+                    self.draw_typing_trainer_stats(ui, metrics, lang, now, remaining_secs);
+                    ui.add_space(metrics.value(24.0));
+                }
                 self.draw_typing_trainer_text(ui, metrics, dark);
                 if self.typing_trainer.is_finished() {
                     ui.add_space(metrics.value(10.0));
@@ -74,10 +82,15 @@ impl EntropyApp {
         let command_modifier_down = ctx
             .input(|input| input.modifiers.command || input.modifiers.ctrl || input.modifiers.alt);
         let events = ctx.input(|input| input.events.clone());
+        let mut typed_this_frame = false;
+        let mut pointer_moved_this_frame = false;
         for event in events {
             match event {
                 egui::Event::Text(text) if !command_modifier_down => {
                     for ch in text.chars() {
+                        if typing_trainer_accepts_char(ch) && !self.typing_trainer.is_finished() {
+                            typed_this_frame = true;
+                        }
                         self.typing_trainer.type_char(ch, now);
                     }
                 }
@@ -86,6 +99,9 @@ impl EntropyApp {
                     pressed: true,
                     ..
                 } => {
+                    if !self.typing_trainer.is_finished() {
+                        typed_this_frame = true;
+                    }
                     self.typing_trainer.backspace();
                 }
                 egui::Event::Key {
@@ -95,8 +111,16 @@ impl EntropyApp {
                 } => {
                     self.typing_trainer.reset();
                 }
+                egui::Event::PointerMoved(_) => {
+                    pointer_moved_this_frame = true;
+                }
                 _ => {}
             }
+        }
+        if pointer_moved_this_frame || self.typing_trainer.is_finished() {
+            self.typing_trainer.ui_hidden = false;
+        } else if typed_this_frame {
+            self.typing_trainer.ui_hidden = true;
         }
     }
 
