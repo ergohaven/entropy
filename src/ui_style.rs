@@ -673,8 +673,9 @@ pub fn modern_dropdown_select_sized(
 
 pub fn modern_toggle_pill(
     ui: &mut Ui,
-    icon: &str,
+    glyph: &str,
     label: &str,
+    tooltip: &str,
     size: Vec2,
     selected: bool,
 ) -> egui::Response {
@@ -686,50 +687,82 @@ pub fn modern_toggle_pill(
 
     let fill = if selected {
         if dark {
-            mix(surface_fill(dark), accent(), 0.18)
+            mix(surface_fill(dark), accent(), 0.16)
         } else {
-            mix(surface_fill(dark), accent(), 0.12)
+            mix(surface_fill(dark), accent(), 0.10)
         }
     } else if resp.hovered() {
         hover_fill(dark)
     } else {
         surface_fill(dark)
     };
-    ui.painter().rect(
-        rect,
-        9.0,
-        fill,
-        modal_outline_stroke(dark),
-        egui::StrokeKind::Inside,
-    );
+    let stroke = if selected {
+        Stroke::new(1.1, mix(modal_outline_stroke(dark).color, accent(), 0.42))
+    } else {
+        modal_outline_stroke(dark)
+    };
+    ui.painter()
+        .rect(rect, 9.0, fill, stroke, egui::StrokeKind::Inside);
 
     let text_color = if selected {
         ui.visuals().text_color()
     } else {
         muted_text(dark)
     };
-    let text = format!("{icon} {label}");
-    let text_rect = rect.shrink2(Vec2::new(14.0, 0.0));
-    let mut font_size = 12.5_f32;
-    let mut galley =
-        ui.painter()
-            .layout_no_wrap(text.clone(), FontId::proportional(font_size), text_color);
+    let badge_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + 26.0, rect.center().y),
+        Vec2::new(34.0, 20.0),
+    );
+    let badge_fill = if selected {
+        mix(surface_fill(dark), accent(), if dark { 0.34 } else { 0.20 })
+    } else if resp.hovered() {
+        if dark {
+            Color32::from_rgb(58, 58, 61)
+        } else {
+            Color32::from_rgb(236, 236, 238)
+        }
+    } else if dark {
+        Color32::from_rgb(52, 52, 55)
+    } else {
+        Color32::from_rgb(244, 244, 246)
+    };
+    ui.painter().rect_filled(badge_rect, 6.0, badge_fill);
+    ui.painter().text(
+        badge_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        glyph,
+        FontId::monospace(11.0),
+        text_color,
+    );
+
+    let text_rect = egui::Rect::from_min_max(
+        egui::pos2(badge_rect.right() + 8.0, rect.top()),
+        egui::pos2(rect.right() - 13.0, rect.bottom()),
+    );
+    let mut font_size = 12.0_f32;
+    let mut galley = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        FontId::proportional(font_size),
+        text_color,
+    );
     while galley.size().x > text_rect.width() && font_size > 8.5 {
         font_size -= 0.5;
-        galley =
-            ui.painter()
-                .layout_no_wrap(text.clone(), FontId::proportional(font_size), text_color);
+        galley = ui.painter().layout_no_wrap(
+            label.to_owned(),
+            FontId::proportional(font_size),
+            text_color,
+        );
     }
     ui.painter().with_clip_rect(text_rect).galley(
         egui::pos2(
-            text_rect.center().x - galley.size().x * 0.5,
+            text_rect.left(),
             text_rect.center().y - galley.size().y * 0.5,
         ),
         galley,
         text_color,
     );
 
-    resp
+    resp.on_hover_text(tooltip)
 }
 
 pub fn paint_floating_scrollbar_handle(

@@ -205,8 +205,8 @@ impl EntropyApp {
         let language_size = metrics.size(96.0, 32.0);
         let mode_size = metrics.size(116.0, 32.0);
         let value_size = metrics.size(88.0, 32.0);
-        let punctuation_size = metrics.size(150.0, 32.0);
-        let numbers_size = metrics.size(126.0, 32.0);
+        let punctuation_size = metrics.size(112.0, 32.0);
+        let numbers_size = metrics.size(104.0, 32.0);
         let gap = metrics.value(10.0);
         let total_size = egui::vec2(
             language_size.x
@@ -291,9 +291,12 @@ impl EntropyApp {
 
                 ui.add_space(gap);
                 let punctuation_label = crate::i18n::tr_catalog(lang, "typing_trainer.punctuation");
+                let punctuation_short_label =
+                    crate::i18n::tr_catalog(lang, "typing_trainer.punctuation_short");
                 if crate::ui_style::modern_toggle_pill(
                     ui,
-                    "@",
+                    ".,?",
+                    punctuation_short_label,
                     punctuation_label,
                     punctuation_size,
                     self.typing_trainer.punctuation_enabled,
@@ -306,9 +309,12 @@ impl EntropyApp {
                 }
                 ui.add_space(gap);
                 let numbers_label = crate::i18n::tr_catalog(lang, "typing_trainer.numbers");
+                let numbers_short_label =
+                    crate::i18n::tr_catalog(lang, "typing_trainer.numbers_short");
                 if crate::ui_style::modern_toggle_pill(
                     ui,
-                    "#",
+                    "123",
+                    numbers_short_label,
                     numbers_label,
                     numbers_size,
                     self.typing_trainer.numbers_enabled,
