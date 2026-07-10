@@ -4,7 +4,9 @@ const TYPING_TRAINER_VISIBLE_LINES: usize = 4;
 
 impl EntropyApp {
     fn typing_trainer_focus_mode_active(&self) -> bool {
-        self.typing_trainer.ui_hidden && !self.typing_trainer.is_finished()
+        self.typing_trainer.ui_hidden
+            && !self.typing_trainer.is_finished()
+            && !self.typing_trainer_history_open
     }
 
     pub(super) fn typing_trainer_chrome_opacity(&self, ctx: &egui::Context) -> f32 {
@@ -12,7 +14,8 @@ impl EntropyApp {
             && self.settings_tab == SettingsTab::TypingTrainer;
         let visible = !typing_trainer_page
             || !self.typing_trainer.ui_hidden
-            || self.typing_trainer.is_finished();
+            || self.typing_trainer.is_finished()
+            || self.typing_trainer_history_open;
         ctx.animate_bool_with_time(
             egui::Id::new("typing_trainer_chrome_visible"),
             visible,
@@ -90,10 +93,10 @@ impl EntropyApp {
                 self.draw_typing_trainer_text(ui, metrics, lang, now, dark);
                 ui.add_space(metrics.value(10.0));
                 self.draw_typing_trainer_actions(ui, metrics, lang, chrome_opacity);
-                ui.add_space(metrics.value(14.0));
-                self.draw_typing_trainer_history(ui, metrics, lang, dark, chrome_opacity);
             });
         });
+
+        self.draw_typing_trainer_history_modal(ctx, metrics, lang, dark);
 
         if self.typing_trainer_focus_mode_active() {
             ctx.set_cursor_icon(egui::CursorIcon::None);
@@ -105,6 +108,7 @@ impl EntropyApp {
             || self.settings_tab != SettingsTab::TypingTrainer
             || self.keycode_picker.open
             || self.unlock_open
+            || self.typing_trainer_history_open
             || ctx.memory(|m| m.any_popup_open())
         {
             return;
@@ -592,11 +596,17 @@ impl EntropyApp {
         let button_size = metrics.size(104.0, 32.0);
         let gap = metrics.value(10.0);
         let finished = self.typing_trainer.is_finished();
-        let total_size = if finished {
-            egui::vec2(button_size.x * 2.0 + gap, button_size.y)
-        } else {
-            button_size
+        let has_history = !self.app_settings.typing_trainer_history.is_empty();
+        let action_count = match (finished, has_history) {
+            (true, true) => 3.0,
+            (true, false) => 2.0,
+            (false, true) => 2.0,
+            (false, false) => 1.0,
         };
+        let total_size = egui::vec2(
+            button_size.x * action_count + gap * (action_count - 1.0),
+            button_size.y,
+        );
         ui.scope(|ui| {
             ui.set_opacity(chrome_opacity);
             if chrome_opacity <= 0.96 {
@@ -628,162 +638,314 @@ impl EntropyApp {
                         {
                             self.typing_trainer.reset();
                         }
-                    } else if crate::ui_style::modern_button(
-                        ui,
-                        crate::i18n::tr_catalog(lang, "typing_trainer.restart"),
-                        button_size,
-                        true,
-                    )
-                    .clicked()
-                    {
-                        self.typing_trainer.reset();
+                    } else {
+                        if crate::ui_style::modern_button(
+                            ui,
+                            crate::i18n::tr_catalog(lang, "typing_trainer.restart"),
+                            button_size,
+                            true,
+                        )
+                        .clicked()
+                        {
+                            self.typing_trainer.reset();
+                        }
+                    }
+
+                    if has_history {
+                        ui.add_space(gap);
+                        if crate::ui_style::modern_button(
+                            ui,
+                            crate::i18n::tr_catalog(lang, "typing_trainer.history"),
+                            button_size,
+                            true,
+                        )
+                        .clicked()
+                        {
+                            self.typing_trainer_history_open = true;
+                            self.typing_trainer.ui_hidden = false;
+                        }
                     }
                 },
             );
         });
     }
 
-    fn draw_typing_trainer_history(
-        &self,
+    fn draw_typing_trainer_history_modal(
+        &mut self,
+        ctx: &egui::Context,
+        metrics: crate::ui_style::ResponsiveMetrics,
+        lang: crate::i18n::Language,
+        dark: bool,
+    ) {
+        if !self.typing_trainer_history_open {
+            return;
+        }
+
+        if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.typing_trainer_history_open = false;
+            return;
+        }
+
+        let screen_rect = ctx.screen_rect();
+        egui::Area::new("typing_trainer_history_backdrop".into())
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen_rect.min)
+            .show(ctx, |ui| {
+                let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen_rect.size());
+                ui.interact(
+                    rect,
+                    egui::Id::new("typing_trainer_history_backdrop_blocker"),
+                    egui::Sense::click_and_drag(),
+                );
+                ui.painter().rect_filled(
+                    rect,
+                    0.0,
+                    Color32::from_black_alpha(crate::ui_style::modal_backdrop_alpha(dark)),
+                );
+            });
+
+        let entries = self.app_settings.typing_trainer_history.clone();
+        let mut open = self.typing_trainer_history_open;
+        let mut clear_clicked = false;
+        let mut close_clicked = false;
+
+        crate::ui_style::centered_modal_window(
+            ctx,
+            crate::i18n::tr_catalog(lang, "typing_trainer.history"),
+            egui::Id::new("typing_trainer_history_window"),
+            &mut open,
+            Vec2::new(660.0, 430.0),
+        )
+        .show(ctx, |ui| {
+            ui.set_min_size(Vec2::new(640.0, 380.0));
+            let rect = ui.max_rect();
+            let content_rect = egui::Rect::from_min_max(
+                egui::pos2(rect.left() + 30.0, rect.top() + 18.0),
+                egui::pos2(rect.right() - 30.0, rect.bottom() - 74.0),
+            );
+            let button_size = crate::ui_style::modal_action_button_size();
+            let button_gap = metrics.value(10.0);
+            let buttons_width = button_size.x * 2.0 + button_gap;
+            let button_rect = egui::Rect::from_center_size(
+                egui::pos2(rect.center().x, rect.bottom() - 34.0),
+                egui::vec2(buttons_width, button_size.y),
+            );
+
+            crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
+                Self::draw_typing_trainer_history_table(ui, metrics, lang, dark, &entries);
+            });
+
+            crate::ui_style::allocate_ui_at_rect(ui, button_rect, |ui| {
+                ui.allocate_ui_with_layout(
+                    button_rect.size(),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        if crate::ui_style::modern_button(
+                            ui,
+                            crate::i18n::tr_catalog(lang, "typing_trainer.clear_history"),
+                            button_size,
+                            !entries.is_empty(),
+                        )
+                        .clicked()
+                        {
+                            clear_clicked = true;
+                        }
+                        ui.add_space(button_gap);
+                        if crate::ui_style::modern_button(
+                            ui,
+                            crate::i18n::tr_catalog(lang, "common.close"),
+                            button_size,
+                            true,
+                        )
+                        .clicked()
+                        {
+                            close_clicked = true;
+                        }
+                    },
+                );
+            });
+        });
+
+        if clear_clicked {
+            self.app_settings.typing_trainer_history.clear();
+            save_app_settings(&self.app_settings);
+            self.typing_trainer_history_open = false;
+        } else {
+            self.typing_trainer_history_open = open && !close_clicked;
+        }
+    }
+
+    fn draw_typing_trainer_history_table(
         ui: &mut egui::Ui,
         metrics: crate::ui_style::ResponsiveMetrics,
         lang: crate::i18n::Language,
         dark: bool,
-        chrome_opacity: f32,
+        entries: &[TypingTrainerRunRecord],
     ) {
-        let entries = &self.app_settings.typing_trainer_history;
         if entries.is_empty() {
+            crate::ui_style::modal_empty_state(
+                ui,
+                crate::i18n::tr_catalog(lang, "typing_trainer.history_empty"),
+                None,
+            );
             return;
         }
 
-        let visible_rows = entries.len().min(5);
-        let width = ui.available_width().min(metrics.value(680.0));
-        let title_height = metrics.value(24.0);
-        let header_height = metrics.value(22.0);
-        let row_height = metrics.value(26.0);
-        let total_height = title_height + header_height + row_height * visible_rows as f32;
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, total_height), Sense::hover());
+        let width = ui.available_width();
+        let header_height = metrics.value(24.0);
+        let row_height = metrics.value(30.0);
+        let scroll_height = (ui.available_height() - header_height - metrics.value(4.0)).max(0.0);
+        let (header_rect, _) =
+            ui.allocate_exact_size(egui::vec2(width, header_height), Sense::hover());
+        Self::paint_typing_trainer_history_header(ui, header_rect, metrics, lang, dark);
+        ui.add_space(metrics.value(4.0));
 
-        ui.scope(|ui| {
-            ui.set_opacity(chrome_opacity);
-            if chrome_opacity <= 0.96 {
-                ui.disable();
-            }
-            let painter = ui.painter();
-            let muted = app_muted_text(dark);
-            let separator = muted.gamma_multiply(if dark { 0.34 } else { 0.24 });
-            let text = if dark {
-                Color32::from_gray(228)
-            } else {
-                ui.visuals().text_color()
-            };
-            let left = rect.left();
-            let right = rect.right();
-            let date_x = left + metrics.value(8.0);
-            let run_x = left + metrics.value(128.0);
-            let wpm_x = right - metrics.value(176.0);
-            let accuracy_x = right - metrics.value(104.0);
-            let errors_x = right - metrics.value(34.0);
-            let title_y = rect.top() + title_height * 0.5;
-            let header_y = rect.top() + title_height + header_height * 0.5;
-
-            painter.text(
-                egui::pos2(rect.center().x, title_y),
-                egui::Align2::CENTER_CENTER,
-                crate::i18n::tr_catalog(lang, "typing_trainer.history"),
-                FontId::proportional(metrics.value(13.0)),
-                muted,
-            );
-
-            painter.text(
-                egui::pos2(date_x, header_y),
-                egui::Align2::LEFT_CENTER,
-                crate::i18n::tr_catalog(lang, "typing_trainer.date"),
-                FontId::proportional(metrics.value(11.0)),
-                muted,
-            );
-            painter.text(
-                egui::pos2(run_x, header_y),
-                egui::Align2::LEFT_CENTER,
-                crate::i18n::tr_catalog(lang, "typing_trainer.run"),
-                FontId::proportional(metrics.value(11.0)),
-                muted,
-            );
-            painter.text(
-                egui::pos2(wpm_x, header_y),
-                egui::Align2::CENTER_CENTER,
-                crate::i18n::tr_catalog(lang, "typing_trainer.wpm"),
-                FontId::proportional(metrics.value(11.0)),
-                muted,
-            );
-            painter.text(
-                egui::pos2(accuracy_x, header_y),
-                egui::Align2::CENTER_CENTER,
-                crate::i18n::tr_catalog(lang, "typing_trainer.accuracy"),
-                FontId::proportional(metrics.value(11.0)),
-                muted,
-            );
-            painter.text(
-                egui::pos2(errors_x, header_y),
-                egui::Align2::CENTER_CENTER,
-                crate::i18n::tr_catalog(lang, "typing_trainer.errors"),
-                FontId::proportional(metrics.value(11.0)),
-                muted,
-            );
-
-            let table_top = rect.top() + title_height + header_height;
-            painter.line_segment(
-                [egui::pos2(left, table_top), egui::pos2(right, table_top)],
-                Stroke::new(metrics.value(1.0), separator),
-            );
-
-            for (idx, entry) in entries.iter().take(visible_rows).enumerate() {
-                let row_top = table_top + row_height * idx as f32;
-                let row_center_y = row_top + row_height * 0.5;
-                let row_bottom = row_top + row_height;
-                painter.text(
-                    egui::pos2(date_x, row_center_y),
-                    egui::Align2::LEFT_CENTER,
-                    typing_trainer_history_date_label(entry.finished_at_unix_secs),
-                    FontId::proportional(metrics.value(12.0)),
-                    muted,
-                );
-                painter.text(
-                    egui::pos2(run_x, row_center_y),
-                    egui::Align2::LEFT_CENTER,
-                    typing_trainer_history_run_label(entry, lang),
-                    FontId::proportional(metrics.value(12.0)),
-                    text,
-                );
-                painter.text(
-                    egui::pos2(wpm_x, row_center_y),
-                    egui::Align2::CENTER_CENTER,
-                    entry.wpm.to_string(),
-                    FontId::proportional(metrics.value(12.0)),
-                    text,
-                );
-                painter.text(
-                    egui::pos2(accuracy_x, row_center_y),
-                    egui::Align2::CENTER_CENTER,
-                    format!("{}%", entry.accuracy_percent),
-                    FontId::proportional(metrics.value(12.0)),
-                    text,
-                );
-                painter.text(
-                    egui::pos2(errors_x, row_center_y),
-                    egui::Align2::CENTER_CENTER,
-                    entry.errors.to_string(),
-                    FontId::proportional(metrics.value(12.0)),
-                    text,
-                );
-                if idx + 1 < visible_rows {
-                    painter.line_segment(
-                        [egui::pos2(left, row_bottom), egui::pos2(right, row_bottom)],
-                        Stroke::new(metrics.value(1.0), separator),
+        egui::ScrollArea::vertical()
+            .max_height(scroll_height)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_width(width - metrics.value(16.0));
+                for (idx, entry) in entries.iter().enumerate() {
+                    let (row_rect, _) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), row_height),
+                        Sense::hover(),
+                    );
+                    Self::paint_typing_trainer_history_row(
+                        ui,
+                        row_rect,
+                        metrics,
+                        lang,
+                        dark,
+                        entry,
+                        idx + 1 < entries.len(),
                     );
                 }
-            }
-        });
+            });
+    }
+
+    fn paint_typing_trainer_history_header(
+        ui: &egui::Ui,
+        rect: egui::Rect,
+        metrics: crate::ui_style::ResponsiveMetrics,
+        lang: crate::i18n::Language,
+        dark: bool,
+    ) {
+        let muted = app_muted_text(dark);
+        let separator = muted.gamma_multiply(if dark { 0.34 } else { 0.24 });
+        let (date_x, run_x, wpm_x, accuracy_x, errors_x) =
+            typing_trainer_history_columns(rect, metrics);
+        let header_y = rect.center().y;
+        let painter = ui.painter();
+
+        painter.text(
+            egui::pos2(date_x, header_y),
+            egui::Align2::LEFT_CENTER,
+            crate::i18n::tr_catalog(lang, "typing_trainer.date"),
+            FontId::proportional(metrics.value(11.0)),
+            muted,
+        );
+        painter.text(
+            egui::pos2(run_x, header_y),
+            egui::Align2::LEFT_CENTER,
+            crate::i18n::tr_catalog(lang, "typing_trainer.run"),
+            FontId::proportional(metrics.value(11.0)),
+            muted,
+        );
+        painter.text(
+            egui::pos2(wpm_x, header_y),
+            egui::Align2::CENTER_CENTER,
+            crate::i18n::tr_catalog(lang, "typing_trainer.wpm"),
+            FontId::proportional(metrics.value(11.0)),
+            muted,
+        );
+        painter.text(
+            egui::pos2(accuracy_x, header_y),
+            egui::Align2::CENTER_CENTER,
+            crate::i18n::tr_catalog(lang, "typing_trainer.accuracy"),
+            FontId::proportional(metrics.value(11.0)),
+            muted,
+        );
+        painter.text(
+            egui::pos2(errors_x, header_y),
+            egui::Align2::CENTER_CENTER,
+            crate::i18n::tr_catalog(lang, "typing_trainer.errors"),
+            FontId::proportional(metrics.value(11.0)),
+            muted,
+        );
+        painter.line_segment(
+            [
+                egui::pos2(rect.left(), rect.bottom()),
+                egui::pos2(rect.right(), rect.bottom()),
+            ],
+            Stroke::new(metrics.value(1.0), separator),
+        );
+    }
+
+    fn paint_typing_trainer_history_row(
+        ui: &egui::Ui,
+        rect: egui::Rect,
+        metrics: crate::ui_style::ResponsiveMetrics,
+        lang: crate::i18n::Language,
+        dark: bool,
+        entry: &TypingTrainerRunRecord,
+        draw_separator: bool,
+    ) {
+        let muted = app_muted_text(dark);
+        let separator = muted.gamma_multiply(if dark { 0.34 } else { 0.24 });
+        let text = if dark {
+            Color32::from_gray(228)
+        } else {
+            ui.visuals().text_color()
+        };
+        let (date_x, run_x, wpm_x, accuracy_x, errors_x) =
+            typing_trainer_history_columns(rect, metrics);
+        let row_center_y = rect.center().y;
+        let painter = ui.painter();
+
+        painter.text(
+            egui::pos2(date_x, row_center_y),
+            egui::Align2::LEFT_CENTER,
+            typing_trainer_history_date_label(entry.finished_at_unix_secs),
+            FontId::proportional(metrics.value(12.0)),
+            muted,
+        );
+        painter.text(
+            egui::pos2(run_x, row_center_y),
+            egui::Align2::LEFT_CENTER,
+            typing_trainer_history_run_label(entry, lang),
+            FontId::proportional(metrics.value(12.0)),
+            text,
+        );
+        painter.text(
+            egui::pos2(wpm_x, row_center_y),
+            egui::Align2::CENTER_CENTER,
+            entry.wpm.to_string(),
+            FontId::proportional(metrics.value(12.0)),
+            text,
+        );
+        painter.text(
+            egui::pos2(accuracy_x, row_center_y),
+            egui::Align2::CENTER_CENTER,
+            format!("{}%", entry.accuracy_percent),
+            FontId::proportional(metrics.value(12.0)),
+            text,
+        );
+        painter.text(
+            egui::pos2(errors_x, row_center_y),
+            egui::Align2::CENTER_CENTER,
+            entry.errors.to_string(),
+            FontId::proportional(metrics.value(12.0)),
+            text,
+        );
+        if draw_separator {
+            painter.line_segment(
+                [
+                    egui::pos2(rect.left(), rect.bottom()),
+                    egui::pos2(rect.right(), rect.bottom()),
+                ],
+                Stroke::new(metrics.value(1.0), separator),
+            );
+        }
     }
 
     fn record_finished_typing_trainer_run(&mut self, now: std::time::Instant) {
@@ -843,6 +1005,19 @@ fn typing_trainer_history_run_label(
         modifiers.push_str(" #");
     }
     format!("{} / {}{}", entry.language.label(), mode, modifiers)
+}
+
+fn typing_trainer_history_columns(
+    rect: egui::Rect,
+    metrics: crate::ui_style::ResponsiveMetrics,
+) -> (f32, f32, f32, f32, f32) {
+    (
+        rect.left() + metrics.value(8.0),
+        rect.left() + metrics.value(128.0),
+        rect.right() - metrics.value(176.0),
+        rect.right() - metrics.value(104.0),
+        rect.right() - metrics.value(34.0),
+    )
 }
 
 fn typing_trainer_visible_start_index(

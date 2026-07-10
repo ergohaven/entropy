@@ -28,6 +28,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 
 ### Fixes
 
+- Moved Typing Trainer history into a scrollable modal opened from the trainer action row
 - Added a local Typing Trainer history list for recent runs with date, mode, language, WPM, accuracy, and errors
 - Added Typing Trainer result actions for retrying the same text or moving to the next text, and persisted trainer controls
 - Changed Typing Trainer mode and length controls to dropdowns and kept all trainer controls on one row

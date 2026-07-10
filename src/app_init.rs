@@ -123,6 +123,7 @@ impl EntropyApp {
             key_override_undo_stack: Vec::new(),
             text_expander_deleted_rules: Vec::new(),
             typing_trainer,
+            typing_trainer_history_open: false,
             selected_key_override: 0,
             key_override_pick_target: None,
             matrix_tester_pressed: Vec::new(),

@@ -285,6 +285,7 @@ impl eframe::App for EntropyApp {
             || self.vial_unlock_polling
             || self.close_to_tray_prompt_open
             || self.import_report_open
+            || self.typing_trainer_history_open
             || import_pending_at_frame_start
             || self.top_dropdown_open(ctx)
             || ctx.memory(|m| m.any_popup_open());
