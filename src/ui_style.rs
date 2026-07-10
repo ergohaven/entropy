@@ -592,6 +592,85 @@ pub fn modern_dropdown_button_sized(
     dropdown_resp
 }
 
+pub fn modern_dropdown_select_sized(
+    ui: &mut Ui,
+    id: egui::Id,
+    labels: &[String],
+    selected: usize,
+    width: f32,
+    height: f32,
+    font_size: f32,
+) -> (egui::Response, Option<usize>) {
+    let dark = ui.visuals().dark_mode;
+    let selected_text = labels.get(selected).map(String::as_str).unwrap_or("");
+    let dropdown_resp = modern_dropdown_button_sized(
+        ui,
+        id,
+        selected_text,
+        ui.visuals().text_color(),
+        width,
+        height,
+        font_size,
+    );
+    let mut picked = None;
+    egui::popup_below_widget(
+        ui,
+        id,
+        &dropdown_resp,
+        egui::PopupCloseBehavior::CloseOnClickOutside,
+        |ui| {
+            ui.set_min_width(width);
+            ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
+            let option_height = 28.0;
+            let max_height = (labels.len() as f32 * (option_height + 2.0))
+                .min(142.0)
+                .max(option_height);
+            egui::ScrollArea::vertical()
+                .id_salt(("modern_dropdown_select_scroll", id))
+                .max_height(max_height)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    for (idx, label) in labels.iter().enumerate() {
+                        let is_selected = idx == selected;
+                        let (option_rect, option_resp) =
+                            ui.allocate_exact_size(Vec2::new(width, option_height), Sense::click());
+                        if option_resp.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        let option_fill = if is_selected {
+                            if dark {
+                                Color32::from_rgb(58, 58, 61)
+                            } else {
+                                Color32::from_rgb(236, 236, 238)
+                            }
+                        } else if option_resp.hovered() {
+                            hover_fill(dark)
+                        } else {
+                            Color32::TRANSPARENT
+                        };
+                        ui.painter().rect_filled(option_rect, 7.0, option_fill);
+                        ui.painter().text(
+                            egui::pos2(option_rect.left() + 10.0, option_rect.center().y),
+                            egui::Align2::LEFT_CENTER,
+                            label,
+                            FontId::proportional(12.0),
+                            if is_selected {
+                                ui.visuals().text_color()
+                            } else {
+                                muted_text(dark)
+                            },
+                        );
+                        if option_resp.clicked() {
+                            picked = Some(idx);
+                            ui.memory_mut(|m| m.close_popup());
+                        }
+                    }
+                });
+        },
+    );
+    (dropdown_resp, picked)
+}
+
 pub fn modern_toggle_pill(
     ui: &mut Ui,
     icon: &str,

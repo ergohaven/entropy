@@ -196,11 +196,21 @@ impl EntropyApp {
                 .unwrap_or(1),
         };
         let language_size = metrics.size(96.0, 32.0);
-        let mode_size = metrics.size(164.0, 32.0);
-        let value_size = metrics.size(244.0, 32.0);
-        let gap = metrics.value(12.0);
+        let mode_size = metrics.size(116.0, 32.0);
+        let value_size = metrics.size(88.0, 32.0);
+        let punctuation_size = metrics.size(150.0, 32.0);
+        let numbers_size = metrics.size(126.0, 32.0);
+        let gap = metrics.value(10.0);
         let total_size = egui::vec2(
-            language_size.x + gap + mode_size.x + gap + value_size.x,
+            language_size.x
+                + gap
+                + mode_size.x
+                + gap
+                + value_size.x
+                + gap
+                + punctuation_size.x
+                + gap
+                + numbers_size.x,
             mode_size.y,
         );
 
@@ -210,69 +220,14 @@ impl EntropyApp {
             |ui| {
                 let language_dropdown_id =
                     ui.make_persistent_id("typing_trainer_language_dropdown");
-                let selected_language_label = language_labels
-                    .get(selected_language)
-                    .map(|label| label.as_str())
-                    .unwrap_or("en");
-                let language_dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
+                let (_, picked_language) = crate::ui_style::modern_dropdown_select_sized(
                     ui,
                     language_dropdown_id,
-                    selected_language_label,
-                    ui.visuals().text_color(),
+                    &language_labels,
+                    selected_language,
                     language_size.x,
                     language_size.y,
                     metrics.value(12.5),
-                );
-                let mut picked_language = None;
-                egui::popup_below_widget(
-                    ui,
-                    language_dropdown_id,
-                    &language_dropdown_resp,
-                    egui::PopupCloseBehavior::CloseOnClickOutside,
-                    |ui| {
-                        ui.set_min_width(language_size.x);
-                        ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
-                        for (idx, label) in language_labels.iter().enumerate() {
-                            let selected = idx == selected_language;
-                            let (option_rect, option_resp) = ui.allocate_exact_size(
-                                egui::vec2(language_size.x, metrics.value(28.0)),
-                                Sense::click(),
-                            );
-                            if option_resp.hovered() {
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                            }
-                            let option_fill = if selected {
-                                if ui.visuals().dark_mode {
-                                    Color32::from_rgb(58, 58, 61)
-                                } else {
-                                    Color32::from_rgb(236, 236, 238)
-                                }
-                            } else if option_resp.hovered() {
-                                crate::ui_style::hover_fill(ui.visuals().dark_mode)
-                            } else {
-                                Color32::TRANSPARENT
-                            };
-                            ui.painter().rect_filled(option_rect, 7.0, option_fill);
-                            ui.painter().text(
-                                egui::pos2(
-                                    option_rect.left() + metrics.value(10.0),
-                                    option_rect.center().y,
-                                ),
-                                egui::Align2::LEFT_CENTER,
-                                label,
-                                FontId::proportional(metrics.value(12.0)),
-                                if selected {
-                                    ui.visuals().text_color()
-                                } else {
-                                    app_muted_text(ui.visuals().dark_mode)
-                                },
-                            );
-                            if option_resp.clicked() {
-                                picked_language = Some(idx);
-                                ui.memory_mut(|m| m.close_popup());
-                            }
-                        }
-                    },
                 );
                 if let Some(picked) = picked_language {
                     self.typing_trainer
@@ -281,13 +236,17 @@ impl EntropyApp {
 
                 ui.add_space(gap);
 
-                if let Some(picked) = crate::ui_style::settings_segmented_control(
+                let mode_dropdown_id = ui.make_persistent_id("typing_trainer_mode_dropdown");
+                let (_, picked_mode) = crate::ui_style::modern_dropdown_select_sized(
                     ui,
-                    "typing_trainer_mode",
+                    mode_dropdown_id,
                     &mode_labels,
                     selected_mode,
-                    mode_size,
-                ) {
+                    mode_size.x,
+                    mode_size.y,
+                    metrics.value(12.5),
+                );
+                if let Some(picked) = picked_mode {
                     let mode = if picked == 0 {
                         TypingTrainerMode::Time
                     } else {
@@ -298,13 +257,17 @@ impl EntropyApp {
 
                 ui.add_space(gap);
 
-                if let Some(picked) = crate::ui_style::settings_segmented_control(
+                let value_dropdown_id = ui.make_persistent_id("typing_trainer_value_dropdown");
+                let (_, picked_value) = crate::ui_style::modern_dropdown_select_sized(
                     ui,
-                    "typing_trainer_value",
+                    value_dropdown_id,
                     &value_labels,
                     selected_value,
-                    value_size,
-                ) {
+                    value_size.x,
+                    value_size.y,
+                    metrics.value(12.5),
+                );
+                if let Some(picked) = picked_value {
                     match self.typing_trainer.mode {
                         TypingTrainerMode::Time => self
                             .typing_trainer
@@ -314,25 +277,14 @@ impl EntropyApp {
                             .set_word_count(TYPING_TRAINER_WORD_COUNTS[picked]),
                     }
                 }
-            },
-        );
 
-        ui.add_space(metrics.value(8.0));
-
-        let modifier_size = metrics.size(156.0, 32.0);
-        let modifier_gap = metrics.value(10.0);
-        let modifier_total_size = egui::vec2(modifier_size.x * 2.0 + modifier_gap, modifier_size.y);
-        let punctuation_label = crate::i18n::tr_catalog(lang, "typing_trainer.punctuation");
-        let numbers_label = crate::i18n::tr_catalog(lang, "typing_trainer.numbers");
-        ui.allocate_ui_with_layout(
-            modifier_total_size,
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
+                ui.add_space(gap);
+                let punctuation_label = crate::i18n::tr_catalog(lang, "typing_trainer.punctuation");
                 if crate::ui_style::modern_toggle_pill(
                     ui,
                     "@",
                     punctuation_label,
-                    modifier_size,
+                    punctuation_size,
                     self.typing_trainer.punctuation_enabled,
                 )
                 .clicked()
@@ -340,12 +292,13 @@ impl EntropyApp {
                     self.typing_trainer
                         .set_punctuation_enabled(!self.typing_trainer.punctuation_enabled);
                 }
-                ui.add_space(modifier_gap);
+                ui.add_space(gap);
+                let numbers_label = crate::i18n::tr_catalog(lang, "typing_trainer.numbers");
                 if crate::ui_style::modern_toggle_pill(
                     ui,
                     "#",
                     numbers_label,
-                    modifier_size,
+                    numbers_size,
                     self.typing_trainer.numbers_enabled,
                 )
                 .clicked()
