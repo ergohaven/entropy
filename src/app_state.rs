@@ -76,6 +76,8 @@ pub(crate) struct AppSettings {
     pub(crate) text_expansion_rules: Vec<crate::text_expander::TextExpansionRule>,
     #[serde(default = "default_layout_sync_enabled")]
     pub(crate) layout_sync_enabled: bool,
+    #[serde(default)]
+    pub(crate) typing_trainer: TypingTrainerSettings,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -178,6 +180,7 @@ impl Default for AppSettings {
             text_expander_rule_files: Vec::new(),
             text_expansion_rules: Vec::new(),
             layout_sync_enabled: default_layout_sync_enabled(),
+            typing_trainer: TypingTrainerSettings::default(),
         }
     }
 }
@@ -1419,10 +1422,72 @@ pub(crate) const TYPING_TRAINER_WORD_COUNTS: [usize; 4] = [10, 25, 50, 100];
 const TYPING_TRAINER_DEFAULT_TEXT_WORDS: usize = 72;
 pub(crate) use super::typing_trainer_words::{TypingTrainerLanguage, TYPING_TRAINER_LANGUAGES};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum TypingTrainerMode {
     Time,
     Words,
+}
+
+impl Default for TypingTrainerMode {
+    fn default() -> Self {
+        Self::Time
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct TypingTrainerSettings {
+    #[serde(default)]
+    pub(crate) language: TypingTrainerLanguage,
+    #[serde(default)]
+    pub(crate) mode: TypingTrainerMode,
+    #[serde(default)]
+    pub(crate) punctuation_enabled: bool,
+    #[serde(default)]
+    pub(crate) numbers_enabled: bool,
+    #[serde(default = "default_typing_trainer_duration_secs")]
+    pub(crate) duration_secs: u32,
+    #[serde(default = "default_typing_trainer_word_count")]
+    pub(crate) word_count: usize,
+}
+
+impl Default for TypingTrainerSettings {
+    fn default() -> Self {
+        Self {
+            language: TypingTrainerLanguage::English,
+            mode: TypingTrainerMode::Time,
+            punctuation_enabled: false,
+            numbers_enabled: false,
+            duration_secs: default_typing_trainer_duration_secs(),
+            word_count: default_typing_trainer_word_count(),
+        }
+    }
+}
+
+impl TypingTrainerSettings {
+    pub(crate) fn normalized(self) -> Self {
+        Self {
+            duration_secs: if TYPING_TRAINER_DURATIONS.contains(&self.duration_secs) {
+                self.duration_secs
+            } else {
+                default_typing_trainer_duration_secs()
+            },
+            word_count: if TYPING_TRAINER_WORD_COUNTS.contains(&self.word_count) {
+                self.word_count
+            } else {
+                default_typing_trainer_word_count()
+            },
+            ..self
+        }
+    }
+}
+
+pub(crate) fn default_typing_trainer_duration_secs() -> u32 {
+    30
+}
+
+pub(crate) fn default_typing_trainer_word_count() -> usize {
+    25
 }
 
 #[derive(Clone)]
@@ -1441,6 +1506,7 @@ pub(crate) struct TypingTrainerState {
     pub(crate) completed_correct_chars: usize,
     pub(crate) completed_errors: usize,
     pub(crate) completed_typed_chars: usize,
+    pub(crate) run_seed: usize,
     pub(crate) text_seed: usize,
     pub(crate) ui_hidden: bool,
 }
@@ -1456,32 +1522,77 @@ pub(crate) struct TypingTrainerStats {
 
 impl Default for TypingTrainerState {
     fn default() -> Self {
+        Self::from_settings(TypingTrainerSettings::default())
+    }
+}
+
+impl TypingTrainerState {
+    pub(crate) fn from_settings(settings: TypingTrainerSettings) -> Self {
+        let settings = settings.normalized();
         let text_seed = 0;
+        let target_text = match settings.mode {
+            TypingTrainerMode::Time => typing_trainer_text_for_language(
+                text_seed,
+                settings.language,
+                settings.punctuation_enabled,
+                settings.numbers_enabled,
+            ),
+            TypingTrainerMode::Words => typing_trainer_text_for_word_count(
+                text_seed,
+                settings.word_count,
+                settings.language,
+                settings.punctuation_enabled,
+                settings.numbers_enabled,
+            ),
+        };
         Self {
-            target_text: typing_trainer_text(text_seed),
+            target_text,
             typed_chars: Vec::new(),
-            language: TypingTrainerLanguage::English,
-            mode: TypingTrainerMode::Time,
-            punctuation_enabled: false,
-            numbers_enabled: false,
-            duration_secs: 30,
-            word_count: 25,
+            language: settings.language,
+            mode: settings.mode,
+            punctuation_enabled: settings.punctuation_enabled,
+            numbers_enabled: settings.numbers_enabled,
+            duration_secs: settings.duration_secs,
+            word_count: settings.word_count,
             started_at: None,
             paused_at: None,
             finished_at: None,
             completed_correct_chars: 0,
             completed_errors: 0,
             completed_typed_chars: 0,
+            run_seed: text_seed,
             text_seed,
             ui_hidden: false,
         }
     }
-}
 
-impl TypingTrainerState {
+    pub(crate) fn settings(&self) -> TypingTrainerSettings {
+        TypingTrainerSettings {
+            language: self.language,
+            mode: self.mode,
+            punctuation_enabled: self.punctuation_enabled,
+            numbers_enabled: self.numbers_enabled,
+            duration_secs: self.duration_secs,
+            word_count: self.word_count,
+        }
+    }
+
     pub(crate) fn reset(&mut self) {
-        self.text_seed = self.text_seed.wrapping_add(17);
+        self.start_run(self.text_seed.wrapping_add(17));
+    }
+
+    fn start_run(&mut self, text_seed: usize) {
+        self.run_seed = text_seed;
+        self.text_seed = text_seed;
         self.target_text = self.new_target_text();
+        self.clear_progress();
+    }
+
+    pub(crate) fn retry(&mut self) {
+        self.start_run(self.run_seed);
+    }
+
+    fn clear_progress(&mut self) {
         self.typed_chars.clear();
         self.started_at = None;
         self.paused_at = None;
@@ -1521,13 +1632,18 @@ impl TypingTrainerState {
     }
 
     pub(crate) fn set_duration(&mut self, duration_secs: u32) {
-        self.duration_secs = duration_secs;
-        self.reset();
+        if self.duration_secs != duration_secs {
+            self.duration_secs = duration_secs;
+            self.reset();
+        }
     }
 
     pub(crate) fn set_word_count(&mut self, word_count: usize) {
-        self.word_count = word_count.max(1);
-        self.reset();
+        let word_count = word_count.max(1);
+        if self.word_count != word_count {
+            self.word_count = word_count;
+            self.reset();
+        }
     }
 
     pub(crate) fn is_finished(&self) -> bool {
@@ -1693,10 +1809,6 @@ impl TypingTrainerState {
         self.target_text = self.new_target_text();
         self.typed_chars.clear();
     }
-}
-
-pub(crate) fn typing_trainer_text(seed: usize) -> String {
-    typing_trainer_text_for_language(seed, TypingTrainerLanguage::English, false, false)
 }
 
 fn typing_trainer_text_for_language(
@@ -1875,6 +1987,73 @@ mod typing_trainer_tests {
         assert_eq!(state.mode, TypingTrainerMode::Time);
         assert_eq!(state.word_count, 25);
         assert!(!state.ui_hidden);
+    }
+
+    #[test]
+    fn typing_trainer_from_settings_uses_persisted_choices() {
+        let state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            language: TypingTrainerLanguage::Russian,
+            mode: TypingTrainerMode::Words,
+            punctuation_enabled: true,
+            numbers_enabled: true,
+            duration_secs: 60,
+            word_count: 50,
+        });
+
+        assert_eq!(state.language, TypingTrainerLanguage::Russian);
+        assert_eq!(state.mode, TypingTrainerMode::Words);
+        assert!(state.punctuation_enabled);
+        assert!(state.numbers_enabled);
+        assert_eq!(state.duration_secs, 60);
+        assert_eq!(state.word_count, 50);
+        assert_eq!(state.target_text.split_whitespace().count(), 50);
+    }
+
+    #[test]
+    fn typing_trainer_retry_keeps_same_text_and_clears_progress() {
+        let mut state = TypingTrainerState::default();
+        let text = state.target_text.clone();
+        let start = std::time::Instant::now();
+        state.type_char('a', start);
+        state.finish(start + std::time::Duration::from_secs(5));
+
+        state.retry();
+
+        assert_eq!(state.target_text, text);
+        assert!(state.typed_chars.is_empty());
+        assert!(state.started_at.is_none());
+        assert!(state.finished_at.is_none());
+    }
+
+    #[test]
+    fn typing_trainer_retry_rewinds_time_mode_sequence() {
+        let mut state = TypingTrainerState::default();
+        let first_text = state.target_text.clone();
+        let now = std::time::Instant::now();
+
+        for ch in first_text.chars() {
+            state.type_char(ch, now);
+        }
+        assert_ne!(state.target_text, first_text);
+
+        state.finish(now + std::time::Duration::from_secs(10));
+        state.retry();
+
+        assert_eq!(state.target_text, first_text);
+        assert!(state.typed_chars.is_empty());
+    }
+
+    #[test]
+    fn typing_trainer_finished_stats_are_stable() {
+        let mut state = TypingTrainerState::default();
+        let start = std::time::Instant::now();
+        state.type_char('a', start);
+        state.finish(start + std::time::Duration::from_secs(10));
+
+        let finished_stats = state.stats_at(start + std::time::Duration::from_secs(10));
+        let later_stats = state.stats_at(start + std::time::Duration::from_secs(60));
+
+        assert_eq!(later_stats, finished_stats);
     }
 
     #[test]

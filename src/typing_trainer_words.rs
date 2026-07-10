@@ -1,4 +1,5 @@
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum TypingTrainerLanguage {
     English,
     Russian,
@@ -15,6 +16,12 @@ impl TypingTrainerLanguage {
             Self::English => "en",
             Self::Russian => "ru",
         }
+    }
+}
+
+impl Default for TypingTrainerLanguage {
+    fn default() -> Self {
+        Self::English
     }
 }
 

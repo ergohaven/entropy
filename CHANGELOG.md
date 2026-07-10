@@ -28,6 +28,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 
 ### Fixes
 
+- Added Typing Trainer result actions for retrying the same text or moving to the next text, and persisted trainer controls
 - Changed Typing Trainer mode and length controls to dropdowns and kept all trainer controls on one row
 - Added Typing Trainer punctuation and numbers toggles, with generated punctuation marks and numeric tokens
 - Added English and Russian language packs to Typing Trainer with Unicode input support

@@ -303,6 +303,7 @@ pub(super) fn load_app_settings() -> AppSettings {
     if !has_layout_image_export {
         settings.layout_image_export.key_legend_layout = settings.key_legend_layout;
     }
+    settings.typing_trainer = settings.typing_trainer.normalized();
 
     settings
 }

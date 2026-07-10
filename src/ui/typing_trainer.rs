@@ -88,7 +88,7 @@ impl EntropyApp {
                 );
                 self.draw_typing_trainer_text(ui, metrics, lang, now, dark);
                 ui.add_space(metrics.value(10.0));
-                self.draw_typing_trainer_restart(ui, metrics, lang, chrome_opacity);
+                self.draw_typing_trainer_actions(ui, metrics, lang, chrome_opacity);
             });
         });
 
@@ -213,6 +213,7 @@ impl EntropyApp {
                 + numbers_size.x,
             mode_size.y,
         );
+        let mut settings_changed = false;
 
         ui.allocate_ui_with_layout(
             total_size,
@@ -232,6 +233,7 @@ impl EntropyApp {
                 if let Some(picked) = picked_language {
                     self.typing_trainer
                         .set_language(TYPING_TRAINER_LANGUAGES[picked]);
+                    settings_changed = true;
                 }
 
                 ui.add_space(gap);
@@ -253,6 +255,7 @@ impl EntropyApp {
                         TypingTrainerMode::Words
                     };
                     self.typing_trainer.set_mode(mode);
+                    settings_changed = true;
                 }
 
                 ui.add_space(gap);
@@ -276,6 +279,7 @@ impl EntropyApp {
                             .typing_trainer
                             .set_word_count(TYPING_TRAINER_WORD_COUNTS[picked]),
                     }
+                    settings_changed = true;
                 }
 
                 ui.add_space(gap);
@@ -291,6 +295,7 @@ impl EntropyApp {
                 {
                     self.typing_trainer
                         .set_punctuation_enabled(!self.typing_trainer.punctuation_enabled);
+                    settings_changed = true;
                 }
                 ui.add_space(gap);
                 let numbers_label = crate::i18n::tr_catalog(lang, "typing_trainer.numbers");
@@ -305,9 +310,13 @@ impl EntropyApp {
                 {
                     self.typing_trainer
                         .set_numbers_enabled(!self.typing_trainer.numbers_enabled);
+                    settings_changed = true;
                 }
             },
         );
+        if settings_changed {
+            self.save_typing_trainer_settings();
+        }
     }
 
     fn reserve_typing_trainer_stats_slot(
@@ -570,27 +579,56 @@ impl EntropyApp {
         }
     }
 
-    fn draw_typing_trainer_restart(
+    fn draw_typing_trainer_actions(
         &mut self,
         ui: &mut egui::Ui,
         metrics: crate::ui_style::ResponsiveMetrics,
         lang: crate::i18n::Language,
         chrome_opacity: f32,
     ) {
-        let size = metrics.size(120.0, 32.0);
+        let button_size = metrics.size(104.0, 32.0);
+        let gap = metrics.value(10.0);
+        let finished = self.typing_trainer.is_finished();
+        let total_size = if finished {
+            egui::vec2(button_size.x * 2.0 + gap, button_size.y)
+        } else {
+            button_size
+        };
         ui.scope(|ui| {
             ui.set_opacity(chrome_opacity);
             if chrome_opacity <= 0.96 {
                 ui.disable();
             }
             ui.allocate_ui_with_layout(
-                size,
+                total_size,
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
-                    if crate::ui_style::modern_button(
+                    if finished {
+                        if crate::ui_style::modern_button(
+                            ui,
+                            crate::i18n::tr_catalog(lang, "typing_trainer.retry"),
+                            button_size,
+                            true,
+                        )
+                        .clicked()
+                        {
+                            self.typing_trainer.retry();
+                        }
+                        ui.add_space(gap);
+                        if crate::ui_style::modern_button(
+                            ui,
+                            crate::i18n::tr_catalog(lang, "typing_trainer.next"),
+                            button_size,
+                            true,
+                        )
+                        .clicked()
+                        {
+                            self.typing_trainer.reset();
+                        }
+                    } else if crate::ui_style::modern_button(
                         ui,
                         crate::i18n::tr_catalog(lang, "typing_trainer.restart"),
-                        size,
+                        button_size,
                         true,
                     )
                     .clicked()
@@ -600,6 +638,14 @@ impl EntropyApp {
                 },
             );
         });
+    }
+
+    fn save_typing_trainer_settings(&mut self) {
+        let settings = self.typing_trainer.settings();
+        if self.app_settings.typing_trainer != settings {
+            self.app_settings.typing_trainer = settings;
+            save_app_settings(&self.app_settings);
+        }
     }
 }
 
