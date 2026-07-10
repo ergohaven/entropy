@@ -792,11 +792,13 @@ impl EntropyApp {
         }
 
         let width = ui.available_width();
+        let scrollbar_gutter = metrics.value(16.0);
+        let table_width = (width - scrollbar_gutter).max(0.0);
         let header_height = metrics.value(24.0);
         let row_height = metrics.value(30.0);
         let scroll_height = (ui.available_height() - header_height - metrics.value(4.0)).max(0.0);
         let (header_rect, _) =
-            ui.allocate_exact_size(egui::vec2(width, header_height), Sense::hover());
+            ui.allocate_exact_size(egui::vec2(table_width, header_height), Sense::hover());
         Self::paint_typing_trainer_history_header(ui, header_rect, metrics, lang, dark);
         ui.add_space(metrics.value(4.0));
 
@@ -804,7 +806,7 @@ impl EntropyApp {
             .max_height(scroll_height)
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.set_width(width - metrics.value(16.0));
+                ui.set_width(table_width);
                 for (idx, entry) in entries.iter().enumerate() {
                     let (row_rect, _) = ui.allocate_exact_size(
                         egui::vec2(ui.available_width(), row_height),
