@@ -705,6 +705,8 @@ impl EntropyApp {
             });
 
         let entries = self.app_settings.typing_trainer_history.clone();
+        let summary =
+            typing_trainer_history_summary_for_settings(&entries, self.typing_trainer.settings());
         let mut open = self.typing_trainer_history_open;
         let mut clear_clicked = false;
         let mut close_clicked = false;
@@ -732,7 +734,9 @@ impl EntropyApp {
             );
 
             crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
-                Self::draw_typing_trainer_history_table(ui, metrics, lang, dark, &entries);
+                Self::draw_typing_trainer_history_content(
+                    ui, metrics, lang, dark, &entries, summary,
+                );
             });
 
             crate::ui_style::allocate_ui_at_rect(ui, button_rect, |ui| {
@@ -775,12 +779,13 @@ impl EntropyApp {
         }
     }
 
-    fn draw_typing_trainer_history_table(
+    fn draw_typing_trainer_history_content(
         ui: &mut egui::Ui,
         metrics: crate::ui_style::ResponsiveMetrics,
         lang: crate::i18n::Language,
         dark: bool,
         entries: &[TypingTrainerRunRecord],
+        summary: TypingTrainerHistorySummary,
     ) {
         if entries.is_empty() {
             crate::ui_style::modal_empty_state(
@@ -791,6 +796,98 @@ impl EntropyApp {
             return;
         }
 
+        Self::draw_typing_trainer_history_summary(ui, metrics, lang, dark, summary);
+        ui.add_space(metrics.value(10.0));
+        Self::draw_typing_trainer_history_table(ui, metrics, lang, dark, entries);
+    }
+
+    fn draw_typing_trainer_history_summary(
+        ui: &mut egui::Ui,
+        metrics: crate::ui_style::ResponsiveMetrics,
+        lang: crate::i18n::Language,
+        dark: bool,
+        summary: TypingTrainerHistorySummary,
+    ) {
+        let width = ui.available_width();
+        let height = metrics.value(50.0);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
+        let muted = app_muted_text(dark);
+        let text = if dark {
+            Color32::from_gray(228)
+        } else {
+            ui.visuals().text_color()
+        };
+        let separator = muted.gamma_multiply(if dark { 0.34 } else { 0.24 });
+        let label_font = FontId::proportional(metrics.value(11.0));
+        let value_font = FontId::proportional(metrics.value(16.0));
+        let title_x = rect.left() + metrics.value(8.0);
+        let title_y = rect.center().y;
+        let columns_left = rect.left() + metrics.value(132.0);
+        let column_width = ((rect.right() - columns_left).max(0.0)) / 4.0;
+        let label_y = rect.top() + metrics.value(15.0);
+        let value_y = rect.top() + metrics.value(34.0);
+        let items = [
+            (
+                crate::i18n::tr_catalog(lang, "typing_trainer.runs"),
+                summary.run_count.to_string(),
+            ),
+            (
+                crate::i18n::tr_catalog(lang, "typing_trainer.best_wpm"),
+                typing_trainer_optional_summary_value(summary.best_wpm, ""),
+            ),
+            (
+                crate::i18n::tr_catalog(lang, "typing_trainer.avg_wpm"),
+                typing_trainer_optional_summary_value(summary.average_wpm, ""),
+            ),
+            (
+                crate::i18n::tr_catalog(lang, "typing_trainer.avg_accuracy"),
+                typing_trainer_optional_summary_value(summary.average_accuracy_percent, "%"),
+            ),
+        ];
+        let painter = ui.painter();
+
+        painter.text(
+            egui::pos2(title_x, title_y),
+            egui::Align2::LEFT_CENTER,
+            crate::i18n::tr_catalog(lang, "typing_trainer.current_set"),
+            FontId::proportional(metrics.value(12.0)),
+            muted,
+        );
+
+        for (idx, (label, value)) in items.into_iter().enumerate() {
+            let center_x = columns_left + column_width * (idx as f32 + 0.5);
+            painter.text(
+                egui::pos2(center_x, label_y),
+                egui::Align2::CENTER_CENTER,
+                label,
+                label_font.clone(),
+                muted,
+            );
+            painter.text(
+                egui::pos2(center_x, value_y),
+                egui::Align2::CENTER_CENTER,
+                value,
+                value_font.clone(),
+                text,
+            );
+        }
+
+        painter.line_segment(
+            [
+                egui::pos2(rect.left(), rect.bottom()),
+                egui::pos2(rect.right(), rect.bottom()),
+            ],
+            Stroke::new(metrics.value(1.0), separator),
+        );
+    }
+
+    fn draw_typing_trainer_history_table(
+        ui: &mut egui::Ui,
+        metrics: crate::ui_style::ResponsiveMetrics,
+        lang: crate::i18n::Language,
+        dark: bool,
+        entries: &[TypingTrainerRunRecord],
+    ) {
         let width = ui.available_width();
         let scrollbar_gutter = metrics.value(16.0);
         let table_width = (width - scrollbar_gutter).max(0.0);
@@ -981,6 +1078,12 @@ fn typing_trainer_history_date_label(finished_at_unix_secs: i64) -> String {
         return "--".to_owned();
     };
     finished_at.format("%m-%d %H:%M").to_string()
+}
+
+fn typing_trainer_optional_summary_value(value: Option<u32>, suffix: &str) -> String {
+    value
+        .map(|value| format!("{value}{suffix}"))
+        .unwrap_or_else(|| "--".to_owned())
 }
 
 fn typing_trainer_history_run_label(

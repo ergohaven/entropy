@@ -1540,6 +1540,58 @@ impl TypingTrainerRunRecord {
             elapsed_secs: state.elapsed_secs_at(now).ceil().max(0.0) as u32,
         })
     }
+
+    fn matches_settings(&self, settings: TypingTrainerSettings) -> bool {
+        self.language == settings.language
+            && self.mode == settings.mode
+            && self.punctuation_enabled == settings.punctuation_enabled
+            && self.numbers_enabled == settings.numbers_enabled
+            && match self.mode {
+                TypingTrainerMode::Time => self.duration_secs == settings.duration_secs,
+                TypingTrainerMode::Words => self.word_count == settings.word_count,
+            }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TypingTrainerHistorySummary {
+    pub(crate) run_count: usize,
+    pub(crate) best_wpm: Option<u32>,
+    pub(crate) average_wpm: Option<u32>,
+    pub(crate) average_accuracy_percent: Option<u32>,
+}
+
+pub(crate) fn typing_trainer_history_summary_for_settings(
+    history: &[TypingTrainerRunRecord],
+    settings: TypingTrainerSettings,
+) -> TypingTrainerHistorySummary {
+    let settings = settings.normalized();
+    let mut run_count = 0usize;
+    let mut best_wpm = 0u32;
+    let mut wpm_sum = 0u64;
+    let mut accuracy_sum = 0u64;
+
+    for record in history
+        .iter()
+        .filter(|record| record.matches_settings(settings))
+    {
+        run_count += 1;
+        best_wpm = best_wpm.max(record.wpm);
+        wpm_sum += u64::from(record.wpm);
+        accuracy_sum += u64::from(record.accuracy_percent);
+    }
+
+    if run_count == 0 {
+        return TypingTrainerHistorySummary::default();
+    }
+
+    let run_count_u64 = run_count as u64;
+    TypingTrainerHistorySummary {
+        run_count,
+        best_wpm: Some(best_wpm),
+        average_wpm: Some(((wpm_sum + run_count_u64 / 2) / run_count_u64) as u32),
+        average_accuracy_percent: Some(((accuracy_sum + run_count_u64 / 2) / run_count_u64) as u32),
+    }
 }
 
 pub(crate) fn push_typing_trainer_history(
@@ -2197,6 +2249,74 @@ mod typing_trainer_tests {
         assert_eq!(
             history.last().map(|record| record.finished_at_unix_secs),
             Some(3)
+        );
+    }
+
+    #[test]
+    fn typing_trainer_history_summary_filters_current_settings() {
+        let settings = TypingTrainerSettings {
+            language: TypingTrainerLanguage::English,
+            mode: TypingTrainerMode::Time,
+            punctuation_enabled: true,
+            numbers_enabled: false,
+            duration_secs: 30,
+            word_count: 25,
+        };
+        let history = vec![
+            TypingTrainerRunRecord {
+                finished_at_unix_secs: 1,
+                language: TypingTrainerLanguage::English,
+                mode: TypingTrainerMode::Time,
+                duration_secs: 30,
+                word_count: 25,
+                punctuation_enabled: true,
+                numbers_enabled: false,
+                wpm: 42,
+                accuracy_percent: 96,
+                errors: 2,
+                typed_chars: 100,
+                elapsed_secs: 30,
+            },
+            TypingTrainerRunRecord {
+                finished_at_unix_secs: 2,
+                language: TypingTrainerLanguage::English,
+                mode: TypingTrainerMode::Time,
+                duration_secs: 30,
+                word_count: 25,
+                punctuation_enabled: true,
+                numbers_enabled: false,
+                wpm: 50,
+                accuracy_percent: 98,
+                errors: 1,
+                typed_chars: 120,
+                elapsed_secs: 30,
+            },
+            TypingTrainerRunRecord {
+                finished_at_unix_secs: 3,
+                language: TypingTrainerLanguage::English,
+                mode: TypingTrainerMode::Time,
+                duration_secs: 60,
+                word_count: 25,
+                punctuation_enabled: true,
+                numbers_enabled: false,
+                wpm: 80,
+                accuracy_percent: 100,
+                errors: 0,
+                typed_chars: 250,
+                elapsed_secs: 60,
+            },
+        ];
+
+        let summary = typing_trainer_history_summary_for_settings(&history, settings);
+
+        assert_eq!(
+            summary,
+            TypingTrainerHistorySummary {
+                run_count: 2,
+                best_wpm: Some(50),
+                average_wpm: Some(46),
+                average_accuracy_percent: Some(97),
+            }
         );
     }
 
