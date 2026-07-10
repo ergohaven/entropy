@@ -304,6 +304,7 @@ pub(super) fn load_app_settings() -> AppSettings {
         settings.layout_image_export.key_legend_layout = settings.key_legend_layout;
     }
     settings.typing_trainer = settings.typing_trainer.normalized();
+    normalize_typing_trainer_history(&mut settings.typing_trainer_history);
 
     settings
 }

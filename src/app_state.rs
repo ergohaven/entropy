@@ -78,6 +78,8 @@ pub(crate) struct AppSettings {
     pub(crate) layout_sync_enabled: bool,
     #[serde(default)]
     pub(crate) typing_trainer: TypingTrainerSettings,
+    #[serde(default)]
+    pub(crate) typing_trainer_history: Vec<TypingTrainerRunRecord>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -181,6 +183,7 @@ impl Default for AppSettings {
             text_expansion_rules: Vec::new(),
             layout_sync_enabled: default_layout_sync_enabled(),
             typing_trainer: TypingTrainerSettings::default(),
+            typing_trainer_history: Vec::new(),
         }
     }
 }
@@ -1419,6 +1422,7 @@ pub(crate) enum SettingsTab {
 
 pub(crate) const TYPING_TRAINER_DURATIONS: [u32; 4] = [15, 30, 60, 120];
 pub(crate) const TYPING_TRAINER_WORD_COUNTS: [usize; 4] = [10, 25, 50, 100];
+pub(crate) const TYPING_TRAINER_HISTORY_LIMIT: usize = 20;
 const TYPING_TRAINER_DEFAULT_TEXT_WORDS: usize = 72;
 pub(crate) use super::typing_trainer_words::{TypingTrainerLanguage, TYPING_TRAINER_LANGUAGES};
 
@@ -1490,6 +1494,66 @@ pub(crate) fn default_typing_trainer_word_count() -> usize {
     25
 }
 
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct TypingTrainerRunRecord {
+    pub(crate) finished_at_unix_secs: i64,
+    pub(crate) language: TypingTrainerLanguage,
+    pub(crate) mode: TypingTrainerMode,
+    pub(crate) duration_secs: u32,
+    pub(crate) word_count: usize,
+    pub(crate) punctuation_enabled: bool,
+    pub(crate) numbers_enabled: bool,
+    pub(crate) wpm: u32,
+    pub(crate) accuracy_percent: u32,
+    pub(crate) errors: usize,
+    pub(crate) typed_chars: usize,
+    pub(crate) elapsed_secs: u32,
+}
+
+impl TypingTrainerRunRecord {
+    pub(crate) fn from_state(
+        state: &TypingTrainerState,
+        now: std::time::Instant,
+        finished_at_unix_secs: i64,
+    ) -> Option<Self> {
+        if !state.is_finished() {
+            return None;
+        }
+
+        let stats = state.stats_at(now);
+        if stats.typed_chars == 0 {
+            return None;
+        }
+
+        Some(Self {
+            finished_at_unix_secs,
+            language: state.language,
+            mode: state.mode,
+            duration_secs: state.duration_secs,
+            word_count: state.word_count,
+            punctuation_enabled: state.punctuation_enabled,
+            numbers_enabled: state.numbers_enabled,
+            wpm: stats.wpm,
+            accuracy_percent: stats.accuracy.round().clamp(0.0, 100.0) as u32,
+            errors: stats.errors,
+            typed_chars: stats.typed_chars,
+            elapsed_secs: state.elapsed_secs_at(now).ceil().max(0.0) as u32,
+        })
+    }
+}
+
+pub(crate) fn push_typing_trainer_history(
+    history: &mut Vec<TypingTrainerRunRecord>,
+    record: TypingTrainerRunRecord,
+) {
+    history.insert(0, record);
+    normalize_typing_trainer_history(history);
+}
+
+pub(crate) fn normalize_typing_trainer_history(history: &mut Vec<TypingTrainerRunRecord>) {
+    history.truncate(TYPING_TRAINER_HISTORY_LIMIT);
+}
+
 #[derive(Clone)]
 pub(crate) struct TypingTrainerState {
     pub(crate) target_text: String,
@@ -1508,6 +1572,7 @@ pub(crate) struct TypingTrainerState {
     pub(crate) completed_typed_chars: usize,
     pub(crate) run_seed: usize,
     pub(crate) text_seed: usize,
+    pub(crate) history_recorded: bool,
     pub(crate) ui_hidden: bool,
 }
 
@@ -1562,6 +1627,7 @@ impl TypingTrainerState {
             completed_typed_chars: 0,
             run_seed: text_seed,
             text_seed,
+            history_recorded: false,
             ui_hidden: false,
         }
     }
@@ -1600,6 +1666,7 @@ impl TypingTrainerState {
         self.completed_correct_chars = 0;
         self.completed_errors = 0;
         self.completed_typed_chars = 0;
+        self.history_recorded = false;
         self.ui_hidden = false;
     }
 
@@ -1703,6 +1770,14 @@ impl TypingTrainerState {
         self.started_at.get_or_insert(now);
         self.finished_at = Some(now);
         self.ui_hidden = false;
+    }
+
+    pub(crate) fn history_record_pending(&self) -> bool {
+        self.finished_at.is_some() && !self.history_recorded
+    }
+
+    pub(crate) fn mark_history_recorded(&mut self) {
+        self.history_recorded = true;
     }
 
     pub(crate) fn extend_target_text(&mut self) {
@@ -1969,6 +2044,7 @@ mod typing_trainer_tests {
         state.completed_correct_chars = 20;
         state.completed_errors = 1;
         state.completed_typed_chars = 21;
+        state.history_recorded = true;
         state.ui_hidden = true;
 
         state.reset();
@@ -1981,6 +2057,7 @@ mod typing_trainer_tests {
         assert_eq!(state.completed_correct_chars, 0);
         assert_eq!(state.completed_errors, 0);
         assert_eq!(state.completed_typed_chars, 0);
+        assert!(!state.history_recorded);
         assert!(!state.punctuation_enabled);
         assert!(!state.numbers_enabled);
         assert_eq!(state.language, TypingTrainerLanguage::English);
@@ -2054,6 +2131,73 @@ mod typing_trainer_tests {
         let later_stats = state.stats_at(start + std::time::Duration::from_secs(60));
 
         assert_eq!(later_stats, finished_stats);
+    }
+
+    #[test]
+    fn typing_trainer_finished_record_contains_run_result() {
+        let mut state = TypingTrainerState::default();
+        let start = std::time::Instant::now();
+        state.type_char('a', start);
+        state.finish(start + std::time::Duration::from_secs(10));
+
+        let record = TypingTrainerRunRecord::from_state(
+            &state,
+            start + std::time::Duration::from_secs(20),
+            1_700_000_000,
+        )
+        .expect("finished run should produce a history record");
+
+        assert_eq!(record.finished_at_unix_secs, 1_700_000_000);
+        assert_eq!(record.language, TypingTrainerLanguage::English);
+        assert_eq!(record.mode, TypingTrainerMode::Time);
+        assert_eq!(record.wpm, state.stats_at(start).wpm);
+        assert_eq!(record.errors, state.stats_at(start).errors);
+        assert_eq!(record.typed_chars, 1);
+        assert_eq!(record.elapsed_secs, 10);
+    }
+
+    #[test]
+    fn typing_trainer_empty_finished_run_has_no_history_record() {
+        let mut state = TypingTrainerState::default();
+        let now = std::time::Instant::now();
+
+        state.finish(now);
+
+        assert!(TypingTrainerRunRecord::from_state(&state, now, 1_700_000_000).is_none());
+    }
+
+    #[test]
+    fn typing_trainer_history_keeps_newest_runs_under_limit() {
+        let mut history = Vec::new();
+        for idx in 0..(TYPING_TRAINER_HISTORY_LIMIT + 3) {
+            push_typing_trainer_history(
+                &mut history,
+                TypingTrainerRunRecord {
+                    finished_at_unix_secs: idx as i64,
+                    language: TypingTrainerLanguage::English,
+                    mode: TypingTrainerMode::Time,
+                    duration_secs: 30,
+                    word_count: 25,
+                    punctuation_enabled: false,
+                    numbers_enabled: false,
+                    wpm: idx as u32,
+                    accuracy_percent: 100,
+                    errors: 0,
+                    typed_chars: 10,
+                    elapsed_secs: 30,
+                },
+            );
+        }
+
+        assert_eq!(history.len(), TYPING_TRAINER_HISTORY_LIMIT);
+        assert_eq!(
+            history.first().map(|record| record.finished_at_unix_secs),
+            Some((TYPING_TRAINER_HISTORY_LIMIT + 2) as i64)
+        );
+        assert_eq!(
+            history.last().map(|record| record.finished_at_unix_secs),
+            Some(3)
+        );
     }
 
     #[test]

@@ -39,6 +39,7 @@ impl EntropyApp {
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
         let now = std::time::Instant::now();
         let remaining_secs = self.typing_trainer.remaining_secs_at(now);
+        self.record_finished_typing_trainer_run(now);
         if self.typing_trainer.is_finished() {
             self.typing_trainer.ui_hidden = false;
         }
@@ -89,6 +90,8 @@ impl EntropyApp {
                 self.draw_typing_trainer_text(ui, metrics, lang, now, dark);
                 ui.add_space(metrics.value(10.0));
                 self.draw_typing_trainer_actions(ui, metrics, lang, chrome_opacity);
+                ui.add_space(metrics.value(14.0));
+                self.draw_typing_trainer_history(ui, metrics, lang, dark, chrome_opacity);
             });
         });
 
@@ -640,6 +643,164 @@ impl EntropyApp {
         });
     }
 
+    fn draw_typing_trainer_history(
+        &self,
+        ui: &mut egui::Ui,
+        metrics: crate::ui_style::ResponsiveMetrics,
+        lang: crate::i18n::Language,
+        dark: bool,
+        chrome_opacity: f32,
+    ) {
+        let entries = &self.app_settings.typing_trainer_history;
+        if entries.is_empty() {
+            return;
+        }
+
+        let visible_rows = entries.len().min(5);
+        let width = ui.available_width().min(metrics.value(680.0));
+        let title_height = metrics.value(24.0);
+        let header_height = metrics.value(22.0);
+        let row_height = metrics.value(26.0);
+        let total_height = title_height + header_height + row_height * visible_rows as f32;
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, total_height), Sense::hover());
+
+        ui.scope(|ui| {
+            ui.set_opacity(chrome_opacity);
+            if chrome_opacity <= 0.96 {
+                ui.disable();
+            }
+            let painter = ui.painter();
+            let muted = app_muted_text(dark);
+            let separator = muted.gamma_multiply(if dark { 0.34 } else { 0.24 });
+            let text = if dark {
+                Color32::from_gray(228)
+            } else {
+                ui.visuals().text_color()
+            };
+            let left = rect.left();
+            let right = rect.right();
+            let date_x = left + metrics.value(8.0);
+            let run_x = left + metrics.value(128.0);
+            let wpm_x = right - metrics.value(176.0);
+            let accuracy_x = right - metrics.value(104.0);
+            let errors_x = right - metrics.value(34.0);
+            let title_y = rect.top() + title_height * 0.5;
+            let header_y = rect.top() + title_height + header_height * 0.5;
+
+            painter.text(
+                egui::pos2(rect.center().x, title_y),
+                egui::Align2::CENTER_CENTER,
+                crate::i18n::tr_catalog(lang, "typing_trainer.history"),
+                FontId::proportional(metrics.value(13.0)),
+                muted,
+            );
+
+            painter.text(
+                egui::pos2(date_x, header_y),
+                egui::Align2::LEFT_CENTER,
+                crate::i18n::tr_catalog(lang, "typing_trainer.date"),
+                FontId::proportional(metrics.value(11.0)),
+                muted,
+            );
+            painter.text(
+                egui::pos2(run_x, header_y),
+                egui::Align2::LEFT_CENTER,
+                crate::i18n::tr_catalog(lang, "typing_trainer.run"),
+                FontId::proportional(metrics.value(11.0)),
+                muted,
+            );
+            painter.text(
+                egui::pos2(wpm_x, header_y),
+                egui::Align2::CENTER_CENTER,
+                crate::i18n::tr_catalog(lang, "typing_trainer.wpm"),
+                FontId::proportional(metrics.value(11.0)),
+                muted,
+            );
+            painter.text(
+                egui::pos2(accuracy_x, header_y),
+                egui::Align2::CENTER_CENTER,
+                crate::i18n::tr_catalog(lang, "typing_trainer.accuracy"),
+                FontId::proportional(metrics.value(11.0)),
+                muted,
+            );
+            painter.text(
+                egui::pos2(errors_x, header_y),
+                egui::Align2::CENTER_CENTER,
+                crate::i18n::tr_catalog(lang, "typing_trainer.errors"),
+                FontId::proportional(metrics.value(11.0)),
+                muted,
+            );
+
+            let table_top = rect.top() + title_height + header_height;
+            painter.line_segment(
+                [egui::pos2(left, table_top), egui::pos2(right, table_top)],
+                Stroke::new(metrics.value(1.0), separator),
+            );
+
+            for (idx, entry) in entries.iter().take(visible_rows).enumerate() {
+                let row_top = table_top + row_height * idx as f32;
+                let row_center_y = row_top + row_height * 0.5;
+                let row_bottom = row_top + row_height;
+                painter.text(
+                    egui::pos2(date_x, row_center_y),
+                    egui::Align2::LEFT_CENTER,
+                    typing_trainer_history_date_label(entry.finished_at_unix_secs),
+                    FontId::proportional(metrics.value(12.0)),
+                    muted,
+                );
+                painter.text(
+                    egui::pos2(run_x, row_center_y),
+                    egui::Align2::LEFT_CENTER,
+                    typing_trainer_history_run_label(entry, lang),
+                    FontId::proportional(metrics.value(12.0)),
+                    text,
+                );
+                painter.text(
+                    egui::pos2(wpm_x, row_center_y),
+                    egui::Align2::CENTER_CENTER,
+                    entry.wpm.to_string(),
+                    FontId::proportional(metrics.value(12.0)),
+                    text,
+                );
+                painter.text(
+                    egui::pos2(accuracy_x, row_center_y),
+                    egui::Align2::CENTER_CENTER,
+                    format!("{}%", entry.accuracy_percent),
+                    FontId::proportional(metrics.value(12.0)),
+                    text,
+                );
+                painter.text(
+                    egui::pos2(errors_x, row_center_y),
+                    egui::Align2::CENTER_CENTER,
+                    entry.errors.to_string(),
+                    FontId::proportional(metrics.value(12.0)),
+                    text,
+                );
+                if idx + 1 < visible_rows {
+                    painter.line_segment(
+                        [egui::pos2(left, row_bottom), egui::pos2(right, row_bottom)],
+                        Stroke::new(metrics.value(1.0), separator),
+                    );
+                }
+            }
+        });
+    }
+
+    fn record_finished_typing_trainer_run(&mut self, now: std::time::Instant) {
+        if !self.typing_trainer.history_record_pending() {
+            return;
+        }
+
+        let finished_at_unix_secs = chrono::Local::now().timestamp();
+        if let Some(record) =
+            TypingTrainerRunRecord::from_state(&self.typing_trainer, now, finished_at_unix_secs)
+        {
+            push_typing_trainer_history(&mut self.app_settings.typing_trainer_history, record);
+            save_app_settings(&self.app_settings);
+        }
+        self.typing_trainer.mark_history_recorded();
+    }
+
     fn save_typing_trainer_settings(&mut self) {
         let settings = self.typing_trainer.settings();
         if self.app_settings.typing_trainer != settings {
@@ -647,6 +808,41 @@ impl EntropyApp {
             save_app_settings(&self.app_settings);
         }
     }
+}
+
+fn typing_trainer_history_date_label(finished_at_unix_secs: i64) -> String {
+    let Some(finished_at) =
+        chrono::TimeZone::timestamp_opt(&chrono::Local, finished_at_unix_secs, 0).single()
+    else {
+        return "--".to_owned();
+    };
+    finished_at.format("%m-%d %H:%M").to_string()
+}
+
+fn typing_trainer_history_run_label(
+    entry: &TypingTrainerRunRecord,
+    lang: crate::i18n::Language,
+) -> String {
+    let mode = match entry.mode {
+        TypingTrainerMode::Time => format!(
+            "{} {}",
+            crate::i18n::tr_catalog(lang, "typing_trainer.time"),
+            entry.duration_secs
+        ),
+        TypingTrainerMode::Words => format!(
+            "{} {}",
+            crate::i18n::tr_catalog(lang, "typing_trainer.words"),
+            entry.word_count
+        ),
+    };
+    let mut modifiers = String::new();
+    if entry.punctuation_enabled {
+        modifiers.push_str(" @");
+    }
+    if entry.numbers_enabled {
+        modifiers.push_str(" #");
+    }
+    format!("{} / {}{}", entry.language.label(), mode, modifiers)
 }
 
 fn typing_trainer_visible_start_index(
