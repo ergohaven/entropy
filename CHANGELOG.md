@@ -5,68 +5,62 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.2.0 - Public Beta
+
+### Main Features
+
+- Added the local Typing Trainer under Advanced with timed and word-count runs, focus mode, EN/RU language packs, punctuation/digits modifiers, result actions, and run history
+- Added Live Features layout sync for ru/en custom firmware keys, with an on/off switch
+- Added optional macro descriptions for picker tooltips and `.entlayout` export/import
+- Added an automatic About Entropy update indicator when a newer GitHub Release is available
+- Remapped Universal Symbols transport from F21-F24 to F13-F20 modifier banks for better cross-platform input compatibility (@IgorArkhipov, #51)
+- Added One-Shot Mod chord choices for Ctrl+Shift, Ctrl+Alt, Shift+Alt, and Shift+GUI in the keycode picker (@IgorArkhipov, #55)
+- Allowed custom keycodes in Tap Dance hold fields while keeping macros limited to tap-style fields (@IgorArkhipov, #52)
+
+### Fixes
+
+- Fixed the Linux udev autoconnect loop
+- Key picker now opens on the tab that matches the clicked key's current keycode
+- Saved combo entries correctly over Bluetooth (@IgorArkhipov, #33)
+- Detected Bluetooth HID transport on macOS (@IgorArkhipov, #24)
+- Retried macOS DMG creation when packaging hits transient detach timing (@IgorArkhipov, #57)
+- Throttled tray background updates to reduce idle CPU usage (@IgorArkhipov, #54)
+- Tried the macOS event tap even when the permission preflight is stale (@IgorArkhipov, #62)
+- Fixed rapid Windows Universal Symbols punctuation pairs (@IgorArkhipov, #53)
+- Verified keycode writebacks to catch silent device write failures (@IgorArkhipov, #61)
+- Verified module setting writebacks to catch silent device write failures (@IgorArkhipov, #56)
+- Guarded unsupported RMK macro layer actions (@IgorArkhipov, #60)
+- Hid unsupported Tap-Hold settings when firmware support is absent (@IgorArkhipov, #63)
+- Improved connect crash diagnostics for failure reports (@IgorArkhipov, #48)
+- Polished Typing Trainer history, focus mode, final stats, language controls, and punctuation/digits toggles
+
 ## v0.1.5 - Public Beta
 
 ### Main Features
 
-- Added Live Features layout sync for ru/en custom firmware keys, with an on/off switch
-- Added a local Typing Trainer under Advanced with timed runs, live WPM, accuracy, and errors
-- Added optional macro descriptions for picker tooltips and `.entlayout` export/import
 - Added About Entropy update checks through GitHub Releases for Linux, Windows, and macOS
 - Added platform-aware update asset selection for AppImage, Windows executable, and macOS DMG downloads
 - Added Changelog and Download actions to About Entropy after checking for updates
 - Added macro choices to Tap Dance assignment for `On tap` and `On double tap`
 - Tap Dance fields now show custom macro names when a macro keycode is assigned
 
-### IgorArkhipov Contributions
-
-- Added pressed-only Layout Indicator mode
-- Added Universal Symbols arrow key support, including Linux backend sync and EditPlus fallback handling
-- Exposed trackball module settings tabs
-- Added single-instance lock override and repeated-launch guard
-- Improved macOS packaging and CI with explicit release targets, package architecture validation, signed bundle metadata, Apple Silicon diagnostics, and arm64 PR coverage
+- Added pressed-only Layout Indicator mode (@IgorArkhipov, #34)
+- Added Universal Symbols arrow key support, including Linux backend sync and EditPlus fallback handling (@IgorArkhipov, #37, #44, #45)
+- Exposed trackball module settings tabs (@IgorArkhipov, #36)
+- Added single-instance lock override and repeated-launch guard (@IgorArkhipov, #26)
+- Improved macOS packaging and CI with explicit release targets, package architecture validation, signed bundle metadata, Apple Silicon diagnostics, and arm64 PR coverage (@IgorArkhipov, #18, #20, #21, #22, #23)
 
 ### Fixes
 
-- Moved Typing Trainer history into a scrollable modal opened from the trainer action row
-- Added a local Typing Trainer history list for recent runs with date, mode, language, WPM, accuracy, and errors
-- Added Typing Trainer result actions for retrying the same text or moving to the next text, and persisted trainer controls
-- Changed Typing Trainer mode and length controls to dropdowns and kept all trainer controls on one row
-- Added Typing Trainer punctuation and numbers toggles, with generated punctuation marks and numeric tokens
-- Added English and Russian language packs to Typing Trainer with Unicode input support
-- Changed the Typing Trainer language selector from a segmented control to a dropdown
-- Finished the Typing Trainer run on Escape and restored time as the last final stat
-- Added a Typing Trainer mode selector for timed runs or fixed word-count runs
-- Brightened correctly typed Typing Trainer text in dark theme for stronger contrast against untyped text
-- Hid the mouse cursor while Typing Trainer focus mode hides the UI during typing
-- Moved Typing Trainer final character count before errors in the result stats
-- Raised the Typing Trainer final stats and added a typed character count
-- Centered the Typing Trainer final stats with the duration selector and Restart button, without showing time
-- Moved Typing Trainer stats into the final result view so they replace the text only after the run ends
-- Moved the Typing Trainer restart button from the top controls into the former finished status position
-- Raised the Typing Trainer focus-mode timer to the same height as the normal time stat
-- Showed the Typing Trainer remaining time centered above the text while focus mode hides the chrome
-- Anchored Typing Trainer focus-mode chrome to the original layout viewport so top navigation does not drift
-- Kept Typing Trainer chrome and page geometry anchored during focus-mode fade transitions
-- Smoothed Typing Trainer focus-mode fade-out and hid the bottom footer controls without moving the text
-- Hid the full Entropy chrome while Typing Trainer focus mode is active, keeping the text block in a stable position
-- Hid the Typing Trainer controls and stats while typing, restoring them on mouse movement or run finish
-- Limited the Typing Trainer text window to four visible typing lines
-- Paused the Typing Trainer timer while its page is inactive, resuming only when typing continues
-- Kept Typing Trainer page updates filled with a uniform visible text block
-- Updated the Typing Trainer text window by full visible pages instead of shifting one line at a time
-- Kept the Typing Trainer text window following the caret so next words appear instead of typing into hidden text
-- Continued Typing Trainer runs with a fresh text when the current text is fully typed before time runs out
-- Moved the Typing Trainer finished status below the text area so it no longer overlaps the final line
 - Centered About Entropy update action buttons under the settings list
 - Removed the application version from the native window title bar
 - Switched the application package version back to the public GitHub release channel
-- Fixed held `MO` layer state in Layout Indicator
-- Preserved unknown macro bytecode during macro round-trips
-- Synced duplicate Layer LED color settings
-- Guarded device connect against zero layer count
-- Stabilized macOS HID initialization and bounded macOS automation waits
-- Reduced clippy and deprecation noise around connect-task payloads, complex types, and egui rect allocation
+- Fixed held `MO` layer state in Layout Indicator (@IgorArkhipov, #31)
+- Preserved unknown macro bytecode during macro round-trips (@IgorArkhipov, #32)
+- Synced duplicate Layer LED color settings (@IgorArkhipov, #39)
+- Guarded device connect against zero layer count (@IgorArkhipov, #46)
+- Stabilized macOS HID initialization and bounded macOS automation waits (@IgorArkhipov, #19, #25)
+- Reduced clippy and deprecation noise around connect-task payloads, complex types, and egui rect allocation (@IgorArkhipov, #29, #30, #40, #41, #43)
 
 ## v0.1.0-beta.1 - Public Beta
 

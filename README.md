@@ -3,7 +3,7 @@
 Modern app for programmable keyboards and input devices, built by Ergohaven.
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
-[![Latest release](https://img.shields.io/badge/latest-v0.1.1-lightgrey.svg)](https://github.com/ergohaven/entropy/releases)
+[![Latest release](https://img.shields.io/badge/latest-v0.2.0-lightgrey.svg)](https://github.com/ergohaven/entropy/releases)
 [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey.svg)](#platforms)
 [![Firmware](https://img.shields.io/badge/firmware-Vial--QMK%20%7C%20Vial--RMK-lightgrey.svg)](#compatibility)
 
@@ -63,13 +63,13 @@ unsigned and not notarized for now.
 Release builds are published on the
 [GitHub Releases](https://github.com/ergohaven/entropy/releases) page:
 
-- `entropy-v0.1.1-x86_64.AppImage`
-- `entropy-v0.1.1-windows-x86_64.exe`
-- `entropy-v0.1.1-macos-arm64.dmg`
-- `entropy-v0.1.1-macos-x86_64.dmg`
+- `entropy-v0.2.0-x86_64.AppImage`
+- `entropy-v0.2.0-windows-x86_64.exe`
+- `entropy-v0.2.0-macos-arm64.dmg`
+- `entropy-v0.2.0-macos-x86_64.dmg`
 
-Stable tags such as `v0.1.2` publish a regular GitHub release and mark it as
-latest. Tags with a suffix, such as `v0.1.2-rc.1`, publish the same artifacts as
+Stable tags such as `v0.2.0` publish a regular GitHub release and mark it as
+latest. Tags with a suffix, such as `v0.2.0-rc.1`, publish the same artifacts as
 a GitHub prerelease.
 
 Windows builds are unsigned for now, so Windows SmartScreen may warn before
