@@ -8,6 +8,8 @@ mod smart_input_symbols;
 #[cfg(target_os = "windows")]
 #[path = "smart_input_windows.rs"]
 mod smart_input_windows;
+#[cfg(any(target_os = "windows", test))]
+use smart_input_symbols::windows_smart_symbol_for_keycode;
 pub use smart_input_symbols::{smart_symbol_for_keycode, SMART_SYMBOLS};
 use smart_input_symbols::{KC_F13, MOD_ALT, MOD_CTRL, MOD_GUI, MOD_SHIFT};
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -402,13 +404,20 @@ fn windows_smart_symbol_for_transport(
     gui: bool,
     observed_modifiers: u16,
 ) -> Option<(char, u16)> {
-    smart_symbol_for_transport(
-        base_keycode,
-        ctrl || observed_modifiers & MOD_CTRL != 0,
-        shift || observed_modifiers & MOD_SHIFT != 0,
-        alt || observed_modifiers & MOD_ALT != 0,
-        gui || observed_modifiers & MOD_GUI != 0,
-    )
+    let mut trigger_keycode = base_keycode;
+    if ctrl || observed_modifiers & MOD_CTRL != 0 {
+        trigger_keycode |= MOD_CTRL;
+    }
+    if shift || observed_modifiers & MOD_SHIFT != 0 {
+        trigger_keycode |= MOD_SHIFT;
+    }
+    if alt || observed_modifiers & MOD_ALT != 0 {
+        trigger_keycode |= MOD_ALT;
+    }
+    if gui || observed_modifiers & MOD_GUI != 0 {
+        trigger_keycode |= MOD_GUI;
+    }
+    windows_smart_symbol_for_keycode(trigger_keycode).map(|symbol| (symbol.symbol, trigger_keycode))
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -1272,17 +1281,29 @@ mod tests {
     }
 
     #[test]
-    fn windows_transport_uses_observed_gui_state_for_arrow_symbols() {
-        let left_arrow = windows_smart_symbol_for_transport(
-            KC_F13,
-            false,
-            false,
-            false,
-            false,
-            MOD_GUI | MOD_SHIFT,
-        )
-        .unwrap();
+    fn windows_transport_uses_legacy_alt_slots_for_arrow_symbols() {
+        let left_arrow =
+            windows_smart_symbol_for_transport(KC_F13 + 7, false, false, true, false, 0).unwrap();
         assert_eq!(left_arrow.0, '←');
+    }
+
+    #[test]
+    fn windows_transport_does_not_use_gui_shortcut_slots() {
+        assert_eq!(
+            windows_smart_symbol_for_transport(KC_F13 + 4, false, false, false, true, MOD_GUI),
+            None
+        );
+    }
+
+    #[test]
+    fn windows_transport_decodes_cyrillic_ha_and_hard_sign() {
+        let ha =
+            windows_smart_symbol_for_transport(KC_F13 + 4, true, false, true, false, 0).unwrap();
+        assert_eq!(ha.0, 'х');
+
+        let hard_sign =
+            windows_smart_symbol_for_transport(KC_F13 + 5, true, false, true, false, 0).unwrap();
+        assert_eq!(hard_sign.0, 'ъ');
     }
 
     #[test]

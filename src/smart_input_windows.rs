@@ -138,7 +138,7 @@ pub(super) fn start() {
 #[cfg(target_os = "windows")]
 fn symbol_for_vk(vk: u32) -> Option<(char, u16)> {
     let base_keycode = match vk {
-        0x7C..=0x83 => KC_F13 + (vk - 0x7C) as u16,
+        0x7C..=0x87 => KC_F13 + (vk - 0x7C) as u16,
         _ => return None,
     };
     windows_smart_symbol_for_transport(
