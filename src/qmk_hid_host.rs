@@ -543,25 +543,6 @@ fn macos_layout_code() -> Option<String> {
         fn CFRelease(cf: *const c_void);
     }
 
-    unsafe {
-        let source = TISCopyCurrentKeyboardInputSource();
-        if source.is_null() {
-            return None;
-        }
-
-        let languages =
-            TISGetInputSourceProperty(source, kTISPropertyInputSourceLanguages) as CFArrayRef;
-        let code = if languages.is_null() || CFArrayGetCount(languages) <= 0 {
-            None
-        } else {
-            let value = CFArrayGetValueAtIndex(languages, 0) as CFStringRef;
-            cf_string_to_string(value)
-        };
-
-        CFRelease(source);
-        code
-    }
-
     unsafe fn cf_string_to_string(value: CFStringRef) -> Option<String> {
         if value.is_null() {
             return None;
@@ -580,6 +561,25 @@ fn macos_layout_code() -> Option<String> {
                 .to_string_lossy()
                 .into_owned(),
         )
+    }
+
+    unsafe {
+        let source = TISCopyCurrentKeyboardInputSource();
+        if source.is_null() {
+            return None;
+        }
+
+        let languages =
+            TISGetInputSourceProperty(source, kTISPropertyInputSourceLanguages) as CFArrayRef;
+        let code = if languages.is_null() || CFArrayGetCount(languages) <= 0 {
+            None
+        } else {
+            let value = CFArrayGetValueAtIndex(languages, 0) as CFStringRef;
+            cf_string_to_string(value)
+        };
+
+        CFRelease(source);
+        code
     }
 }
 
