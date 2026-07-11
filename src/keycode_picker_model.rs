@@ -9,6 +9,40 @@ pub enum BasicPickerLayout {
     Norman,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerViewMode {
+    Layout,
+    List,
+}
+
+impl PickerViewMode {
+    pub(super) const ALL: [PickerViewMode; 2] = [PickerViewMode::List, PickerViewMode::Layout];
+
+    pub(super) fn from_index(index: usize) -> Self {
+        Self::ALL.get(index).copied().unwrap_or(Self::List)
+    }
+
+    pub(super) fn index(self) -> usize {
+        match self {
+            PickerViewMode::List => 0,
+            PickerViewMode::Layout => 1,
+        }
+    }
+
+    pub(super) fn i18n_key(self) -> &'static str {
+        match self {
+            PickerViewMode::Layout => "key_picker.view_layout",
+            PickerViewMode::List => "key_picker.view_list",
+        }
+    }
+}
+
+impl Default for PickerViewMode {
+    fn default() -> Self {
+        Self::List
+    }
+}
+
 impl BasicPickerLayout {
     pub(super) const ALL: [BasicPickerLayout; 5] = [
         BasicPickerLayout::Qwerty,
@@ -329,5 +363,12 @@ mod tests {
             KeycodeTab::preferred_for_vial_keycode(0x7E00, true),
             KeycodeTab::Custom
         );
+    }
+
+    #[test]
+    fn picker_view_mode_defaults_to_list_and_can_switch_to_layout() {
+        assert_eq!(PickerViewMode::default(), PickerViewMode::List);
+        assert_eq!(PickerViewMode::from_index(1), PickerViewMode::Layout);
+        assert_eq!(PickerViewMode::Layout.index(), 1);
     }
 }
