@@ -909,11 +909,7 @@ pub fn modal_intro(ui: &mut Ui, text: &str) {
     ui.label(
         RichText::new(text)
             .size(11.0)
-            .color(Color32::from_gray(if ui.visuals().dark_mode {
-                140
-            } else {
-                140
-            })),
+            .color(Color32::from_gray(140)),
     );
 }
 

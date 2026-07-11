@@ -351,9 +351,7 @@ impl EntropyApp {
             } else {
                 idle_fill
             };
-            let stroke = if is_pressed {
-                app_accent()
-            } else if was_pressed {
+            let stroke = if is_pressed || was_pressed {
                 app_accent()
             } else {
                 app_border_color(dark)

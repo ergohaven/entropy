@@ -43,12 +43,19 @@ pub struct DeviceManager {
 
 impl DeviceManager {
     pub fn new() -> Self {
-        let mut manager = Self { devices: vec![] };
+        #[cfg(not(target_os = "macos"))]
+        {
+            let mut manager = Self { devices: vec![] };
+            manager.scan();
+            manager
+        }
+
         // Do not scan here on macOS: hidapi pumps the run loop during enumeration,
         // which can re-enter winit while its event handler is still active.
-        #[cfg(not(target_os = "macos"))]
-        manager.scan();
-        manager
+        #[cfg(target_os = "macos")]
+        {
+            Self { devices: vec![] }
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]

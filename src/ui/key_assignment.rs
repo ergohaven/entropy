@@ -233,9 +233,9 @@ impl EntropyApp {
         let is_layer_key = vial_layer_target(kc).is_some();
         let pending_base: Option<u16> = if is_layer_key {
             None
-        } else if (0x2000..0x4000).contains(&kc) {
-            Some(kc & 0xFF00)
-        } else if (0x0100..0x2000).contains(&kc) && (kc & 0xFF) != 0 {
+        } else if (0x2000..0x4000).contains(&kc)
+            || ((0x0100..0x2000).contains(&kc) && (kc & 0xFF) != 0)
+        {
             Some(kc & 0xFF00)
         } else {
             None

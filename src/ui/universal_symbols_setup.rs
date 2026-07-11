@@ -31,9 +31,9 @@ impl EntropyApp {
                 dark,
                 content_width,
             );
-            return;
         }
 
+        #[cfg(not(target_os = "macos"))]
         crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(metrics.value(18.0));
