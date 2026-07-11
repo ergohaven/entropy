@@ -6,6 +6,242 @@ const TAPPING_TOGGLE_MAX_TAPS: u32 = 10;
 const ONE_SHOT_TAP_TOGGLE_MAX_TAPS: u32 = 10;
 const ONE_SHOT_TIMEOUT_MAX_MS: u32 = 10_000;
 
+#[derive(Clone, Copy)]
+enum SettingsRowKind {
+    TapHold,
+    OneShot,
+}
+
+enum SettingsRow {
+    Section(&'static str),
+    Setting {
+        kind: SettingsRowKind,
+        qsid: u16,
+        label: &'static str,
+        tooltip: &'static str,
+        is_bool: bool,
+        max: u32,
+    },
+}
+
+fn rmk_hrm_profile_notice(lang: crate::i18n::Language) -> &'static str {
+    match lang {
+        crate::i18n::Language::Russian => {
+            "RMK HRM при перекатах зависит от Morse/Tap-Hold profiles в firmware и карты рук матрицы. Entropy показывает только runtime settings, которые прошивка явно открывает; profiles и карту рук нужно настраивать в RMK firmware."
+        }
+        crate::i18n::Language::English => {
+            "RMK HRM rolling behavior depends on firmware Morse/Tap-Hold profiles and the matrix hand map. Entropy shows only runtime settings exposed by this firmware; profiles and hand mapping must be configured in RMK firmware."
+        }
+    }
+}
+
+fn push_tap_hold_row(
+    rows: &mut Vec<SettingsRow>,
+    settings: &TapHoldSettingsState,
+    row: SettingsRow,
+) {
+    let SettingsRow::Setting { qsid, .. } = row else {
+        rows.push(row);
+        return;
+    };
+    if settings.supports_qsid(qsid) {
+        rows.push(row);
+    }
+}
+
+fn tap_hold_one_shot_rows(
+    lang: crate::i18n::Language,
+    tap_hold_settings: &TapHoldSettingsState,
+    one_shot_settings: &OneShotSettingsState,
+) -> Vec<SettingsRow> {
+    let mut rows: Vec<SettingsRow> = Vec::with_capacity(13);
+    if tap_hold_settings.supported {
+        push_tap_hold_row(
+            &mut rows,
+            tap_hold_settings,
+            SettingsRow::Setting {
+                kind: SettingsRowKind::TapHold,
+                qsid: 7,
+                label: crate::i18n::tr_catalog(lang, "tap_hold_settings.tapping_term_label"),
+                tooltip: crate::i18n::tr_catalog(
+                    lang,
+                    "tap_hold_settings.global_tap_vs_hold_decision_window_for_dual_role_keys",
+                ),
+                is_bool: false,
+                max: TAP_HOLD_TERM_MAX_MS,
+            },
+        );
+        push_tap_hold_row(
+            &mut rows,
+            tap_hold_settings,
+            SettingsRow::Setting {
+                kind: SettingsRowKind::TapHold,
+                qsid: 22,
+                label: crate::i18n::tr_catalog(lang, "tap_hold_settings.permissive_hold"),
+                tooltip: crate::i18n::tr_catalog(
+                    lang,
+                    "tap_hold_settings.nested_taps_choose_hold_for_mod_tap_and_layer_tap_keys",
+                ),
+                is_bool: true,
+                max: 1,
+            },
+        );
+        push_tap_hold_row(
+            &mut rows,
+            tap_hold_settings,
+            SettingsRow::Setting {
+                kind: SettingsRowKind::TapHold,
+                qsid: 23,
+                label: crate::i18n::tr_catalog(lang, "tap_hold_settings.hold_on_other_key"),
+                tooltip: crate::i18n::tr_catalog(
+                    lang,
+                    "tap_hold_settings.pressing_another_key_immediately_chooses_hold_for_dual_role_keys",
+                ),
+                is_bool: true,
+                max: 1,
+            },
+        );
+        push_tap_hold_row(
+            &mut rows,
+            tap_hold_settings,
+            SettingsRow::Setting {
+                kind: SettingsRowKind::TapHold,
+                qsid: 24,
+                label: crate::i18n::tr_catalog(lang, "tap_hold_settings.retro_tapping"),
+                tooltip: crate::i18n::tr_catalog(
+                    lang,
+                    "tap_hold_settings.a_held_and_released_alone_dual_role_key_still_sends_its_tap_action",
+                ),
+                is_bool: true,
+                max: 1,
+            },
+        );
+        push_tap_hold_row(
+            &mut rows,
+            tap_hold_settings,
+            SettingsRow::Setting {
+                kind: SettingsRowKind::TapHold,
+                qsid: 26,
+                label: crate::i18n::tr_catalog(lang, "tap_hold_settings.chordal_hold"),
+                tooltip: crate::i18n::tr_catalog(
+                    lang,
+                    "tap_hold_settings.same_hand_chords_prefer_tap_to_reduce_home_row_mod_accidents",
+                ),
+                is_bool: true,
+                max: 1,
+            },
+        );
+        push_tap_hold_row(
+            &mut rows,
+            tap_hold_settings,
+            SettingsRow::Setting {
+                kind: SettingsRowKind::TapHold,
+                qsid: 25,
+                label: crate::i18n::tr_catalog(lang, "tap_hold_settings.quick_tap_term"),
+                tooltip: crate::i18n::tr_catalog(
+                    lang,
+                    "tap_hold_settings.tap_then_hold_repeat_window_for_dual_role_key_tap_actions",
+                ),
+                is_bool: false,
+                max: TAP_HOLD_TERM_MAX_MS,
+            },
+        );
+        push_tap_hold_row(
+            &mut rows,
+            tap_hold_settings,
+            SettingsRow::Setting {
+                kind: SettingsRowKind::TapHold,
+                qsid: 18,
+                label: crate::i18n::tr_catalog(lang, "tap_hold_settings.tap_code_delay"),
+                tooltip: crate::i18n::tr_catalog(
+                    lang,
+                    "tap_hold_settings.delay_between_register_and_unregister_in_tap_code",
+                ),
+                is_bool: false,
+                max: TAP_HOLD_DELAY_MAX_MS,
+            },
+        );
+        push_tap_hold_row(
+            &mut rows,
+            tap_hold_settings,
+            SettingsRow::Setting {
+                kind: SettingsRowKind::TapHold,
+                qsid: 19,
+                label: crate::i18n::tr_catalog(lang, "tap_hold_settings.tap_hold_caps_delay"),
+                tooltip: crate::i18n::tr_catalog(
+                    lang,
+                    "tap_hold_settings.extra_delay_for_lt_mt_keys_whose_tap_action_is_caps_lock",
+                ),
+                is_bool: false,
+                max: TAP_HOLD_DELAY_MAX_MS,
+            },
+        );
+        push_tap_hold_row(
+            &mut rows,
+            tap_hold_settings,
+            SettingsRow::Setting {
+                kind: SettingsRowKind::TapHold,
+                qsid: 20,
+                label: crate::i18n::tr_catalog(lang, "tap_hold_settings.tapping_toggle"),
+                tooltip: crate::i18n::tr_catalog(
+                    lang,
+                    "tap_hold_settings.number_of_taps_needed_for_tt_layer_toggle",
+                ),
+                is_bool: false,
+                max: TAPPING_TOGGLE_MAX_TAPS,
+            },
+        );
+        push_tap_hold_row(
+            &mut rows,
+            tap_hold_settings,
+            SettingsRow::Setting {
+                kind: SettingsRowKind::TapHold,
+                qsid: 27,
+                label: crate::i18n::tr_catalog(lang, "tap_hold_settings.flow_tap"),
+                tooltip: crate::i18n::tr_catalog(
+                    lang,
+                    "tap_hold_settings.fast_typing_timeout_that_forces_mt_lt_keys_to_tap",
+                ),
+                is_bool: false,
+                max: TAP_HOLD_TERM_MAX_MS,
+            },
+        );
+    }
+    if one_shot_settings.supported {
+        if tap_hold_settings.supported {
+            rows.push(SettingsRow::Section(crate::i18n::tr_catalog(
+                lang,
+                "tap_hold_settings.one_shot_keys",
+            )));
+        }
+        rows.extend([
+            SettingsRow::Setting {
+                kind: SettingsRowKind::OneShot,
+                qsid: 5,
+                label: crate::i18n::tr_catalog(lang, "tap_hold_settings.one_shot_tap_toggle"),
+                tooltip: crate::i18n::tr_catalog(
+                    lang,
+                    "tap_hold_settings.tap_this_many_times_to_keep_a_one_shot_key_held_until_tapped_again",
+                ),
+                is_bool: false,
+                max: ONE_SHOT_TAP_TOGGLE_MAX_TAPS,
+            },
+            SettingsRow::Setting {
+                kind: SettingsRowKind::OneShot,
+                qsid: 6,
+                label: crate::i18n::tr_catalog(lang, "tap_hold_settings.one_shot_timeout"),
+                tooltip: crate::i18n::tr_catalog(
+                    lang,
+                    "tap_hold_settings.how_long_one_shot_state_waits_before_it_is_released",
+                ),
+                is_bool: false,
+                max: ONE_SHOT_TIMEOUT_MAX_MS,
+            },
+        ]);
+    }
+    rows
+}
+
 impl EntropyApp {
     pub(super) fn draw_tap_hold_settings_page(
         &mut self,
@@ -65,6 +301,15 @@ impl EntropyApp {
                     return;
                 }
 
+                if self.current_device_is_likely_rmk() && self.tap_hold_settings.supported {
+                    ui.label(
+                        RichText::new(rmk_hrm_profile_notice(lang))
+                            .size(12.0)
+                            .color(Color32::from_rgb(180, 120, 40)),
+                    );
+                    ui.add_space(12.0);
+                }
+
                 let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
                 let total_rows = self.tap_hold_one_shot_row_count();
                 let list = allocate_adaptive_settings_list_viewport(
@@ -101,9 +346,12 @@ impl EntropyApp {
     }
 
     fn tap_hold_one_shot_row_count(&self) -> usize {
-        self.tap_hold_settings.supported as usize * 10
-            + self.one_shot_settings.supported as usize * 2
-            + (self.tap_hold_settings.supported && self.one_shot_settings.supported) as usize
+        tap_hold_one_shot_rows(
+            self.app_settings.language,
+            &self.tap_hold_settings,
+            &self.one_shot_settings,
+        )
+        .len()
     }
 
     fn draw_tap_hold_editor_content(
@@ -114,165 +362,11 @@ impl EntropyApp {
         row_height: f32,
         suppress_tooltips: bool,
     ) {
-        #[derive(Clone, Copy)]
-        enum SettingsRowKind {
-            TapHold,
-            OneShot,
-        }
-
-        enum SettingsRow {
-            Section(&'static str),
-            Setting {
-                kind: SettingsRowKind,
-                qsid: u16,
-                label: &'static str,
-                tooltip: &'static str,
-                is_bool: bool,
-                max: u32,
-            },
-        }
-
-        let mut rows: Vec<SettingsRow> = Vec::with_capacity(13);
-        if self.tap_hold_settings.supported {
-            rows.extend([
-                SettingsRow::Setting {
-                    kind: SettingsRowKind::TapHold,
-                    qsid: 7,
-                    label: crate::i18n::tr_catalog(self.app_settings.language, "tap_hold_settings.tapping_term_label"),
-                    tooltip: crate::i18n::tr_catalog(
-                        self.app_settings.language,
-                        "tap_hold_settings.global_tap_vs_hold_decision_window_for_dual_role_keys",
-                    ),
-                    is_bool: false,
-                    max: TAP_HOLD_TERM_MAX_MS,
-                },
-                SettingsRow::Setting {
-                    kind: SettingsRowKind::TapHold,
-                    qsid: 22,
-                    label: crate::i18n::tr_catalog(self.app_settings.language, "tap_hold_settings.permissive_hold"),
-                    tooltip: crate::i18n::tr_catalog(
-                        self.app_settings.language,
-                        "tap_hold_settings.nested_taps_choose_hold_for_mod_tap_and_layer_tap_keys",
-                    ),
-                    is_bool: true,
-                    max: 1,
-                },
-                SettingsRow::Setting {
-                    kind: SettingsRowKind::TapHold,
-                    qsid: 23,
-                    label: crate::i18n::tr_catalog(self.app_settings.language, "tap_hold_settings.hold_on_other_key"),
-                    tooltip: crate::i18n::tr_catalog(
-                        self.app_settings.language,
-                        "tap_hold_settings.pressing_another_key_immediately_chooses_hold_for_dual_role_keys",
-                    ),
-                    is_bool: true,
-                    max: 1,
-                },
-                SettingsRow::Setting {
-                    kind: SettingsRowKind::TapHold,
-                    qsid: 24,
-                    label: crate::i18n::tr_catalog(self.app_settings.language, "tap_hold_settings.retro_tapping"),
-                    tooltip: crate::i18n::tr_catalog(
-                        self.app_settings.language,
-                        "tap_hold_settings.a_held_and_released_alone_dual_role_key_still_sends_its_tap_action",
-                    ),
-                    is_bool: true,
-                    max: 1,
-                },
-                SettingsRow::Setting {
-                    kind: SettingsRowKind::TapHold,
-                    qsid: 26,
-                    label: crate::i18n::tr_catalog(self.app_settings.language, "tap_hold_settings.chordal_hold"),
-                    tooltip: crate::i18n::tr_catalog(
-                        self.app_settings.language,
-                        "tap_hold_settings.same_hand_chords_prefer_tap_to_reduce_home_row_mod_accidents",
-                    ),
-                    is_bool: true,
-                    max: 1,
-                },
-                SettingsRow::Setting {
-                    kind: SettingsRowKind::TapHold,
-                    qsid: 25,
-                    label: crate::i18n::tr_catalog(self.app_settings.language, "tap_hold_settings.quick_tap_term"),
-                    tooltip: crate::i18n::tr_catalog(
-                        self.app_settings.language,
-                        "tap_hold_settings.tap_then_hold_repeat_window_for_dual_role_key_tap_actions",
-                    ),
-                    is_bool: false,
-                    max: TAP_HOLD_TERM_MAX_MS,
-                },
-                SettingsRow::Setting {
-                    kind: SettingsRowKind::TapHold,
-                    qsid: 18,
-                    label: crate::i18n::tr_catalog(self.app_settings.language, "tap_hold_settings.tap_code_delay"),
-                    tooltip: crate::i18n::tr_catalog(
-                        self.app_settings.language,
-                        "tap_hold_settings.delay_between_register_and_unregister_in_tap_code",
-                    ),
-                    is_bool: false,
-                    max: TAP_HOLD_DELAY_MAX_MS,
-                },
-                SettingsRow::Setting {
-                    kind: SettingsRowKind::TapHold,
-                    qsid: 19,
-                    label: crate::i18n::tr_catalog(self.app_settings.language, "tap_hold_settings.tap_hold_caps_delay"),
-                    tooltip: crate::i18n::tr_catalog(self.app_settings.language, "tap_hold_settings.extra_delay_for_lt_mt_keys_whose_tap_action_is_caps_lock"),
-                    is_bool: false,
-                    max: TAP_HOLD_DELAY_MAX_MS,
-                },
-                SettingsRow::Setting {
-                    kind: SettingsRowKind::TapHold,
-                    qsid: 20,
-                    label: crate::i18n::tr_catalog(self.app_settings.language, "tap_hold_settings.tapping_toggle"),
-                    tooltip: crate::i18n::tr_catalog(
-                        self.app_settings.language,
-                        "tap_hold_settings.number_of_taps_needed_for_tt_layer_toggle",
-                    ),
-                    is_bool: false,
-                    max: TAPPING_TOGGLE_MAX_TAPS,
-                },
-                SettingsRow::Setting {
-                    kind: SettingsRowKind::TapHold,
-                    qsid: 27,
-                    label: crate::i18n::tr_catalog(self.app_settings.language, "tap_hold_settings.flow_tap"),
-                    tooltip: crate::i18n::tr_catalog(
-                        self.app_settings.language,
-                        "tap_hold_settings.fast_typing_timeout_that_forces_mt_lt_keys_to_tap",
-                    ),
-                    is_bool: false,
-                    max: TAP_HOLD_TERM_MAX_MS,
-                },
-            ]);
-        }
-        if self.one_shot_settings.supported {
-            if self.tap_hold_settings.supported {
-                rows.push(SettingsRow::Section(crate::i18n::tr_catalog(
-                    self.app_settings.language,
-                    "tap_hold_settings.one_shot_keys",
-                )));
-            }
-            rows.extend([
-                SettingsRow::Setting {
-                    kind: SettingsRowKind::OneShot,
-                    qsid: 5,
-                    label: crate::i18n::tr_catalog(self.app_settings.language, "tap_hold_settings.one_shot_tap_toggle"),
-                    tooltip: crate::i18n::tr_catalog(self.app_settings.language, "tap_hold_settings.tap_this_many_times_to_keep_a_one_shot_key_held_until_tapped_again"),
-                    is_bool: false,
-                    max: ONE_SHOT_TAP_TOGGLE_MAX_TAPS,
-                },
-                SettingsRow::Setting {
-                    kind: SettingsRowKind::OneShot,
-                    qsid: 6,
-                    label: crate::i18n::tr_catalog(self.app_settings.language, "tap_hold_settings.one_shot_timeout"),
-                    tooltip: crate::i18n::tr_catalog(
-                        self.app_settings.language,
-                        "tap_hold_settings.how_long_one_shot_state_waits_before_it_is_released",
-                    ),
-                    is_bool: false,
-                    max: ONE_SHOT_TIMEOUT_MAX_MS,
-                },
-            ]);
-        }
+        let rows = tap_hold_one_shot_rows(
+            self.app_settings.language,
+            &self.tap_hold_settings,
+            &self.one_shot_settings,
+        );
         let scale = (row_height / 54.0).clamp(1.0, 1.12);
         let field_width = 86.0 * scale;
         let switch_width = 46.0 * scale;
@@ -531,5 +625,41 @@ impl EntropyApp {
             self.status_msg = format!("Failed to save Tap-Hold setting (qsid {qsid}): {}", e);
             log::warn!("set_qmk_setting_u8(tap_hold qsid {qsid}) failed: {e}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tap_hold_rows_hide_unadvertised_qsids() {
+        let mut tap_hold = TapHoldSettingsState::default();
+        tap_hold.supported = true;
+        tap_hold.set_qsid_supported(7);
+
+        let rows = tap_hold_one_shot_rows(
+            crate::i18n::Language::English,
+            &tap_hold,
+            &OneShotSettingsState::default(),
+        );
+        let qsids: Vec<u16> = rows
+            .iter()
+            .filter_map(|row| match row {
+                SettingsRow::Setting { qsid, .. } => Some(*qsid),
+                SettingsRow::Section(_) => None,
+            })
+            .collect();
+
+        assert_eq!(qsids, vec![7]);
+    }
+
+    #[test]
+    fn rmk_hrm_notice_mentions_firmware_profiles() {
+        let notice = rmk_hrm_profile_notice(crate::i18n::Language::English);
+
+        assert!(notice.contains("RMK"));
+        assert!(notice.contains("firmware"));
+        assert!(notice.contains("profiles"));
     }
 }

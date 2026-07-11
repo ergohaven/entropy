@@ -903,8 +903,22 @@ pub(crate) struct TapHoldSettingsState {
     pub(crate) chordal_hold: bool,
     /// qsid 27: Fast-typing timeout that forces MT/LT tap behavior
     pub(crate) flow_tap: u16,
+    /// Bitset of tap-hold qsids advertised by this firmware.
+    pub(crate) supported_qsids: u64,
     /// Whether qsid 7 was readable (firmware support flag)
     pub(crate) supported: bool,
+}
+
+impl TapHoldSettingsState {
+    pub(crate) fn set_qsid_supported(&mut self, qsid: u16) {
+        if qsid < u64::BITS as u16 {
+            self.supported_qsids |= 1u64 << qsid;
+        }
+    }
+
+    pub(crate) fn supports_qsid(&self, qsid: u16) -> bool {
+        qsid < u64::BITS as u16 && self.supported_qsids & (1u64 << qsid) != 0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
