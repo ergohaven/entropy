@@ -254,32 +254,34 @@ impl EntropyApp {
     }
 
     pub(super) fn assign_keycode(&mut self, layer: usize, ki: usize, kc_value: u16) {
-        // Save old value for undo
         let old_kc = self
             .layout
             .as_ref()
             .map(|l| l.get_keycode(layer, ki))
             .unwrap_or(0);
-        self.undo_stack.push(UndoAction::Key {
-            layer,
-            key_idx: ki,
-            old_kc,
-        });
-        // Update in-memory layout
-        if let Some(layout) = &mut self.layout {
-            layout.set_keycode(layer, ki, kc_value);
-        }
-        self.refresh_layer_picker_content_flags();
 
         let key = match self.layout.as_ref().and_then(|l| l.keys.get(ki)) {
             Some(k) => k.clone(),
             None => return,
         };
 
+        let commit_local_assignment = |this: &mut Self| {
+            this.undo_stack.push(UndoAction::Key {
+                layer,
+                key_idx: ki,
+                old_kc,
+            });
+            if let Some(layout) = &mut this.layout {
+                layout.set_keycode(layer, ki, kc_value);
+            }
+            this.refresh_layer_picker_content_flags();
+        };
+
         // Never open a fresh HID handle synchronously from the UI thread.
         // Connect keeps the active Vial handle alive; if it is unavailable,
         // keep the edit local/read-only instead of freezing the whole app.
         let Some(conn) = &self.hid_device else {
+            commit_local_assignment(self);
             self.status_msg =
                 "Read-only: key changed locally, firmware write disabled for this device".into();
             return;
@@ -287,11 +289,16 @@ impl EntropyApp {
         let result = conn.set_keycode(layer as u8, key.row, key.col, kc_value);
 
         match result {
-            Ok(()) => self.status_msg = "✓ Saved".into(),
+            Ok(()) => {
+                commit_local_assignment(self);
+                self.status_msg = "✓ Saved".into();
+            }
             Err(e) => {
                 self.status_msg = format!("Write error: {e}");
-                // Connection lost — reopen
-                self.hid_device = None;
+                if !crate::hid::is_keycode_writeback_mismatch(&e) {
+                    // Connection lost — reopen
+                    self.hid_device = None;
+                }
             }
         }
     }
