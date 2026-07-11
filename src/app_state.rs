@@ -48,6 +48,8 @@ pub(crate) struct AppSettings {
     pub(crate) sticky_layout_window_size: Option<[f32; 2]>,
     #[serde(default)]
     pub(crate) window_size: Option<[f32; 2]>,
+    #[serde(default)]
+    pub(crate) dark_mode: bool,
     #[serde(default = "crate::i18n::default_language")]
     pub(crate) language: crate::i18n::Language,
     #[serde(default = "default_encoder_hover_enlarge")]
@@ -168,6 +170,7 @@ impl Default for AppSettings {
             sticky_layout_dark_mode: false,
             sticky_layout_window_size: None,
             window_size: None,
+            dark_mode: false,
             language: crate::i18n::default_language(),
             encoder_hover_enlarge: default_encoder_hover_enlarge(),
             show_made_by_signature: default_show_made_by_signature(),
@@ -185,6 +188,30 @@ impl Default for AppSettings {
             typing_trainer: TypingTrainerSettings::default(),
             typing_trainer_history: Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod app_settings_tests {
+    use super::*;
+
+    #[test]
+    fn app_settings_default_dark_mode_is_light() {
+        assert!(!AppSettings::default().dark_mode);
+    }
+
+    #[test]
+    fn app_settings_deserializes_saved_dark_mode() {
+        let settings: AppSettings = serde_json::from_str(r#"{"dark_mode":true}"#).unwrap();
+
+        assert!(settings.dark_mode);
+    }
+
+    #[test]
+    fn app_settings_deserializes_legacy_settings_without_dark_mode() {
+        let settings: AppSettings = serde_json::from_str(r#"{"language":"english"}"#).unwrap();
+
+        assert!(!settings.dark_mode);
     }
 }
 

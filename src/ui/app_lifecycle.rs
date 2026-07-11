@@ -347,6 +347,7 @@ impl eframe::App for EntropyApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.fallback_entropy_display_presets_before_exit();
         self.flush_pending_text_expander_settings();
+        self.app_settings.dark_mode = self.dark_mode;
         save_app_settings(&self.app_settings);
     }
 
@@ -760,12 +761,17 @@ impl eframe::App for EntropyApp {
                     if chrome_opacity <= 0.96 {
                         ui.disable();
                     }
+                    let previous_dark_mode = self.dark_mode;
                     draw_theme_selector_labels(
                         ui,
                         self.app_settings.language,
                         &mut self.dark_mode,
                         false,
                     );
+                    if self.dark_mode != previous_dark_mode {
+                        self.app_settings.dark_mode = self.dark_mode;
+                        save_app_settings(&self.app_settings);
+                    }
                 });
         }
 
