@@ -799,6 +799,25 @@ pub(crate) struct ModuleSettingsState {
     pub(crate) supported: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ModuleSettingWritebackError {
+    SetFailed(String),
+    ReadbackFailed(String),
+    ReadbackMismatch { expected: u16, actual: u16 },
+}
+
+impl std::fmt::Display for ModuleSettingWritebackError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SetFailed(error) => write!(f, "set failed: {error}"),
+            Self::ReadbackFailed(error) => write!(f, "read-back failed: {error}"),
+            Self::ReadbackMismatch { expected, actual } => {
+                write!(f, "read back {actual}, expected {expected}")
+            }
+        }
+    }
+}
+
 impl ModuleSettingsState {
     pub(crate) fn selected_module_group(&self) -> Option<usize> {
         let selected = self.groups.get(self.selected_module_group)?;
@@ -835,6 +854,22 @@ impl ModuleSettingsState {
 
     pub(crate) fn set_value(&mut self, qsid: u16, value: u16) {
         self.values.insert(qsid, value);
+    }
+
+    pub(crate) fn write_verified_value(
+        &mut self,
+        qsid: u16,
+        expected: u16,
+        write: impl FnOnce() -> Result<(), String>,
+        read_back: impl FnOnce() -> Result<u16, String>,
+    ) -> Result<u16, ModuleSettingWritebackError> {
+        write().map_err(ModuleSettingWritebackError::SetFailed)?;
+        let actual = read_back().map_err(ModuleSettingWritebackError::ReadbackFailed)?;
+        if actual != expected {
+            return Err(ModuleSettingWritebackError::ReadbackMismatch { expected, actual });
+        }
+        self.set_value(qsid, actual);
+        Ok(actual)
     }
 }
 
@@ -2729,4 +2764,71 @@ pub struct EntropyApp {
     pub(crate) vial_unlock_total: u8,
     pub(crate) vial_unlock_last_poll: Option<std::time::Instant>,
     pub(crate) vial_unlock_animation_nonce: u64,
+}
+
+#[cfg(test)]
+mod module_settings_state_tests {
+    use super::*;
+
+    #[test]
+    fn verified_module_setting_write_commits_read_back_value() {
+        let mut settings = ModuleSettingsState::default();
+        settings.set_value(42, 7);
+
+        let result = settings.write_verified_value(42, 9, || Ok(()), || Ok(9));
+
+        assert_eq!(result, Ok(9));
+        assert_eq!(settings.value(42), 9);
+    }
+
+    #[test]
+    fn verified_module_setting_write_keeps_old_value_when_set_fails() {
+        let mut settings = ModuleSettingsState::default();
+        settings.set_value(42, 7);
+
+        let result =
+            settings.write_verified_value(42, 9, || Err("device offline".to_owned()), || Ok(9));
+
+        assert_eq!(
+            result,
+            Err(ModuleSettingWritebackError::SetFailed(
+                "device offline".to_owned()
+            ))
+        );
+        assert_eq!(settings.value(42), 7);
+    }
+
+    #[test]
+    fn verified_module_setting_write_keeps_old_value_when_readback_fails() {
+        let mut settings = ModuleSettingsState::default();
+        settings.set_value(42, 7);
+
+        let result =
+            settings.write_verified_value(42, 9, || Ok(()), || Err("read failed".to_owned()));
+
+        assert_eq!(
+            result,
+            Err(ModuleSettingWritebackError::ReadbackFailed(
+                "read failed".to_owned()
+            ))
+        );
+        assert_eq!(settings.value(42), 7);
+    }
+
+    #[test]
+    fn verified_module_setting_write_keeps_old_value_when_readback_mismatches() {
+        let mut settings = ModuleSettingsState::default();
+        settings.set_value(42, 7);
+
+        let result = settings.write_verified_value(42, 9, || Ok(()), || Ok(8));
+
+        assert_eq!(
+            result,
+            Err(ModuleSettingWritebackError::ReadbackMismatch {
+                expected: 9,
+                actual: 8
+            })
+        );
+        assert_eq!(settings.value(42), 7);
+    }
 }
