@@ -916,9 +916,10 @@ impl KeycodePicker {
                             }
                         } else if qmk > 0 && qmk < 0x0100 {
                             if (self.regular_key_pick_allow_mod_key || !modifiers.any())
-                                && self.is_regular_key_pick_value(qmk) {
-                                    self.finish_regular_key_pick(qmk);
-                                }
+                                && self.is_regular_key_pick_value(qmk)
+                            {
+                                self.finish_regular_key_pick(qmk);
+                            }
                         } else if self.regular_key_pick_allow_mod_key
                             && (0x0100..0x2000).contains(&qmk)
                             && self.is_regular_key_pick_value(qmk & 0x00FF)
