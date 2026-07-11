@@ -1,6 +1,6 @@
 use super::*;
 
-const HIDDEN_TO_TRAY_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+const HIDDEN_TO_TRAY_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 const BLUETOOTH_VISIBLE_REPAINT_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(16);
 const DEFAULT_VISIBLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
@@ -17,15 +17,8 @@ fn visible_repaint_interval(selected_device_is_bluetooth: bool) -> std::time::Du
     }
 }
 
-fn app_repaint_interval(
-    selected_device_is_bluetooth: bool,
-    main_window_hidden_to_tray: bool,
-) -> std::time::Duration {
-    if main_window_hidden_to_tray {
-        hidden_to_tray_repaint_interval()
-    } else {
-        visible_repaint_interval(selected_device_is_bluetooth)
-    }
+fn should_poll_device_scan(main_window_hidden_to_tray: bool) -> bool {
+    !main_window_hidden_to_tray
 }
 
 impl EntropyApp {
@@ -321,12 +314,8 @@ mod tests {
     #[test]
     fn hidden_to_tray_repaint_interval_is_throttled() {
         assert_eq!(
-            app_repaint_interval(true, true),
-            std::time::Duration::from_millis(500)
-        );
-        assert_eq!(
-            app_repaint_interval(false, true),
-            std::time::Duration::from_millis(500)
+            hidden_to_tray_repaint_interval(),
+            std::time::Duration::from_secs(5)
         );
     }
 
@@ -340,6 +329,12 @@ mod tests {
             visible_repaint_interval(false),
             std::time::Duration::from_millis(250)
         );
+    }
+
+    #[test]
+    fn hidden_to_tray_skips_device_scan_polling() {
+        assert!(!should_poll_device_scan(true));
+        assert!(should_poll_device_scan(false));
     }
 }
 
@@ -402,26 +397,27 @@ impl eframe::App for EntropyApp {
             .map(|device| device.is_bluetooth_transport())
             .unwrap_or(false);
         let main_window_hidden_to_tray = self.main_window_hidden_to_tray();
-
-        // Keep lightweight device detection alive when idle. On Windows BLE, keep
-        // UI repaint smooth but avoid frequent HID enumeration against the BLE stack.
-        #[cfg(not(target_arch = "wasm32"))]
-        ctx.request_repaint_after(app_repaint_interval(
-            selected_device_is_bluetooth,
-            main_window_hidden_to_tray,
-        ));
-
-        #[cfg(not(target_arch = "wasm32"))]
-        self.poll_device_scan(ctx);
-
-        // Auto-scan for device connect/disconnect changes.
-        self.secondary_click_handled = false;
         let now = ctx.input(|i| i.time);
+
         #[cfg(not(target_arch = "wasm32"))]
         if main_window_hidden_to_tray {
             self.update_hidden_to_tray_background(ctx, now);
+            ctx.request_repaint_after(hidden_to_tray_repaint_interval());
             return;
         }
+
+        // Keep lightweight device detection alive when visible. On Windows BLE,
+        // keep UI repaint smooth but avoid frequent HID enumeration against the BLE stack.
+        #[cfg(not(target_arch = "wasm32"))]
+        ctx.request_repaint_after(visible_repaint_interval(selected_device_is_bluetooth));
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if should_poll_device_scan(main_window_hidden_to_tray) {
+            self.poll_device_scan(ctx);
+        }
+
+        // Auto-scan for device connect/disconnect changes.
+        self.secondary_click_handled = false;
 
         if let Some((layer, ki, kc)) = self.pending_handed_swap {
             if !ctx.input(|i| i.modifiers.ctrl) {
