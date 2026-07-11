@@ -228,6 +228,14 @@ impl KeycodePicker {
             );
             return 254;
         }
+        if let Some(notice) = self.macro_ext_keycodes_notice(self.language) {
+            ui.label(
+                RichText::new(notice)
+                    .size(11.0)
+                    .color(Color32::from_rgb(180, 120, 40)),
+            );
+            ui.add_space(4.0);
+        }
         egui::Frame::NONE.show(ui, |ui| {
             let slot_scroll_height = 86.0 * responsive_picker_element_scale(ui.ctx());
             ui.set_max_height(slot_scroll_height);

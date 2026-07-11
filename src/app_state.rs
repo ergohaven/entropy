@@ -248,6 +248,11 @@ pub(crate) struct VialFeatureSupport {
     pub(crate) repeat_key: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MacroExtKeycodesDisabledReason {
+    RmkVialMacroExtUnsupported,
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct DeviceAboutInfo {
     pub(crate) manufacturer: String,
@@ -263,6 +268,7 @@ pub(crate) struct DeviceAboutInfo {
     pub(crate) macro_memory_bytes: Option<u16>,
     pub(crate) supports_macro_delays: bool,
     pub(crate) supports_macro_ext_keycodes: bool,
+    pub(crate) macro_ext_keycodes_disabled_reason: Option<MacroExtKeycodesDisabledReason>,
     pub(crate) tap_dance_entries: usize,
     pub(crate) combo_entries: usize,
     pub(crate) key_override_entries: usize,
@@ -288,6 +294,7 @@ pub(crate) struct ConnectResult {
     pub(crate) macro_texts: Vec<Vec<u8>>,
     /// Vial protocol >= 5 supports 2-byte keycodes in macros.
     pub(crate) supports_macro_ext_keycodes: bool,
+    pub(crate) macro_ext_keycodes_disabled_reason: Option<MacroExtKeycodesDisabledReason>,
     /// Tap dance entries
     pub(crate) tap_dance_entries: Vec<crate::keycode_picker::TapDanceEntry>,
     /// Combo entries

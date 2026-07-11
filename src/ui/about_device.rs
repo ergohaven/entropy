@@ -119,6 +119,22 @@ fn bytes_label(lang: crate::i18n::Language, bytes: u16) -> String {
     }
 }
 
+fn macro_ext_keycodes_status(lang: crate::i18n::Language, info: &DeviceAboutInfo) -> String {
+    if info.supports_macro_ext_keycodes {
+        return yes_no(lang, true).to_owned();
+    }
+
+    match info.macro_ext_keycodes_disabled_reason {
+        Some(MacroExtKeycodesDisabledReason::RmkVialMacroExtUnsupported) => match lang {
+            crate::i18n::Language::Russian => {
+                "нет, отключено для RMK macro compatibility".to_owned()
+            }
+            crate::i18n::Language::English => "no, disabled for RMK macro compatibility".to_owned(),
+        },
+        None => yes_no(lang, false).to_owned(),
+    }
+}
+
 fn device_about_rows(lang: crate::i18n::Language, info: &DeviceAboutInfo) -> Vec<AboutRow> {
     let firmware_version = info
         .firmware_version
@@ -233,7 +249,7 @@ fn device_about_rows(lang: crate::i18n::Language, info: &DeviceAboutInfo) -> Vec
             "2-byte macro keycodes",
             "Поддержка complex macro keycodes",
             "Complex macro keycode support",
-            yes_no(lang, info.supports_macro_ext_keycodes),
+            macro_ext_keycodes_status(lang, info),
         ),
         localized_row(
             lang,
@@ -633,5 +649,23 @@ impl EntropyApp {
                 });
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn macro_ext_status_explains_rmk_guard() {
+        let info = DeviceAboutInfo {
+            supports_macro_ext_keycodes: false,
+            macro_ext_keycodes_disabled_reason: Some(
+                MacroExtKeycodesDisabledReason::RmkVialMacroExtUnsupported,
+            ),
+            ..Default::default()
+        };
+
+        assert!(macro_ext_keycodes_status(crate::i18n::Language::English, &info).contains("RMK"));
     }
 }
