@@ -71,6 +71,8 @@ impl EntropyApp {
             tray_icon: None,
             #[cfg(target_os = "windows")]
             windows_hwnd: None,
+            #[cfg(target_os = "windows")]
+            windows_window_hidden_to_tray: false,
             #[cfg(target_os = "macos")]
             macos_ns_window: None,
             #[cfg(target_os = "macos")]

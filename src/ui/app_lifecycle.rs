@@ -1,6 +1,57 @@
 use super::*;
 
+const HIDDEN_TO_TRAY_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+const BLUETOOTH_VISIBLE_REPAINT_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(16);
+const DEFAULT_VISIBLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
+fn hidden_to_tray_repaint_interval() -> std::time::Duration {
+    HIDDEN_TO_TRAY_REPAINT_INTERVAL
+}
+
+fn visible_repaint_interval(selected_device_is_bluetooth: bool) -> std::time::Duration {
+    if selected_device_is_bluetooth {
+        BLUETOOTH_VISIBLE_REPAINT_INTERVAL
+    } else {
+        DEFAULT_VISIBLE_REPAINT_INTERVAL
+    }
+}
+
+fn app_repaint_interval(
+    selected_device_is_bluetooth: bool,
+    main_window_hidden_to_tray: bool,
+) -> std::time::Duration {
+    if main_window_hidden_to_tray {
+        hidden_to_tray_repaint_interval()
+    } else {
+        visible_repaint_interval(selected_device_is_bluetooth)
+    }
+}
+
 impl EntropyApp {
+    fn main_window_hidden_to_tray(&self) -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            self.windows_window_hidden_to_tray
+        }
+        #[cfg(target_os = "macos")]
+        {
+            self.macos_window_hidden_to_menu_bar
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        {
+            false
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn update_hidden_to_tray_background(&mut self, ctx: &egui::Context, now: f64) {
+        self.poll_connect(ctx);
+        self.poll_single_instance_signal(ctx);
+        self.poll_text_expander_deferred_save(now);
+        self.auto_reload_text_expander_rules_file(now);
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn import_pending(&self) -> bool {
         self.pending_entlayout_import_path.is_some()
@@ -326,16 +377,14 @@ impl eframe::App for EntropyApp {
             .and_then(|idx| self.device_manager.devices().get(idx))
             .map(|device| device.is_bluetooth_transport())
             .unwrap_or(false);
+        let main_window_hidden_to_tray = self.main_window_hidden_to_tray();
 
         // Keep lightweight device detection alive when idle. On Windows BLE, keep
         // UI repaint smooth but avoid frequent HID enumeration against the BLE stack.
         #[cfg(not(target_arch = "wasm32"))]
-        ctx.request_repaint_after(std::time::Duration::from_millis(
-            if selected_device_is_bluetooth {
-                16
-            } else {
-                250
-            },
+        ctx.request_repaint_after(app_repaint_interval(
+            selected_device_is_bluetooth,
+            main_window_hidden_to_tray,
         ));
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -343,6 +392,13 @@ impl eframe::App for EntropyApp {
 
         // Auto-scan for device connect/disconnect changes.
         self.secondary_click_handled = false;
+        let now = ctx.input(|i| i.time);
+        #[cfg(not(target_arch = "wasm32"))]
+        if main_window_hidden_to_tray {
+            self.update_hidden_to_tray_background(ctx, now);
+            return;
+        }
+
         if let Some((layer, ki, kc)) = self.pending_handed_swap {
             if !ctx.input(|i| i.modifiers.ctrl) {
                 #[cfg(not(target_arch = "wasm32"))]
@@ -354,7 +410,6 @@ impl eframe::App for EntropyApp {
                 self.pending_handed_swap = None;
             }
         }
-        let now = ctx.input(|i| i.time);
         #[cfg(not(target_arch = "wasm32"))]
         self.handle_pending_imports(ctx, now);
         self.poll_text_expander_deferred_save(now);
@@ -1025,5 +1080,34 @@ impl eframe::App for EntropyApp {
         }
 
         self.pause_typing_trainer_if_inactive(std::time::Instant::now());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hidden_to_tray_repaint_interval_is_throttled() {
+        assert_eq!(
+            app_repaint_interval(true, true),
+            std::time::Duration::from_millis(500)
+        );
+        assert_eq!(
+            app_repaint_interval(false, true),
+            std::time::Duration::from_millis(500)
+        );
+    }
+
+    #[test]
+    fn visible_repaint_interval_keeps_bluetooth_responsive() {
+        assert_eq!(
+            visible_repaint_interval(true),
+            std::time::Duration::from_millis(16)
+        );
+        assert_eq!(
+            visible_repaint_interval(false),
+            std::time::Duration::from_millis(250)
+        );
     }
 }
