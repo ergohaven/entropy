@@ -390,6 +390,22 @@ fn smart_symbol_for_transport(
 }
 
 #[cfg(any(target_os = "windows", test))]
+fn windows_smart_symbol_for_transport(
+    base_keycode: u16,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    observed_modifiers: u16,
+) -> Option<(char, u16)> {
+    smart_symbol_for_transport(
+        base_keycode,
+        ctrl || observed_modifiers & MOD_CTRL != 0,
+        shift || observed_modifiers & MOD_SHIFT != 0,
+        alt || observed_modifiers & MOD_ALT != 0,
+    )
+}
+
+#[cfg(any(target_os = "windows", test))]
 fn app_prefers_clipboard_unicode_input(exe: &str) -> bool {
     matches!(
         exe.strip_suffix(".exe").unwrap_or(exe),
@@ -1230,6 +1246,16 @@ mod tests {
     #[test]
     fn editplus_uses_clipboard_fallback_for_universal_symbols() {
         assert!(app_prefers_clipboard_unicode_input("editplus.exe"));
+    }
+
+    #[test]
+    fn windows_transport_uses_observed_alt_state_for_rapid_punctuation_pairs() {
+        let comma =
+            windows_smart_symbol_for_transport(KC_F13 + 1, false, false, false, MOD_ALT).unwrap();
+        assert_eq!(comma.0, ',');
+
+        let dot = windows_smart_symbol_for_transport(KC_F13, false, false, false, MOD_ALT).unwrap();
+        assert_eq!(dot.0, '.');
     }
 
     #[test]

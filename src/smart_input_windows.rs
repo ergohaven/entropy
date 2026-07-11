@@ -141,11 +141,12 @@ fn symbol_for_vk(vk: u32) -> Option<(char, u16)> {
         0x7C..=0x87 => KC_F13 + (vk - 0x7C) as u16,
         _ => return None,
     };
-    smart_symbol_for_transport(
+    windows_smart_symbol_for_transport(
         base_keycode,
         modifier_down(VK_CONTROL),
         modifier_down(VK_SHIFT),
         modifier_down(VK_MENU),
+        active_transport_modifiers(),
     )
 }
 
@@ -155,13 +156,32 @@ fn modifier_down(vk: i32) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn modifier_group_for_vk(vk: u32) -> u32 {
+fn modifier_group_for_vk(vk: u32) -> u16 {
     match vk as i32 {
-        VK_SHIFT | VK_LSHIFT | VK_RSHIFT => MOD_SHIFT as u32,
-        VK_CONTROL | VK_LCONTROL | VK_RCONTROL => MOD_CTRL as u32,
-        VK_MENU | VK_LMENU | VK_RMENU => MOD_ALT as u32,
+        VK_SHIFT | VK_LSHIFT | VK_RSHIFT => MOD_SHIFT,
+        VK_CONTROL | VK_LCONTROL | VK_RCONTROL => MOD_CTRL,
+        VK_MENU | VK_LMENU | VK_RMENU => MOD_ALT,
         _ => 0,
     }
+}
+
+#[cfg(target_os = "windows")]
+fn update_active_transport_modifier_state(vk: u32, is_key_down: bool, is_key_up: bool) {
+    let group = modifier_group_for_vk(vk);
+    if group == 0 {
+        return;
+    }
+    if is_key_down {
+        ACTIVE_TRANSPORT_MODIFIERS.fetch_or(group as u32, std::sync::atomic::Ordering::Relaxed);
+    } else if is_key_up {
+        ACTIVE_TRANSPORT_MODIFIERS.fetch_and(!(group as u32), std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn active_transport_modifiers() -> u16 {
+    (ACTIVE_TRANSPORT_MODIFIERS.load(std::sync::atomic::Ordering::Relaxed)
+        & (MOD_CTRL | MOD_SHIFT | MOD_ALT) as u32) as u16
 }
 
 #[cfg(target_os = "windows")]
@@ -174,7 +194,7 @@ fn suppress_transport_modifier_keyups(trigger_keycode: u16) {
 
 #[cfg(target_os = "windows")]
 fn should_suppress_transport_modifier_keyup(vk: u32) -> bool {
-    let group = modifier_group_for_vk(vk);
+    let group = modifier_group_for_vk(vk) as u32;
     if group == 0 {
         return false;
     }
@@ -258,6 +278,7 @@ unsafe extern "system" fn keyboard_proc(n_code: i32, w_param: usize, l_param: is
         let is_key_up = w_param == WM_KEYUP || w_param == WM_SYSKEYUP;
         let injected = info.flags & LLKHF_INJECTED != 0;
         if !injected {
+            update_active_transport_modifier_state(info.vkCode, is_key_down, is_key_up);
             if is_key_down {
                 remember_current_foreground_app();
             }
@@ -716,6 +737,10 @@ const WINEVENT_OUTOFCONTEXT: u32 = 0x0000;
 
 #[cfg(target_os = "windows")]
 static TRANSPORT_MODIFIER_KEYUPS_TO_SUPPRESS: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
+#[cfg(target_os = "windows")]
+static ACTIVE_TRANSPORT_MODIFIERS: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 
 #[cfg(target_os = "windows")]

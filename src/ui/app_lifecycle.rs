@@ -317,6 +317,30 @@ mod tests {
         assert!(!should_write_combo_entries(false, false, true));
         assert!(!should_write_combo_entries(false, false, false));
     }
+
+    #[test]
+    fn hidden_to_tray_repaint_interval_is_throttled() {
+        assert_eq!(
+            app_repaint_interval(true, true),
+            std::time::Duration::from_millis(500)
+        );
+        assert_eq!(
+            app_repaint_interval(false, true),
+            std::time::Duration::from_millis(500)
+        );
+    }
+
+    #[test]
+    fn visible_repaint_interval_keeps_bluetooth_responsive() {
+        assert_eq!(
+            visible_repaint_interval(true),
+            std::time::Duration::from_millis(16)
+        );
+        assert_eq!(
+            visible_repaint_interval(false),
+            std::time::Duration::from_millis(250)
+        );
+    }
 }
 
 impl eframe::App for EntropyApp {
@@ -331,7 +355,7 @@ impl eframe::App for EntropyApp {
         save_app_settings(&self.app_settings);
     }
 
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.apply_ui_scale(ctx);
         self.handle_ui_scale_shortcuts(ctx);
         self.remember_main_window_size(ctx);
@@ -341,9 +365,9 @@ impl eframe::App for EntropyApp {
         }
 
         #[cfg(target_os = "windows")]
-        self.cache_windows_hwnd(frame);
+        self.cache_windows_hwnd(_frame);
         #[cfg(target_os = "macos")]
-        self.cache_macos_ns_window(frame);
+        self.cache_macos_ns_window(_frame);
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         self.handle_tray_quit_request(ctx);
         #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -1080,34 +1104,5 @@ impl eframe::App for EntropyApp {
         }
 
         self.pause_typing_trainer_if_inactive(std::time::Instant::now());
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hidden_to_tray_repaint_interval_is_throttled() {
-        assert_eq!(
-            app_repaint_interval(true, true),
-            std::time::Duration::from_millis(500)
-        );
-        assert_eq!(
-            app_repaint_interval(false, true),
-            std::time::Duration::from_millis(500)
-        );
-    }
-
-    #[test]
-    fn visible_repaint_interval_keeps_bluetooth_responsive() {
-        assert_eq!(
-            visible_repaint_interval(true),
-            std::time::Duration::from_millis(16)
-        );
-        assert_eq!(
-            visible_repaint_interval(false),
-            std::time::Duration::from_millis(250)
-        );
     }
 }
