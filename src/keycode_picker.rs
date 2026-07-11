@@ -70,10 +70,12 @@ fn mod_tap_tooltip(mod_name: &str, has_right_side: bool) -> String {
 fn one_shot_modifier_tooltip(mod_name: &str, has_right_side: bool) -> String {
     if has_right_side {
         format!(
-            "Applies {mod_name} to the next keypress only\nLeft click assigns One-Shot Left {mod_name}\nRight click assigns One-Shot Right {mod_name}"
+            "Applies {mod_name} to the next keypress only\nHold to use {mod_name} as a normal modifier\nLeft click assigns One-Shot Left {mod_name}\nRight click assigns One-Shot Right {mod_name}"
         )
     } else {
-        format!("Applies {mod_name} to the next keypress only")
+        format!(
+            "Applies {mod_name} to the next keypress only\nHold to use {mod_name} as a normal modifier"
+        )
     }
 }
 
