@@ -138,7 +138,7 @@ pub(super) fn start() {
 #[cfg(target_os = "windows")]
 fn symbol_for_vk(vk: u32) -> Option<(char, u16)> {
     let base_keycode = match vk {
-        0x7C..=0x87 => KC_F13 + (vk - 0x7C) as u16,
+        0x7C..=0x83 => KC_F13 + (vk - 0x7C) as u16,
         _ => return None,
     };
     windows_smart_symbol_for_transport(
@@ -146,6 +146,7 @@ fn symbol_for_vk(vk: u32) -> Option<(char, u16)> {
         modifier_down(VK_CONTROL),
         modifier_down(VK_SHIFT),
         modifier_down(VK_MENU),
+        modifier_down(VK_LWIN) || modifier_down(VK_RWIN),
         active_transport_modifiers(),
     )
 }
@@ -161,6 +162,7 @@ fn modifier_group_for_vk(vk: u32) -> u16 {
         VK_SHIFT | VK_LSHIFT | VK_RSHIFT => MOD_SHIFT,
         VK_CONTROL | VK_LCONTROL | VK_RCONTROL => MOD_CTRL,
         VK_MENU | VK_LMENU | VK_RMENU => MOD_ALT,
+        VK_LWIN | VK_RWIN => MOD_GUI,
         _ => 0,
     }
 }
@@ -181,13 +183,13 @@ fn update_active_transport_modifier_state(vk: u32, is_key_down: bool, is_key_up:
 #[cfg(target_os = "windows")]
 fn active_transport_modifiers() -> u16 {
     (ACTIVE_TRANSPORT_MODIFIERS.load(std::sync::atomic::Ordering::Relaxed)
-        & (MOD_CTRL | MOD_SHIFT | MOD_ALT) as u32) as u16
+        & (MOD_CTRL | MOD_SHIFT | MOD_ALT | MOD_GUI) as u32) as u16
 }
 
 #[cfg(target_os = "windows")]
 fn suppress_transport_modifier_keyups(trigger_keycode: u16) {
     TRANSPORT_MODIFIER_KEYUPS_TO_SUPPRESS.fetch_or(
-        trigger_keycode as u32 & (MOD_CTRL | MOD_SHIFT | MOD_ALT) as u32,
+        trigger_keycode as u32 & (MOD_CTRL | MOD_SHIFT | MOD_ALT | MOD_GUI) as u32,
         std::sync::atomic::Ordering::Relaxed,
     );
 }
@@ -579,6 +581,7 @@ fn schedule_unicode_char(symbol: char, trigger_keycode: u16) {
 #[cfg(target_os = "windows")]
 unsafe fn send_unicode_char(symbol: char, trigger_keycode: u16) {
     neutralize_transport_alt_menu(trigger_keycode);
+    neutralize_transport_gui_menu(trigger_keycode);
     release_transport_modifiers(trigger_keycode);
     let symbol_text = symbol.to_string();
     if should_paste_universal_symbol_for_foreground_app()
@@ -614,8 +617,16 @@ unsafe fn neutralize_transport_alt_menu(trigger_keycode: u16) {
     if trigger_keycode & MOD_ALT == 0 {
         return;
     }
-    // The foreground app already saw Alt down before F13..F24 was suppressed.
+    // The foreground app already saw Alt down before the transport key was suppressed.
     // Send a harmless Alt+F24 tap so Windows does not treat the later Alt up as menu activation.
+    send_vk_tap(VK_F24 as u16);
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn neutralize_transport_gui_menu(trigger_keycode: u16) {
+    if trigger_keycode & MOD_GUI == 0 {
+        return;
+    }
     send_vk_tap(VK_F24 as u16);
 }
 
@@ -629,6 +640,9 @@ unsafe fn release_transport_modifiers(trigger_keycode: u16) {
     }
     if trigger_keycode & MOD_CTRL != 0 {
         release_modifier_pair(VK_CONTROL, VK_LCONTROL, VK_RCONTROL);
+    }
+    if trigger_keycode & MOD_GUI != 0 {
+        release_modifier_pair(VK_LWIN, VK_LWIN, VK_RWIN);
     }
 }
 

@@ -1,6 +1,6 @@
 # Entropy Fcitx5 backend
 
-This is the Fcitx5 module backend for Entropy Universal Symbols on Wayland/Linux. It watches only Entropy's reserved transport chords (`F13..F24` with `Shift`, `Ctrl`, `Alt`, and `Ctrl+Alt`) and commits the matching Unicode text through Fcitx5.
+This is the Fcitx5 module backend for Entropy Universal Symbols on Wayland/Linux. It watches only Entropy's reserved transport chords (`F13..F20` with `Shift`, `Ctrl`, `Alt`, and `Super`) and commits the matching Unicode text through Fcitx5.
 
 Unlike the X11 helper path, this does not use global X grabs or `xdotool`, and unlike `evdev/uinput`, it does not need access to `/dev/input`.
 
