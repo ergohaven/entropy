@@ -105,9 +105,13 @@ pub fn filter_emoji(query: &str) -> Vec<&'static EmojiEntry> {
 }
 
 pub fn filter_emoji_section(query: &str, section: EmojiSection) -> Vec<&'static EmojiEntry> {
+    filter_emoji_sections(query, &[section])
+}
+
+pub fn filter_emoji_sections(query: &str, sections: &[EmojiSection]) -> Vec<&'static EmojiEntry> {
     filter_emoji(query)
         .into_iter()
-        .filter(|entry| entry.section == section)
+        .filter(|entry| sections.contains(&entry.section))
         .collect()
 }
 
@@ -184,6 +188,18 @@ mod tests {
         let people = filter_emoji_section("", EmojiSection::PeopleAndBody);
         assert!(people.iter().any(|entry| entry.emoji == "👍"));
         assert!(!people.iter().any(|entry| entry.emoji == "😂"));
+    }
+
+    #[test]
+    fn combined_people_filter_keeps_smileys_and_people_together() {
+        let entries = filter_emoji_sections(
+            "",
+            &[EmojiSection::SmileysAndEmotion, EmojiSection::PeopleAndBody],
+        );
+
+        assert!(entries.iter().any(|entry| entry.emoji == "😂"));
+        assert!(entries.iter().any(|entry| entry.emoji == "👍"));
+        assert!(!entries.iter().any(|entry| entry.emoji == "🪿"));
     }
 
     #[test]

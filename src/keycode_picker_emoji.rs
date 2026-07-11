@@ -39,16 +39,16 @@ impl KeycodePicker {
 
         ui.add_space(8.0 * scale);
         let mut has_results = false;
-        for section in crate::emoji_catalog::emoji_sections() {
+        for (label_key, sections) in emoji_presentation_sections() {
             let entries =
-                crate::emoji_catalog::filter_emoji_section(&self.emoji_search_query, *section);
+                crate::emoji_catalog::filter_emoji_sections(&self.emoji_search_query, sections);
             if entries.is_empty() {
                 continue;
             }
 
             has_results = true;
             ui.label(
-                RichText::new(emoji_section_label(self.language, *section))
+                RichText::new(tr_picker(self.language, label_key))
                     .size(11.0 * scale)
                     .color(Color32::from_gray(150)),
             );
@@ -134,10 +134,7 @@ fn emoji_cell_button(ui: &mut egui::Ui, emoji: &str, active: bool, scale: f32) -
         rect.center(),
         egui::Align2::CENTER_CENTER,
         emoji,
-        egui::FontId::new(
-            26.0 * scale,
-            egui::FontFamily::Name("emoji_preview".into()),
-        ),
+        egui::FontId::new(26.0 * scale, egui::FontFamily::Name("emoji_preview".into())),
         if active {
             Color32::WHITE
         } else {
@@ -150,28 +147,41 @@ fn emoji_cell_button(ui: &mut egui::Ui, emoji: &str, active: bool, scale: f32) -
     resp
 }
 
-fn emoji_section_label(
-    language: crate::i18n::Language,
-    section: crate::emoji_catalog::EmojiSection,
-) -> &'static str {
-    let key = match section {
-        crate::emoji_catalog::EmojiSection::SmileysAndEmotion => {
-            "key_picker.emoji_section_smileys_emotion"
-        }
-        crate::emoji_catalog::EmojiSection::PeopleAndBody => "key_picker.emoji_section_people_body",
-        crate::emoji_catalog::EmojiSection::AnimalsAndNature => {
-            "key_picker.emoji_section_animals_nature"
-        }
-        crate::emoji_catalog::EmojiSection::FoodAndDrink => "key_picker.emoji_section_food_drink",
-        crate::emoji_catalog::EmojiSection::TravelAndPlaces => {
-            "key_picker.emoji_section_travel_places"
-        }
-        crate::emoji_catalog::EmojiSection::Activities => "key_picker.emoji_category_activities",
-        crate::emoji_catalog::EmojiSection::Objects => "key_picker.emoji_category_objects",
-        crate::emoji_catalog::EmojiSection::Symbols => "key_picker.emoji_category_symbols",
-        crate::emoji_catalog::EmojiSection::Flags => "key_picker.emoji_section_flags",
-    };
-    tr_picker(language, key)
+fn emoji_presentation_sections(
+) -> [(&'static str, &'static [crate::emoji_catalog::EmojiSection]); 8] {
+    use crate::emoji_catalog::EmojiSection;
+
+    [
+        (
+            "key_picker.emoji_section_people",
+            &[EmojiSection::SmileysAndEmotion, EmojiSection::PeopleAndBody],
+        ),
+        (
+            "key_picker.emoji_section_animals_nature",
+            &[EmojiSection::AnimalsAndNature],
+        ),
+        (
+            "key_picker.emoji_section_food_drink",
+            &[EmojiSection::FoodAndDrink],
+        ),
+        (
+            "key_picker.emoji_section_travel_places",
+            &[EmojiSection::TravelAndPlaces],
+        ),
+        (
+            "key_picker.emoji_category_activities",
+            &[EmojiSection::Activities],
+        ),
+        (
+            "key_picker.emoji_category_objects",
+            &[EmojiSection::Objects],
+        ),
+        (
+            "key_picker.emoji_category_symbols",
+            &[EmojiSection::Symbols],
+        ),
+        ("key_picker.emoji_section_flags", &[EmojiSection::Flags]),
+    ]
 }
 
 fn emoji_hover_text(
@@ -204,4 +214,23 @@ fn emoji_skin_tone_label(
         crate::emoji_catalog::EmojiSkinTone::Dark => "key_picker.emoji_skin_dark",
     };
     tr_picker(language, key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn presentation_starts_with_combined_emoji_and_people_section() {
+        let sections = emoji_presentation_sections();
+
+        assert_eq!(sections[0].0, "key_picker.emoji_section_people");
+        assert_eq!(
+            sections[0].1,
+            &[
+                crate::emoji_catalog::EmojiSection::SmileysAndEmotion,
+                crate::emoji_catalog::EmojiSection::PeopleAndBody,
+            ]
+        );
+    }
 }
