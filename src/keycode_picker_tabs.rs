@@ -193,9 +193,6 @@ impl KeycodePicker {
         ) {
             self.assign_keycode_value(value);
         }
-
-        ui.add_space(10.0);
-        self.show_emoji_sections(ui);
     }
 
     pub(super) fn show_vial_generic(&mut self, ui: &mut egui::Ui) {

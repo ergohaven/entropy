@@ -1,6 +1,8 @@
 use super::*;
 
 impl KeycodePicker {
+    // Foundation for the follow-up that wires emoji selection into host output.
+    #[allow(dead_code)]
     pub(super) fn show_emoji_sections(&mut self, ui: &mut egui::Ui) {
         let scale = responsive_picker_element_scale(ui.ctx());
         let dark = ui.visuals().dark_mode;
