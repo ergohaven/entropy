@@ -2731,6 +2731,9 @@ pub struct EntropyApp {
     /// Stack of layers to return to on right-click (last = most recent)
     pub(crate) jump_back_stack: Vec<usize>,
     pub(crate) dark_mode: bool,
+    pub(crate) last_applied_theme: Option<(bool, AppAccentColor)>,
+    #[cfg(target_os = "windows")]
+    pub(crate) windows_repaint_scheduler: WindowsRepaintScheduler,
     pub(crate) app_settings: AppSettings,
     pub(crate) text_expander_rules_signature: Vec<(String, Option<std::time::SystemTime>)>,
     pub(crate) text_expander_rules_last_check_at: f64,

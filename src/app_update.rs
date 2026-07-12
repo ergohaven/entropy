@@ -87,7 +87,14 @@ pub(crate) fn poll_update_check(state: &mut UpdateCheckState) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let outcome = match state {
-            UpdateCheckState::Checking { receiver } => receiver.try_recv().ok(),
+            UpdateCheckState::Checking { receiver } => match receiver.try_recv() {
+                Ok(outcome) => Some(outcome),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    *state = UpdateCheckState::Failed("Update check thread died".to_owned());
+                    return;
+                }
+            },
             _ => None,
         };
 
@@ -230,5 +237,53 @@ fn normalized_arch_label() -> &'static str {
         "x86_64" => "x86_64",
         "aarch64" => "arm64",
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn disconnected_update_worker_finishes_with_failure() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        drop(sender);
+        let mut state = UpdateCheckState::Checking { receiver };
+
+        poll_update_check(&mut state);
+
+        assert!(matches!(
+            state,
+            UpdateCheckState::Failed(ref error) if error == "Update check thread died"
+        ));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn pending_update_worker_stays_checking() {
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        let mut state = UpdateCheckState::Checking { receiver };
+
+        poll_update_check(&mut state);
+
+        assert!(matches!(state, UpdateCheckState::Checking { .. }));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn failed_update_outcome_finishes_with_reported_error() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender
+            .send(UpdateCheckOutcome::Failed("network unavailable".to_owned()))
+            .unwrap();
+        let mut state = UpdateCheckState::Checking { receiver };
+
+        poll_update_check(&mut state);
+
+        assert!(matches!(
+            state,
+            UpdateCheckState::Failed(ref error) if error == "network unavailable"
+        ));
     }
 }

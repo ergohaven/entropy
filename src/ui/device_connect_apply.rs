@@ -58,6 +58,11 @@ mod tests {
         ));
         assert!(!is_hid_open_failure("Layout parse failed: missing matrix"));
     }
+
+    #[test]
+    fn empty_connect_poll_is_throttled() {
+        assert_eq!(CONNECT_POLL_INTERVAL, std::time::Duration::from_millis(250));
+    }
 }
 
 impl EntropyApp {
@@ -79,7 +84,10 @@ impl EntropyApp {
                     ctx.request_repaint();
                     return;
                 }
-                Ok(ConnectTaskMessage::Done(result)) => *result,
+                Ok(ConnectTaskMessage::Done(result)) => {
+                    ctx.request_repaint();
+                    *result
+                }
                 Err(mpsc::TryRecvError::Empty) => {
                     let idle_timeout = last_progress_at.elapsed() > CONNECT_IDLE_TIMEOUT;
                     let total_timeout = started_at.elapsed() > CONNECT_TOTAL_TIMEOUT;
@@ -96,7 +104,8 @@ impl EntropyApp {
                         self.connect_state = ConnectState::Idle;
                         return;
                     }
-                    ctx.request_repaint(); // keep polling
+                    #[cfg(not(target_os = "windows"))]
+                    ctx.request_repaint_after(CONNECT_POLL_INTERVAL);
                     return;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
