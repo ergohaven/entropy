@@ -95,6 +95,9 @@ TEXT_EXPANDER_MAIN_RULES_FILE = "text_expansion_rules.json"
 DEBUG_ENV_VAR = "ENTROPY_UNIVERSAL_SYMBOLS_DEBUG"
 DEBUG_MARKER_FILE = "universal_symbols_debug"
 DEBUG_LOG_FILE = "universal-symbols-debug.log"
+UNICODE_FALLBACK_ENV_VAR = "ENTROPY_UNIVERSAL_SYMBOLS_UNICODE_FALLBACK"
+UNICODE_FALLBACK_MARKER_FILE = "universal_symbols_unicode_fallback"
+UNICODE_FALLBACK_DELAY_MS = 35
 
 XK_F13 = 0xFFCA
 KC_F13 = 0x0068
@@ -186,13 +189,13 @@ def _entropy_cache_dir():
     return os.path.join(_cache_home(), "entropy")
 
 
-def _debug_env_enabled():
-    value = os.environ.get(DEBUG_ENV_VAR, "").strip().lower()
+def _env_enabled(name):
+    value = os.environ.get(name, "").strip().lower()
     return value in ("1", "true", "yes", "on")
 
 
 def _debug_enabled():
-    return _debug_env_enabled() or os.path.exists(
+    return _env_enabled(DEBUG_ENV_VAR) or os.path.exists(
         os.path.join(_entropy_config_dir(), DEBUG_MARKER_FILE)
     )
 
@@ -215,6 +218,12 @@ def _debug_int(value):
         return int(value)
     except Exception:
         return 0
+
+
+def _unicode_fallback_enabled():
+    return _env_enabled(UNICODE_FALLBACK_ENV_VAR) or os.path.exists(
+        os.path.join(_entropy_config_dir(), UNICODE_FALLBACK_MARKER_FILE)
+    )
 
 
 def _app_settings_path():
@@ -716,11 +725,15 @@ class EntropyEngine(IBus.Engine):
         self._client = ""
         self._client_capabilities = 0
         self._input_purpose = IBus.InputPurpose.FREE_FORM
+        self._input_hints = 0
 
     def do_focus_in_id(self, object_path, client):
         del object_path
         self._client = str(client or "").lower()
-        _debug_log(f"focus-in client={self._client or '-'} purpose={_debug_int(self._input_purpose)}")
+        _debug_log(
+            f"focus-in client={self._client or '-'} "
+            f"purpose={_debug_int(self._input_purpose)} hints=0x{_debug_int(self._input_hints):x}"
+        )
 
     def do_focus_out_id(self, object_path):
         del object_path
@@ -733,6 +746,7 @@ class EntropyEngine(IBus.Engine):
 
     def do_set_content_type(self, purpose, hints):
         self._input_purpose = purpose
+        self._input_hints = hints
         _debug_log(
             f"content-type client={self._client or '-'} "
             f"purpose={_debug_int(purpose)} hints=0x{_debug_int(hints):x}"
@@ -747,6 +761,7 @@ class EntropyEngine(IBus.Engine):
             _debug_log(
                 "transport "
                 f"client={self._client or '-'} purpose={_debug_int(self._input_purpose)} "
+                f"hints=0x{_debug_int(self._input_hints):x} "
                 f"keyval=0x{_debug_int(keyval):x} keycode={_debug_int(keycode)} "
                 f"state=0x{_debug_int(state):x} "
                 f"base=0x{base_keycode:x} source={source or '-'} modifiers=0x{modifiers:x} "
@@ -755,14 +770,45 @@ class EntropyEngine(IBus.Engine):
             if symbol is not None:
                 # Commit text on key-down only.
                 if not release:
-                    _debug_log(
-                        f"commit client={self._client or '-'} purpose={_debug_int(self._input_purpose)} "
-                        f"symbol={symbol}"
-                    )
-                    self._commit_text_expander_aware_text(symbol)
+                    self._commit_transport_symbol(symbol)
             return True
 
         return self._process_text_expander_key(keyval, keycode, state)
+
+    def _commit_transport_symbol(self, symbol):
+        if _unicode_fallback_enabled():
+            _debug_log(
+                "unicode-fallback-schedule "
+                f"client={self._client or '-'} purpose={_debug_int(self._input_purpose)} "
+                f"hints=0x{_debug_int(self._input_hints):x} symbol={symbol}"
+            )
+            GLib.timeout_add(
+                UNICODE_FALLBACK_DELAY_MS, self._forward_unicode_fallback_text, symbol
+            )
+            return
+        _debug_log(
+            f"commit client={self._client or '-'} purpose={_debug_int(self._input_purpose)} "
+            f"hints=0x{_debug_int(self._input_hints):x} symbol={symbol}"
+        )
+        self._commit_text_expander_aware_text(symbol)
+
+    def _forward_unicode_fallback_text(self, text):
+        for ch in text:
+            self._forward_unicode_fallback_char(ch)
+        return False
+
+    def _forward_unicode_fallback_char(self, ch):
+        codepoint = f"{ord(ch):x}"
+        _debug_log(f"unicode-fallback-send char={ch} codepoint={codepoint}")
+        ctrl_shift = IBus.ModifierType.CONTROL_MASK | IBus.ModifierType.SHIFT_MASK
+        self._forward_key_tap(IBus.KEY_u, ctrl_shift)
+        for digit in codepoint:
+            self._forward_key_tap(ord(digit), 0)
+        self._forward_key_tap(IBus.KEY_Return, 0)
+
+    def _forward_key_tap(self, keyval, state=0):
+        self.forward_key_event(keyval, 0, state)
+        self.forward_key_event(keyval, 0, state | IBus.ModifierType.RELEASE_MASK)
 
     def _process_text_expander_key(self, keyval, keycode, state):
         del keycode
