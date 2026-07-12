@@ -63,18 +63,6 @@ tail -n 80 ~/.cache/entropy/universal-symbols-debug.log
 
 Remove `~/.config/entropy/universal_symbols_debug` and restart IBus to disable it.
 
-For clients that receive the transport chord but ignore `commit_text`, enable
-the Unicode fallback mode:
-
-```sh
-touch ~/.config/entropy/universal_symbols_unicode_fallback
-ibus restart
-```
-
-This sends Unicode input key events for Universal Symbols instead of using
-`commit_text`. Remove `~/.config/entropy/universal_symbols_unicode_fallback`
-and restart IBus to disable it.
-
 ## Scope
 
 This is the IBus backend. Fcitx5 currently handles Universal Symbols only.

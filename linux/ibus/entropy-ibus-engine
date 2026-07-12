@@ -95,9 +95,6 @@ TEXT_EXPANDER_MAIN_RULES_FILE = "text_expansion_rules.json"
 DEBUG_ENV_VAR = "ENTROPY_UNIVERSAL_SYMBOLS_DEBUG"
 DEBUG_MARKER_FILE = "universal_symbols_debug"
 DEBUG_LOG_FILE = "universal-symbols-debug.log"
-UNICODE_FALLBACK_ENV_VAR = "ENTROPY_UNIVERSAL_SYMBOLS_UNICODE_FALLBACK"
-UNICODE_FALLBACK_MARKER_FILE = "universal_symbols_unicode_fallback"
-UNICODE_FALLBACK_DELAY_MS = 35
 
 XK_F13 = 0xFFCA
 KC_F13 = 0x0068
@@ -218,12 +215,6 @@ def _debug_int(value):
         return int(value)
     except Exception:
         return 0
-
-
-def _unicode_fallback_enabled():
-    return _env_enabled(UNICODE_FALLBACK_ENV_VAR) or os.path.exists(
-        os.path.join(_entropy_config_dir(), UNICODE_FALLBACK_MARKER_FILE)
-    )
 
 
 def _app_settings_path():
@@ -776,39 +767,11 @@ class EntropyEngine(IBus.Engine):
         return self._process_text_expander_key(keyval, keycode, state)
 
     def _commit_transport_symbol(self, symbol):
-        if _unicode_fallback_enabled():
-            _debug_log(
-                "unicode-fallback-schedule "
-                f"client={self._client or '-'} purpose={_debug_int(self._input_purpose)} "
-                f"hints=0x{_debug_int(self._input_hints):x} symbol={symbol}"
-            )
-            GLib.timeout_add(
-                UNICODE_FALLBACK_DELAY_MS, self._forward_unicode_fallback_text, symbol
-            )
-            return
         _debug_log(
             f"commit client={self._client or '-'} purpose={_debug_int(self._input_purpose)} "
             f"hints=0x{_debug_int(self._input_hints):x} symbol={symbol}"
         )
         self._commit_text_expander_aware_text(symbol)
-
-    def _forward_unicode_fallback_text(self, text):
-        for ch in text:
-            self._forward_unicode_fallback_char(ch)
-        return False
-
-    def _forward_unicode_fallback_char(self, ch):
-        codepoint = f"{ord(ch):x}"
-        _debug_log(f"unicode-fallback-send char={ch} codepoint={codepoint}")
-        ctrl_shift = IBus.ModifierType.CONTROL_MASK | IBus.ModifierType.SHIFT_MASK
-        self._forward_key_tap(IBus.KEY_u, ctrl_shift)
-        for digit in codepoint:
-            self._forward_key_tap(ord(digit), 0)
-        self._forward_key_tap(IBus.KEY_Return, 0)
-
-    def _forward_key_tap(self, keyval, state=0):
-        self.forward_key_event(keyval, 0, state)
-        self.forward_key_event(keyval, 0, state | IBus.ModifierType.RELEASE_MASK)
 
     def _process_text_expander_key(self, keyval, keycode, state):
         del keycode
