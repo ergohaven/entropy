@@ -2,17 +2,10 @@
 // Entropy Universal Symbols backend for Fcitx5.
 
 #include <array>
-#include <algorithm>
-#include <chrono>
-#include <cctype>
 #include <cstdint>
-#include <cstdlib>
-#include <fstream>
 #include <memory>
 #include <optional>
-#include <sstream>
 #include <string>
-#include <sys/stat.h>
 #include "fcitx-utils/handlertable.h"
 #include "fcitx-utils/key.h"
 #include "fcitx-utils/keysym.h"
@@ -32,9 +25,6 @@ constexpr uint16_t MOD_CTRL = 0x0100;
 constexpr uint16_t MOD_SHIFT = 0x0200;
 constexpr uint16_t MOD_ALT = 0x0400;
 constexpr uint16_t MOD_GUI = 0x0800;
-constexpr const char *DEBUG_ENV_VAR = "ENTROPY_UNIVERSAL_SYMBOLS_DEBUG";
-constexpr const char *DEBUG_MARKER_FILE = "universal_symbols_debug";
-constexpr const char *DEBUG_LOG_FILE = "universal-symbols-debug.log";
 
 struct SmartSymbol {
     uint16_t trigger;
@@ -176,66 +166,6 @@ std::optional<std::string> symbolForKey(const Key &key) {
     return std::nullopt;
 }
 
-std::string configDir() {
-    if (const char *xdgConfigHome = std::getenv("XDG_CONFIG_HOME")) {
-        return std::string(xdgConfigHome) + "/entropy";
-    }
-    if (const char *home = std::getenv("HOME")) {
-        return std::string(home) + "/.config/entropy";
-    }
-    return {};
-}
-
-std::string cacheDir() {
-    if (const char *xdgCacheHome = std::getenv("XDG_CACHE_HOME")) {
-        return std::string(xdgCacheHome) + "/entropy";
-    }
-    if (const char *home = std::getenv("HOME")) {
-        return std::string(home) + "/.cache/entropy";
-    }
-    return {};
-}
-
-bool fileExists(const std::string &path) {
-    std::ifstream file(path);
-    return file.good();
-}
-
-bool debugEnvEnabled() {
-    const char *raw = std::getenv(DEBUG_ENV_VAR);
-    if (!raw) {
-        return false;
-    }
-    std::string value(raw);
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
-    return value == "1" || value == "true" || value == "yes" || value == "on";
-}
-
-bool debugEnabled() {
-    const auto dir = configDir();
-    return debugEnvEnabled() || (!dir.empty() && fileExists(dir + "/" + DEBUG_MARKER_FILE));
-}
-
-void debugLog(const std::string &message) {
-    if (!debugEnabled()) {
-        return;
-    }
-    const auto dir = cacheDir();
-    if (dir.empty()) {
-        return;
-    }
-    mkdir(dir.c_str(), 0755);
-    std::ofstream log(dir + "/" + DEBUG_LOG_FILE, std::ios::app);
-    if (!log) {
-        return;
-    }
-    const auto now = std::chrono::system_clock::now().time_since_epoch();
-    const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(now).count();
-    log << seconds << " fcitx5 " << message << '\n';
-}
-
 } // namespace
 
 class EntropyUniversalSymbols final : public AddonInstance {
@@ -249,16 +179,7 @@ public:
 private:
     void handleKeyEvent(Event &event) {
         auto &keyEvent = static_cast<KeyEvent &>(event);
-        const auto base = baseKeycodeForSym(keyEvent.key().sym());
         const auto symbol = symbolForKey(keyEvent.key());
-        if (base) {
-            std::ostringstream line;
-            line << "transport base=0x" << std::hex << *base
-                 << " modifiers=0x" << transportModifiers(keyEvent.key().states())
-                 << " symbol=" << (symbol ? *symbol : "-")
-                 << " release=" << std::dec << (keyEvent.isRelease() ? 1 : 0);
-            debugLog(line.str());
-        }
         if (!symbol) {
             return;
         }
@@ -266,7 +187,6 @@ private:
         // Swallow both press and release for handled transport chords, but
         // commit text only on press.
         if (!keyEvent.isRelease()) {
-            debugLog("commit symbol=" + *symbol);
             keyEvent.inputContext()->commitString(*symbol);
         }
         keyEvent.filterAndAccept();
