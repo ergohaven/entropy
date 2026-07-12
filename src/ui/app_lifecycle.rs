@@ -1025,6 +1025,15 @@ impl eframe::App for EntropyApp {
             self.combo_names_dirty = false;
         }
 
+        if self.keycode_picker.macro_metadata_dirty && !self.current_device_name.is_empty() {
+            save_macro_metadata(
+                &self.keycode_picker.macro_names,
+                &self.keycode_picker.macro_descriptions,
+                &self.current_device_name,
+            );
+            self.keycode_picker.macro_metadata_dirty = false;
+        }
+
         if self.combo_colors_dirty {
             save_combo_colors(&self.combo_colors, &self.current_device_name);
             self.combo_colors_dirty = false;

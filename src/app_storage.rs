@@ -594,6 +594,61 @@ pub(super) fn save_alt_repeat_names(names: &[String], device_name: &str) {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub(super) struct MacroMetadata {
+    #[serde(default)]
+    pub(super) names: Vec<String>,
+    #[serde(default)]
+    pub(super) descriptions: Vec<String>,
+}
+
+impl MacroMetadata {
+    pub(super) fn resize(&mut self, slot_count: usize) {
+        self.names.resize(slot_count, String::new());
+        self.descriptions.resize(slot_count, String::new());
+    }
+}
+
+pub(super) fn macro_metadata_path(device_name: &str) -> std::path::PathBuf {
+    let dir = dirs::config_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("entropy");
+    std::fs::create_dir_all(&dir).ok();
+    let slug = device_id_slug(device_name);
+    dir.join(format!("macro_metadata_{}.json", slug))
+}
+
+fn load_macro_metadata_from_path(path: &std::path::Path) -> MacroMetadata {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|data| serde_json::from_str(&data).ok())
+        .unwrap_or_default()
+}
+
+pub(super) fn load_macro_metadata(device_name: &str) -> MacroMetadata {
+    load_macro_metadata_from_path(&macro_metadata_path(device_name))
+}
+
+fn save_macro_metadata_to_path(
+    path: &std::path::Path,
+    metadata: &MacroMetadata,
+) -> Result<(), String> {
+    let data = serde_json::to_string(metadata).map_err(|error| error.to_string())?;
+    std::fs::write(path, data).map_err(|error| error.to_string())
+}
+
+pub(super) fn save_macro_metadata(names: &[String], descriptions: &[String], device_name: &str) {
+    let path = macro_metadata_path(device_name);
+    let metadata = MacroMetadata {
+        names: names.to_vec(),
+        descriptions: descriptions.to_vec(),
+    };
+    match save_macro_metadata_to_path(&path, &metadata) {
+        Ok(()) => log::info!("save_macro_metadata ok → {:?}", path),
+        Err(error) => log::warn!("save_macro_metadata failed at {:?}: {error}", path),
+    }
+}
+
 pub(super) fn macro_custom_name(macro_names: &[String], idx: usize) -> Option<String> {
     macro_names
         .get(idx)
@@ -629,6 +684,67 @@ pub(super) fn tap_dance_display_name(tap_dance_names: &[String], idx: usize) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_macro_metadata_path(test_name: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "entropy_{test_name}_{}_{}.json",
+            std::process::id(),
+            nonce
+        ))
+    }
+
+    #[test]
+    fn macro_metadata_round_trip_preserves_names_and_descriptions() {
+        let path = temp_macro_metadata_path("round_trip");
+        let expected = MacroMetadata {
+            names: vec!["Copy".into(), "Paste".into()],
+            descriptions: vec!["Copy selected text".into(), "Paste clipboard".into()],
+        };
+
+        save_macro_metadata_to_path(&path, &expected).unwrap();
+        let actual = load_macro_metadata_from_path(&path);
+
+        assert_eq!(actual, expected);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn missing_or_invalid_macro_metadata_loads_empty() {
+        let path = temp_macro_metadata_path("invalid");
+
+        assert_eq!(
+            load_macro_metadata_from_path(&path),
+            MacroMetadata::default()
+        );
+
+        std::fs::write(&path, "not json").unwrap();
+        assert_eq!(
+            load_macro_metadata_from_path(&path),
+            MacroMetadata::default()
+        );
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn macro_metadata_resize_matches_available_slots() {
+        let mut metadata = MacroMetadata {
+            names: vec!["One".into(), "Two".into(), "Three".into()],
+            descriptions: vec!["First".into()],
+        };
+
+        metadata.resize(2);
+        assert_eq!(metadata.names, ["One", "Two"]);
+        assert_eq!(metadata.descriptions, ["First", ""]);
+
+        metadata.resize(4);
+        assert_eq!(metadata.names, ["One", "Two", "", ""]);
+        assert_eq!(metadata.descriptions, ["First", "", "", ""]);
+    }
 
     #[test]
     fn text_expander_rules_json_parses_plain_array() {

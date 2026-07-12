@@ -186,8 +186,11 @@ impl EntropyApp {
                     .min(self.combo_visible_count.saturating_sub(1));
                 self.keycode_picker.macro_count = r.macro_texts.len();
                 self.keycode_picker.macro_texts = r.macro_texts.clone();
-                self.keycode_picker.macro_names = vec![String::new(); r.macro_texts.len()];
-                self.keycode_picker.macro_descriptions = vec![String::new(); r.macro_texts.len()];
+                let mut macro_metadata = load_macro_metadata(&self.current_device_name);
+                macro_metadata.resize(r.macro_texts.len());
+                self.keycode_picker.macro_names = macro_metadata.names;
+                self.keycode_picker.macro_descriptions = macro_metadata.descriptions;
+                self.keycode_picker.macro_metadata_dirty = false;
                 self.keycode_picker.supports_macro_ext_keycodes = r.supports_macro_ext_keycodes;
                 self.keycode_picker.macro_ext_keycodes_disabled_reason =
                     r.macro_ext_keycodes_disabled_reason;
