@@ -152,8 +152,8 @@ def _symbol_entries():
     for idx, symbol in enumerate(["°", "‰", "′", "″", "‘", "’", "„", "“"]):
         add(idx, symbol, MOD_CTRL | MOD_SHIFT)
 
-    # Super+F13..F17
-    for idx, symbol in enumerate(["§", "”", "™", "~", "_"]):
+    # Super+F13..F18
+    for idx, symbol in enumerate(["§", "”", "™", "~", "_", "-"]):
         add(idx, symbol, MOD_GUI)
 
     # Super+Shift+F13..F17
