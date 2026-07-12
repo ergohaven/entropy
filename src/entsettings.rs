@@ -89,14 +89,13 @@ impl EntropyApp {
                 &[("path", &path.display().to_string())],
             )
         })?;
-        let bundle: EntSettingsFile = serde_json::from_str(&data)
-            .with_context(|| {
-                crate::i18n::tr_catalog_format(
-                    lang,
-                    "entsettings.failed_to_parse",
-                    &[("path", &path.display().to_string())],
-                )
-            })?;
+        let bundle: EntSettingsFile = serde_json::from_str(&data).with_context(|| {
+            crate::i18n::tr_catalog_format(
+                lang,
+                "entsettings.failed_to_parse",
+                &[("path", &path.display().to_string())],
+            )
+        })?;
         validate_entsettings_file(&bundle, lang)?;
         let backup_path = write_entsettings_auto_backup(&self.entsettings_snapshot(), lang)?;
         self.apply_entsettings(ctx, bundle)?;
@@ -152,8 +151,8 @@ impl EntropyApp {
         for file in &bundle.text_expander_extra_files {
             if let Some(file_name) = normalize_text_expander_rules_file_name(&file.file_name) {
                 let path = text_expander_extra_rules_path(&file_name);
-                let json = serde_json::to_string_pretty(&file.rules)
-                    .context(crate::i18n::tr_catalog(
+                let json =
+                    serde_json::to_string_pretty(&file.rules).context(crate::i18n::tr_catalog(
                         self.app_settings.language,
                         "entsettings.failed_to_serialize_rules",
                     ))?;
