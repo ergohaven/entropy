@@ -36,3 +36,21 @@ The install script restarts Fcitx5 automatically when the `fcitx5` command is av
 - Ignores all ordinary typing
 - Works through the Fcitx5 input-method stack, including Wayland sessions supported by Fcitx5
 - Does not log keyboard input
+
+## Debug
+
+Universal Symbols debug logging is opt-in. Enable it with:
+
+```sh
+mkdir -p ~/.config/entropy
+touch ~/.config/entropy/universal_symbols_debug
+fcitx5 -r
+```
+
+Then reproduce the issue and inspect:
+
+```sh
+tail -n 80 ~/.cache/entropy/universal-symbols-debug.log
+```
+
+Remove `~/.config/entropy/universal_symbols_debug` and restart Fcitx5 to disable it.

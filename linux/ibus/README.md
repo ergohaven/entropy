@@ -45,6 +45,24 @@ Required distro packages are usually:
 - On match, swallows the last trigger key, removes the already typed trigger text through surrounding-text APIs in GUI clients, uses terminal erase bytes in terminal clients, and commits the replacement
 - Does not log keyboard input
 
+## Debug
+
+Universal Symbols debug logging is opt-in. Enable it with:
+
+```sh
+mkdir -p ~/.config/entropy
+touch ~/.config/entropy/universal_symbols_debug
+ibus restart
+```
+
+Then reproduce the issue and inspect:
+
+```sh
+tail -n 80 ~/.cache/entropy/universal-symbols-debug.log
+```
+
+Remove `~/.config/entropy/universal_symbols_debug` and restart IBus to disable it.
+
 ## Scope
 
 This is the IBus backend. Fcitx5 currently handles Universal Symbols only.

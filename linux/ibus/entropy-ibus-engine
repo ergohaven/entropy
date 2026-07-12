@@ -11,6 +11,7 @@ import json
 import os
 import signal
 import sys
+import time
 
 
 try:
@@ -91,6 +92,9 @@ ENGINE_DESCRIPTORS = (
 )
 ENGINE_NAMES = {descriptor["name"] for descriptor in ENGINE_DESCRIPTORS}
 TEXT_EXPANDER_MAIN_RULES_FILE = "text_expansion_rules.json"
+DEBUG_ENV_VAR = "ENTROPY_UNIVERSAL_SYMBOLS_DEBUG"
+DEBUG_MARKER_FILE = "universal_symbols_debug"
+DEBUG_LOG_FILE = "universal-symbols-debug.log"
 
 XK_F13 = 0xFFCA
 KC_F13 = 0x0068
@@ -172,6 +176,45 @@ def _config_home():
 
 def _entropy_config_dir():
     return os.path.join(_config_home(), "entropy")
+
+
+def _cache_home():
+    return os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+
+
+def _entropy_cache_dir():
+    return os.path.join(_cache_home(), "entropy")
+
+
+def _debug_env_enabled():
+    value = os.environ.get(DEBUG_ENV_VAR, "").strip().lower()
+    return value in ("1", "true", "yes", "on")
+
+
+def _debug_enabled():
+    return _debug_env_enabled() or os.path.exists(
+        os.path.join(_entropy_config_dir(), DEBUG_MARKER_FILE)
+    )
+
+
+def _debug_log(message):
+    if not _debug_enabled():
+        return
+    try:
+        os.makedirs(_entropy_cache_dir(), exist_ok=True)
+        path = os.path.join(_entropy_cache_dir(), DEBUG_LOG_FILE)
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(f"{timestamp} ibus {message}\n")
+    except Exception:
+        pass
+
+
+def _debug_int(value):
+    try:
+        return int(value)
+    except Exception:
+        return 0
 
 
 def _app_settings_path():
@@ -677,27 +720,45 @@ class EntropyEngine(IBus.Engine):
     def do_focus_in_id(self, object_path, client):
         del object_path
         self._client = str(client or "").lower()
+        _debug_log(f"focus-in client={self._client or '-'} purpose={_debug_int(self._input_purpose)}")
 
     def do_focus_out_id(self, object_path):
         del object_path
+        _debug_log(f"focus-out client={self._client or '-'}")
         self._client = ""
 
     def do_set_capabilities(self, caps):
         self._client_capabilities = int(caps)
+        _debug_log(f"capabilities client={self._client or '-'} caps=0x{self._client_capabilities:x}")
 
     def do_set_content_type(self, purpose, hints):
-        del hints
         self._input_purpose = purpose
+        _debug_log(
+            f"content-type client={self._client or '-'} "
+            f"purpose={_debug_int(purpose)} hints=0x{_debug_int(hints):x}"
+        )
 
     def do_process_key_event(self, keyval, keycode, state):
         base_keycode, source = _transport_keycode_from_event(keyval, keycode)
         if base_keycode is not None:
             modifiers = _transport_modifiers(state)
             symbol = SMART_SYMBOLS.get((base_keycode, modifiers))
-            del source
+            release = bool(state & IBus.ModifierType.RELEASE_MASK)
+            _debug_log(
+                "transport "
+                f"client={self._client or '-'} purpose={_debug_int(self._input_purpose)} "
+                f"keyval=0x{_debug_int(keyval):x} keycode={_debug_int(keycode)} "
+                f"state=0x{_debug_int(state):x} "
+                f"base=0x{base_keycode:x} source={source or '-'} modifiers=0x{modifiers:x} "
+                f"symbol={symbol if symbol is not None else '-'} release={int(release)}"
+            )
             if symbol is not None:
                 # Commit text on key-down only.
-                if not (state & IBus.ModifierType.RELEASE_MASK):
+                if not release:
+                    _debug_log(
+                        f"commit client={self._client or '-'} purpose={_debug_int(self._input_purpose)} "
+                        f"symbol={symbol}"
+                    )
                     self._commit_text_expander_aware_text(symbol)
             return True
 
