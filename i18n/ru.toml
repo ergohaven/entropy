@@ -388,6 +388,8 @@ unlock_start_failed = "Не удалось начать разблокировк
 unlock_cancelled_disconnected = "Разблокировка отменена — устройство отключено"
 device_unlocked = "Устройство разблокировано"
 unlock_interrupted_disconnected = "Разблокировка прервана — устройство отключено или недоступно: {error}"
+unlock_poll_retry = "Связь при разблокировке прервана; повторная попытка: {error}"
+finish_unlock_before_closing = "Завершите разблокировку устройства или переподключите его перед закрытием Entropy"
 
 [dynamic_status]
 device_not_found = "Устройство не найдено"
