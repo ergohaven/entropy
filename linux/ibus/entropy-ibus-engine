@@ -95,10 +95,6 @@ TEXT_EXPANDER_MAIN_RULES_FILE = "text_expansion_rules.json"
 DEBUG_ENV_VAR = "ENTROPY_UNIVERSAL_SYMBOLS_DEBUG"
 DEBUG_MARKER_FILE = "universal_symbols_debug"
 DEBUG_LOG_FILE = "universal-symbols-debug.log"
-CLIPBOARD_FALLBACK_ENV_VAR = "ENTROPY_UNIVERSAL_SYMBOLS_CLIPBOARD_FALLBACK"
-CLIPBOARD_FALLBACK_MARKER_FILE = "universal_symbols_clipboard_fallback"
-CLIPBOARD_PASTE_DELAY_MS = 30
-CLIPBOARD_RESTORE_DELAY_MS = 600
 
 XK_F13 = 0xFFCA
 KC_F13 = 0x0068
@@ -120,8 +116,6 @@ TERMINAL_CLIENT_MARKERS = (
     "vte",
     "wezterm",
 )
-GTK_CLIPBOARD_MODULES = None
-GTK_CLIPBOARD_IMPORT_FAILED = False
 
 
 def _symbol_entries():
@@ -203,12 +197,6 @@ def _debug_enabled():
     )
 
 
-def _clipboard_fallback_enabled():
-    return _env_enabled(CLIPBOARD_FALLBACK_ENV_VAR) or os.path.exists(
-        os.path.join(_entropy_config_dir(), CLIPBOARD_FALLBACK_MARKER_FILE)
-    )
-
-
 def _debug_log(message):
     if not _debug_enabled():
         return
@@ -227,25 +215,6 @@ def _debug_int(value):
         return int(value)
     except Exception:
         return 0
-
-
-def _gtk_clipboard_modules():
-    global GTK_CLIPBOARD_IMPORT_FAILED, GTK_CLIPBOARD_MODULES
-    if GTK_CLIPBOARD_MODULES is not None:
-        return GTK_CLIPBOARD_MODULES
-    if GTK_CLIPBOARD_IMPORT_FAILED:
-        return None
-    try:
-        gi.require_version("Gdk", "3.0")
-        gi.require_version("Gtk", "3.0")
-        from gi.repository import Gdk, Gtk
-
-        GTK_CLIPBOARD_MODULES = Gdk, Gtk
-        return GTK_CLIPBOARD_MODULES
-    except Exception as exc:
-        GTK_CLIPBOARD_IMPORT_FAILED = True
-        _debug_log(f"clipboard-fallback-unavailable reason={type(exc).__name__}")
-        return None
 
 
 def _app_settings_path():
@@ -748,8 +717,6 @@ class EntropyEngine(IBus.Engine):
         self._client_capabilities = 0
         self._input_purpose = IBus.InputPurpose.FREE_FORM
         self._input_hints = 0
-        self._clipboard_restore_source_id = 0
-        self._clipboard_restore_text = None
 
     def do_focus_in_id(self, object_path, client):
         del object_path
@@ -800,86 +767,11 @@ class EntropyEngine(IBus.Engine):
         return self._process_text_expander_key(keyval, keycode, state)
 
     def _commit_transport_symbol(self, symbol):
-        if _clipboard_fallback_enabled() and self._commit_clipboard_fallback_symbol(symbol):
-            return
         _debug_log(
             f"commit client={self._client or '-'} purpose={_debug_int(self._input_purpose)} "
             f"hints=0x{_debug_int(self._input_hints):x} symbol={symbol}"
         )
         self._commit_text_expander_aware_text(symbol)
-
-    def _commit_clipboard_fallback_symbol(self, symbol):
-        clipboard = self._clipboard()
-        if clipboard is None:
-            return False
-        try:
-            if not self._clipboard_restore_source_id:
-                self._clipboard_restore_text = clipboard.wait_for_text()
-            else:
-                try:
-                    GLib.source_remove(self._clipboard_restore_source_id)
-                except Exception:
-                    pass
-                self._clipboard_restore_source_id = 0
-            clipboard.set_text(symbol, -1)
-            _debug_log(
-                "clipboard-fallback-schedule "
-                f"client={self._client or '-'} purpose={_debug_int(self._input_purpose)} "
-                f"hints=0x{_debug_int(self._input_hints):x} symbol={symbol} "
-                f"restore_text={int(self._clipboard_restore_text is not None)}"
-            )
-            GLib.timeout_add(CLIPBOARD_PASTE_DELAY_MS, self._send_clipboard_paste_event, symbol)
-            self._clipboard_restore_source_id = GLib.timeout_add(
-                CLIPBOARD_RESTORE_DELAY_MS,
-                self._restore_clipboard_text,
-                clipboard,
-            )
-            return True
-        except Exception as exc:
-            _debug_log(f"clipboard-fallback-failed reason={type(exc).__name__}")
-            return False
-
-    @staticmethod
-    def _clipboard():
-        modules = _gtk_clipboard_modules()
-        if modules is None:
-            return None
-        Gdk, Gtk = modules
-        try:
-            display = Gdk.Display.get_default()
-            if display is None:
-                _debug_log("clipboard-fallback-unavailable reason=no-display")
-                return None
-            return Gtk.Clipboard.get_default(display)
-        except Exception as exc:
-            _debug_log(f"clipboard-fallback-unavailable reason={type(exc).__name__}")
-            return None
-
-    def _send_clipboard_paste_event(self, symbol):
-        _debug_log(f"clipboard-fallback-paste symbol={symbol}")
-        self.forward_key_event(IBus.KEY_v, 0, IBus.ModifierType.CONTROL_MASK)
-        self.forward_key_event(
-            IBus.KEY_v,
-            0,
-            IBus.ModifierType.CONTROL_MASK | IBus.ModifierType.RELEASE_MASK,
-        )
-        return False
-
-    def _restore_clipboard_text(self, clipboard):
-        previous_text = self._clipboard_restore_text
-        self._clipboard_restore_text = None
-        self._clipboard_restore_source_id = 0
-        try:
-            if previous_text is None:
-                clipboard.clear()
-                restored = 0
-            else:
-                clipboard.set_text(previous_text, -1)
-                restored = 1
-            _debug_log(f"clipboard-fallback-restore restore_text={restored}")
-        except Exception as exc:
-            _debug_log(f"clipboard-fallback-restore-failed reason={type(exc).__name__}")
-        return False
 
     def _process_text_expander_key(self, keyval, keycode, state):
         del keycode

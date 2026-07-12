@@ -63,27 +63,6 @@ tail -n 80 ~/.cache/entropy/universal-symbols-debug.log
 
 Remove `~/.config/entropy/universal_symbols_debug` and restart IBus to disable it.
 
-## Clipboard fallback
-
-Some Wayland clients can deliver Entropy transport chords to IBus but ignore the
-resulting `commit_text` call in app-controlled fields. The Firefox address bar is
-one observed example. For targeted testing, Universal Symbols can use a clipboard
-paste fallback instead of `commit_text`:
-
-```sh
-mkdir -p ~/.config/entropy
-touch ~/.config/entropy/universal_symbols_clipboard_fallback
-ibus restart
-```
-
-This mode temporarily puts only the selected symbol on the text clipboard, sends
-`Ctrl+V`, then restores the previous text clipboard value when one was available.
-It is intentionally opt-in because non-text clipboard contents cannot be fully
-restored through the GTK text clipboard API.
-
-Remove `~/.config/entropy/universal_symbols_clipboard_fallback` and restart IBus
-to return to the normal `commit_text` path.
-
 ## Scope
 
 This is the IBus backend. Fcitx5 currently handles Universal Symbols only.
