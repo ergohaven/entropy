@@ -592,22 +592,6 @@ impl EntropyApp {
                     ..
                 } => {
                     TRAY_RESTORE_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
-                    #[cfg(target_os = "windows")]
-                    if let Some(hwnd) = hwnd_for_handler {
-                        unsafe {
-                            use windows_sys::Win32::UI::WindowsAndMessaging::{
-                                SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
-                            };
-                            let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
-                            ShowWindow(hwnd, SW_SHOW);
-                            ShowWindow(hwnd, SW_RESTORE);
-                            SetForegroundWindow(hwnd);
-                        }
-                    }
-                    ctx_for_handler.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                    ctx_for_handler.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                    ctx_for_handler.send_viewport_cmd(egui::ViewportCommand::Focus);
-                    ctx_for_handler.request_repaint();
                 }
                 _ => {}
             }
@@ -619,11 +603,6 @@ impl EntropyApp {
             move |event: tray_icon::menu::MenuEvent| {
                 if event.id == "entropy_tray_quit" {
                     TRAY_QUIT_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
-                    #[cfg(target_os = "windows")]
-                    if let Some(hwnd) = hwnd_for_menu {
-                        request_windows_window_close_from_tray(hwnd);
-                    }
-                    ctx_for_menu.request_repaint();
                 }
             },
         ));

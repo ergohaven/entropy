@@ -803,7 +803,7 @@ pub fn run_hid_proxy_if_requested() -> bool {
 
 #[cfg(target_os = "windows")]
 fn run_hid_proxy(device: crate::device::Device) -> Result<()> {
-    let hid = HidDevice::open_fresh_for_local(&device)?;
+    let _hid = HidDevice::open_fresh_for_local(&device)?;
     writeln!(
         std::io::stdout(),
         "{}",
@@ -818,7 +818,7 @@ fn run_hid_proxy(device: crate::device::Device) -> Result<()> {
     for line in BufReader::new(std::io::stdin()).lines() {
         let line = line?;
         let line = line.trim();
-        let response = match hex_to_bytes(line).and_then(|data| hid.usb_send(&data)) {
+        let response = match hex_to_bytes(line).and_then(|data| _hid.usb_send(&data)) {
             Ok(data) => ProxyResponse {
                 ok: true,
                 data: Some(bytes_to_hex(&data)),

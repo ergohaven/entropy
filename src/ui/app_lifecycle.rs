@@ -374,6 +374,40 @@ impl eframe::App for EntropyApp {
         #[cfg(target_os = "macos")]
         self.handle_macos_dock_reopen(ctx);
 
+        let main_window_hidden_to_tray = self.main_window_hidden_to_tray();
+        if main_window_hidden_to_tray {
+            // The winit event loop on Windows 11 does not idle when the window is hidden.
+            // Block here and pump Windows messages so the tray icon stays responsive.
+            // On restore, break out and render the UI in the same frame.
+            while self.main_window_hidden_to_tray() {
+                #[cfg(target_os = "windows")]
+                unsafe {
+                    use windows_sys::Win32::UI::WindowsAndMessaging::{
+                        DispatchMessageW, PeekMessageW, TranslateMessage, PM_REMOVE,
+                    };
+                    let mut msg = std::mem::zeroed();
+                    while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                        TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
+                }
+                if TRAY_RESTORE_REQUESTED.load(std::sync::atomic::Ordering::Relaxed) {
+                    self.handle_tray_restore_request(ctx);
+                }
+                if TRAY_QUIT_REQUESTED.load(std::sync::atomic::Ordering::Relaxed) {
+                    self.handle_tray_quit_request(ctx);
+                    std::process::exit(0);
+                }
+                if !self.main_window_hidden_to_tray() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            if self.main_window_hidden_to_tray() {
+                return;
+            }
+        }
+
         self.tour_target_rects.clear();
 
         let keyboard_input_wanted_at_frame_start = ctx.wants_keyboard_input();
@@ -397,20 +431,14 @@ impl eframe::App for EntropyApp {
             .and_then(|idx| self.device_manager.devices().get(idx))
             .map(|device| device.is_bluetooth_transport())
             .unwrap_or(false);
-        let main_window_hidden_to_tray = self.main_window_hidden_to_tray();
         let now = ctx.input(|i| i.time);
-
-        #[cfg(not(target_arch = "wasm32"))]
-        if main_window_hidden_to_tray {
-            self.update_hidden_to_tray_background(ctx, now);
-            ctx.request_repaint_after(hidden_to_tray_repaint_interval());
-            return;
-        }
 
         // Keep lightweight device detection alive when visible. On Windows BLE,
         // keep UI repaint smooth but avoid frequent HID enumeration against the BLE stack.
         #[cfg(not(target_arch = "wasm32"))]
-        ctx.request_repaint_after(visible_repaint_interval(selected_device_is_bluetooth));
+        // No periodic repaint timer - render purely event-driven.
+        // Continuous timers keep the event loop from idling on this system, burning
+        // 100% CPU and flooding any HID proxy child process with requests on every frame.
 
         #[cfg(not(target_arch = "wasm32"))]
         if should_poll_device_scan(main_window_hidden_to_tray) {
@@ -455,7 +483,12 @@ impl eframe::App for EntropyApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_single_instance_signal(ctx);
 
-        // Apply theme
+        // Apply theme - only when dark_mode actually changes.
+        // Calling set_visuals() on every frame triggers request_discard which invalidates
+        // the font atlas, forcing an expensive rebuild every frame and preventing the
+        // render loop from ever idling.
+        if self.last_applied_dark_mode != Some(self.dark_mode) {
+            self.last_applied_dark_mode = Some(self.dark_mode);
         if self.dark_mode {
             let mut v = egui::Visuals::dark();
             v.panel_fill = app_panel_fill(true);
@@ -501,6 +534,7 @@ impl eframe::App for EntropyApp {
             v.interact_cursor = Some(egui::CursorIcon::PointingHand);
             ctx.set_visuals(v);
         }
+        } // end if last_applied_dark_mode != Some(self.dark_mode)
 
         // Poll background connect thread
         #[cfg(not(target_arch = "wasm32"))]

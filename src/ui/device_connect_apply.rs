@@ -84,7 +84,10 @@ impl EntropyApp {
                         self.connect_state = ConnectState::Idle;
                         return;
                     }
-                    ctx.request_repaint(); // keep polling
+                    // Throttled poll: request_repaint() without a delay overrides any
+                    // baseline throttle and makes the event loop spin at 100% CPU.
+                    // Use a 250 ms interval instead.
+                    ctx.request_repaint_after(std::time::Duration::from_millis(250));
                     return;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {

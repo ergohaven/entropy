@@ -87,7 +87,13 @@ pub(crate) fn poll_update_check(state: &mut UpdateCheckState) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let outcome = match state {
-            UpdateCheckState::Checking { receiver } => receiver.try_recv().ok(),
+            UpdateCheckState::Checking { receiver } => match receiver.try_recv() {
+                Ok(outcome) => Some(outcome),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(
+                    UpdateCheckOutcome::Failed("Update check thread terminated unexpectedly".to_owned()),
+                ),
+            },
             _ => None,
         };
 
