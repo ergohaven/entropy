@@ -27,6 +27,10 @@ fn connect_apply_error_log(error: &str) -> String {
     format!("Connect failed before applying keyboard layout: {error}")
 }
 
+fn is_hid_open_failure(error: &str) -> bool {
+    error.starts_with("Open failed:")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -45,6 +49,14 @@ mod tests {
             connect_apply_error_log("Layout parse failed: missing matrix"),
             "Connect failed before applying keyboard layout: Layout parse failed: missing matrix"
         );
+    }
+
+    #[test]
+    fn detects_hid_open_failure_status() {
+        assert!(is_hid_open_failure(
+            "Open failed: Failed to open HID device"
+        ));
+        assert!(!is_hid_open_failure("Layout parse failed: missing matrix"));
     }
 }
 
@@ -302,10 +314,7 @@ impl EntropyApp {
                 );
             }
             Err(e) => {
-                #[cfg(target_os = "linux")]
-                if e.starts_with("Open failed:")
-                    && !super::app_settings_ui::linux_vial_udev_rules_installed()
-                {
+                if is_hid_open_failure(&e) {
                     self.selected_device = None;
                     self.clear_connected_keyboard_state(e);
                     return;

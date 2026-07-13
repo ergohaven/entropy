@@ -659,6 +659,11 @@ impl eframe::App for EntropyApp {
                     return;
                 }
 
+                if !self.device_manager.devices().is_empty() {
+                    self.draw_device_selection_empty_state(ui, rect);
+                    return;
+                }
+
                 let empty_rect = egui::Rect::from_center_size(
                     rect.center(),
                     egui::vec2(rect.width().min(520.0), 150.0),

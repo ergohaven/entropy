@@ -1,5 +1,9 @@
 use super::*;
 
+fn should_wait_for_manual_device_selection(status_msg: &str) -> bool {
+    status_msg.starts_with("Open failed:") || status_msg.starts_with("Connect timeout")
+}
+
 impl EntropyApp {
     pub(super) fn start_device_scan(&mut self) {
         if !matches!(self.device_scan_state, DeviceScanState::Idle) {
@@ -69,6 +73,15 @@ impl EntropyApp {
             return;
         }
 
+        if self.selected_device.is_none()
+            && self.layout.is_none()
+            && !was_loading
+            && should_wait_for_manual_device_selection(&self.status_msg)
+        {
+            self.qmk_hid_hosts.clear();
+            return;
+        }
+
         #[cfg(target_os = "linux")]
         if self.selected_device.is_none()
             && self.layout.is_none()
@@ -98,5 +111,21 @@ impl EntropyApp {
 
         self.selected_device = Some(0);
         self.start_connect(0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manual_device_selection_waits_after_open_failure() {
+        assert!(should_wait_for_manual_device_selection(
+            "Open failed: Failed to open HID device"
+        ));
+        assert!(should_wait_for_manual_device_selection(
+            "Connect timeout — RMK/Vial device did not finish loading"
+        ));
+        assert!(!should_wait_for_manual_device_selection(""));
     }
 }
