@@ -208,6 +208,7 @@ fn command_exists(program: &str) -> bool {
 }
 
 pub struct QmkHidHostBridge {
+    path: String,
     mode: HostDataMode,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
@@ -217,8 +218,10 @@ impl QmkHidHostBridge {
     pub fn start(path: String, mode: HostDataMode) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
-        let thread = thread::spawn(move || run_bridge(path, mode, worker_stop));
+        let worker_path = path.clone();
+        let thread = thread::spawn(move || run_bridge(worker_path, mode, worker_stop));
         Self {
+            path,
             mode,
             stop,
             thread: Some(thread),
@@ -230,7 +233,11 @@ impl QmkHidHostBridge {
     }
 
     pub fn stop(&mut self) {
+        let was_running = self.thread.is_some();
         self.stop.store(true, Ordering::Relaxed);
+        if was_running {
+            send_shutdown_payloads(&self.path, self.mode);
+        }
         if let Some(thread) = self.thread.take() {
             let _ = thread::Builder::new()
                 .name("qmk-hid-host-join".to_owned())
@@ -278,6 +285,9 @@ fn run_bridge(path: String, mode: HostDataMode, stop: Arc<AtomicBool>) {
             thread::sleep(Duration::from_millis(250));
             continue;
         };
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
 
         #[cfg(target_os = "linux")]
         if !std::path::Path::new(&path).exists() {
@@ -333,6 +343,9 @@ fn run_bridge(path: String, mode: HostDataMode, stop: Arc<AtomicBool>) {
         if mode.media && last_media_poll.elapsed() >= Duration::from_secs(3) {
             last_media_poll = Instant::now();
             let (artist, title) = current_media_info().unwrap_or_default();
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
             let full_resend = last_media_full_send.elapsed() >= Duration::from_secs(10);
             if full_resend || artist != last_artist {
                 last_artist = artist.clone();
@@ -358,6 +371,39 @@ fn run_bridge(path: String, mode: HostDataMode, stop: Arc<AtomicBool>) {
     }
 
     log::info!("qmk-hid-host bridge stopped");
+}
+
+fn send_shutdown_payloads(path: &str, mode: HostDataMode) {
+    let payloads = shutdown_payloads(mode);
+    if payloads.is_empty() {
+        return;
+    }
+
+    let Ok(device) = open_raw_hid(path).map_err(|e| {
+        log::warn!("qmk-hid-host shutdown open failed: {e}");
+    }) else {
+        return;
+    };
+
+    for payload in payloads {
+        if let Err(e) = write_payload(&device, &payload) {
+            log::warn!("qmk-hid-host shutdown write failed: {e}");
+            break;
+        }
+        pause_between_packets();
+    }
+}
+
+fn shutdown_payloads(mode: HostDataMode) -> Vec<Vec<u8>> {
+    let mut payloads = Vec::new();
+    if mode.time {
+        payloads.push(vec![DATA_TIME, u8::MAX, u8::MAX]);
+    }
+    if mode.media {
+        payloads.push(vec![DATA_MEDIA_ARTIST, 0]);
+        payloads.push(vec![DATA_MEDIA_TITLE, 0]);
+    }
+    payloads
 }
 
 fn open_raw_hid(path: &str) -> anyhow::Result<hidapi::HidDevice> {
@@ -672,6 +718,25 @@ mod tests {
 
         assert!(output.is_none());
         assert!(started_at.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn shutdown_payloads_clear_time_and_media() {
+        let payloads = shutdown_payloads(HostDataMode {
+            time: true,
+            volume: true,
+            layout: true,
+            media: true,
+        });
+
+        assert_eq!(
+            payloads,
+            vec![
+                vec![DATA_TIME, u8::MAX, u8::MAX],
+                vec![DATA_MEDIA_ARTIST, 0],
+                vec![DATA_MEDIA_TITLE, 0],
+            ]
+        );
     }
 }
 
