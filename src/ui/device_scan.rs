@@ -43,11 +43,45 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn apply_device_scan_result(&mut self, devices: Vec<Device>) {
+        // Number of consecutive scans the selected device must stay absent
+        // before the session is torn down. Scans run ~1s apart, so this debounces
+        // brief disappearances (e.g. USB re-enumeration after a large import)
+        // without noticeably delaying a genuine unplug.
+        const DEVICE_ABSENT_CLEAR_SCANS: u32 = 3;
+
+        let was_loading = matches!(self.connect_state, ConnectState::Loading { .. });
+
+        if devices.is_empty() {
+            let had_session =
+                self.selected_device.is_some() || self.layout.is_some() || was_loading;
+            if had_session {
+                self.device_absent_scans = self.device_absent_scans.saturating_add(1);
+                if self.device_absent_scans < DEVICE_ABSENT_CLEAR_SCANS {
+                    // Keep the device list, selection and layout so the session
+                    // (and layout-dependent actions like export) survive a
+                    // transient disappearance. Do not touch the device manager.
+                    return;
+                }
+                self.device_manager.replace_devices(devices);
+                self.device_display_names.clear();
+                self.selected_device = None;
+                self.clear_connected_keyboard_state("No device detected");
+            } else {
+                self.device_manager.replace_devices(devices);
+                self.device_display_names.clear();
+                self.qmk_hid_hosts.clear();
+            }
+            return;
+        }
+
         let previous_device_key = self
             .selected_device
             .and_then(|idx| self.device_manager.devices().get(idx))
             .map(Device::display_name_cache_key);
-        let was_loading = matches!(self.connect_state, ConnectState::Loading { .. });
+        // If the device just came back from a transient absence, the previously
+        // opened HID handle is now stale and must be reopened.
+        let recovered_from_absence = self.device_absent_scans > 0;
+        self.device_absent_scans = 0;
 
         self.device_manager.replace_devices(devices);
         let connected_display_name_keys: std::collections::HashSet<String> = self
@@ -58,16 +92,6 @@ impl EntropyApp {
             .collect();
         self.device_display_names
             .retain(|key, _| connected_display_name_keys.contains(key));
-
-        if self.device_manager.devices().is_empty() {
-            if self.selected_device.is_some() || self.layout.is_some() || was_loading {
-                self.selected_device = None;
-                self.clear_connected_keyboard_state("No device detected");
-            } else {
-                self.qmk_hid_hosts.clear();
-            }
-            return;
-        }
 
         #[cfg(target_os = "linux")]
         if self.selected_device.is_none()
@@ -87,7 +111,7 @@ impl EntropyApp {
                 .position(|dev| dev.display_name_cache_key() == device_key)
             {
                 self.selected_device = Some(idx);
-                if self.layout.is_none() && !was_loading {
+                if (self.layout.is_none() || recovered_from_absence) && !was_loading {
                     self.start_connect(idx);
                 } else {
                     self.sync_qmk_hid_host_bridges();

@@ -1501,6 +1501,10 @@ pub struct EntropyApp {
     pub(crate) scan_frame: u32,
     /// Last device scan timestamp in egui seconds
     pub(crate) last_device_scan_at: f64,
+    /// Consecutive device scans where the selected device was absent. Used to
+    /// debounce transient disappearance (e.g. USB re-enumeration after a large
+    /// import) so the session is not torn down on a single missed scan.
+    pub(crate) device_absent_scans: u32,
     /// Layer to preview on hover (None = show selected_layer)
     pub(crate) hover_layer: Option<usize>,
     /// Last main keyboard layout geometry: offset_x, offset_y, unit, padding

@@ -34,6 +34,7 @@ impl EntropyApp {
             undo_stack: Vec::new(),
             scan_frame: 0,
             last_device_scan_at: 0.0,
+            device_absent_scans: 0,
             hover_layer: None,
             last_layout_geometry: None,
             prev_hovered_key: None,
