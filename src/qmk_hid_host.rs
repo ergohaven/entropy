@@ -332,21 +332,20 @@ fn run_bridge(path: String, mode: HostDataMode, stop: Arc<AtomicBool>) {
 
         if mode.media && last_media_poll.elapsed() >= Duration::from_secs(3) {
             last_media_poll = Instant::now();
-            if let Some((artist, title)) = current_media_info() {
-                let full_resend = last_media_full_send.elapsed() >= Duration::from_secs(10);
-                if full_resend || artist != last_artist {
-                    last_artist = artist.clone();
-                    write_failed |= write_text_payload(dev, DATA_MEDIA_ARTIST, &artist).is_err();
-                    pause_between_packets();
-                }
-                if full_resend || title != last_title {
-                    last_title = title.clone();
-                    write_failed |= write_text_payload(dev, DATA_MEDIA_TITLE, &title).is_err();
-                    pause_between_packets();
-                }
-                if full_resend {
-                    last_media_full_send = Instant::now();
-                }
+            let (artist, title) = current_media_info().unwrap_or_default();
+            let full_resend = last_media_full_send.elapsed() >= Duration::from_secs(10);
+            if full_resend || artist != last_artist {
+                last_artist = artist.clone();
+                write_failed |= write_text_payload(dev, DATA_MEDIA_ARTIST, &artist).is_err();
+                pause_between_packets();
+            }
+            if full_resend || title != last_title {
+                last_title = title.clone();
+                write_failed |= write_text_payload(dev, DATA_MEDIA_TITLE, &title).is_err();
+                pause_between_packets();
+            }
+            if full_resend {
+                last_media_full_send = Instant::now();
             }
         }
 
