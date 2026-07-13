@@ -27,7 +27,7 @@ cleanup() {
 	if [[ "$SYSTEM_TRUST_ADDED" == "1" ]]; then
 		sudo -n security remove-trusted-cert \
 			-d \
-			"$TMP_DIR/imported-cert.pem" >/dev/null 2>&1 || true
+			"$TMP_DIR/imported-cert.cer" >/dev/null 2>&1 || true
 	fi
 	security list-keychains -d user -s "${ORIGINAL_KEYCHAINS[@]}" >/dev/null 2>&1 || true
 	security delete-keychain "$KEYCHAIN_PATH" >/dev/null 2>&1 || true
@@ -70,6 +70,10 @@ openssl pkcs12 \
 	-nokeys \
 	-passin "pass:$P12_PASSWORD" \
 	-out "$TMP_DIR/imported-cert.pem"
+openssl x509 \
+	-in "$TMP_DIR/imported-cert.pem" \
+	-outform DER \
+	-out "$TMP_DIR/imported-cert.cer"
 
 printf '%s\n' 'int main(void) { return 1; }' |
 	clang -x c - -o "$TMP_DIR/entropy-v1"
@@ -101,7 +105,7 @@ if ! sign_test_binary "$TMP_DIR/entropy-v1"; then
 		-r trustRoot \
 		-p codeSign \
 		-k /Library/Keychains/System.keychain \
-		"$TMP_DIR/imported-cert.pem"; then
+		"$TMP_DIR/imported-cert.cer"; then
 		echo "Self-signed identity failed signing and runner trust could not be added" >&2
 		exit 1
 	fi
