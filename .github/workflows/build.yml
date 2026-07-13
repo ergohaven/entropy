@@ -92,6 +92,12 @@ jobs:
           cargo test --all-targets app::vial_hid_task::tests::macro_write_uses_the_serialized_background_transport -- --exact
           cargo test --all-targets app::app_lifecycle::tests::layer_completion_starts_settings_queued_behind_it -- --exact
 
+      - name: Test macOS stable signing identity
+        if: matrix.kind == 'macos'
+        run: |
+          scripts/test_macos_stable_signing.sh
+          scripts/test_macos_stable_identity_e2e.sh
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

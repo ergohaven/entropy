@@ -5,11 +5,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="${APP_NAME:-Entropy}"
 BUNDLE_ID="${BUNDLE_ID:-com.ergohaven.entropy}"
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
-REQUIRE_DISTRIBUTION_SIGNING="${REQUIRE_DISTRIBUTION_SIGNING:-0}"
+MACOS_SIGNING_CERTIFICATE_SHA1="${MACOS_SIGNING_CERTIFICATE_SHA1:-}"
+REQUIRE_STABLE_SIGNING="${REQUIRE_STABLE_SIGNING:-0}"
 MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-10.15}"
 export MACOSX_DEPLOYMENT_TARGET
 
-source "$ROOT/scripts/macos_distribution_signing.sh"
+source "$ROOT/scripts/macos_stable_signing.sh"
 
 VERSION="$(
 	awk -F '"' '/^version = / { print $2; exit }' "$ROOT/Cargo.toml"
@@ -84,7 +85,7 @@ sign_app_bundle() {
 	fi
 
 	if ! command -v codesign >/dev/null 2>&1; then
-		if [[ "$REQUIRE_DISTRIBUTION_SIGNING" == "1" ]]; then
+		if [[ "$REQUIRE_STABLE_SIGNING" == "1" ]]; then
 			echo "codesign not found; cannot build a signed release" >&2
 			return 1
 		fi
@@ -96,24 +97,25 @@ sign_app_bundle() {
 	if [[ "$CODESIGN_IDENTITY" == "-" ]]; then
 		codesign_args+=(--timestamp=none)
 	else
-		codesign_args+=(--options runtime --timestamp)
+		codesign_args+=(
+			--identifier "$BUNDLE_ID"
+			--requirements "$(macos_stable_designated_requirement \
+				"$MACOS_SIGNING_CERTIFICATE_SHA1" \
+				"$BUNDLE_ID")"
+			--options runtime
+			--timestamp=none
+		)
 	fi
 
 	codesign "${codesign_args[@]}" "$APP_PATH"
-	if [[ "$REQUIRE_DISTRIBUTION_SIGNING" == "1" ]]; then
-		macos_verify_distribution_signature "$APP_PATH"
+	if [[ "$REQUIRE_STABLE_SIGNING" == "1" ]]; then
+		macos_verify_stable_signature \
+			"$APP_PATH" \
+			"$MACOS_SIGNING_CERTIFICATE_SHA1" \
+			"$BUNDLE_ID"
 	else
 		codesign --verify --strict "$APP_PATH"
 	fi
-}
-
-sign_disk_image() {
-	if [[ "$CODESIGN_IDENTITY" == "-" ]]; then
-		return
-	fi
-
-	codesign --force --timestamp --sign "$CODESIGN_IDENTITY" "$DMG_PATH"
-	codesign --verify --verbose=2 "$DMG_PATH"
 }
 
 create_dmg_with_retries() {
@@ -147,9 +149,11 @@ create_dmg_with_retries() {
 	return "$status"
 }
 
-macos_validate_signing_configuration \
+macos_validate_stable_signing_configuration \
 	"$CODESIGN_IDENTITY" \
-	"$REQUIRE_DISTRIBUTION_SIGNING"
+	"$REQUIRE_STABLE_SIGNING" \
+	"$MACOS_SIGNING_CERTIFICATE_SHA1" \
+	"$BUNDLE_ID"
 
 cd "$ROOT"
 cargo build "${BUILD_ARGS[@]}"
@@ -214,9 +218,8 @@ fi
 
 if command -v hdiutil >/dev/null 2>&1; then
 	create_dmg_with_retries
-	sign_disk_image
-elif [[ "$REQUIRE_DISTRIBUTION_SIGNING" == "1" ]]; then
-	echo "hdiutil not found; cannot build a signed release DMG" >&2
+elif [[ "$REQUIRE_STABLE_SIGNING" == "1" ]]; then
+	echo "hdiutil not found; cannot build a macOS release DMG" >&2
 	exit 1
 else
 	echo "hdiutil not found; skipped DMG build"
