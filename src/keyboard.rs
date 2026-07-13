@@ -318,6 +318,21 @@ impl KeyboardLayout {
         }
     }
 
+    pub fn set_encoder_keycode(&mut self, layer: usize, encoder_visual_idx: usize, keycode: u16) {
+        if self.encoder_layers.len() <= layer {
+            self.encoder_layers
+                .resize_with(layer + 1, || vec![0; self.encoders.len()]);
+        }
+        if let Some(layer_data) = self.encoder_layers.get_mut(layer) {
+            if layer_data.len() < self.encoders.len() {
+                layer_data.resize(self.encoders.len(), 0);
+            }
+            if let Some(slot) = layer_data.get_mut(encoder_visual_idx) {
+                *slot = keycode;
+            }
+        }
+    }
+
     /// Parse a Vial JSON descriptor into a KeyboardLayout.
     ///
     /// Vial JSON format:

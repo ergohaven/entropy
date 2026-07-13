@@ -196,6 +196,9 @@ fn supports_vial_macro_ext_keycodes(vial_protocol: u32, json: &serde_json::Value
 
 impl EntropyApp {
     pub(super) fn start_connect(&mut self, device_idx: usize) {
+        if self.layer_write_task.is_some() {
+            return;
+        }
         let dev = match self.device_manager.devices().get(device_idx) {
             Some(d) => d.clone(),
             None => {
@@ -209,7 +212,9 @@ impl EntropyApp {
         self.selected_key = None;
         self.selected_encoder = None;
         self.selected_layer = 0;
+        self.layer_write_task = None;
         self.hid_device = None;
+        self.undo_stack.clear();
         self.device_about_info = None;
         self.qmk_hid_hosts.clear();
         self.combo_visible_count = 1;

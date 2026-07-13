@@ -28,6 +28,12 @@ pub(crate) fn is_keycode_writeback_mismatch(error: &anyhow::Error) -> bool {
     error.downcast_ref::<KeycodeWritebackMismatch>().is_some()
 }
 
+pub(crate) fn keycode_writeback_readback(error: &anyhow::Error) -> Option<u16> {
+    error
+        .downcast_ref::<KeycodeWritebackMismatch>()
+        .map(|mismatch| mismatch.readback)
+}
+
 fn verify_keycode_writeback(
     layer: u8,
     row: u8,
@@ -169,5 +175,6 @@ mod tests {
             err.to_string().contains("read back 0x0001"),
             "unexpected error: {err}"
         );
+        assert_eq!(keycode_writeback_readback(&err), Some(0x0001));
     }
 }

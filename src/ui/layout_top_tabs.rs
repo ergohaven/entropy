@@ -204,6 +204,9 @@ impl EntropyApp {
 
         self.draw_ui_scale_controls(ui, zoom_left_top);
 
+        #[cfg(not(target_arch = "wasm32"))]
+        let undo_enabled = !self.undo_stack.is_empty() && self.layer_write_task.is_none();
+        #[cfg(target_arch = "wasm32")]
         let undo_enabled = !self.undo_stack.is_empty();
         let undo_resp = ui.allocate_rect(undo_rect, Sense::CLICK);
         if undo_enabled && !suppress_tooltips {

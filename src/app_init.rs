@@ -31,9 +31,12 @@ impl EntropyApp {
             #[cfg(not(target_arch = "wasm32"))]
             hid_device: None,
             #[cfg(not(target_arch = "wasm32"))]
+            layer_write_task: None,
+            #[cfg(not(target_arch = "wasm32"))]
             qmk_hid_hosts: std::collections::HashMap::new(),
             firmware: FirmwareProtocol::Vial,
             undo_stack: Vec::new(),
+            layer_clipboard: None,
             scan_frame: 0,
             last_device_scan_at: 0.0,
             hover_layer: None,

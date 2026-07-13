@@ -1437,7 +1437,7 @@ pub(crate) fn is_alt_repeat_keycode(kc: u16) -> bool {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum UndoAction {
+pub(super) enum UndoAction {
     Key {
         layer: usize,
         key_idx: usize,
@@ -1447,6 +1447,11 @@ pub(crate) enum UndoAction {
         layer: usize,
         encoder_visual_idx: usize,
         old_kc: u16,
+    },
+    Layer {
+        layer: usize,
+        old: LayerSnapshot,
+        requires_firmware: bool,
     },
 }
 
@@ -2675,14 +2680,20 @@ pub struct EntropyApp {
     /// Persistent open HID device for real-time writes (Vial)
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) hid_device: Option<crate::hid::HidDevice>,
+    /// Background whole-layer HID write. Owns the device handle while active.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) layer_write_task: Option<LayerWriteTask>,
     /// Built-in qmk-hid-host bridges for displays/presets that need host data
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) qmk_hid_hosts:
         std::collections::HashMap<String, crate::qmk_hid_host::QmkHidHostBridge>,
     /// Current firmware type (mirrors layout.firmware)
     pub(crate) firmware: FirmwareProtocol,
-    /// Undo stack for key and encoder assignments
-    pub(crate) undo_stack: Vec<UndoAction>,
+    /// Undo stack for key, encoder, and whole-layer assignments
+    pub(super) undo_stack: Vec<UndoAction>,
+    /// In-memory whole-layer clipboard. Kept across device reconnects so keyboards
+    /// with compatible geometry can exchange layers during one Entropy session.
+    pub(super) layer_clipboard: Option<LayerClipboard>,
     /// Frame counter for periodic device scan
     pub(crate) scan_frame: u32,
     /// Last device scan timestamp in egui seconds
