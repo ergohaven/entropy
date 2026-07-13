@@ -17,26 +17,15 @@ Do not replace the certificate anchor with a bundle-ID-only requirement. Any bin
 
 ## Create release identity
 
-Create this identity once on a secure Mac. The common name must remain `Entropy Open Source Release Signing` because the release workflow uses that exact name.
+Create this identity once on a secure Mac using Keychain Access > Certificate Assistant > Create a Certificate:
 
-```bash
-umask 077
-openssl req -new -newkey rsa:4096 -x509 -sha256 -nodes \
-  -days 3650 \
-  -subj '/CN=Entropy Open Source Release Signing/O=Entropy Open Source' \
-  -addext 'basicConstraints=critical,CA:TRUE' \
-  -addext 'keyUsage=critical,digitalSignature,keyCertSign' \
-  -addext 'extendedKeyUsage=codeSigning' \
-  -keyout entropy-release-signing.key \
-  -out entropy-release-signing.pem
-openssl pkcs12 -export \
-  -inkey entropy-release-signing.key \
-  -in entropy-release-signing.pem \
-  -name 'Entropy Open Source Release Signing' \
-  -out entropy-release-signing.p12
-```
+1. Name: `Entropy Open Source Release Signing`.
+2. Identity Type: Self Signed Root.
+3. Certificate Type: Code Signing.
+4. Enable Let me override defaults and choose a long validity period.
+5. Export certificate and private key together as an encrypted `.p12`.
 
-Store encrypted `.p12` and its password in maintainer-controlled offline backup. Delete unencrypted `.key` after backup and GitHub configuration. Never commit private material.
+The common name must remain exact because release workflow uses it to select identity. Store encrypted `.p12` and password in maintainer-controlled offline backup. Never commit private material.
 
 Configure two GitHub Actions repository secrets:
 
@@ -45,7 +34,7 @@ Configure two GitHub Actions repository secrets:
 | `MACOS_CERTIFICATE_P12_BASE64` | `base64 -i entropy-release-signing.p12` output |
 | `MACOS_CERTIFICATE_PASSWORD` | `.p12` export password |
 
-Release workflow imports identity into a temporary keychain, trusts it for code signing on the ephemeral runner, derives certificate hash, embeds an explicit requirement containing that certificate plus `com.ergohaven.entropy`, signs app, removes runner trust, and rejects ad-hoc or mismatched output. DMG is not notarized. Shipped requirement does not contain `anchor trusted`; users do not install or trust this certificate.
+Release workflow imports identity into a temporary keychain, derives certificate hash, embeds an explicit requirement containing that certificate plus `com.ergohaven.entropy`, signs app, and rejects ad-hoc or mismatched output. DMG is not notarized. Shipped requirement does not contain `anchor trusted`; users do not install or trust this certificate.
 
 ## Automated proof
 
@@ -56,7 +45,7 @@ scripts/test_macos_stable_signing.sh
 scripts/test_macos_stable_identity_e2e.sh
 ```
 
-End-to-end test creates temporary self-signed identity and two different binaries. Test passes only when code hashes differ while designated requirements match. Temporary keychain and keys are deleted on exit.
+End-to-end test creates temporary self-signed identity and two different binaries. Test passes only when code hashes differ while designated requirements match. Temporary keychain and keys are deleted on exit. Run it on macOS 26 before manual TCC testing; macOS 15 runners do not expose generic OpenSSL-generated self-signed certificates as code-signing identities.
 
 ## Required manual TCC test
 

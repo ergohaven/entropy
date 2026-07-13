@@ -62,7 +62,6 @@ jobs:
 
           certificate_path="$RUNNER_TEMP/entropy-release-signing.p12"
           certificate_pem_path="$RUNNER_TEMP/entropy-release-signing.pem"
-          certificate_der_path="$RUNNER_TEMP/entropy-release-signing.cer"
           keychain_path="$RUNNER_TEMP/entropy-signing.keychain-db"
           keychain_password="$(openssl rand -base64 32)"
 
@@ -88,10 +87,6 @@ jobs:
             -nokeys \
             -passin "pass:$MACOS_CERTIFICATE_PASSWORD" \
             -out "$certificate_pem_path"
-          openssl x509 \
-            -in "$certificate_pem_path" \
-            -outform DER \
-            -out "$certificate_der_path"
           certificate_sha1="$(
             openssl x509 \
               -in "$certificate_pem_path" \
@@ -104,12 +99,6 @@ jobs:
             echo "Could not derive macOS signing certificate SHA-1" >&2
             exit 1
           fi
-          sudo security add-trusted-cert \
-            -d \
-            -r trustRoot \
-            -p codeSign \
-            -k /Library/Keychains/System.keychain \
-            "$certificate_der_path"
           echo "MACOS_SIGNING_CERTIFICATE_SHA1=$certificate_sha1" >> "$GITHUB_ENV"
 
       - name: Install Linux dependencies
@@ -174,17 +163,10 @@ jobs:
         shell: bash
         run: |
           keychain_path="$RUNNER_TEMP/entropy-signing.keychain-db"
-          certificate_der_path="$RUNNER_TEMP/entropy-release-signing.cer"
-          if [[ -f "$certificate_der_path" ]]; then
-            sudo security remove-trusted-cert \
-              -d \
-              "$certificate_der_path" || true
-          fi
           security delete-keychain "$keychain_path" || true
           rm -f \
             "$RUNNER_TEMP/entropy-release-signing.p12" \
-            "$RUNNER_TEMP/entropy-release-signing.pem" \
-            "$RUNNER_TEMP/entropy-release-signing.cer"
+            "$RUNNER_TEMP/entropy-release-signing.pem"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
