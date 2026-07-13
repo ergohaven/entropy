@@ -45,6 +45,42 @@ jobs:
         if: matrix.kind == 'macos'
         run: rustup target add ${{ matrix.target }}
 
+      - name: Import macOS Developer ID certificate
+        if: matrix.kind == 'macos'
+        shell: bash
+        env:
+          CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          umask 077
+          if [[ -z "$CERTIFICATE_P12_BASE64" ]] ||
+            [[ -z "$MACOS_CERTIFICATE_PASSWORD" ]]; then
+            echo "macOS Developer ID certificate secrets are not configured" >&2
+            exit 1
+          fi
+
+          certificate_path="$RUNNER_TEMP/entropy-developer-id.p12"
+          keychain_path="$RUNNER_TEMP/entropy-signing.keychain-db"
+          keychain_password="$(openssl rand -base64 32)"
+
+          printf '%s' "$CERTIFICATE_P12_BASE64" |
+            base64 -D > "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$keychain_path"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -81,11 +117,52 @@ jobs:
       - name: Build macOS app bundle and DMG
         if: matrix.kind == 'macos'
         shell: bash
+        env:
+          CODESIGN_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          REQUIRE_DISTRIBUTION_SIGNING: '1'
         run: |
           TARGET="${{ matrix.target }}" scripts/build_macos_app.sh
+
+      - name: Notarize macOS DMG
+        if: matrix.kind == 'macos'
+        shell: bash
+        env:
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+        run: |
+          umask 077
+          if [[ -z "$APPLE_NOTARY_KEY_P8_BASE64" ]]; then
+            echo "Apple notarization key secret is not configured" >&2
+            exit 1
+          fi
+
+          notary_key_path="$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
+          printf '%s' "$APPLE_NOTARY_KEY_P8_BASE64" |
+            base64 -D > "$notary_key_path"
+          chmod 600 "$notary_key_path"
+
+          dmg_paths=(dist/macos/*.dmg)
+          if [[ ${#dmg_paths[@]} -ne 1 || ! -f "${dmg_paths[0]}" ]]; then
+            echo "Expected exactly one macOS DMG" >&2
+            exit 1
+          fi
+
+          APPLE_NOTARY_KEY_PATH="$notary_key_path" \
+            scripts/notarize_macos_dmg.sh "${dmg_paths[0]}"
           mkdir -p dist/release
           asset="entropy-${GITHUB_REF_NAME}-macos-${{ matrix.arch }}.dmg"
-          cp dist/macos/*.dmg "dist/release/$asset"
+          cp "${dmg_paths[0]}" "dist/release/$asset"
+
+      - name: Remove macOS signing credentials
+        if: matrix.kind == 'macos' && always()
+        shell: bash
+        run: |
+          keychain_path="$RUNNER_TEMP/entropy-signing.keychain-db"
+          security delete-keychain "$keychain_path" || true
+          rm -f \
+            "$RUNNER_TEMP/entropy-developer-id.p12" \
+            "$RUNNER_TEMP"/AuthKey_*.p8
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -121,7 +198,8 @@ jobs:
           printf '\n## Downloads\n\n' >> RELEASE_NOTES.md
           printf '%s\n' '- Linux: download the `.AppImage`, make it executable, and run it.' >> RELEASE_NOTES.md
           printf '%s\n' '- Windows: download and run the portable `.exe`.' >> RELEASE_NOTES.md
-          printf '%s\n' '- macOS: download the unsigned `.dmg` for your Mac (`arm64` for Apple Silicon, `x86_64` for Intel), drag Entropy to Applications, then remove quarantine if macOS blocks the app.' >> RELEASE_NOTES.md
+          printf '%s\n' '- macOS: download the signed and notarized `.dmg` for your Mac (`arm64` for Apple Silicon, `x86_64` for Intel), then drag Entropy to Applications.' >> RELEASE_NOTES.md
+          printf '%s\n' '- When upgrading from Entropy v0.2.0 or earlier, remove old Entropy entries from Accessibility and Input Monitoring, then grant both permissions once for the signed app. Later signed updates preserve this identity.' >> RELEASE_NOTES.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
