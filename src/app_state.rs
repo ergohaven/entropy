@@ -2605,6 +2605,7 @@ pub(crate) enum LayoutImageExportFormat {
     #[default]
     Png,
     Svg,
+    Pdf,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]

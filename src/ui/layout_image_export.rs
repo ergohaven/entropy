@@ -20,10 +20,16 @@ fn export_text(lang: crate::i18n::Language, key: &str) -> &'static str {
         (crate::i18n::Language::Russian, "title") => "Экспорт картинки раскладки",
         (crate::i18n::Language::English, "title") => "Export layout image",
         (crate::i18n::Language::Russian, "description") => {
-            "PNG или SVG с выбранными слоями, темой и легендами клавиш"
+            "PNG, SVG или PDF с выбранными слоями, темой и легендами клавиш"
         }
         (crate::i18n::Language::English, "description") => {
-            "PNG or SVG with selected layers, theme, and key legends"
+            "PNG, SVG, or PDF with selected layers, theme, and key legends"
+        }
+        (crate::i18n::Language::Russian, "pdf_pages_hint") => {
+            "PDF для печати: каждый выбранный слой на отдельной странице A4"
+        }
+        (crate::i18n::Language::English, "pdf_pages_hint") => {
+            "Printable PDF: each selected layer on its own A4 page"
         }
         (crate::i18n::Language::Russian, "format") => "Формат",
         (crate::i18n::Language::English, "format") => "Format",
@@ -78,6 +84,7 @@ fn export_format_label(
     match format {
         LayoutImageExportFormat::Png => "PNG",
         LayoutImageExportFormat::Svg => "SVG",
+        LayoutImageExportFormat::Pdf => "PDF",
     }
 }
 
@@ -199,7 +206,11 @@ fn draw_format_dropdown(
         |ui| {
             ui.set_min_width(metrics.settings_control_width());
             ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
-            for format in [LayoutImageExportFormat::Png, LayoutImageExportFormat::Svg] {
+            for format in [
+                LayoutImageExportFormat::Png,
+                LayoutImageExportFormat::Svg,
+                LayoutImageExportFormat::Pdf,
+            ] {
                 let selected = format == *selected_format;
                 let (option_rect, option_resp) =
                     ui.allocate_exact_size(metrics.size(168.0, 28.0), Sense::click());
@@ -417,6 +428,14 @@ impl EntropyApp {
                         .size(metrics.value(13.0))
                         .color(app_muted_text(dark)),
                 );
+                if self.app_settings.layout_image_export.format == LayoutImageExportFormat::Pdf {
+                    ui.add_space(metrics.value(4.0));
+                    ui.label(
+                        RichText::new(export_text(lang, "pdf_pages_hint"))
+                            .size(metrics.value(13.0))
+                            .color(app_muted_text(dark)),
+                    );
+                }
                 ui.add_space(metrics.value(24.0));
 
                 let total_rows = 4 + layer_count;
@@ -681,10 +700,12 @@ impl EntropyApp {
         let extension = match format {
             LayoutImageExportFormat::Png => "png",
             LayoutImageExportFormat::Svg => "svg",
+            LayoutImageExportFormat::Pdf => "pdf",
         };
         let filter_label = match format {
             LayoutImageExportFormat::Png => "PNG image",
             LayoutImageExportFormat::Svg => "SVG image",
+            LayoutImageExportFormat::Pdf => "PDF document",
         };
         let file_name = format!("{}-layout.{extension}", device_id_slug(&layout.name));
         let Some(mut path) = rfd::FileDialog::new()
@@ -715,6 +736,9 @@ impl EntropyApp {
             LayoutImageExportFormat::Svg => self
                 .render_layout_svg(layout, &selected_layers)
                 .and_then(|svg| std::fs::write(&path, svg).map_err(|e| anyhow::anyhow!("{e}"))),
+            LayoutImageExportFormat::Pdf => self
+                .render_layout_pdf(layout, &selected_layers)
+                .and_then(|pdf| std::fs::write(&path, pdf).map_err(|e| anyhow::anyhow!("{e}"))),
         };
 
         match result {
@@ -979,6 +1003,21 @@ impl EntropyApp {
         }
 
         Ok(image)
+    }
+
+    /// One A4 page per selected layer, each page embedding that layer's
+    /// raster render, so the file is ready for printing as-is.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn render_layout_pdf(
+        &self,
+        layout: &KeyboardLayout,
+        selected_layers: &[usize],
+    ) -> anyhow::Result<Vec<u8>> {
+        let mut pages = Vec::with_capacity(selected_layers.len());
+        for layer_idx in selected_layers.iter().copied() {
+            pages.push(self.render_layout_image(layout, &[layer_idx])?);
+        }
+        build_pdf_from_images(&pages)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1976,4 +2015,174 @@ fn blend_pixel(image: &mut RgbaImage, x: i32, y: i32, color: Rgba<u8>, coverage:
     dst[1] = (color[1] as f32 * alpha + dst[1] as f32 * inv).round() as u8;
     dst[2] = (color[2] as f32 * alpha + dst[2] as f32 * inv).round() as u8;
     dst[3] = 255;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+const PDF_A4_LONG_PT: f32 = 841.89;
+#[cfg(not(target_arch = "wasm32"))]
+const PDF_A4_SHORT_PT: f32 = 595.276;
+#[cfg(not(target_arch = "wasm32"))]
+const PDF_PAGE_MARGIN_PT: f32 = 28.35;
+
+/// Minimal PDF writer: one A4 page per image, auto orientation, image
+/// centered and scaled to fit inside the page margins (never upscaled
+/// past 1 pt per pixel). Images embed as flate-compressed DeviceRGB
+/// XObjects, so no font embedding is needed for Cyrillic layer names —
+/// all text is already rasterized into the page image.
+#[cfg(not(target_arch = "wasm32"))]
+fn build_pdf_from_images(images: &[RgbaImage]) -> anyhow::Result<Vec<u8>> {
+    use std::io::Write as _;
+
+    anyhow::ensure!(!images.is_empty(), "no layers to export");
+
+    // Objects: 1 = catalog, 2 = page tree, then (page, contents, image) per layer.
+    let object_count = 2 + images.len() * 3;
+    let mut offsets = vec![0usize; object_count + 1];
+    let mut pdf: Vec<u8> = Vec::new();
+    pdf.extend_from_slice(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
+
+    offsets[1] = pdf.len();
+    pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+
+    let kids = (0..images.len())
+        .map(|page| format!("{} 0 R", 3 + page * 3))
+        .collect::<Vec<_>>()
+        .join(" ");
+    offsets[2] = pdf.len();
+    pdf.extend_from_slice(
+        format!(
+            "2 0 obj\n<< /Type /Pages /Kids [{kids}] /Count {} >>\nendobj\n",
+            images.len()
+        )
+        .as_bytes(),
+    );
+
+    for (page, image) in images.iter().enumerate() {
+        let page_id = 3 + page * 3;
+        let contents_id = page_id + 1;
+        let image_id = page_id + 2;
+
+        let (page_w, page_h) = if image.width() >= image.height() {
+            (PDF_A4_LONG_PT, PDF_A4_SHORT_PT)
+        } else {
+            (PDF_A4_SHORT_PT, PDF_A4_LONG_PT)
+        };
+        let scale = ((page_w - PDF_PAGE_MARGIN_PT * 2.0) / image.width() as f32)
+            .min((page_h - PDF_PAGE_MARGIN_PT * 2.0) / image.height() as f32)
+            .min(1.0);
+        let draw_w = image.width() as f32 * scale;
+        let draw_h = image.height() as f32 * scale;
+        let draw_x = (page_w - draw_w) * 0.5;
+        let draw_y = (page_h - draw_h) * 0.5;
+
+        offsets[page_id] = pdf.len();
+        pdf.extend_from_slice(
+            format!(
+                "{page_id} 0 obj\n<< /Type /Page /Parent 2 0 R \
+                 /MediaBox [0 0 {page_w:.2} {page_h:.2}] \
+                 /Resources << /XObject << /Im{page} {image_id} 0 R >> >> \
+                 /Contents {contents_id} 0 R >>\nendobj\n"
+            )
+            .as_bytes(),
+        );
+
+        let content =
+            format!("q\n{draw_w:.2} 0 0 {draw_h:.2} {draw_x:.2} {draw_y:.2} cm\n/Im{page} Do\nQ\n");
+        offsets[contents_id] = pdf.len();
+        pdf.extend_from_slice(
+            format!(
+                "{contents_id} 0 obj\n<< /Length {} >>\nstream\n{content}endstream\nendobj\n",
+                content.len()
+            )
+            .as_bytes(),
+        );
+
+        // Export images are fully opaque, so alpha can be dropped.
+        let mut rgb = Vec::with_capacity(image.width() as usize * image.height() as usize * 3);
+        for pixel in image.pixels() {
+            rgb.extend_from_slice(&pixel.0[..3]);
+        }
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&rgb)?;
+        let data = encoder.finish()?;
+
+        offsets[image_id] = pdf.len();
+        pdf.extend_from_slice(
+            format!(
+                "{image_id} 0 obj\n<< /Type /XObject /Subtype /Image \
+                 /Width {} /Height {} /ColorSpace /DeviceRGB /BitsPerComponent 8 \
+                 /Filter /FlateDecode /Length {} >>\nstream\n",
+                image.width(),
+                image.height(),
+                data.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(&data);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+    }
+
+    let xref_offset = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n", object_count + 1).as_bytes());
+    pdf.extend_from_slice(b"0000000000 65535 f \n");
+    for offset in &offsets[1..] {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n",
+            object_count + 1
+        )
+        .as_bytes(),
+    );
+    Ok(pdf)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pdf_export_builds_one_page_per_layer_image() {
+        let wide = RgbaImage::from_pixel(200, 100, Rgba([250, 250, 250, 255]));
+        let tall = RgbaImage::from_pixel(100, 200, Rgba([20, 20, 20, 255]));
+        let pdf = build_pdf_from_images(&[wide, tall]).expect("pdf should build");
+        assert!(pdf.starts_with(b"%PDF-1.4"));
+        assert!(pdf.ends_with(b"%%EOF\n"));
+
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.contains("/Count 2"));
+        assert!(text.contains("/MediaBox [0 0 841.89 595.28]"));
+        assert!(text.contains("/MediaBox [0 0 595.28 841.89]"));
+        assert_eq!(text.matches("/Subtype /Image").count(), 2);
+    }
+
+    #[test]
+    fn pdf_export_rejects_empty_layer_selection() {
+        assert!(build_pdf_from_images(&[]).is_err());
+    }
+
+    #[test]
+    fn pdf_xref_offsets_point_at_objects() {
+        let image = RgbaImage::from_pixel(4, 4, Rgba([0, 128, 255, 255]));
+        let pdf = build_pdf_from_images(&[image]).expect("pdf should build");
+        let text = String::from_utf8_lossy(&pdf);
+        let xref_pos = text.rfind("\nxref\n").expect("xref table present") + 1;
+        for (row, line) in text[xref_pos..]
+            .lines()
+            .skip(3)
+            .take_while(|line| line.ends_with("n "))
+            .enumerate()
+        {
+            let offset: usize = line[..10].parse().expect("xref offset");
+            let expected = format!("{} 0 obj", row + 1);
+            assert!(
+                pdf[offset..].starts_with(expected.as_bytes()),
+                "xref entry {} points at {:?}",
+                row + 1,
+                String::from_utf8_lossy(&pdf[offset..(offset + 12).min(pdf.len())])
+            );
+        }
+    }
 }
