@@ -639,15 +639,15 @@ mod tests {
         let json = serde_json::json!({
             "name": "Qube Test",
             "matrix": { "rows": 1, "cols": 1 },
-            "entropy": { "liveFeatures": ["time", "layout"] },
+            "entropy": { "liveFeatures": ["time", "media"] },
             "layouts": { "keymap": [["0,0"]] }
         });
 
         let layout = KeyboardLayout::from_vial_json(&json).unwrap();
 
         assert!(layout.live_features.time);
-        assert!(layout.live_features.layout);
+        assert!(!layout.live_features.layout);
         assert!(!layout.live_features.volume);
-        assert!(!layout.live_features.media);
+        assert!(layout.live_features.media);
     }
 }

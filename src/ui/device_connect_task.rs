@@ -6,7 +6,7 @@ fn vial_cache_dir() -> Option<std::path::PathBuf> {
     Some(dir)
 }
 
-const VIAL_DEFINITION_CACHE_VERSION: u8 = 2;
+const VIAL_DEFINITION_CACHE_VERSION: u8 = 3;
 
 fn cache_component(value: &str) -> String {
     let mut component = String::with_capacity(value.len());
@@ -1050,7 +1050,7 @@ mod tests {
     fn vial_definition_cache_filename_includes_schema_version_and_size() {
         assert_eq!(
             cached_vial_definition_file_name("keyboard", 0x1234),
-            "definition_v2_keyboard_00001234.json"
+            "definition_v3_keyboard_00001234.json"
         );
         assert_ne!(
             cached_vial_definition_file_name("keyboard", 0x1234),
