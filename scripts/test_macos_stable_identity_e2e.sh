@@ -59,10 +59,11 @@ security set-key-partition-list \
 	"$KEYCHAIN_PATH" >/dev/null
 security list-keychains -d user -s "$KEYCHAIN_PATH" "${ORIGINAL_KEYCHAINS[@]}"
 
-security find-certificate \
-	-c "$IDENTITY" \
-	-p \
-	"$KEYCHAIN_PATH" > "$TMP_DIR/imported-cert.pem"
+openssl pkcs12 \
+	-in "$TMP_DIR/identity.p12" \
+	-nokeys \
+	-passin "pass:$P12_PASSWORD" \
+	-out "$TMP_DIR/imported-cert.pem"
 
 printf '%s\n' 'int main(void) { return 1; }' |
 	clang -x c - -o "$TMP_DIR/entropy-v1"

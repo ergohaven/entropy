@@ -82,10 +82,11 @@ jobs:
             "$keychain_path"
           security list-keychains -d user -s "$keychain_path"
 
-          security find-certificate \
-            -c "$MACOS_SIGNING_IDENTITY" \
-            -p \
-            "$keychain_path" > "$certificate_pem_path"
+          openssl pkcs12 \
+            -in "$certificate_path" \
+            -nokeys \
+            -passin "pass:$MACOS_CERTIFICATE_PASSWORD" \
+            -out "$certificate_pem_path"
           certificate_sha1="$(
             openssl x509 \
               -in "$certificate_pem_path" \
