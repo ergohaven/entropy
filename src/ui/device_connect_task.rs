@@ -319,6 +319,23 @@ impl EntropyApp {
                     json
                 };
 
+                progress("Reading firmware version…");
+                let runtime_firmware_version = match dev_conn.get_firmware_version() {
+                    Ok(Some(version)) => Some(version),
+                    Ok(None) => {
+                        log::info!("Runtime firmware version is not reported");
+                        None
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Runtime firmware version read failed, falling back to Vial JSON metadata: {e}"
+                        );
+                        None
+                    }
+                };
+                let firmware_version =
+                    runtime_firmware_version.or_else(|| firmware_version_from_vial_json(&json));
+
                 let touchpad_settings_in_definition =
                     Self::layout_json_has_touchpad_settings(&json);
                 let supported_qmk_settings = if vial_protocol >= 4 {
@@ -900,7 +917,7 @@ impl EntropyApp {
                     vendor_id: dev.vendor_id,
                     product_id: dev.product_id,
                     path: dev.path.clone(),
-                    firmware_version: firmware_version_from_vial_json(&json),
+                    firmware_version,
                     via_protocol,
                     vial_protocol,
                     keyboard_id,
@@ -986,5 +1003,32 @@ mod tests {
         });
 
         assert!(supports_vial_macro_ext_keycodes(5, &json));
+    }
+
+    #[test]
+    fn reads_firmware_version_from_embedded_firmware_metadata() {
+        let json = serde_json::json!({
+            "firmware": {
+                "version": "4.0.5"
+            },
+            "firmwareVersion": "3.9.9"
+        });
+
+        assert_eq!(
+            firmware_version_from_vial_json(&json).as_deref(),
+            Some("4.0.5")
+        );
+    }
+
+    #[test]
+    fn reads_legacy_firmware_version_metadata() {
+        let json = serde_json::json!({
+            "firmwareVersion": "4.0.5"
+        });
+
+        assert_eq!(
+            firmware_version_from_vial_json(&json).as_deref(),
+            Some("4.0.5")
+        );
     }
 }

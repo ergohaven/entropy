@@ -167,8 +167,8 @@ fn device_about_rows(lang: crate::i18n::Language, info: &DeviceAboutInfo) -> Vec
             lang,
             "Версия прошивки",
             "Firmware version",
-            "Версия из Vial JSON metadata",
-            "Version from Vial JSON metadata",
+            "Runtime VIA id_firmware_version, fallback на Vial JSON metadata",
+            "Runtime VIA id_firmware_version, fallback from Vial JSON metadata",
             firmware_version,
         ),
         localized_monospace_row(

@@ -19,8 +19,30 @@ fn verify_qmk_setting_writeback(qsid: u16, requested: u16, readback: u16) -> Res
     )
 }
 
+fn format_via_firmware_version(value: u32) -> Option<String> {
+    if value == 0 {
+        return None;
+    }
+
+    let major = value >> 16;
+    let minor = (value >> 8) & 0xFF;
+    let patch = value & 0xFF;
+    Some(format!("{major}.{minor}.{patch}"))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl HidDevice {
+    pub fn get_firmware_version(&self) -> Result<Option<String>> {
+        let resp = self.usb_send(&[CMD_VIA_GET_KEYBOARD_VALUE, VIA_FIRMWARE_VERSION])?;
+        if resp[0] != CMD_VIA_GET_KEYBOARD_VALUE || resp[1] != VIA_FIRMWARE_VERSION {
+            anyhow::bail!("unexpected firmware version response");
+        }
+
+        Ok(format_via_firmware_version(u32::from_be_bytes([
+            resp[2], resp[3], resp[4], resp[5],
+        ])))
+    }
+
     pub fn get_layout_options(&self) -> Result<u32> {
         let resp = self.usb_send(&[CMD_VIA_GET_KEYBOARD_VALUE, VIA_LAYOUT_OPTIONS])?;
         if resp.len() < 6 {
@@ -317,5 +339,18 @@ mod tests {
 
         assert!(error.to_string().contains("qmk setting writeback mismatch"));
         assert!(error.to_string().contains("qsid 7"));
+    }
+
+    #[test]
+    fn formats_via_firmware_version_as_semver() {
+        assert_eq!(
+            format_via_firmware_version(0x0004_0005).as_deref(),
+            Some("4.0.5")
+        );
+    }
+
+    #[test]
+    fn treats_zero_firmware_version_as_not_reported() {
+        assert_eq!(format_via_firmware_version(0), None);
     }
 }
