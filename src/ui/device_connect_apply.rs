@@ -1,5 +1,13 @@
 use super::*;
 
+fn is_default_layer_name(index: usize, name: &str) -> bool {
+    let trimmed = name.trim();
+    trimmed.is_empty()
+        || trimmed == index.to_string()
+        || (index == 0 && trimmed.eq_ignore_ascii_case("main"))
+        || trimmed.eq_ignore_ascii_case(&format!("layer {index}"))
+}
+
 fn connect_apply_start_log(
     device_name: &str,
     layer_count: usize,
@@ -217,7 +225,26 @@ impl EntropyApp {
                 self.status_msg = format!("Connected: {}", r.device_name);
 
                 let device_name = r.device_name.clone();
-                self.layer_names = r.layout.layer_names.clone();
+                // Prefer real names from firmware, then overlay locally-saved
+                // names per layer wherever the firmware only reports a default
+                // placeholder. Doing this per layer (instead of all-or-nothing)
+                // means a single real firmware name no longer suppresses saved
+                // names for every other layer.
+                let mut layer_names = r.layout.layer_names.clone();
+                if layer_names.len() < r.layer_count {
+                    let start = layer_names.len();
+                    layer_names.extend((start..r.layer_count).map(|layer| layer.to_string()));
+                }
+                layer_names.truncate(r.layer_count);
+                if let Some(local_layer_names) = load_saved_layer_names(&device_name) {
+                    for (idx, name) in local_layer_names.into_iter().enumerate().take(r.layer_count)
+                    {
+                        if !name.trim().is_empty() && is_default_layer_name(idx, &layer_names[idx]) {
+                            layer_names[idx] = name;
+                        }
+                    }
+                }
+                self.layer_names = layer_names;
 
                 let encoder_count = r.layout.encoder_count();
                 self.encoder_visibility =

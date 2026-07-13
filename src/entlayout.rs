@@ -1008,6 +1008,36 @@ impl EntropyApp {
             ));
         }
 
+        // Persist layer names into firmware (qsid 200 + layer). Without this the
+        // imported names live only in the local cache file and get overwritten by
+        // the firmware's own names on the next reconnect. Unsupported qsids simply
+        // return an error, which we treat as "firmware has no layer-name storage".
+        if self.firmware == FirmwareProtocol::Vial {
+            if let Err(err) = (|| -> Result<()> {
+                for (source_layer_idx, name) in bundle.data.layer_names.iter().enumerate() {
+                    let Some(target_layer_idx) =
+                        map_layer_index(source_layer_idx, self.layer_count)
+                    else {
+                        continue;
+                    };
+                    hid.set_qmk_setting_string(200 + target_layer_idx as u16, name)?;
+                }
+                Ok(())
+            })() {
+                failures.push(crate::i18n::tr_catalog_format(
+                    lang,
+                    "entlayout.firmware_failure",
+                    &[
+                        (
+                            "section",
+                            crate::i18n::tr_catalog(lang, "entlayout.layer_names"),
+                        ),
+                        ("error", &err.to_string()),
+                    ],
+                ));
+            }
+        }
+
         if let Err(err) = (|| -> Result<()> {
             for (source_layer_idx, layer_codes) in bundle.data.encoder_keymap.iter().enumerate() {
                 let Some(target_layer_idx) = map_layer_index(source_layer_idx, self.layer_count)
