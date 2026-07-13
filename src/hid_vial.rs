@@ -32,7 +32,12 @@ impl HidDevice {
     }
 
     pub fn get_layout_json(&self) -> Result<serde_json::Value> {
-        let sz = self.get_definition_size()? as usize;
+        let sz = self.get_definition_size()?;
+        self.get_layout_json_with_size(sz)
+    }
+
+    pub fn get_layout_json_with_size(&self, sz: u32) -> Result<serde_json::Value> {
+        let sz = sz as usize;
         if sz == 0 || sz > 2_000_000 {
             bail!("Invalid definition size: {sz}");
         }

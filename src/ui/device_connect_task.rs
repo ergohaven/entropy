@@ -6,6 +6,8 @@ fn vial_cache_dir() -> Option<std::path::PathBuf> {
     Some(dir)
 }
 
+const VIAL_DEFINITION_CACHE_VERSION: u8 = 2;
+
 fn cache_component(value: &str) -> String {
     let mut component = String::with_capacity(value.len());
     let mut previous_was_sep = false;
@@ -47,22 +49,29 @@ fn device_cache_key(device: &crate::device::Device, keyboard_id: u64) -> String 
     parts.join("_")
 }
 
-fn cached_vial_definition_path(cache_key: &str) -> Option<std::path::PathBuf> {
-    Some(vial_cache_dir()?.join(format!("definition_{cache_key}.json")))
+fn cached_vial_definition_file_name(cache_key: &str, definition_size: u32) -> String {
+    format!("definition_v{VIAL_DEFINITION_CACHE_VERSION}_{cache_key}_{definition_size:08x}.json")
+}
+
+fn cached_vial_definition_path(
+    cache_key: &str,
+    definition_size: u32,
+) -> Option<std::path::PathBuf> {
+    Some(vial_cache_dir()?.join(cached_vial_definition_file_name(cache_key, definition_size)))
 }
 
 fn cached_qmk_settings_path(cache_key: &str) -> Option<std::path::PathBuf> {
     Some(vial_cache_dir()?.join(format!("qmk_settings_{cache_key}.json")))
 }
 
-fn load_cached_vial_definition(cache_key: &str) -> Option<serde_json::Value> {
-    let path = cached_vial_definition_path(cache_key)?;
+fn load_cached_vial_definition(cache_key: &str, definition_size: u32) -> Option<serde_json::Value> {
+    let path = cached_vial_definition_path(cache_key, definition_size)?;
     let text = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&text).ok()
 }
 
-fn save_cached_vial_definition(cache_key: &str, json: &serde_json::Value) {
-    let Some(path) = cached_vial_definition_path(cache_key) else {
+fn save_cached_vial_definition(cache_key: &str, definition_size: u32, json: &serde_json::Value) {
+    let Some(path) = cached_vial_definition_path(cache_key, definition_size) else {
         return;
     };
     match serde_json::to_vec(json) {
@@ -306,16 +315,21 @@ impl EntropyApp {
 
                 progress("Reading Vial layout definition…");
                 log::info!("Getting layout JSON…");
-                let json = if let Some(cached) = load_cached_vial_definition(&cache_key) {
+                let definition_size = dev_conn
+                    .get_definition_size()
+                    .map_err(|e| format!("Layout size read failed: {e}"))?;
+                let json = if let Some(cached) =
+                    load_cached_vial_definition(&cache_key, definition_size)
+                {
                     log::info!(
-                        "Loaded Vial definition from cache for keyboard id {keyboard_id:016X}, key {cache_key}"
+                        "Loaded Vial definition from cache for keyboard id {keyboard_id:016X}, key {cache_key}, size {definition_size}"
                     );
                     cached
                 } else {
                     let json = dev_conn
-                        .get_layout_json()
+                        .get_layout_json_with_size(definition_size)
                         .map_err(|e| format!("Layout read failed: {e}"))?;
-                    save_cached_vial_definition(&cache_key, &json);
+                    save_cached_vial_definition(&cache_key, definition_size, &json);
                     json
                 };
 
@@ -1029,6 +1043,18 @@ mod tests {
         assert_eq!(
             firmware_version_from_vial_json(&json).as_deref(),
             Some("4.0.5")
+        );
+    }
+
+    #[test]
+    fn vial_definition_cache_filename_includes_schema_version_and_size() {
+        assert_eq!(
+            cached_vial_definition_file_name("keyboard", 0x1234),
+            "definition_v2_keyboard_00001234.json"
+        );
+        assert_ne!(
+            cached_vial_definition_file_name("keyboard", 0x1234),
+            cached_vial_definition_file_name("keyboard", 0x1235)
         );
     }
 }
