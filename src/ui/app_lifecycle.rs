@@ -990,6 +990,9 @@ impl eframe::App for EntropyApp {
             self.cache_windows_hwnd(frame);
             #[cfg(target_os = "macos")]
             self.cache_macos_ns_window(frame);
+            // Cache the winit window/display handles so native file dialogs can be
+            // parented to the main window instead of opening behind it.
+            self.cache_parent_window_handles(frame);
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             self.handle_tray_quit_request(ctx);
             #[cfg(any(target_os = "windows", target_os = "macos"))]

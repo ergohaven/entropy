@@ -2760,6 +2760,12 @@ pub struct EntropyApp {
         super::file_dialog::FileDialogAction,
         std::sync::mpsc::Receiver<Option<std::path::PathBuf>>,
     )>,
+    /// Raw handles of the main window, cached each frame so file dialogs can be
+    /// parented to it — otherwise the native picker can open behind the window.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) parent_window_handle: Option<raw_window_handle::RawWindowHandle>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) parent_display_handle: Option<raw_window_handle::RawDisplayHandle>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) pending_entlayout_import_path: Option<std::path::PathBuf>,
     #[cfg(not(target_arch = "wasm32"))]

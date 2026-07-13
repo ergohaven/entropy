@@ -52,6 +52,7 @@ rfd = "0.15"
 ureq = { version = "2", features = ["json"] }
 # Preserve eframe's native winit defaults while selecting its Glow renderer.
 winit = "0.30.13"
+raw-window-handle = "0.6"
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))'.dependencies]
 hidapi = "2.6"

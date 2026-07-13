@@ -16,7 +16,47 @@ pub enum FileDialogAction {
     ExportLayoutImage,
 }
 
+/// Owns the main window's raw handles so a file dialog can be parented to it.
+/// Only ever used on the UI thread (where the window is alive) to hand the
+/// handles to `rfd`'s `set_parent`, which copies them into the (Send) dialog.
+#[cfg(not(target_arch = "wasm32"))]
+struct ParentWindow {
+    window: raw_window_handle::RawWindowHandle,
+    display: raw_window_handle::RawDisplayHandle,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl raw_window_handle::HasWindowHandle for ParentWindow {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        // Safe: the main window outlives this transient borrow used only to
+        // build the parent identifier for the dialog.
+        Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(self.window) })
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl raw_window_handle::HasDisplayHandle for ParentWindow {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(self.display) })
+    }
+}
+
 impl EntropyApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn cache_parent_window_handles(&mut self, frame: &eframe::Frame) {
+        use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+        if let Ok(handle) = frame.window_handle() {
+            self.parent_window_handle = Some(handle.as_raw());
+        }
+        if let Ok(handle) = frame.display_handle() {
+            self.parent_display_handle = Some(handle.as_raw());
+        }
+    }
+
     /// Spawn a native file dialog on a worker thread. `save` picks a save
     /// dialog, otherwise an open dialog. Only one dialog runs at a time; a new
     /// request while one is in flight is ignored.
@@ -24,11 +64,19 @@ impl EntropyApp {
     pub(crate) fn spawn_file_dialog(
         &mut self,
         action: FileDialogAction,
-        dialog: rfd::FileDialog,
+        mut dialog: rfd::FileDialog,
         save: bool,
     ) {
         if self.pending_file_dialog.is_some() {
             return;
+        }
+        // Parent the picker to the main window so it opens in front instead of
+        // behind it. set_parent copies the raw handles into the Send dialog, so
+        // the dialog can still run on the worker thread.
+        if let (Some(window), Some(display)) =
+            (self.parent_window_handle, self.parent_display_handle)
+        {
+            dialog = dialog.set_parent(&ParentWindow { window, display });
         }
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
