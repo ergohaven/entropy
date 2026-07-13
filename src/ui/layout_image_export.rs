@@ -682,6 +682,48 @@ impl EntropyApp {
     fn export_layout_image_dialog(&mut self, layout: &KeyboardLayout) {
         let lang = self.app_settings.language;
         let layer_count = self.layer_count.max(layout.layers.len()).max(1);
+        let any_selected = self
+            .app_settings
+            .layout_image_export
+            .selected_layers
+            .iter()
+            .take(layer_count)
+            .any(|selected| *selected);
+        if !any_selected {
+            self.status_msg = export_text(lang, "select_layer").into();
+            return;
+        }
+
+        let format = self.app_settings.layout_image_export.format;
+        let (extension, filter_label) = match format {
+            LayoutImageExportFormat::Png => ("png", "PNG image"),
+            LayoutImageExportFormat::Svg => ("svg", "SVG image"),
+            LayoutImageExportFormat::Pdf => ("pdf", "PDF document"),
+        };
+        let file_name = format!("{}-layout.{extension}", device_id_slug(&layout.name));
+        // The picker runs on a worker thread; rendering + writing happen in
+        // write_layout_image_export once a path comes back. All three formats
+        // (PNG, SVG, PDF) go through this same async parented-dialog path.
+        self.spawn_file_dialog(
+            crate::app::file_dialog::FileDialogAction::ExportLayoutImage,
+            rfd::FileDialog::new()
+                .add_filter(filter_label, &[extension])
+                .set_file_name(&file_name),
+            true,
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn write_layout_image_export(
+        &mut self,
+        mut path: std::path::PathBuf,
+        _ctx: &egui::Context,
+    ) {
+        let lang = self.app_settings.language;
+        let Some(layout) = self.layout.clone() else {
+            return;
+        };
+        let layer_count = self.layer_count.max(layout.layers.len()).max(1);
         let selected_layers: Vec<usize> = self
             .app_settings
             .layout_image_export
@@ -702,19 +744,8 @@ impl EntropyApp {
             LayoutImageExportFormat::Svg => "svg",
             LayoutImageExportFormat::Pdf => "pdf",
         };
-        let filter_label = match format {
-            LayoutImageExportFormat::Png => "PNG image",
-            LayoutImageExportFormat::Svg => "SVG image",
-            LayoutImageExportFormat::Pdf => "PDF document",
-        };
-        let file_name = format!("{}-layout.{extension}", device_id_slug(&layout.name));
-        let Some(mut path) = rfd::FileDialog::new()
-            .add_filter(filter_label, &[extension])
-            .set_file_name(&file_name)
-            .save_file()
-        else {
-            return;
-        };
+        // The picker already ran on the worker thread; `path` is the chosen file.
+        // Only the extension normalization, render, and write happen here.
         if path
             .extension()
             .and_then(|ext| ext.to_str())
@@ -726,7 +757,7 @@ impl EntropyApp {
 
         let result = match format {
             LayoutImageExportFormat::Png => self
-                .render_layout_image(layout, &selected_layers)
+                .render_layout_image(&layout, &selected_layers)
                 .and_then(|image| {
                     image
                         .save(&path)
@@ -734,10 +765,10 @@ impl EntropyApp {
                         .map(|_| ())
                 }),
             LayoutImageExportFormat::Svg => self
-                .render_layout_svg(layout, &selected_layers)
+                .render_layout_svg(&layout, &selected_layers)
                 .and_then(|svg| std::fs::write(&path, svg).map_err(|e| anyhow::anyhow!("{e}"))),
             LayoutImageExportFormat::Pdf => self
-                .render_layout_pdf(layout, &selected_layers)
+                .render_layout_pdf(&layout, &selected_layers)
                 .and_then(|pdf| std::fs::write(&path, pdf).map_err(|e| anyhow::anyhow!("{e}"))),
         };
 

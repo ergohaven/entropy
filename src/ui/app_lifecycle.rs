@@ -1084,6 +1084,11 @@ impl eframe::App for EntropyApp {
             self.last_applied_theme = Some((self.dark_mode, accent_color));
         }
 
+        // Deliver results from any background file dialog (import/export pickers
+        // run off the UI thread so the portal round-trip never freezes egui).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_file_dialog(ctx);
+
         self.apply_picker_results();
 
         // Deselect key when picker is closed without choosing

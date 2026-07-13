@@ -70,6 +70,7 @@ impl EntropyApp {
             import_report_title: String::new(),
             import_report_body: String::new(),
             pending_entlayout_import_path: None,
+            pending_file_dialog: None,
             pending_entsettings_import_path: None,
             import_progress_started_at: None,
             import_progress_title: String::new(),

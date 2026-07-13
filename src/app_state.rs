@@ -2753,6 +2753,13 @@ pub struct EntropyApp {
     pub(crate) import_report_open: bool,
     pub(crate) import_report_title: String,
     pub(crate) import_report_body: String,
+    /// In-flight native file dialog running on a background thread so the UI
+    /// thread never blocks on the (portal/D-Bus) picker. Only one at a time.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) pending_file_dialog: Option<(
+        super::file_dialog::FileDialogAction,
+        std::sync::mpsc::Receiver<Option<std::path::PathBuf>>,
+    )>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) pending_entlayout_import_path: Option<std::path::PathBuf>,
     #[cfg(not(target_arch = "wasm32"))]
