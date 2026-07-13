@@ -5,7 +5,7 @@ use std::sync::{Mutex, OnceLock, RwLock};
 
 #[path = "smart_input_symbols.rs"]
 mod smart_input_symbols;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 #[path = "smart_input_windows.rs"]
 mod smart_input_windows;
 #[cfg(any(target_os = "windows", test))]

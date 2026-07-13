@@ -675,7 +675,7 @@ mod tests {
 
     #[test]
     fn prepares_multiline_and_cursor_marker() {
-        let mut engine = TextExpansionEngine::new(vec![rule(":sig", "Hello\n$|$World")]);
+        let mut engine = TextExpansionEngine::new(vec![rule(":sig", r"Hello\n$|$World")]);
         let mut matched = None;
         for ch in ":sig".chars() {
             matched = engine.push_char(ch);
