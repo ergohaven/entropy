@@ -24,6 +24,8 @@ impl EntropyApp {
         self.bluetooth_settings = BluetoothSettingsState::default();
         self.module_settings = ModuleSettingsState::default();
         self.tap_hold_settings = TapHoldSettingsState::default();
+        self.pending_tap_hold_numeric_writes.clear();
+        self.tap_hold_numeric_write_due = None;
         self.magic_settings = MagicSettingsState::default();
         self.one_shot_settings = OneShotSettingsState::default();
         self.grave_escape_settings = GraveEscapeSettingsState::default();

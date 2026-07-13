@@ -282,12 +282,23 @@ impl EntropyApp {
     }
 }
 
-fn should_write_combo_entries(
-    combo_dirty: bool,
+fn should_write_dynamic_entries(
+    entries_dirty: bool,
     keycode_picker_open: bool,
     _active_hid_is_bluetooth: bool,
 ) -> bool {
-    combo_dirty && !keycode_picker_open
+    entries_dirty && !keycode_picker_open
+}
+
+fn tap_dance_entries_to_write(
+    entries: &[crate::keycode_picker::TapDanceEntry],
+    synced_entries: &[crate::keycode_picker::TapDanceEntry],
+) -> Vec<usize> {
+    entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| (synced_entries.get(index) != Some(entry)).then_some(index))
+        .collect()
 }
 
 #[cfg(test)]
@@ -295,20 +306,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dirty_combo_entries_write_over_bluetooth() {
-        assert!(should_write_combo_entries(true, false, true));
+    fn dirty_dynamic_entries_write_over_bluetooth() {
+        assert!(should_write_dynamic_entries(true, false, true));
     }
 
     #[test]
-    fn combo_entries_wait_while_key_picker_is_open() {
-        assert!(!should_write_combo_entries(true, true, true));
-        assert!(!should_write_combo_entries(true, true, false));
+    fn dynamic_entries_wait_while_key_picker_is_open() {
+        assert!(!should_write_dynamic_entries(true, true, true));
+        assert!(!should_write_dynamic_entries(true, true, false));
     }
 
     #[test]
-    fn clean_combo_entries_do_not_write() {
-        assert!(!should_write_combo_entries(false, false, true));
-        assert!(!should_write_combo_entries(false, false, false));
+    fn clean_dynamic_entries_do_not_write() {
+        assert!(!should_write_dynamic_entries(false, false, true));
+        assert!(!should_write_dynamic_entries(false, false, false));
+    }
+
+    #[test]
+    fn tap_dance_writeback_targets_only_changed_entries() {
+        let unchanged = crate::keycode_picker::TapDanceEntry {
+            on_tap: 0x002c,
+            tapping_term: 150,
+            ..Default::default()
+        };
+        let changed = crate::keycode_picker::TapDanceEntry {
+            on_hold: 0x0202,
+            ..unchanged.clone()
+        };
+
+        assert_eq!(
+            tap_dance_entries_to_write(
+                &[unchanged.clone(), changed],
+                &[unchanged.clone(), unchanged]
+            ),
+            vec![1]
+        );
     }
 
     #[test]
@@ -344,6 +376,7 @@ impl eframe::App for EntropyApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.flush_pending_tap_hold_numeric_writes();
         #[cfg(not(target_arch = "wasm32"))]
         self.fallback_entropy_display_presets_before_exit();
         self.flush_pending_text_expander_settings();
@@ -966,7 +999,7 @@ impl eframe::App for EntropyApp {
         }
 
         // Write combos to device if changed
-        if should_write_combo_entries(
+        if should_write_dynamic_entries(
             self.combo_dirty,
             self.keycode_picker.open,
             active_hid_is_bluetooth,
@@ -1030,14 +1063,26 @@ impl eframe::App for EntropyApp {
             self.combo_colors_dirty = false;
         }
 
+        self.flush_due_tap_hold_numeric_writes();
+
         // Write tap dance to device if changed
-        if self.keycode_picker.tap_dance_dirty
-            && !self.keycode_picker.open
-            && !active_hid_is_bluetooth
-        {
+        if should_write_dynamic_entries(
+            self.keycode_picker.tap_dance_dirty,
+            self.keycode_picker.open,
+            active_hid_is_bluetooth,
+        ) {
+            let entries_to_write = tap_dance_entries_to_write(
+                &self.keycode_picker.tap_dance_entries,
+                &self.keycode_picker.tap_dance_synced_entries,
+            );
             let mut td_save_ok = true;
-            if let Some(hid) = &self.hid_device {
-                for (i, td) in self.keycode_picker.tap_dance_entries.iter().enumerate() {
+            if entries_to_write.is_empty() {
+                // Names are local metadata; no device round-trip is needed.
+            } else if let Some(hid) = &self.hid_device {
+                for i in entries_to_write {
+                    let Some(td) = self.keycode_picker.tap_dance_entries.get(i).cloned() else {
+                        continue;
+                    };
                     match hid.set_tap_dance(
                         i as u8,
                         td.on_tap,
@@ -1046,7 +1091,14 @@ impl eframe::App for EntropyApp {
                         td.on_tap_hold,
                         td.tapping_term,
                     ) {
-                        Ok(()) => {}
+                        Ok(()) => {
+                            if self.keycode_picker.tap_dance_synced_entries.len() <= i {
+                                self.keycode_picker
+                                    .tap_dance_synced_entries
+                                    .resize(i + 1, Default::default());
+                            }
+                            self.keycode_picker.tap_dance_synced_entries[i] = td;
+                        }
                         Err(e) => {
                             self.status_msg = crate::i18n::tr_catalog_format(
                                 self.app_settings.language,
@@ -1058,13 +1110,28 @@ impl eframe::App for EntropyApp {
                         }
                     }
                 }
-            }
-            if td_save_ok {
-                save_tap_dance_names(
-                    &self.keycode_picker.tap_dance_names,
-                    &self.current_device_name,
+            } else {
+                self.status_msg = crate::i18n::tr_catalog_format(
+                    self.app_settings.language,
+                    "status_messages.tap_dance_write_error",
+                    &[(
+                        "error",
+                        crate::i18n::tr_catalog(
+                            self.app_settings.language,
+                            "status_messages.device_unavailable",
+                        ),
+                    )],
                 );
-                self.keycode_picker.tap_dance_dirty = false;
+                td_save_ok = false;
+            }
+            save_tap_dance_names(
+                &self.keycode_picker.tap_dance_names,
+                &self.current_device_name,
+            );
+            // Consume this attempt. Failed device entries remain different from the
+            // synced snapshot and retry after the next edit or picker close.
+            self.keycode_picker.tap_dance_dirty = false;
+            if td_save_ok {
                 if self.status_msg.is_empty() || self.status_msg.starts_with("✓") {
                     self.status_msg = crate::i18n::tr_catalog(
                         self.app_settings.language,

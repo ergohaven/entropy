@@ -6,6 +6,25 @@ use super::hid_protocol::*;
 use super::HidDevice;
 use anyhow::Result;
 
+type TapDanceData = (u16, u16, u16, u16, u16);
+
+fn verify_tap_dance_writeback(
+    index: u8,
+    requested: TapDanceData,
+    readback: TapDanceData,
+) -> Result<()> {
+    if readback == requested {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "tap dance writeback mismatch at index {}: wrote {:?}, read back {:?}",
+        index,
+        requested,
+        readback
+    )
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl HidDevice {
     /// Get Vial dynamic entry counts and optional feature bits.
@@ -159,7 +178,7 @@ impl HidDevice {
     }
 
     /// Get a tap dance entry: (on_tap, on_hold, on_double_tap, on_tap_hold, tapping_term)
-    pub fn get_tap_dance(&self, idx: u8) -> Result<(u16, u16, u16, u16, u16)> {
+    pub fn get_tap_dance(&self, idx: u8) -> Result<TapDanceData> {
         let resp = self.usb_send(&[
             CMD_VIA_VIAL_PREFIX,
             CMD_VIAL_DYNAMIC_ENTRY_OP,
@@ -180,6 +199,7 @@ impl HidDevice {
         on_tap_hold: u16,
         tapping_term: u16,
     ) -> Result<()> {
+        let requested = (on_tap, on_hold, on_double_tap, on_tap_hold, tapping_term);
         let mut cmd = [0u8; 32];
         cmd[0] = CMD_VIA_VIAL_PREFIX;
         cmd[1] = CMD_VIAL_DYNAMIC_ENTRY_OP;
@@ -194,6 +214,30 @@ impl HidDevice {
         if resp[0] != 0 {
             anyhow::bail!("tap dance set error: {}", resp[0]);
         }
-        Ok(())
+        let readback = self.get_tap_dance(idx)?;
+        verify_tap_dance_writeback(idx, requested, readback)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tap_dance_writeback_accepts_matching_entry() {
+        let entry = (0x002C, 0x0202, 0, 0, 150);
+
+        assert!(verify_tap_dance_writeback(0, entry, entry).is_ok());
+    }
+
+    #[test]
+    fn tap_dance_writeback_rejects_stale_entry() {
+        let requested = (0x002C, 0x0202, 0, 0, 150);
+        let stale = (0, 0, 0, 0, 200);
+
+        let error = verify_tap_dance_writeback(0, requested, stale).unwrap_err();
+
+        assert!(error.to_string().contains("tap dance writeback mismatch"));
+        assert!(error.to_string().contains("index 0"));
     }
 }
