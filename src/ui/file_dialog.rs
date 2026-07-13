@@ -52,6 +52,15 @@ impl EntropyApp {
             Ok(result) => {
                 let action = *action;
                 self.pending_file_dialog = None;
+                // A native dialog steals window focus; when it closes, egui can
+                // be left holding stale pointer/interaction state (a pointer that
+                // never got its release), which wedges subsequent clicks — dead
+                // menus. Drop that state and close the hover dropdown that opened
+                // the dialog before continuing.
+                self.close_top_dropdowns(ctx);
+                ctx.input_mut(|i| i.pointer = egui::PointerState::default());
+                ctx.memory_mut(|m| m.stop_text_input());
+                ctx.request_repaint();
                 if let Some(path) = result {
                     self.handle_file_dialog_result(action, path, ctx);
                 }
