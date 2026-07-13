@@ -141,6 +141,30 @@ fn firmware_version_from_vial_json(json: &serde_json::Value) -> Option<String> {
     .find_map(|path| json_path_string(json, path))
 }
 
+fn supports_battery_halves_from_vial_json(json: &serde_json::Value) -> bool {
+    let candidates = [
+        json.get("entropy").and_then(|v| v.get("batteryHalves")),
+        json.get("entropy").and_then(|v| v.get("battery_halves")),
+        json.get("features")
+            .and_then(|v| v.get("entropyBatteryHalves")),
+        json.get("features")
+            .and_then(|v| v.get("entropy_battery_halves")),
+    ];
+
+    candidates.into_iter().flatten().any(|value| {
+        value.as_bool().unwrap_or(false)
+            || value
+                .as_str()
+                .map(|text| {
+                    matches!(
+                        text.trim().to_ascii_lowercase().as_str(),
+                        "true" | "1" | "yes"
+                    )
+                })
+                .unwrap_or(false)
+    })
+}
+
 fn json_u16_value(value: &serde_json::Value) -> Option<u16> {
     match value {
         serde_json::Value::Number(number) => {
@@ -349,6 +373,18 @@ impl EntropyApp {
                 };
                 let firmware_version =
                     runtime_firmware_version.or_else(|| firmware_version_from_vial_json(&json));
+                let battery_halves = if supports_battery_halves_from_vial_json(&json) {
+                    progress("Reading split battery levels…");
+                    match dev_conn.get_battery_halves() {
+                        Ok(levels) => levels,
+                        Err(e) => {
+                            log::warn!("split battery levels read failed: {e}");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
 
                 let touchpad_settings_in_definition =
                     Self::layout_json_has_touchpad_settings(&json);
@@ -932,6 +968,7 @@ impl EntropyApp {
                     product_id: dev.product_id,
                     path: dev.path.clone(),
                     firmware_version,
+                    battery_halves,
                     via_protocol,
                     vial_protocol,
                     keyboard_id,
@@ -1044,6 +1081,17 @@ mod tests {
             firmware_version_from_vial_json(&json).as_deref(),
             Some("4.0.5")
         );
+    }
+
+    #[test]
+    fn reads_entropy_battery_halves_metadata() {
+        let json = serde_json::json!({
+            "entropy": {
+                "batteryHalves": true
+            }
+        });
+
+        assert!(supports_battery_halves_from_vial_json(&json));
     }
 
     #[test]

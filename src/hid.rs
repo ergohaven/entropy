@@ -123,6 +123,7 @@ pub(crate) use hid_keymap::{is_keycode_writeback_mismatch, keycode_writeback_rea
 
 #[path = "hid_settings.rs"]
 mod hid_settings;
+pub(crate) use hid_settings::BatteryHalves;
 
 #[path = "hid_vial.rs"]
 mod hid_vial;
@@ -619,6 +620,9 @@ fn response_matches_command(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
             command.len() >= 4 && resp[..4] == command[..4]
         }
         CMD_VIA_MACRO_GET_COUNT | CMD_VIA_MACRO_GET_BUFFER_SIZE => resp[0] == cmd,
+        CMD_VIA_CUSTOM_GET_VALUE if command.get(1) == Some(&ERGOHAVEN_CUSTOM_NAMESPACE) => {
+            command.len() >= 3 && resp[0] == cmd && resp[1..3] == command[1..3]
+        }
         CMD_VIA_GET_KEYBOARD_VALUE | CMD_VIA_LIGHTING_GET_VALUE => {
             command.len() >= 2 && resp[0] == cmd && resp[1] == command[1]
         }

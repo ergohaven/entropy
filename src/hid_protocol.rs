@@ -9,6 +9,7 @@ pub(super) const CMD_VIA_GET_KEYCODE: u8 = 0x04;
 pub(super) const CMD_VIA_SET_KEYCODE: u8 = 0x05;
 pub(super) const CMD_VIA_LIGHTING_SET_VALUE: u8 = 0x07;
 pub(super) const CMD_VIA_LIGHTING_GET_VALUE: u8 = 0x08;
+pub(super) const CMD_VIA_CUSTOM_GET_VALUE: u8 = 0x08;
 pub(super) const CMD_VIA_LIGHTING_SAVE: u8 = 0x09;
 pub(super) const CMD_VIA_GET_LAYER_COUNT: u8 = 0x11;
 pub(super) const CMD_VIA_KEYMAP_GET_BUFFER: u8 = 0x12;
@@ -31,6 +32,10 @@ pub(super) const VIALRGB_GET_INFO: u8 = 0x40;
 pub(super) const VIALRGB_GET_MODE: u8 = 0x41;
 pub(super) const VIALRGB_GET_SUPPORTED: u8 = 0x42;
 pub(super) const VIALRGB_SET_MODE: u8 = 0x41;
+
+pub(super) const ERGOHAVEN_CUSTOM_NAMESPACE: u8 = 0xE8;
+pub(super) const ERGOHAVEN_CUSTOM_BATTERY_HALVES: u8 = 0x01;
+pub(super) const ERGOHAVEN_BATTERY_HALVES_VERSION: u8 = 0x01;
 
 // Vial sub-commands (used after CMD_VIA_VIAL_PREFIX)
 pub(super) const CMD_VIAL_GET_KEYBOARD_ID: u8 = 0x00;

@@ -135,6 +135,12 @@ fn macro_ext_keycodes_status(lang: crate::i18n::Language, info: &DeviceAboutInfo
     }
 }
 
+fn battery_percent_text(lang: crate::i18n::Language, value: Option<u8>) -> String {
+    value
+        .map(|percent| format!("{percent}%"))
+        .unwrap_or_else(|| not_reported(lang).to_owned())
+}
+
 fn device_about_rows(lang: crate::i18n::Language, info: &DeviceAboutInfo) -> Vec<AboutRow> {
     let firmware_version = info
         .firmware_version
@@ -146,7 +152,7 @@ fn device_about_rows(lang: crate::i18n::Language, info: &DeviceAboutInfo) -> Vec
         .map(|bytes| bytes_label(lang, bytes))
         .unwrap_or_else(|| not_reported(lang).to_owned());
 
-    vec![
+    let mut rows = vec![
         localized_row(
             lang,
             "Производитель",
@@ -307,7 +313,34 @@ fn device_about_rows(lang: crate::i18n::Language, info: &DeviceAboutInfo) -> Vec
             "Vial QMK Settings support",
             yes_no(lang, info.qmk_settings),
         ),
-    ]
+    ];
+
+    if let Some(battery) = info.battery_halves {
+        rows.insert(
+            3,
+            localized_row(
+                lang,
+                "Заряд левой половинки",
+                "Left half battery",
+                "VIA CustomGetValue 0xE8/0x01, left half",
+                "VIA CustomGetValue 0xE8/0x01, left half",
+                battery_percent_text(lang, battery.left),
+            ),
+        );
+        rows.insert(
+            4,
+            localized_row(
+                lang,
+                "Заряд правой половинки",
+                "Right half battery",
+                "VIA CustomGetValue 0xE8/0x01, right half",
+                "VIA CustomGetValue 0xE8/0x01, right half",
+                battery_percent_text(lang, battery.right),
+            ),
+        );
+    }
+
+    rows
 }
 
 fn about_entropy_update_rows(

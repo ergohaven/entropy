@@ -19,6 +19,12 @@ fn verify_qmk_setting_writeback(qsid: u16, requested: u16, readback: u16) -> Res
     )
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct BatteryHalves {
+    pub(crate) left: Option<u8>,
+    pub(crate) right: Option<u8>,
+}
+
 fn format_via_firmware_version(value: u32) -> Option<String> {
     if value == 0 {
         return None;
@@ -30,8 +36,55 @@ fn format_via_firmware_version(value: u32) -> Option<String> {
     Some(format!("{major}.{minor}.{patch}"))
 }
 
+fn battery_level_from_response(flags: u8, valid_bit: u8, value: u8) -> Option<u8> {
+    if flags & valid_bit == 0 || value == 0xFF || value > 100 {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn parse_battery_halves_response(resp: &[u8; MSG_LEN]) -> Result<Option<BatteryHalves>> {
+    if resp[0] != CMD_VIA_CUSTOM_GET_VALUE
+        || resp[1] != ERGOHAVEN_CUSTOM_NAMESPACE
+        || resp[2] != ERGOHAVEN_CUSTOM_BATTERY_HALVES
+    {
+        anyhow::bail!("unexpected Ergohaven battery halves response");
+    }
+
+    if resp[3] != ERGOHAVEN_BATTERY_HALVES_VERSION {
+        log::warn!(
+            "unsupported Ergohaven battery halves response version: {}",
+            resp[3]
+        );
+        return Ok(None);
+    }
+
+    let flags = resp[4];
+    let halves = BatteryHalves {
+        left: battery_level_from_response(flags, 0x01, resp[5]),
+        right: battery_level_from_response(flags, 0x02, resp[6]),
+    };
+    Ok(Some(halves))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl HidDevice {
+    pub fn get_battery_halves(&self) -> Result<Option<BatteryHalves>> {
+        let _ = self.get_battery_halves_once()?;
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        self.get_battery_halves_once()
+    }
+
+    fn get_battery_halves_once(&self) -> Result<Option<BatteryHalves>> {
+        let mut cmd = [0u8; MSG_LEN];
+        cmd[0] = CMD_VIA_CUSTOM_GET_VALUE;
+        cmd[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
+        cmd[2] = ERGOHAVEN_CUSTOM_BATTERY_HALVES;
+        let resp = self.usb_send(&cmd)?;
+        parse_battery_halves_response(&resp)
+    }
+
     pub fn get_firmware_version(&self) -> Result<Option<String>> {
         let resp = self.usb_send(&[CMD_VIA_GET_KEYBOARD_VALUE, VIA_FIRMWARE_VERSION])?;
         if resp[0] != CMD_VIA_GET_KEYBOARD_VALUE || resp[1] != VIA_FIRMWARE_VERSION {
@@ -352,5 +405,45 @@ mod tests {
     #[test]
     fn treats_zero_firmware_version_as_not_reported() {
         assert_eq!(format_via_firmware_version(0), None);
+    }
+
+    #[test]
+    fn parses_ergo_battery_halves_response() {
+        let mut resp = [0u8; MSG_LEN];
+        resp[0] = CMD_VIA_CUSTOM_GET_VALUE;
+        resp[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
+        resp[2] = ERGOHAVEN_CUSTOM_BATTERY_HALVES;
+        resp[3] = ERGOHAVEN_BATTERY_HALVES_VERSION;
+        resp[4] = 0x03;
+        resp[5] = 87;
+        resp[6] = 64;
+
+        assert_eq!(
+            parse_battery_halves_response(&resp).unwrap(),
+            Some(BatteryHalves {
+                left: Some(87),
+                right: Some(64),
+            })
+        );
+    }
+
+    #[test]
+    fn keeps_ergo_battery_halves_with_unknown_levels() {
+        let mut resp = [0u8; MSG_LEN];
+        resp[0] = CMD_VIA_CUSTOM_GET_VALUE;
+        resp[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
+        resp[2] = ERGOHAVEN_CUSTOM_BATTERY_HALVES;
+        resp[3] = ERGOHAVEN_BATTERY_HALVES_VERSION;
+        resp[4] = 0x02;
+        resp[5] = 90;
+        resp[6] = 0xFF;
+
+        assert_eq!(
+            parse_battery_halves_response(&resp).unwrap(),
+            Some(BatteryHalves {
+                left: None,
+                right: None,
+            })
+        );
     }
 }
