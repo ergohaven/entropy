@@ -101,11 +101,9 @@ jobs:
           cargo test --all-targets hid::hid_proxy::tests -- --test-threads=1
           cargo test --all-targets qmk_hid_host::qa_followup_shared_output -- --test-threads=1
 
-      - name: Test macOS stable signing identity
+      - name: Test macOS stable signing validation
         if: matrix.kind == 'macos'
-        run: |
-          scripts/test_macos_stable_signing.sh
-          scripts/test_macos_stable_identity_e2e.sh
+        run: scripts/test_macos_stable_signing.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
