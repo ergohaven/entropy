@@ -99,6 +99,12 @@ jobs:
             echo "Could not derive macOS signing certificate SHA-1" >&2
             exit 1
           fi
+          sudo security add-trusted-cert \
+            -d \
+            -r trustRoot \
+            -p codeSign \
+            -k /Library/Keychains/System.keychain \
+            "$certificate_pem_path"
           echo "MACOS_SIGNING_CERTIFICATE_SHA1=$certificate_sha1" >> "$GITHUB_ENV"
 
       - name: Install Linux dependencies
@@ -139,6 +145,7 @@ jobs:
         shell: bash
         env:
           CODESIGN_IDENTITY: Entropy Open Source Release Signing
+          CODESIGN_KEYCHAIN: ${{ runner.temp }}/entropy-signing.keychain-db
           REQUIRE_STABLE_SIGNING: '1'
         run: |
           TARGET="${{ matrix.target }}" scripts/build_macos_app.sh
@@ -162,6 +169,12 @@ jobs:
         shell: bash
         run: |
           keychain_path="$RUNNER_TEMP/entropy-signing.keychain-db"
+          certificate_pem_path="$RUNNER_TEMP/entropy-release-signing.pem"
+          if [[ -f "$certificate_pem_path" ]]; then
+            sudo security remove-trusted-cert \
+              -d \
+              "$certificate_pem_path" || true
+          fi
           security delete-keychain "$keychain_path" || true
           rm -f \
             "$RUNNER_TEMP/entropy-release-signing.p12" \

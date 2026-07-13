@@ -45,7 +45,7 @@ Configure two GitHub Actions repository secrets:
 | `MACOS_CERTIFICATE_P12_BASE64` | `base64 -i entropy-release-signing.p12` output |
 | `MACOS_CERTIFICATE_PASSWORD` | `.p12` export password |
 
-Release workflow imports identity into a temporary keychain, derives certificate hash, embeds an explicit requirement containing that certificate plus `com.ergohaven.entropy`, signs app, and rejects ad-hoc or mismatched output. DMG is not notarized.
+Release workflow imports identity into a temporary keychain, trusts it for code signing on the ephemeral runner, derives certificate hash, embeds an explicit requirement containing that certificate plus `com.ergohaven.entropy`, signs app, removes runner trust, and rejects ad-hoc or mismatched output. DMG is not notarized. Shipped requirement does not contain `anchor trusted`; users do not install or trust this certificate.
 
 ## Automated proof
 
