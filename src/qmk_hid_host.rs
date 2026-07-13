@@ -23,14 +23,15 @@ const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HostDataMode {
-    pub clock_volume: bool,
+    pub time: bool,
+    pub volume: bool,
     pub layout: bool,
     pub media: bool,
 }
 
 impl HostDataMode {
     pub fn is_empty(self) -> bool {
-        !self.clock_volume && !self.layout && !self.media
+        !self.time && !self.volume && !self.layout && !self.media
     }
 }
 
@@ -288,7 +289,7 @@ fn run_bridge(path: String, mode: HostDataMode, stop: Arc<AtomicBool>) {
 
         let mut write_failed = false;
 
-        if mode.clock_volume && last_time_poll.elapsed() >= Duration::from_secs(1) {
+        if mode.time && last_time_poll.elapsed() >= Duration::from_secs(1) {
             last_time_poll = Instant::now();
             let now = current_time_payload();
             if last_time != Some(now) {
@@ -298,7 +299,7 @@ fn run_bridge(path: String, mode: HostDataMode, stop: Arc<AtomicBool>) {
             }
         }
 
-        if mode.clock_volume && last_volume_poll.elapsed() >= Duration::from_secs(2) {
+        if mode.volume && last_volume_poll.elapsed() >= Duration::from_secs(2) {
             last_volume_poll = Instant::now();
             if let Some(volume) = current_volume_percent() {
                 if last_volume != Some(volume) {

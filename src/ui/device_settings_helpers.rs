@@ -981,7 +981,12 @@ impl EntropyApp {
         packed: Option<u32>,
     ) -> crate::qmk_hid_host::HostDataMode {
         let values = Self::unpack_layout_option_values(&layout.layout_options, packed.unwrap_or(0));
-        let mut mode = crate::qmk_hid_host::HostDataMode::default();
+        let mut mode = crate::qmk_hid_host::HostDataMode {
+            time: layout.live_features.time,
+            volume: layout.live_features.volume,
+            layout: layout.live_features.layout,
+            media: layout.live_features.media,
+        };
         for (idx, option) in layout.layout_options.iter().enumerate() {
             if Self::is_encoder_layout_option(option) || option.choices.is_empty() {
                 continue;
@@ -998,10 +1003,11 @@ impl EntropyApp {
                 .map(|s| s.as_str())
                 .unwrap_or("");
             let selected_lower = selected.to_ascii_lowercase();
-            if Self::display_preset_needs_entropy(selected)
-                && (selected_lower.contains("clock") || selected_lower.contains("volume"))
-            {
-                mode.clock_volume = true;
+            if Self::display_preset_needs_entropy(selected) && selected_lower.contains("clock") {
+                mode.time = true;
+            }
+            if Self::display_preset_needs_entropy(selected) && selected_lower.contains("volume") {
+                mode.volume = true;
             }
             if Self::display_preset_needs_entropy(selected) && selected_lower.contains("layout") {
                 mode.layout = true;
@@ -1093,7 +1099,8 @@ impl EntropyApp {
             }
 
             if Self::device_uses_automatic_display_host_data(device) {
-                mode.clock_volume = true;
+                mode.time = true;
+                mode.volume = true;
                 mode.media = true;
             }
             if !self.app_settings.layout_sync_enabled {
@@ -1279,6 +1286,7 @@ mod tests {
             layer_names: Vec::new(),
             custom_keycodes: Vec::new(),
             layout_options: Vec::new(),
+            live_features: Default::default(),
             supports_rgb: false,
             lighting_mode: None,
             firmware: FirmwareProtocol::Vial,

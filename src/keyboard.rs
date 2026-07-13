@@ -66,6 +66,35 @@ pub struct LayoutOption {
     pub choices: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LiveFeatures {
+    #[serde(default)]
+    pub time: bool,
+    #[serde(default)]
+    pub volume: bool,
+    #[serde(default)]
+    pub layout: bool,
+    #[serde(default)]
+    pub media: bool,
+}
+
+impl LiveFeatures {
+    pub fn is_empty(&self) -> bool {
+        !self.time && !self.volume && !self.layout && !self.media
+    }
+
+    fn enable_named(&mut self, name: &str) {
+        let normalized = name.trim().replace(['-', ' '], "_").to_ascii_lowercase();
+        match normalized.as_str() {
+            "time" | "clock" | "clock_sync" | "time_sync" => self.time = true,
+            "volume" | "volume_sync" => self.volume = true,
+            "layout" | "layout_sync" | "keyboard_layout" => self.layout = true,
+            "media" | "media_info" | "media_sync" => self.media = true,
+            _ => {}
+        }
+    }
+}
+
 /// Full keyboard layout with multiple layers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyboardLayout {
@@ -84,6 +113,9 @@ pub struct KeyboardLayout {
     /// Vial `layouts.labels` options. Boolean entries have no choices; select entries store choices.
     #[serde(default)]
     pub layout_options: Vec<LayoutOption>,
+    /// Entropy Live Features advertised by firmware metadata.
+    #[serde(default, skip_serializing_if = "LiveFeatures::is_empty")]
+    pub live_features: LiveFeatures,
     /// Whether the keyboard definition exposes runtime RGB controls.
     #[serde(default)]
     pub supports_rgb: bool,
@@ -282,6 +314,52 @@ fn parse_layout_options_from_json(json: &serde_json::Value) -> Vec<LayoutOption>
         .collect()
 }
 
+fn parse_live_features_candidate(candidate: &serde_json::Value, features: &mut LiveFeatures) {
+    if let Some(name) = candidate.as_str() {
+        features.enable_named(name);
+        return;
+    }
+
+    if let Some(arr) = candidate.as_array() {
+        for item in arr {
+            parse_live_features_candidate(item, features);
+        }
+        return;
+    }
+
+    if let Some(obj) = candidate.as_object() {
+        for (key, value) in obj {
+            if value.as_bool().unwrap_or(false) {
+                features.enable_named(key);
+            } else if matches!(key.as_str(), "features" | "liveFeatures" | "live_features") {
+                parse_live_features_candidate(value, features);
+            }
+        }
+    }
+}
+
+fn parse_live_features_from_json(json: &serde_json::Value) -> LiveFeatures {
+    let mut features = LiveFeatures::default();
+    let candidates = [
+        json.get("entropy").and_then(|v| v.get("liveFeatures")),
+        json.get("entropy").and_then(|v| v.get("live_features")),
+        json.get("features")
+            .and_then(|v| v.get("entropyLiveFeatures")),
+        json.get("features")
+            .and_then(|v| v.get("entropy_live_features")),
+        json.get("firmware")
+            .and_then(|v| v.get("entropyLiveFeatures")),
+        json.get("firmware")
+            .and_then(|v| v.get("entropy_live_features")),
+    ];
+
+    for candidate in candidates.into_iter().flatten() {
+        parse_live_features_candidate(candidate, &mut features);
+    }
+
+    features
+}
+
 impl KeyboardLayout {
     pub fn get_keycode(&self, layer: usize, key_idx: usize) -> u16 {
         self.layers
@@ -478,6 +556,7 @@ impl KeyboardLayout {
 
         let layer_names = parse_layer_names_from_json(json);
         let layout_options = parse_layout_options_from_json(json);
+        let live_features = parse_live_features_from_json(json);
 
         // Parse custom keycodes
         let custom_keycodes =
@@ -543,9 +622,32 @@ impl KeyboardLayout {
             layer_names,
             custom_keycodes,
             layout_options,
+            live_features,
             supports_rgb,
             lighting_mode,
             firmware: FirmwareProtocol::Vial,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_entropy_live_features_from_vial_json() {
+        let json = serde_json::json!({
+            "name": "Qube Test",
+            "matrix": { "rows": 1, "cols": 1 },
+            "entropy": { "liveFeatures": ["time", "layout"] },
+            "layouts": { "keymap": [["0,0"]] }
+        });
+
+        let layout = KeyboardLayout::from_vial_json(&json).unwrap();
+
+        assert!(layout.live_features.time);
+        assert!(layout.live_features.layout);
+        assert!(!layout.live_features.volume);
+        assert!(!layout.live_features.media);
     }
 }

@@ -17,7 +17,8 @@ impl EntropyApp {
             mode = Self::qmk_hid_host_mode_for(layout, self.layout_options_value);
         }
         if Self::device_uses_automatic_display_host_data(selected) {
-            mode.clock_volume = true;
+            mode.time = true;
+            mode.volume = true;
             mode.media = true;
         }
 
@@ -248,7 +249,7 @@ impl EntropyApp {
                     }
                 }
                 let mode = active_mode.unwrap_or_default();
-                if mode.clock_volume {
+                if mode.time {
                     Self::draw_live_feature_row(
                         ui,
                         metrics,
@@ -263,6 +264,8 @@ impl EntropyApp {
                             "live_features.uses_the_local_system_clock",
                         )),
                     );
+                }
+                if mode.volume {
                     let volume = crate::qmk_hid_host::volume_check();
                     Self::draw_live_feature_row(
                         ui,

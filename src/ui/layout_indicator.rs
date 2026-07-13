@@ -190,6 +190,7 @@ mod tests {
             layer_names: vec![],
             custom_keycodes: vec![],
             layout_options: vec![],
+            live_features: Default::default(),
             supports_rgb: false,
             lighting_mode: None,
             firmware: FirmwareProtocol::Vial,
