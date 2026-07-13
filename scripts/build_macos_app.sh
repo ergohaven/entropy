@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="${APP_NAME:-Entropy}"
 BUNDLE_ID="${BUNDLE_ID:-com.ergohaven.entropy}"
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
+CODESIGN_KEYCHAIN="${CODESIGN_KEYCHAIN:-}"
 MACOS_SIGNING_CERTIFICATE_SHA1="${MACOS_SIGNING_CERTIFICATE_SHA1:-}"
 REQUIRE_STABLE_SIGNING="${REQUIRE_STABLE_SIGNING:-0}"
 MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-10.15}"
@@ -94,6 +95,9 @@ sign_app_bundle() {
 	fi
 
 	local codesign_args=(--force --sign "$CODESIGN_IDENTITY")
+	if [[ -n "$CODESIGN_KEYCHAIN" ]]; then
+		codesign_args+=(--keychain "$CODESIGN_KEYCHAIN")
+	fi
 	if [[ "$CODESIGN_IDENTITY" == "-" ]]; then
 		codesign_args+=(--timestamp=none)
 	else

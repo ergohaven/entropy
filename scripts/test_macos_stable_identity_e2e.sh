@@ -16,6 +16,7 @@ P12_PASSWORD="entropy-test-p12"
 IDENTITY="Entropy Open Source Release Signing"
 BUNDLE_ID="com.ergohaven.entropy"
 ORIGINAL_KEYCHAINS=()
+SYSTEM_TRUST_ADDED=0
 
 while IFS= read -r keychain; do
 	keychain="${keychain//\"/}"
@@ -23,6 +24,11 @@ while IFS= read -r keychain; do
 done < <(security list-keychains -d user)
 
 cleanup() {
+	if [[ "$SYSTEM_TRUST_ADDED" == "1" ]]; then
+		sudo -n security remove-trusted-cert \
+			-d \
+			"$TMP_DIR/imported-cert.pem" >/dev/null 2>&1 || true
+	fi
 	security list-keychains -d user -s "${ORIGINAL_KEYCHAINS[@]}" >/dev/null 2>&1 || true
 	security delete-keychain "$KEYCHAIN_PATH" >/dev/null 2>&1 || true
 	rm -rf "$TMP_DIR"
@@ -76,7 +82,9 @@ CERTIFICATE_SHA1="$(
 )"
 REQUIREMENT="$(macos_stable_designated_requirement "$CERTIFICATE_SHA1" "$BUNDLE_ID")"
 
-for binary in "$TMP_DIR/entropy-v1" "$TMP_DIR/entropy-v2"; do
+sign_test_binary() {
+	local binary="$1"
+
 	codesign --force \
 		--sign "$IDENTITY" \
 		--keychain "$KEYCHAIN_PATH" \
@@ -85,6 +93,31 @@ for binary in "$TMP_DIR/entropy-v1" "$TMP_DIR/entropy-v2"; do
 		--options runtime \
 		--timestamp=none \
 		"$binary"
+}
+
+if ! sign_test_binary "$TMP_DIR/entropy-v1"; then
+	if ! sudo -n security add-trusted-cert \
+		-d \
+		-r trustRoot \
+		-p codeSign \
+		-k /Library/Keychains/System.keychain \
+		"$TMP_DIR/imported-cert.pem"; then
+		echo "Self-signed identity failed signing and runner trust could not be added" >&2
+		exit 1
+	fi
+	SYSTEM_TRUST_ADDED=1
+	sign_test_binary "$TMP_DIR/entropy-v1"
+fi
+macos_verify_stable_signature \
+	"$TMP_DIR/entropy-v1" \
+	"$CERTIFICATE_SHA1" \
+	"$BUNDLE_ID"
+
+for binary in "$TMP_DIR/entropy-v1" "$TMP_DIR/entropy-v2"; do
+	if [[ "$binary" == "$TMP_DIR/entropy-v1" ]]; then
+		continue
+	fi
+	sign_test_binary "$binary"
 	macos_verify_stable_signature "$binary" "$CERTIFICATE_SHA1" "$BUNDLE_ID"
 done
 
