@@ -1207,6 +1207,7 @@ mod tests {
             supports_rgb: false,
             lighting_mode: None,
             firmware: FirmwareProtocol::Vial,
+            live_features: Default::default(),
         }
     }
 
