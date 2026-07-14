@@ -2598,7 +2598,7 @@ pub(crate) enum LayoutImageExportTheme {
     Dark,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub(crate) enum LayoutImageExportFormat {
@@ -2608,18 +2608,86 @@ pub(crate) enum LayoutImageExportFormat {
     Pdf,
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone)]
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(
+    into = "LayoutImageExportStatePersisted",
+    from = "LayoutImageExportStatePersisted"
+)]
 pub(crate) struct LayoutImageExportState {
-    #[serde(default)]
     pub(crate) format: LayoutImageExportFormat,
-    #[serde(default)]
     pub(crate) theme: LayoutImageExportTheme,
-    #[serde(default)]
     pub(crate) key_legend_layout: KeyLegendLayout,
-    #[serde(default = "default_layout_image_export_show_layer_names")]
     pub(crate) show_layer_names: bool,
-    #[serde(default)]
     pub(crate) selected_layers: Vec<bool>,
+}
+
+/// The `png`/`svg` values a pre-PDF build (v0.2.0) can deserialize. PDF is
+/// stored out-of-band so older builds never choke on an unknown `format` and
+/// reset *all* app settings to defaults.
+#[derive(Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum BaseImageFormat {
+    #[default]
+    Png,
+    Svg,
+}
+
+/// On-disk shape of [`LayoutImageExportState`]. `format` stays within the values
+/// old builds understand; `export_pdf` is an extra field they silently ignore.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct LayoutImageExportStatePersisted {
+    #[serde(default)]
+    format: BaseImageFormat,
+    #[serde(default)]
+    export_pdf: bool,
+    #[serde(default)]
+    theme: LayoutImageExportTheme,
+    #[serde(default)]
+    key_legend_layout: KeyLegendLayout,
+    #[serde(default = "default_layout_image_export_show_layer_names")]
+    show_layer_names: bool,
+    #[serde(default)]
+    selected_layers: Vec<bool>,
+}
+
+impl From<LayoutImageExportState> for LayoutImageExportStatePersisted {
+    fn from(state: LayoutImageExportState) -> Self {
+        let (format, export_pdf) = match state.format {
+            LayoutImageExportFormat::Png => (BaseImageFormat::Png, false),
+            LayoutImageExportFormat::Svg => (BaseImageFormat::Svg, false),
+            // Persist a safe base for old builds; the sidecar restores PDF here.
+            LayoutImageExportFormat::Pdf => (BaseImageFormat::Png, true),
+        };
+        Self {
+            format,
+            export_pdf,
+            theme: state.theme,
+            key_legend_layout: state.key_legend_layout,
+            show_layer_names: state.show_layer_names,
+            selected_layers: state.selected_layers,
+        }
+    }
+}
+
+impl From<LayoutImageExportStatePersisted> for LayoutImageExportState {
+    fn from(p: LayoutImageExportStatePersisted) -> Self {
+        let format = if p.export_pdf {
+            LayoutImageExportFormat::Pdf
+        } else {
+            match p.format {
+                BaseImageFormat::Png => LayoutImageExportFormat::Png,
+                BaseImageFormat::Svg => LayoutImageExportFormat::Svg,
+            }
+        };
+        Self {
+            format,
+            theme: p.theme,
+            key_legend_layout: p.key_legend_layout,
+            show_layer_names: p.show_layer_names,
+            selected_layers: p.selected_layers,
+        }
+    }
 }
 
 fn default_layout_image_export_show_layer_names() -> bool {
@@ -2879,5 +2947,66 @@ mod module_settings_state_tests {
             })
         );
         assert_eq!(settings.value(42), 7);
+    }
+}
+
+#[cfg(test)]
+mod layout_image_export_persist_tests {
+    use super::{LayoutImageExportFormat, LayoutImageExportState};
+
+    #[test]
+    fn pdf_persists_backward_compatibly() {
+        let mut state = LayoutImageExportState::default();
+        state.format = LayoutImageExportFormat::Pdf;
+        let json = serde_json::to_value(&state).unwrap();
+        // A pre-PDF build only understands png/svg for `format`; PDF is stored
+        // in the ignored `export_pdf` sidecar so it can't break their parsing.
+        assert_eq!(json["format"], "png");
+        assert_eq!(json["export_pdf"], true);
+    }
+
+    #[test]
+    fn png_and_svg_have_no_pdf_sidecar_set() {
+        for (fmt, expected) in [
+            (LayoutImageExportFormat::Png, "png"),
+            (LayoutImageExportFormat::Svg, "svg"),
+        ] {
+            let mut state = LayoutImageExportState::default();
+            state.format = fmt;
+            let json = serde_json::to_value(&state).unwrap();
+            assert_eq!(json["format"], expected);
+            assert_eq!(json["export_pdf"], false);
+        }
+    }
+
+    #[test]
+    fn round_trips_every_format() {
+        for fmt in [
+            LayoutImageExportFormat::Png,
+            LayoutImageExportFormat::Svg,
+            LayoutImageExportFormat::Pdf,
+        ] {
+            let mut state = LayoutImageExportState::default();
+            state.format = fmt;
+            let json = serde_json::to_string(&state).unwrap();
+            let back: LayoutImageExportState = serde_json::from_str(&json).unwrap();
+            assert_eq!(back.format, fmt);
+        }
+    }
+
+    #[test]
+    fn reads_legacy_json_without_sidecar() {
+        // A v0.2.0 file: only png/svg, no export_pdf field.
+        let legacy = r#"{"format":"svg","theme":"dark","show_layer_names":false}"#;
+        let state: LayoutImageExportState = serde_json::from_str(legacy).unwrap();
+        assert_eq!(state.format, LayoutImageExportFormat::Svg);
+    }
+
+    #[test]
+    fn export_pdf_sidecar_wins_over_base_format() {
+        // Mirrors what a newer build writes; older base kept as png.
+        let json = r#"{"format":"png","export_pdf":true}"#;
+        let state: LayoutImageExportState = serde_json::from_str(json).unwrap();
+        assert_eq!(state.format, LayoutImageExportFormat::Pdf);
     }
 }
