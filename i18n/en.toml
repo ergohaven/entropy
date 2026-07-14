@@ -390,6 +390,8 @@ unlock_start_failed = "Unlock start failed: {error}"
 unlock_cancelled_disconnected = "Unlock cancelled — device disconnected"
 device_unlocked = "Device unlocked!"
 unlock_interrupted_disconnected = "Unlock interrupted — device disconnected or unavailable: {error}"
+unlock_poll_retry = "Unlock communication interrupted; retrying: {error}"
+finish_unlock_before_closing = "Finish device unlock or reconnect it before closing Entropy"
 
 [dynamic_status]
 device_not_found = "Device not found"

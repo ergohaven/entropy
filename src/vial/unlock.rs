@@ -3,6 +3,20 @@ use super::*;
 const VIAL_UNLOCK_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
 const VIAL_UNLOCK_PROGRESS_ANIMATION_TIME: f32 = 0.16;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UnlockPollFailureAction {
+    Retry,
+    Stop,
+}
+
+fn unlock_poll_failure_action(disconnected: bool) -> UnlockPollFailureAction {
+    if disconnected {
+        UnlockPollFailureAction::Stop
+    } else {
+        UnlockPollFailureAction::Retry
+    }
+}
+
 impl EntropyApp {
     fn stop_vial_unlock_with_status(&mut self, status: impl Into<String>) {
         self.status_msg = status.into();
@@ -91,14 +105,28 @@ impl EntropyApp {
                                     }
                                 }
                             }
-                            Err(e) => {
-                                self.stop_vial_unlock_with_status(crate::i18n::tr_catalog_format(
-                                    self.app_settings.language,
-                                    "status_messages.unlock_interrupted_disconnected",
-                                    &[("error", &e.to_string())],
-                                ));
-                                return;
-                            }
+                            Err(e) => match unlock_poll_failure_action(
+                                crate::hid::is_disconnect_error(&e),
+                            ) {
+                                UnlockPollFailureAction::Stop => {
+                                    self.stop_vial_unlock_with_status(
+                                        crate::i18n::tr_catalog_format(
+                                            self.app_settings.language,
+                                            "status_messages.unlock_interrupted_disconnected",
+                                            &[("error", &e.to_string())],
+                                        ),
+                                    );
+                                    return;
+                                }
+                                UnlockPollFailureAction::Retry => {
+                                    log::warn!("Vial unlock poll failed; retrying: {e}");
+                                    self.status_msg = crate::i18n::tr_catalog_format(
+                                        self.app_settings.language,
+                                        "status_messages.unlock_poll_retry",
+                                        &[("error", &e.to_string())],
+                                    );
+                                }
+                            },
                         }
                     } else {
                         self.stop_vial_unlock_with_status(crate::i18n::tr_catalog(
@@ -273,5 +301,26 @@ impl EntropyApp {
                     }
                 });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transient_unlock_poll_failure_keeps_session_active() {
+        assert_eq!(
+            unlock_poll_failure_action(false),
+            UnlockPollFailureAction::Retry
+        );
+    }
+
+    #[test]
+    fn disconnected_unlock_poll_failure_stops_session() {
+        assert_eq!(
+            unlock_poll_failure_action(true),
+            UnlockPollFailureAction::Stop
+        );
     }
 }

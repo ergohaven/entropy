@@ -5,7 +5,21 @@ use super::*;
 #[cfg(target_os = "macos")]
 use objc::{msg_send, sel, sel_impl};
 
+fn should_keep_vial_unlock_visible(unlock_open: bool, unlock_polling: bool) -> bool {
+    unlock_open || unlock_polling
+}
+
 impl EntropyApp {
+    fn keep_vial_unlock_visible(&mut self, ctx: &egui::Context) {
+        self.restore_from_tray(ctx);
+        self.status_msg = crate::i18n::tr_catalog(
+            self.app_settings.language,
+            "status_messages.finish_unlock_before_closing",
+        )
+        .into();
+        ctx.request_repaint();
+    }
+
     pub(super) fn remember_main_window_size(&mut self, ctx: &egui::Context) {
         let viewport = ctx.input(|i| i.viewport().clone());
         if viewport.minimized == Some(true)
@@ -108,6 +122,12 @@ impl EntropyApp {
             return;
         }
 
+        if should_keep_vial_unlock_visible(self.unlock_open, self.vial_unlock_polling) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.keep_vial_unlock_visible(ctx);
+            return;
+        }
+
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         if self.consume_tray_quit_request() {
             return;
@@ -140,6 +160,11 @@ impl EntropyApp {
     }
 
     pub(super) fn minimize_window_to_tray(&mut self, ctx: &egui::Context) {
+        if should_keep_vial_unlock_visible(self.unlock_open, self.vial_unlock_polling) {
+            self.keep_vial_unlock_visible(ctx);
+            return;
+        }
+
         #[cfg(target_os = "linux")]
         let background_status = "Entropy is running in background";
         #[cfg(target_os = "macos")]
@@ -658,6 +683,13 @@ impl EntropyApp {
 
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub(super) fn handle_tray_quit_request(&mut self, ctx: &egui::Context) {
+        if should_keep_vial_unlock_visible(self.unlock_open, self.vial_unlock_polling)
+            && TRAY_QUIT_REQUESTED.swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            self.keep_vial_unlock_visible(ctx);
+            return;
+        }
+
         if self.consume_tray_quit_request() {
             #[cfg(target_os = "windows")]
             {
@@ -912,5 +944,18 @@ fn linux_close_to_tray_prompt_copy(
             "Keep running",
             "Cancel",
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_vial_unlock_blocks_close_and_tray_actions() {
+        assert!(should_keep_vial_unlock_visible(true, false));
+        assert!(should_keep_vial_unlock_visible(false, true));
+        assert!(should_keep_vial_unlock_visible(true, true));
+        assert!(!should_keep_vial_unlock_visible(false, false));
     }
 }
