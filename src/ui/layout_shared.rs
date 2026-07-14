@@ -526,6 +526,10 @@ fn draw_key_label_with_colors(
     }
 }
 
+pub(crate) fn inherited_key_label_color(dark: bool) -> Color32 {
+    app_muted_text(dark)
+}
+
 pub(crate) fn draw_key_label_dimmed(
     painter: &egui::Painter,
     rect: egui::Rect,
@@ -533,17 +537,8 @@ pub(crate) fn draw_key_label_dimmed(
     dark: bool,
     rotation: f32,
 ) {
-    let dim = if dark {
-        Color32::from_rgb(62, 56, 56)
-    } else {
-        Color32::from_rgb(200, 200, 208)
-    };
-    let dim_top = if dark {
-        Color32::from_rgb(45, 45, 50)
-    } else {
-        Color32::from_rgb(215, 215, 220)
-    };
-    draw_key_label_with_colors(painter, rect, label, dim_top, dim, rotation);
+    let color = inherited_key_label_color(dark);
+    draw_key_label_with_colors(painter, rect, label, color, color, rotation);
 }
 
 pub(crate) fn number_row_shifted_label(
@@ -609,4 +604,45 @@ pub(crate) fn draw_key_label(
         Color32::from_rgb(26, 26, 30)
     };
     draw_key_label_with_colors(painter, rect, label, top_color, main_color, rotation);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn relative_luminance(color: Color32) -> f32 {
+        let linear = |channel: u8| {
+            let channel = channel as f32 / 255.0;
+            if channel <= 0.04045 {
+                channel / 12.92
+            } else {
+                ((channel + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
+    }
+
+    fn contrast_ratio(left: Color32, right: Color32) -> f32 {
+        let left = relative_luminance(left);
+        let right = relative_luminance(right);
+        let lighter = left.max(right);
+        let darker = left.min(right);
+        (lighter + 0.05) / (darker + 0.05)
+    }
+
+    #[test]
+    fn inherited_key_label_color_is_muted_but_legible_in_both_themes() {
+        for (dark, keycap) in [
+            (true, Color32::from_rgb(48, 48, 52)),
+            (false, Color32::WHITE),
+        ] {
+            let color = inherited_key_label_color(dark);
+
+            assert_eq!(color, app_muted_text(dark));
+            assert!(
+                contrast_ratio(color, keycap) >= 4.0,
+                "inherited label contrast is too low for dark={dark}"
+            );
+        }
+    }
 }

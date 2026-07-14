@@ -44,11 +44,7 @@ impl EntropyApp {
                 self.assign_encoder_keycode(layer, encoder_visual_idx, kc_value);
                 #[cfg(target_arch = "wasm32")]
                 if let Some(layout) = &mut self.layout {
-                    if let Some(layer_codes) = layout.encoder_layers.get_mut(layer) {
-                        if let Some(slot) = layer_codes.get_mut(encoder_visual_idx) {
-                            *slot = kc_value;
-                        }
-                    }
+                    layout.set_encoder_keycode(layer, encoder_visual_idx, kc_value);
                 }
                 if is_alt_repeat_keycode(kc_value) {
                     self.open_alt_repeat_window_compact();
@@ -95,11 +91,7 @@ impl EntropyApp {
         });
 
         if let Some(layout) = &mut self.layout {
-            if let Some(layer_codes) = layout.encoder_layers.get_mut(layer) {
-                if let Some(slot) = layer_codes.get_mut(encoder_visual_idx) {
-                    *slot = kc_value;
-                }
-            }
+            layout.set_encoder_keycode(layer, encoder_visual_idx, kc_value);
         }
 
         let Some(conn) = &self.hid_device else {
@@ -332,6 +324,13 @@ impl EntropyApp {
             } => {
                 self.assign_encoder_keycode(layer, encoder_visual_idx, old_kc);
                 self.undo_stack.pop();
+            }
+            UndoAction::Layer {
+                layer,
+                old,
+                requires_firmware,
+            } => {
+                self.undo_layer_snapshot(layer, old, requires_firmware);
             }
         }
     }

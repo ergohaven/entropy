@@ -8,7 +8,9 @@ impl EntropyApp {
         self.selected_layer = 0;
         self.layer_count = 0;
         self.qmk_hid_hosts.clear();
+        self.layer_write_task = None;
         self.hid_device = None;
+        self.undo_stack.clear();
         self.connect_state = ConnectState::Idle;
         self.unlock_open = false;
         self.vial_unlock_polling = false;

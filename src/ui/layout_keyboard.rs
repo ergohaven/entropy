@@ -428,11 +428,7 @@ impl EntropyApp {
                 value => (encoder_value_label(value), false),
             }
         };
-        let encoder_dim_text_color = if dark {
-            Color32::from_rgb(62, 56, 56)
-        } else {
-            Color32::from_rgb(200, 200, 208)
-        };
+        let encoder_dim_text_color = inherited_key_label_color(dark);
 
         let draw_encoder_arrow = |painter: &egui::Painter,
                                   center: egui::Pos2,

@@ -149,6 +149,10 @@ impl EntropyApp {
                                     for (i, dev) in self.device_manager.devices().iter().enumerate()
                                     {
                                         let is_selected = self.selected_device == Some(i);
+                                        #[cfg(not(target_arch = "wasm32"))]
+                                        let switch_enabled = self.layer_write_task.is_none();
+                                        #[cfg(target_arch = "wasm32")]
+                                        let switch_enabled = true;
                                         let cached_display_name = self
                                             .device_display_names
                                             .get(&dev.display_name_cache_key())
@@ -159,10 +163,10 @@ impl EntropyApp {
                                             ui,
                                             dropdown_size.x - 16.0,
                                             display_name,
-                                            true,
+                                            switch_enabled,
                                             is_selected,
                                         );
-                                        if resp.clicked() {
+                                        if switch_enabled && resp.clicked() {
                                             self.selected_device = Some(i);
                                             self.main_menu_tab = MainMenuTab::Keyboard;
                                             device_clicked = true;

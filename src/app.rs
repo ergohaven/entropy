@@ -74,6 +74,11 @@ mod encoder_visibility_settings_ui;
 mod grave_escape_settings_ui;
 #[path = "ui/key_assignment.rs"]
 mod key_assignment;
+#[path = "ui/layer_operations.rs"]
+mod layer_operations;
+#[cfg(not(target_arch = "wasm32"))]
+use layer_operations::LayerWriteTask;
+use layer_operations::{LayerClipboard, LayerSnapshot};
 #[path = "ui/key_override_settings.rs"]
 mod key_override_settings_ui;
 #[path = "ui/layer_led_settings.rs"]

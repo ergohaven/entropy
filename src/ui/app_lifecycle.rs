@@ -39,6 +39,7 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn update_hidden_to_tray_background(&mut self, ctx: &egui::Context, now: f64) {
+        self.poll_layer_write(ctx);
         self.poll_connect(ctx);
         self.poll_single_instance_signal(ctx);
         self.poll_text_expander_deferred_save(now);
@@ -446,7 +447,7 @@ impl eframe::App for EntropyApp {
         ctx.request_repaint_after(visible_repaint_interval(selected_device_is_bluetooth));
 
         #[cfg(not(target_arch = "wasm32"))]
-        if should_poll_device_scan(main_window_hidden_to_tray) {
+        if should_poll_device_scan(main_window_hidden_to_tray) && self.layer_write_task.is_none() {
             self.poll_device_scan(ctx);
         }
 
@@ -469,6 +470,7 @@ impl eframe::App for EntropyApp {
         self.poll_text_expander_deferred_save(now);
         self.auto_reload_text_expander_rules_file(now);
         let is_connecting = matches!(self.connect_state, ConnectState::Loading { .. });
+        let layer_write_active = self.layer_write_task.is_some();
         #[cfg(target_os = "macos")]
         let hid_session_active = self.hid_device.is_some();
         #[cfg(not(target_os = "macos"))]
@@ -477,6 +479,7 @@ impl eframe::App for EntropyApp {
             && (self.last_device_scan_at == 0.0 || now - self.last_device_scan_at >= 1.0)
             && !self.vial_unlock_polling
             && !is_connecting
+            && !layer_write_active
             && !hid_session_active
         {
             self.scan_frame = self.scan_frame.wrapping_add(1);
@@ -538,6 +541,8 @@ impl eframe::App for EntropyApp {
         // Poll background connect thread
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_connect(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_layer_write(ctx);
 
         self.apply_picker_results();
 
@@ -587,7 +592,8 @@ impl eframe::App for EntropyApp {
 
         // Check if loading
         #[cfg(not(target_arch = "wasm32"))]
-        let is_loading = matches!(self.connect_state, ConnectState::Loading { .. });
+        let is_loading = matches!(self.connect_state, ConnectState::Loading { .. })
+            || self.layer_write_task.is_some();
         #[cfg(target_arch = "wasm32")]
         let is_loading = false;
 
