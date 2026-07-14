@@ -491,47 +491,56 @@ impl EntropyApp {
                         );
                     }
 
-                    crate::ui_style::allocate_ui_at_rect(ui, title_rect.shrink2(Vec2::new(6.0, 4.0)), |ui| {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if sticky_layout_window_icon_button(
-                                ui,
-                                dark,
-                                StickyLayoutWindowButton::Close,
-                                false,
-                                crate::i18n::tr_catalog(
-                                    lang,
-                                    "ui.sticky_layout_window_close_tooltip",
-                                ),
-                            )
-                            .clicked()
-                            {
-                                *should_close = true;
-                            }
-                            ui.add_space(4.0);
-                            if sticky_layout_window_icon_button(
-                                ui,
-                                dark,
-                                StickyLayoutWindowButton::Pin,
-                                sticky_always_on_top,
-                                crate::i18n::tr_catalog(
-                                    lang,
-                                    "ui.sticky_layout_window_pin_tooltip",
-                                ),
-                            )
-                            .clicked()
-                            {
-                                sticky_always_on_top = !sticky_always_on_top;
-                                should_save_settings = true;
-                                viewport_ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
-                                    if sticky_always_on_top {
-                                        egui::WindowLevel::AlwaysOnTop
-                                    } else {
-                                        egui::WindowLevel::Normal
-                                    },
-                                ));
-                            }
-                        });
-                    });
+                    crate::ui_style::allocate_ui_at_rect(
+                        ui,
+                        title_rect.shrink2(Vec2::new(6.0, 4.0)),
+                        |ui| {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if sticky_layout_window_icon_button(
+                                        ui,
+                                        dark,
+                                        StickyLayoutWindowButton::Close,
+                                        false,
+                                        crate::i18n::tr_catalog(
+                                            lang,
+                                            "ui.sticky_layout_window_close_tooltip",
+                                        ),
+                                    )
+                                    .clicked()
+                                    {
+                                        *should_close = true;
+                                    }
+                                    ui.add_space(4.0);
+                                    if sticky_layout_window_icon_button(
+                                        ui,
+                                        dark,
+                                        StickyLayoutWindowButton::Pin,
+                                        sticky_always_on_top,
+                                        crate::i18n::tr_catalog(
+                                            lang,
+                                            "ui.sticky_layout_window_pin_tooltip",
+                                        ),
+                                    )
+                                    .clicked()
+                                    {
+                                        sticky_always_on_top = !sticky_always_on_top;
+                                        should_save_settings = true;
+                                        viewport_ctx.send_viewport_cmd(
+                                            egui::ViewportCommand::WindowLevel(
+                                                if sticky_always_on_top {
+                                                    egui::WindowLevel::AlwaysOnTop
+                                                } else {
+                                                    egui::WindowLevel::Normal
+                                                },
+                                            ),
+                                        );
+                                    }
+                                },
+                            );
+                        },
+                    );
 
                     let footer_rect = egui::Rect::from_min_max(
                         egui::pos2(
