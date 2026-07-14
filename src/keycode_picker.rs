@@ -185,7 +185,7 @@ fn tr_picker(language: crate::i18n::Language, key: &'static str) -> &'static str
 
 const UNIVERSAL_MAIN_SYMBOL_ORDER: &[char] = &[
     '.', ',', ';', ':', '!', '?', '/', '`', '~', '\'', '"', '(', ')', '[', ']', '{', '}', '<', '>',
-    '+', '*', '=', '#', '@', '$', '%', '^', '&', '|', '\\', '_',
+    '-', '+', '*', '=', '#', '@', '$', '%', '^', '&', '|', '\\', '_',
 ];
 
 const UNIVERSAL_EXTRA_SYMBOL_ORDER: &[char] = &[
@@ -202,6 +202,12 @@ mod tests {
         for symbol in ['←', '↑', '→', '↓', '↔'] {
             assert!(UNIVERSAL_EXTRA_SYMBOL_ORDER.contains(&symbol));
         }
+    }
+
+    #[test]
+    fn universal_main_symbols_include_hyphen_minus() {
+        assert_eq!(UNIVERSAL_MAIN_SYMBOL_ORDER.len(), 32);
+        assert!(UNIVERSAL_MAIN_SYMBOL_ORDER.contains(&'-'));
     }
 
     #[test]

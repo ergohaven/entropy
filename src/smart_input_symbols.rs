@@ -341,7 +341,7 @@ const MAC_FRIENDLY_SMART_SYMBOLS: &[SmartSymbol] = &[
         symbol: '“',
         name: "Left double quotation mark",
     },
-    // Gui/Super/Win+F13..F17
+    // Gui/Super/Win+F13..F18
     SmartSymbol {
         trigger_keycode: MOD_GUI | KC_F13,
         symbol: '§',
@@ -366,6 +366,11 @@ const MAC_FRIENDLY_SMART_SYMBOLS: &[SmartSymbol] = &[
         trigger_keycode: MOD_GUI | (KC_F13 + 4),
         symbol: '_',
         name: "Underscore",
+    },
+    SmartSymbol {
+        trigger_keycode: MOD_GUI | (KC_F13 + 5),
+        symbol: '-',
+        name: "Hyphen-minus",
     },
     // Gui/Super/Win+Shift+F13..F17
     SmartSymbol {
@@ -641,7 +646,7 @@ const WINDOWS_SMART_SYMBOLS: &[SmartSymbol] = &[
         symbol: '↔',
         name: "Left right arrow",
     },
-    // Ctrl+Alt+F13..F19
+    // Ctrl+Alt+F13..F20
     SmartSymbol {
         trigger_keycode: MOD_CTRL | MOD_ALT | KC_F13,
         symbol: 'б',
@@ -676,6 +681,11 @@ const WINDOWS_SMART_SYMBOLS: &[SmartSymbol] = &[
         trigger_keycode: MOD_CTRL | MOD_ALT | (KC_F13 + 6),
         symbol: 'ё',
         name: "Cyrillic yo",
+    },
+    SmartSymbol {
+        trigger_keycode: MOD_CTRL | MOD_ALT | (KC_F13 + 7),
+        symbol: '-',
+        name: "Hyphen-minus",
     },
     // Ctrl+Alt+Shift+F13..F19
     SmartSymbol {
@@ -801,8 +811,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn universal_symbol_catalog_stays_at_74_entries() {
-        assert_eq!(SMART_SYMBOLS.len(), 74);
+    fn universal_symbol_catalog_stays_at_75_entries() {
+        assert_eq!(SMART_SYMBOLS.len(), 75);
     }
 
     #[test]
@@ -825,7 +835,7 @@ mod tests {
 
     #[test]
     fn windows_universal_symbols_avoid_gui_transport_slots() {
-        assert_eq!(WINDOWS_SMART_SYMBOLS.len(), 74);
+        assert_eq!(WINDOWS_SMART_SYMBOLS.len(), 75);
         assert!(WINDOWS_SMART_SYMBOLS
             .iter()
             .all(|symbol| symbol.trigger_keycode & MOD_GUI == 0));
@@ -882,6 +892,20 @@ mod tests {
     }
 
     #[test]
+    fn hyphen_minus_uses_platform_safe_transport_slots() {
+        assert_eq!(
+            smart_symbol_for_keycode(MOD_GUI | (KC_F13 + 5))
+                .map(|smart_symbol| smart_symbol.symbol),
+            Some('-')
+        );
+        assert_eq!(
+            windows_smart_symbol_for_keycode(MOD_CTRL | MOD_ALT | (KC_F13 + 7))
+                .map(|smart_symbol| smart_symbol.symbol),
+            Some('-')
+        );
+    }
+
+    #[test]
     fn linux_input_method_backends_include_arrow_symbols() {
         let ibus_backend = include_str!("../linux/ibus/entropy-ibus-engine");
         let fcitx5_backend = include_str!("../linux/fcitx5/src/entropyuniversalsymbols.cpp");
@@ -896,5 +920,14 @@ mod tests {
                 "Fcitx5 backend is missing {symbol}"
             );
         }
+    }
+
+    #[test]
+    fn linux_input_method_backends_include_hyphen_minus_transport() {
+        let ibus_backend = include_str!("../linux/ibus/entropy-ibus-engine");
+        let fcitx5_backend = include_str!("../linux/fcitx5/src/entropyuniversalsymbols.cpp");
+
+        assert!(ibus_backend.contains("[\"§\", \"”\", \"™\", \"~\", \"_\", \"-\"]"));
+        assert!(fcitx5_backend.contains("{uint16_t(MOD_GUI | (KC_F13 + 5)), \"-\"},"));
     }
 }
