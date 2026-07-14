@@ -12,6 +12,25 @@ pub(super) const UPDATE_CHECK_POLL_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(100);
 
 #[cfg(not(target_arch = "wasm32"))]
+fn should_use_high_frequency_bluetooth_repaint_for_target(
+    selected_device_is_bluetooth: bool,
+    target_is_windows: bool,
+) -> bool {
+    // A 16 ms timer keeps visible eframe windows rendering continuously on Windows.
+    selected_device_is_bluetooth && !target_is_windows
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn should_use_high_frequency_bluetooth_repaint(
+    selected_device_is_bluetooth: bool,
+) -> bool {
+    should_use_high_frequency_bluetooth_repaint_for_target(
+        selected_device_is_bluetooth,
+        cfg!(target_os = "windows"),
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn native_repaint_interval(
     hidden_to_tray: bool,
     high_frequency_bluetooth: bool,
@@ -77,6 +96,28 @@ mod tests {
         assert_eq!(
             native_repaint_interval(false, false, true, true),
             UPDATE_CHECK_POLL_INTERVAL
+        );
+    }
+
+    #[test]
+    fn windows_bluetooth_uses_normal_visible_idle_cadence() {
+        assert_eq!(
+            native_repaint_interval(
+                false,
+                should_use_high_frequency_bluetooth_repaint_for_target(true, true),
+                false,
+                false,
+            ),
+            VISIBLE_REPAINT_INTERVAL
+        );
+        assert_eq!(
+            native_repaint_interval(
+                false,
+                should_use_high_frequency_bluetooth_repaint_for_target(true, false),
+                false,
+                false,
+            ),
+            BLUETOOTH_VISIBLE_REPAINT_INTERVAL
         );
     }
 }
