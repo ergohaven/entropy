@@ -2758,8 +2758,16 @@ pub struct EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) pending_file_dialog: Option<(
         super::file_dialog::FileDialogAction,
+        // Connection generation captured when the dialog was opened, so a
+        // device-scoped import/export can be rejected if the device changed
+        // while the picker was up.
+        u64,
         std::sync::mpsc::Receiver<Option<std::path::PathBuf>>,
     )>,
+    /// Bumped on every connect and disconnect. Used to detect that the active
+    /// device changed while a file dialog was open.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) connection_generation: u64,
     /// Raw handles of the main window, cached each frame so file dialogs can be
     /// parented to it — otherwise the native picker can open behind the window.
     #[cfg(not(target_arch = "wasm32"))]

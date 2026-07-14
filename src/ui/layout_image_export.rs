@@ -714,11 +714,7 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn write_layout_image_export(
-        &mut self,
-        mut path: std::path::PathBuf,
-        _ctx: &egui::Context,
-    ) {
+    pub(super) fn write_layout_image_export(&mut self, mut path: std::path::PathBuf) {
         let lang = self.app_settings.language;
         let Some(layout) = self.layout.clone() else {
             return;

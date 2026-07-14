@@ -80,7 +80,7 @@ impl EntropyApp {
                             )
                             .clicked()
                             {
-                                self.import_entsettings_dialog(ui.ctx());
+                                self.import_entsettings_dialog();
                             }
                             if crate::ui_style::modern_button(
                                 ui,

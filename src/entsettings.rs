@@ -57,7 +57,7 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn import_entsettings_dialog(&mut self, _ctx: &egui::Context) {
+    pub(super) fn import_entsettings_dialog(&mut self) {
         self.spawn_file_dialog(
             crate::app::file_dialog::FileDialogAction::ImportEntsettings,
             rfd::FileDialog::new().add_filter("Entropy app settings", &["entsettings"]),

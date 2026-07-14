@@ -7,13 +7,68 @@ use super::*;
 /// Running it on the egui/winit UI thread freezes the whole app for the
 /// duration and corrupts input state afterwards (menus stop responding), so
 /// every dialog runs on a worker thread and delivers its result here.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileDialogAction {
     ImportEntlayout,
     ExportEntlayout,
     ImportEntsettings,
     ExportEntsettings,
     ExportLayoutImage,
+}
+
+impl FileDialogAction {
+    /// Whether the follow-up reads or writes the currently connected device.
+    /// These must be rejected if the active device changed while the picker was
+    /// open. App-settings import/export are device-independent.
+    fn is_device_scoped(self) -> bool {
+        match self {
+            FileDialogAction::ImportEntlayout
+            | FileDialogAction::ExportEntlayout
+            | FileDialogAction::ExportLayoutImage => true,
+            FileDialogAction::ImportEntsettings | FileDialogAction::ExportEntsettings => false,
+        }
+    }
+}
+
+/// Whether a completed dialog result must be discarded because the active device
+/// changed while the picker was open. App-settings actions are never rejected.
+fn dialog_result_stale(
+    action: FileDialogAction,
+    opened_generation: u64,
+    current_generation: u64,
+) -> bool {
+    action.is_device_scoped() && opened_generation != current_generation
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn device_scoped_actions_are_classified_correctly() {
+        assert!(FileDialogAction::ImportEntlayout.is_device_scoped());
+        assert!(FileDialogAction::ExportEntlayout.is_device_scoped());
+        assert!(FileDialogAction::ExportLayoutImage.is_device_scoped());
+        assert!(!FileDialogAction::ImportEntsettings.is_device_scoped());
+        assert!(!FileDialogAction::ExportEntsettings.is_device_scoped());
+    }
+
+    #[test]
+    fn device_scoped_result_is_stale_only_when_generation_changed() {
+        // Same generation: apply.
+        assert!(!dialog_result_stale(FileDialogAction::ImportEntlayout, 7, 7));
+        assert!(!dialog_result_stale(FileDialogAction::ExportEntlayout, 7, 7));
+        // Device changed while picker open: reject.
+        assert!(dialog_result_stale(FileDialogAction::ImportEntlayout, 7, 8));
+        assert!(dialog_result_stale(FileDialogAction::ExportLayoutImage, 7, 8));
+    }
+
+    #[test]
+    fn app_settings_result_never_stale() {
+        // App settings are device-independent, so a generation change is fine.
+        assert!(!dialog_result_stale(FileDialogAction::ImportEntsettings, 1, 99));
+        assert!(!dialog_result_stale(FileDialogAction::ExportEntsettings, 1, 99));
+    }
 }
 
 /// Owns the main window's raw handles so a file dialog can be parented to it.
@@ -87,54 +142,67 @@ impl EntropyApp {
             };
             let _ = tx.send(result);
         });
-        self.pending_file_dialog = Some((action, rx));
+        self.pending_file_dialog = Some((action, self.connection_generation, rx));
+    }
+
+    /// Restore input state after a native dialog closes. The dialog steals
+    /// window focus, and on return egui can be left holding a pointer that never
+    /// got its release, which wedges subsequent clicks — dead menus. Drop that
+    /// state and close the hover dropdown that launched the dialog.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn recover_input_after_dialog(&mut self, ctx: &egui::Context) {
+        self.close_top_dropdowns(ctx);
+        ctx.input_mut(|i| i.pointer = egui::PointerState::default());
+        ctx.memory_mut(|m| m.stop_text_input());
+        ctx.request_repaint();
     }
 
     /// Poll the in-flight file dialog, if any, and dispatch its result.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn poll_file_dialog(&mut self, ctx: &egui::Context) {
-        let Some((action, rx)) = &self.pending_file_dialog else {
+        let Some((action, generation, rx)) = &self.pending_file_dialog else {
             return;
         };
+        let action = *action;
+        let generation = *generation;
         match rx.try_recv() {
             Ok(result) => {
-                let action = *action;
                 self.pending_file_dialog = None;
-                // A native dialog steals window focus; when it closes, egui can
-                // be left holding stale pointer/interaction state (a pointer that
-                // never got its release), which wedges subsequent clicks — dead
-                // menus. Drop that state and close the hover dropdown that opened
-                // the dialog before continuing.
-                self.close_top_dropdowns(ctx);
-                ctx.input_mut(|i| i.pointer = egui::PointerState::default());
-                ctx.memory_mut(|m| m.stop_text_input());
-                ctx.request_repaint();
-                if let Some(path) = result {
-                    self.handle_file_dialog_result(action, path, ctx);
+                self.recover_input_after_dialog(ctx);
+                let Some(path) = result else {
+                    return;
+                };
+                // Reject a device-scoped result if the active device changed
+                // while the picker was open — otherwise we could save device B's
+                // layout under device A's filename, or program B with A's data.
+                if dialog_result_stale(action, generation, self.connection_generation) {
+                    self.status_msg =
+                        "Device changed while the file dialog was open — please try again."
+                            .to_owned();
+                    return;
                 }
+                self.handle_file_dialog_result(action, path);
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                // Worker vanished (e.g. panicked). Clear state and run the same
+                // input recovery so a lost dialog can't leave the UI wedged.
                 self.pending_file_dialog = None;
+                self.recover_input_after_dialog(ctx);
             }
         }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn handle_file_dialog_result(
-        &mut self,
-        action: FileDialogAction,
-        path: std::path::PathBuf,
-        ctx: &egui::Context,
-    ) {
+    fn handle_file_dialog_result(&mut self, action: FileDialogAction, path: std::path::PathBuf) {
         match action {
             FileDialogAction::ImportEntlayout => self.begin_entlayout_import(path),
             FileDialogAction::ExportEntlayout => self.write_entlayout_export(&path),
             FileDialogAction::ImportEntsettings => self.begin_entsettings_import(path),
             FileDialogAction::ExportEntsettings => self.write_entsettings_export(&path),
-            FileDialogAction::ExportLayoutImage => self.write_layout_image_export(path, ctx),
+            FileDialogAction::ExportLayoutImage => self.write_layout_image_export(path),
         }
     }
 }
