@@ -23,6 +23,9 @@ type ForegroundCacheState = Option<(std::time::Instant, Option<TextExpanderAppCa
 static TEXT_EXPANDER_CONFIG: OnceLock<RwLock<TextExpansionConfig>> = OnceLock::new();
 static TEXT_EXPANDER_ENGINE: OnceLock<Mutex<TextExpansionEngine>> = OnceLock::new();
 static RECENT_FOREGROUND_APPS: OnceLock<Mutex<Vec<TextExpanderAppCandidate>>> = OnceLock::new();
+static HOST_TEXT_TRANSPORT_DECODER: OnceLock<
+    Mutex<crate::host_text_transport::HostTextTransportDecoder>,
+> = OnceLock::new();
 
 fn text_expander_config() -> &'static RwLock<TextExpansionConfig> {
     TEXT_EXPANDER_CONFIG.get_or_init(|| RwLock::new(TextExpansionConfig::default()))
@@ -34,6 +37,11 @@ fn text_expander_engine() -> &'static Mutex<TextExpansionEngine> {
 
 fn recent_foreground_apps() -> &'static Mutex<Vec<TextExpanderAppCandidate>> {
     RECENT_FOREGROUND_APPS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn host_text_transport_decoder(
+) -> &'static Mutex<crate::host_text_transport::HostTextTransportDecoder> {
+    HOST_TEXT_TRANSPORT_DECODER.get_or_init(|| Mutex::new(Default::default()))
 }
 
 fn current_process_name_lower() -> Option<String> {
@@ -400,6 +408,33 @@ fn smart_symbol_for_transport(
     smart_symbol_for_keycode(trigger_keycode).map(|symbol| (symbol.symbol, trigger_keycode))
 }
 
+fn host_text_transport_for_event(
+    base_keycode: u16,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    gui: bool,
+    pressed: bool,
+) -> crate::host_text_transport::TransportOutcome {
+    let mut trigger_keycode = base_keycode;
+    if ctrl {
+        trigger_keycode |= MOD_CTRL;
+    }
+    if shift {
+        trigger_keycode |= MOD_SHIFT;
+    }
+    if alt {
+        trigger_keycode |= MOD_ALT;
+    }
+    if gui {
+        trigger_keycode |= MOD_GUI;
+    }
+    host_text_transport_decoder()
+        .lock()
+        .map(|mut decoder| decoder.handle(trigger_keycode, pressed, std::time::Instant::now()))
+        .unwrap_or(crate::host_text_transport::TransportOutcome::PassThrough)
+}
+
 #[cfg(any(target_os = "windows", test))]
 fn windows_smart_symbol_for_transport(
     base_keycode: u16,
@@ -423,6 +458,35 @@ fn windows_smart_symbol_for_transport(
         trigger_keycode |= MOD_GUI;
     }
     windows_smart_symbol_for_keycode(trigger_keycode).map(|symbol| (symbol.symbol, trigger_keycode))
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_host_text_transport_for_event(
+    base_keycode: u16,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    gui: bool,
+    observed_modifiers: u16,
+    pressed: bool,
+) -> crate::host_text_transport::TransportOutcome {
+    let mut trigger_keycode = base_keycode;
+    if ctrl || observed_modifiers & MOD_CTRL != 0 {
+        trigger_keycode |= MOD_CTRL;
+    }
+    if shift || observed_modifiers & MOD_SHIFT != 0 {
+        trigger_keycode |= MOD_SHIFT;
+    }
+    if alt || observed_modifiers & MOD_ALT != 0 {
+        trigger_keycode |= MOD_ALT;
+    }
+    if gui || observed_modifiers & MOD_GUI != 0 {
+        trigger_keycode |= MOD_GUI;
+    }
+    host_text_transport_decoder()
+        .lock()
+        .map(|mut decoder| decoder.handle(trigger_keycode, pressed, std::time::Instant::now()))
+        .unwrap_or(crate::host_text_transport::TransportOutcome::PassThrough)
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -766,6 +830,22 @@ mod macos {
         let command = flags & K_CG_EVENT_FLAG_MASK_COMMAND != 0;
 
         if let Some(base_keycode) = mac_keycode_to_qmk_f_key(keycode) {
+            match host_text_transport_for_event(
+                base_keycode,
+                ctrl,
+                shift,
+                alt,
+                command,
+                event_type == K_CG_EVENT_KEY_DOWN,
+            ) {
+                crate::host_text_transport::TransportOutcome::Complete(text) => {
+                    schedule_unicode_text(text);
+                    return null_mut();
+                }
+                crate::host_text_transport::TransportOutcome::Started
+                | crate::host_text_transport::TransportOutcome::Consumed => return null_mut(),
+                crate::host_text_transport::TransportOutcome::PassThrough => {}
+            }
             if let Some((symbol, _trigger_keycode)) =
                 smart_symbol_for_transport(base_keycode, ctrl, shift, alt, command)
             {
@@ -1024,6 +1104,12 @@ end tell"#;
         });
     }
 
+    fn schedule_unicode_text(text: String) {
+        std::thread::spawn(move || unsafe {
+            send_unicode_text(&text);
+        });
+    }
+
     unsafe fn send_unicode_char(symbol: char) {
         let mut buffer = [0u16; 2];
         let units = symbol.encode_utf16(&mut buffer);
@@ -1158,11 +1244,27 @@ mod linux_x11 {
                 let shift = xkey.state & SHIFT_MASK != 0;
                 let alt = xkey.state & MOD1_MASK != 0;
                 let gui = xkey.state & MOD4_MASK != 0;
+                match host_text_transport_for_event(
+                    *base_keycode,
+                    ctrl,
+                    shift,
+                    alt,
+                    gui,
+                    event_type == KEY_PRESS,
+                ) {
+                    crate::host_text_transport::TransportOutcome::Complete(text) => {
+                        type_unicode_text(&text);
+                        continue;
+                    }
+                    crate::host_text_transport::TransportOutcome::Started
+                    | crate::host_text_transport::TransportOutcome::Consumed => continue,
+                    crate::host_text_transport::TransportOutcome::PassThrough => {}
+                }
                 if let Some((symbol, _trigger_keycode)) =
                     smart_symbol_for_transport(*base_keycode, ctrl, shift, alt, gui)
                 {
                     if event_type == KEY_PRESS {
-                        type_unicode(symbol);
+                        type_unicode_text(&symbol.to_string());
                     }
                 }
             }
@@ -1198,11 +1300,11 @@ mod linux_x11 {
         masks
     }
 
-    fn type_unicode(symbol: char) {
+    fn type_unicode_text(text: &str) {
         let status = Command::new("xdotool")
             .arg("type")
             .arg("--clearmodifiers")
-            .arg(symbol.to_string())
+            .arg(text)
             .status();
         if !matches!(status, Ok(status) if status.success()) {
             log::warn!("Smart Input: xdotool failed or is not installed");
@@ -1304,6 +1406,21 @@ mod tests {
     }
 
     #[test]
+    fn host_text_start_chord_is_not_a_static_symbol() {
+        assert!(
+            smart_symbol_for_keycode(crate::host_text_transport::START_TRIGGER_KEYCODE).is_none()
+        );
+        assert!(smart_symbol_for_keycode(
+            crate::host_text_transport::START_TRIGGER_KEYCODE | MOD_SHIFT | MOD_CTRL
+        )
+        .is_none());
+        assert!(windows_smart_symbol_for_keycode(
+            crate::host_text_transport::START_TRIGGER_KEYCODE
+        )
+        .is_none());
+    }
+
+    #[test]
     fn windows_transport_decodes_cyrillic_ha_and_hard_sign() {
         let ha =
             windows_smart_symbol_for_transport(KC_F13 + 4, true, false, true, false, 0).unwrap();
@@ -1319,6 +1436,48 @@ mod tests {
         assert!(should_start_linux_x11_backend(LinuxSessionKind::X11));
         assert!(!should_start_linux_x11_backend(LinuxSessionKind::Wayland));
         assert!(!should_start_linux_x11_backend(LinuxSessionKind::Unknown));
+    }
+
+    #[test]
+    fn windows_transport_decodes_framed_host_text() {
+        let start = windows_host_text_transport_for_event(
+            crate::host_text_transport::KC_F20,
+            false,
+            false,
+            false,
+            true,
+            MOD_GUI,
+            true,
+        );
+        assert_eq!(start, crate::host_text_transport::TransportOutcome::Started);
+        assert_eq!(
+            windows_host_text_transport_for_event(
+                crate::host_text_transport::KC_F20,
+                false,
+                false,
+                false,
+                true,
+                MOD_GUI,
+                false,
+            ),
+            crate::host_text_transport::TransportOutcome::Consumed
+        );
+
+        let mut completed = None;
+        for keycode in crate::host_text_transport::encode_text_payload("😀").unwrap() {
+            let outcome =
+                windows_host_text_transport_for_event(keycode, false, false, false, false, 0, true);
+            if let crate::host_text_transport::TransportOutcome::Complete(text) = outcome {
+                completed = Some(text);
+            }
+            assert_eq!(
+                windows_host_text_transport_for_event(
+                    keycode, false, false, false, false, 0, false,
+                ),
+                crate::host_text_transport::TransportOutcome::Consumed
+            );
+        }
+        assert_eq!(completed.as_deref(), Some("😀"));
     }
 
     #[test]

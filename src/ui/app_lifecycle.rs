@@ -1542,9 +1542,16 @@ impl eframe::App for EntropyApp {
             self.macro_auto_unlock_cancelled = false;
         }
 
+        let emoji_tab_requires_macro_unlock = self.keycode_picker.selected_tab
+            == KeycodeTab::Symbols
+            && self.keycode_picker.supports_macro
+            && self.keycode_picker.macro_count > 0
+            && self.keycode_picker.macro_buffer_size.is_some()
+            && self.keycode_picker.emoji_target_keycode.is_some();
         if self.firmware == FirmwareProtocol::Vial
             && self.keycode_picker.open
-            && self.keycode_picker.selected_tab == KeycodeTab::Macro
+            && (self.keycode_picker.selected_tab == KeycodeTab::Macro
+                || emoji_tab_requires_macro_unlock)
             && !self.unlock_open
             && !self.vial_unlock_polling
             && !self.macro_auto_unlock_cancelled

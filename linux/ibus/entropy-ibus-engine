@@ -98,6 +98,10 @@ MOD_CTRL = 0x0100
 MOD_SHIFT = 0x0200
 MOD_ALT = 0x0400
 MOD_GUI = 0x0800
+HOST_TEXT_START_TRIGGER = MOD_GUI | (KC_F13 + 7)
+HOST_TEXT_COUNT_DIGITS = 2
+HOST_TEXT_CODEPOINT_DIGITS = 7
+HOST_TEXT_TIMEOUT_US = 2_000_000
 EVDEV_F13_KEYCODE = 183
 XKB_F13_KEYCODE = EVDEV_F13_KEYCODE + 8
 TERMINAL_CLIENT_MARKERS = (
@@ -164,6 +168,79 @@ def _symbol_entries():
 
 
 SMART_SYMBOLS = {(keycode, modifiers): symbol for keycode, modifiers, symbol in _symbol_entries()}
+
+
+class HostTextTransportDecoder:
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.active = False
+        self.count_digits = 0
+        self.codepoint_count = 0
+        self.remaining = 0
+        self.codepoint_digits = 0
+        self.codepoint = 0
+        self.output = []
+        self.last_event_us = None
+
+    def process(self, base_keycode, modifiers, released):
+        now = GLib.get_monotonic_time()
+        if (
+            self.active
+            and self.last_event_us is not None
+            and now - self.last_event_us > HOST_TEXT_TIMEOUT_US
+        ):
+            self.reset()
+
+        trigger = base_keycode | modifiers
+        if not self.active:
+            if (
+                base_keycode != (HOST_TEXT_START_TRIGGER & 0x00FF)
+                or not trigger & MOD_GUI
+                or released
+            ):
+                return False, None
+            self.active = True
+            self.last_event_us = now
+            return True, None
+
+        self.last_event_us = now
+        if released:
+            return True, None
+        if not KC_F13 <= base_keycode <= KC_F13 + 7:
+            self.reset()
+            return True, None
+
+        digit = base_keycode - KC_F13
+        if self.count_digits < HOST_TEXT_COUNT_DIGITS:
+            self.codepoint_count = (self.codepoint_count << 3) | digit
+            self.count_digits += 1
+            if self.count_digits == HOST_TEXT_COUNT_DIGITS:
+                if not 1 <= self.codepoint_count <= 0o77:
+                    self.reset()
+                else:
+                    self.remaining = self.codepoint_count
+            return True, None
+
+        self.codepoint = (self.codepoint << 3) | digit
+        self.codepoint_digits += 1
+        if self.codepoint_digits != HOST_TEXT_CODEPOINT_DIGITS:
+            return True, None
+        if self.codepoint > 0x10FFFF or 0xD800 <= self.codepoint <= 0xDFFF:
+            self.reset()
+            return True, None
+
+        self.output.append(chr(self.codepoint))
+        self.remaining -= 1
+        self.codepoint = 0
+        self.codepoint_digits = 0
+        if self.remaining:
+            return True, None
+
+        output = "".join(self.output)
+        self.reset()
+        return True, output
 
 
 def _config_home():
@@ -670,6 +747,7 @@ class EntropyEngine(IBus.Engine):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._text_expander = SHARED_TEXT_EXPANDER_RUNTIME
+        self._host_text_transport = HostTextTransportDecoder()
         self._client = ""
         self._client_capabilities = 0
         self._input_purpose = IBus.InputPurpose.FREE_FORM
@@ -693,6 +771,15 @@ class EntropyEngine(IBus.Engine):
         base_keycode, source = _transport_keycode_from_event(keyval, keycode)
         if base_keycode is not None:
             modifiers = _transport_modifiers(state)
+            handled, text = self._host_text_transport.process(
+                base_keycode,
+                modifiers,
+                bool(state & IBus.ModifierType.RELEASE_MASK),
+            )
+            if handled:
+                if text is not None:
+                    self._commit_text_expander_aware_text(text)
+                return True
             symbol = SMART_SYMBOLS.get((base_keycode, modifiers))
             del source
             if symbol is not None:

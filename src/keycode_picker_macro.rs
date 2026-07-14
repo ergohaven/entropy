@@ -809,7 +809,7 @@ impl KeycodePicker {
                 .unwrap_or(false)
     }
 
-    fn ensure_macro_meta_len(&mut self, n: usize) {
+    pub(super) fn ensure_macro_meta_len(&mut self, n: usize) {
         while self.macro_texts.len() <= n {
             self.macro_texts.push(Vec::new());
         }

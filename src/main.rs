@@ -8,6 +8,7 @@ mod emoji_catalog;
 mod firmware;
 #[cfg(not(target_arch = "wasm32"))]
 mod hid;
+mod host_text_transport;
 mod i18n;
 mod keyboard;
 mod keycode;

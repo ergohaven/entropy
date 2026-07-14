@@ -138,10 +138,7 @@ pub(super) fn start() {
 
 #[cfg(target_os = "windows")]
 fn symbol_for_vk(vk: u32) -> Option<(char, u16)> {
-    let base_keycode = match vk {
-        0x7C..=0x87 => KC_F13 + (vk - 0x7C) as u16,
-        _ => return None,
-    };
+    let base_keycode = base_keycode_for_vk(vk)?;
     windows_smart_symbol_for_transport(
         base_keycode,
         modifier_down(VK_CONTROL),
@@ -150,6 +147,14 @@ fn symbol_for_vk(vk: u32) -> Option<(char, u16)> {
         modifier_down(VK_LWIN) || modifier_down(VK_RWIN),
         active_transport_modifiers(),
     )
+}
+
+#[cfg(target_os = "windows")]
+fn base_keycode_for_vk(vk: u32) -> Option<u16> {
+    match vk {
+        0x7C..=0x87 => Some(KC_F13 + (vk - 0x7C) as u16),
+        _ => None,
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -291,6 +296,33 @@ unsafe extern "system" fn keyboard_proc(n_code: i32, w_param: usize, l_param: is
             if is_key_up && should_suppress_transport_modifier_keyup(info.vkCode) {
                 return 1;
             }
+
+            if let Some(base_keycode) = base_keycode_for_vk(info.vkCode) {
+                match windows_host_text_transport_for_event(
+                    base_keycode,
+                    modifier_down(VK_CONTROL),
+                    modifier_down(VK_SHIFT),
+                    modifier_down(VK_MENU),
+                    modifier_down(VK_LWIN) || modifier_down(VK_RWIN),
+                    active_transport_modifiers(),
+                    is_key_down,
+                ) {
+                    crate::host_text_transport::TransportOutcome::Started => {
+                        let trigger = crate::host_text_transport::START_TRIGGER_KEYCODE;
+                        suppress_transport_modifier_keyups(trigger);
+                        neutralize_transport_gui_menu(trigger);
+                        release_transport_modifiers(trigger);
+                        return 1;
+                    }
+                    crate::host_text_transport::TransportOutcome::Complete(text) => {
+                        schedule_host_text(text);
+                        return 1;
+                    }
+                    crate::host_text_transport::TransportOutcome::Consumed => return 1,
+                    crate::host_text_transport::TransportOutcome::PassThrough => {}
+                }
+            }
+
             if is_key_down && text_expander_enabled() {
                 if text_expander_suppressed_for_context() {
                     if let Ok(mut engine) = text_expander_engine().lock() {
@@ -651,6 +683,19 @@ fn schedule_unicode_char(symbol: char, trigger_keycode: u16) {
     std::thread::spawn(move || unsafe {
         std::thread::sleep(std::time::Duration::from_millis(2));
         send_unicode_char(symbol, trigger_keycode);
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn schedule_host_text(text: String) {
+    std::thread::spawn(move || unsafe {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        if should_paste_universal_symbol_for_foreground_app()
+            && paste_text_with_clipboard_restore(&text)
+        {
+            return;
+        }
+        send_unicode_text(&text);
     });
 }
 

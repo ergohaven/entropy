@@ -2,10 +2,13 @@
 // Entropy Universal Symbols backend for Fcitx5.
 
 #include <array>
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include "fcitx-utils/handlertable.h"
 #include "fcitx-utils/key.h"
 #include "fcitx-utils/keysym.h"
@@ -25,6 +28,9 @@ constexpr uint16_t MOD_CTRL = 0x0100;
 constexpr uint16_t MOD_SHIFT = 0x0200;
 constexpr uint16_t MOD_ALT = 0x0400;
 constexpr uint16_t MOD_GUI = 0x0800;
+constexpr uint16_t HOST_TEXT_START_TRIGGER = MOD_GUI | (KC_F13 + 7);
+constexpr std::size_t HOST_TEXT_COUNT_DIGITS = 2;
+constexpr std::size_t HOST_TEXT_CODEPOINT_DIGITS = 7;
 
 struct SmartSymbol {
     uint16_t trigger;
@@ -166,6 +172,123 @@ std::optional<std::string> symbolForKey(const Key &key) {
     return std::nullopt;
 }
 
+struct HostTextTransportResult {
+    bool handled;
+    std::optional<std::string> text;
+};
+
+class HostTextTransportDecoder {
+public:
+    HostTextTransportResult process(uint16_t baseKeycode, uint16_t modifiers,
+                                    bool released) {
+        const auto now = std::chrono::steady_clock::now();
+        if (active_ && now - lastEvent_ > std::chrono::seconds(2)) {
+            reset();
+        }
+
+        const uint16_t trigger = baseKeycode | modifiers;
+        if (!active_) {
+            if (baseKeycode != (HOST_TEXT_START_TRIGGER & 0x00FF) ||
+                !(trigger & MOD_GUI) || released) {
+                return {false, std::nullopt};
+            }
+            active_ = true;
+            lastEvent_ = now;
+            return {true, std::nullopt};
+        }
+
+        lastEvent_ = now;
+        if (released) {
+            return {true, std::nullopt};
+        }
+        if (baseKeycode < KC_F13 || baseKeycode > KC_F13 + 7) {
+            reset();
+            return {true, std::nullopt};
+        }
+
+        const uint32_t digit = baseKeycode - KC_F13;
+        if (countDigits_ < HOST_TEXT_COUNT_DIGITS) {
+            codepointCount_ = (codepointCount_ << 3) | digit;
+            countDigits_++;
+            if (countDigits_ == HOST_TEXT_COUNT_DIGITS) {
+                if (codepointCount_ == 0 || codepointCount_ > 077) {
+                    reset();
+                } else {
+                    remaining_ = codepointCount_;
+                }
+            }
+            return {true, std::nullopt};
+        }
+
+        codepoint_ = (codepoint_ << 3) | digit;
+        codepointDigits_++;
+        if (codepointDigits_ != HOST_TEXT_CODEPOINT_DIGITS) {
+            return {true, std::nullopt};
+        }
+        if (!appendUtf8(output_, codepoint_)) {
+            reset();
+            return {true, std::nullopt};
+        }
+
+        remaining_--;
+        codepoint_ = 0;
+        codepointDigits_ = 0;
+        if (remaining_ != 0) {
+            return {true, std::nullopt};
+        }
+
+        auto output = std::move(output_);
+        reset();
+        return {true, std::move(output)};
+    }
+
+private:
+    static bool appendUtf8(std::string &output, uint32_t codepoint) {
+        if (codepoint > 0x10FFFF ||
+            (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
+            return false;
+        }
+        if (codepoint <= 0x7F) {
+            output.push_back(static_cast<char>(codepoint));
+        } else if (codepoint <= 0x7FF) {
+            output.push_back(static_cast<char>(0xC0 | (codepoint >> 6)));
+            output.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+        } else if (codepoint <= 0xFFFF) {
+            output.push_back(static_cast<char>(0xE0 | (codepoint >> 12)));
+            output.push_back(
+                static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+            output.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+        } else {
+            output.push_back(static_cast<char>(0xF0 | (codepoint >> 18)));
+            output.push_back(
+                static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F)));
+            output.push_back(
+                static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+            output.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+        }
+        return true;
+    }
+
+    void reset() {
+        active_ = false;
+        countDigits_ = 0;
+        codepointCount_ = 0;
+        remaining_ = 0;
+        codepointDigits_ = 0;
+        codepoint_ = 0;
+        output_.clear();
+    }
+
+    bool active_ = false;
+    std::size_t countDigits_ = 0;
+    uint32_t codepointCount_ = 0;
+    uint32_t remaining_ = 0;
+    std::size_t codepointDigits_ = 0;
+    uint32_t codepoint_ = 0;
+    std::string output_;
+    std::chrono::steady_clock::time_point lastEvent_{};
+};
+
 } // namespace
 
 class EntropyUniversalSymbols final : public AddonInstance {
@@ -179,6 +302,19 @@ public:
 private:
     void handleKeyEvent(Event &event) {
         auto &keyEvent = static_cast<KeyEvent &>(event);
+        if (const auto base = baseKeycodeForSym(keyEvent.key().sym())) {
+            const auto result = hostTextTransport_.process(
+                *base, transportModifiers(keyEvent.key().states()),
+                keyEvent.isRelease());
+            if (result.handled) {
+                if (result.text) {
+                    keyEvent.inputContext()->commitString(*result.text);
+                }
+                keyEvent.filterAndAccept();
+                return;
+            }
+        }
+
         const auto symbol = symbolForKey(keyEvent.key());
         if (!symbol) {
             return;
@@ -193,6 +329,7 @@ private:
     }
 
     Instance *instance_;
+    HostTextTransportDecoder hostTextTransport_;
     std::unique_ptr<HandlerTableEntry<EventHandler>> eventHandler_;
 };
 

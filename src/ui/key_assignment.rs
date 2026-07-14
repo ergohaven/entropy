@@ -155,6 +155,10 @@ impl EntropyApp {
         self.selected_encoder = encoder_target.map(|ei| (self.selected_layer, ei));
         self.keycode_picker.open = true;
         self.keycode_picker.result = None;
+        self.keycode_picker.emoji_target_keycode = current_keycode;
+        self.keycode_picker.emoji_assignment_error = false;
+        self.keycode_picker.emoji_selected = None;
+        self.keycode_picker.emoji_skin_tone = Default::default();
         self.keycode_picker.search_query.clear();
         self.keycode_picker.layer_names = self.layer_names.clone();
         self.keycode_picker.vial_quantum_pending_mod = None;

@@ -196,6 +196,8 @@ impl EntropyApp {
                     .selected_combo
                     .min(self.combo_visible_count.saturating_sub(1));
                 self.keycode_picker.macro_count = r.macro_texts.len();
+                self.keycode_picker.macro_buffer_size =
+                    r.about_info.macro_memory_bytes.map(usize::from);
                 self.keycode_picker.macro_texts = r.macro_texts.clone();
                 self.keycode_picker.macro_synced_texts = r.macro_texts.clone();
                 let mut macro_metadata = load_macro_metadata(&self.current_device_name);

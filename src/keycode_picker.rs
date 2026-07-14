@@ -150,6 +150,7 @@ pub struct KeycodePicker {
     pub regular_mod_key_pick: Option<u16>,
     /// Open macro editor for this macro number (0..15), None = closed
     pub macro_count: usize,
+    pub macro_buffer_size: Option<usize>,
     pub tap_dance_entries: Vec<TapDanceEntry>,
     pub tap_dance_names: Vec<String>,
     pub tap_dance_undo_stack: Vec<(usize, TapDanceEntry, String)>,
@@ -183,6 +184,8 @@ pub struct KeycodePicker {
     pub emoji_search_query: String,
     pub emoji_skin_tone: crate::emoji_catalog::EmojiSkinTone,
     pub emoji_selected: Option<&'static crate::emoji_catalog::EmojiEntry>,
+    pub emoji_target_keycode: Option<u16>,
+    pub emoji_assignment_error: bool,
     popup_state: PopupState,
     pub language: crate::i18n::Language,
     pub key_legend_layout: KeyLegendLayout,
@@ -363,6 +366,7 @@ impl Default for KeycodePicker {
             regular_mod_key_pick: None,
             macro_inline_selected: None,
             macro_count: 16,
+            macro_buffer_size: None,
             tap_dance_entries: vec![],
             tap_dance_names: vec![],
             tap_dance_undo_stack: vec![],
@@ -382,6 +386,8 @@ impl Default for KeycodePicker {
             emoji_search_query: String::new(),
             emoji_skin_tone: crate::emoji_catalog::EmojiSkinTone::Default,
             emoji_selected: None,
+            emoji_target_keycode: None,
+            emoji_assignment_error: false,
             macros_dirty: false,
             popup_state: PopupState::default(),
             language: crate::i18n::default_language(),
@@ -561,6 +567,8 @@ impl KeycodePicker {
         self.vial_quantum_pending_mod = None;
         self.vial_quantum_pending_mt = None;
         self.vial_layer_pending = None;
+        self.emoji_target_keycode = None;
+        self.emoji_assignment_error = false;
     }
 
     pub(crate) fn open_full_key_picker(&mut self, selected_tab: KeycodeTab) {
@@ -576,6 +584,8 @@ impl KeycodePicker {
         self.tap_dance_editor_open = None;
         self.td_key_pick = None;
         self.td_mod_key_pick = None;
+        self.emoji_target_keycode = None;
+        self.emoji_assignment_error = false;
         self.selected_tab = selected_tab;
     }
 
