@@ -385,7 +385,8 @@ mod tests {
 
     #[test]
     fn generated_macro_round_trips_complex_emoji() {
-        for emoji in ["😀", "👍🏽", "👨‍👩‍👧‍👦", "🏳️‍🌈"] {
+        for emoji in ["😀", "👍🏽", "👨‍👩‍👧‍👦", "🏳️‍🌈", "🇺🇦"]
+        {
             let actions = emoji_macro_actions(emoji).unwrap();
             let encoded =
                 crate::keycode_picker::keycode_picker_macro::encode_macro_actions(&actions);
@@ -494,6 +495,7 @@ mod tests {
         let entry = crate::emoji_catalog::EMOJI_CATALOG.first().unwrap();
         let mut picker = KeycodePicker::default();
         picker.macro_buffer_size = Some(8192);
+        picker.open = true;
         picker.emoji_target_keycode = Some(0x0004);
         for slot in 0..picker.macro_count {
             picker.macro_actions[slot] = vec![MacroAction::Text("occupied".into())];
@@ -505,6 +507,7 @@ mod tests {
         assert_eq!(picker.result, None);
         assert!(picker.emoji_assignment_error);
         assert!(!picker.macros_dirty);
+        assert!(picker.open);
     }
 
     #[test]
@@ -512,11 +515,35 @@ mod tests {
         let entry = crate::emoji_catalog::EMOJI_CATALOG.first().unwrap();
         let mut picker = KeycodePicker::default();
         picker.macro_buffer_size = Some(picker.macro_count);
+        picker.open = true;
         picker.emoji_target_keycode = Some(0x0004);
 
         picker.assign_emoji(entry, crate::emoji_catalog::EmojiSkinTone::Default);
 
         assert_eq!(picker.result, None);
         assert!(picker.emoji_assignment_error);
+        assert!(picker.open);
+    }
+
+    #[test]
+    fn assignment_accepts_exact_macro_buffer_boundary() {
+        let entry = crate::emoji_catalog::EMOJI_CATALOG.first().unwrap();
+        let emoji = crate::emoji_catalog::emoji_sequence(
+            entry,
+            crate::emoji_catalog::EmojiSkinTone::Default,
+        );
+        let actions = emoji_macro_actions(&emoji).unwrap();
+        let encoded_len =
+            crate::keycode_picker::keycode_picker_macro::encode_macro_actions(&actions).len();
+        let mut picker = KeycodePicker::default();
+        picker.macro_buffer_size = Some(encoded_len + picker.macro_count);
+        picker.open = true;
+        picker.emoji_target_keycode = Some(0x0004);
+
+        picker.assign_emoji(entry, crate::emoji_catalog::EmojiSkinTone::Default);
+
+        assert_eq!(picker.result, Some(0x7700));
+        assert!(!picker.emoji_assignment_error);
+        assert!(!picker.open);
     }
 }

@@ -222,7 +222,8 @@ mod tests {
 
     #[test]
     fn round_trips_single_and_multi_codepoint_emoji() {
-        for emoji in ["😀", "👍🏽", "👨‍👩‍👧‍👦", "🏳️‍🌈"] {
+        for emoji in ["😀", "👍🏽", "👨‍👩‍👧‍👦", "🏳️‍🌈", "🇺🇦"]
+        {
             assert_eq!(decode(emoji), emoji);
         }
     }
