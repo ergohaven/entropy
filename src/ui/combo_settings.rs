@@ -56,10 +56,12 @@ impl EntropyApp {
     }
 
     fn handle_combo_editor_input(&mut self, ctx: &egui::Context, allow_close: bool) -> bool {
-        if !self.keycode_picker.open && ctx.input(|i| i.key_pressed(egui::Key::Escape))
-            && allow_close {
-                return true;
-            }
+        if !self.keycode_picker.open
+            && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+            && allow_close
+        {
+            return true;
+        }
         false
     }
 
