@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+#[cfg(target_os = "windows")]
 use super::*;
 
 #[cfg(target_os = "windows")]
@@ -436,6 +437,43 @@ fn should_use_clipboard_paste(text: &str) -> bool {
     text.chars().count() > 64 || text.contains(['\n', '\r', '\t'])
 }
 
+#[cfg(any(target_os = "windows", test))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum WindowsTextUnit {
+    Character(char),
+    LineBreak,
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_text_units(text: &str) -> impl Iterator<Item = WindowsTextUnit> + '_ {
+    let mut chars = text.chars().peekable();
+    std::iter::from_fn(move || {
+        let ch = chars.next()?;
+        Some(match ch {
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                WindowsTextUnit::LineBreak
+            }
+            '\n' => WindowsTextUnit::LineBreak,
+            _ => WindowsTextUnit::Character(ch),
+        })
+    })
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_clipboard_text(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    for unit in windows_text_units(text) {
+        match unit {
+            WindowsTextUnit::Character(ch) => output.push(ch),
+            WindowsTextUnit::LineBreak => output.push_str("\r\n"),
+        }
+    }
+    output
+}
+
 #[cfg(target_os = "windows")]
 unsafe fn paste_text_with_clipboard_restore(text: &str) -> bool {
     let _guard = match CLIPBOARD_PASTE_LOCK.lock() {
@@ -449,9 +487,12 @@ unsafe fn paste_text_with_clipboard_restore(text: &str) -> bool {
         return false;
     }
     std::thread::sleep(std::time::Duration::from_millis(12));
-    send_ctrl_v();
+    let pasted = send_ctrl_v();
     std::thread::sleep(std::time::Duration::from_millis(80));
-    set_clipboard_text(&previous_text)
+    if !set_clipboard_text(&previous_text) {
+        log::warn!("Smart Input: failed to restore clipboard text after paste");
+    }
+    pasted
 }
 
 #[cfg(target_os = "windows")]
@@ -488,7 +529,8 @@ unsafe fn set_clipboard_text(text: &str) -> bool {
         CloseClipboard();
         return false;
     }
-    let utf16 = text
+    let clipboard_text = windows_clipboard_text(text);
+    let utf16 = clipboard_text
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
@@ -516,7 +558,7 @@ unsafe fn set_clipboard_text(text: &str) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-unsafe fn send_ctrl_v() {
+unsafe fn send_ctrl_v() -> bool {
     let inputs = [
         INPUT::keyboard_vk(VK_CONTROL as u16, false),
         INPUT::keyboard_vk(VK_V as u16, false),
@@ -530,28 +572,62 @@ unsafe fn send_ctrl_v() {
     );
     if sent != inputs.len() as u32 {
         log::warn!("Smart Input: SendInput failed for Ctrl+V");
+        send_vk_keyup(VK_V as u16);
+        send_vk_keyup(VK_CONTROL as u16);
     }
+    sent >= 2
 }
 
 #[cfg(target_os = "windows")]
 unsafe fn send_unicode_text(text: &str) {
-    for ch in text.chars() {
-        for unit in ch.encode_utf16(&mut [0; 2]) {
-            let down = INPUT::keyboard_unicode(*unit, false);
-            let up = INPUT::keyboard_unicode(*unit, true);
-            let inputs = [down, up];
-            let sent = SendInput(
-                inputs.len() as u32,
-                inputs.as_ptr(),
-                std::mem::size_of::<INPUT>() as i32,
-            );
-            if sent != inputs.len() as u32 {
-                log::warn!(
-                    "Smart Input: SendInput failed for text expansion unit U+{:04X}",
-                    *unit as u32
-                );
+    for text_unit in windows_text_units(text) {
+        match text_unit {
+            WindowsTextUnit::Character(ch) => {
+                for unit in ch.encode_utf16(&mut [0; 2]) {
+                    let down = INPUT::keyboard_unicode(*unit, false);
+                    let up = INPUT::keyboard_unicode(*unit, true);
+                    let inputs = [down, up];
+                    let sent = SendInput(
+                        inputs.len() as u32,
+                        inputs.as_ptr(),
+                        std::mem::size_of::<INPUT>() as i32,
+                    );
+                    if sent != inputs.len() as u32 {
+                        log::warn!(
+                            "Smart Input: SendInput failed for text expansion unit U+{:04X}",
+                            *unit as u32
+                        );
+                    }
+                }
             }
+            WindowsTextUnit::LineBreak => send_text_expansion_line_break(),
         }
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn send_text_expansion_line_break() {
+    if modifier_down(VK_SHIFT) {
+        send_vk_tap(VK_RETURN as u16);
+        return;
+    }
+
+    // Shift+Enter inserts a line break without submitting chat and browser forms.
+    let inputs = [
+        INPUT::keyboard_vk(VK_SHIFT as u16, false),
+        INPUT::keyboard_vk(VK_RETURN as u16, false),
+        INPUT::keyboard_vk(VK_RETURN as u16, true),
+        INPUT::keyboard_vk(VK_SHIFT as u16, true),
+    ];
+    let sent = SendInput(
+        inputs.len() as u32,
+        inputs.as_ptr(),
+        std::mem::size_of::<INPUT>() as i32,
+    );
+    if sent != inputs.len() as u32 {
+        log::warn!("Smart Input: SendInput failed for text expansion line break");
+        send_vk_keyup(VK_RETURN as u16);
+        send_vk_keyup(VK_SHIFT as u16);
     }
 }
 
@@ -946,4 +1022,40 @@ extern "system" {
     fn GlobalLock(hMem: HANDLE) -> *mut core::ffi::c_void;
     fn GlobalUnlock(hMem: HANDLE) -> i32;
     fn GlobalFree(hMem: HANDLE) -> HANDLE;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{windows_clipboard_text, windows_text_units, WindowsTextUnit};
+
+    #[test]
+    fn normalizes_clipboard_line_endings_for_windows() {
+        assert_eq!(windows_clipboard_text("line1\nline2"), "line1\r\nline2");
+        assert_eq!(windows_clipboard_text("line1\r\nline2"), "line1\r\nline2");
+        assert_eq!(windows_clipboard_text("line1\rline2"), "line1\r\nline2");
+    }
+
+    #[test]
+    fn treats_each_newline_encoding_as_one_windows_line_break() {
+        for text in ["line1\nline2", "line1\r\nline2", "line1\rline2"] {
+            let units = windows_text_units(text).collect::<Vec<_>>();
+            assert_eq!(
+                units
+                    .iter()
+                    .filter(|unit| matches!(unit, WindowsTextUnit::LineBreak))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                units
+                    .iter()
+                    .filter_map(|unit| match unit {
+                        WindowsTextUnit::Character(ch) => Some(*ch),
+                        WindowsTextUnit::LineBreak => None,
+                    })
+                    .collect::<String>(),
+                "line1line2"
+            );
+        }
+    }
 }
