@@ -1,9 +1,8 @@
 /// Keycode picker modal for Vial/QMK keycodes.
 use crate::app::MacroExtKeycodesDisabledReason;
 use crate::keycode::{
-    KEYCODES, KeyLegendLayout, KeycodeCategory, gui_label, gui_mod_name, gui_sym,
-    key_label_font_sizes, keycode_label_with_names_and_layout, keycode_tooltip,
-    modifier_label_from_bits,
+    gui_label, gui_mod_name, gui_sym, key_label_font_sizes, keycode_label_with_names_and_layout,
+    keycode_tooltip, modifier_label_from_bits, KeyLegendLayout, KeycodeCategory, KEYCODES,
 };
 use crate::popup_state::{PopupKey, PopupState};
 use egui::{Color32, Key, RichText, Vec2};
@@ -225,17 +224,13 @@ mod tests {
         picker.macro_ext_keycodes_disabled_reason =
             Some(MacroExtKeycodesDisabledReason::RmkVialMacroExtUnsupported);
 
-        assert!(
-            picker
-                .macro_layer_key_choices(MacroKeyPickKind::Tap)
-                .is_empty()
-        );
-        assert!(
-            picker
-                .macro_ext_keycodes_notice(crate::i18n::Language::English)
-                .expect("RMK notice should be present")
-                .contains("RMK")
-        );
+        assert!(picker
+            .macro_layer_key_choices(MacroKeyPickKind::Tap)
+            .is_empty());
+        assert!(picker
+            .macro_ext_keycodes_notice(crate::i18n::Language::English)
+            .expect("RMK notice should be present")
+            .contains("RMK"));
     }
 }
 
