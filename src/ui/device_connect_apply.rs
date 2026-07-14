@@ -299,6 +299,7 @@ impl EntropyApp {
                 // open-once/reload/use model. Avoid Entropy-only reopen churn when switching
                 // between qmk-vial and RMK devices.
                 self.hid_device = r.hid_device;
+                self.sync_layer_names_to_firmware();
 
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -322,6 +323,40 @@ impl EntropyApp {
 
                 self.status_msg = e;
                 log::error!("{}", connect_apply_error_log(&self.status_msg));
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn sync_layer_names_to_firmware(&self) {
+        if self.firmware != FirmwareProtocol::Vial {
+            return;
+        }
+        let Some(dev) = &self.hid_device else {
+            return;
+        };
+
+        for (layer, name) in self.layer_names.iter().enumerate().take(self.layer_count) {
+            let qsid = 200 + layer as u16;
+            let name = name.trim();
+            if name.is_empty() {
+                continue;
+            }
+            match dev.get_qmk_setting_string(qsid) {
+                Ok(current) if current == name => {}
+                Ok(_) => {
+                    if let Err(e) = dev.set_qmk_setting_string(qsid, name) {
+                        log::warn!(
+                            "Vial set_qmk_setting_string failed while syncing layer {layer}: {e}"
+                        );
+                    }
+                }
+                Err(e) => {
+                    log::debug!("Vial layer name qsid {qsid} not synced: {e}");
+                    if layer == 0 {
+                        break;
+                    }
+                }
             }
         }
     }
