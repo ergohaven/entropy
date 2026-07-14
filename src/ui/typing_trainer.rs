@@ -109,7 +109,7 @@ impl EntropyApp {
             || self.keycode_picker.open
             || self.unlock_open
             || self.typing_trainer_history_open
-            || ctx.memory(|m| m.any_popup_open())
+            || egui::Popup::is_any_open(ctx)
         {
             return;
         }
@@ -692,7 +692,7 @@ impl EntropyApp {
             return;
         }
 
-        let screen_rect = ctx.screen_rect();
+        let screen_rect = ctx.content_rect();
         egui::Area::new("typing_trainer_history_backdrop".into())
             .order(egui::Order::Foreground)
             .fixed_pos(screen_rect.min)

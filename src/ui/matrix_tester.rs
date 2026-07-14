@@ -357,7 +357,7 @@ impl EntropyApp {
             } else {
                 app_border_color(dark)
             };
-            paint_layout_keycap(&painter, rect, key.rotation, fill, Stroke::new(1.0, stroke));
+            paint_layout_keycap(&painter, rect, key.rotation, fill, Stroke::new(1.0_f32, stroke));
         }
     }
 }

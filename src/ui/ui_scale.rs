@@ -41,9 +41,8 @@ impl EntropyApp {
             if !i.modifiers.ctrl {
                 return None;
             }
-            let wheel_delta = i.raw_scroll_delta.y;
+            let wheel_delta = i.smooth_scroll_delta.y;
             if wheel_delta.abs() > 0.0 {
-                i.raw_scroll_delta = Vec2::ZERO;
                 i.smooth_scroll_delta = Vec2::ZERO;
                 return Some(if wheel_delta > 0.0 { 1 } else { -1 });
             }

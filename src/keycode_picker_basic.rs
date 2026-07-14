@@ -237,7 +237,7 @@ impl KeycodePicker {
                         ui.visuals().text_color(),
                         dropdown_width,
                     );
-                    egui::popup_below_widget(
+                    crate::ui_style::popup_below_widget(
                         ui,
                         dropdown_id,
                         &dropdown_resp,
@@ -279,7 +279,7 @@ impl KeycodePicker {
                                 );
                                 if option_resp.clicked() {
                                     self.basic_layout = layout;
-                                    ui.memory_mut(|m| m.close_popup());
+                                    egui::Popup::close_all(ui.ctx());
                                 }
                             }
                         },

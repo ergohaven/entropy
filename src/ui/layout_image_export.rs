@@ -191,7 +191,7 @@ fn draw_format_dropdown(
         metrics.settings_control_height(),
         metrics.settings_control_font_size(),
     );
-    egui::popup_below_widget(
+    crate::ui_style::popup_below_widget(
         ui,
         dropdown_id,
         &dropdown_resp,
@@ -234,7 +234,7 @@ fn draw_format_dropdown(
                 );
                 if option_resp.clicked() {
                     *selected_format = format;
-                    ui.memory_mut(|m| m.close_popup());
+                    egui::Popup::close_all(ui.ctx());
                 }
             }
         },
@@ -258,7 +258,7 @@ fn draw_theme_dropdown(
         metrics.settings_control_height(),
         metrics.settings_control_font_size(),
     );
-    egui::popup_below_widget(
+    crate::ui_style::popup_below_widget(
         ui,
         dropdown_id,
         &dropdown_resp,
@@ -305,7 +305,7 @@ fn draw_theme_dropdown(
                 );
                 if option_resp.clicked() {
                     *selected_theme = theme;
-                    ui.memory_mut(|m| m.close_popup());
+                    egui::Popup::close_all(ui.ctx());
                 }
             }
         },
@@ -329,7 +329,7 @@ fn draw_key_legend_dropdown(
         metrics.settings_control_height(),
         metrics.settings_control_font_size(),
     );
-    egui::popup_below_widget(
+    crate::ui_style::popup_below_widget(
         ui,
         dropdown_id,
         &dropdown_resp,
@@ -376,7 +376,7 @@ fn draw_key_legend_dropdown(
                 );
                 if option_resp.clicked() {
                     *selected_layout = layout;
-                    ui.memory_mut(|m| m.close_popup());
+                    egui::Popup::close_all(ui.ctx());
                 }
             }
         },

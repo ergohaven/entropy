@@ -72,7 +72,7 @@ impl EntropyApp {
                         .font(editing_font)
                         .horizontal_align(egui::Align::Center)
                         .char_limit(12)
-                        .frame(false),
+                        .frame(egui::Frame::NONE),
                 );
                 // Request focus only on the first frame so lost_focus() works correctly.
                 if !self.editing_layer_focus_requested {
@@ -130,7 +130,7 @@ impl EntropyApp {
                 let right_center = egui::pos2(center_x + fixed_half + gap + 24.0, arrow_y);
 
                 // Still measure actual text width for painting the name and edit icon.
-                let text_w = ui.fonts(|f| {
+                let text_w = ui.fonts_mut(|f| {
                     f.layout_no_wrap(name.clone(), label_font.clone(), text_color)
                         .size()
                         .x
@@ -156,7 +156,7 @@ impl EntropyApp {
 
                 // Scroll wheel over the whole layer bar switches layers (down = next, up = prev)
                 if wheel_r.hovered() {
-                    let scroll = ui.input(|i| i.raw_scroll_delta.y);
+                    let scroll = ui.input(|i| i.smooth_scroll_delta.y);
                     if scroll < 0.0 && selected > 0 {
                         self.selected_layer = selected - 1;
                     } else if scroll > 0.0 && selected + 1 < layer_count {

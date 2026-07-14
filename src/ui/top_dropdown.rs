@@ -85,7 +85,7 @@ pub(super) fn top_dropdown_item_with_indicator(
 }
 
 pub(super) fn top_menu_text_width(ui: &egui::Ui, label: &str, font_size: f32) -> f32 {
-    ui.fonts(|f| {
+    ui.fonts_mut(|f| {
         f.layout_no_wrap(
             label.to_owned(),
             egui::FontId::proportional(font_size),

@@ -369,7 +369,7 @@ impl EntropyApp {
         ui.visuals_mut().selection.bg_fill = slider_fill;
         ui.visuals_mut().widgets.active.bg_fill = slider_fill;
         ui.visuals_mut().widgets.active.weak_bg_fill = slider_fill;
-        ui.visuals_mut().widgets.hovered.bg_stroke = Stroke::new(1.0, slider_fill);
+        ui.visuals_mut().widgets.hovered.bg_stroke = Stroke::new(1.0_f32, slider_fill);
         let mut changed = false;
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_sized(
@@ -463,7 +463,7 @@ impl EntropyApp {
                         ui.make_persistent_id(("layer_led_layer_color_picker", layer))
                     }
                 };
-                let popup_open = ui.memory(|m| m.is_popup_open(popup_id));
+                let popup_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
                 let swatch_color = layer_led_palette_color(current);
                 let swatch_border = if popup_open {
                     app_accent()
@@ -478,20 +478,20 @@ impl EntropyApp {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
                 if swatch_resp.clicked() {
-                    ui.memory_mut(|m| m.toggle_popup(popup_id));
+                    egui::Popup::toggle_id(ui.ctx(), popup_id);
                 }
                 ui.painter().rect(
                     swatch_rect,
                     9.0,
                     app_surface_fill(dark),
-                    Stroke::new(1.0, swatch_border),
+                    Stroke::new(1.0_f32, swatch_border),
                     egui::StrokeKind::Inside,
                 );
                 ui.painter().rect(
                     swatch_rect.shrink(5.0 * scale),
                     6.0,
                     swatch_color,
-                    Stroke::new(1.0, swatch_border.gamma_multiply(0.85)),
+                    Stroke::new(1.0_f32, swatch_border.gamma_multiply(0.85)),
                     egui::StrokeKind::Inside,
                 );
                 if current == 0 {
@@ -500,7 +500,7 @@ impl EntropyApp {
                             swatch_rect.left_top() + egui::vec2(10.0 * scale, 10.0 * scale),
                             swatch_rect.right_bottom() - egui::vec2(10.0 * scale, 10.0 * scale),
                         ],
-                        Stroke::new(1.2, app_muted_text(dark)),
+                        Stroke::new(1.2_f32, app_muted_text(dark)),
                     );
                 }
                 swatch_resp.clone().on_hover_text(crate::i18n::tr_catalog(
@@ -510,7 +510,7 @@ impl EntropyApp {
 
                 ui.style_mut().visuals.window_stroke = crate::ui_style::modal_outline_stroke(dark);
                 ui.style_mut().visuals.window_fill = app_surface_fill(dark);
-                egui::popup_below_widget(
+                crate::ui_style::popup_below_widget(
                     ui,
                     popup_id,
                     &swatch_resp,
@@ -548,7 +548,7 @@ impl EntropyApp {
                                         cell_rect,
                                         7.0,
                                         app_surface_fill(dark),
-                                        Stroke::new(if selected { 1.6 } else { 1.0 }, outline),
+                                        Stroke::new(if selected { 1.6_f32 } else { 1.0_f32 }, outline),
                                         egui::StrokeKind::Inside,
                                     );
                                     ui.painter().rect(
@@ -566,7 +566,7 @@ impl EntropyApp {
                                                 cell_rect.right_bottom()
                                                     - egui::vec2(8.0 * scale, 8.0 * scale),
                                             ],
-                                            Stroke::new(1.1, app_muted_text(dark)),
+                                            Stroke::new(1.1_f32, app_muted_text(dark)),
                                         );
                                     }
                                     cell_resp.clone().on_hover_text(crate::i18n::tr_text(
@@ -595,7 +595,7 @@ impl EntropyApp {
                                             }
                                         }
                                         self.write_layer_led_color(&qsids, color_idx_u8);
-                                        ui.memory_mut(|m| m.close_popup());
+                                        egui::Popup::close_all(ui.ctx());
                                     }
                                 }
                             });

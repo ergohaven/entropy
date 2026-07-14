@@ -50,17 +50,17 @@ pub(super) fn apply_picker_button_visuals(ui: &mut egui::Ui) {
     visuals.widgets.active.corner_radius = egui::CornerRadius::same(6);
     visuals.widgets.open.corner_radius = egui::CornerRadius::same(6);
     if dark_mode {
-        visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, Color32::from_rgb(54, 54, 58));
-        visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, Color32::from_rgb(54, 54, 58));
-        visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, crate::ui_style::accent());
-        visuals.widgets.open.bg_stroke = egui::Stroke::new(1.0, crate::ui_style::accent());
+        visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, Color32::from_rgb(54, 54, 58));
+        visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, Color32::from_rgb(54, 54, 58));
+        visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0_f32, crate::ui_style::accent());
+        visuals.widgets.open.bg_stroke = egui::Stroke::new(1.0_f32, crate::ui_style::accent());
     } else {
         visuals.widgets.inactive.bg_stroke =
-            egui::Stroke::new(1.0, Color32::from_rgb(230, 230, 233));
+            egui::Stroke::new(1.0_f32, Color32::from_rgb(230, 230, 233));
         visuals.widgets.hovered.bg_stroke =
-            egui::Stroke::new(1.0, Color32::from_rgb(230, 230, 233));
-        visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, crate::ui_style::accent());
-        visuals.widgets.open.bg_stroke = egui::Stroke::new(1.0, crate::ui_style::accent());
+            egui::Stroke::new(1.0_f32, Color32::from_rgb(230, 230, 233));
+        visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0_f32, crate::ui_style::accent());
+        visuals.widgets.open.bg_stroke = egui::Stroke::new(1.0_f32, crate::ui_style::accent());
     }
 }
 
@@ -186,7 +186,7 @@ const KEY_PICKER_MAIN_HEIGHT: f32 = 560.0;
 const KEY_PICKER_MAIN_CONTENT_HEIGHT: f32 = 455.0;
 
 pub(super) fn responsive_window_size(ctx: &egui::Context, base: Vec2, max: Vec2) -> Vec2 {
-    let screen = ctx.screen_rect().size();
+    let screen = ctx.content_rect().size();
     Vec2::new(
         base.x.max((screen.x * 0.82).min(max.x)),
         base.y.max((screen.y * 0.78).min(max.y)),

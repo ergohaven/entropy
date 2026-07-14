@@ -101,7 +101,7 @@ fn compact_rgb_slider_1d(
 
         let x = egui::lerp(rect.x_range(), *value);
         let picked_color = color_at(*value);
-        let stroke = Stroke::new(1.2, rgb_picker_contrast(picked_color));
+        let stroke = Stroke::new(1.2_f32, rgb_picker_contrast(picked_color));
         let handle_rect = egui::Rect::from_center_size(
             egui::pos2(x, rect.center().y),
             Vec2::new(10.0, rect.height() + 6.0),
@@ -167,7 +167,7 @@ fn compact_rgb_slider_2d(
         let x = egui::lerp(rect.x_range(), *x_value);
         let y = egui::lerp(rect.y_range(), 1.0 - *y_value);
         let picked_color = color_at(*x_value, *y_value);
-        let stroke = Stroke::new(1.6, rgb_picker_contrast(picked_color));
+        let stroke = Stroke::new(1.6_f32, rgb_picker_contrast(picked_color));
         ui.painter().circle_stroke(egui::pos2(x, y), 10.0, stroke);
         ui.painter()
             .rect_stroke(rect, 2.0, visuals.bg_stroke, egui::StrokeKind::Inside);
@@ -469,7 +469,7 @@ impl EntropyApp {
                         rgb_font_size,
                     );
 
-                    egui::popup_below_widget(
+                    crate::ui_style::popup_below_widget(
                         ui,
                         dropdown_id,
                         &dropdown_resp,
@@ -521,7 +521,7 @@ impl EntropyApp {
                                         if option_resp.clicked() {
                                             selected_effect = *id;
                                             self.set_rgb_effect(selected_effect);
-                                            ui.memory_mut(|m| m.close_popup());
+                                            egui::Popup::close_all(ui.ctx());
                                         }
                                     }
                                 });
@@ -541,7 +541,7 @@ impl EntropyApp {
                 |ui| {
                     let popup_id = ui.make_persistent_id("rgb_color_popup");
                     let popup_hsva_id = popup_id.with("hsva");
-                    let popup_open = ui.memory(|m| m.is_popup_open(popup_id));
+                    let popup_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
                     let border = if dark {
                         Color32::from_gray(95)
                     } else {
@@ -566,13 +566,13 @@ impl EntropyApp {
                     if color_enabled && swatch_resp.clicked() {
                         ui.ctx()
                             .data_mut(|d| d.insert_temp(popup_hsva_id, color_hsva));
-                        ui.memory_mut(|m| m.toggle_popup(popup_id));
+                        egui::Popup::toggle_id(ui.ctx(), popup_id);
                     }
                     ui.painter().rect(
                         swatch_rect,
                         9.0,
                         app_surface_fill(dark),
-                        Stroke::new(1.0, swatch_border),
+                        Stroke::new(1.0_f32, swatch_border),
                         egui::StrokeKind::Inside,
                     );
                     ui.painter().rect(
@@ -583,7 +583,7 @@ impl EntropyApp {
                         } else {
                             swatch_color.gamma_multiply(0.45)
                         },
-                        Stroke::new(1.0, swatch_border.gamma_multiply(0.85)),
+                        Stroke::new(1.0_f32, swatch_border.gamma_multiply(0.85)),
                         egui::StrokeKind::Inside,
                     );
 
@@ -592,7 +592,7 @@ impl EntropyApp {
                             .ctx()
                             .data(|d| d.get_temp::<egui::ecolor::Hsva>(popup_hsva_id))
                             .unwrap_or(color_hsva);
-                        egui::popup_below_widget(
+                        crate::ui_style::popup_below_widget(
                             ui,
                             popup_id,
                             &swatch_resp,
@@ -646,7 +646,7 @@ impl EntropyApp {
                     };
                     ui.visuals_mut().widgets.active.bg_fill = rgb_slider_fill;
                     ui.visuals_mut().widgets.active.weak_bg_fill = rgb_slider_fill;
-                    ui.visuals_mut().widgets.hovered.bg_stroke = Stroke::new(1.0, rgb_slider_fill);
+                    ui.visuals_mut().widgets.hovered.bg_stroke = Stroke::new(1.0_f32, rgb_slider_fill);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_sized(
                             [rgb_value_width, layout.row_height],
@@ -702,7 +702,7 @@ impl EntropyApp {
                     };
                     ui.visuals_mut().widgets.active.bg_fill = rgb_slider_fill;
                     ui.visuals_mut().widgets.active.weak_bg_fill = rgb_slider_fill;
-                    ui.visuals_mut().widgets.hovered.bg_stroke = Stroke::new(1.0, rgb_slider_fill);
+                    ui.visuals_mut().widgets.hovered.bg_stroke = Stroke::new(1.0_f32, rgb_slider_fill);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_sized(
                             [rgb_value_width, layout.row_height],

@@ -67,8 +67,6 @@ impl EntropyApp {
             import_progress_body: String::new(),
             dark_mode,
             last_applied_theme: None,
-            #[cfg(target_os = "windows")]
-            windows_repaint_scheduler: WindowsRepaintScheduler::new(&cc.egui_ctx),
             app_settings,
             text_expander_rules_signature,
             text_expander_rules_last_check_at: 0.0,

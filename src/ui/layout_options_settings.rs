@@ -168,7 +168,7 @@ impl EntropyApp {
                                             metrics.settings_control_font_size(),
                                         );
 
-                                    egui::popup_below_widget(
+                                    crate::ui_style::popup_below_widget(
                                         ui,
                                         dropdown_id,
                                         &dropdown_resp,
@@ -238,7 +238,7 @@ impl EntropyApp {
                                                                 row_idx,
                                                                 choice_idx as u32,
                                                             );
-                                                            ui.memory_mut(|m| m.close_popup());
+                                                            egui::Popup::close_all(ui.ctx());
                                                         }
                                                     }
                                                 });

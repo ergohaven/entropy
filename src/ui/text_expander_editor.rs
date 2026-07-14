@@ -1,7 +1,7 @@
 use super::*;
 
 fn text_width_for_font(ui: &egui::Ui, text: &str, font_id: &FontId) -> f32 {
-    ui.fonts(|fonts| {
+    ui.fonts_mut(|fonts| {
         fonts
             .layout_no_wrap(text.to_owned(), font_id.clone(), ui.visuals().text_color())
             .size()
@@ -223,9 +223,9 @@ impl EntropyApp {
                                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                             }
                             if more_resp.clicked() {
-                                ui.memory_mut(|m| m.toggle_popup(popup_id));
+                                egui::Popup::toggle_id(ui.ctx(), popup_id);
                             }
-                            let more_open = ui.memory(|m| m.is_popup_open(popup_id));
+                            let more_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
                             let fill = if more_resp.hovered() || more_open {
                                 crate::ui_style::hover_fill(dark)
                             } else {
@@ -245,7 +245,7 @@ impl EntropyApp {
                                 FontId::proportional(metrics.value(12.0)),
                                 ui.visuals().text_color(),
                             );
-                            egui::popup_below_widget(
+                            crate::ui_style::popup_below_widget(
                                 ui,
                                 popup_id,
                                 &more_resp,
@@ -331,7 +331,7 @@ impl EntropyApp {
                                                 );
                                                 if option_resp.clicked() {
                                                     remove_app = Some(app_name.clone());
-                                                    ui.memory_mut(|m| m.close_popup());
+                                                    egui::Popup::close_all(ui.ctx());
                                                 }
                                             }
                                         });
@@ -359,9 +359,9 @@ impl EntropyApp {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
                         if add_resp.clicked() {
-                            ui.memory_mut(|m| m.toggle_popup(add_popup_id));
+                            egui::Popup::toggle_id(ui.ctx(), add_popup_id);
                         }
-                        let add_open = ui.memory(|m| m.is_popup_open(add_popup_id));
+                        let add_open = egui::Popup::is_id_open(ui.ctx(), add_popup_id);
                         let fill = if add_resp.hovered() || add_open {
                             crate::ui_style::hover_fill(dark)
                         } else {
@@ -381,7 +381,7 @@ impl EntropyApp {
                             FontId::proportional(metrics.value(15.0)),
                             ui.visuals().text_color(),
                         );
-                        egui::popup_below_widget(
+                        crate::ui_style::popup_below_widget(
                             ui,
                             add_popup_id,
                             &add_resp,
@@ -469,7 +469,7 @@ impl EntropyApp {
                                                 );
                                                 if option_resp.clicked() {
                                                     add_app = Some(candidate.exe.clone());
-                                                    ui.memory_mut(|m| m.close_popup());
+                                                    egui::Popup::close_all(ui.ctx());
                                                 }
                                             }
                                         }
@@ -665,9 +665,9 @@ impl EntropyApp {
                                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                             }
                             if more_resp.clicked() {
-                                ui.memory_mut(|m| m.toggle_popup(popup_id));
+                                egui::Popup::toggle_id(ui.ctx(), popup_id);
                             }
-                            let more_open = ui.memory(|m| m.is_popup_open(popup_id));
+                            let more_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
                             let fill = if more_resp.hovered() || more_open {
                                 crate::ui_style::hover_fill(dark)
                             } else {
@@ -687,7 +687,7 @@ impl EntropyApp {
                                 FontId::proportional(metrics.value(12.0)),
                                 ui.visuals().text_color(),
                             );
-                            egui::popup_below_widget(
+                            crate::ui_style::popup_below_widget(
                                 ui,
                                 popup_id,
                                 &more_resp,
@@ -781,7 +781,7 @@ impl EntropyApp {
                                                 );
                                                 if option_resp.clicked() {
                                                     remove_file = Some(file_idx);
-                                                    ui.memory_mut(|m| m.close_popup());
+                                                    egui::Popup::close_all(ui.ctx());
                                                 }
                                             }
                                         });
@@ -809,9 +809,9 @@ impl EntropyApp {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
                         if add_resp.clicked() {
-                            ui.memory_mut(|m| m.toggle_popup(add_popup_id));
+                            egui::Popup::toggle_id(ui.ctx(), add_popup_id);
                         }
-                        let add_open = ui.memory(|m| m.is_popup_open(add_popup_id));
+                        let add_open = egui::Popup::is_id_open(ui.ctx(), add_popup_id);
                         let fill = if add_resp.hovered() || add_open {
                             crate::ui_style::hover_fill(dark)
                         } else {
@@ -831,7 +831,7 @@ impl EntropyApp {
                             FontId::proportional(metrics.value(15.0)),
                             ui.visuals().text_color(),
                         );
-                        egui::popup_below_widget(
+                        crate::ui_style::popup_below_widget(
                             ui,
                             add_popup_id,
                             &add_resp,
@@ -915,7 +915,7 @@ impl EntropyApp {
                                                 );
                                                 if option_resp.clicked() {
                                                     add_file = Some(option.clone());
-                                                    ui.memory_mut(|m| m.close_popup());
+                                                    egui::Popup::close_all(ui.ctx());
                                                 }
                                             }
                                         }

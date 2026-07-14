@@ -333,7 +333,7 @@ impl EntropyApp {
                 .or(layer_led_outline)
                 .unwrap_or(neutral_border);
             let key_border_stroke =
-                Stroke::new(if has_combo_outline { 2.0 } else { 1.0 }, key_border);
+                Stroke::new(if has_combo_outline { 2.0_f32 } else { 1.0_f32 }, key_border);
 
             if kc == 0x0001 {
                 paint_layout_keycap(painter, draw_rect, key.rotation, bg, key_border_stroke);
@@ -451,7 +451,7 @@ impl EntropyApp {
                     center.y + rad.sin() * r,
                 ));
             }
-            painter.add(egui::Shape::line(points.clone(), Stroke::new(1.7, color)));
+            painter.add(egui::Shape::line(points.clone(), Stroke::new(1.7_f32, color)));
             if points.len() >= 2 {
                 let end = points[points.len() - 1];
                 let prev = points[points.len() - 2];
@@ -782,14 +782,14 @@ impl EntropyApp {
                         egui::pos2(center.x - top_divider_half_width, top_divider_y),
                         egui::pos2(center.x + top_divider_half_width, top_divider_y),
                     ],
-                    Stroke::new(1.0, outline.color),
+                    Stroke::new(1.0_f32, outline.color),
                 );
                 painter.line_segment(
                     [
                         egui::pos2(center.x - bottom_divider_half_width, bottom_divider_y),
                         egui::pos2(center.x + bottom_divider_half_width, bottom_divider_y),
                     ],
-                    Stroke::new(1.0, outline.color),
+                    Stroke::new(1.0_f32, outline.color),
                 );
                 let press_text_rect = middle_rect.shrink2(egui::vec2(4.0, 2.0));
 
@@ -863,7 +863,7 @@ impl EntropyApp {
                         egui::pos2(center.x - divider_half_width, center.y),
                         egui::pos2(center.x + divider_half_width, center.y),
                     ],
-                    Stroke::new(1.0, outline.color),
+                    Stroke::new(1.0_f32, outline.color),
                 );
             }
         }

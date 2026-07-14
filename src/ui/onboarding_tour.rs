@@ -100,9 +100,9 @@ impl EntropyApp {
 
         egui::Area::new(egui::Id::new("onboarding_tour_overlay"))
             .order(egui::Order::Tooltip)
-            .fixed_pos(ctx.screen_rect().min)
+            .fixed_pos(ctx.content_rect().min)
             .show(ctx, |ui| {
-                let screen = ctx.screen_rect();
+                let screen = ctx.content_rect();
                 let local_screen = egui::Rect::from_min_size(egui::Pos2::ZERO, screen.size());
                 ui.set_min_size(screen.size());
                 let _block = ui.interact(
@@ -125,7 +125,7 @@ impl EntropyApp {
                         highlight,
                         15.0,
                         Color32::from_rgba_unmultiplied(255, 255, 255, 22),
-                        Stroke::new(2.0, app_accent()),
+                        Stroke::new(2.0_f32, app_accent()),
                         egui::StrokeKind::Inside,
                     );
                     if matches!(step.target, Some(TourTarget::BottomHints)) {
@@ -171,7 +171,7 @@ impl EntropyApp {
                     card_rect,
                     18.0,
                     app_window_fill(dark),
-                    Stroke::new(1.0, app_border_color(dark)),
+                    Stroke::new(1.0_f32, app_border_color(dark)),
                     egui::StrokeKind::Inside,
                 );
                 crate::ui_style::allocate_ui_at_rect(

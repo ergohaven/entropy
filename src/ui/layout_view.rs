@@ -104,7 +104,7 @@ impl EntropyApp {
                 *rect,
                 6.0,
                 bg,
-                Stroke::new(1.0, Color32::from_gray(80)),
+                Stroke::new(1.0_f32, Color32::from_gray(80)),
                 egui::StrokeKind::Inside,
             );
             painter.text(
