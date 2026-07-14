@@ -2608,8 +2608,7 @@ pub(crate) enum LayoutImageExportFormat {
     Pdf,
 }
 
-#[derive(Clone)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(
     into = "LayoutImageExportStatePersisted",
     from = "LayoutImageExportStatePersisted"

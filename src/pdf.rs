@@ -60,7 +60,12 @@ fn encode_rgb(image: &RgbaImage) -> Result<Vec<u8>> {
     Ok(encoder.finish()?)
 }
 
-fn write_page(pdf: &mut Vec<u8>, offsets: &mut [usize], page: usize, image: &RgbaImage) -> Result<()> {
+fn write_page(
+    pdf: &mut Vec<u8>,
+    offsets: &mut [usize],
+    page: usize,
+    image: &RgbaImage,
+) -> Result<()> {
     let page_id = 3 + page * 3;
     let contents_id = page_id + 1;
     let image_id = page_id + 2;

@@ -2016,5 +2016,3 @@ fn blend_pixel(image: &mut RgbaImage, x: i32, y: i32, color: Rgba<u8>, coverage:
     dst[2] = (color[2] as f32 * alpha + dst[2] as f32 * inv).round() as u8;
     dst[3] = 255;
 }
-
-
