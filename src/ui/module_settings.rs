@@ -7,7 +7,11 @@ enum ModuleSettingsRow {
     Field { group_idx: usize, field_idx: usize },
 }
 
-const MODULE_SETTING_WRITEBACK_DELAY: std::time::Duration = std::time::Duration::from_millis(20);
+const MODULE_SETTING_WRITEBACK_DELAYS: [std::time::Duration; MODULE_SETTING_READBACK_ATTEMPTS] = [
+    std::time::Duration::from_millis(20),
+    std::time::Duration::from_millis(80),
+    std::time::Duration::from_millis(200),
+];
 
 impl EntropyApp {
     fn module_setting_display_title<'a>(
@@ -133,6 +137,7 @@ impl EntropyApp {
             return;
         };
 
+        let mut readback_attempt = 0;
         let result = self.module_settings.write_verified_value(
             field.qsid,
             requested,
@@ -145,7 +150,10 @@ impl EntropyApp {
                 .map_err(|error| error.to_string())
             },
             || {
-                std::thread::sleep(MODULE_SETTING_WRITEBACK_DELAY);
+                let delay = MODULE_SETTING_WRITEBACK_DELAYS
+                    [readback_attempt.min(MODULE_SETTING_WRITEBACK_DELAYS.len() - 1)];
+                readback_attempt += 1;
+                std::thread::sleep(delay);
                 if field.width > 1 {
                     hid.get_qmk_setting_u16(field.qsid)
                 } else {

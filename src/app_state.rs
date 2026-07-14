@@ -840,6 +840,8 @@ pub(crate) enum ModuleSettingWritebackError {
     ReadbackMismatch { expected: u16, actual: u16 },
 }
 
+pub(crate) const MODULE_SETTING_READBACK_ATTEMPTS: usize = 3;
+
 impl std::fmt::Display for ModuleSettingWritebackError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -895,15 +897,28 @@ impl ModuleSettingsState {
         qsid: u16,
         expected: u16,
         write: impl FnOnce() -> Result<(), String>,
-        read_back: impl FnOnce() -> Result<u16, String>,
+        mut read_back: impl FnMut() -> Result<u16, String>,
     ) -> Result<u16, ModuleSettingWritebackError> {
         write().map_err(ModuleSettingWritebackError::SetFailed)?;
-        let actual = read_back().map_err(ModuleSettingWritebackError::ReadbackFailed)?;
-        if actual != expected {
-            return Err(ModuleSettingWritebackError::ReadbackMismatch { expected, actual });
+
+        let mut last_error = None;
+        for _ in 0..MODULE_SETTING_READBACK_ATTEMPTS {
+            match read_back() {
+                Ok(actual) if actual == expected => {
+                    self.set_value(qsid, actual);
+                    return Ok(actual);
+                }
+                Ok(actual) => {
+                    last_error =
+                        Some(ModuleSettingWritebackError::ReadbackMismatch { expected, actual });
+                }
+                Err(error) => {
+                    return Err(ModuleSettingWritebackError::ReadbackFailed(error));
+                }
+            }
         }
-        self.set_value(qsid, actual);
-        Ok(actual)
+
+        Err(last_error.expect("module setting readback attempts must be non-zero"))
     }
 }
 
@@ -2830,6 +2845,27 @@ mod module_settings_state_tests {
     }
 
     #[test]
+    fn verified_module_setting_write_retries_stale_readback() {
+        let mut settings = ModuleSettingsState::default();
+        settings.set_value(42, 7);
+        let mut attempts = 0;
+
+        let result = settings.write_verified_value(
+            42,
+            9,
+            || Ok(()),
+            || {
+                attempts += 1;
+                Ok(if attempts == 1 { 7 } else { 9 })
+            },
+        );
+
+        assert_eq!(result, Ok(9));
+        assert_eq!(attempts, 2);
+        assert_eq!(settings.value(42), 9);
+    }
+
+    #[test]
     fn verified_module_setting_write_keeps_old_value_when_set_fails() {
         let mut settings = ModuleSettingsState::default();
         settings.set_value(42, 7);
@@ -2850,9 +2886,17 @@ mod module_settings_state_tests {
     fn verified_module_setting_write_keeps_old_value_when_readback_fails() {
         let mut settings = ModuleSettingsState::default();
         settings.set_value(42, 7);
+        let mut attempts = 0;
 
-        let result =
-            settings.write_verified_value(42, 9, || Ok(()), || Err("read failed".to_owned()));
+        let result = settings.write_verified_value(
+            42,
+            9,
+            || Ok(()),
+            || {
+                attempts += 1;
+                Err("read failed".to_owned())
+            },
+        );
 
         assert_eq!(
             result,
@@ -2860,6 +2904,7 @@ mod module_settings_state_tests {
                 "read failed".to_owned()
             ))
         );
+        assert_eq!(attempts, 1);
         assert_eq!(settings.value(42), 7);
     }
 
@@ -2867,8 +2912,17 @@ mod module_settings_state_tests {
     fn verified_module_setting_write_keeps_old_value_when_readback_mismatches() {
         let mut settings = ModuleSettingsState::default();
         settings.set_value(42, 7);
+        let mut attempts = 0;
 
-        let result = settings.write_verified_value(42, 9, || Ok(()), || Ok(8));
+        let result = settings.write_verified_value(
+            42,
+            9,
+            || Ok(()),
+            || {
+                attempts += 1;
+                Ok(8)
+            },
+        );
 
         assert_eq!(
             result,
@@ -2877,6 +2931,7 @@ mod module_settings_state_tests {
                 actual: 8
             })
         );
+        assert_eq!(attempts, MODULE_SETTING_READBACK_ATTEMPTS);
         assert_eq!(settings.value(42), 7);
     }
 }
