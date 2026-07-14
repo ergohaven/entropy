@@ -4,6 +4,31 @@ use super::hid_parse::{
 };
 use super::hid_protocol::*;
 use super::HidDevice;
+
+/// Escape `%` as `%%` and pack `value` into at most `budget` bytes, stopping at
+/// a whole-character boundary. Never splits a UTF-8 codepoint or a `%%` pair, so
+/// the firmware never receives a corrupted string.
+fn truncate_qmk_string_payload(value: &str, budget: usize) -> Vec<u8> {
+    let mut payload: Vec<u8> = Vec::with_capacity(budget.min(value.len() + 1));
+    for ch in value.chars() {
+        if ch == '%' {
+            if payload.len() + 2 > budget {
+                break;
+            }
+            payload.push(b'%');
+            payload.push(b'%');
+        } else {
+            let len = ch.len_utf8();
+            if payload.len() + len > budget {
+                break;
+            }
+            let mut buf = [0u8; 4];
+            payload.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+        }
+    }
+    payload
+}
+
 use anyhow::Result;
 
 fn verify_qmk_setting_writeback(qsid: u16, requested: u16, readback: u16) -> Result<()> {
@@ -238,12 +263,14 @@ impl HidDevice {
         cmd[1] = CMD_VIAL_QMK_SETTINGS_SET;
         cmd[2..4].copy_from_slice(&qsid.to_le_bytes());
 
-        let safe_value = value.replace('%', "%%");
-        let bytes = safe_value.as_bytes();
+        // Escape '%' as '%%' and pack into the fixed payload, truncating only at
+        // whole characters — never mid-codepoint and never splitting a '%%' pair,
+        // either of which would leave a corrupted string in firmware.
         let max_len = cmd.len().saturating_sub(4);
-        let copy_len = bytes.len().min(max_len.saturating_sub(1));
-        cmd[4..4 + copy_len].copy_from_slice(&bytes[..copy_len]);
-        cmd[4 + copy_len] = 0;
+        let budget = max_len.saturating_sub(1); // reserve one byte for the null terminator
+        let payload = truncate_qmk_string_payload(value, budget);
+        cmd[4..4 + payload.len()].copy_from_slice(&payload);
+        cmd[4 + payload.len()] = 0;
 
         let resp = self.usb_send(&cmd)?;
         if resp[0] != 0 {
@@ -380,6 +407,39 @@ impl HidDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncate_short_ascii_is_unchanged() {
+        assert_eq!(truncate_qmk_string_payload("BASE", 27), b"BASE");
+    }
+
+    #[test]
+    fn truncate_percent_is_escaped_and_not_split() {
+        assert_eq!(truncate_qmk_string_payload("a%b", 27), b"a%%b");
+        // Budget only fits `a` plus one byte: the `%%` pair must not be split.
+        assert_eq!(truncate_qmk_string_payload("a%", 2), b"a");
+    }
+
+    #[test]
+    fn truncate_multibyte_on_codepoint_boundary() {
+        // "🙂" is 4 bytes; with a 3-byte budget nothing fits, output stays valid.
+        let out = truncate_qmk_string_payload("🙂", 3);
+        assert!(out.is_empty());
+        assert!(std::str::from_utf8(&out).is_ok());
+
+        // Two emoji (8 bytes) with a 5-byte budget keeps exactly one whole emoji.
+        let out = truncate_qmk_string_payload("🙂🙂", 5);
+        assert_eq!(out, "🙂".as_bytes());
+        assert!(std::str::from_utf8(&out).is_ok());
+    }
+
+    #[test]
+    fn truncate_cyrillic_on_codepoint_boundary() {
+        // Each Cyrillic letter is 2 bytes; a 5-byte budget keeps two letters.
+        let out = truncate_qmk_string_payload("СЛОЙ", 5);
+        assert_eq!(out, "СЛ".as_bytes());
+        assert!(std::str::from_utf8(&out).is_ok());
+    }
 
     #[test]
     fn qmk_setting_writeback_accepts_matching_value() {

@@ -8,6 +8,37 @@ fn is_default_layer_name(index: usize, name: &str) -> bool {
         || trimmed.eq_ignore_ascii_case(&format!("layer {index}"))
 }
 
+/// Merge firmware-read layer names with locally saved ones.
+///
+/// A name the firmware actually stored (`from_firmware[i]`) is authoritative,
+/// even when it looks like a default such as "Main". A locally saved name only
+/// fills a layer the firmware left as a generated descriptor placeholder, so
+/// provenance — not the string — decides. One real firmware name therefore no
+/// longer suppresses saved names for the other layers.
+fn resolve_layer_names(
+    firmware_names: &[String],
+    from_firmware: &[bool],
+    local_names: Option<&[String]>,
+    layer_count: usize,
+) -> Vec<String> {
+    let mut names: Vec<String> = firmware_names.to_vec();
+    if names.len() < layer_count {
+        let start = names.len();
+        names.extend((start..layer_count).map(|layer| layer.to_string()));
+    }
+    names.truncate(layer_count);
+    if let Some(local) = local_names {
+        for (idx, name) in local.iter().enumerate().take(layer_count) {
+            let from_firmware = from_firmware.get(idx).copied().unwrap_or(false);
+            if !name.trim().is_empty() && !from_firmware && is_default_layer_name(idx, &names[idx])
+            {
+                names[idx] = name.clone();
+            }
+        }
+    }
+    names
+}
+
 fn connect_apply_start_log(
     device_name: &str,
     layer_count: usize,
@@ -55,6 +86,55 @@ mod tests {
     #[test]
     fn empty_connect_poll_is_throttled() {
         assert_eq!(CONNECT_POLL_INTERVAL, std::time::Duration::from_millis(250));
+    }
+
+    fn s(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn resolve_prefers_firmware_names_even_when_default_looking() {
+        // Firmware stored "Main" for layer 0; a stale local name must not win.
+        let names = resolve_layer_names(
+            &s(&["Main", "1"]),
+            &[true, false],
+            Some(&s(&["OLD", "LOWER"])),
+            2,
+        );
+        assert_eq!(names, s(&["Main", "LOWER"]));
+    }
+
+    #[test]
+    fn resolve_fills_placeholder_layers_from_local() {
+        // Firmware provided nothing (all placeholders); local names fill them.
+        let names = resolve_layer_names(
+            &s(&["0", "1", "2"]),
+            &[false, false, false],
+            Some(&s(&["BASE", "LOWER", ""])),
+            3,
+        );
+        // Empty local name leaves the placeholder untouched.
+        assert_eq!(names, s(&["BASE", "LOWER", "2"]));
+    }
+
+    #[test]
+    fn resolve_mixed_firmware_and_local() {
+        // Layer 0 real firmware name kept; layers 1/2 placeholders filled locally.
+        let names = resolve_layer_names(
+            &s(&["BASE", "1", "2"]),
+            &[true, false, false],
+            Some(&s(&["X", "RAISE", "ADJUST"])),
+            3,
+        );
+        assert_eq!(names, s(&["BASE", "RAISE", "ADJUST"]));
+    }
+
+    #[test]
+    fn resolve_extends_and_truncates_to_layer_count() {
+        let names = resolve_layer_names(&s(&["BASE"]), &[true], None, 3);
+        assert_eq!(names, s(&["BASE", "1", "2"]));
+        let names = resolve_layer_names(&s(&["A", "B", "C"]), &[true, true, true], None, 2);
+        assert_eq!(names, s(&["A", "B"]));
     }
 }
 
@@ -224,27 +304,15 @@ impl EntropyApp {
 
                 self.status_msg = format!("Connected: {}", r.device_name);
 
+                // Load per-device layer names.
                 let device_name = r.device_name.clone();
-                // Prefer real names from firmware, then overlay locally-saved
-                // names per layer wherever the firmware only reports a default
-                // placeholder. Doing this per layer (instead of all-or-nothing)
-                // means a single real firmware name no longer suppresses saved
-                // names for every other layer.
-                let mut layer_names = r.layout.layer_names.clone();
-                if layer_names.len() < r.layer_count {
-                    let start = layer_names.len();
-                    layer_names.extend((start..r.layer_count).map(|layer| layer.to_string()));
-                }
-                layer_names.truncate(r.layer_count);
-                if let Some(local_layer_names) = load_saved_layer_names(&device_name) {
-                    for (idx, name) in local_layer_names.into_iter().enumerate().take(r.layer_count)
-                    {
-                        if !name.trim().is_empty() && is_default_layer_name(idx, &layer_names[idx]) {
-                            layer_names[idx] = name;
-                        }
-                    }
-                }
-                self.layer_names = layer_names;
+                let local_layer_names = load_saved_layer_names(&device_name);
+                self.layer_names = resolve_layer_names(
+                    &r.layout.layer_names,
+                    &r.layer_names_from_firmware,
+                    local_layer_names.as_deref(),
+                    r.layer_count,
+                );
 
                 let encoder_count = r.layout.encoder_count();
                 self.encoder_visibility =

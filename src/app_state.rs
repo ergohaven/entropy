@@ -361,6 +361,9 @@ pub(crate) struct ConnectResult {
     pub(crate) alt_repeat_entries: Vec<AltRepeatKeyEntry>,
     /// Feature bits reported by Vial dynamic entries.
     pub(crate) vial_features: VialFeatureSupport,
+    /// Per-layer flag: true where the firmware returned a stored layer name via
+    /// QSID read, so locally-saved names are only applied to the rest.
+    pub(crate) layer_names_from_firmware: Vec<bool>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
