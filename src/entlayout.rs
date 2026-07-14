@@ -1393,6 +1393,12 @@ impl EntropyApp {
         self.keycode_picker
             .macro_descriptions
             .truncate(self.keycode_picker.macro_count);
+        save_macro_metadata(
+            &self.keycode_picker.macro_names,
+            &self.keycode_picker.macro_descriptions,
+            &self.current_device_name,
+        );
+        self.keycode_picker.macro_metadata_dirty = false;
         self.keycode_picker.macros_dirty = false;
 
         if let Some(layout) = &self.layout {

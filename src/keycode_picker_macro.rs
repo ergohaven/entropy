@@ -300,6 +300,7 @@ impl KeycodePicker {
         let custom_pairs = self.custom_keycode_pairs();
         ui.add_space(4.0 * scale);
         let language = self.language;
+        let mut macro_metadata_changed = false;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 12.0 * scale;
             if let Some(name) = self.macro_names.get_mut(n) {
@@ -315,6 +316,7 @@ impl KeycodePicker {
                 );
                 if resp.changed() {
                     limit_chars(name, MACRO_NAME_CHAR_LIMIT);
+                    macro_metadata_changed = true;
                 }
             }
 
@@ -336,6 +338,7 @@ impl KeycodePicker {
                 ));
                 if resp.changed() {
                     limit_chars(description, MACRO_DESCRIPTION_CHAR_LIMIT);
+                    macro_metadata_changed = true;
                 }
             }
         });
@@ -738,6 +741,7 @@ impl KeycodePicker {
                     self.macro_descriptions[n].clear();
                 }
                 macro_changed = true;
+                macro_metadata_changed = true;
             }
             if picker_button(
                 ui,
@@ -785,6 +789,9 @@ impl KeycodePicker {
         if macro_changed {
             self.encode_macro(n);
             self.macros_dirty = true;
+        }
+        if macro_metadata_changed {
+            self.macro_metadata_dirty = true;
         }
 
         selected_macro

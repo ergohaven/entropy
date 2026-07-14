@@ -165,6 +165,8 @@ pub struct KeycodePicker {
     pub macro_names: Vec<String>,
     /// User-visible descriptions for macros (optional, local metadata)
     pub macro_descriptions: Vec<String>,
+    /// Local macro names or descriptions changed and need persistence
+    pub macro_metadata_dirty: bool,
     /// Macro actions for editor UI
     pub macro_actions: Vec<Vec<MacroAction>>,
     /// Flag: macro texts changed, need to write to device
@@ -364,6 +366,7 @@ impl Default for KeycodePicker {
             macro_texts: vec![Vec::new(); 16],
             macro_names: vec![String::new(); 16],
             macro_descriptions: vec![String::new(); 16],
+            macro_metadata_dirty: false,
             macro_actions: vec![vec![]; 16],
             macro_undo_stack: Vec::new(),
             macro_key_pick: None,
