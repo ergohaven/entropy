@@ -375,7 +375,9 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn begin_entlayout_import(&mut self, path: std::path::PathBuf) {
-        self.pending_entlayout_import_path = Some(path);
+        // Remember which connection this import belongs to; the deferred write
+        // in handle_pending_imports re-checks it before touching the device.
+        self.pending_entlayout_import_path = Some((path, self.connection_generation));
         self.import_progress_started_at = None;
         self.import_progress_title =
             crate::i18n::tr_catalog(self.app_settings.language, "entlayout.importing_layout")

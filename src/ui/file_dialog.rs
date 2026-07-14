@@ -30,6 +30,14 @@ impl FileDialogAction {
     }
 }
 
+/// A device-scoped operation captured at `opened_generation` is stale once the
+/// active device changes to `current_generation`. Used both at dialog
+/// completion and again just before the deferred `.entlayout` firmware write,
+/// since the device can also change during that later gap.
+pub(super) fn device_generation_stale(opened_generation: u64, current_generation: u64) -> bool {
+    opened_generation != current_generation
+}
+
 /// Whether a completed dialog result must be discarded because the active device
 /// changed while the picker was open. App-settings actions are never rejected.
 fn dialog_result_stale(
@@ -37,7 +45,7 @@ fn dialog_result_stale(
     opened_generation: u64,
     current_generation: u64,
 ) -> bool {
-    action.is_device_scoped() && opened_generation != current_generation
+    action.is_device_scoped() && device_generation_stale(opened_generation, current_generation)
 }
 
 #[cfg(test)]
@@ -56,18 +64,46 @@ mod tests {
     #[test]
     fn device_scoped_result_is_stale_only_when_generation_changed() {
         // Same generation: apply.
-        assert!(!dialog_result_stale(FileDialogAction::ImportEntlayout, 7, 7));
-        assert!(!dialog_result_stale(FileDialogAction::ExportEntlayout, 7, 7));
+        assert!(!dialog_result_stale(
+            FileDialogAction::ImportEntlayout,
+            7,
+            7
+        ));
+        assert!(!dialog_result_stale(
+            FileDialogAction::ExportEntlayout,
+            7,
+            7
+        ));
         // Device changed while picker open: reject.
         assert!(dialog_result_stale(FileDialogAction::ImportEntlayout, 7, 8));
-        assert!(dialog_result_stale(FileDialogAction::ExportLayoutImage, 7, 8));
+        assert!(dialog_result_stale(
+            FileDialogAction::ExportLayoutImage,
+            7,
+            8
+        ));
     }
 
     #[test]
     fn app_settings_result_never_stale() {
         // App settings are device-independent, so a generation change is fine.
-        assert!(!dialog_result_stale(FileDialogAction::ImportEntsettings, 1, 99));
-        assert!(!dialog_result_stale(FileDialogAction::ExportEntsettings, 1, 99));
+        assert!(!dialog_result_stale(
+            FileDialogAction::ImportEntsettings,
+            1,
+            99
+        ));
+        assert!(!dialog_result_stale(
+            FileDialogAction::ExportEntsettings,
+            1,
+            99
+        ));
+    }
+
+    #[test]
+    fn deferred_import_generation_check() {
+        // The deferred .entlayout write in handle_pending_imports applies the
+        // same rule: proceed only if the device is unchanged since the pick.
+        assert!(!device_generation_stale(3, 3));
+        assert!(device_generation_stale(3, 4));
     }
 }
 

@@ -161,7 +161,15 @@ impl EntropyApp {
             return;
         }
 
-        if let Some(path) = self.pending_entlayout_import_path.take() {
+        if let Some((path, opened_generation)) = self.pending_entlayout_import_path.take() {
+            if opened_generation != self.connection_generation {
+                // The device changed between choosing the file and this deferred
+                // write; do not program the new device with the old one's import.
+                self.status_msg =
+                    "Device changed while the file dialog was open — please try again.".to_owned();
+                self.import_progress_started_at = None;
+                return;
+            }
             match self.import_entlayout_from_path(&path) {
                 Ok(report) => {
                     self.status_msg = crate::i18n::tr_catalog(

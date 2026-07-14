@@ -2775,7 +2775,11 @@ pub struct EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) parent_display_handle: Option<raw_window_handle::RawDisplayHandle>,
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) pending_entlayout_import_path: Option<std::path::PathBuf>,
+    /// Deferred `.entlayout` import: the chosen path plus the connection
+    /// generation when it was chosen. The generation is re-checked just before
+    /// the firmware write so an import picked for device A is not applied to a
+    /// device B that connected in the meantime.
+    pub(crate) pending_entlayout_import_path: Option<(std::path::PathBuf, u64)>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) pending_entsettings_import_path: Option<std::path::PathBuf>,
     #[cfg(not(target_arch = "wasm32"))]
