@@ -101,6 +101,8 @@ impl EntropyApp {
 
         match result {
             Ok(r) => {
+                self.pending_tap_hold_numeric_writes.clear();
+                self.tap_hold_numeric_write_due = None;
                 log::info!(
                     "{}",
                     connect_apply_start_log(&r.device_name, r.layer_count, r.layout.firmware)
@@ -121,6 +123,7 @@ impl EntropyApp {
                         .insert(dev.display_name_cache_key(), r.device_name.clone());
                 }
                 self.keycode_picker.tap_dance_entries = r.tap_dance_entries.clone();
+                self.keycode_picker.tap_dance_synced_entries = r.tap_dance_entries.clone();
                 self.combo_entries = r.combo_entries.clone();
                 self.key_override_entries = r.key_override_entries.clone();
                 self.alt_repeat_entries = r.alt_repeat_entries.clone();

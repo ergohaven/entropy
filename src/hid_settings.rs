@@ -6,6 +6,19 @@ use super::hid_protocol::*;
 use super::HidDevice;
 use anyhow::Result;
 
+fn verify_qmk_setting_writeback(qsid: u16, requested: u16, readback: u16) -> Result<()> {
+    if readback == requested {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "qmk setting writeback mismatch for qsid {}: wrote {}, read back {}",
+        qsid,
+        requested,
+        readback
+    )
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl HidDevice {
     pub fn get_layout_options(&self) -> Result<u32> {
@@ -93,6 +106,12 @@ impl HidDevice {
         Ok(())
     }
 
+    pub fn set_qmk_setting_u8_verified(&self, qsid: u16, value: u8) -> Result<()> {
+        self.set_qmk_setting_u8(qsid, value)?;
+        let readback = self.get_qmk_setting_u8(qsid)?;
+        verify_qmk_setting_writeback(qsid, value as u16, readback as u16)
+    }
+
     pub fn get_qmk_setting_u16(&self, qsid: u16) -> Result<u16> {
         let mut cmd = [0u8; 32];
         cmd[0] = CMD_VIA_VIAL_PREFIX;
@@ -116,6 +135,12 @@ impl HidDevice {
             anyhow::bail!("qmk setting set error or unsupported qsid: {qsid}");
         }
         Ok(())
+    }
+
+    pub fn set_qmk_setting_u16_verified(&self, qsid: u16, value: u16) -> Result<()> {
+        self.set_qmk_setting_u16(qsid, value)?;
+        let readback = self.get_qmk_setting_u16(qsid)?;
+        verify_qmk_setting_writeback(qsid, value, readback)
     }
 
     pub fn get_qmk_setting_string(&self, qsid: u16) -> Result<String> {
@@ -274,5 +299,23 @@ impl HidDevice {
         } else {
             parse_switch_matrix_payload(&resp[2..], rows, cols)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qmk_setting_writeback_accepts_matching_value() {
+        assert!(verify_qmk_setting_writeback(7, 150, 150).is_ok());
+    }
+
+    #[test]
+    fn qmk_setting_writeback_rejects_stale_value() {
+        let error = verify_qmk_setting_writeback(7, 150, 250).unwrap_err();
+
+        assert!(error.to_string().contains("qmk setting writeback mismatch"));
+        assert!(error.to_string().contains("qsid 7"));
     }
 }

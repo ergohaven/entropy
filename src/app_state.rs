@@ -2758,6 +2758,8 @@ pub struct EntropyApp {
     pub(crate) bluetooth_settings: BluetoothSettingsState,
     pub(crate) module_settings: ModuleSettingsState,
     pub(crate) tap_hold_settings: TapHoldSettingsState,
+    pub(crate) pending_tap_hold_numeric_writes: std::collections::BTreeMap<u16, u16>,
+    pub(crate) tap_hold_numeric_write_due: Option<std::time::Instant>,
     pub(crate) magic_settings: MagicSettingsState,
     pub(crate) one_shot_settings: OneShotSettingsState,
     pub(crate) grave_escape_settings: GraveEscapeSettingsState,

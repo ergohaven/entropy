@@ -86,7 +86,7 @@ fn picker_ok_label(language: crate::i18n::Language) -> &'static str {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TapDanceEntry {
     pub on_tap: u16,
     pub on_hold: u16,
@@ -153,6 +153,7 @@ pub struct KeycodePicker {
     pub tap_dance_undo_stack: Vec<(usize, TapDanceEntry, String)>,
     pub tap_dance_editor_open: Option<u8>,
     pub tap_dance_dirty: bool,
+    pub tap_dance_synced_entries: Vec<TapDanceEntry>,
     /// Which field is being edited: (td_idx, field: 0=tap,1=hold,2=dtap,3=taphold)
     pub td_key_pick: Option<(usize, u8)>,
     /// Pending tap dance Mod+Key selection: (td_idx, field, modifier base)
@@ -351,6 +352,7 @@ impl Default for KeycodePicker {
             tap_dance_undo_stack: vec![],
             tap_dance_editor_open: None,
             tap_dance_dirty: false,
+            tap_dance_synced_entries: vec![],
             td_key_pick: None,
             td_mod_key_pick: None,
             macro_texts: vec![Vec::new(); 16],

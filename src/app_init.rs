@@ -102,6 +102,8 @@ impl EntropyApp {
             bluetooth_settings: BluetoothSettingsState::default(),
             module_settings: ModuleSettingsState::default(),
             tap_hold_settings: TapHoldSettingsState::default(),
+            pending_tap_hold_numeric_writes: std::collections::BTreeMap::new(),
+            tap_hold_numeric_write_due: None,
             magic_settings: MagicSettingsState::default(),
             one_shot_settings: OneShotSettingsState::default(),
             grave_escape_settings: GraveEscapeSettingsState::default(),

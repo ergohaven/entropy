@@ -5,8 +5,24 @@ const TAP_HOLD_DELAY_MAX_MS: u32 = 255;
 const TAPPING_TOGGLE_MAX_TAPS: u32 = 10;
 const ONE_SHOT_TAP_TOGGLE_MAX_TAPS: u32 = 10;
 const ONE_SHOT_TIMEOUT_MAX_MS: u32 = 10_000;
+const TAP_HOLD_WRITE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250);
 
-#[derive(Clone, Copy)]
+fn update_pending_tap_hold_numeric_write(
+    pending: &mut std::collections::BTreeMap<u16, u16>,
+    qsid: u16,
+    current: u16,
+    edited: u16,
+) -> bool {
+    if edited == current {
+        pending.remove(&qsid);
+        false
+    } else {
+        pending.insert(qsid, edited);
+        true
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum SettingsRowKind {
     TapHold,
     OneShot,
@@ -417,7 +433,6 @@ impl EntropyApp {
                             switch_size,
                         );
                         if resp.changed() {
-                            self.set_tap_hold_bool_value(qsid, value);
                             self.write_tap_hold_bool_setting(qsid, value);
                         }
                     },
@@ -445,14 +460,18 @@ impl EntropyApp {
                                 SettingsRowKind::TapHold => "tap_hold_edit",
                                 SettingsRowKind::OneShot => "one_shot_edit",
                             },
+                            self.current_keyboard_id,
                             qsid,
                         ));
                         let mut text = ui.ctx().data_mut(|d| {
                             d.get_temp::<String>(edit_id)
                                 .unwrap_or_else(|| current.to_string())
                         });
+                        let tap_hold_edit_pending = kind == SettingsRowKind::TapHold
+                            && self.pending_tap_hold_numeric_writes.contains_key(&qsid);
                         if text.parse::<u16>().ok() != Some(current)
                             && !ui.memory(|m| m.has_focus(edit_id))
+                            && !tap_hold_edit_pending
                         {
                             text = current.to_string();
                         }
@@ -476,24 +495,50 @@ impl EntropyApp {
                             ),
                             _ => resp,
                         };
+                        let commit_tap_hold_edit = kind == SettingsRowKind::TapHold
+                            && (resp.lost_focus()
+                                || (resp.has_focus()
+                                    && ui.input(|i| i.key_pressed(egui::Key::Enter))));
                         if resp.changed() {
                             let filtered: String =
                                 text.chars().filter(|c: &char| c.is_ascii_digit()).collect();
                             let clamped = filtered.parse::<u32>().unwrap_or(0).min(max);
                             let new_value = clamped as u16;
-                            if new_value != current {
-                                match kind {
-                                    SettingsRowKind::TapHold => {
-                                        self.set_tap_hold_numeric_value(qsid, new_value);
-                                        self.write_tap_hold_numeric_setting(qsid, new_value);
-                                    }
-                                    SettingsRowKind::OneShot => {
-                                        self.set_one_shot_numeric_value(qsid, new_value);
-                                        self.write_one_shot_numeric_setting(qsid, new_value);
+                            match kind {
+                                SettingsRowKind::TapHold => {
+                                    if update_pending_tap_hold_numeric_write(
+                                        &mut self.pending_tap_hold_numeric_writes,
+                                        qsid,
+                                        current,
+                                        new_value,
+                                    ) {
+                                        self.tap_hold_numeric_write_due = Some(
+                                            std::time::Instant::now() + TAP_HOLD_WRITE_DEBOUNCE,
+                                        );
+                                        ui.ctx().request_repaint_after(TAP_HOLD_WRITE_DEBOUNCE);
+                                    } else if self.pending_tap_hold_numeric_writes.is_empty() {
+                                        self.tap_hold_numeric_write_due = None;
                                     }
                                 }
+                                SettingsRowKind::OneShot if new_value != current => {
+                                    self.set_one_shot_numeric_value(qsid, new_value);
+                                    self.write_one_shot_numeric_setting(qsid, new_value);
+                                }
+                                SettingsRowKind::OneShot => {}
                             }
                             text = clamped.to_string();
+                        }
+                        if commit_tap_hold_edit {
+                            if let Some(new_value) =
+                                self.pending_tap_hold_numeric_writes.remove(&qsid)
+                            {
+                                if new_value != current {
+                                    self.write_tap_hold_numeric_setting(qsid, new_value);
+                                }
+                                if self.pending_tap_hold_numeric_writes.is_empty() {
+                                    self.tap_hold_numeric_write_due = None;
+                                }
+                            }
                         }
                         ui.ctx().data_mut(|d| d.insert_temp(edit_id, text));
                     },
@@ -602,28 +647,78 @@ impl EntropyApp {
         }
     }
 
+    fn tap_hold_write_error(&mut self, qsid: u16, error: &str) {
+        let qsid = qsid.to_string();
+        self.status_msg = crate::i18n::tr_catalog_format(
+            self.app_settings.language,
+            "status_messages.tap_hold_write_error",
+            &[("qsid", &qsid), ("error", error)],
+        );
+    }
+
+    pub(super) fn flush_due_tap_hold_numeric_writes(&mut self) {
+        let Some(due) = self.tap_hold_numeric_write_due else {
+            return;
+        };
+        if std::time::Instant::now() < due {
+            return;
+        }
+
+        self.flush_pending_tap_hold_numeric_writes();
+    }
+
+    pub(super) fn flush_pending_tap_hold_numeric_writes(&mut self) {
+        self.tap_hold_numeric_write_due = None;
+        let pending = std::mem::take(&mut self.pending_tap_hold_numeric_writes);
+        for (qsid, value) in pending {
+            self.write_tap_hold_numeric_setting(qsid, value);
+        }
+    }
+
     fn write_tap_hold_numeric_setting(&mut self, qsid: u16, value: u16) {
         let Some(hid) = &self.hid_device else {
+            self.tap_hold_write_error(
+                qsid,
+                crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "status_messages.device_unavailable",
+                ),
+            );
             return;
         };
         let result = if qsid == 20 {
-            hid.set_qmk_setting_u8(qsid, value.min(u8::MAX as u16) as u8)
+            hid.set_qmk_setting_u8_verified(qsid, value.min(u8::MAX as u16) as u8)
         } else {
-            hid.set_qmk_setting_u16(qsid, value)
+            hid.set_qmk_setting_u16_verified(qsid, value)
         };
-        if let Err(e) = result {
-            self.status_msg = format!("Failed to save Tap-Hold setting (qsid {qsid}): {}", e);
-            log::warn!("set_qmk_setting(tap_hold qsid {qsid}) failed: {e}");
+        match result {
+            Ok(()) => {
+                self.set_tap_hold_numeric_value(qsid, value);
+            }
+            Err(e) => {
+                self.tap_hold_write_error(qsid, &e.to_string());
+                log::warn!("set_qmk_setting(tap_hold qsid {qsid}) failed: {e}");
+            }
         }
     }
 
     fn write_tap_hold_bool_setting(&mut self, qsid: u16, value: bool) {
         let Some(hid) = &self.hid_device else {
+            self.tap_hold_write_error(
+                qsid,
+                crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "status_messages.device_unavailable",
+                ),
+            );
             return;
         };
-        if let Err(e) = hid.set_qmk_setting_u8(qsid, u8::from(value)) {
-            self.status_msg = format!("Failed to save Tap-Hold setting (qsid {qsid}): {}", e);
-            log::warn!("set_qmk_setting_u8(tap_hold qsid {qsid}) failed: {e}");
+        match hid.set_qmk_setting_u8_verified(qsid, u8::from(value)) {
+            Ok(()) => self.set_tap_hold_bool_value(qsid, value),
+            Err(e) => {
+                self.tap_hold_write_error(qsid, &e.to_string());
+                log::warn!("set_qmk_setting_u8(tap_hold qsid {qsid}) failed: {e}");
+            }
         }
     }
 }
@@ -661,5 +756,26 @@ mod tests {
         assert!(notice.contains("RMK"));
         assert!(notice.contains("firmware"));
         assert!(notice.contains("profiles"));
+    }
+
+    #[test]
+    fn reverting_tap_hold_edit_cancels_pending_write() {
+        let mut pending = std::collections::BTreeMap::new();
+
+        assert!(update_pending_tap_hold_numeric_write(
+            &mut pending,
+            7,
+            250,
+            150
+        ));
+        assert_eq!(pending.get(&7), Some(&150));
+
+        assert!(!update_pending_tap_hold_numeric_write(
+            &mut pending,
+            7,
+            250,
+            250
+        ));
+        assert!(!pending.contains_key(&7));
     }
 }
