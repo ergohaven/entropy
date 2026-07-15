@@ -226,6 +226,7 @@ impl EntropyApp {
         self.vial_unlock_keys.clear();
         self.vial_unlock_polling = false;
         self.vial_unlock_last_poll = None;
+        self.vial_unlock_reconnect_after_completion = false;
         self.pending_layout_indicator_open_after_unlock = false;
         self.keycode_picker.open = false;
         self.current_device_name.clear();

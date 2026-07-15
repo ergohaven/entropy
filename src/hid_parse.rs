@@ -154,8 +154,16 @@ pub(crate) fn parse_vialrgb_supported_effects_payload(
     batch_max
 }
 
-pub(crate) fn parse_unlock_status_response(resp: &[u8]) -> (bool, Vec<(u8, u8)>) {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct VialUnlockStatus {
+    pub(crate) unlocked: bool,
+    pub(crate) in_progress: bool,
+    pub(crate) keys: Vec<(u8, u8)>,
+}
+
+pub(crate) fn parse_unlock_status_response(resp: &[u8]) -> VialUnlockStatus {
     let unlocked = resp.first().copied() == Some(1);
+    let in_progress = resp.get(1).copied() == Some(1);
     let mut keys = Vec::new();
     let mut i = 2;
     while i + 1 < resp.len() {
@@ -167,12 +175,33 @@ pub(crate) fn parse_unlock_status_response(resp: &[u8]) -> (bool, Vec<(u8, u8)>)
         keys.push((row, col));
         i += 2;
     }
-    (unlocked, keys)
+    VialUnlockStatus {
+        unlocked,
+        in_progress,
+        keys,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_active_unlock_status_and_keys() {
+        let mut resp = [0xFFu8; 32];
+        resp[0] = 0;
+        resp[1] = 1;
+        resp[2..6].copy_from_slice(&[1, 2, 3, 4]);
+
+        assert_eq!(
+            parse_unlock_status_response(&resp),
+            VialUnlockStatus {
+                unlocked: false,
+                in_progress: true,
+                keys: vec![(1, 2), (3, 4)],
+            }
+        );
+    }
 
     #[test]
     fn parses_and_pads_macro_buffer() {
@@ -300,7 +329,11 @@ mod tests {
         let resp = [1, 0, 3, 4, 5, 6, 0xff, 0xff, 7, 8];
         assert_eq!(
             parse_unlock_status_response(&resp),
-            (true, vec![(3, 4), (5, 6)])
+            VialUnlockStatus {
+                unlocked: true,
+                in_progress: false,
+                keys: vec![(3, 4), (5, 6)],
+            }
         );
     }
 }

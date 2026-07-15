@@ -439,7 +439,55 @@ impl EntropyApp {
         };
 
         match result {
-            Ok(mut r) => {
+            Ok(ConnectOutcome::UnlockRecovery(r)) => {
+                let layer_count = r.layout.layers.len().max(1);
+                log::warn!(
+                    "Applying Vial unlock recovery for {} (keyboard id {:016X}, {} unlock keys)",
+                    r.device_name,
+                    r.keyboard_id,
+                    r.unlock_keys.len()
+                );
+                self.pending_tap_hold_numeric_writes.clear();
+                self.tap_hold_numeric_write_due = None;
+                self.connection_generation = self.connection_generation.wrapping_add(1);
+                self.layer_count = layer_count;
+                self.firmware = r.layout.firmware;
+                self.current_device_name = r.device_name.clone();
+                self.current_keyboard_id = Some(r.keyboard_id);
+                self.current_encoder_visibility_id =
+                    encoder_visibility_id(&r.device_name, r.keyboard_id);
+                self.layout = Some(r.layout);
+                self.vial_unlocked = Some(false);
+                self.shared_hid_output = r
+                    .hid_device
+                    .as_ref()
+                    .and_then(crate::hid::HidDevice::shared_output);
+                self.hid_device = r.hid_device;
+                self.vial_unlock_keys = r.unlock_keys;
+                self.vial_unlock_polling = true;
+                self.vial_unlock_counter = 1;
+                self.vial_unlock_best = 1;
+                self.vial_unlock_total = 1;
+                self.vial_unlock_last_poll = Some(std::time::Instant::now());
+                self.vial_unlock_animation_nonce = self.vial_unlock_animation_nonce.wrapping_add(1);
+                self.vial_unlock_reconnect_after_completion = true;
+                self.unlock_open = true;
+                self.macro_auto_unlock_cancelled = false;
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "status_messages.unlock_recovery_detected",
+                )
+                .into();
+                if let Some(dev) = self
+                    .selected_device
+                    .and_then(|idx| self.device_manager.devices().get(idx))
+                {
+                    self.device_display_names
+                        .insert(dev.display_name_cache_key(), r.device_name);
+                }
+                ctx.request_repaint();
+            }
+            Ok(ConnectOutcome::Connected(mut r)) => {
                 if reconnect.is_some() && self.layout.is_some() {
                     self.preserve_deferred_snapshot_on_reconnect(&mut r);
                 }

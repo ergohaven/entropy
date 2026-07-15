@@ -269,6 +269,9 @@ return_to_layout_hint = "ПКМ или Esc — вернуться к раскл�
 
 [unlock]
 highlighted_keys_hint = "Нажмите и удерживайте подсвеченные клавиши"
+start_hint = "Начните разблокировку, затем удерживайте подсвеченные клавиши"
+start = "Начать разблокировку"
+cancel = "Отмена"
 
 [universal_symbols_setup]
 open_privacy_settings = "Открыть настройки приватности"
@@ -415,6 +418,7 @@ refresh_device_data_pending_write = "Завершите запись слоя п
 refresh_device_data_missing_device = "Не удалось обновить данные устройства: устройство не найдено"
 refresh_device_data_missing_info = "Не удалось обновить данные устройства: информация недоступна"
 refresh_device_data_delete_failed = "Не удалось удалить сохранённые данные устройства"
+unlock_recovery_detected = "Активная разблокировка восстановлена — удерживайте подсвеченные клавиши"
 
 [dynamic_status]
 device_not_found = "Устройство не найдено"

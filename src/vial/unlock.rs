@@ -11,12 +11,14 @@ impl EntropyApp {
         self.unlock_open = false;
         self.vial_unlock_polling = false;
         self.vial_unlock_last_poll = None;
+        self.vial_unlock_reconnect_after_completion = false;
         self.vial_unlock_counter = self.vial_unlock_total;
         self.vial_unlock_best = self.vial_unlock_total;
         self.pending_layout_indicator_open_after_unlock = false;
     }
 
     fn complete_vial_unlock(&mut self) {
+        let reconnect_after_completion = self.vial_unlock_reconnect_after_completion;
         self.vial_unlocked = Some(true);
         self.status_msg = crate::i18n::tr_catalog(
             self.app_settings.language,
@@ -26,12 +28,24 @@ impl EntropyApp {
         self.unlock_open = false;
         self.vial_unlock_polling = false;
         self.vial_unlock_last_poll = None;
+        self.vial_unlock_reconnect_after_completion = false;
         self.macro_auto_unlock_cancelled = false;
         if self.pending_layout_indicator_open_after_unlock {
             self.pending_layout_indicator_open_after_unlock = false;
             self.app_settings.sticky_layout_window = true;
             self.sticky_layout_last_size = None;
             save_app_settings(&self.app_settings);
+        }
+        if reconnect_after_completion {
+            if let Some(device_idx) = self.selected_device {
+                log::info!("Reloading device state after Vial unlock recovery");
+                self.start_connect(device_idx);
+            } else {
+                self.stop_vial_unlock_with_status(crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "status_messages.unlock_cancelled_disconnected",
+                ));
+            }
         }
     }
 
@@ -59,7 +73,7 @@ impl EntropyApp {
     pub(super) fn finish_vial_unlock_poll(
         &mut self,
         unlocked: bool,
-        _in_progress: bool,
+        in_progress: bool,
         counter: u8,
     ) {
         self.vial_unlock_counter = counter;
@@ -68,6 +82,21 @@ impl EntropyApp {
         }
         if unlocked {
             self.complete_vial_unlock();
+        } else if !in_progress {
+            log::warn!("Vial unlock poll reported session ended before unlock; reconnecting");
+            self.vial_unlocked = Some(false);
+            self.unlock_open = false;
+            self.vial_unlock_polling = false;
+            self.vial_unlock_last_poll = None;
+            self.vial_unlock_reconnect_after_completion = false;
+            if let Some(device_idx) = self.selected_device {
+                self.start_connect(device_idx);
+            } else {
+                self.stop_vial_unlock_with_status(crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "status_messages.unlock_cancelled_disconnected",
+                ));
+            }
         } else {
             self.vial_unlocked = Some(false);
         }

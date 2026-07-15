@@ -494,6 +494,23 @@ fn supports_vial_macro_ext_keycodes(vial_protocol: u32, json: &serde_json::Value
     vial_protocol >= 5 && macro_ext_keycodes_disabled_reason(json).is_none()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ViaConnectMode {
+    Normal,
+    RecoverUnlock,
+    Unsupported,
+}
+
+fn classify_via_connect(via_protocol: u16, unlock_status: Option<(bool, bool)>) -> ViaConnectMode {
+    if matches!(via_protocol, 9 | u16::MAX) {
+        ViaConnectMode::Normal
+    } else if via_protocol == 0 && unlock_status == Some((false, true)) {
+        ViaConnectMode::RecoverUnlock
+    } else {
+        ViaConnectMode::Unsupported
+    }
+}
+
 impl EntropyApp {
     pub(super) fn refresh_current_device_data(&mut self) {
         let lang = self.app_settings.language;
@@ -675,6 +692,10 @@ impl EntropyApp {
             self.key_override_pick_target = None;
             self.vial_unlocked = None;
             self.vial_unlock_keys.clear();
+            self.unlock_open = false;
+            self.vial_unlock_polling = false;
+            self.vial_unlock_last_poll = None;
+            self.vial_unlock_reconnect_after_completion = false;
             self.reset_matrix_tester_state();
         }
 
@@ -691,7 +712,7 @@ impl EntropyApp {
             let progress = |message: &str| {
                 let _ = tx.send(ConnectTaskMessage::Progress(message.to_owned()));
             };
-            let result = (|| -> Result<ConnectResult, String> {
+            let result = (|| -> Result<ConnectOutcome, String> {
                 use crate::hid::HidDevice;
 
                 progress("Opening HID device…");
@@ -719,9 +740,6 @@ impl EntropyApp {
                 log::info!("Vial protocol: {vial_protocol}, keyboard id: {keyboard_id:016X}");
                 let cache_keys = device_cache_keys(&dev, keyboard_id);
                 let cache_key = &cache_keys[0];
-                if ![-1i32, 9].contains(&(via_protocol as i32)) {
-                    return Err(format!("Unsupported VIA protocol version: {via_protocol}"));
-                }
                 if !matches!(vial_protocol, 0..=6) {
                     return Err(format!(
                         "Unsupported Vial protocol version: {vial_protocol}"
@@ -735,7 +753,22 @@ impl EntropyApp {
                         None
                     }
                 };
-
+                if via_protocol == 0 {
+                    progress("Checking active Vial unlock…");
+                    log::warn!(
+                        "VIA protocol 0 received from {}; checking Vial unlock state",
+                        dev.name
+                    );
+                }
+                let connect_mode = classify_via_connect(
+                    via_protocol,
+                    vial_unlock_status
+                        .as_ref()
+                        .map(|status| (status.unlocked, status.in_progress)),
+                );
+                if connect_mode == ViaConnectMode::Unsupported {
+                    return Err(format!("Unsupported VIA protocol version: {via_protocol}"));
+                }
                 progress("Reading firmware version…");
                 let runtime_firmware_version = match dev_conn.get_firmware_version() {
                     Ok(Some(version)) => Some(version),
@@ -795,6 +828,31 @@ impl EntropyApp {
                     }
                     json
                 };
+
+                progress("Parsing keyboard layout…");
+                let mut layout = KeyboardLayout::from_vial_json(&json)
+                    .map_err(|e| format!("Layout parse failed: {e}"))?;
+
+                if connect_mode == ViaConnectMode::RecoverUnlock {
+                    let Some(unlock_status) = vial_unlock_status.as_ref() else {
+                        return Err("Active Vial unlock state disappeared during connect".into());
+                    };
+                    let unlock_keys = unlock_status.keys.clone();
+                    log::warn!(
+                        "Recovering active Vial unlock for {} (keyboard id {keyboard_id:016X}, {} unlock keys)",
+                        dev.name,
+                        unlock_keys.len()
+                    );
+                    progress("Resuming active Vial unlock…");
+                    return Ok(ConnectOutcome::UnlockRecovery(UnlockRecoveryResult {
+                        device_name: dev.name.clone(),
+                        keyboard_id,
+                        hid_device: Some(dev_conn),
+                        layout,
+                        unlock_keys,
+                    }));
+                }
+
                 let firmware_version = runtime_firmware_version
                     .clone()
                     .or_else(|| firmware_version_from_vial_json(&json));
@@ -867,10 +925,6 @@ impl EntropyApp {
                     Vec::new()
                 };
                 let has_qmk_setting = |qsid: u16| supported_qmk_settings.contains(&qsid);
-
-                progress("Parsing keyboard layout…");
-                let mut layout = KeyboardLayout::from_vial_json(&json)
-                    .map_err(|e| format!("Layout parse failed: {e}"))?;
 
                 progress("Reading layer count…");
                 log::info!("Getting layer count…");
@@ -1331,7 +1385,7 @@ impl EntropyApp {
                 };
 
                 progress("Applying keyboard layout…");
-                Ok(ConnectResult {
+                Ok(ConnectOutcome::Connected(ConnectResult {
                     device_name: dev.name.clone(),
                     keyboard_id,
                     vial_unlock_status,
@@ -1365,7 +1419,7 @@ impl EntropyApp {
                     layer_count,
                     supported_qmk_settings,
                     deferred_load,
-                })
+                }))
             })();
 
             let _ = tx.send(ConnectTaskMessage::Done(Box::new(result)));
@@ -1385,6 +1439,28 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn via_zero_recovers_only_active_vial_unlock() {
+        assert_eq!(
+            classify_via_connect(0, Some((false, true))),
+            ViaConnectMode::RecoverUnlock
+        );
+        assert_eq!(
+            classify_via_connect(0, Some((false, false))),
+            ViaConnectMode::Unsupported
+        );
+        assert_eq!(
+            classify_via_connect(0, Some((true, true))),
+            ViaConnectMode::Unsupported
+        );
+        assert_eq!(classify_via_connect(0, None), ViaConnectMode::Unsupported);
+        assert_eq!(classify_via_connect(9, None), ViaConnectMode::Normal);
+        assert_eq!(
+            classify_via_connect(u16::MAX, None),
+            ViaConnectMode::Normal
+        );
+    }
 
     #[test]
     fn reported_layer_count_is_never_zero() {

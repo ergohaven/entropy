@@ -1,4 +1,4 @@
-use super::hid_parse::parse_unlock_status_response;
+use super::hid_parse::{parse_unlock_status_response, VialUnlockStatus};
 use super::hid_protocol::*;
 use super::HidDevice;
 use anyhow::{bail, Context, Result};
@@ -81,8 +81,7 @@ impl HidDevice {
     }
 
     /// Check if keyboard is unlocked
-    /// Returns (unlocked, unlock_keys: Vec<(row,col)>)
-    pub fn get_unlock_status(&self) -> Result<(bool, Vec<(u8, u8)>)> {
+    pub fn get_unlock_status(&self) -> Result<VialUnlockStatus> {
         let resp = self
             .usb_send(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_GET_UNLOCK_STATUS])
             .context("failed to read Vial unlock status")?;

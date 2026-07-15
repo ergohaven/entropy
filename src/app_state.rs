@@ -1000,10 +1000,26 @@ pub(crate) struct ConnectResult {
     pub(crate) deferred_load: DeferredDeviceLoadState,
 }
 
+/// Minimal device state available while Vial firmware blocks normal VIA commands.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct UnlockRecoveryResult {
+    pub(crate) device_name: String,
+    pub(crate) keyboard_id: u64,
+    pub(crate) hid_device: Option<crate::hid::HidDevice>,
+    pub(crate) layout: KeyboardLayout,
+    pub(crate) unlock_keys: Vec<(u8, u8)>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) enum ConnectOutcome {
+    Connected(ConnectResult),
+    UnlockRecovery(UnlockRecoveryResult),
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) enum ConnectTaskMessage {
     Progress(String),
-    Done(Box<Result<ConnectResult, String>>),
+    Done(Box<Result<ConnectOutcome, String>>),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -3974,6 +3990,8 @@ pub struct EntropyApp {
     pub(crate) vial_unlock_total: u8,
     pub(crate) vial_unlock_last_poll: Option<std::time::Instant>,
     pub(crate) vial_unlock_animation_nonce: u64,
+    /// Reload full device state after finishing an unlock recovered during connect.
+    pub(crate) vial_unlock_reconnect_after_completion: bool,
 }
 
 #[cfg(test)]
