@@ -61,6 +61,24 @@ fn device_about_description(lang: crate::i18n::Language) -> &'static str {
     }
 }
 
+fn refresh_device_data_label(lang: crate::i18n::Language) -> &'static str {
+    match lang {
+        crate::i18n::Language::Russian => "Обновить данные",
+        crate::i18n::Language::English => "Refresh device data",
+    }
+}
+
+fn refresh_device_data_tooltip(lang: crate::i18n::Language) -> &'static str {
+    match lang {
+        crate::i18n::Language::Russian => {
+            "Удалить сохраненные данные Vial и QMK, затем переподключить устройство"
+        }
+        crate::i18n::Language::English => {
+            "Discard the cached definition and QMK settings, then reconnect the device"
+        }
+    }
+}
+
 struct AboutRow {
     label: &'static str,
     tooltip: &'static str,
@@ -589,7 +607,29 @@ impl EntropyApp {
                         .color(app_muted_text(dark)),
                 );
                 ui.add_space(metrics.value(24.0));
-                draw_about_rows(ui, "about_device", metrics, &rows);
+                let list_viewport = draw_about_rows(ui, "about_device", metrics, &rows);
+                let button_size = egui::vec2(metrics.value(180.0), metrics.value(32.0));
+                let actions_rect = egui::Rect::from_center_size(
+                    egui::pos2(
+                        list_viewport.center().x,
+                        list_viewport.bottom() + metrics.value(34.0),
+                    ),
+                    button_size,
+                );
+                crate::ui_style::allocate_ui_at_rect(ui, actions_rect, |ui| {
+                    ui.set_min_size(actions_rect.size());
+                    if crate::ui_style::modern_button(
+                        ui,
+                        refresh_device_data_label(lang),
+                        button_size,
+                        true,
+                    )
+                    .on_hover_text(refresh_device_data_tooltip(lang))
+                    .clicked()
+                    {
+                        self.refresh_current_device_data();
+                    }
+                });
             });
         });
     }

@@ -7,6 +7,37 @@ fn vial_cache_dir() -> Option<std::path::PathBuf> {
 }
 
 const VIAL_DEFINITION_CACHE_VERSION: u8 = 3;
+const QMK_SETTINGS_CACHE_VERSION: u8 = 1;
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+struct QmkSettingsCacheContext {
+    definition_size: u32,
+    definition_fingerprint: u64,
+    via_protocol: u16,
+    vial_protocol: u32,
+    firmware_version: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+struct CachedQmkSettings {
+    version: u8,
+    context: QmkSettingsCacheContext,
+    settings: Vec<u16>,
+}
+
+impl CachedQmkSettings {
+    fn new(context: &QmkSettingsCacheContext, settings: &[u16]) -> Self {
+        Self {
+            version: QMK_SETTINGS_CACHE_VERSION,
+            context: context.clone(),
+            settings: settings.to_vec(),
+        }
+    }
+
+    fn matches(&self, context: &QmkSettingsCacheContext) -> bool {
+        self.version == QMK_SETTINGS_CACHE_VERSION && &self.context == context
+    }
+}
 
 fn cache_component(value: &str) -> String {
     let mut component = String::with_capacity(value.len());
@@ -64,6 +95,35 @@ fn cached_qmk_settings_path(cache_key: &str) -> Option<std::path::PathBuf> {
     Some(vial_cache_dir()?.join(format!("qmk_settings_{cache_key}.json")))
 }
 
+fn vial_definition_fingerprint(json: &serde_json::Value) -> Result<u64, serde_json::Error> {
+    // FNV-1a is deterministic across app versions; cryptographic strength is unnecessary here.
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in serde_json::to_vec(json)? {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    Ok(hash)
+}
+
+fn qmk_settings_cache_context(
+    definition_size: u32,
+    json: &serde_json::Value,
+    via_protocol: u16,
+    vial_protocol: u32,
+    firmware_version: Option<&str>,
+) -> Result<QmkSettingsCacheContext, serde_json::Error> {
+    Ok(QmkSettingsCacheContext {
+        definition_size,
+        definition_fingerprint: vial_definition_fingerprint(json)?,
+        via_protocol,
+        vial_protocol,
+        firmware_version: firmware_version
+            .map(str::trim)
+            .filter(|version| !version.is_empty())
+            .map(str::to_owned),
+    })
+}
+
 fn load_cached_vial_definition(cache_key: &str, definition_size: u32) -> Option<serde_json::Value> {
     let path = cached_vial_definition_path(cache_key, definition_size)?;
     let text = std::fs::read_to_string(path).ok()?;
@@ -84,17 +144,25 @@ fn save_cached_vial_definition(cache_key: &str, definition_size: u32, json: &ser
     }
 }
 
-fn load_cached_qmk_settings(cache_key: &str) -> Option<Vec<u16>> {
-    let path = cached_qmk_settings_path(cache_key)?;
-    let text = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&text).ok()
+fn parse_cached_qmk_settings(text: &str, context: &QmkSettingsCacheContext) -> Option<Vec<u16>> {
+    let cached = serde_json::from_str::<CachedQmkSettings>(text).ok()?;
+    cached.matches(context).then_some(cached.settings)
 }
 
-fn save_cached_qmk_settings(cache_key: &str, settings: &[u16]) {
+fn load_cached_qmk_settings(
+    cache_key: &str,
+    context: &QmkSettingsCacheContext,
+) -> Option<Vec<u16>> {
+    let path = cached_qmk_settings_path(cache_key)?;
+    let text = std::fs::read_to_string(path).ok()?;
+    parse_cached_qmk_settings(&text, context)
+}
+
+fn save_cached_qmk_settings(cache_key: &str, context: &QmkSettingsCacheContext, settings: &[u16]) {
     let Some(path) = cached_qmk_settings_path(cache_key) else {
         return;
     };
-    match serde_json::to_vec(settings) {
+    match serde_json::to_vec(&CachedQmkSettings::new(context, settings)) {
         Ok(bytes) => {
             if let Err(e) = std::fs::write(path, bytes) {
                 log::warn!("failed to write QMK settings cache: {e}");
@@ -102,6 +170,46 @@ fn save_cached_qmk_settings(cache_key: &str, settings: &[u16]) {
         }
         Err(e) => log::warn!("failed to serialize QMK settings cache: {e}"),
     }
+}
+
+fn is_cached_vial_definition_for_device(file_name: &str, cache_key: &str) -> bool {
+    let prefix = format!("definition_v{VIAL_DEFINITION_CACHE_VERSION}_{cache_key}_");
+    file_name.starts_with(&prefix) && file_name.ends_with(".json")
+}
+
+fn clear_cached_device_data(cache_key: &str) -> Result<(), String> {
+    let cache_dir =
+        vial_cache_dir().ok_or_else(|| "device cache directory is unavailable".to_owned())?;
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir(&cache_dir)
+        .map_err(|error| format!("failed to read {}: {error}", cache_dir.display()))?
+    {
+        let entry = entry.map_err(|error| {
+            format!(
+                "failed to inspect cached device data in {}: {error}",
+                cache_dir.display()
+            )
+        })?;
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| is_cached_vial_definition_for_device(name, cache_key))
+        {
+            paths.push(entry.path());
+        }
+    }
+    paths.push(cache_dir.join(format!("qmk_settings_{cache_key}.json")));
+
+    for path in paths {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!("failed to remove {}: {error}", path.display()));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn normalize_reported_layer_count(reported_layer_count: usize) -> usize {
@@ -268,6 +376,37 @@ fn supports_vial_macro_ext_keycodes(vial_protocol: u32, json: &serde_json::Value
 }
 
 impl EntropyApp {
+    pub(super) fn refresh_current_device_data(&mut self) {
+        if self.layer_write_task.is_some() {
+            self.status_msg =
+                "Finish the pending layer write before refreshing device data".to_owned();
+            return;
+        }
+        let Some(device_idx) = self.selected_device else {
+            self.status_msg = "Failed to refresh device data: no device selected".to_owned();
+            return;
+        };
+        let Some(device) = self.device_manager.devices().get(device_idx).cloned() else {
+            self.status_msg = "Failed to refresh device data: device not found".to_owned();
+            return;
+        };
+        let Some(info) = self.device_about_info.as_ref() else {
+            self.status_msg =
+                "Failed to refresh device data: device information unavailable".to_owned();
+            return;
+        };
+
+        let cache_key = device_cache_key(&device, info.keyboard_id);
+        if let Err(error) = clear_cached_device_data(&cache_key) {
+            self.status_msg = format!("Failed to refresh device data: {error}");
+            log::warn!("device cache refresh failed for key {cache_key}: {error}");
+            return;
+        }
+
+        log::info!("Cleared Vial definition and QMK settings cache for key {cache_key}");
+        self.start_connect(device_idx);
+    }
+
     pub(super) fn start_connect(&mut self, device_idx: usize) {
         if self.layer_write_task.is_some() {
             return;
@@ -428,10 +567,28 @@ impl EntropyApp {
 
                 let touchpad_settings_in_definition =
                     Self::layout_json_has_touchpad_settings(&json);
+                let qmk_cache_context = match qmk_settings_cache_context(
+                    definition_size,
+                    &json,
+                    via_protocol,
+                    vial_protocol,
+                    firmware_version.as_deref(),
+                ) {
+                    Ok(context) => Some(context),
+                    Err(error) => {
+                        log::warn!(
+                            "failed to fingerprint Vial definition; QMK settings cache disabled: {error}"
+                        );
+                        None
+                    }
+                };
                 let supported_qmk_settings = if vial_protocol >= 4 {
-                    if let Some(cached) = load_cached_qmk_settings(&cache_key) {
+                    if let Some(cached) = qmk_cache_context
+                        .as_ref()
+                        .and_then(|context| load_cached_qmk_settings(&cache_key, context))
+                    {
                         log::info!(
-                            "Loaded {} QMK settings from cache for keyboard id {keyboard_id:016X}, key {cache_key}",
+                            "Loaded {} QMK settings from definition-aware cache for keyboard id {keyboard_id:016X}, key {cache_key}",
                             cached.len(),
                         );
                         cached
@@ -439,11 +596,13 @@ impl EntropyApp {
                         progress("Querying QMK settings…");
                         match dev_conn.query_qmk_settings() {
                             Ok(settings) => {
-                                save_cached_qmk_settings(&cache_key, &settings);
+                                if let Some(context) = qmk_cache_context.as_ref() {
+                                    save_cached_qmk_settings(&cache_key, context, &settings);
+                                }
                                 settings
                             }
-                            Err(e) => {
-                                log::warn!("qmk settings query failed: {e}");
+                            Err(error) => {
+                                log::warn!("qmk settings query failed: {error}");
                                 Vec::new()
                             }
                         }
@@ -1202,5 +1361,91 @@ mod tests {
             cached_vial_definition_file_name("keyboard", 0x1234),
             cached_vial_definition_file_name("keyboard", 0x1235)
         );
+    }
+
+    #[test]
+    fn device_cache_refresh_matches_all_definition_sizes_for_only_one_device() {
+        assert!(is_cached_vial_definition_for_device(
+            "definition_v3_keyboard_00001234.json",
+            "keyboard"
+        ));
+        assert!(is_cached_vial_definition_for_device(
+            "definition_v3_keyboard_00005678.json",
+            "keyboard"
+        ));
+        assert!(!is_cached_vial_definition_for_device(
+            "definition_v3_other-keyboard_00001234.json",
+            "keyboard"
+        ));
+        assert!(!is_cached_vial_definition_for_device(
+            "definition_v2_keyboard_00001234.json",
+            "keyboard"
+        ));
+    }
+
+    fn cache_context(json: &serde_json::Value) -> QmkSettingsCacheContext {
+        qmk_settings_cache_context(0x1234, json, 9, 6, Some("1.2.3")).unwrap()
+    }
+
+    #[test]
+    fn qmk_settings_cache_reuses_matching_definition_and_protocol_metadata() {
+        let context = cache_context(&serde_json::json!({"settings": [120, 121]}));
+        let cached = CachedQmkSettings::new(&context, &[120, 121]);
+        let text = serde_json::to_string(&cached).unwrap();
+
+        assert_eq!(
+            parse_cached_qmk_settings(&text, &context),
+            Some(vec![120, 121])
+        );
+    }
+
+    #[test]
+    fn qmk_settings_cache_rejects_same_size_definition_changes() {
+        let first_json = serde_json::json!({"settings": [120]});
+        let second_json = serde_json::json!({"settings": [121]});
+        assert_eq!(
+            serde_json::to_vec(&first_json).unwrap().len(),
+            serde_json::to_vec(&second_json).unwrap().len()
+        );
+
+        let first_context = cache_context(&first_json);
+        let second_context = cache_context(&second_json);
+        let cached = CachedQmkSettings::new(&first_context, &[120]);
+        let text = serde_json::to_string(&cached).unwrap();
+
+        assert_eq!(parse_cached_qmk_settings(&text, &second_context), None);
+    }
+
+    #[test]
+    fn qmk_settings_cache_rejects_protocol_and_firmware_changes() {
+        let context = cache_context(&serde_json::json!({"settings": [120]}));
+        let cached = CachedQmkSettings::new(&context, &[120]);
+        let text = serde_json::to_string(&cached).unwrap();
+
+        let mut changed_size = context.clone();
+        changed_size.definition_size += 1;
+        assert_eq!(parse_cached_qmk_settings(&text, &changed_size), None);
+
+        let mut changed_via_protocol = context.clone();
+        changed_via_protocol.via_protocol += 1;
+        assert_eq!(
+            parse_cached_qmk_settings(&text, &changed_via_protocol),
+            None
+        );
+
+        let mut changed_protocol = context.clone();
+        changed_protocol.vial_protocol += 1;
+        assert_eq!(parse_cached_qmk_settings(&text, &changed_protocol), None);
+
+        let mut changed_firmware = context.clone();
+        changed_firmware.firmware_version = Some("1.2.4".to_owned());
+        assert_eq!(parse_cached_qmk_settings(&text, &changed_firmware), None);
+    }
+
+    #[test]
+    fn qmk_settings_cache_rejects_legacy_unversioned_entries() {
+        let context = cache_context(&serde_json::json!({"settings": [120]}));
+
+        assert_eq!(parse_cached_qmk_settings("[120,121]", &context), None);
     }
 }
