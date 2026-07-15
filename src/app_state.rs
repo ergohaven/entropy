@@ -835,6 +835,44 @@ pub(crate) struct ModuleSettingsState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ModuleSettingRefreshEntry {
+    pub(crate) qsid: u16,
+    pub(crate) width: u8,
+    pub(crate) previous: u16,
+    pub(crate) result: Result<u16, String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ModuleSettingsRefreshReport {
+    pub(crate) entries: Vec<ModuleSettingRefreshEntry>,
+}
+
+impl ModuleSettingsRefreshReport {
+    pub(crate) fn successful_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| entry.result.is_ok())
+            .count()
+    }
+
+    pub(crate) fn changed_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| {
+                entry
+                    .result
+                    .as_ref()
+                    .is_ok_and(|value| *value != entry.previous)
+            })
+            .count()
+    }
+
+    pub(crate) fn failed_count(&self) -> usize {
+        self.entries.len().saturating_sub(self.successful_count())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ModuleSettingWritebackError {
     SetFailed(String),
     ReadbackFailed(String),
@@ -891,6 +929,35 @@ impl ModuleSettingsState {
 
     pub(crate) fn set_value(&mut self, qsid: u16, value: u16) {
         self.values.insert(qsid, value);
+    }
+
+    pub(crate) fn refresh_values(
+        &mut self,
+        mut read: impl FnMut(u16, u8) -> Result<u16, String>,
+    ) -> ModuleSettingsRefreshReport {
+        let mut widths = std::collections::BTreeMap::<u16, u8>::new();
+        for field in &self.fields {
+            widths
+                .entry(field.qsid)
+                .and_modify(|width| *width = (*width).max(field.width))
+                .or_insert(field.width);
+        }
+
+        let mut report = ModuleSettingsRefreshReport::default();
+        for (qsid, width) in widths {
+            let previous = self.value(qsid);
+            let result = read(qsid, width);
+            if let Ok(value) = result {
+                self.set_value(qsid, value);
+            }
+            report.entries.push(ModuleSettingRefreshEntry {
+                qsid,
+                width,
+                previous,
+                result,
+            });
+        }
+        report
     }
 
     pub(crate) fn write_verified_value(
@@ -2961,5 +3028,51 @@ mod module_settings_state_tests {
         );
         assert_eq!(attempts, MODULE_SETTING_READBACK_ATTEMPTS);
         assert_eq!(settings.value(42), 7);
+    }
+
+    fn module_field(qsid: u16, width: u8, title: &str) -> ModuleSettingField {
+        ModuleSettingField {
+            title: title.to_owned(),
+            qsid,
+            kind: ModuleSettingKind::Integer,
+            bit: 0,
+            width,
+            min: 0,
+            max: u16::MAX,
+            variants: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn module_setting_refresh_reads_unique_qsids_at_the_widest_declared_width() {
+        let mut settings = ModuleSettingsState {
+            fields: vec![
+                module_field(42, 1, "Left mode"),
+                module_field(42, 2, "Right mode"),
+                module_field(43, 1, "Scroll sens"),
+            ],
+            supported: true,
+            ..Default::default()
+        };
+        settings.set_value(42, 7);
+        settings.set_value(43, 8);
+        let mut reads = Vec::new();
+
+        let report = settings.refresh_values(|qsid, width| {
+            reads.push((qsid, width));
+            match qsid {
+                42 => Ok(9),
+                43 => Err("read failed".to_owned()),
+                _ => unreachable!(),
+            }
+        });
+
+        assert_eq!(reads, vec![(42, 2), (43, 1)]);
+        assert_eq!(report.successful_count(), 1);
+        assert_eq!(report.changed_count(), 1);
+        assert_eq!(report.failed_count(), 1);
+        assert_eq!(settings.value(42), 9);
+        assert_eq!(settings.value(43), 8);
+        assert_eq!(report.entries[1].result, Err("read failed".to_owned()));
     }
 }

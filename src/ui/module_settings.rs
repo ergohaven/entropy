@@ -2,12 +2,110 @@ use super::*;
 
 #[derive(Clone, Copy)]
 enum ModuleSettingsRow {
+    Refresh,
     SideSelector,
     Section(usize),
     Field { group_idx: usize, field_idx: usize },
 }
 
+const MODULE_SETTING_WRITEBACK_DELAYS: [std::time::Duration; MODULE_SETTING_READBACK_ATTEMPTS] = [
+    std::time::Duration::from_millis(20),
+    std::time::Duration::from_millis(80),
+    std::time::Duration::from_millis(200),
+];
+
+fn module_setting_diagnostic_labels(groups: &[ModuleSettingsGroup], qsid: u16) -> String {
+    let mut labels = groups
+        .iter()
+        .flat_map(|group| {
+            group
+                .fields
+                .iter()
+                .filter(move |field| field.qsid == qsid)
+                .map(move |field| format!("{} / {}", group.title, field.title))
+        })
+        .collect::<Vec<_>>();
+    labels.sort();
+    labels.dedup();
+    labels.join(" | ")
+}
 impl EntropyApp {
+    fn refresh_module_settings_values(&mut self) {
+        let lang = self.app_settings.language;
+        let Some(hid) = self.hid_device.as_ref() else {
+            self.status_msg =
+                crate::i18n::tr_catalog(lang, "modules_settings.refresh_unavailable").to_owned();
+            return;
+        };
+
+        let device = self
+            .device_about_info
+            .as_ref()
+            .map(|info| info.product.as_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or(self.current_device_name.as_str());
+        let mut previous_error = None::<String>;
+        let report = self.module_settings.refresh_values(|qsid, width| {
+            if let Some(error) = previous_error.as_deref() {
+                return Err(format!("skipped after previous read failure: {error}"));
+            }
+            let result = if width > 1 {
+                hid.get_qmk_setting_u16(qsid)
+            } else {
+                hid.get_qmk_setting_u8(qsid).map(u16::from)
+            }
+            .map_err(|error| error.to_string());
+            if let Err(error) = &result {
+                previous_error = Some(error.clone());
+            }
+            result
+        });
+
+        log::info!(
+            "module settings snapshot: source=manual-refresh device={device:?} persistent_qmk=true runtime_mode_observable=false entries={} changed={} failed={}",
+            report.entries.len(),
+            report.changed_count(),
+            report.failed_count(),
+        );
+        for entry in &report.entries {
+            let labels = module_setting_diagnostic_labels(&self.module_settings.groups, entry.qsid);
+            match &entry.result {
+                Ok(value) => log::info!(
+                    "module setting snapshot entry: labels={labels:?} qsid={} width={} before={} after={} changed={}",
+                    entry.qsid,
+                    entry.width,
+                    entry.previous,
+                    value,
+                    entry.previous != *value,
+                ),
+                Err(error) => log::warn!(
+                    "module setting snapshot entry failed: labels={labels:?} qsid={} width={} before={} after=unavailable error={error}",
+                    entry.qsid,
+                    entry.width,
+                    entry.previous,
+                ),
+            }
+        }
+
+        let successful = report.successful_count().to_string();
+        let changed = report.changed_count().to_string();
+        let failed = report.failed_count().to_string();
+        let key = if report.failed_count() == 0 {
+            "modules_settings.refresh_status"
+        } else {
+            "modules_settings.refresh_partial_status"
+        };
+        self.status_msg = crate::i18n::tr_catalog_format(
+            lang,
+            key,
+            &[
+                ("count", successful.as_str()),
+                ("changed", changed.as_str()),
+                ("failed", failed.as_str()),
+            ],
+        );
+    }
+
     fn module_setting_display_title<'a>(
         &self,
         group_kind: ModuleSettingsGroupKind,
@@ -283,7 +381,7 @@ impl EntropyApp {
     }
 
     fn module_settings_rows(&self) -> Vec<ModuleSettingsRow> {
-        let mut rows = Vec::new();
+        let mut rows = vec![ModuleSettingsRow::Refresh];
         let side_groups = self.module_settings_side_group_indices();
         let selected_side_group = self.module_settings.selected_module_group();
         if side_groups.len() > 1 {
@@ -435,6 +533,46 @@ impl EntropyApp {
         );
     }
 
+    fn draw_module_settings_refresh_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        content_width: f32,
+        row_height: f32,
+        suppress_tooltips: bool,
+    ) {
+        let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
+        let lang = self.app_settings.language;
+        let tooltip = (!suppress_tooltips).then(|| {
+            crate::i18n::tr_catalog(lang, "modules_settings.persistent_values_tooltip").to_owned()
+        });
+        let button_width = metrics.value(112.0);
+        crate::ui_style::settings_list_row_with_tooltip(
+            ui,
+            content_width,
+            row_height,
+            crate::i18n::tr_catalog(lang, "modules_settings.persistent_values"),
+            true,
+            tooltip.as_deref(),
+            button_width,
+            |ui| {
+                if crate::ui_style::modern_button(
+                    ui,
+                    crate::i18n::tr_catalog(lang, "modules_settings.refresh"),
+                    egui::vec2(button_width, metrics.settings_control_height()),
+                    self.hid_device.is_some(),
+                )
+                .on_hover_text(crate::i18n::tr_catalog(
+                    lang,
+                    "modules_settings.persistent_values_tooltip",
+                ))
+                .clicked()
+                {
+                    self.refresh_module_settings_values();
+                }
+            },
+        );
+    }
+
     fn draw_module_settings_row_entry(
         &mut self,
         ui: &mut egui::Ui,
@@ -444,6 +582,12 @@ impl EntropyApp {
         suppress_tooltips: bool,
     ) {
         match row {
+            ModuleSettingsRow::Refresh => self.draw_module_settings_refresh_row(
+                ui,
+                content_width,
+                row_height,
+                suppress_tooltips,
+            ),
             ModuleSettingsRow::SideSelector => self.draw_module_settings_side_selector(
                 ui,
                 content_width,
@@ -542,5 +686,44 @@ impl EntropyApp {
                 }
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn diagnostic_field(qsid: u16, title: &str) -> ModuleSettingField {
+        ModuleSettingField {
+            title: title.to_owned(),
+            qsid,
+            kind: ModuleSettingKind::Select,
+            bit: 0,
+            width: 1,
+            min: 0,
+            max: 1,
+            variants: vec!["Normal".to_owned(), "Scroll".to_owned()],
+        }
+    }
+
+    #[test]
+    fn module_setting_diagnostics_keep_left_and_right_firmware_labels() {
+        let groups = vec![
+            ModuleSettingsGroup {
+                title: "Left Modules".to_owned(),
+                kind: ModuleSettingsGroupKind::Left,
+                fields: vec![diagnostic_field(42, "Left Mode")],
+            },
+            ModuleSettingsGroup {
+                title: "Right Modules".to_owned(),
+                kind: ModuleSettingsGroupKind::Right,
+                fields: vec![diagnostic_field(42, "Right Mode")],
+            },
+        ];
+
+        assert_eq!(
+            module_setting_diagnostic_labels(&groups, 42),
+            "Left Modules / Left Mode | Right Modules / Right Mode"
+        );
     }
 }
