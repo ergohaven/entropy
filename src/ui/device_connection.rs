@@ -31,6 +31,7 @@ impl EntropyApp {
         self.layer_count = 0;
         self.qmk_hid_hosts.clear();
         self.layer_write_task = None;
+        self.combo_write_task = None;
         self.hid_device = None;
         self.undo_stack.clear();
         self.connect_state = ConnectState::Idle;
@@ -43,6 +44,9 @@ impl EntropyApp {
         self.current_keyboard_id = None;
         self.current_encoder_visibility_id.clear();
         self.device_about_info = None;
+        self.combo_dirty = false;
+        self.combo_edit_revision = self.combo_edit_revision.wrapping_add(1);
+        self.combo_attempted_revision = None;
         self.mouse_keys_settings = MouseKeysSettingsState::default();
         self.touchpad_settings = TouchpadSettingsState::default();
         self.bluetooth_settings = BluetoothSettingsState::default();

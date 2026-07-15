@@ -93,10 +93,12 @@ impl EntropyApp {
     ) {
         if should_poll_device_scan(main_window_hidden_to_tray) {
             self.handle_pending_imports(ctx, now);
-            self.poll_device_scan(ctx);
+            if !self.hid_write_task_active() {
+                self.poll_device_scan(ctx);
+            }
 
             let is_connecting = matches!(self.connect_state, ConnectState::Loading { .. });
-            let layer_write_active = self.layer_write_task.is_some();
+            let hid_write_active = self.hid_write_task_active();
             #[cfg(target_os = "macos")]
             let hid_session_active = self.hid_device.is_some();
             #[cfg(not(target_os = "macos"))]
@@ -105,7 +107,7 @@ impl EntropyApp {
                 && (self.last_device_scan_at == 0.0 || now - self.last_device_scan_at >= 1.0)
                 && !self.vial_unlock_polling
                 && !is_connecting
-                && !layer_write_active
+                && !hid_write_active
                 && !hid_session_active
             {
                 self.scan_frame = self.scan_frame.wrapping_add(1);
@@ -115,6 +117,7 @@ impl EntropyApp {
         }
 
         self.poll_layer_write(ctx);
+        self.poll_combo_write(ctx);
         self.poll_text_expander_deferred_save(now);
         self.auto_reload_text_expander_rules_file(now);
         self.poll_single_instance_signal(ctx);
@@ -1180,6 +1183,11 @@ impl eframe::App for EntropyApp {
                 }
             }
         }
+
+        // Start background combo I/O after synchronous dynamic-entry writes have finished
+        // using the shared HID handle for this frame.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.maybe_start_combo_write(ctx);
 
         let mut settings_page_navigation_handled = false;
         if self.can_return_from_settings_page(

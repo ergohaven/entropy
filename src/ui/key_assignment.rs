@@ -13,7 +13,7 @@ impl EntropyApp {
                                 crate::keycode::normalize_output_symbol_keycode(kc_value);
                         }
                     }
-                    self.combo_dirty = true;
+                    self.mark_combo_dirty();
                 }
             } else if let Some(field) = self.key_override_pick_target.take() {
                 let idx = self

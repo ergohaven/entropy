@@ -33,6 +33,8 @@ impl EntropyApp {
             #[cfg(not(target_arch = "wasm32"))]
             layer_write_task: None,
             #[cfg(not(target_arch = "wasm32"))]
+            combo_write_task: None,
+            #[cfg(not(target_arch = "wasm32"))]
             qmk_hid_hosts: std::collections::HashMap::new(),
             firmware: FirmwareProtocol::Vial,
             undo_stack: Vec::new(),
@@ -91,10 +93,13 @@ impl EntropyApp {
             force_close_requested: false,
             main_menu_tab: MainMenuTab::Keyboard,
             combo_entries: vec![],
+            combo_synced_entries: vec![],
             combo_names: vec![],
             combo_colors: vec![],
             selected_combo: 0,
             combo_dirty: false,
+            combo_edit_revision: 0,
+            combo_attempted_revision: None,
             combo_names_dirty: false,
             combo_colors_dirty: false,
             combo_term: None,
