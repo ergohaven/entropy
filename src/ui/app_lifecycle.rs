@@ -162,7 +162,10 @@ impl EntropyApp {
         }
 
         if let Some((path, opened_generation)) = self.pending_entlayout_import_path.take() {
-            if opened_generation != self.connection_generation {
+            if super::file_dialog::device_generation_stale(
+                opened_generation,
+                self.connection_generation,
+            ) {
                 // The device changed between choosing the file and this deferred
                 // write; do not program the new device with the old one's import.
                 self.status_msg =
