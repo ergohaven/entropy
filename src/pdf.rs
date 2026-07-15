@@ -14,6 +14,35 @@ const A4_LONG_PT: f32 = 841.89;
 const A4_SHORT_PT: f32 = 595.276;
 const PAGE_MARGIN_PT: f32 = 28.35;
 
+/// Per-page and whole-document pixel ceilings. One page bounds a single render
+/// (~30 MP ≈ 90 MB RGB); the total bounds a many-layer export so it can't grow
+/// without limit across pages. Both are checked before a page is encoded.
+const MAX_PAGE_PIXELS: u64 = 30_000_000;
+const MAX_TOTAL_PIXELS: u64 = 120_000_000;
+
+/// Add one page's pixels to the running total, enforcing the per-page and total
+/// ceilings. Returns the new running total, or an error naming the breached
+/// limit so the export fails cleanly instead of exhausting memory.
+fn accumulate_pixel_budget(
+    width: u32,
+    height: u32,
+    running_total: u64,
+    max_page: u64,
+    max_total: u64,
+) -> Result<u64> {
+    let page_pixels = width as u64 * height as u64;
+    anyhow::ensure!(
+        page_pixels <= max_page,
+        "layout page is too large for PDF export ({width}x{height})"
+    );
+    let total = running_total.saturating_add(page_pixels);
+    anyhow::ensure!(
+        total <= max_total,
+        "PDF export exceeds the total pixel budget across layers"
+    );
+    Ok(total)
+}
+
 /// Where a page image lands on its A4 sheet, in PostScript points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Placement {
@@ -49,14 +78,18 @@ fn place_on_a4(img_w: u32, img_h: u32) -> Placement {
 }
 
 /// Flate-compress an image's RGB bytes (export images are fully opaque, so the
-/// alpha channel is dropped).
+/// alpha channel is dropped). Feeds one row at a time into the encoder, so the
+/// extra live memory is a single row of RGB rather than a full-image RGB copy.
 fn encode_rgb(image: &RgbaImage) -> Result<Vec<u8>> {
-    let mut rgb = Vec::with_capacity(image.width() as usize * image.height() as usize * 3);
-    for pixel in image.pixels() {
-        rgb.extend_from_slice(&pixel.0[..3]);
-    }
     let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
-    encoder.write_all(&rgb)?;
+    let mut row: Vec<u8> = Vec::with_capacity(image.width() as usize * 3);
+    for y in 0..image.height() {
+        row.clear();
+        for x in 0..image.width() {
+            row.extend_from_slice(&image.get_pixel(x, y).0[..3]);
+        }
+        encoder.write_all(&row)?;
+    }
     Ok(encoder.finish()?)
 }
 
@@ -157,8 +190,16 @@ where
             .as_bytes(),
     );
 
+    let mut total_pixels: u64 = 0;
     for page in 0..page_count {
         let image = render_page(page)?;
+        total_pixels = accumulate_pixel_budget(
+            image.width(),
+            image.height(),
+            total_pixels,
+            MAX_PAGE_PIXELS,
+            MAX_TOTAL_PIXELS,
+        )?;
         write_page(&mut pdf, &mut offsets, page, &image)?;
         drop(image);
     }
@@ -206,6 +247,27 @@ mod tests {
         })
         .unwrap();
         assert_eq!(calls, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn pixel_budget_accepts_within_limits_and_accumulates() {
+        // 10x10 pages under both a small per-page and total cap; total grows.
+        let t = accumulate_pixel_budget(10, 10, 0, 1_000, 10_000).unwrap();
+        assert_eq!(t, 100);
+        let t = accumulate_pixel_budget(10, 10, t, 1_000, 10_000).unwrap();
+        assert_eq!(t, 200);
+    }
+
+    #[test]
+    fn pixel_budget_rejects_oversized_page() {
+        // 40x40 = 1600 px exceeds a 1000 px per-page cap.
+        assert!(accumulate_pixel_budget(40, 40, 0, 1_000, 1_000_000).is_err());
+    }
+
+    #[test]
+    fn pixel_budget_rejects_total_overflow() {
+        // Each page fits per-page, but the running total exceeds the whole-doc cap.
+        assert!(accumulate_pixel_budget(30, 30, 200, 1_000, 1_000).is_err());
     }
 
     #[test]
