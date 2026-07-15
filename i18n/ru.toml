@@ -1153,6 +1153,18 @@ one_shot_timeout = "One-shot таймаут"
 how_long_one_shot_state_waits_before_it_is_released = "Сколько one-shot состояние ждёт перед сбросом"
 value_is_in_milliseconds = "Значение в миллисекундах"
 
+[settings_write]
+pending = "Сохранение"
+saved = "Сохранено"
+failed = "Ошибка сохранения: {error}"
+pending_status = "Сохранение {setting}..."
+saved_status = "Сохранено: {setting}"
+failed_status = "Не удалось сохранить {setting}: {error}"
+device_not_connected = "Устройство не подключено"
+device_disconnected = "Устройство отключено"
+worker_failed = "Фоновая задача сохранения настроек неожиданно остановилась"
+busy = "Дождитесь завершения сохранения настройки"
+
 [touchpad_settings]
 dpi = "DPI"
 touchpad_pointer_resolution_in_dots_per_inch = "Разрешение указателя тачпада в точках на дюйм"

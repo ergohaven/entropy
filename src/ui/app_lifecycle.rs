@@ -95,6 +95,7 @@ impl EntropyApp {
         main_window_hidden_to_tray: bool,
         selected_device_is_bluetooth: bool,
     ) {
+        self.poll_settings_write(ctx);
         if should_poll_device_scan(main_window_hidden_to_tray) {
             if hid_lifecycle_writes_available(self.hid_write_task_active()) {
                 self.handle_pending_imports(ctx, now);

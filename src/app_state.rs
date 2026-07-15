@@ -2702,6 +2702,10 @@ pub struct EntropyApp {
     /// Background combo HID write. Owns the device handle while active.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) combo_write_task: Option<ComboWriteTask>,
+    /// Serialized background QMK settings write. Owns the HID handle while active.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) settings_write_task: Option<SettingsWriteTask>,
+    pub(super) settings_write_queue: SettingsWriteQueueState,
     /// Built-in qmk-hid-host bridges for displays/presets that need host data
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) qmk_hid_hosts:

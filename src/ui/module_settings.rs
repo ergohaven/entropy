@@ -7,12 +7,6 @@ enum ModuleSettingsRow {
     Field { group_idx: usize, field_idx: usize },
 }
 
-const MODULE_SETTING_WRITEBACK_DELAYS: [std::time::Duration; MODULE_SETTING_READBACK_ATTEMPTS] = [
-    std::time::Duration::from_millis(20),
-    std::time::Duration::from_millis(80),
-    std::time::Duration::from_millis(200),
-];
-
 impl EntropyApp {
     fn module_setting_display_title<'a>(
         &self,
@@ -113,75 +107,27 @@ impl EntropyApp {
         field: &ModuleSettingField,
         value: u16,
     ) {
-        let group_title = self
-            .module_settings
-            .groups
-            .get(group_idx)
+        let group = self.module_settings.groups.get(group_idx);
+        let group_title = group
             .map(|group| group.title.clone())
             .unwrap_or_else(|| "Modules".to_owned());
+        let group_kind = group
+            .map(|group| group.kind)
+            .unwrap_or(ModuleSettingsGroupKind::Other);
         let field_title = field.title.clone();
+        let display_label = self.module_setting_label(group_kind, &field_title);
         let old_value = self.module_settings.value(field.qsid);
         let requested = Self::module_setting_transport_value(field, value);
 
-        let Some(hid) = self.hid_device.as_ref() else {
-            self.status_msg = format!(
-                "Failed to save module setting (qsid {}): device is not connected",
-                field.qsid
-            );
-            log::warn!(
-                "module setting write skipped: group={group_title:?} field={field_title:?} qsid={} old={} requested={} readback=unavailable error=device not connected",
-                field.qsid,
-                old_value,
-                requested,
-            );
-            return;
-        };
-
-        let mut readback_attempt = 0;
-        let result = self.module_settings.write_verified_value(
+        self.queue_module_setting_write(
+            group_title,
+            field_title,
+            display_label,
             field.qsid,
+            field.width,
+            old_value,
             requested,
-            || {
-                if field.width > 1 {
-                    hid.set_qmk_setting_u16(field.qsid, requested)
-                } else {
-                    hid.set_qmk_setting_u8(field.qsid, requested as u8)
-                }
-                .map_err(|error| error.to_string())
-            },
-            || {
-                let delay = MODULE_SETTING_WRITEBACK_DELAYS
-                    [readback_attempt.min(MODULE_SETTING_WRITEBACK_DELAYS.len() - 1)];
-                readback_attempt += 1;
-                std::thread::sleep(delay);
-                if field.width > 1 {
-                    hid.get_qmk_setting_u16(field.qsid)
-                } else {
-                    hid.get_qmk_setting_u8(field.qsid)
-                        .map(|readback| readback as u16)
-                }
-                .map_err(|error| error.to_string())
-            },
         );
-
-        if let Err(error) = result {
-            let readback = match &error {
-                ModuleSettingWritebackError::ReadbackMismatch { actual, .. } => actual.to_string(),
-                _ => "unavailable".to_owned(),
-            };
-            self.status_msg = format!(
-                "Failed to save module setting {} (qsid {}): {}",
-                field_title, field.qsid, error
-            );
-            log::warn!(
-                "module setting writeback failed: group={group_title:?} field={field_title:?} qsid={} old={} requested={} readback={} error={}",
-                field.qsid,
-                old_value,
-                requested,
-                readback,
-                error,
-            );
-        }
     }
 
     fn draw_module_settings_field_row(
@@ -208,7 +154,10 @@ impl EntropyApp {
         } else {
             Some(self.module_setting_tooltip(group_kind, &field))
         };
-        let raw_value = self.module_settings.value(field.qsid);
+        let raw_value = self
+            .pending_settings_write_value(field.qsid)
+            .unwrap_or_else(|| self.module_settings.value(field.qsid));
+        let status_width = self.settings_write_status_width(metrics);
         match field.kind {
             ModuleSettingKind::Boolean => {
                 let switch_width = metrics.value(46.0);
@@ -222,8 +171,9 @@ impl EntropyApp {
                     label.as_str(),
                     true,
                     tooltip.as_deref(),
-                    switch_width,
+                    switch_width + status_width,
                     |ui| {
+                        self.draw_settings_write_status(ui, field.qsid, metrics);
                         let resp = crate::ui_style::settings_switch_sized_stable(
                             ui,
                             ("module_settings", group_idx, field.qsid, field.bit),
@@ -250,8 +200,9 @@ impl EntropyApp {
                     label.as_str(),
                     true,
                     tooltip.as_deref(),
-                    field_width,
+                    field_width + status_width,
                     |ui| {
+                        self.draw_settings_write_status(ui, field.qsid, metrics);
                         let edit_id = egui::Id::new(("module_setting_edit", group_idx, field.qsid));
                         let current = raw_value.clamp(field.min, field.max);
                         let mut text = ui.ctx().data_mut(|d| {
@@ -306,8 +257,9 @@ impl EntropyApp {
                     label.as_str(),
                     true,
                     tooltip.as_deref(),
-                    dropdown_width,
+                    dropdown_width + status_width,
                     |ui| {
+                        self.draw_settings_write_status(ui, field.qsid, metrics);
                         let dropdown_id = ui.make_persistent_id((
                             "module_setting_dropdown",
                             group_idx,

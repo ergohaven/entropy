@@ -143,6 +143,11 @@ mod onboarding_tour;
 mod rgb_settings_ui;
 #[path = "ui/settings_shell.rs"]
 mod settings_shell;
+#[path = "ui/settings_write_queue.rs"]
+mod settings_write_queue;
+use settings_write_queue::SettingsWriteQueueState;
+#[cfg(not(target_arch = "wasm32"))]
+use settings_write_queue::SettingsWriteTask;
 #[path = "ui/tap_hold_settings.rs"]
 mod tap_hold_settings_ui;
 #[path = "ui/text_expander_editor.rs"]

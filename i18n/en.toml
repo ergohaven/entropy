@@ -1153,6 +1153,18 @@ one_shot_timeout = "One-shot timeout"
 how_long_one_shot_state_waits_before_it_is_released = "How long one-shot state waits before it is released"
 value_is_in_milliseconds = "Value is in milliseconds"
 
+[settings_write]
+pending = "Saving"
+saved = "Saved"
+failed = "Save failed: {error}"
+pending_status = "Saving {setting}..."
+saved_status = "Saved {setting}"
+failed_status = "Failed to save {setting}: {error}"
+device_not_connected = "Device is not connected"
+device_disconnected = "Device disconnected"
+worker_failed = "Settings write worker stopped unexpectedly"
+busy = "Wait for the pending setting to finish saving"
+
 [touchpad_settings]
 dpi = "DPI"
 touchpad_pointer_resolution_in_dots_per_inch = "Touchpad pointer resolution in dots per inch"
