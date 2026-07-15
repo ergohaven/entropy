@@ -425,10 +425,12 @@ mod tests {
             .iter()
             .find(|entry| entry.emoji == "🚀")
             .unwrap();
-        let mut picker = KeycodePicker::default();
-        picker.macro_buffer_size = Some(8192);
-        picker.open = true;
-        picker.emoji_target_keycode = Some(0x0004);
+        let mut picker = KeycodePicker {
+            macro_buffer_size: Some(8192),
+            open: true,
+            emoji_target_keycode: Some(0x0004),
+            ..Default::default()
+        };
         picker.macro_actions[0] = vec![MacroAction::Text("occupied".into())];
         picker.encode_macro(0);
 
@@ -449,11 +451,13 @@ mod tests {
             .iter()
             .find(|entry| entry.emoji == "😀")
             .unwrap();
-        let mut picker = KeycodePicker::default();
-        picker.macro_buffer_size = Some(8192);
+        let mut picker = KeycodePicker {
+            macro_buffer_size: Some(8192),
+            emoji_target_keycode: Some(0x0004),
+            ..Default::default()
+        };
         picker.macro_actions[3] = emoji_macro_actions("😀").unwrap();
         picker.encode_macro(3);
-        picker.emoji_target_keycode = Some(0x0004);
 
         picker.assign_emoji(smile, crate::emoji_catalog::EmojiSkinTone::Default);
 
@@ -471,11 +475,13 @@ mod tests {
             .iter()
             .find(|entry| entry.emoji == "😀")
             .unwrap();
-        let mut picker = KeycodePicker::default();
-        picker.macro_buffer_size = Some(8192);
+        let mut picker = KeycodePicker {
+            macro_buffer_size: Some(8192),
+            emoji_target_keycode: Some(0x7703),
+            ..Default::default()
+        };
         picker.macro_actions[3] = emoji_macro_actions("🚀").unwrap();
         picker.encode_macro(3);
-        picker.emoji_target_keycode = Some(0x7703);
 
         picker.assign_emoji(smile, crate::emoji_catalog::EmojiSkinTone::Default);
 
@@ -493,10 +499,12 @@ mod tests {
     #[test]
     fn assignment_reports_when_no_macro_slot_is_free() {
         let entry = crate::emoji_catalog::EMOJI_CATALOG.first().unwrap();
-        let mut picker = KeycodePicker::default();
-        picker.macro_buffer_size = Some(8192);
-        picker.open = true;
-        picker.emoji_target_keycode = Some(0x0004);
+        let mut picker = KeycodePicker {
+            macro_buffer_size: Some(8192),
+            open: true,
+            emoji_target_keycode: Some(0x0004),
+            ..Default::default()
+        };
         for slot in 0..picker.macro_count {
             picker.macro_actions[slot] = vec![MacroAction::Text("occupied".into())];
             picker.encode_macro(slot);
