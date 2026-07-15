@@ -397,4 +397,52 @@ impl EntropyApp {
             }
         }
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn sync_layer_names_to_firmware(&self) {
+        let _ = self.write_layer_names_to_firmware(&self.layer_names);
+    }
+
+    /// Write `names` to firmware (qsid 200 + layer), one layer at a time so a
+    /// single failing SET does not abort the rest. Skips names that already
+    /// match. Returns the indices of layers whose write failed (empty on full
+    /// success or when the firmware exposes no layer-name storage), so callers
+    /// like the .entlayout import can aggregate and report them.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn write_layer_names_to_firmware(&self, names: &[String]) -> Vec<usize> {
+        let mut failed = Vec::new();
+        if self.firmware != FirmwareProtocol::Vial {
+            return failed;
+        }
+        let Some(dev) = &self.hid_device else {
+            return failed;
+        };
+
+        for (layer, name) in names.iter().enumerate().take(self.layer_count) {
+            let qsid = 200 + layer as u16;
+            let name = name.trim();
+            if name.is_empty() {
+                continue;
+            }
+            match dev.get_qmk_setting_string(qsid) {
+                Ok(current) if current == name => {}
+                Ok(_) => {
+                    if let Err(e) = dev.set_qmk_setting_string(qsid, name) {
+                        log::warn!(
+                            "Vial set_qmk_setting_string failed while syncing layer {layer}: {e}"
+                        );
+                        failed.push(layer);
+                    }
+                }
+                Err(e) => {
+                    log::debug!("Vial layer name qsid {qsid} not synced: {e}");
+                    if layer == 0 {
+                        // Firmware exposes no layer-name storage; stop probing.
+                        break;
+                    }
+                }
+            }
+        }
+        failed
+    }
 }

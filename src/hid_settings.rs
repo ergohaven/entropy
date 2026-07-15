@@ -5,26 +5,32 @@ use super::hid_parse::{
 use super::hid_protocol::*;
 use super::HidDevice;
 
-/// Escape `%` as `%%` and pack `value` into at most `budget` bytes, stopping at
-/// a whole-character boundary. Never splits a UTF-8 codepoint or a `%%` pair, so
-/// the firmware never receives a corrupted string.
-fn truncate_qmk_string_payload(value: &str, budget: usize) -> Vec<u8> {
-    let mut payload: Vec<u8> = Vec::with_capacity(budget.min(value.len() + 1));
+/// Layer names land in a 16-byte firmware buffer (15 data bytes + NUL). The
+/// name is `%`-decoded by the firmware, so what must fit is the *decoded* length
+/// — the on-wire escaped form can be longer.
+const QMK_STRING_MAX_DECODED_BYTES: usize = 15;
+
+/// Escape `%` as `%%` and pack `value` into the wire payload, stopping at a whole
+/// character so it never splits a UTF-8 codepoint or a `%%` pair. Honours two
+/// limits: `max_decoded` bytes after the firmware un-escapes it (so it isn't cut
+/// mid-character inside firmware's own buffer) and `max_escaped` on-wire bytes.
+fn truncate_qmk_string_payload(value: &str, max_decoded: usize, max_escaped: usize) -> Vec<u8> {
+    let mut payload: Vec<u8> = Vec::with_capacity(max_escaped.min(value.len() + 1));
+    let mut decoded_len = 0usize;
     for ch in value.chars() {
+        let decoded = ch.len_utf8();
+        let escaped = if ch == '%' { 2 } else { decoded };
+        if decoded_len + decoded > max_decoded || payload.len() + escaped > max_escaped {
+            break;
+        }
         if ch == '%' {
-            if payload.len() + 2 > budget {
-                break;
-            }
             payload.push(b'%');
             payload.push(b'%');
         } else {
-            let len = ch.len_utf8();
-            if payload.len() + len > budget {
-                break;
-            }
             let mut buf = [0u8; 4];
             payload.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
         }
+        decoded_len += decoded;
     }
     payload
 }
@@ -265,10 +271,11 @@ impl HidDevice {
 
         // Escape '%' as '%%' and pack into the fixed payload, truncating only at
         // whole characters — never mid-codepoint and never splitting a '%%' pair,
-        // either of which would leave a corrupted string in firmware.
+        // either of which would leave a corrupted string in firmware. Bound by
+        // both the firmware label buffer (decoded) and the wire packet (escaped).
         let max_len = cmd.len().saturating_sub(4);
-        let budget = max_len.saturating_sub(1); // reserve one byte for the null terminator
-        let payload = truncate_qmk_string_payload(value, budget);
+        let wire_budget = max_len.saturating_sub(1); // reserve one byte for the null terminator
+        let payload = truncate_qmk_string_payload(value, QMK_STRING_MAX_DECODED_BYTES, wire_budget);
         cmd[4..4 + payload.len()].copy_from_slice(&payload);
         cmd[4 + payload.len()] = 0;
 
@@ -410,34 +417,58 @@ mod tests {
 
     #[test]
     fn truncate_short_ascii_is_unchanged() {
-        assert_eq!(truncate_qmk_string_payload("BASE", 27), b"BASE");
+        assert_eq!(truncate_qmk_string_payload("BASE", 15, 27), b"BASE");
     }
 
     #[test]
     fn truncate_percent_is_escaped_and_not_split() {
-        assert_eq!(truncate_qmk_string_payload("a%b", 27), b"a%%b");
-        // Budget only fits `a` plus one byte: the `%%` pair must not be split.
-        assert_eq!(truncate_qmk_string_payload("a%", 2), b"a");
+        assert_eq!(truncate_qmk_string_payload("a%b", 15, 27), b"a%%b");
+        // Wire budget only fits `a` plus one byte: the `%%` pair must not split.
+        assert_eq!(truncate_qmk_string_payload("a%", 15, 2), b"a");
     }
 
     #[test]
     fn truncate_multibyte_on_codepoint_boundary() {
-        // "🙂" is 4 bytes; with a 3-byte budget nothing fits, output stays valid.
-        let out = truncate_qmk_string_payload("🙂", 3);
+        // "🙂" is 4 bytes; a 3-byte wire budget fits nothing, output stays valid.
+        let out = truncate_qmk_string_payload("🙂", 15, 3);
         assert!(out.is_empty());
         assert!(std::str::from_utf8(&out).is_ok());
 
-        // Two emoji (8 bytes) with a 5-byte budget keeps exactly one whole emoji.
-        let out = truncate_qmk_string_payload("🙂🙂", 5);
+        // Two emoji (8 bytes) with a 5-byte wire budget keeps one whole emoji.
+        let out = truncate_qmk_string_payload("🙂🙂", 15, 5);
         assert_eq!(out, "🙂".as_bytes());
         assert!(std::str::from_utf8(&out).is_ok());
     }
 
     #[test]
     fn truncate_cyrillic_on_codepoint_boundary() {
-        // Each Cyrillic letter is 2 bytes; a 5-byte budget keeps two letters.
-        let out = truncate_qmk_string_payload("СЛОЙ", 5);
+        // Each Cyrillic letter is 2 bytes; a 5-byte wire budget keeps two.
+        let out = truncate_qmk_string_payload("СЛОЙ", 15, 5);
         assert_eq!(out, "СЛ".as_bytes());
+        assert!(std::str::from_utf8(&out).is_ok());
+    }
+
+    #[test]
+    fn truncate_respects_decoded_label_limit() {
+        // The wire budget is generous, but the firmware label buffer (decoded)
+        // binds first: four 4-byte emoji (16 decoded bytes) keep only three,
+        // never splitting the fourth mid-codepoint.
+        let out = truncate_qmk_string_payload("🙂🙂🙂🙂", 15, 27);
+        assert_eq!(out, "🙂🙂🙂".as_bytes());
+        assert_eq!(out.len(), 12);
+        assert!(std::str::from_utf8(&out).is_ok());
+
+        // Sixteen ASCII chars decode to 16 bytes; only fifteen may be stored.
+        let out = truncate_qmk_string_payload("0123456789ABCDEF", 15, 27);
+        assert_eq!(out, b"0123456789ABCDE");
+    }
+
+    #[test]
+    fn truncate_production_set_string_bounds_layer_name() {
+        // Exercise the exact limits set_qmk_setting_string uses (15 decoded / 27
+        // wire) so those production values can't regress silently.
+        let out = truncate_qmk_string_payload("МАКРОСЛОЙ", QMK_STRING_MAX_DECODED_BYTES, 27);
+        assert!(out.len() <= QMK_STRING_MAX_DECODED_BYTES);
         assert!(std::str::from_utf8(&out).is_ok());
     }
 

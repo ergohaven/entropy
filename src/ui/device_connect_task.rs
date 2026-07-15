@@ -761,11 +761,8 @@ impl EntropyApp {
                         .extend((start..layer_count).map(|layer| layer.to_string()));
                 }
                 layout.layer_names.truncate(layer_count);
-<<<<<<< HEAD
                 let mut current_firmware_layer_names = vec![None; layer_count];
-=======
                 let mut layer_names_from_firmware = vec![false; layer_count];
->>>>>>> 8a29dfa (Address review: safe layer-name truncation and firmware-name precedence)
                 if has_qmk_setting(200) {
                     for (layer, current_firmware_name) in
                         current_firmware_layer_names.iter_mut().enumerate()
@@ -775,20 +772,13 @@ impl EntropyApp {
                             continue;
                         }
                         match dev_conn.get_qmk_setting_string(qsid) {
-<<<<<<< HEAD
                             Ok(name) => {
                                 *current_firmware_name = Some(name.clone());
                                 if !name.is_empty() {
                                     layout.layer_names[layer] = name;
+                                    layer_names_from_firmware[layer] = true;
                                 }
                             }
-=======
-                            Ok(name) if !name.is_empty() => {
-                                layout.layer_names[layer] = name;
-                                layer_names_from_firmware[layer] = true;
-                            }
-                            Ok(_) => {}
->>>>>>> 8a29dfa (Address review: safe layer-name truncation and firmware-name precedence)
                             Err(e) => {
                                 log::warn!("get_qmk_setting_string(layer name qsid {qsid}): {e}")
                             }
