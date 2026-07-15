@@ -12,6 +12,7 @@ mod i18n;
 mod keyboard;
 mod keycode;
 mod keycode_picker;
+#[cfg(test)]
 mod layouts;
 #[cfg(target_os = "linux")]
 mod linux_setup;
