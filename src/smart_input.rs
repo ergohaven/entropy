@@ -175,7 +175,7 @@ pub fn universal_output_status() -> String {
     "Universal output backend: unsupported on this OS".to_owned()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LinuxSessionKind {
     Wayland,
@@ -192,6 +192,11 @@ fn linux_session_kind() -> LinuxSessionKind {
     } else {
         LinuxSessionKind::Unknown
     }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn should_start_linux_x11_backend(session: LinuxSessionKind) -> bool {
+    matches!(session, LinuxSessionKind::X11)
 }
 
 #[cfg(target_os = "linux")]
@@ -504,6 +509,9 @@ pub fn start() {
 
 #[cfg(target_os = "linux")]
 pub fn start() {
+    if !should_start_linux_x11_backend(linux_session_kind()) {
+        return;
+    }
     use std::sync::Once;
     static START: Once = Once::new();
     START.call_once(|| {
@@ -1304,6 +1312,13 @@ mod tests {
         let hard_sign =
             windows_smart_symbol_for_transport(KC_F13 + 5, true, false, true, false, 0).unwrap();
         assert_eq!(hard_sign.0, 'ъ');
+    }
+
+    #[test]
+    fn linux_x11_backend_only_starts_for_x11_sessions() {
+        assert!(should_start_linux_x11_backend(LinuxSessionKind::X11));
+        assert!(!should_start_linux_x11_backend(LinuxSessionKind::Wayland));
+        assert!(!should_start_linux_x11_backend(LinuxSessionKind::Unknown));
     }
 
     #[test]
