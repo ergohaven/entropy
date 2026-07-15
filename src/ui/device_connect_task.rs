@@ -844,13 +844,15 @@ impl EntropyApp {
                         unlock_keys.len()
                     );
                     progress("Resuming active Vial unlock…");
-                    return Ok(ConnectOutcome::UnlockRecovery(UnlockRecoveryResult {
-                        device_name: dev.name.clone(),
-                        keyboard_id,
-                        hid_device: Some(dev_conn),
-                        layout,
-                        unlock_keys,
-                    }));
+                    return Ok(ConnectOutcome::UnlockRecovery(Box::new(
+                        UnlockRecoveryResult {
+                            device_name: dev.name.clone(),
+                            keyboard_id,
+                            hid_device: Some(dev_conn),
+                            layout,
+                            unlock_keys,
+                        },
+                    )));
                 }
 
                 let firmware_version = runtime_firmware_version
@@ -1385,7 +1387,7 @@ impl EntropyApp {
                 };
 
                 progress("Applying keyboard layout…");
-                Ok(ConnectOutcome::Connected(ConnectResult {
+                Ok(ConnectOutcome::Connected(Box::new(ConnectResult {
                     device_name: dev.name.clone(),
                     keyboard_id,
                     vial_unlock_status,
@@ -1419,7 +1421,7 @@ impl EntropyApp {
                     layer_count,
                     supported_qmk_settings,
                     deferred_load,
-                }))
+                })))
             })();
 
             let _ = tx.send(ConnectTaskMessage::Done(Box::new(result)));

@@ -1012,8 +1012,8 @@ pub(crate) struct UnlockRecoveryResult {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) enum ConnectOutcome {
-    Connected(ConnectResult),
-    UnlockRecovery(UnlockRecoveryResult),
+    Connected(Box<ConnectResult>),
+    UnlockRecovery(Box<UnlockRecoveryResult>),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
