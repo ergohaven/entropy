@@ -1,6 +1,320 @@
 use super::*;
 
 impl EntropyApp {
+    pub(super) fn portable_setting_specs(
+        json: &serde_json::Value,
+        supported_qmk_settings: &[u16],
+        layer_count: usize,
+    ) -> Vec<crate::app::portable_settings::PortableSettingSpec> {
+        use crate::app::portable_settings::{known_qmk_setting, PortableSettingId};
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let supported = supported_qmk_settings
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let mut specs = BTreeMap::<PortableSettingId, _>::new();
+
+        if let Some(tabs) = json.get("settings").and_then(serde_json::Value::as_array) {
+            for tab in tabs {
+                let tab_name = tab
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let Some(fields) = tab.get("fields").and_then(serde_json::Value::as_array) else {
+                    continue;
+                };
+                for field in fields {
+                    let Some(spec) =
+                        Self::portable_definition_field_spec(tab_name, field, &supported)
+                    else {
+                        continue;
+                    };
+                    specs.insert(spec.id.clone(), spec);
+                }
+            }
+        }
+
+        let mut linked_leds = BTreeMap::<String, Vec<_>>::new();
+        for spec in specs.values().filter(|spec| {
+            matches!(
+                spec.category,
+                crate::app::portable_settings::PortableCategory::LayerLeds
+            ) && spec.id.semantic.starts_with("layer_")
+                && spec.id.semantic.ends_with("_color")
+        }) {
+            linked_leds
+                .entry(spec.id.semantic.clone())
+                .or_default()
+                .push(spec.clone());
+        }
+        for (semantic, mut group) in linked_leds {
+            if group.len() < 2 {
+                continue;
+            }
+            group.sort_by_key(|spec| spec.id.primary_qsid);
+            let contract = &group[0];
+            if !group.iter().all(|spec| {
+                spec.category == contract.category
+                    && spec.kind == contract.kind
+                    && spec.wire_width == contract.wire_width
+                    && spec.range == contract.range
+                    && spec.bit_meanings == contract.bit_meanings
+                    && spec.ordered_variants == contract.ordered_variants
+            }) {
+                continue;
+            }
+            for spec in &group {
+                specs.remove(&spec.id);
+            }
+            let primary_qsid = group[0].id.primary_qsid.expect("QMK spec has QSID");
+            let linked_qsids = group
+                .iter()
+                .skip(1)
+                .filter_map(|spec| spec.id.primary_qsid)
+                .collect::<Vec<_>>();
+            let mut coalesced = group.remove(0);
+            coalesced.id =
+                PortableSettingId::qmk(coalesced.category, semantic, primary_qsid, linked_qsids);
+            specs.insert(coalesced.id.clone(), coalesced);
+        }
+
+        let has_definition_leds = specs.values().any(|spec| {
+            matches!(
+                spec.category,
+                crate::app::portable_settings::PortableCategory::LayerLeds
+            )
+        });
+        if !has_definition_leds && supported.contains(&300) {
+            use crate::app::portable_settings::{
+                PortableCategory, PortableSettingSpec, ValueRange, WireWidth,
+            };
+            for layer in 0..layer_count.min(16) {
+                let qsid = 300 + layer as u16;
+                if !supported.contains(&qsid) {
+                    break;
+                }
+                let spec = PortableSettingSpec::qmk_select(
+                    PortableCategory::LayerLeds,
+                    format!("layer_{layer}_color"),
+                    qsid,
+                    WireWidth::Bits8,
+                    LAYER_LED_PALETTE
+                        .iter()
+                        .map(|label| (*label).to_owned())
+                        .collect(),
+                );
+                specs.insert(spec.id.clone(), spec);
+            }
+            if supported.contains(&316) {
+                let spec = PortableSettingSpec::qmk_numeric(
+                    PortableCategory::LayerLeds,
+                    "brightness",
+                    316,
+                    WireWidth::Bits16,
+                    ValueRange::new(0, 255),
+                );
+                specs.insert(spec.id.clone(), spec);
+            }
+            if supported.contains(&317) {
+                let spec = PortableSettingSpec::qmk_numeric(
+                    PortableCategory::LayerLeds,
+                    "timeout",
+                    317,
+                    WireWidth::Bits8,
+                    ValueRange::new(0, 255),
+                );
+                specs.insert(spec.id.clone(), spec);
+            }
+        }
+
+        for qsid in &supported {
+            let Some(spec) = known_qmk_setting(*qsid) else {
+                continue;
+            };
+            if matches!(
+                spec.category,
+                crate::app::portable_settings::PortableCategory::LayerNames
+            ) && usize::from(qsid.saturating_sub(200)) >= layer_count
+            {
+                continue;
+            }
+            let has_definition_override = specs.keys().any(|id| id.primary_qsid == Some(*qsid));
+            if matches!(*qsid, 120..=124 | 142 | 143) && !has_definition_override {
+                continue;
+            }
+            if !has_definition_override {
+                specs.insert(spec.id.clone(), spec);
+            }
+        }
+
+        specs.into_values().collect()
+    }
+
+    fn portable_definition_field_spec(
+        tab_name: &str,
+        field: &serde_json::Value,
+        supported: &std::collections::BTreeSet<u16>,
+    ) -> Option<crate::app::portable_settings::PortableSettingSpec> {
+        use crate::app::portable_settings::{
+            PortableCategory, PortableSettingId, PortableSettingSpec, PortableValueKind,
+            ValueRange, WireWidth,
+        };
+
+        let qsid = u16::try_from(field.get("qsid")?.as_u64()?).ok()?;
+        if !supported.contains(&qsid) {
+            return None;
+        }
+        let title = field
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let tab = tab_name.to_ascii_lowercase();
+        let title_lower = title.to_ascii_lowercase();
+        if ["pair", "calibrat", "serial", "identity", "bootloader"]
+            .iter()
+            .any(|denied| tab.contains(denied) || title_lower.contains(denied))
+        {
+            return None;
+        }
+
+        let definition_auto_layer = tab.contains("auto") && tab.contains("layer");
+        let (category, semantic) = if (tab.contains("touchpad")
+            && matches!(qsid, 120..=124 | 142 | 143))
+            || (definition_auto_layer && matches!(qsid, 142 | 143))
+        {
+            let semantic = crate::app::portable_settings::known_qmk_setting(qsid)
+                .map(|spec| spec.id.semantic)
+                .unwrap_or_else(|| format!("touchpad_{qsid}"));
+            (PortableCategory::Touchpad, semantic)
+        } else if tab.contains("bluetooth")
+            && title_lower.contains("sleep")
+            && title_lower.contains("timeout")
+        {
+            (PortableCategory::Bluetooth, "sleep_timeout".to_owned())
+        } else if tab.contains("bluetooth")
+            && title_lower.contains("bt profile")
+            && title_lower.contains("color")
+        {
+            let profile = Self::parse_trailing_setting_index(&title_lower, "bt profile", "color")?;
+            if profile > 4 {
+                return None;
+            }
+            (
+                PortableCategory::Bluetooth,
+                format!("profile_{profile}_color"),
+            )
+        } else if tab.contains("led") && title_lower.contains("led brightness") {
+            (PortableCategory::LayerLeds, "brightness".to_owned())
+        } else if tab.contains("led") && title_lower.contains("led timeout") {
+            (PortableCategory::LayerLeds, "timeout".to_owned())
+        } else if tab.contains("led")
+            && title_lower.contains("bt profile")
+            && title_lower.contains("color")
+        {
+            let profile = Self::parse_trailing_setting_index(&title_lower, "bt profile", "color")?;
+            if profile > 4 {
+                return None;
+            }
+            (
+                PortableCategory::LayerLeds,
+                format!("bt_profile_{profile}_color"),
+            )
+        } else if tab.contains("led")
+            && title_lower.contains("layer")
+            && title_lower.contains("color")
+        {
+            let layer = Self::parse_trailing_setting_index(&title_lower, "layer", "color")?;
+            (PortableCategory::LayerLeds, format!("layer_{layer}_color"))
+        } else if tab.contains("module") || tab.contains("trackball") || definition_auto_layer {
+            let bit = field
+                .get("bit")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0)
+                .min(15);
+            let suffix = if field.get("type").and_then(serde_json::Value::as_str) == Some("boolean")
+            {
+                format!("_bit_{bit}")
+            } else {
+                String::new()
+            };
+            (PortableCategory::Module, format!("module_{qsid}{suffix}"))
+        } else {
+            return None;
+        };
+
+        let width = field
+            .get("width")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(1)
+            .clamp(1, 2) as u8;
+        let wire_width = if width > 1 {
+            WireWidth::Bits16
+        } else {
+            WireWidth::Bits8
+        };
+        let field_type = field.get("type").and_then(serde_json::Value::as_str);
+        let variants = field
+            .get("variants")
+            .and_then(serde_json::Value::as_array)
+            .map(|variants| {
+                variants
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|variant| !variant.is_empty())
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let (kind, range, bit_meanings, ordered_variants) = match field_type {
+            Some("boolean") => {
+                let bit = field
+                    .get("bit")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0)
+                    .min(15) as usize;
+                let mut bit_meanings = vec![String::new(); bit + 1];
+                bit_meanings[bit] = semantic.clone();
+                (PortableValueKind::Boolean, None, bit_meanings, Vec::new())
+            }
+            Some("select") if !variants.is_empty() => {
+                (PortableValueKind::Select, None, Vec::new(), variants)
+            }
+            Some("integer") => {
+                let max_default = if width > 1 { u16::MAX } else { u8::MAX.into() };
+                let min = field
+                    .get("min")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0)
+                    .min(u16::MAX.into());
+                let max = field
+                    .get("max")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(max_default.into())
+                    .min(u16::MAX.into());
+                (
+                    PortableValueKind::Unsigned,
+                    Some(ValueRange::new(min, max)),
+                    Vec::new(),
+                    Vec::new(),
+                )
+            }
+            _ => return None,
+        };
+
+        Some(PortableSettingSpec {
+            id: PortableSettingId::qmk(category, semantic, qsid, []),
+            category,
+            kind,
+            wire_width,
+            range,
+            bit_meanings,
+            ordered_variants,
+        })
+    }
+
     pub(super) fn is_encoder_layout_option(option: &LayoutOption) -> bool {
         option
             .label

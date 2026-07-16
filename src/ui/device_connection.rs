@@ -57,6 +57,12 @@ impl EntropyApp {
         self.cancel_pending_qmk_setting_writes();
         self.qmk_settings_write_queue.clear();
         self.pending_device_connect = None;
+        self.settings_write_queue.clear();
+        self.abort_settings_recovery_task();
+        self.recovery_capture.clear();
+        self.recovery_identity = None;
+        self.recovery_fingerprint = None;
+        self.settings_recovery = SettingsRecoveryState::Idle;
         self.hid_device = None;
         self.supported_qmk_settings.clear();
         self.undo_stack.clear();

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 const ENTLAYOUT_FORMAT: &str = "entropy.layout";
-const ENTLAYOUT_VERSION: u16 = 3;
+const ENTLAYOUT_VERSION: u16 = 4;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct EntLayoutFile {
@@ -34,6 +34,8 @@ struct EntLayoutKeyboard {
 struct EntLayoutData {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_layout: Option<EntLayoutSourceLayout>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    portable_settings: Vec<crate::app::portable_settings::PortableSetting>,
     keymap: Vec<Vec<u16>>,
     encoder_keymap: Vec<Vec<u16>>,
     encoder_visibility: Vec<bool>,
@@ -429,6 +431,27 @@ impl EntropyApp {
             keyboard,
             data: EntLayoutData {
                 source_layout: Some(entlayout_source_layout(layout)),
+                portable_settings: {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        self.recovery_capture
+                            .iter()
+                            .filter_map(|entry| match &entry.state {
+                                crate::app::portable_settings::StrictCaptureState::Captured(
+                                    setting,
+                                ) => Some(setting.clone()),
+                                crate::app::portable_settings::StrictCaptureState::Unavailable(_)
+                                | crate::app::portable_settings::StrictCaptureState::Unsupported => {
+                                    None
+                                }
+                            })
+                            .collect()
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        Vec::new()
+                    }
+                },
                 keymap: layout.layers.clone(),
                 encoder_keymap: layout.encoder_layers.clone(),
                 encoder_visibility: self.encoder_visibility.clone(),
@@ -583,6 +606,14 @@ impl EntropyApp {
                     &[("version", &bundle.version.to_string())]
                 )
             );
+        }
+        if bundle
+            .data
+            .portable_settings
+            .iter()
+            .any(|setting| !setting.is_valid())
+        {
+            bail!("portable settings contain an invalid value or contract");
         }
         let _layout = self.layout.as_ref().context(crate::i18n::tr_catalog(
             self.app_settings.language,
@@ -1134,6 +1165,22 @@ impl EntropyApp {
 
         if self.current_device_is_likely_rmk() {
             return Ok(failures);
+        }
+
+        for setting in &bundle.data.portable_settings {
+            let compatible = self.recovery_capture.iter().any(|entry| {
+                entry.spec.id == setting.spec.id
+                    && setting.spec.compatibility_with(&entry.spec).is_ok()
+            });
+            if !compatible {
+                continue;
+            }
+            if let Err(error) = crate::app::settings_recovery_ui::write_setting(hid, setting) {
+                failures.push(format!(
+                    "portable setting {} ({error})",
+                    setting.spec.id.semantic
+                ));
+            }
         }
 
         if entmacro_count(&bundle.data.macros) > 0 && self.keycode_picker.macro_count > 0 {

@@ -38,6 +38,10 @@ use app_repaint::*;
 mod entlayout;
 #[path = "entsettings.rs"]
 mod entsettings;
+#[path = "portable_settings.rs"]
+mod portable_settings;
+#[path = "settings_recovery.rs"]
+mod settings_recovery;
 
 #[path = "ui/settings_units.rs"]
 mod settings_units;
@@ -146,6 +150,10 @@ mod qmk_settings_write_queue;
 use qmk_settings_write_queue::QmkSettingsWriteQueue;
 #[path = "ui/rgb_settings.rs"]
 mod rgb_settings_ui;
+#[path = "ui/settings_recovery.rs"]
+mod settings_recovery_ui;
+#[cfg(not(target_arch = "wasm32"))]
+use settings_recovery_ui::{RecoveryWriteTask, SettingsRecoveryState};
 #[path = "ui/settings_shell.rs"]
 mod settings_shell;
 #[path = "ui/settings_write_queue.rs"]

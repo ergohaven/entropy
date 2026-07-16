@@ -114,14 +114,21 @@ impl EntropyApp {
                             #[cfg(not(target_arch = "wasm32"))]
                             if self.firmware == FirmwareProtocol::Vial {
                                 if let Some(dev) = &self.hid_device {
-                                    if let Err(e) =
-                                        dev.set_qmk_setting_string(200 + selected as u16, &new_name)
+                                    let qsid = 200 + selected as u16;
+                                    match dev
+                                        .set_qmk_setting_string_recovery_verified(qsid, &new_name)
                                     {
-                                        log::warn!(
+                                        Ok(()) => self.record_verified_qmk_value(
+                                            qsid,
+                                            crate::app::portable_settings::PortableValue::Text(
+                                                new_name.clone(),
+                                            ),
+                                        ),
+                                        Err(e) => log::warn!(
                                             "Vial set_qmk_setting_string failed for layer {}: {}",
                                             selected,
                                             e
-                                        );
+                                        ),
                                     }
                                 }
                             }

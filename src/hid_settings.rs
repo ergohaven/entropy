@@ -101,6 +101,49 @@ fn parse_battery_halves_response(resp: &[u8; MSG_LEN]) -> Result<Option<BatteryH
 
 #[cfg(not(target_arch = "wasm32"))]
 impl HidDevice {
+    fn verify_recovery_write<T: Eq + std::fmt::Debug>(
+        &self,
+        expected: &T,
+        mut read: impl FnMut() -> Result<T>,
+    ) -> Result<()> {
+        let mut last = None;
+        for delay in [20, 80, 200] {
+            std::thread::sleep(std::time::Duration::from_millis(delay));
+            match read() {
+                Ok(actual) if &actual == expected => return Ok(()),
+                Ok(actual) => last = Some(format!("read back {actual:?}")),
+                Err(error) => last = Some(error.to_string()),
+            }
+        }
+        anyhow::bail!(
+            "verified recovery write failed; expected {expected:?}, {}",
+            last.unwrap_or_else(|| "no readback".to_owned())
+        )
+    }
+
+    pub(crate) fn set_qmk_setting_u8_recovery_verified(&self, qsid: u16, value: u8) -> Result<()> {
+        self.set_qmk_setting_u8(qsid, value)?;
+        self.verify_recovery_write(&value, || self.get_qmk_setting_u8(qsid))
+    }
+
+    pub(crate) fn set_qmk_setting_u16_recovery_verified(
+        &self,
+        qsid: u16,
+        value: u16,
+    ) -> Result<()> {
+        self.set_qmk_setting_u16(qsid, value)?;
+        self.verify_recovery_write(&value, || self.get_qmk_setting_u16(qsid))
+    }
+
+    pub(crate) fn set_qmk_setting_string_recovery_verified(
+        &self,
+        qsid: u16,
+        value: &str,
+    ) -> Result<()> {
+        self.set_qmk_setting_string(qsid, value)?;
+        self.verify_recovery_write(&value.to_owned(), || self.get_qmk_setting_string(qsid))
+    }
+
     pub fn get_battery_halves(&self) -> Result<Option<BatteryHalves>> {
         let _ = self.get_battery_halves_once()?;
         std::thread::sleep(std::time::Duration::from_millis(400));

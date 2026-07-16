@@ -39,6 +39,18 @@ impl EntropyApp {
             settings_write_queue: SettingsWriteQueueState::default(),
             settings_write_generation: 0,
             #[cfg(not(target_arch = "wasm32"))]
+            settings_recovery: SettingsRecoveryState::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            recovery_write_task: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            recovery_capture: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            recovery_identity: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            recovery_fingerprint: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            connection_generation: 0,
+            #[cfg(not(target_arch = "wasm32"))]
             qmk_hid_hosts: std::collections::HashMap::new(),
             pending_device_connect: None,
             firmware: FirmwareProtocol::Vial,

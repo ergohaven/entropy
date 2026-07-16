@@ -342,6 +342,13 @@ impl EntropyApp {
 
         match result {
             Ok(r) => {
+                // Recovery decision is established from fresh strict reads before this
+                // connection is allowed to perform any device write.
+                self.prepare_settings_recovery(
+                    r.recovery_identity.clone(),
+                    r.recovery_fingerprint.clone(),
+                    r.portable_settings.clone(),
+                );
                 self.pending_tap_hold_numeric_writes.clear();
                 self.tap_hold_numeric_write_due = None;
                 log::info!(
@@ -525,7 +532,6 @@ impl EntropyApp {
 
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    self.restore_entropy_display_preset_after_connect();
                     self.sync_qmk_hid_host_bridges();
                 }
 

@@ -357,6 +357,170 @@ fn firmware_version_from_vial_json(json: &serde_json::Value) -> Option<String> {
     .find_map(|path| json_path_string(json, path))
 }
 
+fn canonical_json(value: &serde_json::Value, output: &mut String) {
+    match value {
+        serde_json::Value::Null => output.push_str("null"),
+        serde_json::Value::Bool(value) => output.push_str(if *value { "true" } else { "false" }),
+        serde_json::Value::Number(value) => output.push_str(&value.to_string()),
+        serde_json::Value::String(value) => {
+            output.push_str(&serde_json::to_string(value).expect("string serialization cannot fail"));
+        }
+        serde_json::Value::Array(values) => {
+            output.push('[');
+            for value in values {
+                canonical_json(value, output);
+                output.push(',');
+            }
+            output.push(']');
+        }
+        serde_json::Value::Object(values) => {
+            output.push('{');
+            let mut keys = values.keys().collect::<Vec<_>>();
+            keys.sort_unstable();
+            for key in keys {
+                output.push_str(&serde_json::to_string(key).expect("object key serialization cannot fail"));
+                output.push(':');
+                canonical_json(&values[key], output);
+                output.push(',');
+            }
+            output.push('}');
+        }
+    }
+}
+
+fn portable_schema_hash(
+    json: &serde_json::Value,
+    supported_qmk_settings: &[u16],
+    specs: &[crate::app::portable_settings::PortableSettingSpec],
+) -> String {
+    let mut canonical = String::new();
+    canonical_json(json, &mut canonical);
+    let mut supported = supported_qmk_settings.to_vec();
+    supported.sort_unstable();
+    supported.dedup();
+    canonical.push_str(&serde_json::to_string(&supported).expect("u16 list serialization cannot fail"));
+    let mut specs = specs.to_vec();
+    specs.sort_by(|left, right| left.id.cmp(&right.id));
+    canonical.push_str(&serde_json::to_string(&specs).expect("portable specs serialization cannot fail"));
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in canonical.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
+fn capture_portable_setting(
+    spec: crate::app::portable_settings::PortableSettingSpec,
+    read: impl FnOnce(&crate::app::portable_settings::PortableSettingSpec) -> Result<crate::app::portable_settings::PortableValue, String>,
+) -> PortableCaptureEntry {
+    use crate::app::portable_settings::{PortableSetting, StrictCaptureState};
+    let state = match read(&spec) {
+        Ok(value) => PortableSetting::new(spec.clone(), value)
+            .map(StrictCaptureState::Captured)
+            .unwrap_or_else(|_| StrictCaptureState::Unavailable("value violates advertised contract".into())),
+        Err(error) => StrictCaptureState::Unavailable(error),
+    };
+    PortableCaptureEntry { spec, state }
+}
+
+fn portable_rgb_specs(rgb: &RgbSettingsState) -> Vec<crate::app::portable_settings::PortableSettingSpec> {
+    use crate::app::portable_settings::{PortableCategory, PortableSettingId, PortableSettingSpec, PortableValueKind, ValueRange, WireWidth};
+    if !rgb.supported || matches!(rgb.kind, RgbSupportKind::None) {
+        return Vec::new();
+    }
+    let namespace = match rgb.kind {
+        RgbSupportKind::QmkRgblight => "qmk_rgblight",
+        RgbSupportKind::VialRgb => "vialrgb",
+        RgbSupportKind::None => return Vec::new(),
+    };
+    let make = |semantic: &str, wire_width, max, ordered_variants: Vec<String>| PortableSettingSpec {
+        id: PortableSettingId::named(namespace, PortableCategory::Rgb, semantic),
+        category: PortableCategory::Rgb,
+        kind: PortableValueKind::Unsigned,
+        wire_width,
+        range: Some(ValueRange::new(0, max)),
+        bit_meanings: Vec::new(),
+        ordered_variants,
+    };
+    vec![
+        make("effect", WireWidth::Bits16, u16::MAX.into(), rgb.supported_effects.iter().map(u16::to_string).collect()),
+        make("brightness", WireWidth::Bits8, rgb.max_brightness.into(), Vec::new()),
+        make("speed", WireWidth::Bits8, u8::MAX.into(), Vec::new()),
+        make("hue", WireWidth::Bits8, u8::MAX.into(), Vec::new()),
+        make("saturation", WireWidth::Bits8, u8::MAX.into(), Vec::new()),
+    ]
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_portable_qmk_setting(
+    hid: &crate::hid::HidDevice,
+    spec: &crate::app::portable_settings::PortableSettingSpec,
+) -> Result<crate::app::portable_settings::PortableValue, String> {
+    use crate::app::portable_settings::{PortableValue, PortableValueKind, WireWidth};
+    let qsid = spec.id.primary_qsid.ok_or_else(|| "portable QMK setting has no QSID".to_owned())?;
+    if matches!(spec.kind, PortableValueKind::Text) {
+        return hid.get_qmk_setting_string(qsid).map(PortableValue::Text).map_err(|error| error.to_string());
+    }
+    let read_numeric = |qsid| match spec.wire_width {
+        WireWidth::Bits16 => hid.get_qmk_setting_u16(qsid).map(u64::from).map_err(|error| error.to_string()),
+        WireWidth::Bit | WireWidth::Bits8 => hid.get_qmk_setting_u8(qsid).map(u64::from).map_err(|error| error.to_string()),
+        WireWidth::Utf8 => Err("non-text setting advertised UTF-8 width".into()),
+    };
+    let raw = read_numeric(qsid)?;
+    for linked_qsid in &spec.id.linked_qsids {
+        let linked = read_numeric(*linked_qsid)?;
+        if linked != raw {
+            return Err(format!("linked qsid {linked_qsid} value {linked} differs from primary qsid {qsid} value {raw}"));
+        }
+    }
+    Ok(match spec.kind {
+        PortableValueKind::Boolean => {
+            let bit = spec.bit_meanings.iter().position(|meaning| !meaning.is_empty());
+            PortableValue::Boolean(bit.map_or(raw != 0, |bit| raw & (1u64 << bit) != 0))
+        }
+        PortableValueKind::Unsigned => PortableValue::Unsigned(raw),
+        PortableValueKind::Select => PortableValue::Select(u16::try_from(raw).map_err(|_| "select value exceeds u16".to_owned())?),
+        PortableValueKind::Text => unreachable!("text handled above"),
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_portable_rgb_setting(
+    hid: &crate::hid::HidDevice,
+    spec: &crate::app::portable_settings::PortableSettingSpec,
+) -> Result<crate::app::portable_settings::PortableValue, String> {
+    use crate::app::portable_settings::PortableValue;
+    let value = match spec.id.namespace.as_str() {
+        "vialrgb" => {
+            let (effect, speed, hue, saturation, brightness) = hid.get_vialrgb_mode().map_err(|error| error.to_string())?;
+            match spec.id.semantic.as_str() {
+                "effect" => u64::from(effect), "brightness" => u64::from(brightness), "speed" => u64::from(speed),
+                "hue" => u64::from(hue), "saturation" => u64::from(saturation), _ => return Err("unknown VialRGB portable field".into()),
+            }
+        }
+        "qmk_rgblight" => match spec.id.semantic.as_str() {
+            "effect" => u64::from(hid.get_qmk_rgblight_effect().map_err(|error| error.to_string())?),
+            "brightness" => u64::from(hid.get_qmk_rgblight_brightness().map_err(|error| error.to_string())?),
+            "speed" => u64::from(hid.get_qmk_rgblight_effect_speed().map_err(|error| error.to_string())?),
+            "hue" | "saturation" => { let (hue, saturation) = hid.get_qmk_rgblight_color().map_err(|error| error.to_string())?; u64::from(if spec.id.semantic == "hue" { hue } else { saturation }) }
+            _ => return Err("unknown QMK RGBLight portable field".into()),
+        },
+        _ => return Err("unknown portable RGB namespace".into()),
+    };
+    Ok(PortableValue::Unsigned(value))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn capture_portable_settings_from_hid(
+    hid: &crate::hid::HidDevice,
+    entries: &[PortableCaptureEntry],
+) -> Vec<PortableCaptureEntry> {
+    entries.iter().map(|entry| capture_portable_setting(entry.spec.clone(), |spec| {
+        if spec.id.primary_qsid.is_some() { read_portable_qmk_setting(hid, spec) } else { read_portable_rgb_setting(hid, spec) }
+    })).collect()
+}
+
 fn supports_battery_halves_from_vial_json(json: &serde_json::Value) -> bool {
     let candidates = [
         json.get("entropy").and_then(|v| v.get("batteryHalves")),
@@ -1221,6 +1385,35 @@ impl EntropyApp {
                     load_rgb_settings(&dev_conn, &layout)
                 };
 
+                progress("Capturing portable settings…");
+                let mut portable_specs =
+                    Self::portable_setting_specs(&json, &supported_qmk_settings, layer_count);
+                portable_specs.extend(portable_rgb_specs(&rgb_settings));
+                let schema_hash =
+                    portable_schema_hash(&json, &supported_qmk_settings, &portable_specs);
+                let recovery_identity = crate::app::settings_recovery::RecoveryIdentity::new(
+                    dev.vendor_id,
+                    dev.product_id,
+                    format!("{keyboard_id:016x}"),
+                    Some(&dev.serial_number),
+                );
+                let recovery_fingerprint = crate::app::settings_recovery::RecoveryFingerprint::new(
+                    firmware_version.clone(),
+                    Some(schema_hash),
+                );
+                let portable_settings = portable_specs
+                    .into_iter()
+                    .map(|spec| {
+                        capture_portable_setting(spec, |spec| {
+                            if spec.id.primary_qsid.is_some() {
+                                read_portable_qmk_setting(&dev_conn, spec)
+                            } else {
+                                read_portable_rgb_setting(&dev_conn, spec)
+                            }
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
                 progress("Reading tap dance entries…");
                 let tap_dance_entries = {
                     let count = tap_dance_count;
@@ -1337,6 +1530,9 @@ impl EntropyApp {
                 Ok(ConnectResult {
                     device_name: dev.name.clone(),
                     keyboard_id,
+                    recovery_identity,
+                    recovery_fingerprint,
+                    portable_settings,
                     hid_device: Some(dev_conn),
                     about_info,
                     layer_names_from_firmware,

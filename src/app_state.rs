@@ -312,6 +312,14 @@ pub(crate) struct ConnectResult {
     pub(crate) device_name: String,
     /// Stable Vial keyboard definition id used for per-keyboard local settings.
     pub(crate) keyboard_id: u64,
+    /// Serial-backed authority for automatic firmware recovery. `None` keeps
+    /// recovery opt-in rather than guessing that a device is the same keyboard.
+    pub(crate) recovery_identity: Option<crate::app::settings_recovery::RecoveryIdentity>,
+    /// Fresh runtime version and canonical fresh schema fingerprint.
+    pub(crate) recovery_fingerprint: Option<crate::app::settings_recovery::RecoveryFingerprint>,
+    /// Strict current values. Failed reads remain unavailable instead of
+    /// becoming presentation defaults such as zero.
+    pub(crate) portable_settings: Vec<PortableCaptureEntry>,
     /// Open HID connection used during loading; kept for live writes just like vial-gui.
     pub(crate) hid_device: Option<crate::hid::HidDevice>,
     pub(crate) layout: KeyboardLayout,
@@ -367,6 +375,13 @@ pub(crate) struct ConnectResult {
     /// QMK setting ids the firmware exposes, so later layer-name writes can tell
     /// unsupported storage apart from a transport error.
     pub(crate) supported_qmk_settings: Vec<u16>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PortableCaptureEntry {
+    pub(crate) spec: crate::app::portable_settings::PortableSettingSpec,
+    pub(crate) state: crate::app::portable_settings::StrictCaptureState,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2808,6 +2823,17 @@ pub struct EntropyApp {
     pub(super) settings_write_generation: u64,
     pub(super) qmk_settings_write_queue: QmkSettingsWriteQueue,
     pub(super) pending_device_connect: Option<usize>,
+    /// Firmware-settings recovery prompt and background verified write.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) settings_recovery: SettingsRecoveryState,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) recovery_write_task: Option<RecoveryWriteTask>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) recovery_capture: Vec<PortableCaptureEntry>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) recovery_identity: Option<crate::app::settings_recovery::RecoveryIdentity>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) recovery_fingerprint: Option<crate::app::settings_recovery::RecoveryFingerprint>,
     /// Built-in qmk-hid-host bridges for displays/presets that need host data
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) qmk_hid_hosts:
