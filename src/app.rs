@@ -139,6 +139,9 @@ mod module_settings_ui;
 mod mouse_keys_settings_ui;
 #[path = "ui/onboarding_tour.rs"]
 mod onboarding_tour;
+#[path = "ui/qmk_settings_write_queue.rs"]
+mod qmk_settings_write_queue;
+use qmk_settings_write_queue::QmkSettingsWriteQueue;
 #[path = "ui/rgb_settings.rs"]
 mod rgb_settings_ui;
 #[path = "ui/settings_shell.rs"]

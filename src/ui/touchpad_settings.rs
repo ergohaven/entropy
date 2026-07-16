@@ -10,7 +10,7 @@ impl EntropyApp {
         }
     }
 
-    fn set_touchpad_numeric_value(&mut self, qsid: u16, value: u16) {
+    pub(super) fn set_touchpad_numeric_value(&mut self, qsid: u16, value: u16) {
         match qsid {
             121 => self.touchpad_settings.sniper_sens = value.min(u8::MAX as u16) as u8,
             122 => self.touchpad_settings.scroll_sens = value.min(u8::MAX as u16) as u8,
@@ -21,16 +21,17 @@ impl EntropyApp {
 
     fn write_touchpad_numeric_setting(
         &mut self,
+        ctx: &egui::Context,
         qsid: u16,
         old_value: u16,
         value: u16,
         display_label: &str,
     ) {
         let value = value.clamp(1, 255) as u8;
-        self.queue_touchpad_setting_write(
+        self.debounce_touchpad_setting_write(
+            ctx,
             display_label.to_owned(),
             qsid,
-            1,
             old_value,
             value as u16,
         );
@@ -374,7 +375,11 @@ impl EntropyApp {
                                         if new_value != current {
                                             self.set_touchpad_numeric_value(qsid, new_value);
                                             self.write_touchpad_numeric_setting(
-                                                qsid, current, new_value, label,
+                                                ui.ctx(),
+                                                qsid,
+                                                current,
+                                                new_value,
+                                                label,
                                             );
                                         }
                                     }

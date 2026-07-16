@@ -170,6 +170,9 @@ impl EntropyApp {
             return;
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
+        self.flush_pending_qmk_setting_writes();
+
         if should_keep_vial_unlock_visible(self.unlock_open, self.vial_unlock_polling) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.keep_vial_unlock_visible(ctx);

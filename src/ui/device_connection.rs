@@ -34,6 +34,8 @@ impl EntropyApp {
         self.combo_write_task = None;
         self.settings_write_task = None;
         self.settings_write_queue.clear();
+        self.cancel_pending_qmk_setting_writes();
+        self.qmk_settings_write_queue.clear();
         self.hid_device = None;
         self.undo_stack.clear();
         self.connect_state = ConnectState::Idle;

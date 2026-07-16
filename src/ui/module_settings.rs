@@ -103,6 +103,7 @@ impl EntropyApp {
 
     fn write_module_setting_value(
         &mut self,
+        ctx: &egui::Context,
         group_idx: usize,
         field: &ModuleSettingField,
         value: u16,
@@ -186,7 +187,7 @@ impl EntropyApp {
                             } else {
                                 raw_value & !mask
                             };
-                            self.write_module_setting_value(group_idx, &field, new_value);
+                            self.write_module_setting_value(ui.ctx(), group_idx, &field, new_value);
                         }
                     },
                 );
@@ -231,7 +232,12 @@ impl EntropyApp {
                                 Ok(value) => {
                                     let value = value.clamp(field.min, field.max);
                                     if value != raw_value {
-                                        self.write_module_setting_value(group_idx, &field, value);
+                                        self.write_module_setting_value(
+                                            ui.ctx(),
+                                            group_idx,
+                                            &field,
+                                            value,
+                                        );
                                     }
                                     text = value.to_string();
                                 }
@@ -274,7 +280,12 @@ impl EntropyApp {
                             dropdown_width,
                         );
                         if let Some(picked) = picked {
-                            self.write_module_setting_value(group_idx, &field, picked as u16);
+                            self.write_module_setting_value(
+                                ui.ctx(),
+                                group_idx,
+                                &field,
+                                picked as u16,
+                            );
                         }
                     },
                 );

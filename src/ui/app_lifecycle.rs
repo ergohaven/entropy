@@ -96,6 +96,7 @@ impl EntropyApp {
         selected_device_is_bluetooth: bool,
     ) {
         self.poll_settings_write(ctx);
+        self.flush_due_qmk_setting_writes();
         if should_poll_device_scan(main_window_hidden_to_tray) {
             if hid_lifecycle_writes_available(self.hid_write_task_active()) {
                 self.handle_pending_imports(ctx, now);
@@ -1579,6 +1580,7 @@ impl eframe::App for EntropyApp {
         }
 
         if !hid_write_task_active {
+            self.flush_due_qmk_setting_writes();
             self.flush_due_tap_hold_numeric_writes();
         }
 

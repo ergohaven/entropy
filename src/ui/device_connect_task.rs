@@ -488,6 +488,7 @@ impl EntropyApp {
         if self.hid_write_task_active() {
             return;
         }
+        self.cancel_pending_qmk_setting_writes();
         let dev = match self.device_manager.devices().get(device_idx) {
             Some(d) => d.clone(),
             None => {
@@ -505,6 +506,7 @@ impl EntropyApp {
         self.combo_write_task = None;
         self.settings_write_task = None;
         self.settings_write_queue.clear();
+        self.qmk_settings_write_queue.clear();
         self.hid_device = None;
         self.undo_stack.clear();
         self.device_about_info = None;
