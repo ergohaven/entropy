@@ -323,6 +323,29 @@ impl EntropyApp {
         ergohaven_macropad_display || name.contains("m4cr0pad v2") || name.contains("m4cr0pad v3")
     }
 
+    fn settings_title_words(title: &str) -> Vec<String> {
+        title
+            .split(|character: char| !character.is_ascii_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .map(str::to_ascii_lowercase)
+            .collect()
+    }
+
+    fn is_generic_touchpad_settings_tab(tab: &serde_json::Value) -> bool {
+        let Some(title) = tab.get("name").and_then(serde_json::Value::as_str) else {
+            return false;
+        };
+        let words = Self::settings_title_words(title);
+        let identifies_touchpad = words
+            .iter()
+            .any(|word| matches!(word.as_str(), "touchpad" | "trackpad"));
+        let identifies_side = words
+            .iter()
+            .any(|word| matches!(word.as_str(), "left" | "right"));
+
+        identifies_touchpad && !identifies_side
+    }
+
     pub(super) fn touchpad_setting_field(
         json: &serde_json::Value,
         qsid: u16,
@@ -330,15 +353,9 @@ impl EntropyApp {
         json.get("settings")
             .and_then(|value| value.as_array())?
             .iter()
-            .find(|tab| {
-                tab.get("name")
-                    .and_then(|value| value.as_str())
-                    .map(|name| name.to_ascii_lowercase().contains("touchpad"))
-                    .unwrap_or(false)
-            })?
-            .get("fields")
-            .and_then(|value| value.as_array())?
-            .iter()
+            .filter(|tab| Self::is_generic_touchpad_settings_tab(tab))
+            .filter_map(|tab| tab.get("fields").and_then(|value| value.as_array()))
+            .flatten()
             .find(|field| field.get("qsid").and_then(|value| value.as_u64()) == Some(qsid as u64))
     }
 
@@ -361,31 +378,9 @@ impl EntropyApp {
     }
 
     pub(super) fn layout_json_has_touchpad_settings(json: &serde_json::Value) -> bool {
-        let Some(tabs) = json.get("settings").and_then(|value| value.as_array()) else {
-            return false;
-        };
-
-        tabs.iter().any(|tab| {
-            let tab_name = tab
-                .get("name")
-                .and_then(|value| value.as_str())
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            let has_touchpad_name = tab_name.contains("touchpad");
-            let has_touchpad_qsids = tab
-                .get("fields")
-                .and_then(|value| value.as_array())
-                .map(|fields| {
-                    [120u64, 121, 122, 123, 124].iter().all(|qsid| {
-                        fields.iter().any(|field| {
-                            field.get("qsid").and_then(|value| value.as_u64()) == Some(*qsid)
-                        })
-                    })
-                })
-                .unwrap_or(false);
-
-            has_touchpad_name && has_touchpad_qsids
-        })
+        [120u16, 121, 122, 123, 124]
+            .iter()
+            .all(|qsid| Self::touchpad_setting_exists(json, *qsid))
     }
 
     fn bluetooth_setting_variants(field: &serde_json::Value) -> Vec<String> {
@@ -882,9 +877,21 @@ impl EntropyApp {
     }
 
     fn is_module_settings_tab(normalized_title: &str) -> bool {
+        let words = Self::settings_title_words(normalized_title);
+        let identifies_side = words
+            .iter()
+            .any(|word| matches!(word.as_str(), "left" | "right"));
+        let identifies_controller = words.iter().any(|word| {
+            matches!(
+                word.as_str(),
+                "controller" | "pointing" | "touchpad" | "trackpad"
+            )
+        });
+
         normalized_title.contains("module")
             || normalized_title.contains("trackball")
             || (normalized_title.contains("auto") && normalized_title.contains("layer"))
+            || (identifies_side && identifies_controller)
     }
 
     pub(super) fn module_settings_groups(
@@ -1240,6 +1247,141 @@ mod tests {
         assert_eq!(groups[0].fields[0].title, "Ball DPI");
         assert_eq!(groups[0].fields[0].qsid, 120);
         assert_eq!(groups[0].fields[0].kind, ModuleSettingKind::Integer);
+    }
+
+    #[test]
+    fn generic_touchpad_settings_can_span_multiple_tabs() {
+        let json = serde_json::json!({
+            "settings": [
+                {
+                    "name": "Touchpad Pointer",
+                    "fields": [
+                        {
+                            "title": "DPI",
+                            "qsid": 120,
+                            "type": "select",
+                            "variants": ["400", "800"]
+                        },
+                        { "title": "Sniper sensitivity", "qsid": 121, "type": "integer" }
+                    ]
+                },
+                {
+                    "name": "Touchpad Behavior",
+                    "fields": [
+                        { "title": "Scroll sensitivity", "qsid": 122, "type": "integer" },
+                        { "title": "Text sensitivity", "qsid": 123, "type": "integer" },
+                        { "title": "Options", "qsid": 124, "type": "integer" }
+                    ]
+                }
+            ]
+        });
+
+        assert!(EntropyApp::layout_json_has_touchpad_settings(&json));
+        assert_eq!(
+            EntropyApp::touchpad_setting_variants(&json, 120),
+            vec!["400", "800"]
+        );
+        assert_eq!(
+            EntropyApp::touchpad_setting_field(&json, 123)
+                .and_then(|field| field.get("title"))
+                .and_then(serde_json::Value::as_str),
+            Some("Text sensitivity")
+        );
+        assert!(EntropyApp::module_settings_groups(&json, &[120, 121, 122, 123, 124]).is_empty());
+    }
+
+    #[test]
+    fn generic_touchpad_settings_ignore_side_specific_tabs() {
+        let json = serde_json::json!({
+            "settings": [
+                {
+                    "name": "Left Touchpad",
+                    "fields": [
+                        { "title": "Ball DPI", "qsid": 120, "type": "select" },
+                        { "title": "Touch DPI", "qsid": 122, "type": "select" },
+                        { "title": "Scroll sensitivity", "qsid": 124, "type": "integer" }
+                    ]
+                },
+                {
+                    "name": "Right Touchpad",
+                    "fields": [
+                        { "title": "Ball DPI", "qsid": 121, "type": "select" },
+                        { "title": "Touch DPI", "qsid": 123, "type": "select" }
+                    ]
+                }
+            ]
+        });
+
+        assert!(!EntropyApp::layout_json_has_touchpad_settings(&json));
+        assert!(EntropyApp::touchpad_setting_field(&json, 120).is_none());
+    }
+
+    #[test]
+    fn module_settings_groups_include_split_touchpad_controller_tabs() {
+        let json = serde_json::json!({
+            "settings": [
+                {
+                    "name": "Left Touchpad",
+                    "fields": [
+                        {
+                            "title": "Mode",
+                            "qsid": 134,
+                            "type": "select",
+                            "variants": ["Normal", "Scroll"]
+                        },
+                        {
+                            "title": "Scroll sensitivity",
+                            "qsid": 125,
+                            "type": "integer",
+                            "min": 1,
+                            "max": 255
+                        }
+                    ]
+                },
+                {
+                    "name": "Right Controller",
+                    "fields": [
+                        {
+                            "title": "Mode",
+                            "qsid": 135,
+                            "type": "select",
+                            "variants": ["Normal", "Scroll"]
+                        },
+                        {
+                            "title": "Scroll sensitivity",
+                            "qsid": 128,
+                            "type": "integer",
+                            "min": 1,
+                            "max": 255
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let groups = EntropyApp::module_settings_groups(&json, &[125, 128, 134, 135]);
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].title, "Left Touchpad");
+        assert_eq!(groups[0].kind, ModuleSettingsGroupKind::Left);
+        assert_eq!(
+            groups[0]
+                .fields
+                .iter()
+                .map(|field| field.qsid)
+                .collect::<Vec<_>>(),
+            vec![134, 125]
+        );
+        assert_eq!(groups[1].title, "Right Controller");
+        assert_eq!(groups[1].kind, ModuleSettingsGroupKind::Right);
+        assert_eq!(
+            groups[1]
+                .fields
+                .iter()
+                .map(|field| field.qsid)
+                .collect::<Vec<_>>(),
+            vec![135, 128]
+        );
     }
 
     fn test_module_field(title: &str, qsid: u16) -> ModuleSettingField {
