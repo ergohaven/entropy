@@ -808,7 +808,7 @@ impl EntropyApp {
         field: &serde_json::Value,
         supported_qmk_settings: &[u16],
     ) -> Option<ModuleSettingField> {
-        let qsid = field.get("qsid")?.as_u64()? as u16;
+        let qsid = u16::try_from(field.get("qsid")?.as_u64()?).ok()?;
         if !supported_qmk_settings.contains(&qsid) {
             return None;
         }
@@ -866,6 +866,17 @@ impl EntropyApp {
                 .min(u16::MAX as u64) as u16,
             variants,
         })
+    }
+
+    fn module_setting_widths(fields: &[ModuleSettingField]) -> std::collections::BTreeMap<u16, u8> {
+        let mut widths = std::collections::BTreeMap::<u16, u8>::new();
+        for field in fields {
+            widths
+                .entry(field.qsid)
+                .and_modify(|width| *width = (*width).max(field.width))
+                .or_insert(field.width);
+        }
+        widths
     }
 
     fn module_settings_group_kind(tab_name: &str) -> ModuleSettingsGroupKind {
@@ -953,14 +964,7 @@ impl EntropyApp {
             values: std::collections::BTreeMap::new(),
             supported: true,
         };
-        let mut widths = std::collections::BTreeMap::<u16, u8>::new();
-        for field in &settings.fields {
-            widths
-                .entry(field.qsid)
-                .and_modify(|width| *width = (*width).max(field.width))
-                .or_insert(field.width);
-        }
-        for (qsid, width) in widths {
+        for (qsid, width) in Self::module_setting_widths(&settings.fields) {
             let value = if width > 1 {
                 dev_conn.get_qmk_setting_u16(qsid)
             } else {
@@ -1348,5 +1352,118 @@ mod tests {
         assert!(EntropyApp::module_settings_encoder_visible(
             &settings, &layout, 0
         ));
+    }
+
+    #[test]
+    fn module_setting_parser_preserves_integer_width_and_bounds() {
+        let field = EntropyApp::parse_module_setting_field(
+            &serde_json::json!({
+                "title": " Ball DPI ",
+                "qsid": 120,
+                "type": "integer",
+                "width": 2,
+                "min": 100,
+                "max": 16000
+            }),
+            &[120],
+        )
+        .expect("supported integer field should parse");
+
+        assert_eq!(field.title, "Ball DPI");
+        assert_eq!(field.qsid, 120);
+        assert_eq!(field.kind, ModuleSettingKind::Integer);
+        assert_eq!(field.width, 2);
+        assert_eq!(field.min, 100);
+        assert_eq!(field.max, 16000);
+    }
+
+    #[test]
+    fn module_setting_parser_normalizes_select_metadata() {
+        let field = EntropyApp::parse_module_setting_field(
+            &serde_json::json!({
+                "title": "Mode",
+                "qsid": 134,
+                "type": "select",
+                "width": 0,
+                "bit": 99,
+                "variants": ["Normal", " Scroll ", ""]
+            }),
+            &[134],
+        )
+        .expect("supported select field should parse");
+
+        assert_eq!(field.kind, ModuleSettingKind::Select);
+        assert_eq!(field.width, 1);
+        assert_eq!(field.bit, 15);
+        assert_eq!(field.variants, vec!["Normal", "Scroll"]);
+        assert_eq!(field.min, 0);
+        assert_eq!(field.max, 1);
+    }
+
+    #[test]
+    fn module_setting_parser_rejects_unsupported_or_invalid_fields() {
+        let unsupported = serde_json::json!({
+            "title": "Mode",
+            "qsid": 134,
+            "type": "select"
+        });
+        let overflowed_qsid = serde_json::json!({
+            "title": "Mode",
+            "qsid": 65536,
+            "type": "select"
+        });
+        let blank_title = serde_json::json!({
+            "title": "  ",
+            "qsid": 134,
+            "type": "select"
+        });
+        let unknown_type = serde_json::json!({
+            "title": "Mode",
+            "qsid": 134,
+            "type": "slider"
+        });
+
+        assert!(EntropyApp::parse_module_setting_field(&unsupported, &[]).is_none());
+        assert!(EntropyApp::parse_module_setting_field(&overflowed_qsid, &[0]).is_none());
+        assert!(EntropyApp::parse_module_setting_field(&blank_title, &[134]).is_none());
+        assert!(EntropyApp::parse_module_setting_field(&unknown_type, &[134]).is_none());
+    }
+
+    #[test]
+    fn duplicate_module_qsid_uses_widest_read_width() {
+        let narrow = EntropyApp::parse_module_setting_field(
+            &serde_json::json!({
+                "title": "Mode",
+                "qsid": 134,
+                "type": "select",
+                "width": 1
+            }),
+            &[134, 135],
+        )
+        .unwrap();
+        let wide = EntropyApp::parse_module_setting_field(
+            &serde_json::json!({
+                "title": "Resolution",
+                "qsid": 134,
+                "type": "integer",
+                "width": 2
+            }),
+            &[134, 135],
+        )
+        .unwrap();
+        let other = EntropyApp::parse_module_setting_field(
+            &serde_json::json!({
+                "title": "Invert",
+                "qsid": 135,
+                "type": "boolean"
+            }),
+            &[134, 135],
+        )
+        .unwrap();
+
+        assert_eq!(
+            EntropyApp::module_setting_widths(&[narrow, wide, other]),
+            std::collections::BTreeMap::from([(134, 2), (135, 1)])
+        );
     }
 }
