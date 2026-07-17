@@ -1,58 +1,29 @@
-/// Offline embedded Ergohaven layout database for Vial coordinate corrections.
-///
-/// Some firmware layout JSONs use KLE rotation groups that are easier to render
-/// from trusted device-specific coordinates. `lookup_layout` matches a device
-/// name to an embedded physical layout.
+//! Validation helpers for embedded Ergohaven layout fixtures.
 use crate::keyboard::PhysicalKey;
 
 const K03_JSON: &str = include_str!("layouts/k03.json");
 const IMPERIAL44_JSON: &str = include_str!("layouts/imperial44.json");
 const OP36_JSON: &str = include_str!("layouts/op36.json");
 
-pub struct EmbeddedLayout {
-    pub id: &'static str,
-    pub name: &'static str,
-    pub json: &'static str,
+struct EmbeddedLayout {
+    name: &'static str,
+    json: &'static str,
 }
 
 static LAYOUTS: &[EmbeddedLayout] = &[
     EmbeddedLayout {
-        id: "k03",
         name: "K:03",
         json: K03_JSON,
     },
     EmbeddedLayout {
-        id: "imperial44",
         name: "Imperial44",
         json: IMPERIAL44_JSON,
     },
     EmbeddedLayout {
-        id: "op36",
         name: "Omega Point 36",
         json: OP36_JSON,
     },
 ];
-
-/// Try to find an embedded layout matching the device name (case-insensitive substring match).
-/// Returns parsed physical keys on success.
-pub fn lookup_layout(device_name: &str) -> Option<(&'static EmbeddedLayout, Vec<PhysicalKey>)> {
-    // Strip non-alphanumeric for fuzzy match (e.g. "K:03" matches id "k03")
-    let dn = device_name.to_lowercase();
-    let dn_alnum: String = dn.chars().filter(|c| c.is_alphanumeric()).collect();
-    let layout = LAYOUTS.iter().find(|l| {
-        let id = l.id.to_lowercase();
-        let name = l.name.to_lowercase();
-        let id_alnum: String = id.chars().filter(|c| c.is_alphanumeric()).collect();
-        let name_alnum: String = name.chars().filter(|c| c.is_alphanumeric()).collect();
-        dn.contains(&id)
-            || dn.contains(&name)
-            || dn_alnum.contains(&id_alnum)
-            || dn_alnum.contains(&name_alnum)
-    })?;
-
-    let keys = parse_embedded_json(layout.json)?;
-    Some((layout, keys))
-}
 
 /// Parse the embedded JSON format: `layouts.default_transform.layout` is an array of
 /// `{ row, col, x, y, r? }` with absolute coordinates in KLE units.
