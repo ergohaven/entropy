@@ -416,7 +416,7 @@ impl EntropyApp {
             crate::ui_style::border_color(dark).gamma_multiply(if dark { 0.72 } else { 0.9 });
         ui.painter().line_segment(
             [row_rect.left_bottom(), row_rect.right_bottom()],
-            egui::Stroke::new(1.0, separator),
+            egui::Stroke::new(1.0_f32, separator),
         );
         ui.painter().text(
             row_rect.center(),

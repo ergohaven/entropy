@@ -225,8 +225,8 @@ impl EntropyApp {
             return;
         }
 
-        let dark = ctx.style().visuals.dark_mode;
-        let screen_rect = ctx.screen_rect();
+        let dark = ctx.global_style().visuals.dark_mode;
+        let screen_rect = ctx.content_rect();
         egui::Area::new("close_to_tray_prompt_backdrop".into())
             .order(egui::Order::Foreground)
             .fixed_pos(screen_rect.min)
@@ -305,7 +305,7 @@ impl EntropyApp {
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .fixed_size(panel_size)
             .frame(crate::ui_style::modal_window_frame(
-                ctx.style().as_ref(),
+                ctx.global_style().as_ref(),
                 dark,
             ))
             .show(ctx, |ui| {
@@ -364,7 +364,7 @@ impl EntropyApp {
                 let checkbox_size = 13.0;
                 let remember_gap = 7.0;
                 let remember_font = FontId::proportional(12.5);
-                let remember_text_width = ui.fonts(|f| {
+                let remember_text_width = ui.fonts_mut(|f| {
                     f.layout_no_wrap(
                         remember.to_owned(),
                         remember_font.clone(),

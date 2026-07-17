@@ -250,7 +250,7 @@ impl EntropyApp {
                                         ui.style_mut().visuals.window_stroke =
                                             crate::ui_style::modal_outline_stroke(dark);
                                         ui.style_mut().visuals.window_fill = app_surface_fill(dark);
-                                        egui::popup_below_widget(
+                                        crate::ui_style::popup_below_widget(
                                             ui,
                                             dropdown_id,
                                             &dropdown_resp,
@@ -351,7 +351,7 @@ impl EntropyApp {
                                                             if option_resp.clicked() {
                                                                 self.selected_alt_repeat =
                                                                     entry_idx;
-                                                                ui.memory_mut(|m| m.close_popup());
+                                                                egui::Popup::close_all(ui.ctx());
                                                             }
                                                         }
                                                     });

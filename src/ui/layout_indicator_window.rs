@@ -19,13 +19,13 @@ fn sticky_layout_visuals(dark: bool) -> egui::Visuals {
     visuals.faint_bg_color = app_panel_fill(dark);
     visuals.extreme_bg_color = app_panel_fill(dark);
     visuals.widgets.noninteractive.bg_fill = app_panel_fill(dark);
-    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, app_border_color(dark));
+    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, app_border_color(dark));
     visuals.widgets.inactive.bg_fill = app_surface_fill(dark);
     visuals.widgets.inactive.weak_bg_fill = app_surface_fill(dark);
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, app_border_color(dark));
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, app_border_color(dark));
     visuals.widgets.hovered.bg_fill = app_hover_fill(dark);
     visuals.widgets.hovered.weak_bg_fill = app_hover_fill(dark);
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, app_border_color(dark));
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, app_border_color(dark));
     visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
     visuals
 }
@@ -121,7 +121,7 @@ fn draw_sticky_layout_transparency_dropdown(
     );
 
     let mut changed = false;
-    egui::popup_below_widget(
+    crate::ui_style::popup_below_widget(
         ui,
         dropdown_id,
         &dropdown_resp,
@@ -165,7 +165,7 @@ fn draw_sticky_layout_transparency_dropdown(
                     if pressed_resp.clicked() {
                         *visibility_mode = StickyLayoutVisibilityMode::PressedOnly;
                         changed = true;
-                        ui.memory_mut(|m| m.close_popup());
+                        egui::Popup::close_all(ui.ctx());
                     }
 
                     for (idx, value) in OPACITY_VALUES.iter().copied().enumerate() {
@@ -206,7 +206,7 @@ fn draw_sticky_layout_transparency_dropdown(
                             *visibility_mode = StickyLayoutVisibilityMode::LayoutAndPresses;
                             *opacity = value;
                             changed = true;
-                            ui.memory_mut(|m| m.close_popup());
+                            egui::Popup::close_all(ui.ctx());
                         }
                     }
                 });
@@ -243,7 +243,7 @@ fn sticky_layout_window_icon_button(
         rect,
         8.0,
         fill,
-        Stroke::new(if active { 1.2 } else { 0.8 }, stroke_color),
+        Stroke::new(if active { 1.2_f32 } else { 0.8_f32 }, stroke_color),
         egui::StrokeKind::Inside,
     );
 
@@ -252,7 +252,7 @@ fn sticky_layout_window_icon_button(
     } else {
         app_muted_text(dark)
     };
-    let stroke = Stroke::new(1.7, color);
+    let stroke = Stroke::new(1.7_f32, color);
     match kind {
         StickyLayoutWindowButton::Close => {
             let a = rect.center() + egui::vec2(-4.5, -4.5);
@@ -387,7 +387,8 @@ impl EntropyApp {
         ctx.show_viewport_immediate(
             viewport_id,
             viewport_builder,
-            |viewport_ctx, viewport_class| {
+            |viewport_ui, viewport_class| {
+                let viewport_ctx = viewport_ui.ctx().clone();
                 if viewport_ctx.input(|i| i.viewport().close_requested()) {
                     should_close = true;
                     return;
@@ -414,8 +415,6 @@ impl EntropyApp {
                     }
                 }
 
-                let viewport_default_size = sticky_window_size;
-
                 let mut draw_contents = |ui: &mut egui::Ui, should_close: &mut bool| {
                     *ui.visuals_mut() = sticky_layout_visuals(dark);
                     let effective_sticky_opacity = if resize_opacity_hold_frames > 0 {
@@ -434,7 +433,7 @@ impl EntropyApp {
                         full_rect.shrink(0.5),
                         0.0,
                         Color32::TRANSPARENT,
-                        Stroke::new(1.0, app_border_color(dark)),
+                        Stroke::new(1.0_f32, app_border_color(dark)),
                         egui::StrokeKind::Inside,
                     );
                     let title_rect = egui::Rect::from_min_max(
@@ -454,7 +453,7 @@ impl EntropyApp {
                             egui::pos2(title_rect.left(), title_rect.bottom()),
                             egui::pos2(title_rect.right(), title_rect.bottom()),
                         ],
-                        Stroke::new(1.0, app_border_color(dark)),
+                        Stroke::new(1.0_f32, app_border_color(dark)),
                     );
 
                     let title_x = title_rect.left() + 12.0;
@@ -554,7 +553,7 @@ impl EntropyApp {
                             egui::pos2(footer_rect.left(), footer_rect.top()),
                             egui::pos2(footer_rect.right(), footer_rect.top()),
                         ],
-                        Stroke::new(1.0, app_border_color(dark)),
+                        Stroke::new(1.0_f32, app_border_color(dark)),
                     );
                     let footer_drag_rect = egui::Rect::from_min_max(
                         egui::pos2(footer_rect.left() + 124.0, footer_rect.top()),
@@ -603,7 +602,7 @@ impl EntropyApp {
                             rect,
                             16.0,
                             app_surface_fill(dark),
-                            Stroke::new(1.0, app_border_color(dark)),
+                            Stroke::new(1.0_f32, app_border_color(dark)),
                             egui::StrokeKind::Inside,
                         );
                         ui.painter().text(
@@ -672,28 +671,17 @@ impl EntropyApp {
                                 egui::pos2(full_rect.right() - offset, full_rect.bottom() - 5.0),
                                 egui::pos2(full_rect.right() - 5.0, full_rect.bottom() - offset),
                             ],
-                            Stroke::new(1.0, grip_color),
+                            Stroke::new(1.0_f32, grip_color),
                         );
                     }
                 };
 
-                if matches!(viewport_class, egui::ViewportClass::Embedded) {
-                    let mut open = true;
-                    egui::Window::new(window_title.as_str())
-                        .open(&mut open)
-                        .default_size(viewport_default_size)
-                        .min_size(sticky_layout_default_window_size())
-                        .resizable(true)
-                        .show(viewport_ctx, |ui| {
-                            draw_contents(ui, &mut should_close);
-                        });
-                    if !open {
-                        should_close = true;
-                    }
+                if matches!(viewport_class, egui::ViewportClass::EmbeddedWindow) {
+                    draw_contents(viewport_ui, &mut should_close);
                 } else {
                     egui::CentralPanel::default()
                         .frame(egui::Frame::NONE.fill(app_panel_fill(dark)))
-                        .show(viewport_ctx, |ui| {
+                        .show_inside(viewport_ui, |ui| {
                             draw_contents(ui, &mut should_close);
                         });
                 }

@@ -83,7 +83,7 @@ impl EntropyApp {
             metrics.settings_control_font_size(),
         );
         let mut picked = None;
-        egui::popup_below_widget(
+        crate::ui_style::popup_below_widget(
             ui,
             dropdown_id,
             &dropdown_resp,
@@ -133,7 +133,7 @@ impl EntropyApp {
                             );
                             if option_resp.clicked() {
                                 picked = Some(idx);
-                                ui.memory_mut(|m| m.close_popup());
+                                egui::Popup::close_all(ui.ctx());
                             }
                         }
                     });
@@ -319,7 +319,7 @@ impl EntropyApp {
                             ui.visuals_mut().widgets.active.bg_fill = slider_fill;
                             ui.visuals_mut().widgets.active.weak_bg_fill = slider_fill;
                             ui.visuals_mut().widgets.hovered.bg_stroke =
-                                Stroke::new(1.0, slider_fill);
+                                Stroke::new(1.0_f32, slider_fill);
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {

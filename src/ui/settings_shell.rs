@@ -246,8 +246,8 @@ impl EntropyApp {
             && !self.vial_unlock_polling
             && !modal_or_popup_open_at_frame_start
             && !keyboard_input_wanted_at_frame_start
-            && !ctx.wants_keyboard_input()
-            && !ctx.memory(|m| m.any_popup_open())
+            && !ctx.egui_wants_keyboard_input()
+            && !egui::Popup::is_any_open(ctx)
             && !self.top_dropdown_open(ctx)
     }
 }

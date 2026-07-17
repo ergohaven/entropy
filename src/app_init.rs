@@ -66,6 +66,7 @@ impl EntropyApp {
             import_progress_title: String::new(),
             import_progress_body: String::new(),
             dark_mode,
+            last_applied_theme: None,
             app_settings,
             text_expander_rules_signature,
             text_expander_rules_last_check_at: 0.0,

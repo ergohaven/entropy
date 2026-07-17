@@ -1,24 +1,70 @@
 use super::*;
 
-const HIDDEN_TO_TRAY_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
-const BLUETOOTH_VISIBLE_REPAINT_INTERVAL: std::time::Duration =
-    std::time::Duration::from_millis(16);
-const DEFAULT_VISIBLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
-
-fn hidden_to_tray_repaint_interval() -> std::time::Duration {
-    HIDDEN_TO_TRAY_REPAINT_INTERVAL
-}
-
-fn visible_repaint_interval(selected_device_is_bluetooth: bool) -> std::time::Duration {
-    if selected_device_is_bluetooth {
-        BLUETOOTH_VISIBLE_REPAINT_INTERVAL
-    } else {
-        DEFAULT_VISIBLE_REPAINT_INTERVAL
-    }
-}
-
 fn should_poll_device_scan(main_window_hidden_to_tray: bool) -> bool {
     !main_window_hidden_to_tray
+}
+
+fn theme_application_required(
+    last_applied_theme: Option<(bool, AppAccentColor)>,
+    dark_mode: bool,
+    accent_color: AppAccentColor,
+) -> bool {
+    last_applied_theme != Some((dark_mode, accent_color))
+}
+
+fn app_visuals(dark_mode: bool) -> egui::Visuals {
+    let mut visuals = if dark_mode {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    visuals.panel_fill = app_panel_fill(dark_mode);
+    visuals.window_fill = app_window_fill(dark_mode);
+    visuals.faint_bg_color = if dark_mode {
+        app_window_fill(true)
+    } else {
+        app_panel_fill(false)
+    };
+    visuals.extreme_bg_color = if dark_mode {
+        Color32::from_rgb(24, 24, 24)
+    } else {
+        Color32::from_rgb(235, 235, 235)
+    };
+    visuals.widgets.noninteractive.bg_fill = if dark_mode {
+        app_window_fill(true)
+    } else {
+        app_panel_fill(false)
+    };
+    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, app_border_color(dark_mode));
+    visuals.widgets.inactive.bg_fill = app_surface_fill(dark_mode);
+    visuals.widgets.inactive.weak_bg_fill = app_surface_fill(dark_mode);
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, app_border_color(dark_mode));
+    visuals.widgets.hovered.bg_fill = app_hover_fill(dark_mode);
+    visuals.widgets.hovered.weak_bg_fill = app_hover_fill(dark_mode);
+    visuals.widgets.hovered.bg_stroke = Stroke::new(
+        1.0_f32,
+        if dark_mode {
+            app_accent()
+        } else {
+            Color32::from_rgb(230, 230, 233)
+        },
+    );
+    visuals.widgets.active.bg_fill = app_accent();
+    visuals.widgets.active.weak_bg_fill = app_accent();
+    visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, app_accent());
+    visuals.selection.bg_fill =
+        Color32::from_rgba_unmultiplied(82, 82, 86, if dark_mode { 140 } else { 72 });
+    visuals.selection.stroke = Stroke::new(
+        1.0_f32,
+        if dark_mode {
+            Color32::from_rgb(245, 245, 245)
+        } else {
+            Color32::from_rgb(38, 38, 40)
+        },
+    );
+    visuals.hyperlink_color = app_accent();
+    visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
+    visuals
 }
 
 impl EntropyApp {
@@ -38,12 +84,41 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn update_hidden_to_tray_background(&mut self, ctx: &egui::Context, now: f64) {
+    fn update_native_background(
+        &mut self,
+        ctx: &egui::Context,
+        now: f64,
+        main_window_hidden_to_tray: bool,
+        selected_device_is_bluetooth: bool,
+    ) {
+        if should_poll_device_scan(main_window_hidden_to_tray) {
+            self.handle_pending_imports(ctx, now);
+            self.poll_device_scan(ctx);
+
+            let is_connecting = matches!(self.connect_state, ConnectState::Loading { .. });
+            let layer_write_active = self.layer_write_task.is_some();
+            #[cfg(target_os = "macos")]
+            let hid_session_active = self.hid_device.is_some();
+            #[cfg(not(target_os = "macos"))]
+            let hid_session_active = false;
+            if !selected_device_is_bluetooth
+                && (self.last_device_scan_at == 0.0 || now - self.last_device_scan_at >= 1.0)
+                && !self.vial_unlock_polling
+                && !is_connecting
+                && !layer_write_active
+                && !hid_session_active
+            {
+                self.scan_frame = self.scan_frame.wrapping_add(1);
+                self.last_device_scan_at = now;
+                self.start_device_scan();
+            }
+        }
+
         self.poll_layer_write(ctx);
-        self.poll_connect(ctx);
-        self.poll_single_instance_signal(ctx);
         self.poll_text_expander_deferred_save(now);
         self.auto_reload_text_expander_rules_file(now);
+        self.poll_single_instance_signal(ctx);
+        self.poll_connect(ctx);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -239,7 +314,7 @@ impl EntropyApp {
         if !self.import_pending() {
             return;
         }
-        let screen_rect = ctx.screen_rect();
+        let screen_rect = ctx.content_rect();
         egui::Area::new("import_progress_backdrop".into())
             .order(egui::Order::Foreground)
             .fixed_pos(screen_rect.min)
@@ -254,7 +329,7 @@ impl EntropyApp {
                     rect,
                     0.0,
                     Color32::from_black_alpha(crate::ui_style::modal_backdrop_alpha(
-                        ctx.style().visuals.dark_mode,
+                        ctx.global_style().visuals.dark_mode,
                     )),
                 );
             });
@@ -345,29 +420,35 @@ mod tests {
     }
 
     #[test]
-    fn hidden_to_tray_repaint_interval_is_throttled() {
-        assert_eq!(
-            hidden_to_tray_repaint_interval(),
-            std::time::Duration::from_secs(5)
-        );
-    }
-
-    #[test]
-    fn visible_repaint_interval_keeps_bluetooth_responsive() {
-        assert_eq!(
-            visible_repaint_interval(true),
-            std::time::Duration::from_millis(16)
-        );
-        assert_eq!(
-            visible_repaint_interval(false),
-            std::time::Duration::from_millis(250)
-        );
-    }
-
-    #[test]
     fn hidden_to_tray_skips_device_scan_polling() {
         assert!(!should_poll_device_scan(true));
+        // Minimized and occluded windows are not tray-hidden, so App::logic
+        // keeps their background device polling alive while App::ui is skipped.
         assert!(should_poll_device_scan(false));
+    }
+
+    #[test]
+    fn theme_is_applied_only_initially_and_after_changes() {
+        assert!(theme_application_required(
+            None,
+            false,
+            AppAccentColor::Rose
+        ));
+        assert!(!theme_application_required(
+            Some((false, AppAccentColor::Rose)),
+            false,
+            AppAccentColor::Rose
+        ));
+        assert!(theme_application_required(
+            Some((false, AppAccentColor::Rose)),
+            true,
+            AppAccentColor::Rose
+        ));
+        assert!(theme_application_required(
+            Some((false, AppAccentColor::Rose)),
+            false,
+            AppAccentColor::Blue
+        ));
     }
 }
 
@@ -385,32 +466,68 @@ impl eframe::App for EntropyApp {
         save_app_settings(&self.app_settings);
     }
 
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            #[cfg(target_os = "windows")]
+            self.cache_windows_hwnd(frame);
+            #[cfg(target_os = "macos")]
+            self.cache_macos_ns_window(frame);
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            self.handle_tray_quit_request(ctx);
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            self.handle_tray_restore_request(ctx);
+            self.handle_close_to_tray(ctx);
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            self.poll_tray_events(ctx);
+            #[cfg(target_os = "macos")]
+            self.handle_macos_dock_reopen(ctx);
+
+            crate::app::poll_update_check(&mut self.update_check);
+            let main_window_hidden_to_tray = self.main_window_hidden_to_tray();
+            let selected_device_is_bluetooth = self
+                .selected_device
+                .and_then(|idx| self.device_manager.devices().get(idx))
+                .map(|device| device.is_bluetooth_transport())
+                .unwrap_or(false);
+            let high_frequency_bluetooth_repaint =
+                should_use_high_frequency_bluetooth_repaint(selected_device_is_bluetooth);
+            let connect_pending = matches!(self.connect_state, ConnectState::Loading { .. });
+            let update_check_pending =
+                matches!(self.update_check, UpdateCheckState::Checking { .. });
+            ctx.request_repaint_after(native_repaint_interval(
+                main_window_hidden_to_tray,
+                high_frequency_bluetooth_repaint,
+                connect_pending,
+                update_check_pending,
+            ));
+            self.update_native_background(
+                ctx,
+                ctx.input(|i| i.time),
+                main_window_hidden_to_tray,
+                selected_device_is_bluetooth,
+            );
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            crate::app::poll_update_check(&mut self.update_check);
+            let now = ctx.input(|i| i.time);
+            self.poll_text_expander_deferred_save(now);
+            self.auto_reload_text_expander_rules_file(now);
+        }
+    }
+
+    fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx_owned = root_ui.ctx().clone();
+        let ctx = &ctx_owned;
         self.apply_ui_scale(ctx);
         self.handle_ui_scale_shortcuts(ctx);
         self.remember_main_window_size(ctx);
-        crate::app::poll_update_check(&mut self.update_check);
-        if matches!(self.update_check, UpdateCheckState::Checking { .. }) {
-            ctx.request_repaint_after(std::time::Duration::from_millis(100));
-        }
-
-        #[cfg(target_os = "windows")]
-        self.cache_windows_hwnd(_frame);
-        #[cfg(target_os = "macos")]
-        self.cache_macos_ns_window(_frame);
-        #[cfg(any(target_os = "windows", target_os = "macos"))]
-        self.handle_tray_quit_request(ctx);
-        #[cfg(any(target_os = "windows", target_os = "macos"))]
-        self.handle_tray_restore_request(ctx);
-        self.handle_close_to_tray(ctx);
-        #[cfg(any(target_os = "windows", target_os = "macos"))]
-        self.poll_tray_events(ctx);
-        #[cfg(target_os = "macos")]
-        self.handle_macos_dock_reopen(ctx);
 
         self.tour_target_rects.clear();
 
-        let keyboard_input_wanted_at_frame_start = ctx.wants_keyboard_input();
+        let keyboard_input_wanted_at_frame_start = ctx.egui_wants_keyboard_input();
         #[cfg(not(target_arch = "wasm32"))]
         let import_pending_at_frame_start = self.import_pending();
         #[cfg(target_arch = "wasm32")]
@@ -423,33 +540,7 @@ impl eframe::App for EntropyApp {
             || self.typing_trainer_history_open
             || import_pending_at_frame_start
             || self.top_dropdown_open(ctx)
-            || ctx.memory(|m| m.any_popup_open());
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let selected_device_is_bluetooth = self
-            .selected_device
-            .and_then(|idx| self.device_manager.devices().get(idx))
-            .map(|device| device.is_bluetooth_transport())
-            .unwrap_or(false);
-        let main_window_hidden_to_tray = self.main_window_hidden_to_tray();
-        let now = ctx.input(|i| i.time);
-
-        #[cfg(not(target_arch = "wasm32"))]
-        if main_window_hidden_to_tray {
-            self.update_hidden_to_tray_background(ctx, now);
-            ctx.request_repaint_after(hidden_to_tray_repaint_interval());
-            return;
-        }
-
-        // Keep lightweight device detection alive when visible. On Windows BLE,
-        // keep UI repaint smooth but avoid frequent HID enumeration against the BLE stack.
-        #[cfg(not(target_arch = "wasm32"))]
-        ctx.request_repaint_after(visible_repaint_interval(selected_device_is_bluetooth));
-
-        #[cfg(not(target_arch = "wasm32"))]
-        if should_poll_device_scan(main_window_hidden_to_tray) && self.layer_write_task.is_none() {
-            self.poll_device_scan(ctx);
-        }
+            || egui::Popup::is_any_open(ctx);
 
         // Auto-scan for device connect/disconnect changes.
         self.secondary_click_handled = false;
@@ -465,84 +556,11 @@ impl eframe::App for EntropyApp {
                 self.pending_handed_swap = None;
             }
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        self.handle_pending_imports(ctx, now);
-        self.poll_text_expander_deferred_save(now);
-        self.auto_reload_text_expander_rules_file(now);
-        let is_connecting = matches!(self.connect_state, ConnectState::Loading { .. });
-        let layer_write_active = self.layer_write_task.is_some();
-        #[cfg(target_os = "macos")]
-        let hid_session_active = self.hid_device.is_some();
-        #[cfg(not(target_os = "macos"))]
-        let hid_session_active = false;
-        if !selected_device_is_bluetooth
-            && (self.last_device_scan_at == 0.0 || now - self.last_device_scan_at >= 1.0)
-            && !self.vial_unlock_polling
-            && !is_connecting
-            && !layer_write_active
-            && !hid_session_active
-        {
-            self.scan_frame = self.scan_frame.wrapping_add(1);
-            self.last_device_scan_at = now;
-            #[cfg(not(target_arch = "wasm32"))]
-            self.start_device_scan();
+        let accent_color = self.app_settings.accent_color;
+        if theme_application_required(self.last_applied_theme, self.dark_mode, accent_color) {
+            ctx.set_visuals(app_visuals(self.dark_mode));
+            self.last_applied_theme = Some((self.dark_mode, accent_color));
         }
-
-        #[cfg(not(target_arch = "wasm32"))]
-        self.poll_single_instance_signal(ctx);
-
-        // Apply theme
-        if self.dark_mode {
-            let mut v = egui::Visuals::dark();
-            v.panel_fill = app_panel_fill(true);
-            v.window_fill = app_window_fill(true);
-            v.faint_bg_color = app_window_fill(true);
-            v.extreme_bg_color = Color32::from_rgb(24, 24, 24);
-            v.widgets.noninteractive.bg_fill = app_window_fill(true);
-            v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, app_border_color(true));
-            v.widgets.inactive.bg_fill = app_surface_fill(true);
-            v.widgets.inactive.weak_bg_fill = app_surface_fill(true);
-            v.widgets.inactive.bg_stroke = Stroke::new(1.0, app_border_color(true));
-            v.widgets.hovered.bg_fill = app_hover_fill(true);
-            v.widgets.hovered.weak_bg_fill = app_hover_fill(true);
-            v.widgets.hovered.bg_stroke = Stroke::new(1.0, app_accent());
-            v.widgets.active.bg_fill = app_accent();
-            v.widgets.active.weak_bg_fill = app_accent();
-            v.widgets.active.bg_stroke = Stroke::new(1.0, app_accent());
-            v.selection.bg_fill = Color32::from_rgba_unmultiplied(82, 82, 86, 140);
-            v.selection.stroke = Stroke::new(1.0, Color32::from_rgb(245, 245, 245));
-            v.hyperlink_color = app_accent();
-            v.interact_cursor = Some(egui::CursorIcon::PointingHand);
-            ctx.set_visuals(v);
-        } else {
-            let mut v = egui::Visuals::light();
-            v.panel_fill = app_panel_fill(false);
-            v.window_fill = app_window_fill(false);
-            v.faint_bg_color = app_panel_fill(false);
-            v.extreme_bg_color = Color32::from_rgb(235, 235, 235);
-            v.widgets.noninteractive.bg_fill = app_panel_fill(false);
-            v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, app_border_color(false));
-            v.widgets.inactive.bg_fill = app_surface_fill(false);
-            v.widgets.inactive.weak_bg_fill = app_surface_fill(false);
-            v.widgets.inactive.bg_stroke = Stroke::new(1.0, app_border_color(false));
-            v.widgets.hovered.bg_fill = app_hover_fill(false);
-            v.widgets.hovered.weak_bg_fill = app_hover_fill(false);
-            v.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(230, 230, 233));
-            v.widgets.active.bg_fill = app_accent();
-            v.widgets.active.weak_bg_fill = app_accent();
-            v.widgets.active.bg_stroke = Stroke::new(1.0, app_accent());
-            v.selection.bg_fill = Color32::from_rgba_unmultiplied(82, 82, 86, 72);
-            v.selection.stroke = Stroke::new(1.0, Color32::from_rgb(38, 38, 40));
-            v.hyperlink_color = app_accent();
-            v.interact_cursor = Some(egui::CursorIcon::PointingHand);
-            ctx.set_visuals(v);
-        }
-
-        // Poll background connect thread
-        #[cfg(not(target_arch = "wasm32"))]
-        self.poll_connect(ctx);
-        #[cfg(not(target_arch = "wasm32"))]
-        self.poll_layer_write(ctx);
 
         self.apply_picker_results();
 
@@ -576,7 +594,8 @@ impl eframe::App for EntropyApp {
         }
 
         // Arrow keys Left/Right switch layers (when picker is closed and no text field is focused)
-        if !self.tour_state.active && !self.keycode_picker.open && !ctx.wants_keyboard_input() {
+        if !self.tour_state.active && !self.keycode_picker.open && !ctx.egui_wants_keyboard_input()
+        {
             let layer_count = self.layer_count;
             ctx.input(|i| {
                 if i.key_pressed(egui::Key::ArrowLeft) && self.selected_layer > 0 {
@@ -598,7 +617,7 @@ impl eframe::App for EntropyApp {
         let is_loading = false;
 
         // Main canvas
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show_inside(root_ui, |ui| {
             if self.selected_device.is_none() {
                 let rect = ui.max_rect();
                 #[cfg(target_os = "linux")]
@@ -712,7 +731,7 @@ impl eframe::App for EntropyApp {
                     crate::i18n::tr_text(self.app_settings.language, &self.status_msg)
                 };
                 let font_id = FontId::proportional(16.0);
-                let text_width = ui.fonts(|f| {
+                let text_width = ui.fonts_mut(|f| {
                     f.layout_no_wrap(text.to_owned(), font_id.clone(), Color32::GRAY)
                         .size()
                         .x
@@ -823,7 +842,7 @@ impl eframe::App for EntropyApp {
         self.draw_import_progress_overlay(ctx);
 
         if self.import_report_open {
-            let screen_rect = ctx.screen_rect();
+            let screen_rect = ctx.content_rect();
             egui::Area::new("import_report_backdrop".into())
                 .order(egui::Order::Foreground)
                 .fixed_pos(screen_rect.min)
@@ -838,7 +857,7 @@ impl eframe::App for EntropyApp {
                         rect,
                         0.0,
                         Color32::from_black_alpha(crate::ui_style::modal_backdrop_alpha(
-                            ctx.style().visuals.dark_mode,
+                            ctx.global_style().visuals.dark_mode,
                         )),
                     );
                 });
@@ -890,7 +909,7 @@ impl eframe::App for EntropyApp {
         self.draw_vial_unlock_overlay(ctx);
 
         if self.keycode_picker.open {
-            let screen_rect = ctx.screen_rect();
+            let screen_rect = ctx.content_rect();
             egui::Area::new("window_backdrop".into())
                 .order(egui::Order::Middle)
                 .fixed_pos(screen_rect.min)
@@ -902,7 +921,7 @@ impl eframe::App for EntropyApp {
                         rect,
                         0.0,
                         Color32::from_black_alpha(crate::ui_style::modal_backdrop_alpha(
-                            ctx.style().visuals.dark_mode,
+                            ctx.global_style().visuals.dark_mode,
                         )),
                     );
                     if response.clicked() {

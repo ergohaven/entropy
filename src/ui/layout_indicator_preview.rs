@@ -78,7 +78,7 @@ fn draw_sticky_encoder_arrow(
             center.y + rad.sin() * r,
         ));
     }
-    painter.add(egui::Shape::line(points.clone(), Stroke::new(1.7, color)));
+    painter.add(egui::Shape::line(points.clone(), Stroke::new(1.7_f32, color)));
     if points.len() >= 2 {
         let end = points[points.len() - 1];
         let prev = points[points.len() - 2];
@@ -418,7 +418,7 @@ impl EntropyApp {
                 *key_rect,
                 key.rotation,
                 fill,
-                Stroke::new(1.0, stroke),
+                Stroke::new(1.0_f32, stroke),
             );
 
             if kc == 0x0000 {
@@ -572,7 +572,7 @@ impl EntropyApp {
             painter
                 .with_clip_rect(bottom_rect)
                 .circle_filled(center, fill_radius, key_fill);
-            painter.circle_stroke(center, radius, Stroke::new(1.0, outline));
+            painter.circle_stroke(center, radius, Stroke::new(1.0_f32, outline));
 
             let has_press_button = press_slot.is_some();
             let (top_label, top_dimmed) = label_for(cw);
@@ -642,14 +642,14 @@ impl EntropyApp {
                         egui::pos2(center.x - top_divider_half_width, top_divider_y),
                         egui::pos2(center.x + top_divider_half_width, top_divider_y),
                     ],
-                    Stroke::new(1.0, outline),
+                    Stroke::new(1.0_f32, outline),
                 );
                 painter.line_segment(
                     [
                         egui::pos2(center.x - bottom_divider_half_width, bottom_divider_y),
                         egui::pos2(center.x + bottom_divider_half_width, bottom_divider_y),
                     ],
-                    Stroke::new(1.0, outline),
+                    Stroke::new(1.0_f32, outline),
                 );
 
                 let (press_label, press_dimmed) = {
@@ -721,7 +721,7 @@ impl EntropyApp {
                         egui::pos2(center.x - divider_half_width, center.y),
                         egui::pos2(center.x + divider_half_width, center.y),
                     ],
-                    Stroke::new(1.0, outline),
+                    Stroke::new(1.0_f32, outline),
                 );
             }
         }

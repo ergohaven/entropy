@@ -181,7 +181,7 @@ impl EntropyApp {
                         ui.style_mut().visuals.window_stroke =
                             crate::ui_style::modal_outline_stroke(dark);
                         ui.style_mut().visuals.window_fill = app_surface_fill(dark);
-                        egui::popup_below_widget(
+                        crate::ui_style::popup_below_widget(
                             ui,
                             dropdown_id,
                             &dropdown_resp,
@@ -256,7 +256,7 @@ impl EntropyApp {
                                             );
                                             if option_resp.clicked() {
                                                 self.selected_combo = entry_idx;
-                                                ui.memory_mut(|m| m.close_popup());
+                                                egui::Popup::close_all(ui.ctx());
                                             }
                                         }
                                     });
@@ -326,7 +326,7 @@ impl EntropyApp {
                     color_swatch_width,
                     |ui| {
                         let popup_id = ui.make_persistent_id(("combo_color_picker", combo_idx));
-                        let popup_open = ui.memory(|m| m.is_popup_open(popup_id));
+                        let popup_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
                         let swatch_border = if popup_open {
                             app_accent()
                         } else if dark {
@@ -340,7 +340,7 @@ impl EntropyApp {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
                         if swatch_resp.clicked() {
-                            ui.memory_mut(|m| m.toggle_popup(popup_id));
+                            egui::Popup::toggle_id(ui.ctx(), popup_id);
                         }
                         paint_combo_color_picker_button(
                             ui,
@@ -360,7 +360,7 @@ impl EntropyApp {
                         ui.style_mut().visuals.window_stroke =
                             crate::ui_style::modal_outline_stroke(dark);
                         ui.style_mut().visuals.window_fill = app_surface_fill(dark);
-                        egui::popup_below_widget(
+                        crate::ui_style::popup_below_widget(
                             ui,
                             popup_id,
                             &swatch_resp,
@@ -448,7 +448,7 @@ impl EntropyApp {
                                                             *slot_color = color_value;
                                                         }
                                                         self.combo_colors_dirty = true;
-                                                        ui.memory_mut(|m| m.close_popup());
+                                                        egui::Popup::close_all(ui.ctx());
                                                     }
                                                 }
                                             });
@@ -755,7 +755,7 @@ fn paint_combo_color_picker_button(
         rect,
         9.0,
         app_surface_fill(dark),
-        Stroke::new(1.0, border),
+        Stroke::new(1.0_f32, border),
         egui::StrokeKind::Inside,
     );
     paint_combo_color_chip(
@@ -789,7 +789,7 @@ fn paint_combo_color_picker_cell(
         rect,
         7.0,
         app_surface_fill(dark),
-        Stroke::new(if selected { 1.6 } else { 1.0 }, outline),
+        Stroke::new(if selected { 1.6_f32 } else { 1.0_f32 }, outline),
         egui::StrokeKind::Inside,
     );
     paint_combo_color_chip(

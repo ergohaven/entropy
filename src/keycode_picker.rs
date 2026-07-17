@@ -791,7 +791,7 @@ impl KeycodePicker {
         }
 
         // Physical key capture is disabled on inline macro editing tab and while text inputs are focused
-        if !matches!(self.selected_tab, KeycodeTab::Macro) && !ctx.wants_keyboard_input() {
+        if !matches!(self.selected_tab, KeycodeTab::Macro) && !ctx.egui_wants_keyboard_input() {
             ctx.input(|i| {
                 for event in &i.events {
                     if let egui::Event::Key {

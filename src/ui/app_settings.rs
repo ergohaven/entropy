@@ -153,7 +153,7 @@ impl EntropyApp {
                                 metrics.settings_control_height(),
                                 metrics.settings_control_font_size(),
                             );
-                            egui::popup_below_widget(
+                            crate::ui_style::popup_below_widget(
                                 ui,
                                 dropdown_id,
                                 &dropdown_resp,
@@ -199,7 +199,7 @@ impl EntropyApp {
                                         );
                                         if option_resp.clicked() {
                                             selected_language = language;
-                                            ui.memory_mut(|m| m.close_popup());
+                                            egui::Popup::close_all(ui.ctx());
                                         }
                                     }
                                 },
@@ -235,7 +235,7 @@ impl EntropyApp {
                                 metrics.settings_control_height(),
                                 metrics.settings_control_font_size(),
                             );
-                            egui::popup_below_widget(
+                            crate::ui_style::popup_below_widget(
                                 ui,
                                 dropdown_id,
                                 &dropdown_resp,
@@ -285,7 +285,7 @@ impl EntropyApp {
                                         );
                                         if option_resp.clicked() {
                                             selected_key_legend_layout = key_legend_layout;
-                                            ui.memory_mut(|m| m.close_popup());
+                                            egui::Popup::close_all(ui.ctx());
                                         }
                                     }
                                 },
@@ -477,7 +477,7 @@ impl EntropyApp {
                                         selected_accent = accent;
                                     }
                                     let stroke = if selected {
-                                        Stroke::new(2.0, color)
+                                        Stroke::new(2.0_f32, color)
                                     } else {
                                         crate::ui_style::modal_outline_stroke(dark)
                                     };

@@ -18,6 +18,27 @@ pub fn accent() -> Color32 {
     )
 }
 
+pub fn popup_below_widget<R>(
+    _parent_ui: &Ui,
+    popup_id: egui::Id,
+    widget_response: &egui::Response,
+    close_behavior: egui::PopupCloseBehavior,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
+    let response = egui::Popup::from_response(widget_response)
+        .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
+        .open_memory(None)
+        .close_behavior(close_behavior)
+        .id(popup_id)
+        .align(egui::RectAlign::BOTTOM_START)
+        .width(widget_response.rect.width())
+        .show(|ui| {
+            ui.set_min_width(ui.available_width());
+            add_contents(ui)
+        })?;
+    Some(response.inner)
+}
+
 pub fn panel_fill(dark: bool) -> Color32 {
     if dark {
         Color32::from_rgb(30, 30, 30)
@@ -78,9 +99,9 @@ pub fn muted_text(dark: bool) -> Color32 {
 
 pub fn modal_outline_stroke(dark: bool) -> Stroke {
     if dark {
-        Stroke::new(1.0, Color32::from_rgb(54, 54, 58))
+        Stroke::new(1.0_f32, Color32::from_rgb(54, 54, 58))
     } else {
-        Stroke::new(1.0, Color32::from_rgb(230, 230, 233))
+        Stroke::new(1.0_f32, Color32::from_rgb(230, 230, 233))
     }
 }
 
@@ -104,7 +125,7 @@ impl ResponsiveMetrics {
             .native_pixels_per_point()
             .unwrap_or_else(|| ctx.pixels_per_point() / ctx.zoom_factor().max(0.1))
             .max(1.0);
-        let short_side = ctx.screen_rect().width().min(ctx.screen_rect().height()) * native_scale;
+        let short_side = ctx.content_rect().width().min(ctx.content_rect().height()) * native_scale;
         let t = ((short_side - 1_500.0) / (2_160.0 - 1_500.0)).clamp(0.0, 1.0);
         Self {
             scale: 1.0 + 0.12 * t,
@@ -299,7 +320,7 @@ pub fn settings_segmented_control(
                     egui::pos2(x, rect.top() + 7.0),
                     egui::pos2(x, rect.bottom() - 7.0),
                 ],
-                Stroke::new(1.0, border_color(dark).gamma_multiply(0.75)),
+                Stroke::new(1.0_f32, border_color(dark).gamma_multiply(0.75)),
             );
         }
         let text_color = if is_selected {
@@ -510,7 +531,7 @@ fn modern_text_field_impl(
                 .hint_text(hint)
                 .font(FontId::proportional(font_size))
                 .char_limit(char_limit)
-                .frame(false)
+                .frame(egui::Frame::NONE)
                 .interactive(interactive)
                 .horizontal_align(horizontal_align)
                 .vertical_align(egui::Align::Center),
@@ -543,14 +564,14 @@ pub fn modern_dropdown_button_sized(
     font_size: f32,
 ) -> egui::Response {
     let dark = ui.visuals().dark_mode;
-    let dropdown_open = ui.memory(|m| m.is_popup_open(id));
+    let dropdown_open = egui::Popup::is_id_open(ui.ctx(), id);
     let (dropdown_rect, dropdown_resp) =
         ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
     if dropdown_resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     if dropdown_resp.clicked() {
-        ui.memory_mut(|m| m.toggle_popup(id));
+        egui::Popup::toggle_id(ui.ctx(), id);
     }
 
     let dropdown_fill = if dropdown_open || dropdown_resp.hovered() {
@@ -580,14 +601,14 @@ pub fn modern_dropdown_button_sized(
             egui::pos2(chevron_x - 4.5, chevron_y - 2.0),
             egui::pos2(chevron_x, chevron_y + 2.5),
         ],
-        Stroke::new(1.4, chevron_color),
+        Stroke::new(1.4_f32, chevron_color),
     );
     ui.painter().line_segment(
         [
             egui::pos2(chevron_x, chevron_y + 2.5),
             egui::pos2(chevron_x + 4.5, chevron_y - 2.0),
         ],
-        Stroke::new(1.4, chevron_color),
+        Stroke::new(1.4_f32, chevron_color),
     );
     dropdown_resp
 }
@@ -613,7 +634,7 @@ pub fn modern_dropdown_select_sized(
         font_size,
     );
     let mut picked = None;
-    egui::popup_below_widget(
+    crate::ui_style::popup_below_widget(
         ui,
         id,
         &dropdown_resp,
@@ -662,7 +683,7 @@ pub fn modern_dropdown_select_sized(
                         );
                         if option_resp.clicked() {
                             picked = Some(idx);
-                            ui.memory_mut(|m| m.close_popup());
+                            egui::Popup::close_all(ui.ctx());
                         }
                     }
                 });
@@ -697,7 +718,7 @@ pub fn modern_toggle_pill(
         surface_fill(dark)
     };
     let stroke = if selected {
-        Stroke::new(1.1, mix(modal_outline_stroke(dark).color, accent(), 0.42))
+        Stroke::new(1.1_f32, mix(modal_outline_stroke(dark).color, accent(), 0.42))
     } else {
         modal_outline_stroke(dark)
     };
@@ -883,8 +904,8 @@ pub fn centered_modal_window<'a>(
         .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
         .fixed_size(size)
         .frame(modal_window_frame(
-            ctx.style().as_ref(),
-            ctx.style().visuals.dark_mode,
+            ctx.global_style().as_ref(),
+            ctx.global_style().visuals.dark_mode,
         ))
 }
 
@@ -1044,7 +1065,7 @@ pub fn settings_list_row_with_tooltip(
     let separator = border_color(dark).gamma_multiply(if dark { 0.72 } else { 0.9 });
     ui.painter().line_segment(
         [row_rect.left_bottom(), row_rect.right_bottom()],
-        Stroke::new(1.0, separator),
+        Stroke::new(1.0_f32, separator),
     );
 
     let label_scale = (content_width / 452.0).clamp(1.0, 1.12);

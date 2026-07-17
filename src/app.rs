@@ -30,6 +30,10 @@ use app_storage::*;
 #[path = "app_update.rs"]
 mod app_update;
 use app_update::*;
+#[path = "app_repaint.rs"]
+mod app_repaint;
+#[cfg(not(target_arch = "wasm32"))]
+use app_repaint::*;
 #[path = "entlayout.rs"]
 mod entlayout;
 #[path = "entsettings.rs"]

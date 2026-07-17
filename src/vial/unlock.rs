@@ -148,7 +148,7 @@ impl EntropyApp {
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
-                    let screen = ui.ctx().screen_rect();
+                    let screen = ui.ctx().content_rect();
                     let dark = ui.visuals().dark_mode;
                     let screen_bg = app_panel_fill(dark);
                     let title_color = if dark {
@@ -295,7 +295,7 @@ impl EntropyApp {
                                 rect,
                                 key.rotation,
                                 bg,
-                                Stroke::new(1.0, border),
+                                Stroke::new(1.0_f32, border),
                             );
                         }
                     }

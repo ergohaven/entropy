@@ -562,12 +562,12 @@ impl EntropyApp {
             Sense::click(),
         );
         if button_response.clicked() {
-            ui.memory_mut(|memory| memory.toggle_popup(popup_id));
+            egui::Popup::toggle_id(ui.ctx(), popup_id);
         }
         if button_response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
-        let popup_open = ui.memory(|memory| memory.is_popup_open(popup_id));
+        let popup_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
         if button_response.hovered() || popup_open {
             ui.painter()
                 .rect_filled(button_rect, 8.0, app_hover_fill(self.dark_mode));
@@ -621,7 +621,7 @@ impl EntropyApp {
         ui.style_mut().visuals.window_stroke =
             crate::ui_style::modal_outline_stroke(self.dark_mode);
         ui.style_mut().visuals.window_fill = app_surface_fill(self.dark_mode);
-        egui::popup_below_widget(
+        crate::ui_style::popup_below_widget(
             ui,
             popup_id,
             &button_response,
@@ -705,7 +705,7 @@ impl EntropyApp {
                 }
 
                 if requested_action.is_some() {
-                    ui.memory_mut(|memory| memory.close_popup());
+                    egui::Popup::close_all(ui.ctx());
                 }
             },
         );
