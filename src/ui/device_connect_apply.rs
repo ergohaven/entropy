@@ -55,6 +55,27 @@ fn is_hid_open_failure(error: &str) -> bool {
     error.starts_with("Open failed:")
 }
 
+fn restored_selection(previous: usize, row_count: usize) -> usize {
+    previous.min(row_count.saturating_sub(1))
+}
+
+fn restore_module_settings_group(
+    settings: &mut ModuleSettingsState,
+    previous: Option<&(ModuleSettingsGroupKind, String)>,
+) {
+    let Some((kind, title)) = previous else {
+        return;
+    };
+    let matching_group = settings
+        .groups
+        .iter()
+        .position(|group| group.kind == *kind && group.title == *title)
+        .or_else(|| settings.groups.iter().position(|group| group.kind == *kind));
+    if let Some(group_idx) = matching_group {
+        settings.selected_module_group = group_idx;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,6 +303,42 @@ mod tests {
         let failed = sync_layer_names_to_store(&store, &names, 2);
         assert!(failed.is_empty());
         assert!(store.writes.borrow().is_empty());
+    #[test]
+    fn reconnect_selection_is_preserved_and_clamped() {
+        assert_eq!(restored_selection(3, 5), 3);
+        assert_eq!(restored_selection(3, 2), 1);
+        assert_eq!(restored_selection(3, 0), 0);
+    }
+
+    #[test]
+    fn reconnect_restores_module_group_by_stable_identity() {
+        let mut settings = ModuleSettingsState {
+            groups: vec![
+                ModuleSettingsGroup {
+                    title: "Auto layer".into(),
+                    kind: ModuleSettingsGroupKind::AutoLayer,
+                    fields: Vec::new(),
+                },
+                ModuleSettingsGroup {
+                    title: "Left".into(),
+                    kind: ModuleSettingsGroupKind::Left,
+                    fields: Vec::new(),
+                },
+                ModuleSettingsGroup {
+                    title: "Right".into(),
+                    kind: ModuleSettingsGroupKind::Right,
+                    fields: Vec::new(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        restore_module_settings_group(
+            &mut settings,
+            Some(&(ModuleSettingsGroupKind::Right, "Right".into())),
+        );
+
+        assert_eq!(settings.selected_module_group, 2);
     }
 }
 
@@ -342,6 +399,13 @@ impl EntropyApp {
 
         match result {
             Ok(r) => {
+                let selected_alt_repeat = self.selected_alt_repeat;
+                let selected_key_override = self.selected_key_override;
+                let selected_module_group = self
+                    .module_settings
+                    .groups
+                    .get(self.module_settings.selected_module_group)
+                    .map(|group| (group.kind, group.title.clone()));
                 self.pending_tap_hold_numeric_writes.clear();
                 self.tap_hold_numeric_write_due = None;
                 log::info!(
@@ -379,7 +443,8 @@ impl EntropyApp {
                 self.alt_repeat_names
                     .resize(self.alt_repeat_entries.len(), String::new());
                 self.alt_repeat_undo_stack.clear();
-                self.selected_alt_repeat = 0;
+                self.selected_alt_repeat =
+                    restored_selection(selected_alt_repeat, self.alt_repeat_entries.len());
                 self.alt_repeat_visible_count = if self.alt_repeat_entries.is_empty() {
                     1
                 } else {
@@ -390,7 +455,8 @@ impl EntropyApp {
                     .resize(self.key_override_entries.len(), String::new());
                 self.key_override_visible_count = 1;
                 self.key_override_undo_stack.clear();
-                self.selected_key_override = 0;
+                self.selected_key_override =
+                    restored_selection(selected_key_override, self.key_override_entries.len());
                 self.combo_names = load_combo_names(&self.current_device_name);
                 self.combo_names
                     .resize(self.combo_entries.len(), String::new());
@@ -408,6 +474,10 @@ impl EntropyApp {
                 self.touchpad_settings = r.touchpad_settings;
                 self.bluetooth_settings = r.bluetooth_settings;
                 self.module_settings = r.module_settings;
+                restore_module_settings_group(
+                    &mut self.module_settings,
+                    selected_module_group.as_ref(),
+                );
                 self.tap_hold_settings = r.tap_hold_settings;
                 self.magic_settings = r.magic_settings;
                 self.one_shot_settings = r.one_shot_settings;

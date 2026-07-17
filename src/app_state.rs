@@ -386,9 +386,19 @@ pub(crate) enum ConnectState {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeviceScanTrigger {
+    Automatic,
+    Manual,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) enum DeviceScanState {
     Idle,
-    Scanning(mpsc::Receiver<Vec<Device>>),
+    Scanning {
+        rx: mpsc::Receiver<Vec<Device>>,
+        trigger: DeviceScanTrigger,
+    },
 }
 
 pub(crate) fn toggle_handed_modifier(value: u16) -> Option<u16> {

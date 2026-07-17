@@ -28,6 +28,20 @@ fn about_device_label(lang: crate::i18n::Language) -> &'static str {
     }
 }
 
+fn refresh_devices_label(lang: crate::i18n::Language) -> &'static str {
+    match lang {
+        crate::i18n::Language::Russian => "Обновить устройства",
+        crate::i18n::Language::English => "Refresh devices",
+    }
+}
+
+fn refreshing_devices_status(lang: crate::i18n::Language) -> &'static str {
+    match lang {
+        crate::i18n::Language::Russian => "Обновление списка устройств…",
+        crate::i18n::Language::English => "Refreshing device list…",
+    }
+}
+
 impl EntropyApp {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_layout_device_dropdown(
@@ -51,6 +65,7 @@ impl EntropyApp {
             let device_count = self.device_manager.devices().len();
             let device_rows = device_count.max(1) as f32;
             let devices_h = 12.0 + device_rows * 30.0;
+            let refresh_devices_h = 36.0;
             let sticky_layout_h = 36.0;
             #[cfg(not(target_arch = "wasm32"))]
             let import_export_h = 102.0;
@@ -73,6 +88,7 @@ impl EntropyApp {
                     })
                     .collect()
             };
+            device_menu_labels.push(refresh_devices_label(lang).to_owned());
             if show_key_legend_switcher {
                 if let Some(order_key) = self.app_settings.key_legend_layout.order_i18n_key() {
                     device_menu_labels.push(crate::i18n::tr_catalog(lang, order_key).to_owned());
@@ -94,6 +110,7 @@ impl EntropyApp {
                     152.0,
                 ),
                 devices_h
+                    + refresh_devices_h
                     + key_legend_switcher_h
                     + import_export_h
                     + sticky_layout_h
@@ -178,6 +195,33 @@ impl EntropyApp {
                                 if self.selected_device != prev_selected {
                                     if let Some(idx) = self.selected_device {
                                         self.start_connect(idx);
+                                    }
+                                }
+
+                                #[cfg(not(target_arch = "wasm32"))]
+                                {
+                                    ui.add_space(6.0);
+                                    let refresh_enabled = matches!(
+                                        self.device_scan_state,
+                                        DeviceScanState::Idle
+                                    ) && !self.device_refresh_blocked();
+                                    if top_dropdown_item(
+                                        ui,
+                                        dropdown_size.x - 16.0,
+                                        refresh_devices_label(lang),
+                                        refresh_enabled,
+                                        false,
+                                    )
+                                    .clicked()
+                                        && refresh_enabled
+                                    {
+                                        self.close_top_dropdowns(ctx);
+                                        if self.start_manual_device_scan() {
+                                            self.status_msg =
+                                                refreshing_devices_status(lang).into();
+                                        }
+                                        ctx.request_repaint();
+                                        device_clicked = true;
                                     }
                                 }
 

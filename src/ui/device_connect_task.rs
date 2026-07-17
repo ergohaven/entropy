@@ -542,7 +542,6 @@ impl EntropyApp {
         self.alt_repeat_entries.clear();
         self.alt_repeat_names.clear();
         self.alt_repeat_undo_stack.clear();
-        self.selected_alt_repeat = 0;
         self.alt_repeat_visible_count = 1;
         self.alt_repeat_pick_target = None;
         self.rgb_settings = RgbSettingsState::default();
@@ -558,7 +557,6 @@ impl EntropyApp {
         self.key_override_names.clear();
         self.key_override_visible_count = 1;
         self.key_override_undo_stack.clear();
-        self.selected_key_override = 0;
         self.key_override_pick_target = None;
         self.reset_matrix_tester_state();
 
