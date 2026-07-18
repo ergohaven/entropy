@@ -108,6 +108,46 @@ fn normalize_reported_layer_count(reported_layer_count: usize) -> usize {
     reported_layer_count.max(1)
 }
 
+fn is_default_layer_name(index: usize, name: &str) -> bool {
+    let trimmed = name.trim();
+    trimmed.is_empty()
+        || trimmed == index.to_string()
+        || (index == 0 && trimmed.eq_ignore_ascii_case("main"))
+        || trimmed.eq_ignore_ascii_case(&format!("layer {index}"))
+}
+
+fn has_firmware_layer_names(names: &[String]) -> bool {
+    names
+        .iter()
+        .enumerate()
+        .any(|(index, name)| !is_default_layer_name(index, name))
+}
+
+fn layer_name_sync_updates(
+    names: &[String],
+    current_names: &[Option<String>],
+    supported_qmk_settings: &[u16],
+) -> Vec<(u16, String)> {
+    names
+        .iter()
+        .enumerate()
+        .filter_map(|(layer, name)| {
+            let qsid = u16::try_from(layer).ok()?.checked_add(200)?;
+            if !supported_qmk_settings.contains(&qsid) {
+                return None;
+            }
+
+            let current = current_names.get(layer)?.as_deref()?;
+            let name = name.trim();
+            if name.is_empty() || current == name {
+                None
+            } else {
+                Some((qsid, name.to_owned()))
+            }
+        })
+        .collect()
+}
+
 fn json_string_value(value: &serde_json::Value) -> Option<String> {
     match value {
         serde_json::Value::String(text) => {
@@ -461,18 +501,53 @@ impl EntropyApp {
                         .extend((start..layer_count).map(|layer| layer.to_string()));
                 }
                 layout.layer_names.truncate(layer_count);
+                let mut current_firmware_layer_names = vec![None; layer_count];
                 if has_qmk_setting(200) {
-                    for layer in 0..layer_count {
+                    for (layer, current_firmware_name) in
+                        current_firmware_layer_names.iter_mut().enumerate()
+                    {
                         let qsid = 200 + layer as u16;
                         if !has_qmk_setting(qsid) {
                             continue;
                         }
                         match dev_conn.get_qmk_setting_string(qsid) {
-                            Ok(name) if !name.is_empty() => layout.layer_names[layer] = name,
-                            Ok(_) => {}
+                            Ok(name) => {
+                                *current_firmware_name = Some(name.clone());
+                                if !name.is_empty() {
+                                    layout.layer_names[layer] = name;
+                                }
+                            }
                             Err(e) => {
                                 log::warn!("get_qmk_setting_string(layer name qsid {qsid}): {e}")
                             }
+                        }
+                    }
+                }
+
+                if !has_firmware_layer_names(&layout.layer_names) {
+                    if let Some(local_layer_names) = load_saved_layer_names(&dev.name) {
+                        for (layer, name) in
+                            local_layer_names.into_iter().enumerate().take(layer_count)
+                        {
+                            if !name.trim().is_empty() {
+                                layout.layer_names[layer] = name;
+                            }
+                        }
+                    }
+                }
+
+                let layer_name_updates = layer_name_sync_updates(
+                    &layout.layer_names,
+                    &current_firmware_layer_names,
+                    &supported_qmk_settings,
+                );
+                if !layer_name_updates.is_empty() {
+                    progress("Syncing layer names…");
+                    for (qsid, name) in layer_name_updates {
+                        if let Err(e) = dev_conn.set_qmk_setting_string(qsid, &name) {
+                            log::warn!(
+                                "Vial set_qmk_setting_string failed while syncing qsid {qsid}: {e}"
+                            );
                         }
                     }
                 }
@@ -1032,6 +1107,29 @@ mod tests {
     fn reported_layer_count_is_never_zero() {
         assert_eq!(normalize_reported_layer_count(0), 1);
         assert_eq!(normalize_reported_layer_count(4), 4);
+    }
+
+    #[test]
+    fn unsupported_layer_name_qsids_do_not_schedule_hid_requests() {
+        let names = vec!["Main".to_owned(), "Nav".to_owned()];
+        let current = vec![None, None];
+
+        assert!(layer_name_sync_updates(&names, &current, &[1, 2, 3]).is_empty());
+    }
+
+    #[test]
+    fn layer_name_sync_only_writes_supported_changed_names() {
+        let names = vec!["Main".to_owned(), "Nav".to_owned(), "Symbols".to_owned()];
+        let current = vec![
+            Some("Main".to_owned()),
+            Some(String::new()),
+            Some("Old symbols".to_owned()),
+        ];
+
+        assert_eq!(
+            layer_name_sync_updates(&names, &current, &[200, 201]),
+            vec![(201, "Nav".to_owned())]
+        );
     }
 
     #[test]

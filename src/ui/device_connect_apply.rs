@@ -1,20 +1,5 @@
 use super::*;
 
-fn is_default_layer_name(index: usize, name: &str) -> bool {
-    let trimmed = name.trim();
-    trimmed.is_empty()
-        || trimmed == index.to_string()
-        || (index == 0 && trimmed.eq_ignore_ascii_case("main"))
-        || trimmed.eq_ignore_ascii_case(&format!("layer {index}"))
-}
-
-fn has_firmware_layer_names(names: &[String]) -> bool {
-    names
-        .iter()
-        .enumerate()
-        .any(|(index, name)| !is_default_layer_name(index, name))
-}
-
 fn connect_apply_start_log(
     device_name: &str,
     layer_count: usize,
@@ -227,29 +212,8 @@ impl EntropyApp {
 
                 self.status_msg = format!("Connected: {}", r.device_name);
 
-                // Load per-device layer names
                 let device_name = r.device_name.clone();
-                // Prefer names from descriptor/firmware, then overlay local overrides only if a real saved file exists
-                let mut layer_names = r.layout.layer_names.clone();
-                if layer_names.len() < r.layer_count {
-                    let start = layer_names.len();
-                    layer_names.extend((start..r.layer_count).map(|layer| layer.to_string()));
-                }
-                layer_names.truncate(r.layer_count);
-                if !has_firmware_layer_names(&layer_names) {
-                    if let Some(local_layer_names) = load_saved_layer_names(&device_name) {
-                        for (idx, name) in local_layer_names
-                            .into_iter()
-                            .enumerate()
-                            .take(r.layer_count)
-                        {
-                            if !name.trim().is_empty() {
-                                layer_names[idx] = name;
-                            }
-                        }
-                    }
-                }
-                self.layer_names = layer_names;
+                self.layer_names = r.layout.layer_names.clone();
 
                 let encoder_count = r.layout.encoder_count();
                 self.encoder_visibility =
@@ -308,7 +272,6 @@ impl EntropyApp {
                 // open-once/reload/use model. Avoid Entropy-only reopen churn when switching
                 // between qmk-vial and RMK devices.
                 self.hid_device = r.hid_device;
-                self.sync_layer_names_to_firmware();
 
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -332,40 +295,6 @@ impl EntropyApp {
 
                 self.status_msg = e;
                 log::error!("{}", connect_apply_error_log(&self.status_msg));
-            }
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn sync_layer_names_to_firmware(&self) {
-        if self.firmware != FirmwareProtocol::Vial {
-            return;
-        }
-        let Some(dev) = &self.hid_device else {
-            return;
-        };
-
-        for (layer, name) in self.layer_names.iter().enumerate().take(self.layer_count) {
-            let qsid = 200 + layer as u16;
-            let name = name.trim();
-            if name.is_empty() {
-                continue;
-            }
-            match dev.get_qmk_setting_string(qsid) {
-                Ok(current) if current == name => {}
-                Ok(_) => {
-                    if let Err(e) = dev.set_qmk_setting_string(qsid, name) {
-                        log::warn!(
-                            "Vial set_qmk_setting_string failed while syncing layer {layer}: {e}"
-                        );
-                    }
-                }
-                Err(e) => {
-                    log::debug!("Vial layer name qsid {qsid} not synced: {e}");
-                    if layer == 0 {
-                        break;
-                    }
-                }
             }
         }
     }
