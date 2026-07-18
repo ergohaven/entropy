@@ -896,6 +896,22 @@ pub(crate) struct ModuleSettingsDeviceIdentity {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct DeferredHidSettings {
+    pub(crate) identity: ModuleSettingsDeviceIdentity,
+    pub(crate) macro_texts: Vec<Vec<u8>>,
+    pub(crate) macros_dirty: bool,
+    pub(crate) combo_entries: Vec<ComboEntry>,
+    pub(crate) combo_dirty: bool,
+    pub(crate) combo_term: Option<u16>,
+    pub(crate) combo_term_dirty: bool,
+    pub(crate) tap_dance_entries: Vec<crate::keycode_picker::TapDanceEntry>,
+    pub(crate) tap_dance_synced_entries: Vec<crate::keycode_picker::TapDanceEntry>,
+    pub(crate) tap_dance_dirty: bool,
+    pub(crate) pending_tap_hold_numeric_writes: std::collections::BTreeMap<u16, u16>,
+    pub(crate) tap_hold_numeric_write_due: Option<std::time::Instant>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct ModuleSettingsRefreshTaskResult {
     pub(crate) hid_device: Option<crate::hid::HidDevice>,
     pub(crate) identity: ModuleSettingsDeviceIdentity,
@@ -2829,6 +2845,9 @@ pub struct EntropyApp {
     /// Background module settings refresh. Owns the HID handle while active.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) module_settings_refresh_task: Option<ModuleSettingsRefreshTask>,
+    /// Dirty firmware settings retained across a module-refresh disconnect.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) deferred_hid_settings: Option<DeferredHidSettings>,
     /// Built-in qmk-hid-host bridges for displays/presets that need host data
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) qmk_hid_hosts:

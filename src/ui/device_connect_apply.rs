@@ -107,8 +107,6 @@ impl EntropyApp {
 
         match result {
             Ok(r) => {
-                self.pending_tap_hold_numeric_writes.clear();
-                self.tap_hold_numeric_write_due = None;
                 log::info!(
                     "{}",
                     connect_apply_start_log(&r.device_name, r.layer_count, r.layout.firmware)
@@ -213,6 +211,7 @@ impl EntropyApp {
                     .iter()
                     .map(|bytes| crate::keycode_picker::decode_macro_actions(bytes))
                     .collect();
+                self.restore_deferred_hid_settings_after_connect(&r.about_info);
 
                 self.status_msg = format!("Connected: {}", r.device_name);
 

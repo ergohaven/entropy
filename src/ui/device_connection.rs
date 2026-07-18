@@ -23,6 +23,85 @@ fn select_keyboard_hint(lang: crate::i18n::Language, has_error: bool) -> &'stati
 }
 
 impl EntropyApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn preserve_deferred_hid_settings_for_disconnect(&mut self) {
+        let Some(about) = self.device_about_info.as_ref() else {
+            return;
+        };
+        let macros_dirty = self.keycode_picker.macros_dirty;
+        let combo_dirty = self.combo_dirty;
+        let combo_term_dirty = self.combo_term_dirty;
+        let tap_dance_dirty = self.keycode_picker.tap_dance_dirty;
+        if !macros_dirty
+            && !combo_dirty
+            && !combo_term_dirty
+            && !tap_dance_dirty
+            && self.pending_tap_hold_numeric_writes.is_empty()
+        {
+            return;
+        }
+
+        self.deferred_hid_settings = Some(DeferredHidSettings {
+            identity: ModuleSettingsDeviceIdentity {
+                path: about.path.clone(),
+                keyboard_id: about.keyboard_id,
+            },
+            macro_texts: self.keycode_picker.macro_texts.clone(),
+            macros_dirty,
+            combo_entries: self.combo_entries.clone(),
+            combo_dirty,
+            combo_term: self.combo_term,
+            combo_term_dirty,
+            tap_dance_entries: self.keycode_picker.tap_dance_entries.clone(),
+            tap_dance_synced_entries: self.keycode_picker.tap_dance_synced_entries.clone(),
+            tap_dance_dirty,
+            pending_tap_hold_numeric_writes: self.pending_tap_hold_numeric_writes.clone(),
+            tap_hold_numeric_write_due: self.tap_hold_numeric_write_due,
+        });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn restore_deferred_hid_settings_after_connect(&mut self, about: &DeviceAboutInfo) {
+        let Some(deferred) = self.deferred_hid_settings.take() else {
+            return;
+        };
+        if deferred.identity.path != about.path
+            || deferred.identity.keyboard_id != about.keyboard_id
+        {
+            return;
+        }
+
+        if deferred.macros_dirty {
+            self.keycode_picker.macro_texts = deferred.macro_texts;
+            self.keycode_picker.macro_actions = self
+                .keycode_picker
+                .macro_texts
+                .iter()
+                .map(|bytes| crate::keycode_picker::decode_macro_actions(bytes))
+                .collect();
+            self.keycode_picker.macros_dirty = true;
+        }
+        if deferred.combo_dirty {
+            self.combo_entries = deferred.combo_entries;
+            self.combo_dirty = true;
+        }
+        if deferred.combo_term_dirty {
+            self.combo_term = deferred.combo_term;
+            self.combo_term_dirty = true;
+        }
+        if deferred.tap_dance_dirty {
+            self.keycode_picker.tap_dance_entries = deferred.tap_dance_entries;
+            self.keycode_picker.tap_dance_synced_entries = deferred.tap_dance_synced_entries;
+            self.keycode_picker.tap_dance_dirty = true;
+        }
+        if !deferred.pending_tap_hold_numeric_writes.is_empty() {
+            self.pending_tap_hold_numeric_writes = deferred.pending_tap_hold_numeric_writes;
+            self.tap_hold_numeric_write_due = deferred
+                .tap_hold_numeric_write_due
+                .or_else(|| Some(std::time::Instant::now()));
+        }
+    }
+
     pub(super) fn clear_connected_keyboard_state(&mut self, status_msg: impl Into<String>) {
         self.layout = None;
         self.selected_key = None;
@@ -163,5 +242,65 @@ impl EntropyApp {
                 });
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn reconnect_restores_deferred_hid_settings_for_the_same_device() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        let about = DeviceAboutInfo {
+            path: "usb:phenom".to_owned(),
+            keyboard_id: 42,
+            ..Default::default()
+        };
+        app.device_about_info = Some(about.clone());
+        app.keycode_picker.macro_texts = vec![vec![1, 2, 3]];
+        app.keycode_picker.macros_dirty = true;
+        app.combo_entries = vec![ComboEntry {
+            keys: [0x0004, 0x0005, 0, 0],
+            output: 0x0006,
+        }];
+        app.combo_dirty = true;
+        app.combo_term = Some(175);
+        app.combo_term_dirty = true;
+        app.keycode_picker.tap_dance_entries = vec![crate::keycode_picker::TapDanceEntry {
+            on_tap: 0x0004,
+            ..Default::default()
+        }];
+        app.keycode_picker.tap_dance_synced_entries = vec![Default::default()];
+        app.keycode_picker.tap_dance_dirty = true;
+        app.pending_tap_hold_numeric_writes.insert(7, 175);
+
+        app.preserve_deferred_hid_settings_for_disconnect();
+        app.clear_connected_keyboard_state("disconnected");
+
+        app.keycode_picker.macro_texts = vec![Vec::new()];
+        app.keycode_picker.macros_dirty = false;
+        app.combo_entries = vec![ComboEntry::default()];
+        app.combo_dirty = false;
+        app.combo_term = Some(50);
+        app.combo_term_dirty = false;
+        app.keycode_picker.tap_dance_entries = vec![Default::default()];
+        app.keycode_picker.tap_dance_synced_entries = vec![Default::default()];
+        app.keycode_picker.tap_dance_dirty = false;
+
+        app.restore_deferred_hid_settings_after_connect(&about);
+
+        assert_eq!(app.keycode_picker.macro_texts, vec![vec![1, 2, 3]]);
+        assert!(app.keycode_picker.macros_dirty);
+        assert_eq!(app.combo_entries[0].output, 0x0006);
+        assert!(app.combo_dirty);
+        assert_eq!(app.combo_term, Some(175));
+        assert!(app.combo_term_dirty);
+        assert_eq!(app.keycode_picker.tap_dance_entries[0].on_tap, 0x0004);
+        assert!(app.keycode_picker.tap_dance_dirty);
+        assert_eq!(app.pending_tap_hold_numeric_writes.get(&7), Some(&175));
     }
 }

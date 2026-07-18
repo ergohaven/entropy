@@ -73,7 +73,7 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn refresh_module_settings_values(&mut self) {
+    pub(super) fn refresh_module_settings_values(&mut self) {
         let lang = self.app_settings.language;
         if self.hid_write_task_active() {
             return;
@@ -156,6 +156,7 @@ impl EntropyApp {
                     .expect("module settings refresh task checked above");
                 let current = self.current_module_settings_device_identity();
                 if module_settings_refresh_identity_matches(&task.identity, current.as_ref()) {
+                    self.preserve_deferred_hid_settings_for_disconnect();
                     self.clear_connected_keyboard_state(crate::i18n::tr_catalog(
                         self.app_settings.language,
                         "modules_settings.refresh_task_failed",
@@ -179,9 +180,11 @@ impl EntropyApp {
         }
 
         let Some(hid_device) = result.hid_device else {
-            self.clear_connected_keyboard_state(
-                "Module settings refresh lost device connection; reconnect the keyboard",
-            );
+            self.preserve_deferred_hid_settings_for_disconnect();
+            self.clear_connected_keyboard_state(crate::i18n::tr_catalog(
+                self.app_settings.language,
+                "modules_settings.refresh_disconnected",
+            ));
             return;
         };
 
