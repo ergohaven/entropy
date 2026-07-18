@@ -398,7 +398,7 @@ fn tap_dance_entries_to_write(
 
 #[cfg(test)]
 mod tests {
-    use super::super::combo_write::ComboWritePlan;
+    use super::super::combo_write::{ComboWritePlan, ComboWriteResult};
     use super::*;
 
     #[test]
@@ -474,90 +474,51 @@ mod tests {
         );
     }
 
-    #[derive(Default)]
-    struct HidLifecycleProbe {
-        macro_dirty: bool,
-        combo_timeout_dirty: bool,
-        tap_dance_dirty: bool,
-        tap_hold_pending: std::collections::BTreeMap<u16, u16>,
-        import_pending: bool,
-        writes: [u8; 5],
-        status: String,
-    }
-
-    impl HidLifecycleProbe {
-        fn with_pending_writes() -> Self {
-            Self {
-                macro_dirty: true,
-                combo_timeout_dirty: true,
-                tap_dance_dirty: true,
-                tap_hold_pending: std::iter::once((7, 175)).collect(),
-                import_pending: true,
-                ..Default::default()
-            }
-        }
-
-        fn advance(&mut self, combo_task_active: bool) {
-            if !hid_lifecycle_writes_available(combo_task_active) {
-                return;
-            }
-
-            let mut wrote = false;
-            if self.import_pending {
-                self.import_pending = false;
-                self.writes[0] += 1;
-                wrote = true;
-            }
-            if self.macro_dirty {
-                self.macro_dirty = false;
-                self.writes[1] += 1;
-                wrote = true;
-            }
-            if self.combo_timeout_dirty {
-                self.combo_timeout_dirty = false;
-                self.writes[2] += 1;
-                wrote = true;
-            }
-            if self.tap_dance_dirty {
-                self.tap_dance_dirty = false;
-                self.writes[3] += 1;
-                wrote = true;
-            }
-            if !self.tap_hold_pending.is_empty() {
-                self.tap_hold_pending.clear();
-                self.writes[4] += 1;
-                wrote = true;
-            }
-            if wrote {
-                self.status = "Saved".to_owned();
-            }
-        }
-    }
-
     #[test]
-    fn in_flight_combo_task_defers_other_hid_writes_until_handle_returns() {
-        let mut lifecycle = HidLifecycleProbe::with_pending_writes();
+    fn combo_task_defers_settings_changes_and_refresh_until_handle_returns() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.combo_write_task = Some(ComboWriteTask {
+            receiver,
+            revision: 0,
+        });
+        app.key_override_entries = vec![KeyOverrideEntry::default()];
+        app.key_override_pick_target = Some(KeyOverridePickField::Trigger);
+        app.keycode_picker.result = Some(0x0004);
 
-        lifecycle.advance(true);
+        app.apply_picker_results();
+        assert_eq!(app.keycode_picker.result, Some(0x0004));
+        assert_eq!(app.key_override_entries[0].trigger, 0);
 
-        assert!(lifecycle.import_pending);
-        assert!(lifecycle.macro_dirty);
-        assert!(lifecycle.combo_timeout_dirty);
-        assert!(lifecycle.tap_dance_dirty);
-        assert_eq!(lifecycle.tap_hold_pending.get(&7), Some(&175));
-        assert_eq!(lifecycle.writes, [0; 5]);
-        assert!(lifecycle.status.is_empty());
+        app.refresh_current_device_data();
+        assert_eq!(
+            app.status_msg,
+            crate::i18n::tr_catalog(
+                app.app_settings.language,
+                "status_messages.refresh_device_data_pending_write"
+            )
+        );
 
-        lifecycle.advance(false);
-        lifecycle.advance(false);
+        sender
+            .send(ComboWriteResult {
+                hid_device: None,
+                index: 0,
+                entry: ComboEntry::default(),
+                revision: 0,
+                result: Ok(()),
+            })
+            .expect("combo test task receiver is active");
+        app.poll_combo_write(&ctx);
+        assert!(!app.hid_write_task_active());
 
-        assert!(!lifecycle.import_pending);
-        assert!(!lifecycle.macro_dirty);
-        assert!(!lifecycle.combo_timeout_dirty);
-        assert!(!lifecycle.tap_dance_dirty);
-        assert!(lifecycle.tap_hold_pending.is_empty());
-        assert_eq!(lifecycle.writes, [1; 5]);
-        assert_eq!(lifecycle.status, "Saved");
+        app.apply_picker_results();
+        assert_eq!(app.key_override_entries[0].trigger, 0x0004);
+        assert!(app.keycode_picker.result.is_none());
+
+        app.apply_picker_results();
+        assert_eq!(app.key_override_entries[0].trigger, 0x0004);
     }
 
     #[test]
@@ -689,12 +650,17 @@ impl eframe::App for EntropyApp {
         if let Some((layer, ki, kc)) = self.pending_handed_swap {
             if !ctx.input(|i| i.modifiers.ctrl) {
                 #[cfg(not(target_arch = "wasm32"))]
-                self.assign_keycode(layer, ki, kc);
-                #[cfg(target_arch = "wasm32")]
-                if let Some(layout) = &mut self.layout {
-                    layout.set_keycode(layer, ki, kc);
+                if !self.hid_write_task_active() {
+                    self.assign_keycode(layer, ki, kc);
+                    self.pending_handed_swap = None;
                 }
-                self.pending_handed_swap = None;
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if let Some(layout) = &mut self.layout {
+                        layout.set_keycode(layer, ki, kc);
+                    }
+                    self.pending_handed_swap = None;
+                }
             }
         }
         let accent_color = self.app_settings.accent_color;
@@ -753,7 +719,7 @@ impl eframe::App for EntropyApp {
         // Check if loading
         #[cfg(not(target_arch = "wasm32"))]
         let is_loading = matches!(self.connect_state, ConnectState::Loading { .. })
-            || self.layer_write_task.is_some();
+            || self.hid_write_task_active();
         #[cfg(target_arch = "wasm32")]
         let is_loading = false;
 

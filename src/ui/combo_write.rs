@@ -52,17 +52,17 @@ fn record_combo_write_success(
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) struct ComboWriteTask {
-    receiver: std::sync::mpsc::Receiver<ComboWriteResult>,
-    revision: u64,
+    pub(super) receiver: std::sync::mpsc::Receiver<ComboWriteResult>,
+    pub(super) revision: u64,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-struct ComboWriteResult {
-    hid_device: Option<crate::hid::HidDevice>,
-    index: usize,
-    entry: ComboEntry,
-    revision: u64,
-    result: Result<(), String>,
+pub(super) struct ComboWriteResult {
+    pub(super) hid_device: Option<crate::hid::HidDevice>,
+    pub(super) index: usize,
+    pub(super) entry: ComboEntry,
+    pub(super) revision: u64,
+    pub(super) result: Result<(), String>,
 }
 
 impl EntropyApp {

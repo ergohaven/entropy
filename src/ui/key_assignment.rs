@@ -2,6 +2,11 @@ use super::*;
 
 impl EntropyApp {
     pub(super) fn apply_picker_results(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.hid_write_task_active() {
+            return;
+        }
+
         if let Some(kc_value) = self.keycode_picker.result.take() {
             if let Some((combo_idx, field)) = self.combo_pick_target.take() {
                 self.push_combo_undo();

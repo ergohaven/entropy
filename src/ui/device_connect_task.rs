@@ -446,7 +446,7 @@ fn supports_vial_macro_ext_keycodes(vial_protocol: u32, json: &serde_json::Value
 impl EntropyApp {
     pub(super) fn refresh_current_device_data(&mut self) {
         let lang = self.app_settings.language;
-        if self.layer_write_task.is_some() {
+        if self.hid_write_task_active() {
             self.status_msg =
                 crate::i18n::tr_catalog(lang, "status_messages.refresh_device_data_pending_write")
                     .to_owned();
