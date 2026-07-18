@@ -91,11 +91,14 @@ fn run_vial_hid_operation(
 ) -> anyhow::Result<VialHidOutcome> {
     match operation {
         VialHidOperation::UnlockStart => {
-            let (unlocked, keys) = hid.get_unlock_status()?;
-            if !unlocked {
+            let status = hid.get_unlock_status()?;
+            if !status.unlocked && !status.in_progress {
                 hid.unlock_start()?;
             }
-            Ok(VialHidOutcome::UnlockStarted { unlocked, keys })
+            Ok(VialHidOutcome::UnlockStarted {
+                unlocked: status.unlocked,
+                keys: status.keys,
+            })
         }
         VialHidOperation::UnlockPoll => {
             let (unlocked, in_progress, counter) = hid.unlock_poll()?;

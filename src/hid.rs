@@ -1446,10 +1446,7 @@ fn response_matches_command(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
     };
 
     match cmd {
-        CMD_VIA_GET_PROTOCOL_VERSION => {
-            resp[0] == CMD_VIA_GET_PROTOCOL_VERSION
-                && matches!(u16::from_be_bytes([resp[1], resp[2]]), 9 | 0xFFFF)
-        }
+        CMD_VIA_GET_PROTOCOL_VERSION => response_matches_via_protocol_version(command, resp),
         CMD_VIA_GET_LAYER_COUNT => {
             resp[0] == CMD_VIA_GET_LAYER_COUNT && (1..=32).contains(&resp[1])
         }
@@ -1472,6 +1469,16 @@ fn response_matches_command(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
         CMD_VIA_VIAL_PREFIX => response_matches_vial_command(command, resp),
         _ => true,
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn response_matches_via_protocol_version(command: &[u8], resp: &[u8]) -> bool {
+    command.first() == Some(&CMD_VIA_GET_PROTOCOL_VERSION)
+        && resp.first() == Some(&CMD_VIA_GET_PROTOCOL_VERSION)
+        && resp
+            .get(1..3)
+            .map(|version| matches!(u16::from_be_bytes([version[0], version[1]]), 0 | 9 | 0xFFFF))
+            .unwrap_or(false)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2063,6 +2070,22 @@ mod tests {
 
         assert!(response_matches_command(&command, &success));
         assert!(response_matches_command(&command, &error));
+    }
+
+    #[test]
+    fn protocol_version_matcher_accepts_active_unlock_zero_and_rejects_unrelated_reports() {
+        let command = [CMD_VIA_GET_PROTOCOL_VERSION];
+        let active_unlock_response = [CMD_VIA_GET_PROTOCOL_VERSION, 0, 0];
+        let unrelated_response = [CMD_VIA_GET_LAYER_COUNT, 0, 0];
+
+        assert!(response_matches_via_protocol_version(
+            &command,
+            &active_unlock_response
+        ));
+        assert!(!response_matches_via_protocol_version(
+            &command,
+            &unrelated_response
+        ));
     }
 
     #[test]

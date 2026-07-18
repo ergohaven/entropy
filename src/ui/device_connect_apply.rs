@@ -59,7 +59,7 @@ fn is_hid_open_failure(error: &str) -> bool {
 enum ConnectTaskChannelState {
     Empty,
     Progress(String),
-    Done(Box<Result<ConnectResult, String>>),
+    Done(Box<Result<ConnectOutcome, String>>),
     Disconnected,
 }
 
@@ -365,7 +365,7 @@ impl EntropyApp {
 
         enum ConnectPollEvent {
             Done {
-                result: Result<ConnectResult, String>,
+                result: Result<ConnectOutcome, String>,
                 reconnect: Option<BluetoothReconnectState>,
             },
             Failed {

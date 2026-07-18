@@ -1390,7 +1390,8 @@ impl EntropyApp {
                 Ok(ConnectOutcome::Connected(Box::new(ConnectResult {
                     device_name: dev.name.clone(),
                     keyboard_id,
-                    vial_unlock_status,
+                    vial_unlock_status: vial_unlock_status
+                        .map(|status| (status.unlocked, status.keys)),
                     hid_device: Some(dev_conn),
                     about_info,
                     layer_names_from_firmware,
@@ -1458,9 +1459,24 @@ mod tests {
         );
         assert_eq!(classify_via_connect(0, None), ViaConnectMode::Unsupported);
         assert_eq!(classify_via_connect(9, None), ViaConnectMode::Normal);
+        assert_eq!(classify_via_connect(u16::MAX, None), ViaConnectMode::Normal);
+    }
+
+    #[test]
+    fn active_unlock_via_zero_response_requires_unlock_in_progress() {
+        let command = [0x01]; // CMD_VIA_GET_PROTOCOL_VERSION
+        let response = [0x01, 0, 0];
+
+        assert!(crate::hid::response_matches_via_protocol_version(
+            &command, &response
+        ));
         assert_eq!(
-            classify_via_connect(u16::MAX, None),
-            ViaConnectMode::Normal
+            classify_via_connect(0, Some((false, true))),
+            ViaConnectMode::RecoverUnlock
+        );
+        assert_eq!(
+            classify_via_connect(0, Some((false, false))),
+            ViaConnectMode::Unsupported
         );
     }
 
