@@ -369,6 +369,16 @@ fn should_write_dynamic_entries(
     entries_dirty && !keycode_picker_open
 }
 
+pub(super) fn combo_write_lifecycle_plan(
+    combo_dirty: bool,
+    keycode_picker_open: bool,
+    entries: &[ComboEntry],
+    synced_entries: &[ComboEntry],
+) -> Option<super::combo_write::ComboWritePlan> {
+    (combo_dirty && !keycode_picker_open)
+        .then(|| super::combo_write::next_combo_write(entries, synced_entries))
+}
+
 fn tap_dance_entries_to_write(
     entries: &[crate::keycode_picker::TapDanceEntry],
     synced_entries: &[crate::keycode_picker::TapDanceEntry],
@@ -382,6 +392,7 @@ fn tap_dance_entries_to_write(
 
 #[cfg(test)]
 mod tests {
+    use super::super::combo_write::ComboWritePlan;
     use super::*;
 
     #[test]
@@ -399,6 +410,41 @@ mod tests {
     fn clean_dynamic_entries_do_not_write() {
         assert!(!should_write_dynamic_entries(false, false, true));
         assert!(!should_write_dynamic_entries(false, false, false));
+    }
+
+    fn combo(keys: [u16; 4], output: u16) -> ComboEntry {
+        ComboEntry { keys, output }
+    }
+
+    #[test]
+    fn combo_lifecycle_keeps_incomplete_draft_off_hid_path() {
+        let entries = [combo([0x0004, 0, 0, 0], 0x0005)];
+        let synced = [ComboEntry::default()];
+
+        assert_eq!(
+            combo_write_lifecycle_plan(true, false, &entries, &synced),
+            Some(ComboWritePlan::Incomplete { index: 0 })
+        );
+    }
+
+    #[test]
+    fn combo_lifecycle_schedules_only_changed_valid_slot() {
+        let unchanged = combo([0x0004, 0x0005, 0, 0], 0x0006);
+        let changed = combo([0x0007, 0x0008, 0, 0], 0x0009);
+        let previous = combo([0x0007, 0x0008, 0, 0], 0x000a);
+
+        assert_eq!(
+            combo_write_lifecycle_plan(
+                true,
+                false,
+                &[unchanged.clone(), changed.clone(), unchanged.clone()],
+                &[unchanged.clone(), previous, unchanged]
+            ),
+            Some(ComboWritePlan::Write {
+                index: 1,
+                entry: changed,
+            })
+        );
     }
 
     #[test]
@@ -1028,39 +1074,6 @@ impl eframe::App for EntropyApp {
                         &[("error", "device handle is not available")],
                     )
                 }
-            }
-        }
-
-        // Write combos to device if changed
-        if should_write_dynamic_entries(
-            self.combo_dirty,
-            self.keycode_picker.open,
-            active_hid_is_bluetooth,
-        ) {
-            let mut combo_save_ok = true;
-            if let Some(hid) = &self.hid_device {
-                for (i, combo) in self.combo_entries.iter().enumerate() {
-                    match hid.set_combo(i as u8, combo.keys, combo.output) {
-                        Ok(()) => {}
-                        Err(e) => {
-                            self.status_msg = crate::i18n::tr_catalog_format(
-                                self.app_settings.language,
-                                "status_messages.combo_write_error",
-                                &[("error", &e.to_string())],
-                            );
-                            combo_save_ok = false;
-                            break;
-                        }
-                    }
-                }
-            }
-            if combo_save_ok {
-                self.combo_dirty = false;
-                self.status_msg = crate::i18n::tr_catalog(
-                    self.app_settings.language,
-                    "status_messages.combos_saved",
-                )
-                .into();
             }
         }
 

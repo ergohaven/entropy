@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum ComboWritePlan {
+pub(super) enum ComboWritePlan {
     Clean,
     Incomplete { index: usize },
     Write { index: usize, entry: ComboEntry },
@@ -13,7 +13,10 @@ fn combo_entry_is_writable(entry: &ComboEntry) -> bool {
     is_empty || ((2..=4).contains(&trigger_count) && entry.output != 0)
 }
 
-fn next_combo_write(entries: &[ComboEntry], synced_entries: &[ComboEntry]) -> ComboWritePlan {
+pub(super) fn next_combo_write(
+    entries: &[ComboEntry],
+    synced_entries: &[ComboEntry],
+) -> ComboWritePlan {
     let mut first_incomplete = None;
 
     for (index, entry) in entries.iter().enumerate() {
@@ -76,16 +79,22 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn maybe_start_combo_write(&mut self, ctx: &egui::Context) {
-        if !self.combo_dirty
-            || self.keycode_picker.open
-            || self.hid_write_task_active()
+        if self.hid_write_task_active()
             || self.combo_attempted_revision == Some(self.combo_edit_revision)
         {
             return;
         }
 
         let revision = self.combo_edit_revision;
-        match next_combo_write(&self.combo_entries, &self.combo_synced_entries) {
+        let Some(plan) = super::app_lifecycle::combo_write_lifecycle_plan(
+            self.combo_dirty,
+            self.keycode_picker.open,
+            &self.combo_entries,
+            &self.combo_synced_entries,
+        ) else {
+            return;
+        };
+        match plan {
             ComboWritePlan::Clean => {
                 self.combo_dirty = false;
                 self.combo_attempted_revision = None;
