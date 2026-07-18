@@ -443,6 +443,10 @@ device_unlocked = "Устройство разблокировано"
 unlock_interrupted_disconnected = "Разблокировка прервана — устройство отключено или недоступно: {error}"
 unlock_poll_retry = "Связь при разблокировке прервана; повторная попытка: {error}"
 finish_unlock_before_closing = "Завершите разблокировку устройства или переподключите его перед закрытием Entropy"
+refresh_device_data_pending_write = "Завершите запись слоя перед обновлением данных устройства"
+refresh_device_data_missing_device = "Не удалось обновить данные устройства: устройство не найдено"
+refresh_device_data_missing_info = "Не удалось обновить данные устройства: информация недоступна"
+refresh_device_data_delete_failed = "Не удалось удалить сохранённые данные устройства"
 
 [dynamic_status]
 device_not_found = "Устройство не найдено"

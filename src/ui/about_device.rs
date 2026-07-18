@@ -522,14 +522,10 @@ fn draw_about_rows(
     id_salt: &'static str,
     metrics: crate::ui_style::ResponsiveMetrics,
     rows: &[AboutRow],
+    bottom_reserve: f32,
 ) -> egui::Rect {
-    let list = allocate_adaptive_settings_list_viewport(
-        ui,
-        id_salt,
-        metrics,
-        rows.len(),
-        metrics.value(4.0),
-    );
+    let list =
+        allocate_adaptive_settings_list_viewport(ui, id_salt, metrics, rows.len(), bottom_reserve);
 
     crate::ui_style::allocate_ui_at_rect(ui, list.content_rect, |ui| {
         ui.set_clip_rect(list.viewport);
@@ -607,7 +603,8 @@ impl EntropyApp {
                         .color(app_muted_text(dark)),
                 );
                 ui.add_space(metrics.value(24.0));
-                let list_viewport = draw_about_rows(ui, "about_device", metrics, &rows);
+                let list_viewport =
+                    draw_about_rows(ui, "about_device", metrics, &rows, metrics.value(54.0));
                 let button_size = egui::vec2(metrics.value(180.0), metrics.value(32.0));
                 let actions_rect = egui::Rect::from_center_size(
                     egui::pos2(
@@ -655,7 +652,8 @@ impl EntropyApp {
                         .color(app_muted_text(dark)),
                 );
                 ui.add_space(metrics.value(24.0));
-                let list_viewport = draw_about_rows(ui, "about_entropy", metrics, &rows);
+                let list_viewport =
+                    draw_about_rows(ui, "about_entropy", metrics, &rows, metrics.value(54.0));
 
                 let checking = matches!(self.update_check, UpdateCheckState::Checking { .. });
                 let ready = match &self.update_check {

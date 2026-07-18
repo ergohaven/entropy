@@ -232,8 +232,17 @@ fn save_cached_qmk_settings(cache_key: &str, context: &QmkSettingsCacheContext, 
 }
 
 fn is_cached_vial_definition_for_device(file_name: &str, cache_key: &str) -> bool {
-    let prefix = format!("definition_v{VIAL_DEFINITION_CACHE_VERSION}_{cache_key}_");
-    file_name.starts_with(&prefix) && file_name.ends_with(".json")
+    let Some(stem) = file_name.strip_suffix(".json") else {
+        return false;
+    };
+    let Some((device_prefix, definition_size)) = stem.rsplit_once('_') else {
+        return false;
+    };
+    let expected_prefix = format!("definition_v{VIAL_DEFINITION_CACHE_VERSION}_{cache_key}");
+
+    device_prefix == expected_prefix
+        && definition_size.len() == 8
+        && definition_size.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn clear_cached_device_data(cache_key: &str) -> Result<(), String> {
@@ -436,28 +445,37 @@ fn supports_vial_macro_ext_keycodes(vial_protocol: u32, json: &serde_json::Value
 
 impl EntropyApp {
     pub(super) fn refresh_current_device_data(&mut self) {
+        let lang = self.app_settings.language;
         if self.layer_write_task.is_some() {
             self.status_msg =
-                "Finish the pending layer write before refreshing device data".to_owned();
+                crate::i18n::tr_catalog(lang, "status_messages.refresh_device_data_pending_write")
+                    .to_owned();
             return;
         }
         let Some(device_idx) = self.selected_device else {
-            self.status_msg = "Failed to refresh device data: no device selected".to_owned();
+            self.status_msg =
+                crate::i18n::tr_catalog(lang, "status_messages.refresh_device_data_missing_device")
+                    .to_owned();
             return;
         };
         let Some(device) = self.device_manager.devices().get(device_idx).cloned() else {
-            self.status_msg = "Failed to refresh device data: device not found".to_owned();
+            self.status_msg =
+                crate::i18n::tr_catalog(lang, "status_messages.refresh_device_data_missing_device")
+                    .to_owned();
             return;
         };
         let Some(info) = self.device_about_info.as_ref() else {
             self.status_msg =
-                "Failed to refresh device data: device information unavailable".to_owned();
+                crate::i18n::tr_catalog(lang, "status_messages.refresh_device_data_missing_info")
+                    .to_owned();
             return;
         };
 
         let cache_key = device_cache_key(&device, info.keyboard_id);
         if let Err(error) = clear_cached_device_data(&cache_key) {
-            self.status_msg = format!("Failed to refresh device data: {error}");
+            self.status_msg =
+                crate::i18n::tr_catalog(lang, "status_messages.refresh_device_data_delete_failed")
+                    .to_owned();
             log::warn!("device cache refresh failed for key {cache_key}: {error}");
             return;
         }
@@ -1456,6 +1474,18 @@ mod tests {
         ));
         assert!(!is_cached_vial_definition_for_device(
             "definition_v3_keyboard_00001234.json",
+            "keyboard"
+        ));
+        assert!(!is_cached_vial_definition_for_device(
+            "definition_v4_keyboard_pro_00001234.json",
+            "keyboard"
+        ));
+        assert!(!is_cached_vial_definition_for_device(
+            "definition_v4_keyboard_0000123.json",
+            "keyboard"
+        ));
+        assert!(!is_cached_vial_definition_for_device(
+            "definition_v4_keyboard_not-hex.json",
             "keyboard"
         ));
     }
