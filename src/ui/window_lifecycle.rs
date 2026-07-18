@@ -187,7 +187,12 @@ impl EntropyApp {
                 self.close_to_tray_prompt_remember = false;
                 ctx.request_repaint();
             }
-            CloseToTrayBehavior::Ask | CloseToTrayBehavior::Close | CloseToTrayBehavior::Tray => {}
+            CloseToTrayBehavior::Ask | CloseToTrayBehavior::Close | CloseToTrayBehavior::Tray => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.defer_exit_until_hid_write_returns(ctx);
+                }
+            }
         }
     }
 

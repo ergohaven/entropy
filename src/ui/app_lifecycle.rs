@@ -506,7 +506,25 @@ mod tests {
                 "status_messages.refresh_device_data_pending_write"
             )
         );
-        assert!(app.defer_exit_until_hid_write_returns(&ctx));
+        app.app_settings.minimize_to_tray_on_close = false;
+        app.app_settings.close_to_tray_behavior = CloseToTrayBehavior::Close;
+        let mut close_input = egui::RawInput::default();
+        close_input
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .expect("root viewport exists")
+            .events
+            .push(egui::ViewportEvent::Close);
+        let close_output = ctx.run_ui(close_input, |_ui| {
+            app.handle_close_to_tray(&ctx);
+        });
+        assert!(close_output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .expect("root viewport output exists")
+            .commands
+            .contains(&egui::ViewportCommand::CancelClose));
+        assert!(app.exit_after_hid_write);
         eframe::App::on_exit(&mut app, None);
         assert_eq!(app.pending_tap_hold_numeric_writes.get(&7), Some(&175));
 
@@ -542,9 +560,17 @@ mod tests {
         app.apply_picker_results();
         assert_eq!(app.key_override_entries[0].trigger, 0x0004);
 
-        app.finish_deferred_exit_after_hid_write(&ctx);
+        let final_close_output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+            app.finish_deferred_exit_after_hid_write(&ctx);
+        });
         assert!(!app.exit_after_hid_write);
         assert!(app.pending_tap_hold_numeric_writes.is_empty());
+        assert!(final_close_output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .expect("root viewport output exists")
+            .commands
+            .contains(&egui::ViewportCommand::Close));
 
         let completed_requests = recorder.requests();
         assert_eq!(
