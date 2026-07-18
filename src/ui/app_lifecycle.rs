@@ -401,6 +401,7 @@ fn tap_dance_entries_to_write(
 mod tests {
     use super::super::combo_write::ComboWritePlan;
     use super::*;
+    use crate::keyboard::{KeyboardLayout, LayoutOption};
 
     #[test]
     fn dirty_dynamic_entries_write_over_bluetooth() {
@@ -493,6 +494,26 @@ mod tests {
         app.key_override_pick_target = Some(KeyOverridePickField::Trigger);
         app.keycode_picker.result = Some(0x0004);
         app.pending_tap_hold_numeric_writes.insert(7, 175);
+        app.layout = Some(KeyboardLayout {
+            name: "Test".into(),
+            rows: 0,
+            cols: 0,
+            keys: vec![],
+            encoders: vec![],
+            layers: vec![],
+            encoder_layers: vec![],
+            layer_names: vec![],
+            custom_keycodes: vec![],
+            layout_options: vec![LayoutOption {
+                label: "Display preset".into(),
+                choices: vec!["Disabled".into(), "Clock".into()],
+            }],
+            live_features: Default::default(),
+            supports_rgb: false,
+            lighting_mode: None,
+            firmware: FirmwareProtocol::Vial,
+        });
+        app.layout_options_value = Some(1);
 
         app.apply_picker_results();
         assert_eq!(app.keycode_picker.result, Some(0x0004));
@@ -543,6 +564,13 @@ mod tests {
                 .count(),
             0
         );
+        assert_eq!(
+            active_requests
+                .iter()
+                .filter(|request| request[..6] == [0x03, 0x02, 0, 0, 0, 0])
+                .count(),
+            0
+        );
 
         for _ in 0..100 {
             app.poll_combo_write(&ctx);
@@ -565,6 +593,7 @@ mod tests {
         });
         assert!(!app.exit_after_hid_write);
         assert!(app.pending_tap_hold_numeric_writes.is_empty());
+        assert_eq!(app.layout_options_value, Some(0));
         assert!(final_close_output
             .viewport_output
             .get(&egui::ViewportId::ROOT)
@@ -591,6 +620,13 @@ mod tests {
             completed_requests
                 .iter()
                 .filter(|request| request[..2] == [0xfe, 0x0b])
+                .count(),
+            1
+        );
+        assert_eq!(
+            completed_requests
+                .iter()
+                .filter(|request| request[..6] == [0x03, 0x02, 0, 0, 0, 0])
                 .count(),
             1
         );
