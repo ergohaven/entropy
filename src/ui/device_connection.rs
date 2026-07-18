@@ -34,6 +34,7 @@ impl EntropyApp {
         self.combo_write_task = None;
         self.settings_write_task = None;
         self.settings_write_queue.clear();
+        self.module_settings_refresh_task = None;
         self.hid_device = None;
         self.undo_stack.clear();
         self.connect_state = ConnectState::Idle;
