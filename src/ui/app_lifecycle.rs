@@ -67,6 +67,10 @@ fn app_visuals(dark_mode: bool) -> egui::Visuals {
     visuals
 }
 
+fn hid_lifecycle_writes_available(hid_write_task_active: bool) -> bool {
+    !hid_write_task_active
+}
+
 impl EntropyApp {
     fn main_window_hidden_to_tray(&self) -> bool {
         #[cfg(target_os = "windows")]
@@ -92,7 +96,9 @@ impl EntropyApp {
         selected_device_is_bluetooth: bool,
     ) {
         if should_poll_device_scan(main_window_hidden_to_tray) {
-            self.handle_pending_imports(ctx, now);
+            if hid_lifecycle_writes_available(self.hid_write_task_active()) {
+                self.handle_pending_imports(ctx, now);
+            }
             if !self.hid_write_task_active() {
                 self.poll_device_scan(ctx);
             }
@@ -466,6 +472,92 @@ mod tests {
             ),
             vec![1]
         );
+    }
+
+    #[derive(Default)]
+    struct HidLifecycleProbe {
+        macro_dirty: bool,
+        combo_timeout_dirty: bool,
+        tap_dance_dirty: bool,
+        tap_hold_pending: std::collections::BTreeMap<u16, u16>,
+        import_pending: bool,
+        writes: [u8; 5],
+        status: String,
+    }
+
+    impl HidLifecycleProbe {
+        fn with_pending_writes() -> Self {
+            Self {
+                macro_dirty: true,
+                combo_timeout_dirty: true,
+                tap_dance_dirty: true,
+                tap_hold_pending: std::iter::once((7, 175)).collect(),
+                import_pending: true,
+                ..Default::default()
+            }
+        }
+
+        fn advance(&mut self, combo_task_active: bool) {
+            if !hid_lifecycle_writes_available(combo_task_active) {
+                return;
+            }
+
+            let mut wrote = false;
+            if self.import_pending {
+                self.import_pending = false;
+                self.writes[0] += 1;
+                wrote = true;
+            }
+            if self.macro_dirty {
+                self.macro_dirty = false;
+                self.writes[1] += 1;
+                wrote = true;
+            }
+            if self.combo_timeout_dirty {
+                self.combo_timeout_dirty = false;
+                self.writes[2] += 1;
+                wrote = true;
+            }
+            if self.tap_dance_dirty {
+                self.tap_dance_dirty = false;
+                self.writes[3] += 1;
+                wrote = true;
+            }
+            if !self.tap_hold_pending.is_empty() {
+                self.tap_hold_pending.clear();
+                self.writes[4] += 1;
+                wrote = true;
+            }
+            if wrote {
+                self.status = "Saved".to_owned();
+            }
+        }
+    }
+
+    #[test]
+    fn in_flight_combo_task_defers_other_hid_writes_until_handle_returns() {
+        let mut lifecycle = HidLifecycleProbe::with_pending_writes();
+
+        lifecycle.advance(true);
+
+        assert!(lifecycle.import_pending);
+        assert!(lifecycle.macro_dirty);
+        assert!(lifecycle.combo_timeout_dirty);
+        assert!(lifecycle.tap_dance_dirty);
+        assert_eq!(lifecycle.tap_hold_pending.get(&7), Some(&175));
+        assert_eq!(lifecycle.writes, [0; 5]);
+        assert!(lifecycle.status.is_empty());
+
+        lifecycle.advance(false);
+        lifecycle.advance(false);
+
+        assert!(!lifecycle.import_pending);
+        assert!(!lifecycle.macro_dirty);
+        assert!(!lifecycle.combo_timeout_dirty);
+        assert!(!lifecycle.tap_dance_dirty);
+        assert!(lifecycle.tap_hold_pending.is_empty());
+        assert_eq!(lifecycle.writes, [1; 5]);
+        assert_eq!(lifecycle.status, "Saved");
     }
 
     #[test]
@@ -1019,8 +1111,16 @@ impl eframe::App for EntropyApp {
             .as_ref()
             .map(|hid| hid.is_bluetooth_transport())
             .unwrap_or(false);
+        #[cfg(not(target_arch = "wasm32"))]
+        let hid_lifecycle_writes_available =
+            hid_lifecycle_writes_available(self.hid_write_task_active());
+        #[cfg(target_arch = "wasm32")]
+        let hid_lifecycle_writes_available = true;
 
-        if self.keycode_picker.macros_dirty && !self.keycode_picker.open {
+        if hid_lifecycle_writes_available
+            && self.keycode_picker.macros_dirty
+            && !self.keycode_picker.open
+        {
             if self.unlock_open || self.vial_unlock_polling {
                 // Defer macro write until unlock flow fully finishes.
             } else if self.is_vial_locked() {
@@ -1077,7 +1177,11 @@ impl eframe::App for EntropyApp {
             }
         }
 
-        if self.combo_term_dirty && !self.keycode_picker.open && !active_hid_is_bluetooth {
+        if hid_lifecycle_writes_available
+            && self.combo_term_dirty
+            && !self.keycode_picker.open
+            && !active_hid_is_bluetooth
+        {
             let mut term_save_ok = true;
             if let (Some(hid), Some(value)) = (&self.hid_device, self.combo_term) {
                 if let Err(e) = hid.set_qmk_setting_u16(2, value) {
@@ -1118,14 +1222,18 @@ impl eframe::App for EntropyApp {
             self.combo_colors_dirty = false;
         }
 
-        self.flush_due_tap_hold_numeric_writes();
+        if hid_lifecycle_writes_available {
+            self.flush_due_tap_hold_numeric_writes();
+        }
 
         // Write tap dance to device if changed
-        if should_write_dynamic_entries(
-            self.keycode_picker.tap_dance_dirty,
-            self.keycode_picker.open,
-            active_hid_is_bluetooth,
-        ) {
+        if hid_lifecycle_writes_available
+            && should_write_dynamic_entries(
+                self.keycode_picker.tap_dance_dirty,
+                self.keycode_picker.open,
+                active_hid_is_bluetooth,
+            )
+        {
             let entries_to_write = tap_dance_entries_to_write(
                 &self.keycode_picker.tap_dance_entries,
                 &self.keycode_picker.tap_dance_synced_entries,
