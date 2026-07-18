@@ -42,11 +42,11 @@ fn spawn_module_settings_refresh_job<T: Send + 'static>(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn module_settings_refresh_start_allowed(
-    task_active: bool,
+    hid_write_task_active: bool,
     hid_available: bool,
     identity_available: bool,
 ) -> bool {
-    !task_active && hid_available && identity_available
+    !hid_write_task_active && hid_available && identity_available
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -57,6 +57,11 @@ fn module_settings_refresh_identity_matches(
     current == Some(expected)
 }
 impl EntropyApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn hid_write_task_active(&self) -> bool {
+        self.layer_write_task.is_some() || self.module_settings_refresh_task.is_some()
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn current_module_settings_device_identity(&self) -> Option<ModuleSettingsDeviceIdentity> {
         self.device_about_info
@@ -70,7 +75,7 @@ impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn refresh_module_settings_values(&mut self) {
         let lang = self.app_settings.language;
-        if self.module_settings_refresh_task.is_some() {
+        if self.hid_write_task_active() {
             return;
         }
         let Some(identity) = self.current_module_settings_device_identity() else {
@@ -96,16 +101,20 @@ impl EntropyApp {
             #[cfg(target_os = "macos")]
             let _hid_lock = crate::hid::macos_hid_operation_lock();
 
+            let mut disconnected = false;
             let report = module_settings.refresh_values(|qsid, width| {
                 if width > 1 {
                     hid_device.get_qmk_setting_u16(qsid)
                 } else {
                     hid_device.get_qmk_setting_u8(qsid).map(u16::from)
                 }
-                .map_err(|error| error.to_string())
+                .map_err(|error| {
+                    disconnected |= crate::hid::is_disconnect_error(&error);
+                    error.to_string()
+                })
             });
             ModuleSettingsRefreshTaskResult {
-                hid_device,
+                hid_device: (!disconnected).then_some(hid_device),
                 identity: worker_identity,
                 device_name,
                 report,
@@ -147,12 +156,10 @@ impl EntropyApp {
                     .expect("module settings refresh task checked above");
                 let current = self.current_module_settings_device_identity();
                 if module_settings_refresh_identity_matches(&task.identity, current.as_ref()) {
-                    self.hid_device = None;
-                    self.status_msg = crate::i18n::tr_catalog(
+                    self.clear_connected_keyboard_state(crate::i18n::tr_catalog(
                         self.app_settings.language,
                         "modules_settings.refresh_task_failed",
-                    )
-                    .to_owned();
+                    ));
                 }
                 log::warn!("module settings refresh worker stopped before returning a result");
             }
@@ -171,7 +178,14 @@ impl EntropyApp {
             return;
         }
 
-        self.hid_device = Some(result.hid_device);
+        let Some(hid_device) = result.hid_device else {
+            self.clear_connected_keyboard_state(
+                "Module settings refresh lost device connection; reconnect the keyboard",
+            );
+            return;
+        };
+
+        self.hid_device = Some(hid_device);
         self.module_settings.apply_refresh_report(&result.report);
         self.apply_module_settings_refresh_report(&result.device_name, &result.report);
     }
@@ -683,7 +697,7 @@ impl EntropyApp {
         let refresh_active = false;
         #[cfg(not(target_arch = "wasm32"))]
         let refresh_enabled = module_settings_refresh_start_allowed(
-            refresh_active,
+            self.hid_write_task_active(),
             self.hid_device.is_some(),
             self.current_module_settings_device_identity().is_some(),
         );

@@ -897,7 +897,7 @@ pub(crate) struct ModuleSettingsDeviceIdentity {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct ModuleSettingsRefreshTaskResult {
-    pub(crate) hid_device: crate::hid::HidDevice,
+    pub(crate) hid_device: Option<crate::hid::HidDevice>,
     pub(crate) identity: ModuleSettingsDeviceIdentity,
     pub(crate) device_name: String,
     pub(crate) report: ModuleSettingsRefreshReport,
