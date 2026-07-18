@@ -41,6 +41,8 @@ impl EntropyApp {
             #[cfg(not(target_arch = "wasm32"))]
             module_settings_refresh_task: None,
             #[cfg(not(target_arch = "wasm32"))]
+            deferred_hid_settings: None,
+            #[cfg(not(target_arch = "wasm32"))]
             qmk_hid_hosts: std::collections::HashMap::new(),
             pending_device_connect: None,
             firmware: FirmwareProtocol::Vial,

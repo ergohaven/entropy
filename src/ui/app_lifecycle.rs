@@ -432,8 +432,9 @@ mod tests {
     use super::super::settings_write_queue::SettingsWriteStatus;
     use super::*;
     use crate::app::app_state::{
-        DeviceAboutInfo, ModuleSettingRefreshEntry, ModuleSettingRefreshOutcome,
-        ModuleSettingsDeviceIdentity, ModuleSettingsRefreshReport, ModuleSettingsRefreshTask,
+        DeviceAboutInfo, ModuleSettingField, ModuleSettingKind, ModuleSettingRefreshEntry,
+        ModuleSettingRefreshOutcome, ModuleSettingsDeviceIdentity, ModuleSettingsGroup,
+        ModuleSettingsGroupKind, ModuleSettingsRefreshReport, ModuleSettingsRefreshTask,
         ModuleSettingsRefreshTaskResult,
     };
     use crate::keyboard::{KeyboardLayout, LayoutOption, PhysicalKey};
@@ -604,7 +605,7 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn module_refresh_task_defers_picker_and_device_refresh_until_completion() {
+    fn module_refresh_task_returns_handle_then_flushes_deferred_writes_and_exit() {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -617,11 +618,24 @@ mod tests {
             keyboard_id: identity.keyboard_id,
             ..Default::default()
         });
-        let (sender, receiver) = std::sync::mpsc::channel();
-        app.module_settings_refresh_task = Some(ModuleSettingsRefreshTask {
-            receiver,
-            identity: identity.clone(),
-        });
+        let (hid_device, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        app.module_settings.groups = vec![ModuleSettingsGroup {
+            title: "Modules".to_owned(),
+            kind: ModuleSettingsGroupKind::Other,
+            fields: vec![ModuleSettingField {
+                title: "Mode".to_owned(),
+                qsid: 7,
+                kind: ModuleSettingKind::Select,
+                bit: 0,
+                width: 1,
+                min: 0,
+                max: 1,
+                variants: vec!["Normal".to_owned(), "Scroll".to_owned()],
+            }],
+        }];
+        app.refresh_module_settings_values();
+        assert!(app.hid_write_task_active());
         app.key_override_entries = vec![KeyOverrideEntry::default()];
         app.key_override_pick_target = Some(KeyOverridePickField::Trigger);
         app.keycode_picker.result = Some(0x0004);
@@ -655,25 +669,118 @@ mod tests {
                 "status_messages.refresh_device_data_pending_write"
             )
         );
+        assert!(app.defer_exit_until_hid_write_returns(&ctx));
+        eframe::App::on_exit(&mut app, None);
+        assert_eq!(app.pending_tap_hold_numeric_writes.get(&7), Some(&175));
 
-        sender
-            .send(ModuleSettingsRefreshTaskResult {
-                hid_device: None,
-                identity,
-                device_name: "Phenom".to_owned(),
-                report: ModuleSettingsRefreshReport::default(),
-            })
-            .expect("module refresh task receiver is active");
-        app.poll_module_settings_refresh(&ctx);
+        let active_requests = recorder.requests();
+        assert_eq!(
+            active_requests
+                .iter()
+                .filter(|request| request[..3] == [0xfe, 0x0d, 0x06])
+                .count(),
+            0
+        );
+        assert_eq!(
+            active_requests
+                .iter()
+                .filter(|request| request[..2] == [0xfe, 0x0b])
+                .count(),
+            0
+        );
+
+        for _ in 0..100 {
+            app.poll_module_settings_refresh(&ctx);
+            if !app.hid_write_task_active() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         assert!(!app.hid_write_task_active());
-        assert!(app.hid_device.is_none());
-        assert!(app.layout.is_none());
+        assert!(app.hid_device.is_some());
 
         app.apply_picker_results();
         assert_eq!(app.key_override_entries[0].trigger, 0x0004);
         assert!(app.keycode_picker.result.is_none());
         app.apply_picker_results();
         assert_eq!(app.key_override_entries[0].trigger, 0x0004);
+        app.finish_deferred_exit_after_hid_write(&ctx);
+        assert!(!app.exit_after_hid_write);
+        assert!(app.pending_tap_hold_numeric_writes.is_empty());
+
+        let completed_requests = recorder.requests();
+        assert_eq!(
+            completed_requests
+                .iter()
+                .filter(|request| request[..3] == [0xfe, 0x0d, 0x06])
+                .count(),
+            1
+        );
+        assert_eq!(
+            completed_requests
+                .iter()
+                .filter(|request| request[..4] == [0xfe, 0x0b, 7, 0])
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn module_refresh_disconnect_preserves_dirty_settings_for_reconnect() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let identity = ModuleSettingsDeviceIdentity {
+            path: "usb:phenom".to_owned(),
+            keyboard_id: 42,
+        };
+        app.device_about_info = Some(DeviceAboutInfo {
+            path: identity.path.clone(),
+            keyboard_id: identity.keyboard_id,
+            ..Default::default()
+        });
+        app.keycode_picker.macro_texts = vec![vec![1, 2, 3]];
+        app.keycode_picker.macros_dirty = true;
+        app.combo_entries = vec![ComboEntry {
+            keys: [0x0004, 0x0005, 0, 0],
+            output: 0x0006,
+        }];
+        app.combo_dirty = true;
+        app.pending_tap_hold_numeric_writes.insert(7, 175);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.module_settings_refresh_task = Some(ModuleSettingsRefreshTask {
+            receiver,
+            identity: identity.clone(),
+        });
+
+        sender
+            .send(ModuleSettingsRefreshTaskResult {
+                hid_device: None,
+                identity,
+                device_name: "Phenom".to_owned(),
+                report: ModuleSettingsRefreshReport { entries: vec![] },
+            })
+            .expect("module refresh task receiver is active");
+        app.poll_module_settings_refresh(&ctx);
+
+        let deferred = app
+            .deferred_hid_settings
+            .as_ref()
+            .expect("disconnect preserves pending HID-backed settings");
+        assert!(deferred.macros_dirty);
+        assert_eq!(deferred.macro_texts, vec![vec![1, 2, 3]]);
+        assert!(deferred.combo_dirty);
+        assert_eq!(deferred.combo_entries[0].output, 0x0006);
+        assert_eq!(deferred.pending_tap_hold_numeric_writes.get(&7), Some(&175));
+        assert!(app.device_about_info.is_none());
+        assert_eq!(
+            app.status_msg,
+            crate::i18n::tr_catalog(
+                app.app_settings.language,
+                "modules_settings.refresh_disconnected"
+            )
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
