@@ -845,7 +845,14 @@ pub(crate) struct ModuleSettingRefreshEntry {
     pub(crate) qsid: u16,
     pub(crate) width: u8,
     pub(crate) previous: u16,
-    pub(crate) result: Result<u16, String>,
+    pub(crate) outcome: ModuleSettingRefreshOutcome,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ModuleSettingRefreshOutcome {
+    Success(u16),
+    Failed(String),
+    Skipped(String),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -857,25 +864,55 @@ impl ModuleSettingsRefreshReport {
     pub(crate) fn successful_count(&self) -> usize {
         self.entries
             .iter()
-            .filter(|entry| entry.result.is_ok())
+            .filter(|entry| matches!(entry.outcome, ModuleSettingRefreshOutcome::Success(_)))
             .count()
     }
 
     pub(crate) fn changed_count(&self) -> usize {
         self.entries
             .iter()
-            .filter(|entry| {
-                entry
-                    .result
-                    .as_ref()
-                    .is_ok_and(|value| *value != entry.previous)
+            .filter(|entry| match entry.outcome {
+                ModuleSettingRefreshOutcome::Success(value) => value != entry.previous,
+                ModuleSettingRefreshOutcome::Failed(_)
+                | ModuleSettingRefreshOutcome::Skipped(_) => false,
             })
             .count()
     }
 
     pub(crate) fn failed_count(&self) -> usize {
-        self.entries.len().saturating_sub(self.successful_count())
+        self.entries
+            .iter()
+            .filter(|entry| matches!(entry.outcome, ModuleSettingRefreshOutcome::Failed(_)))
+            .count()
     }
+
+    pub(crate) fn skipped_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| matches!(entry.outcome, ModuleSettingRefreshOutcome::Skipped(_)))
+            .count()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ModuleSettingsDeviceIdentity {
+    pub(crate) path: String,
+    pub(crate) keyboard_id: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct ModuleSettingsRefreshTaskResult {
+    pub(crate) hid_device: crate::hid::HidDevice,
+    pub(crate) identity: ModuleSettingsDeviceIdentity,
+    pub(crate) device_name: String,
+    pub(crate) report: ModuleSettingsRefreshReport,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct ModuleSettingsRefreshTask {
+    pub(crate) receiver: mpsc::Receiver<ModuleSettingsRefreshTaskResult>,
+    pub(crate) identity: ModuleSettingsDeviceIdentity,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -938,7 +975,7 @@ impl ModuleSettingsState {
     }
 
     pub(crate) fn refresh_values(
-        &mut self,
+        &self,
         mut read: impl FnMut(u16, u8) -> Result<u16, String>,
     ) -> ModuleSettingsRefreshReport {
         let mut widths = std::collections::BTreeMap::<u16, u8>::new();
@@ -950,20 +987,36 @@ impl ModuleSettingsState {
         }
 
         let mut report = ModuleSettingsRefreshReport::default();
+        let mut previous_error = None::<String>;
         for (qsid, width) in widths {
             let previous = self.value(qsid);
-            let result = read(qsid, width);
-            if let Ok(value) = result {
-                self.set_value(qsid, value);
-            }
+            let outcome = if let Some(error) = previous_error.as_ref() {
+                ModuleSettingRefreshOutcome::Skipped(error.clone())
+            } else {
+                match read(qsid, width) {
+                    Ok(value) => ModuleSettingRefreshOutcome::Success(value),
+                    Err(error) => {
+                        previous_error = Some(error.clone());
+                        ModuleSettingRefreshOutcome::Failed(error)
+                    }
+                }
+            };
             report.entries.push(ModuleSettingRefreshEntry {
                 qsid,
                 width,
                 previous,
-                result,
+                outcome,
             });
         }
         report
+    }
+
+    pub(crate) fn apply_refresh_report(&mut self, report: &ModuleSettingsRefreshReport) {
+        for entry in &report.entries {
+            if let ModuleSettingRefreshOutcome::Success(value) = entry.outcome {
+                self.set_value(entry.qsid, value);
+            }
+        }
     }
 
     pub(crate) fn write_verified_value(
@@ -2875,6 +2928,9 @@ pub struct EntropyApp {
     pub(super) settings_write_generation: u64,
     pub(super) qmk_settings_write_queue: QmkSettingsWriteQueue,
     pub(super) pending_device_connect: Option<usize>,
+    /// Background module settings refresh. Owns the HID handle while active.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) module_settings_refresh_task: Option<ModuleSettingsRefreshTask>,
     /// Built-in qmk-hid-host bridges for displays/presets that need host data
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) qmk_hid_hosts:
@@ -3178,9 +3234,45 @@ mod module_settings_state_tests {
         assert_eq!(report.successful_count(), 1);
         assert_eq!(report.changed_count(), 1);
         assert_eq!(report.failed_count(), 1);
+        assert_eq!(report.skipped_count(), 0);
+        settings.apply_refresh_report(&report);
         assert_eq!(settings.value(42), 9);
         assert_eq!(settings.value(43), 8);
-        assert_eq!(report.entries[1].result, Err("read failed".to_owned()));
+        assert_eq!(
+            report.entries[1].outcome,
+            ModuleSettingRefreshOutcome::Failed("read failed".to_owned())
+        );
+    }
+
+    #[test]
+    fn module_setting_refresh_counts_failed_and_skipped_reads_separately() {
+        let settings = ModuleSettingsState {
+            fields: vec![
+                module_field(42, 1, "Left mode"),
+                module_field(43, 1, "Right mode"),
+                module_field(44, 1, "Scroll sens"),
+            ],
+            supported: true,
+            ..Default::default()
+        };
+        let mut reads = Vec::new();
+
+        let report = settings.refresh_values(|qsid, width| {
+            reads.push((qsid, width));
+            Err("device stopped responding".to_owned())
+        });
+
+        assert_eq!(reads, vec![(42, 1)]);
+        assert_eq!(report.successful_count(), 0);
+        assert_eq!(report.failed_count(), 1);
+        assert_eq!(report.skipped_count(), 2);
+        assert!(matches!(
+            report.entries[0].outcome,
+            ModuleSettingRefreshOutcome::Failed(_)
+        ));
+        assert!(report.entries[1..]
+            .iter()
+            .all(|entry| matches!(entry.outcome, ModuleSettingRefreshOutcome::Skipped(_))));
     }
 }
 

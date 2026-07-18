@@ -130,6 +130,7 @@ impl EntropyApp {
         }
 
         self.poll_layer_write(ctx);
+        self.poll_module_settings_refresh(ctx);
         self.poll_combo_write(ctx);
         self.maybe_start_combo_write(ctx);
         self.finish_deferred_exit_after_hid_write(ctx);

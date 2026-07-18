@@ -151,48 +151,173 @@ fn module_setting_diagnostic_labels(groups: &[ModuleSettingsGroup], qsid: u16) -
     labels.dedup();
     labels.join(" | ")
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_module_settings_refresh_job<T: Send + 'static>(
+    job: impl FnOnce() -> T + Send + 'static,
+) -> std::sync::mpsc::Receiver<T> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(job());
+    });
+    receiver
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn module_settings_refresh_start_allowed(
+    task_active: bool,
+    hid_available: bool,
+    identity_available: bool,
+) -> bool {
+    !task_active && hid_available && identity_available
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn module_settings_refresh_identity_matches(
+    expected: &ModuleSettingsDeviceIdentity,
+    current: Option<&ModuleSettingsDeviceIdentity>,
+) -> bool {
+    current == Some(expected)
+}
+
 impl EntropyApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn current_module_settings_device_identity(&self) -> Option<ModuleSettingsDeviceIdentity> {
+        self.device_about_info
+            .as_ref()
+            .map(|info| ModuleSettingsDeviceIdentity {
+                path: info.path.clone(),
+                keyboard_id: info.keyboard_id,
+            })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn refresh_module_settings_values(&mut self) {
         let lang = self.app_settings.language;
-        let Some(hid) = self.hid_device.as_ref() else {
+        if self.module_settings_refresh_task.is_some() {
+            return;
+        }
+        let Some(identity) = self.current_module_settings_device_identity() else {
+            self.status_msg =
+                crate::i18n::tr_catalog(lang, "modules_settings.refresh_unavailable").to_owned();
+            return;
+        };
+        let Some(hid_device) = self.hid_device.take() else {
             self.status_msg =
                 crate::i18n::tr_catalog(lang, "modules_settings.refresh_unavailable").to_owned();
             return;
         };
 
-        let device = self
+        let device_name = self
             .device_about_info
             .as_ref()
-            .map(|info| info.product.as_str())
+            .map(|info| info.product.clone())
             .filter(|name| !name.is_empty())
-            .unwrap_or(self.current_device_name.as_str());
-        let mut previous_error = None::<String>;
-        let report = self.module_settings.refresh_values(|qsid, width| {
-            if let Some(error) = previous_error.as_deref() {
-                return Err(format!("skipped after previous read failure: {error}"));
+            .unwrap_or_else(|| self.current_device_name.clone());
+        let module_settings = self.module_settings.clone();
+        let worker_identity = identity.clone();
+        let receiver = spawn_module_settings_refresh_job(move || {
+            #[cfg(target_os = "macos")]
+            let _hid_lock = crate::hid::macos_hid_operation_lock();
+
+            let report = module_settings.refresh_values(|qsid, width| {
+                if width > 1 {
+                    hid_device.get_qmk_setting_u16(qsid)
+                } else {
+                    hid_device.get_qmk_setting_u8(qsid).map(u16::from)
+                }
+                .map_err(|error| error.to_string())
+            });
+            ModuleSettingsRefreshTaskResult {
+                hid_device,
+                identity: worker_identity,
+                device_name,
+                report,
             }
-            let result = if width > 1 {
-                hid.get_qmk_setting_u16(qsid)
-            } else {
-                hid.get_qmk_setting_u8(qsid).map(u16::from)
-            }
-            .map_err(|error| error.to_string());
-            if let Err(error) = &result {
-                previous_error = Some(error.clone());
-            }
-            result
         });
+        self.module_settings_refresh_task = Some(ModuleSettingsRefreshTask { receiver, identity });
+        self.status_msg = crate::i18n::tr_catalog(lang, "modules_settings.refreshing").to_owned();
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn refresh_module_settings_values(&mut self) {
+        self.status_msg = crate::i18n::tr_catalog(
+            self.app_settings.language,
+            "modules_settings.refresh_unavailable",
+        )
+        .to_owned();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn poll_module_settings_refresh(&mut self, ctx: &egui::Context) {
+        let result = match self.module_settings_refresh_task.as_ref() {
+            Some(task) => task.receiver.try_recv(),
+            None => return,
+        };
+
+        match result {
+            Ok(result) => {
+                self.module_settings_refresh_task = None;
+                self.finish_module_settings_refresh(result);
+                ctx.request_repaint();
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                let task = self
+                    .module_settings_refresh_task
+                    .take()
+                    .expect("module settings refresh task checked above");
+                let current = self.current_module_settings_device_identity();
+                if module_settings_refresh_identity_matches(&task.identity, current.as_ref()) {
+                    self.hid_device = None;
+                    self.status_msg = crate::i18n::tr_catalog(
+                        self.app_settings.language,
+                        "modules_settings.refresh_task_failed",
+                    )
+                    .to_owned();
+                }
+                log::warn!("module settings refresh worker stopped before returning a result");
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn finish_module_settings_refresh(&mut self, result: ModuleSettingsRefreshTaskResult) {
+        let current = self.current_module_settings_device_identity();
+        if !module_settings_refresh_identity_matches(&result.identity, current.as_ref()) {
+            log::info!(
+                "discarded stale module settings refresh result: device={:?} keyboard_id={:016X}",
+                result.identity.path,
+                result.identity.keyboard_id,
+            );
+            return;
+        }
+
+        self.hid_device = Some(result.hid_device);
+        self.module_settings.apply_refresh_report(&result.report);
+        self.apply_module_settings_refresh_report(&result.device_name, &result.report);
+    }
+
+    fn apply_module_settings_refresh_report(
+        &mut self,
+        device: &str,
+        report: &ModuleSettingsRefreshReport,
+    ) {
+        let lang = self.app_settings.language;
 
         log::info!(
-            "module settings snapshot: source=manual-refresh device={device:?} persistent_qmk=true runtime_mode_observable=false entries={} changed={} failed={}",
+            "module settings snapshot: source=manual-refresh device={device:?} persistent_qmk=true runtime_mode_observable=false entries={} changed={} failed={} skipped={}",
             report.entries.len(),
             report.changed_count(),
             report.failed_count(),
+            report.skipped_count(),
         );
         for entry in &report.entries {
             let labels = module_setting_diagnostic_labels(&self.module_settings.groups, entry.qsid);
-            match &entry.result {
-                Ok(value) => log::info!(
+            match &entry.outcome {
+                ModuleSettingRefreshOutcome::Success(value) => log::info!(
                     "module setting snapshot entry: labels={labels:?} qsid={} width={} before={} after={} changed={}",
                     entry.qsid,
                     entry.width,
@@ -200,8 +325,14 @@ impl EntropyApp {
                     value,
                     entry.previous != *value,
                 ),
-                Err(error) => log::warn!(
+                ModuleSettingRefreshOutcome::Failed(error) => log::warn!(
                     "module setting snapshot entry failed: labels={labels:?} qsid={} width={} before={} after=unavailable error={error}",
+                    entry.qsid,
+                    entry.width,
+                    entry.previous,
+                ),
+                ModuleSettingRefreshOutcome::Skipped(error) => log::info!(
+                    "module setting snapshot entry skipped: labels={labels:?} qsid={} width={} before={} after=unavailable previous_error={error}",
                     entry.qsid,
                     entry.width,
                     entry.previous,
@@ -212,6 +343,7 @@ impl EntropyApp {
         let successful = report.successful_count().to_string();
         let changed = report.changed_count().to_string();
         let failed = report.failed_count().to_string();
+        let skipped = report.skipped_count().to_string();
         let key = if report.failed_count() == 0 {
             "modules_settings.refresh_status"
         } else {
@@ -224,6 +356,7 @@ impl EntropyApp {
                 ("count", successful.as_str()),
                 ("changed", changed.as_str()),
                 ("failed", failed.as_str()),
+                ("skipped", skipped.as_str()),
             ],
         );
     }
@@ -639,6 +772,23 @@ impl EntropyApp {
             crate::i18n::tr_catalog(lang, "modules_settings.persistent_values_tooltip").to_owned()
         });
         let button_width = metrics.value(112.0);
+        #[cfg(not(target_arch = "wasm32"))]
+        let refresh_active = self.module_settings_refresh_task.is_some();
+        #[cfg(target_arch = "wasm32")]
+        let refresh_active = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        let refresh_enabled = module_settings_refresh_start_allowed(
+            refresh_active,
+            self.hid_device.is_some(),
+            self.current_module_settings_device_identity().is_some(),
+        );
+        #[cfg(target_arch = "wasm32")]
+        let refresh_enabled = false;
+        let button_label = if refresh_active {
+            crate::i18n::tr_catalog(lang, "modules_settings.refreshing")
+        } else {
+            crate::i18n::tr_catalog(lang, "modules_settings.refresh")
+        };
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
             content_width,
@@ -648,18 +798,19 @@ impl EntropyApp {
             tooltip.as_deref(),
             button_width,
             |ui| {
-                if crate::ui_style::modern_button(
+                let mut response = crate::ui_style::modern_button(
                     ui,
-                    crate::i18n::tr_catalog(lang, "modules_settings.refresh"),
+                    button_label,
                     egui::vec2(button_width, metrics.settings_control_height()),
-                    self.hid_device.is_some(),
-                )
-                .on_hover_text(crate::i18n::tr_catalog(
-                    lang,
-                    "modules_settings.persistent_values_tooltip",
-                ))
-                .clicked()
-                {
+                    refresh_enabled,
+                );
+                if !suppress_tooltips {
+                    response = response.on_hover_text(crate::i18n::tr_catalog(
+                        lang,
+                        "modules_settings.persistent_values_tooltip",
+                    ));
+                }
+                if response.clicked() {
                     self.refresh_module_settings_values();
                 }
             },
@@ -862,5 +1013,73 @@ mod tests {
             module_setting_diagnostic_labels(&groups, 42),
             "Left Modules / Left Mode | Right Modules / Right Mode"
         );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn module_settings_refresh_job_runs_without_blocking_the_caller() {
+        let (started_sender, started_receiver) = std::sync::mpsc::channel();
+        let (release_sender, release_receiver) = std::sync::mpsc::channel();
+
+        let result_receiver = spawn_module_settings_refresh_job(move || {
+            started_sender.send(()).unwrap();
+            release_receiver.recv().unwrap();
+            42
+        });
+
+        started_receiver
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        assert!(matches!(
+            result_receiver.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        release_sender.send(()).unwrap();
+        assert_eq!(
+            result_receiver
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap(),
+            42
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn module_settings_refresh_rejects_duplicate_or_incomplete_requests() {
+        assert!(module_settings_refresh_start_allowed(false, true, true));
+        assert!(!module_settings_refresh_start_allowed(true, true, true));
+        assert!(!module_settings_refresh_start_allowed(false, false, true));
+        assert!(!module_settings_refresh_start_allowed(false, true, false));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn module_settings_refresh_result_requires_the_same_connected_device() {
+        let expected = ModuleSettingsDeviceIdentity {
+            path: "usb:phenom".to_owned(),
+            keyboard_id: 42,
+        };
+        let changed_path = ModuleSettingsDeviceIdentity {
+            path: "bluetooth:phenom".to_owned(),
+            keyboard_id: 42,
+        };
+        let changed_keyboard = ModuleSettingsDeviceIdentity {
+            path: expected.path.clone(),
+            keyboard_id: 43,
+        };
+
+        assert!(module_settings_refresh_identity_matches(
+            &expected,
+            Some(&expected)
+        ));
+        assert!(!module_settings_refresh_identity_matches(&expected, None));
+        assert!(!module_settings_refresh_identity_matches(
+            &expected,
+            Some(&changed_path)
+        ));
+        assert!(!module_settings_refresh_identity_matches(
+            &expected,
+            Some(&changed_keyboard)
+        ));
     }
 }

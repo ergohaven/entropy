@@ -57,6 +57,8 @@ impl EntropyApp {
         self.cancel_pending_qmk_setting_writes();
         self.qmk_settings_write_queue.clear();
         self.pending_device_connect = None;
+        self.settings_write_queue.clear();
+        self.module_settings_refresh_task = None;
         self.hid_device = None;
         self.supported_qmk_settings.clear();
         self.undo_stack.clear();
