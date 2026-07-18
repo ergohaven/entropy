@@ -124,6 +124,7 @@ impl EntropyApp {
 
         self.poll_layer_write(ctx);
         self.poll_combo_write(ctx);
+        self.finish_deferred_exit_after_hid_write(ctx);
         self.poll_text_expander_deferred_save(now);
         self.auto_reload_text_expander_rules_file(now);
         self.poll_single_instance_signal(ctx);
@@ -398,7 +399,7 @@ fn tap_dance_entries_to_write(
 
 #[cfg(test)]
 mod tests {
-    use super::super::combo_write::{ComboWritePlan, ComboWriteResult};
+    use super::super::combo_write::ComboWritePlan;
     use super::*;
 
     #[test]
@@ -475,18 +476,23 @@ mod tests {
     }
 
     #[test]
-    fn combo_task_defers_settings_changes_and_refresh_until_handle_returns() {
+    fn combo_task_defers_settings_changes_refresh_and_exit_writes_until_handle_returns() {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
-        let (sender, receiver) = std::sync::mpsc::channel();
-        app.combo_write_task = Some(ComboWriteTask {
-            receiver,
-            revision: 0,
-        });
+        let (hid_device, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        app.combo_entries = vec![combo([0x0004, 0x0005, 0, 0], 0x0006)];
+        app.combo_synced_entries = vec![ComboEntry::default()];
+        app.combo_dirty = true;
+        app.combo_edit_revision = 1;
+        app.maybe_start_combo_write(&ctx);
+        assert!(app.hid_write_task_active());
+
         app.key_override_entries = vec![KeyOverrideEntry::default()];
         app.key_override_pick_target = Some(KeyOverridePickField::Trigger);
         app.keycode_picker.result = Some(0x0004);
+        app.pending_tap_hold_numeric_writes.insert(7, 175);
 
         app.apply_picker_results();
         assert_eq!(app.keycode_picker.result, Some(0x0004));
@@ -500,25 +506,68 @@ mod tests {
                 "status_messages.refresh_device_data_pending_write"
             )
         );
+        assert!(app.defer_exit_until_hid_write_returns(&ctx));
+        eframe::App::on_exit(&mut app, None);
+        assert_eq!(app.pending_tap_hold_numeric_writes.get(&7), Some(&175));
 
-        sender
-            .send(ComboWriteResult {
-                hid_device: None,
-                index: 0,
-                entry: ComboEntry::default(),
-                revision: 0,
-                result: Ok(()),
-            })
-            .expect("combo test task receiver is active");
-        app.poll_combo_write(&ctx);
+        let active_requests = recorder.requests();
+        assert_eq!(
+            active_requests
+                .iter()
+                .filter(|request| request[..3] == [0xfe, 0x0d, 0x06])
+                .count(),
+            0
+        );
+        assert_eq!(
+            active_requests
+                .iter()
+                .filter(|request| request[..2] == [0xfe, 0x0b])
+                .count(),
+            0
+        );
+
+        for _ in 0..100 {
+            app.poll_combo_write(&ctx);
+            if !app.hid_write_task_active() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         assert!(!app.hid_write_task_active());
+        assert!(app.hid_device.is_some());
 
         app.apply_picker_results();
         assert_eq!(app.key_override_entries[0].trigger, 0x0004);
         assert!(app.keycode_picker.result.is_none());
-
         app.apply_picker_results();
         assert_eq!(app.key_override_entries[0].trigger, 0x0004);
+
+        app.finish_deferred_exit_after_hid_write(&ctx);
+        assert!(!app.exit_after_hid_write);
+        assert!(app.pending_tap_hold_numeric_writes.is_empty());
+
+        let completed_requests = recorder.requests();
+        assert_eq!(
+            completed_requests
+                .iter()
+                .filter(|request| request[..3] == [0xfe, 0x0d, 0x04])
+                .count(),
+            1
+        );
+        assert_eq!(
+            completed_requests
+                .iter()
+                .filter(|request| request[..3] == [0xfe, 0x0d, 0x06])
+                .count(),
+            1
+        );
+        assert_eq!(
+            completed_requests
+                .iter()
+                .filter(|request| request[..2] == [0xfe, 0x0b])
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -560,9 +609,13 @@ impl eframe::App for EntropyApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.flush_pending_tap_hold_numeric_writes();
         #[cfg(not(target_arch = "wasm32"))]
-        self.fallback_entropy_display_presets_before_exit();
+        if !self.hid_write_task_active() {
+            self.flush_pending_tap_hold_numeric_writes();
+            self.fallback_entropy_display_presets_before_exit();
+        }
+        #[cfg(target_arch = "wasm32")]
+        self.flush_pending_tap_hold_numeric_writes();
         self.flush_pending_text_expander_settings();
         self.app_settings.dark_mode = self.dark_mode;
         save_app_settings(&self.app_settings);

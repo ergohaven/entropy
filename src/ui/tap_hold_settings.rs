@@ -671,11 +671,17 @@ impl EntropyApp {
         self.tap_hold_numeric_write_due = None;
         let pending = std::mem::take(&mut self.pending_tap_hold_numeric_writes);
         for (qsid, value) in pending {
-            self.write_tap_hold_numeric_setting(qsid, value);
+            if !self.write_tap_hold_numeric_setting(qsid, value) {
+                self.pending_tap_hold_numeric_writes.insert(qsid, value);
+            }
+        }
+        if !self.pending_tap_hold_numeric_writes.is_empty() {
+            self.tap_hold_numeric_write_due =
+                Some(std::time::Instant::now() + TAP_HOLD_WRITE_DEBOUNCE);
         }
     }
 
-    fn write_tap_hold_numeric_setting(&mut self, qsid: u16, value: u16) {
+    fn write_tap_hold_numeric_setting(&mut self, qsid: u16, value: u16) -> bool {
         let Some(hid) = &self.hid_device else {
             self.tap_hold_write_error(
                 qsid,
@@ -684,7 +690,7 @@ impl EntropyApp {
                     "status_messages.device_unavailable",
                 ),
             );
-            return;
+            return false;
         };
         let result = if qsid == 20 {
             hid.set_qmk_setting_u8_verified(qsid, value.min(u8::MAX as u16) as u8)
@@ -694,10 +700,12 @@ impl EntropyApp {
         match result {
             Ok(()) => {
                 self.set_tap_hold_numeric_value(qsid, value);
+                true
             }
             Err(e) => {
                 self.tap_hold_write_error(qsid, &e.to_string());
                 log::warn!("set_qmk_setting(tap_hold qsid {qsid}) failed: {e}");
+                false
             }
         }
     }
@@ -726,6 +734,20 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn pending_numeric_write_is_retained_when_hid_is_unavailable() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        app.pending_tap_hold_numeric_writes.insert(7, 175);
+
+        app.flush_pending_tap_hold_numeric_writes();
+
+        assert_eq!(app.pending_tap_hold_numeric_writes.get(&7), Some(&175));
+        assert!(app.tap_hold_numeric_write_due.is_some());
+    }
 
     #[test]
     fn tap_hold_rows_hide_unadvertised_qsids() {

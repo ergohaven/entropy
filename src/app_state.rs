@@ -2757,6 +2757,8 @@ pub struct EntropyApp {
     pub(crate) close_to_tray_prompt_open: bool,
     pub(crate) close_to_tray_prompt_remember: bool,
     pub(crate) force_close_requested: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) exit_after_hid_write: bool,
     pub(crate) main_menu_tab: MainMenuTab,
     pub(crate) combo_entries: Vec<ComboEntry>,
     pub(crate) combo_synced_entries: Vec<ComboEntry>,
