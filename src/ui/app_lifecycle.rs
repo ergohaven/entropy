@@ -12,6 +12,10 @@ fn theme_application_required(
     last_applied_theme != Some((dark_mode, accent_color))
 }
 
+fn hid_lifecycle_writes_available(hid_write_task_active: bool) -> bool {
+    !hid_write_task_active
+}
+
 fn app_visuals(dark_mode: bool) -> egui::Visuals {
     let mut visuals = if dark_mode {
         egui::Visuals::dark()
@@ -427,6 +431,11 @@ mod tests {
     use super::super::layer_operations::LayerSnapshot;
     use super::super::settings_write_queue::SettingsWriteStatus;
     use super::*;
+    use crate::app::app_state::{
+        DeviceAboutInfo, ModuleSettingRefreshEntry, ModuleSettingRefreshOutcome,
+        ModuleSettingsDeviceIdentity, ModuleSettingsRefreshReport, ModuleSettingsRefreshTask,
+        ModuleSettingsRefreshTaskResult,
+    };
     use crate::keyboard::{KeyboardLayout, LayoutOption, PhysicalKey};
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -590,6 +599,134 @@ mod tests {
                 &[unchanged.clone(), unchanged]
             ),
             vec![1]
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn module_refresh_task_defers_picker_and_device_refresh_until_completion() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let identity = ModuleSettingsDeviceIdentity {
+            path: "usb:phenom".to_owned(),
+            keyboard_id: 42,
+        };
+        app.device_about_info = Some(DeviceAboutInfo {
+            path: identity.path.clone(),
+            keyboard_id: identity.keyboard_id,
+            ..Default::default()
+        });
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.module_settings_refresh_task = Some(ModuleSettingsRefreshTask {
+            receiver,
+            identity: identity.clone(),
+        });
+        app.key_override_entries = vec![KeyOverrideEntry::default()];
+        app.key_override_pick_target = Some(KeyOverridePickField::Trigger);
+        app.keycode_picker.result = Some(0x0004);
+        app.keycode_picker.macros_dirty = true;
+        app.combo_dirty = true;
+        app.combo_term = Some(150);
+        app.combo_term_dirty = true;
+        app.keycode_picker.tap_dance_dirty = true;
+        app.pending_tap_hold_numeric_writes.insert(7, 175);
+        app.tap_hold_numeric_write_due =
+            Some(std::time::Instant::now() - std::time::Duration::from_millis(1));
+
+        let mut frame = eframe::Frame::_new_kittest();
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            eframe::App::ui(&mut app, ui, &mut frame);
+        });
+
+        assert_eq!(app.keycode_picker.result, Some(0x0004));
+        assert_eq!(app.key_override_entries[0].trigger, 0);
+        assert!(app.keycode_picker.macros_dirty);
+        assert!(app.combo_dirty);
+        assert!(app.combo_term_dirty);
+        assert!(app.keycode_picker.tap_dance_dirty);
+        assert_eq!(app.pending_tap_hold_numeric_writes.get(&7), Some(&175));
+
+        app.refresh_current_device_data();
+        assert_eq!(
+            app.status_msg,
+            crate::i18n::tr_catalog(
+                app.app_settings.language,
+                "status_messages.refresh_device_data_pending_write"
+            )
+        );
+
+        sender
+            .send(ModuleSettingsRefreshTaskResult {
+                hid_device: None,
+                identity,
+                device_name: "Phenom".to_owned(),
+                report: ModuleSettingsRefreshReport::default(),
+            })
+            .expect("module refresh task receiver is active");
+        app.poll_module_settings_refresh(&ctx);
+        assert!(!app.hid_write_task_active());
+        assert!(app.hid_device.is_none());
+        assert!(app.layout.is_none());
+
+        app.apply_picker_results();
+        assert_eq!(app.key_override_entries[0].trigger, 0x0004);
+        assert!(app.keycode_picker.result.is_none());
+        app.apply_picker_results();
+        assert_eq!(app.key_override_entries[0].trigger, 0x0004);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn module_refresh_task_discards_stale_results_after_device_identity_changes() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let expected = ModuleSettingsDeviceIdentity {
+            path: "usb:phenom".to_owned(),
+            keyboard_id: 42,
+        };
+        app.device_about_info = Some(DeviceAboutInfo {
+            path: expected.path.clone(),
+            keyboard_id: expected.keyboard_id,
+            ..Default::default()
+        });
+        app.module_settings.set_value(7, 1);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.module_settings_refresh_task = Some(ModuleSettingsRefreshTask {
+            receiver,
+            identity: expected.clone(),
+        });
+        app.device_about_info = Some(DeviceAboutInfo {
+            path: "bluetooth:phenom".to_owned(),
+            keyboard_id: 42,
+            ..Default::default()
+        });
+
+        sender
+            .send(ModuleSettingsRefreshTaskResult {
+                hid_device: None,
+                identity: expected,
+                device_name: "Phenom".to_owned(),
+                report: ModuleSettingsRefreshReport {
+                    entries: vec![ModuleSettingRefreshEntry {
+                        qsid: 7,
+                        width: 1,
+                        previous: 1,
+                        outcome: ModuleSettingRefreshOutcome::Success(9),
+                    }],
+                },
+            })
+            .expect("module refresh task receiver is active");
+        app.poll_module_settings_refresh(&ctx);
+
+        assert!(!app.hid_write_task_active());
+        assert_eq!(app.module_settings.value(7), 1);
+        assert_eq!(
+            app.device_about_info
+                .as_ref()
+                .map(|info| info.path.as_str()),
+            Some("bluetooth:phenom")
         );
     }
 
