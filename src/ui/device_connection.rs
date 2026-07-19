@@ -62,6 +62,16 @@ impl EntropyApp {
             .filter(|(index, entry)| self.combo_synced_entries.get(*index) != Some(*entry))
             .map(|(index, entry)| (index, entry.clone()))
             .collect::<Vec<_>>();
+        let key_override_entries = self
+            .key_override_dirty
+            .then(|| {
+                self.key_override_entries
+                    .iter()
+                    .cloned()
+                    .enumerate()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         let tap_dance_entries = self
             .keycode_picker
             .tap_dance_entries
@@ -73,12 +83,15 @@ impl EntropyApp {
             .map(|(index, entry)| (index, entry.clone()))
             .collect::<Vec<_>>();
         let picker_mutation = self.deferred_picker_mutation();
+        let layer_write = self.pending_layer_write.clone();
         if macro_entries.is_empty()
             && combo_entries.is_empty()
             && !combo_term_dirty
+            && key_override_entries.is_empty()
             && tap_dance_entries.is_empty()
             && self.pending_tap_hold_numeric_writes.is_empty()
             && picker_mutation.is_none()
+            && layer_write.is_none()
         {
             return;
         }
@@ -90,10 +103,12 @@ impl EntropyApp {
             combo_entries,
             combo_term: self.combo_term,
             combo_term_dirty,
+            key_override_entries,
             tap_dance_entries,
             pending_tap_hold_numeric_writes: self.pending_tap_hold_numeric_writes.clone(),
             tap_hold_numeric_write_due: self.tap_hold_numeric_write_due,
             picker_mutation,
+            layer_write,
         };
         if let Some(existing) = self
             .deferred_hid_settings
@@ -104,6 +119,21 @@ impl EntropyApp {
         } else {
             self.deferred_hid_settings.push(deferred);
         }
+        // Deferred record now owns this retry. Do not leave a transient copy
+        // that could be associated with a later, unrelated disconnect.
+        self.pending_layer_write = None;
+        self.keycode_picker.macros_dirty = false;
+        self.combo_dirty = false;
+        self.combo_term_dirty = false;
+        self.key_override_dirty = false;
+        self.keycode_picker.tap_dance_dirty = false;
+        self.pending_tap_hold_numeric_writes.clear();
+        self.tap_hold_numeric_write_due = None;
+        self.keycode_picker.result = None;
+        self.combo_pick_target = None;
+        self.key_override_pick_target = None;
+        self.alt_repeat_pick_target = None;
+        self.picker_retry_due = None;
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -114,6 +144,15 @@ impl EntropyApp {
             .iter()
             .position(|deferred| deferred.identity.matches(&identity))
         else {
+            if self.deferred_hid_settings.iter().any(|deferred| {
+                deferred.identity.serial_number.is_none()
+                    && identity.serial_number.is_none()
+                    && deferred.identity.vendor_id == identity.vendor_id
+                    && deferred.identity.product_id == identity.product_id
+                    && deferred.identity.keyboard_id == identity.keyboard_id
+            }) {
+                self.status_msg = "Unsaved settings remain bound to the previous HID path; reconnect that keyboard to apply them.".into();
+            }
             return;
         };
 
@@ -149,6 +188,16 @@ impl EntropyApp {
             self.combo_term = deferred.combo_term;
             self.combo_term_dirty = true;
         }
+        if !deferred.key_override_entries.is_empty() {
+            for (index, entry) in deferred.key_override_entries {
+                if self.key_override_entries.len() <= index {
+                    self.key_override_entries
+                        .resize(index + 1, KeyOverrideEntry::default());
+                }
+                self.key_override_entries[index] = entry;
+            }
+            self.key_override_dirty = true;
+        }
         if !deferred.tap_dance_entries.is_empty() {
             for (index, entry) in deferred.tap_dance_entries {
                 if self.keycode_picker.tap_dance_entries.len() <= index {
@@ -169,6 +218,18 @@ impl EntropyApp {
         if let Some(mutation) = deferred.picker_mutation {
             self.restore_deferred_picker_mutation(mutation);
         }
+        if let Some(layer_write) = deferred.layer_write {
+            self.apply_layer_snapshot_with_behavior(
+                layer_write.layer,
+                LayerSnapshot {
+                    keycodes: layer_write.keycodes,
+                    encoder_keycodes: layer_write.encoder_keycodes,
+                },
+                "layer_actions.paste",
+                crate::app::layer_operations::LayerUndoBehavior::RecordOld,
+            );
+        }
+        self.pending_layer_write = None;
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -478,6 +539,13 @@ mod tests {
         app.combo_dirty = true;
         app.combo_term = Some(175);
         app.combo_term_dirty = true;
+        let dirty_key_override = KeyOverrideEntry {
+            trigger: 0x0004,
+            replacement: 0x0005,
+            ..Default::default()
+        };
+        app.key_override_entries = vec![dirty_key_override.clone()];
+        app.key_override_dirty = true;
         let dirty_tap_dance = crate::keycode_picker::TapDanceEntry {
             on_tap: 0x0004,
             ..Default::default()
@@ -493,6 +561,7 @@ mod tests {
         app.pending_tap_hold_numeric_writes.insert(7, 175);
 
         app.preserve_deferred_hid_settings_for_disconnect();
+        assert!(!app.key_override_dirty);
         app.clear_connected_keyboard_state("disconnected");
 
         let other_device = DeviceAboutInfo {
@@ -522,6 +591,8 @@ mod tests {
         app.combo_dirty = false;
         app.combo_term = Some(50);
         app.combo_term_dirty = false;
+        app.key_override_entries = vec![KeyOverrideEntry::default()];
+        app.key_override_dirty = false;
         app.keycode_picker.tap_dance_entries = vec![
             Default::default(),
             crate::keycode_picker::TapDanceEntry {
@@ -532,11 +603,7 @@ mod tests {
         app.keycode_picker.tap_dance_synced_entries = app.keycode_picker.tap_dance_entries.clone();
         app.keycode_picker.tap_dance_dirty = false;
 
-        let replugged_about = DeviceAboutInfo {
-            path: "/dev/hidraw7".to_owned(),
-            ..about
-        };
-        app.restore_deferred_hid_settings_after_connect(&replugged_about);
+        app.restore_deferred_hid_settings_after_connect(&about);
 
         assert_eq!(app.keycode_picker.macro_texts[0], vec![1, 2, 3]);
         assert_eq!(app.keycode_picker.macro_texts[1], vec![8, 9]);
@@ -546,9 +613,41 @@ mod tests {
         assert!(app.combo_dirty);
         assert_eq!(app.combo_term, Some(175));
         assert!(app.combo_term_dirty);
+        assert_eq!(app.key_override_entries[0], dirty_key_override);
+        assert!(app.key_override_dirty);
         assert_eq!(app.keycode_picker.tap_dance_entries[0].on_tap, 0x0004);
         assert_eq!(app.keycode_picker.tap_dance_entries[1].on_tap, 0x000a);
         assert!(app.keycode_picker.tap_dance_dirty);
         assert_eq!(app.pending_tap_hold_numeric_writes.get(&7), Some(&175));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn no_serial_path_change_keeps_deferred_settings_pending_for_confirmation() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        let original = DeviceAboutInfo {
+            path: "/dev/hidraw0".to_owned(),
+            vendor_id: 0xe126,
+            product_id: 0x0042,
+            keyboard_id: 42,
+            ..Default::default()
+        };
+        app.device_about_info = Some(original.clone());
+        app.keycode_picker.macro_texts = vec![vec![1, 2, 3]];
+        app.keycode_picker.macros_dirty = true;
+        app.preserve_deferred_hid_settings_for_disconnect();
+        app.clear_connected_keyboard_state("disconnected");
+        app.keycode_picker.macro_texts.clear();
+
+        app.restore_deferred_hid_settings_after_connect(&DeviceAboutInfo {
+            path: "/dev/hidraw7".to_owned(),
+            ..original
+        });
+
+        assert_eq!(app.deferred_hid_settings.len(), 1);
+        assert!(app.keycode_picker.macro_texts.is_empty());
+        assert!(app.status_msg.contains("previous HID path"));
     }
 }

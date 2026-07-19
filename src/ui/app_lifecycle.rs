@@ -86,6 +86,7 @@ impl EntropyApp {
             || self.combo_dirty
             || self.combo_term_dirty
             || self.keycode_picker.tap_dance_dirty
+            || self.key_override_dirty
             || !self.pending_tap_hold_numeric_writes.is_empty()
             || self.deferred_picker_mutation().is_some()
     }
@@ -929,7 +930,7 @@ mod tests {
             app.finish_deferred_exit_after_hid_write(&ctx);
         });
         assert!(!app.exit_after_hid_write);
-        assert!(!close_output
+        assert!(close_output
             .viewport_output
             .get(&egui::ViewportId::ROOT)
             .expect("root viewport output exists")
@@ -946,7 +947,7 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn deferred_settings_do_not_block_exit_with_healthy_hid() {
+    fn explicit_close_discards_unmatched_deferred_settings() {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -964,10 +965,12 @@ mod tests {
             combo_entries: vec![],
             combo_term: None,
             combo_term_dirty: false,
+            key_override_entries: vec![],
             tap_dance_entries: vec![],
             pending_tap_hold_numeric_writes: Default::default(),
             tap_hold_numeric_write_due: None,
             picker_mutation: None,
+            layer_write: None,
         }];
         app.exit_after_hid_write = true;
 
@@ -976,12 +979,83 @@ mod tests {
         });
 
         assert!(!app.exit_after_hid_write);
+        assert!(app.deferred_hid_settings.is_empty());
         assert!(close_output
             .viewport_output
             .get(&egui::ViewportId::ROOT)
             .expect("root viewport output exists")
             .commands
             .contains(&egui::ViewportCommand::Close));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn deferred_close_without_hid_discards_unmatched_settings_and_closes() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        app.deferred_hid_settings = vec![DeferredHidSettings {
+            identity: ModuleSettingsDeviceIdentity {
+                path: "usb:previous-device".to_owned(),
+                serial_number: None,
+                vendor_id: 0,
+                product_id: 0,
+                keyboard_id: 1,
+            },
+            macro_entries: vec![],
+            combo_entries: vec![],
+            combo_term: None,
+            combo_term_dirty: false,
+            key_override_entries: vec![],
+            tap_dance_entries: vec![],
+            pending_tap_hold_numeric_writes: Default::default(),
+            tap_hold_numeric_write_due: None,
+            picker_mutation: None,
+            layer_write: None,
+        }];
+        app.exit_after_hid_write = true;
+
+        let output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+            app.finish_deferred_exit_after_hid_write(&ctx);
+        });
+
+        assert!(app.deferred_hid_settings.is_empty());
+        assert!(output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .expect("root viewport output exists")
+            .commands
+            .contains(&egui::ViewportCommand::Close));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn close_with_dirty_hid_state_and_no_worker_is_cancelled() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid_device, _) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        app.keycode_picker.macros_dirty = true;
+        app.app_settings.minimize_to_tray_on_close = false;
+        app.app_settings.close_to_tray_behavior = CloseToTrayBehavior::Close;
+
+        let mut close_input = egui::RawInput::default();
+        close_input
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .expect("root viewport exists")
+            .events
+            .push(egui::ViewportEvent::Close);
+        let output = ctx.run_ui(close_input, |_ui| app.handle_close_to_tray(&ctx));
+
+        assert!(output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .expect("root viewport output exists")
+            .commands
+            .contains(&egui::ViewportCommand::CancelClose));
+        assert!(app.exit_after_hid_write);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1179,7 +1253,7 @@ mod tests {
         assert_eq!(app.key_override_entries[0].trigger, 0x0004);
         app.flush_pending_key_override_writes();
 
-        let final_close_output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+        let _final_close_output = ctx.run_ui(egui::RawInput::default(), |_ui| {
             app.finish_deferred_exit_after_hid_write(&ctx);
         });
         assert!(!app.exit_after_hid_write);
@@ -1311,12 +1385,19 @@ mod tests {
         let (hid_device, recorder) =
             crate::hid::HidDevice::test_device_with_fault_after_requests(Some((2, fault)));
         app.hid_device = Some(hid_device);
+        app.device_about_info = Some(DeviceAboutInfo {
+            path: "usb:phenom".to_owned(),
+            keyboard_id: 42,
+            ..Default::default()
+        });
         app.combo_entries = vec![combo([0x0004, 0x0005, 0, 0], 0x0006)];
         app.combo_synced_entries = vec![ComboEntry::default()];
         app.combo_dirty = true;
         app.combo_edit_revision = 1;
         app.maybe_start_combo_write(&ctx);
         app.queue_touchpad_setting_write("Sniper sensitivity".to_owned(), 121, 1, 1, 2);
+        app.keycode_picker.macro_texts = vec![vec![1, 2, 3]];
+        app.keycode_picker.macro_synced_texts = vec![vec![]];
         app.keycode_picker.macros_dirty = true;
         app.exit_after_hid_write = true;
 
@@ -1324,6 +1405,7 @@ mod tests {
         for _ in 0..200 {
             let output = ctx.run_ui(egui::RawInput::default(), |_ui| {
                 app.update_native_background(&ctx, 0.0, true, false);
+                app.finish_deferred_exit_after_hid_write(&ctx);
             });
             close_count += output
                 .viewport_output
@@ -1338,16 +1420,26 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
 
-        assert_eq!(close_count, 1);
+        assert_eq!(
+            close_count,
+            1,
+            "exit={} hid={} deferred={} pending={} macros={} combo={} term={} tap_dance={} key_override={}",
+            app.exit_after_hid_write,
+            app.hid_device.is_some(),
+            app.deferred_hid_settings.len(),
+            app.has_pending_hid_mutations(),
+            app.keycode_picker.macros_dirty,
+            app.combo_dirty,
+            app.combo_term_dirty,
+            app.keycode_picker.tap_dance_dirty,
+            app.key_override_dirty,
+        );
         assert!(!app.exit_after_hid_write);
         assert!(app.hid_device.is_none());
         assert!(!app.qmk_settings_write_busy());
-        assert!(matches!(
-            app.settings_write_status(121),
-            Some(SettingsWriteStatus::Failed(_))
-        ));
         assert!(!app.combo_dirty);
-        assert!(app.keycode_picker.macros_dirty);
+        assert!(!app.keycode_picker.macros_dirty);
+        assert!(app.deferred_hid_settings.is_empty());
         let requests = recorder.requests();
         assert_eq!(
             requests
@@ -1363,14 +1455,6 @@ mod tests {
                 .count(),
             1
         );
-
-        let output = ctx.run_ui(egui::RawInput::default(), |_ui| {});
-        assert!(!output
-            .viewport_output
-            .get(&egui::ViewportId::ROOT)
-            .into_iter()
-            .flat_map(|viewport| &viewport.commands)
-            .any(|command| *command == egui::ViewportCommand::Close));
     }
 
     #[cfg(not(target_arch = "wasm32"))]

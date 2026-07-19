@@ -367,7 +367,7 @@ type EncoderChange = (usize, u8, u8, u16);
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LayerUndoBehavior {
+pub(super) enum LayerUndoBehavior {
     RecordOld,
     RetryDesired { requires_firmware: bool },
 }
@@ -804,7 +804,7 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn apply_layer_snapshot_with_behavior(
+    pub(super) fn apply_layer_snapshot_with_behavior(
         &mut self,
         layer: usize,
         desired: LayerSnapshot,
@@ -1021,6 +1021,11 @@ impl EntropyApp {
                         ("layer", &task.fallback.layer.to_string()),
                     ],
                 );
+                self.pending_layer_write = Some(DeferredLayerWrite {
+                    layer: task.fallback.layer,
+                    keycodes: task.fallback.desired.keycodes.clone(),
+                    encoder_keycodes: task.fallback.desired.encoder_keycodes.clone(),
+                });
                 self.handoff_hid_worker_disconnect(status_msg);
                 if let LayerUndoBehavior::RetryDesired { requires_firmware } =
                     task.fallback.undo_behavior
@@ -1038,6 +1043,11 @@ impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn finish_layer_write(&mut self, result: LayerWriteResult) {
         if result.hid_device.is_none() {
+            self.pending_layer_write = Some(DeferredLayerWrite {
+                layer: result.context.layer,
+                keycodes: result.context.desired.keycodes.clone(),
+                encoder_keycodes: result.context.desired.encoder_keycodes.clone(),
+            });
             self.handoff_hid_worker_disconnect("Layer write disconnected");
             return;
         }
@@ -1495,6 +1505,66 @@ mod tests {
         assert_eq!(progress.error.as_deref(), Some("device disconnected"));
         assert!(progress.disconnect);
         assert_eq!(encoder_calls, 0);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn layer_disconnect_reconnect_replays_only_remaining_keys_and_encoders() {
+        // Each key is a set/readback pair; fault after two requests interrupts
+        // after key 0, while fault after four interrupts before encoder 0.
+        for (fault_after, fresh_keys, expected_requests) in
+            [(2, vec![30, 2], 3), (4, vec![30, 31], 1)]
+        {
+            let ctx = egui::Context::default();
+            let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = EntropyApp::new(&creation_context);
+            let about = DeviceAboutInfo {
+                path: format!("usb:test-{fault_after}"),
+                keyboard_id: 42,
+                ..Default::default()
+            };
+            app.device_about_info = Some(about.clone());
+            app.layout = Some(layout(&[(0.0, 0.0), (1.0, 0.0)], &[1, 2], &[3]));
+            let (hid, _) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+                fault_after,
+                crate::hid::TestHidFault::Disconnect,
+            )));
+            app.hid_device = Some(hid);
+            app.apply_layer_snapshot(
+                0,
+                LayerSnapshot {
+                    keycodes: vec![30, 31],
+                    encoder_keycodes: vec![32],
+                },
+                "layer_actions.paste",
+            );
+            for _ in 0..100 {
+                app.poll_layer_write(&ctx);
+                if app.layer_write_task.is_none() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            assert_eq!(app.deferred_hid_settings.len(), 1);
+
+            let (hid, recorder) = crate::hid::HidDevice::test_device();
+            app.device_about_info = Some(about.clone());
+            app.layout = Some(layout(&[(0.0, 0.0), (1.0, 0.0)], &fresh_keys, &[3]));
+            app.hid_device = Some(hid);
+            app.restore_deferred_hid_settings_after_connect(&about);
+            for _ in 0..100 {
+                app.poll_layer_write(&ctx);
+                if app.layer_write_task.is_none() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+
+            let layout = app.layout.as_ref().expect("reconnected layout");
+            assert_eq!(layout.layers[0], vec![30, 31]);
+            assert_eq!(layout.encoder_layers[0], vec![32]);
+            assert_eq!(recorder.requests().len(), expected_requests);
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]

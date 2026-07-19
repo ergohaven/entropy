@@ -498,7 +498,6 @@ impl EntropyApp {
                 if task.request.generation != self.settings_write_generation {
                     return;
                 }
-                self.hid_device = None;
                 let error = crate::i18n::tr_catalog(
                     self.app_settings.language,
                     "settings_write.worker_failed",
@@ -510,7 +509,7 @@ impl EntropyApp {
                     SettingsWriteStatus::Failed(error.clone()),
                 );
                 self.settings_write_queue.fail_pending(&error);
-                self.status_msg = crate::i18n::tr_catalog_format(
+                let status_msg = crate::i18n::tr_catalog_format(
                     self.app_settings.language,
                     "settings_write.failed_status",
                     &[
@@ -518,8 +517,7 @@ impl EntropyApp {
                         ("error", &error),
                     ],
                 );
-                self.continue_pending_settings_writes(ctx);
-                self.resume_pending_device_connect();
+                self.handoff_hid_worker_disconnect(status_msg);
             }
         }
     }
@@ -617,6 +615,7 @@ impl EntropyApp {
                 "settings_write.device_disconnected",
             );
             self.settings_write_queue.fail_pending(error);
+            self.handoff_hid_worker_disconnect(error);
         }
     }
 

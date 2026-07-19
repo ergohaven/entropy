@@ -450,8 +450,6 @@ impl EntropyApp {
                     .iter()
                     .map(|bytes| crate::keycode_picker::decode_macro_actions(bytes))
                     .collect();
-                self.restore_deferred_hid_settings_after_connect(&r.about_info);
-
                 self.status_msg = format!("Connected: {}", r.device_name);
 
                 // Load per-device layer names.
@@ -522,6 +520,10 @@ impl EntropyApp {
                 // between qmk-vial and RMK devices.
                 self.hid_device = r.hid_device;
                 self.supported_qmk_settings = r.supported_qmk_settings;
+
+                // Deferred layer writes need fresh layout geometry and the
+                // connected HID handle before they can be reconciled.
+                self.restore_deferred_hid_settings_after_connect(&r.about_info);
 
                 #[cfg(not(target_arch = "wasm32"))]
                 {

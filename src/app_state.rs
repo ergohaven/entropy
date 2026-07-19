@@ -918,15 +918,17 @@ impl ModuleSettingsDeviceIdentity {
         }
     }
 
-    /// Serial-backed identities survive HID-path changes. With no serial, path is
-    /// deliberately required: identical keyboards cannot otherwise be told apart.
+    /// Deferred firmware edits are path-bound even when a serial is present:
+    /// firmware can expose duplicated serials, so a serial alone is not a safe
+    /// authority to replay mutations onto another connected keyboard.
     pub(crate) fn matches(&self, other: &Self) -> bool {
         self.vendor_id == other.vendor_id
             && self.product_id == other.product_id
             && self.keyboard_id == other.keyboard_id
+            && self.path == other.path
             && match (&self.serial_number, &other.serial_number) {
                 (Some(left), Some(right)) => left == right,
-                (None, None) => self.path == other.path,
+                (None, None) => true,
                 _ => false,
             }
     }
@@ -941,10 +943,12 @@ pub(crate) struct DeferredHidSettings {
     pub(crate) combo_entries: Vec<(usize, ComboEntry)>,
     pub(crate) combo_term: Option<u16>,
     pub(crate) combo_term_dirty: bool,
+    pub(crate) key_override_entries: Vec<(usize, KeyOverrideEntry)>,
     pub(crate) tap_dance_entries: Vec<(usize, crate::keycode_picker::TapDanceEntry)>,
     pub(crate) pending_tap_hold_numeric_writes: std::collections::BTreeMap<u16, u16>,
     pub(crate) tap_hold_numeric_write_due: Option<std::time::Instant>,
     pub(crate) picker_mutation: Option<DeferredPickerMutation>,
+    pub(crate) layer_write: Option<DeferredLayerWrite>,
 }
 
 /// A completed picker choice that could not safely mutate firmware while another
@@ -978,6 +982,15 @@ pub(crate) enum DeferredPickerMutation {
         index: usize,
         keycode: u16,
     },
+}
+
+/// Whole-layer write to reconcile after its HID worker disconnected.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DeferredLayerWrite {
+    pub(crate) layer: usize,
+    pub(crate) keycodes: Vec<u16>,
+    pub(crate) encoder_keycodes: Vec<u16>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -3015,6 +3028,10 @@ pub struct EntropyApp {
     /// change to an indistinguishable sibling keyboard.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) deferred_hid_settings: Vec<DeferredHidSettings>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) pending_layer_write: Option<DeferredLayerWrite>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) picker_retry_due: Option<std::time::Instant>,
     /// Built-in qmk-hid-host bridges for displays/presets that need host data
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) qmk_hid_hosts:

@@ -3,11 +3,20 @@ use super::*;
 impl EntropyApp {
     pub(super) fn apply_picker_results(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
+        if self
+            .picker_retry_due
+            .is_some_and(|due| std::time::Instant::now() < due)
+        {
+            return;
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
         if self.hid_write_task_active() {
             return;
         }
 
         if let Some(kc_value) = self.keycode_picker.result.take() {
+            let mut committed = true;
             if let Some((combo_idx, field)) = self.combo_pick_target.take() {
                 self.push_combo_undo();
                 if let Some(combo) = self.combo_entries.get_mut(combo_idx) {
@@ -24,6 +33,8 @@ impl EntropyApp {
                 let idx = self
                     .selected_key_override
                     .min(self.key_override_entries.len().saturating_sub(1));
+                let previous = self.key_override_entries.get(idx).cloned();
+                let key_override_was_dirty = self.key_override_dirty;
                 self.push_key_override_undo();
                 if let Some(entry) = self.key_override_entries.get_mut(idx) {
                     match field {
@@ -33,13 +44,22 @@ impl EntropyApp {
                     Self::normalize_key_override_entry(entry);
                 }
                 if !self.write_key_override(idx) {
+                    if let (Some(previous), Some(entry)) =
+                        (previous, self.key_override_entries.get_mut(idx))
+                    {
+                        *entry = previous;
+                    }
+                    self.key_override_undo_stack.pop();
+                    self.key_override_dirty = key_override_was_dirty;
                     self.keycode_picker.result = Some(kc_value);
                     self.key_override_pick_target = Some(field);
+                    committed = false;
                 }
             } else if let Some(field) = self.alt_repeat_pick_target.take() {
                 let idx = self
                     .selected_alt_repeat
                     .min(self.alt_repeat_entries.len().saturating_sub(1));
+                let previous = self.alt_repeat_entries.get(idx).cloned();
                 if let Some(entry) = self.alt_repeat_entries.get_mut(idx) {
                     match field {
                         AltRepeatPickField::LastKey => entry.keycode = kc_value,
@@ -47,12 +67,23 @@ impl EntropyApp {
                     }
                 }
                 if !self.write_alt_repeat_entry(idx) {
+                    if let (Some(previous), Some(entry)) =
+                        (previous, self.alt_repeat_entries.get_mut(idx))
+                    {
+                        *entry = previous;
+                    }
                     self.keycode_picker.result = Some(kc_value);
                     self.alt_repeat_pick_target = Some(field);
+                    committed = false;
                 }
             } else if let Some((layer, encoder_visual_idx)) = self.selected_encoder {
                 #[cfg(not(target_arch = "wasm32"))]
-                self.assign_encoder_keycode(layer, encoder_visual_idx, kc_value);
+                {
+                    committed = self.assign_encoder_keycode(layer, encoder_visual_idx, kc_value);
+                    if !committed {
+                        self.keycode_picker.result = Some(kc_value);
+                    }
+                }
                 #[cfg(target_arch = "wasm32")]
                 if let Some(layout) = &mut self.layout {
                     layout.set_encoder_keycode(layer, encoder_visual_idx, kc_value);
@@ -62,7 +93,12 @@ impl EntropyApp {
                 }
             } else if let Some((layer, ki)) = self.selected_key {
                 #[cfg(not(target_arch = "wasm32"))]
-                self.assign_keycode(layer, ki, kc_value);
+                {
+                    committed = self.assign_keycode(layer, ki, kc_value);
+                    if !committed {
+                        self.keycode_picker.result = Some(kc_value);
+                    }
+                }
                 #[cfg(target_arch = "wasm32")]
                 if let Some(layout) = &mut self.layout {
                     layout.set_keycode(layer, ki, kc_value);
@@ -71,8 +107,20 @@ impl EntropyApp {
                     self.open_alt_repeat_window_compact();
                 }
             }
-            self.selected_key = None;
-            self.selected_encoder = None;
+            if committed {
+                self.selected_key = None;
+                self.selected_encoder = None;
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.picker_retry_due = None;
+                }
+            } else {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.picker_retry_due =
+                        Some(std::time::Instant::now() + std::time::Duration::from_millis(100));
+                }
+            }
         }
     }
 
@@ -81,12 +129,12 @@ impl EntropyApp {
         layer: usize,
         encoder_visual_idx: usize,
         kc_value: u16,
-    ) {
+    ) -> bool {
         if self.qmk_settings_write_busy() {
             self.status_msg =
                 crate::i18n::tr_catalog(self.app_settings.language, "settings_write.busy")
                     .to_owned();
-            return;
+            return false;
         }
         let encoder = match self
             .layout
@@ -94,28 +142,16 @@ impl EntropyApp {
             .and_then(|l| l.encoders.get(encoder_visual_idx))
         {
             Some(e) => e.clone(),
-            None => return,
+            None => return false,
         };
         let old_kc = self
             .layout
             .as_ref()
             .map(|l| l.get_encoder_keycode(layer, encoder_visual_idx))
             .unwrap_or(0);
-        self.undo_stack.push(UndoAction::Encoder {
-            layer,
-            encoder_visual_idx,
-            old_kc,
-        });
-
-        if let Some(layout) = &mut self.layout {
-            layout.set_encoder_keycode(layer, encoder_visual_idx, kc_value);
-        }
-
         let Some(conn) = &self.hid_device else {
-            self.status_msg =
-                "Read-only: encoder changed locally, firmware write disabled for this device"
-                    .into();
-            return;
+            self.status_msg = "Device handle is unavailable; encoder assignment will retry".into();
+            return false;
         };
         let result = conn.set_encoder(
             layer as u8,
@@ -126,15 +162,25 @@ impl EntropyApp {
 
         match result {
             Ok(()) => {
+                self.undo_stack.push(UndoAction::Encoder {
+                    layer,
+                    encoder_visual_idx,
+                    old_kc,
+                });
+                if let Some(layout) = &mut self.layout {
+                    layout.set_encoder_keycode(layer, encoder_visual_idx, kc_value);
+                }
                 self.status_msg = format!(
                     "Assigned encoder {} direction {} on layer {}",
                     encoder.encoder_idx,
                     encoder.direction,
                     layer + 1
                 );
+                true
             }
             Err(e) => {
                 self.status_msg = format!("Set encoder failed: {e}");
+                false
             }
         }
     }
@@ -262,12 +308,12 @@ impl EntropyApp {
         }
     }
 
-    pub(super) fn assign_keycode(&mut self, layer: usize, ki: usize, kc_value: u16) {
+    pub(super) fn assign_keycode(&mut self, layer: usize, ki: usize, kc_value: u16) -> bool {
         if self.qmk_settings_write_busy() {
             self.status_msg =
                 crate::i18n::tr_catalog(self.app_settings.language, "settings_write.busy")
                     .to_owned();
-            return;
+            return false;
         }
         let old_kc = self
             .layout
@@ -277,7 +323,7 @@ impl EntropyApp {
 
         let key = match self.layout.as_ref().and_then(|l| l.keys.get(ki)) {
             Some(k) => k.clone(),
-            None => return,
+            None => return false,
         };
 
         let commit_local_assignment = |this: &mut Self| {
@@ -296,10 +342,8 @@ impl EntropyApp {
         // Connect keeps the active Vial handle alive; if it is unavailable,
         // keep the edit local/read-only instead of freezing the whole app.
         let Some(conn) = &self.hid_device else {
-            commit_local_assignment(self);
-            self.status_msg =
-                "Read-only: key changed locally, firmware write disabled for this device".into();
-            return;
+            self.status_msg = "Device handle is unavailable; key assignment will retry".into();
+            return false;
         };
         let result = conn.set_keycode(layer as u8, key.row, key.col, kc_value);
 
@@ -307,6 +351,7 @@ impl EntropyApp {
             Ok(()) => {
                 commit_local_assignment(self);
                 self.status_msg = "✓ Saved".into();
+                true
             }
             Err(e) => {
                 self.status_msg = format!("Write error: {e}");
@@ -314,6 +359,7 @@ impl EntropyApp {
                     // Connection lost — reopen
                     self.hid_device = None;
                 }
+                false
             }
         }
     }
@@ -356,5 +402,50 @@ impl EntropyApp {
                 self.undo_layer_snapshot(layer, old, requires_firmware);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn failed_picker_writes_restore_key_override_and_alt_repeat_entries() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        app.key_override_entries = vec![KeyOverrideEntry {
+            trigger: 0x0004,
+            ..Default::default()
+        }];
+        app.key_override_pick_target = Some(KeyOverridePickField::Trigger);
+        app.keycode_picker.result = Some(0x0005);
+        let (hid, _) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+            0,
+            crate::hid::TestHidFault::Disconnect,
+        )));
+        app.hid_device = Some(hid);
+        app.apply_picker_results();
+        assert_eq!(app.key_override_entries[0].trigger, 0x0004);
+        assert_eq!(app.keycode_picker.result, Some(0x0005));
+        assert!(!app.key_override_dirty);
+
+        app.picker_retry_due = None;
+        app.keycode_picker.result = Some(0x0006);
+        app.key_override_pick_target = None;
+        app.alt_repeat_entries = vec![AltRepeatKeyEntry {
+            keycode: 0x0004,
+            ..Default::default()
+        }];
+        app.alt_repeat_pick_target = Some(AltRepeatPickField::LastKey);
+        let (hid, _) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+            0,
+            crate::hid::TestHidFault::Disconnect,
+        )));
+        app.hid_device = Some(hid);
+        app.apply_picker_results();
+        assert_eq!(app.alt_repeat_entries[0].keycode, 0x0004);
+        assert_eq!(app.keycode_picker.result, Some(0x0006));
     }
 }

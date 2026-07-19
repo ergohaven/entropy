@@ -171,6 +171,8 @@ enum HidBackend {
         combo: std::sync::Mutex<([u16; 4], u16)>,
         tap_dance: std::sync::Mutex<Vec<(u16, u16, u16, u16, u16)>>,
         qmk_settings: std::sync::Mutex<std::collections::BTreeMap<u16, u16>>,
+        keycodes: std::sync::Mutex<std::collections::BTreeMap<(u8, u8, u8), u16>>,
+        encoders: std::sync::Mutex<std::collections::BTreeMap<(u8, u8, u8), u16>>,
         fault_after_requests: std::sync::Mutex<Option<(usize, TestHidFault)>>,
     },
 }
@@ -301,6 +303,8 @@ impl HidDevice {
                 combo: std::sync::Mutex::new(([0; 4], 0)),
                 tap_dance: std::sync::Mutex::new(Vec::new()),
                 qmk_settings: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+                keycodes: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+                encoders: std::sync::Mutex::new(std::collections::BTreeMap::new()),
                 fault_after_requests: std::sync::Mutex::new(fault_after_requests),
             },
         };
@@ -487,6 +491,8 @@ impl HidDevice {
                 combo,
                 tap_dance,
                 qmk_settings,
+                keycodes,
+                encoders,
                 fault_after_requests,
             } => {
                 let mut request = [0; MSG_LEN];
@@ -520,6 +526,45 @@ impl HidDevice {
 
                 let mut response = [0; MSG_LEN];
                 match (request[0], request[1], request[2]) {
+                    (CMD_VIA_SET_KEYCODE, layer, row) => {
+                        let keycode = u16::from_be_bytes([request[4], request[5]]);
+                        keycodes
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .insert((layer, row, request[3]), keycode);
+                    }
+                    (CMD_VIA_GET_KEYCODE, layer, row) => {
+                        let keycode = keycodes
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .get(&(layer, row, request[3]))
+                            .copied()
+                            .unwrap_or_default();
+                        response[4..6].copy_from_slice(&keycode.to_be_bytes());
+                    }
+                    (CMD_VIA_VIAL_PREFIX, CMD_VIAL_SET_ENCODER, layer) => {
+                        let keycode = u16::from_be_bytes([request[5], request[6]]);
+                        encoders
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .insert((layer, request[3], request[4]), keycode);
+                    }
+                    (CMD_VIA_VIAL_PREFIX, CMD_VIAL_GET_ENCODER, layer) => {
+                        let positive = encoders
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .get(&(layer, request[3], 0))
+                            .copied()
+                            .unwrap_or_default();
+                        let negative = encoders
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .get(&(layer, request[3], 1))
+                            .copied()
+                            .unwrap_or_default();
+                        response[..2].copy_from_slice(&positive.to_be_bytes());
+                        response[2..4].copy_from_slice(&negative.to_be_bytes());
+                    }
                     (CMD_VIA_MACRO_GET_BUFFER_SIZE, _, _) => {
                         response[1..3].copy_from_slice(&28u16.to_be_bytes());
                     }

@@ -1085,6 +1085,20 @@ mod tests {
             product_id: 0,
             keyboard_id: 43,
         };
+        let duplicate_serial_different_path = ModuleSettingsDeviceIdentity {
+            path: "usb:another-phenom".to_owned(),
+            serial_number: Some("duplicate".to_owned()),
+            vendor_id: expected.vendor_id,
+            product_id: expected.product_id,
+            keyboard_id: expected.keyboard_id,
+        };
+        let expected_duplicate_serial = ModuleSettingsDeviceIdentity {
+            path: expected.path.clone(),
+            serial_number: Some("duplicate".to_owned()),
+            vendor_id: expected.vendor_id,
+            product_id: expected.product_id,
+            keyboard_id: expected.keyboard_id,
+        };
 
         assert!(module_settings_refresh_identity_matches(
             &expected,
@@ -1098,6 +1112,10 @@ mod tests {
         assert!(!module_settings_refresh_identity_matches(
             &expected,
             Some(&changed_keyboard)
+        ));
+        assert!(!module_settings_refresh_identity_matches(
+            &expected_duplicate_serial,
+            Some(&duplicate_serial_different_path)
         ));
     }
 }

@@ -21,8 +21,26 @@ impl EntropyApp {
             || self.qmk_settings_write_pending()
     }
 
+    fn discard_deferred_hid_settings_for_exit(&mut self) {
+        if self.deferred_hid_settings.is_empty() {
+            return;
+        }
+        log::warn!(
+            "discarding {} unmatched deferred HID setting group(s) on explicit close",
+            self.deferred_hid_settings.len()
+        );
+        self.deferred_hid_settings.clear();
+        self.pending_layer_write = None;
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn defer_exit_until_hid_write_returns(&mut self, ctx: &egui::Context) -> bool {
+        if !self.hid_write_task_active()
+            && !self.has_pending_hid_mutations()
+            && !self.deferred_hid_settings.is_empty()
+        {
+            self.discard_deferred_hid_settings_for_exit();
+        }
         if !self.hid_write_lifecycle_busy() && !self.deferred_exit_has_pending_hid_writes() {
             return false;
         }
@@ -48,6 +66,12 @@ impl EntropyApp {
         // A refresh can lose its HID handle after close was deferred. Keep
         // pending settings for reconnect instead of closing before they write.
         if self.hid_device.is_none() {
+            if !self.has_pending_hid_mutations() {
+                self.discard_deferred_hid_settings_for_exit();
+                self.exit_after_hid_write = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            }
             self.exit_after_hid_write = false;
             return;
         }
@@ -61,6 +85,7 @@ impl EntropyApp {
             ctx.request_repaint();
             return;
         }
+        self.discard_deferred_hid_settings_for_exit();
         if !self.fallback_entropy_display_presets_before_exit() {
             ctx.request_repaint();
             return;
