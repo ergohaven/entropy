@@ -110,8 +110,6 @@ pub enum MacroAction {
 #[derive(Clone, Debug)]
 pub(crate) struct EmojiAssignment {
     pub slot: usize,
-    pub previous_actions: Vec<MacroAction>,
-    pub previous_text: Vec<u8>,
     pub actions: Vec<MacroAction>,
     pub text: Vec<u8>,
 }

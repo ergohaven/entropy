@@ -1,4 +1,5 @@
 use super::*;
+use crate::keycode_picker::MacroAction;
 
 impl EntropyApp {
     fn emoji_target_slot_reusable(

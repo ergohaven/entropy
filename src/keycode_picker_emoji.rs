@@ -165,8 +165,6 @@ impl KeycodePicker {
             .unwrap_or_else(|| self.macro_texts[slot].clone());
         self.emoji_assignment = Some(EmojiAssignment {
             slot,
-            previous_actions: self.macro_actions[slot].clone(),
-            previous_text: self.macro_texts[slot].clone(),
             actions,
             text,
         });
