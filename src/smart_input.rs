@@ -244,15 +244,10 @@ pub fn text_expander_runs_outside_entropy_process() -> bool {
 /// method can provide that decoder.
 #[cfg(target_os = "linux")]
 pub fn emoji_assignment_backend_ready() -> bool {
-    match linux_session_kind() {
-        LinuxSessionKind::X11 => std::env::var_os("DISPLAY").is_some(),
-        LinuxSessionKind::Wayland => match linux_recommended_input_backend() {
-            LinuxRecommendedInputBackend::IBus => linux_ibus_backend_ready(),
-            LinuxRecommendedInputBackend::Fcitx5 => linux_fcitx5_backend_ready(),
-            LinuxRecommendedInputBackend::X11Native => false,
-        },
-        LinuxSessionKind::Unknown => false,
-    }
+    // DISPLAY, installed engine bytes, and an installer marker prove setup,
+    // not that a decoder owns the current session. Keep firmware assignment
+    // disabled until the host protocol has an active runtime handshake.
+    false
 }
 
 #[cfg(target_os = "macos")]

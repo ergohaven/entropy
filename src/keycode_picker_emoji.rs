@@ -13,7 +13,10 @@ impl KeycodePicker {
         ui.add_space(4.0 * scale);
         if !self.emoji_assignment_backend_ready {
             ui.label(
-                RichText::new("Finish Universal Symbols setup before assigning emoji macros.")
+                RichText::new(tr_picker(
+                    self.language,
+                    "key_picker.emoji_backend_unavailable",
+                ))
                     .size(10.0 * scale)
                     .color(Color32::from_rgb(200, 110, 90)),
             );
@@ -24,13 +27,10 @@ impl KeycodePicker {
                 .size(10.0 * scale)
                 .color(crate::ui_style::muted_text(dark)),
         );
-        if self.emoji_assignment_error {
+        if let Some(error) = self.emoji_assignment_error {
             ui.add_space(3.0 * scale);
             ui.label(
-                RichText::new(tr_picker(
-                    self.language,
-                    "key_picker.emoji_no_free_macro_slot",
-                ))
+                RichText::new(tr_picker(self.language, emoji_assignment_error_key(error)))
                 .size(10.0 * scale)
                 .color(Color32::from_rgb(200, 110, 90)),
             );
@@ -134,7 +134,7 @@ impl KeycodePicker {
             && ui.input(|input| input.modifiers.ctrl)
             && entry.supports_skin_tone
         {
-            self.emoji_assignment_error = false;
+            self.emoji_assignment_error = None;
             if !active {
                 self.emoji_selected = Some(entry);
                 self.emoji_skin_tone = crate::emoji_catalog::EmojiSkinTone::Default;
@@ -150,12 +150,12 @@ impl KeycodePicker {
     ) {
         let emoji = crate::emoji_catalog::emoji_sequence(entry, tone);
         let Some(actions) = emoji_macro_actions(&emoji) else {
-            self.emoji_assignment_error = true;
+            self.emoji_assignment_error = Some(EmojiAssignmentError::NoFreeMacroSlot);
             return;
         };
         let encoded_len = super::keycode_picker_macro::encode_macro_actions(&actions).len();
         let Some((slot, write_macro)) = self.emoji_macro_slot(&emoji, encoded_len) else {
-            self.emoji_assignment_error = true;
+            self.emoji_assignment_error = Some(EmojiAssignmentError::NoFreeMacroSlot);
             return;
         };
 
@@ -168,7 +168,7 @@ impl KeycodePicker {
             actions,
             text,
         });
-        self.emoji_assignment_error = false;
+        self.emoji_assignment_error = None;
         self.result = Some(0x7700 + slot as u16);
         self.open = false;
     }
@@ -233,6 +233,17 @@ impl KeycodePicker {
             .sum::<usize>()
             + slot_count;
         required <= capacity
+    }
+}
+
+fn emoji_assignment_error_key(error: EmojiAssignmentError) -> &'static str {
+    match error {
+        EmojiAssignmentError::BackendUnavailable => "key_picker.emoji_backend_unavailable",
+        EmojiAssignmentError::NoFreeMacroSlot => "key_picker.emoji_no_free_macro_slot",
+        EmojiAssignmentError::DeviceUnavailable => "key_picker.emoji_device_unavailable",
+        EmojiAssignmentError::TargetUnavailable => "key_picker.emoji_target_unavailable",
+        EmojiAssignmentError::WorkerStopped => "key_picker.emoji_worker_stopped",
+        EmojiAssignmentError::SaveFailed => "key_picker.emoji_save_failed",
     }
 }
 
@@ -561,7 +572,10 @@ mod tests {
         picker.assign_emoji(entry, crate::emoji_catalog::EmojiSkinTone::Default);
 
         assert_eq!(picker.result, None);
-        assert!(picker.emoji_assignment_error);
+        assert_eq!(
+            picker.emoji_assignment_error,
+            Some(EmojiAssignmentError::NoFreeMacroSlot)
+        );
         assert!(!picker.macros_dirty);
         assert!(picker.open);
     }
@@ -577,7 +591,10 @@ mod tests {
         picker.assign_emoji(entry, crate::emoji_catalog::EmojiSkinTone::Default);
 
         assert_eq!(picker.result, None);
-        assert!(picker.emoji_assignment_error);
+        assert_eq!(
+            picker.emoji_assignment_error,
+            Some(EmojiAssignmentError::NoFreeMacroSlot)
+        );
         assert!(picker.open);
     }
 
@@ -599,7 +616,7 @@ mod tests {
         picker.assign_emoji(entry, crate::emoji_catalog::EmojiSkinTone::Default);
 
         assert_eq!(picker.result, Some(0x7700));
-        assert!(!picker.emoji_assignment_error);
+        assert_eq!(picker.emoji_assignment_error, None);
         assert!(!picker.open);
     }
 }

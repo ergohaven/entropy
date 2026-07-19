@@ -114,6 +114,16 @@ pub(crate) struct EmojiAssignment {
     pub text: Vec<u8>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EmojiAssignmentError {
+    BackendUnavailable,
+    NoFreeMacroSlot,
+    DeviceUnavailable,
+    TargetUnavailable,
+    WorkerStopped,
+    SaveFailed,
+}
+
 pub(crate) const MACRO_NAME_CHAR_LIMIT: usize = 7;
 pub(crate) const MACRO_DESCRIPTION_CHAR_LIMIT: usize = 120;
 
@@ -194,7 +204,7 @@ pub struct KeycodePicker {
     pub emoji_target_keycode: Option<u16>,
     pub emoji_target_slot_reusable: bool,
     pub emoji_assignment_backend_ready: bool,
-    pub emoji_assignment_error: bool,
+    pub emoji_assignment_error: Option<EmojiAssignmentError>,
     pub emoji_assignment: Option<EmojiAssignment>,
     popup_state: PopupState,
     pub language: crate::i18n::Language,
@@ -399,7 +409,7 @@ impl Default for KeycodePicker {
             emoji_target_keycode: None,
             emoji_target_slot_reusable: false,
             emoji_assignment_backend_ready: false,
-            emoji_assignment_error: false,
+            emoji_assignment_error: None,
             emoji_assignment: None,
             macros_dirty: false,
             popup_state: PopupState::default(),
@@ -583,7 +593,7 @@ impl KeycodePicker {
         self.emoji_target_keycode = None;
         self.emoji_target_slot_reusable = false;
         self.emoji_assignment_backend_ready = false;
-        self.emoji_assignment_error = false;
+        self.emoji_assignment_error = None;
         self.emoji_assignment = None;
     }
 
@@ -603,7 +613,7 @@ impl KeycodePicker {
         self.emoji_target_keycode = None;
         self.emoji_target_slot_reusable = false;
         self.emoji_assignment_backend_ready = false;
-        self.emoji_assignment_error = false;
+        self.emoji_assignment_error = None;
         self.emoji_assignment = None;
         self.selected_tab = selected_tab;
     }

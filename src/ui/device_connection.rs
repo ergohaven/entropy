@@ -249,6 +249,11 @@ impl EntropyApp {
     }
 
     pub(super) fn clear_connected_keyboard_state(&mut self, status_msg: impl Into<String>) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.hid_connection_generation = self.hid_connection_generation.wrapping_add(1);
+            self.emoji_assignment_task = None;
+        }
         self.layout = None;
         self.selected_key = None;
         self.selected_encoder = None;

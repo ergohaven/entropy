@@ -42,6 +42,8 @@ impl EntropyApp {
             deferred_hid_settings: Vec::new(),
             emoji_assignment_task: None,
             #[cfg(not(target_arch = "wasm32"))]
+            hid_connection_generation: 0,
+            #[cfg(not(target_arch = "wasm32"))]
             qmk_hid_hosts: std::collections::HashMap::new(),
             firmware: FirmwareProtocol::Vial,
             undo_stack: Vec::new(),

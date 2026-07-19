@@ -140,6 +140,13 @@ pub(crate) struct TestHidRecorder {
 }
 
 #[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum TestHidReadbackMismatch {
+    MacroBuffer,
+    Keycode,
+}
+
+#[cfg(test)]
 impl TestHidRecorder {
     pub(crate) fn requests(&self) -> Vec<[u8; MSG_LEN]> {
         self.requests
@@ -172,6 +179,11 @@ enum HidBackend {
         tap_dance: std::sync::Mutex<Vec<(u16, u16, u16, u16, u16)>>,
         qmk_settings: std::sync::Mutex<std::collections::BTreeMap<u16, u16>>,
         fault_after_requests: std::sync::Mutex<Option<(usize, TestHidFault)>>,
+        macro_buffer: std::sync::Mutex<Vec<u8>>,
+        macro_buffer_size: u16,
+        keycodes: std::sync::Mutex<std::collections::BTreeMap<(u8, u8, u8), u16>>,
+        macro_readback_mismatch_once: std::sync::Mutex<bool>,
+        keycode_readback_mismatch_once: std::sync::Mutex<bool>,
     },
 }
 
@@ -292,6 +304,37 @@ impl HidDevice {
     pub(crate) fn test_device_with_fault_after_requests(
         fault_after_requests: Option<(usize, TestHidFault)>,
     ) -> (Self, TestHidRecorder) {
+        Self::test_device_with_macro_buffer_size_and_fault_after_requests(
+            28,
+            fault_after_requests,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_device_with_disconnect_after_requests(
+        disconnect_after_requests: Option<usize>,
+    ) -> (Self, TestHidRecorder) {
+        Self::test_device_with_fault_after_requests(
+            disconnect_after_requests.map(|count| (count, TestHidFault::Disconnect)),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_device_with_macro_buffer_size_and_disconnect_after_requests(
+        macro_buffer_size: u16,
+        disconnect_after_requests: Option<usize>,
+    ) -> (Self, TestHidRecorder) {
+        Self::test_device_with_macro_buffer_size_and_fault_after_requests(
+            macro_buffer_size,
+            disconnect_after_requests.map(|count| (count, TestHidFault::Disconnect)),
+        )
+    }
+
+    #[cfg(test)]
+    fn test_device_with_macro_buffer_size_and_fault_after_requests(
+        macro_buffer_size: u16,
+        fault_after_requests: Option<(usize, TestHidFault)>,
+    ) -> (Self, TestHidRecorder) {
         let recorder = TestHidRecorder {
             requests: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
@@ -302,9 +345,57 @@ impl HidDevice {
                 tap_dance: std::sync::Mutex::new(Vec::new()),
                 qmk_settings: std::sync::Mutex::new(std::collections::BTreeMap::new()),
                 fault_after_requests: std::sync::Mutex::new(fault_after_requests),
+                macro_buffer: std::sync::Mutex::new(vec![0; macro_buffer_size as usize]),
+                macro_buffer_size,
+                keycodes: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+                macro_readback_mismatch_once: std::sync::Mutex::new(false),
+                keycode_readback_mismatch_once: std::sync::Mutex::new(false),
             },
         };
         (device, recorder)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_mismatch_next_readback(&self, mismatch: TestHidReadbackMismatch) {
+        let (macro_readback_mismatch_once, keycode_readback_mismatch_once) = match &self.backend {
+            HidBackend::Test {
+                macro_readback_mismatch_once,
+                keycode_readback_mismatch_once,
+                ..
+            } => (macro_readback_mismatch_once, keycode_readback_mismatch_once),
+            _ => unreachable!("test helper needs the test HID backend"),
+        };
+        let pending = match mismatch {
+            TestHidReadbackMismatch::MacroBuffer => macro_readback_mismatch_once,
+            TestHidReadbackMismatch::Keycode => keycode_readback_mismatch_once,
+        };
+        *pending.lock().unwrap_or_else(|error| error.into_inner()) = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_macro_entries(&self, count: u8) -> Vec<Vec<u8>> {
+        let macro_buffer = match &self.backend {
+            HidBackend::Test { macro_buffer, .. } => macro_buffer,
+            _ => unreachable!("test helper needs the test HID backend"),
+        };
+        let buffer = macro_buffer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        Self::parse_macros(&buffer, count)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_keycode(&self, layer: u8, row: u8, col: u8) -> u16 {
+        let keycodes = match &self.backend {
+            HidBackend::Test { keycodes, .. } => keycodes,
+            _ => unreachable!("test helper needs the test HID backend"),
+        };
+        keycodes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(&(layer, row, col))
+            .copied()
+            .unwrap_or_default()
     }
 
     pub fn open(path: &str) -> Result<Self> {
@@ -488,6 +579,11 @@ impl HidDevice {
                 tap_dance,
                 qmk_settings,
                 fault_after_requests,
+                macro_buffer,
+                macro_buffer_size,
+                keycodes,
+                macro_readback_mismatch_once,
+                keycode_readback_mismatch_once,
             } => {
                 let mut request = [0; MSG_LEN];
                 let len = data.len().min(MSG_LEN);
@@ -521,7 +617,55 @@ impl HidDevice {
                 let mut response = [0; MSG_LEN];
                 match (request[0], request[1], request[2]) {
                     (CMD_VIA_MACRO_GET_BUFFER_SIZE, _, _) => {
-                        response[1..3].copy_from_slice(&28u16.to_be_bytes());
+                        response[1..3].copy_from_slice(&macro_buffer_size.to_be_bytes());
+                    }
+                    (CMD_VIA_MACRO_SET_BUFFER, _, _) => {
+                        let offset = u16::from_be_bytes([request[1], request[2]]) as usize;
+                        let chunk = request[3] as usize;
+                        let mut buffer = macro_buffer
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner());
+                        buffer[offset..offset + chunk].copy_from_slice(&request[4..4 + chunk]);
+                    }
+                    (CMD_VIA_MACRO_GET_BUFFER, _, _) => {
+                        let offset = u16::from_be_bytes([request[1], request[2]]) as usize;
+                        let chunk = request[3] as usize;
+                        response[..4].copy_from_slice(&request[..4]);
+                        let buffer = macro_buffer
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner());
+                        response[4..4 + chunk].copy_from_slice(&buffer[offset..offset + chunk]);
+                        let mut mismatch = macro_readback_mismatch_once
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner());
+                        if *mismatch {
+                            response[4] ^= 0xFF;
+                            *mismatch = false;
+                        }
+                    }
+                    (CMD_VIA_SET_KEYCODE, layer, row) => {
+                        let col = request[3];
+                        let keycode = u16::from_be_bytes([request[4], request[5]]);
+                        keycodes
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .insert((layer, row, col), keycode);
+                    }
+                    (CMD_VIA_GET_KEYCODE, layer, row) => {
+                        let mut keycode = keycodes
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .get(&(layer, row, request[3]))
+                            .copied()
+                            .unwrap_or_default();
+                        let mut mismatch = keycode_readback_mismatch_once
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner());
+                        if *mismatch {
+                            keycode = keycode.wrapping_add(1);
+                            *mismatch = false;
+                        }
+                        response[4..6].copy_from_slice(&keycode.to_be_bytes());
                     }
                     (CMD_VIA_VIAL_PREFIX, CMD_VIAL_DYNAMIC_ENTRY_OP, DYNAMIC_VIAL_COMBO_SET) => {
                         let mut keys = [0; 4];

@@ -117,10 +117,15 @@ impl EntropyApp {
                 self.start_emoji_assignment(ctx, target, assignment);
             } else {
                 self.keycode_picker.emoji_assignment = Some(assignment);
-                self.keycode_picker.emoji_assignment_error = true;
+                self.keycode_picker.emoji_assignment_error =
+                    Some(crate::keycode_picker::EmojiAssignmentError::TargetUnavailable);
                 self.keycode_picker.result = None;
                 self.keycode_picker.open = true;
-                self.status_msg = "Emoji assignment target is no longer available".into();
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "status_messages.emoji_assignment_target_unavailable",
+                )
+                .into();
             }
             return;
         }
@@ -278,7 +283,7 @@ impl EntropyApp {
             .emoji_target_slot_reusable(current_keycode, key_target, encoder_target);
         self.keycode_picker.emoji_assignment_backend_ready =
             crate::smart_input::emoji_assignment_backend_ready();
-        self.keycode_picker.emoji_assignment_error = false;
+        self.keycode_picker.emoji_assignment_error = None;
         self.keycode_picker.emoji_assignment = None;
         self.keycode_picker.emoji_selected = None;
         self.keycode_picker.emoji_skin_tone = Default::default();

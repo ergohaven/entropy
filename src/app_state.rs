@@ -2916,6 +2916,10 @@ pub struct EntropyApp {
     /// Serialized macro-buffer then target-key write for emoji assignment.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) emoji_assignment_task: Option<EmojiAssignmentTask>,
+    /// Incremented whenever the active keyboard state is cleared so worker
+    /// completions cannot restore HID or mutate a replacement connection.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) hid_connection_generation: u64,
     /// Built-in qmk-hid-host bridges for displays/presets that need host data
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) qmk_hid_hosts:

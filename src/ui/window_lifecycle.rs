@@ -22,6 +22,11 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn defer_exit_until_hid_write_returns(&mut self, ctx: &egui::Context) -> bool {
+        // A worker owns its HID handle and cannot be forcibly joined. Drop its
+        // completion channel instead of leaving Close hostage to a stalled host
+        // emoji assignment; any late result is generation-invalidated.
+        self.abandon_emoji_assignment();
+
         if !self.hid_write_task_active() {
             return false;
         }

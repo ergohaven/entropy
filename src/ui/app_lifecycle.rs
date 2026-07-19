@@ -71,10 +71,6 @@ fn app_visuals(dark_mode: bool) -> egui::Visuals {
     visuals
 }
 
-fn hid_lifecycle_writes_available(hid_write_task_active: bool) -> bool {
-    !hid_write_task_active
-}
-
 fn picker_requires_macro_unlock(picker: &KeycodePicker) -> bool {
     picker.selected_tab == KeycodeTab::Macro
         || (picker.selected_tab == KeycodeTab::Symbols
@@ -119,6 +115,9 @@ impl EntropyApp {
         selected_device_is_bluetooth: bool,
     ) {
         self.poll_settings_write(ctx);
+        // Retire an abandoned emoji worker before deciding whether HID scanning
+        // can proceed; otherwise its timeout would delay reconnect by a frame.
+        self.poll_emoji_assignment(ctx);
         if should_poll_device_scan(main_window_hidden_to_tray) {
             if hid_lifecycle_writes_available(self.hid_write_task_active()) {
                 self.handle_pending_imports(ctx, now);
@@ -146,7 +145,6 @@ impl EntropyApp {
             }
         }
 
-        self.poll_emoji_assignment(ctx);
         self.poll_layer_write(ctx);
         self.poll_module_settings_refresh(ctx);
         self.poll_combo_write(ctx);
