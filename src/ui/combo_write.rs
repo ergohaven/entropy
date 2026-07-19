@@ -77,14 +77,14 @@ impl EntropyApp {
         self.layer_write_task.is_some()
             || self.combo_write_task.is_some()
             || self.settings_write_task.is_some()
+            || self.module_settings_refresh_task.is_some()
+            || self.emoji_assignment_task.is_some()
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn hid_write_task_active(&self) -> bool {
         self.hid_write_task_owner_active()
-            || self.module_settings_refresh_task.is_some()
             || !self.settings_write_queue.is_empty()
-            || self.emoji_assignment_task.is_some()
     }
 
     #[cfg(not(target_arch = "wasm32"))]

@@ -1015,6 +1015,32 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn module_refresh_keeps_queued_settings_pending_until_hid_returns() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let identity = ModuleSettingsDeviceIdentity {
+            path: "usb:phenom".to_owned(),
+            serial_number: None,
+            vendor_id: 0,
+            product_id: 0,
+            keyboard_id: 42,
+        };
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        app.module_settings_refresh_task = Some(ModuleSettingsRefreshTask { receiver, identity });
+
+        app.queue_touchpad_setting_write("Sniper sensitivity".to_owned(), 121, 1, 1, 2);
+        app.cancel_pending_settings_writes_without_transport();
+
+        assert!(app.settings_write_task.is_none());
+        assert_eq!(
+            app.settings_write_queue.status(121),
+            Some(&SettingsWriteStatus::Pending)
+        );
+    }
+
     #[test]
     fn combo_task_defers_settings_changes_refresh_and_exit_writes_until_handle_returns() {
         let ctx = egui::Context::default();

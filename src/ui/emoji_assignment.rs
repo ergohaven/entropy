@@ -561,6 +561,23 @@ mod tests {
         assert!(!app.hid_write_task_active());
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn emoji_worker_holds_the_settings_write_transport() {
+        let ctx = egui::Context::default();
+        let mut app = app(&ctx);
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        app.emoji_assignment_task = Some(EmojiAssignmentTask {
+            receiver,
+            target: target(),
+            assignment: assignment(),
+            connection_generation: app.hid_connection_generation,
+            started_at: std::time::Instant::now(),
+        });
+
+        assert!(app.hid_write_task_owner_active());
+    }
+
     #[test]
     fn hung_emoji_worker_stops_blocking_hid_lifecycle() {
         let ctx = egui::Context::default();

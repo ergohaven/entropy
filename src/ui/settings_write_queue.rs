@@ -114,7 +114,7 @@ impl SettingsWriteQueueState {
         self.pending.pop_front()
     }
 
-    fn status(&self, qsid: u16) -> Option<&SettingsWriteStatus> {
+    pub(super) fn status(&self, qsid: u16) -> Option<&SettingsWriteStatus> {
         self.statuses.get(&qsid).map(|entry| &entry.status)
     }
 
