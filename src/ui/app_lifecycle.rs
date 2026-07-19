@@ -71,10 +71,6 @@ fn app_visuals(dark_mode: bool) -> egui::Visuals {
     visuals
 }
 
-fn hid_lifecycle_writes_available(hid_write_task_active: bool) -> bool {
-    !hid_write_task_active
-}
-
 impl EntropyApp {
     fn main_window_hidden_to_tray(&self) -> bool {
         #[cfg(target_os = "windows")]
@@ -131,7 +127,6 @@ impl EntropyApp {
         self.poll_module_settings_refresh(ctx);
         self.poll_combo_write(ctx);
         self.maybe_start_combo_write(ctx);
-        self.finish_deferred_exit_after_hid_write(ctx);
         self.poll_text_expander_deferred_save(now);
         self.auto_reload_text_expander_rules_file(now);
         self.poll_single_instance_signal(ctx);
@@ -734,8 +729,7 @@ mod tests {
             .expect("disconnect preserves pending HID-backed settings");
         assert!(deferred.macros_dirty);
         assert_eq!(deferred.macro_texts, vec![vec![1, 2, 3]]);
-        assert!(deferred.combo_dirty);
-        assert_eq!(deferred.combo_entries[0].output, 0x0006);
+        assert_eq!(deferred.combo_entries[0].1.output, 0x0006);
         assert_eq!(deferred.pending_tap_hold_numeric_writes.get(&7), Some(&175));
         assert!(app.device_about_info.is_none());
         assert_eq!(
@@ -1909,6 +1903,9 @@ impl eframe::App for EntropyApp {
         // using the shared HID handle for this frame.
         #[cfg(not(target_arch = "wasm32"))]
         self.maybe_start_combo_write(ctx);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        self.finish_deferred_exit_after_hid_write(ctx);
 
         let mut settings_page_navigation_handled = false;
         if self.can_return_from_settings_page(

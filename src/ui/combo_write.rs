@@ -81,7 +81,9 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn hid_write_task_active(&self) -> bool {
-        self.hid_write_task_owner_active() || !self.settings_write_queue.is_empty()
+        self.hid_write_task_owner_active()
+            || self.module_settings_refresh_task.is_some()
+            || !self.settings_write_queue.is_empty()
     }
 
     #[cfg(not(target_arch = "wasm32"))]
