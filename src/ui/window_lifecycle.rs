@@ -43,10 +43,14 @@ impl EntropyApp {
             return;
         }
 
-        // A refresh can lose its HID handle after close was deferred. Keep
-        // pending settings for reconnect instead of closing before they write.
+        // A worker can lose its HID handle after Close was deferred. Preserve
+        // dirty state for reconnect, but do not leave application shutdown
+        // waiting for a transport that no longer exists.
         if self.hid_device.is_none() {
             self.exit_after_hid_write = false;
+            if self.deferred_hid_settings.is_empty() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
             return;
         }
         // Close bypasses debounce so every queued setting gets one verified

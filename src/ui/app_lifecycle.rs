@@ -149,6 +149,7 @@ impl EntropyApp {
         self.poll_module_settings_refresh(ctx);
         self.poll_combo_write(ctx);
         self.maybe_start_combo_write(ctx);
+        self.finish_deferred_exit_after_hid_write(ctx);
         self.poll_text_expander_deferred_save(now);
         self.auto_reload_text_expander_rules_file(now);
         self.poll_single_instance_signal(ctx);
@@ -1148,7 +1149,7 @@ mod tests {
         );
         assert_eq!(app.key_override_entries[0].trigger, 0x0004);
         assert!(app.keycode_picker.result.is_none());
-        app.apply_picker_results();
+        app.apply_picker_results(&ctx);
         assert_eq!(app.key_override_entries[0].trigger, 0x0004);
         app.flush_pending_key_override_writes();
 

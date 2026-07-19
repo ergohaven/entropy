@@ -263,9 +263,9 @@ impl EntropyApp {
         self.layer_write_task = None;
         self.combo_write_task = None;
         self.settings_write_task = None;
-        self.settings_write_queue.clear();
         self.module_settings_refresh_task = None;
         self.hid_device = None;
+        self.cancel_pending_settings_writes_without_transport();
         self.undo_stack.clear();
         self.connect_state = ConnectState::Idle;
         self.unlock_open = false;
