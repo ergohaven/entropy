@@ -2805,6 +2805,7 @@ pub struct EntropyApp {
     pub(crate) combo_pick_target: Option<(usize, ComboPickField)>,
     pub(crate) key_override_entries: Vec<KeyOverrideEntry>,
     pub(crate) key_override_names: Vec<String>,
+    pub(crate) key_override_dirty: bool,
     pub(crate) key_override_visible_count: usize,
     pub(crate) key_override_undo_stack: Vec<(Vec<KeyOverrideEntry>, Vec<String>, usize, usize)>,
     pub(crate) text_expander_deleted_rules: Vec<(usize, crate::text_expander::TextExpansionRule)>,

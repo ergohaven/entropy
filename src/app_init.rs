@@ -137,6 +137,7 @@ impl EntropyApp {
             combo_pick_target: None,
             key_override_entries: Vec::new(),
             key_override_names: vec![],
+            key_override_dirty: false,
             key_override_visible_count: 1,
             key_override_undo_stack: Vec::new(),
             text_expander_deleted_rules: Vec::new(),

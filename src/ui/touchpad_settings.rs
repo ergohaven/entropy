@@ -202,7 +202,7 @@ impl EntropyApp {
                         },
                         dropdown_width + status_width,
                         |ui| {
-                            self.draw_settings_write_status(ui, 120, metrics);
+                            self.draw_settings_write_status(ui, 120, metrics, suppress_tooltips);
                             if variants.is_empty() {
                                 let current = self.touchpad_settings.dpi;
                                 let edit_id = egui::Id::new(("touchpad_edit", 120u16));
@@ -330,7 +330,7 @@ impl EntropyApp {
                         },
                         slider_control_width + status_width,
                         |ui| {
-                            self.draw_settings_write_status(ui, qsid, metrics);
+                            self.draw_settings_write_status(ui, qsid, metrics, suppress_tooltips);
                             ui.spacing_mut().item_spacing.x = 0.0;
                             let slider_fill = if dark {
                                 Color32::from_rgb(92, 92, 96)
@@ -411,7 +411,7 @@ impl EntropyApp {
                         },
                         switch_width + status_width,
                         |ui| {
-                            self.draw_settings_write_status(ui, 124, metrics);
+                            self.draw_settings_write_status(ui, 124, metrics, suppress_tooltips);
                             let old_bits = self.touchpad_settings.bits;
                             let mut value = self.touchpad_settings.bit(bit);
                             let resp = crate::ui_style::settings_switch_sized_stable(
@@ -445,7 +445,7 @@ impl EntropyApp {
                         },
                         switch_width + status_width,
                         |ui| {
-                            self.draw_settings_write_status(ui, 142, metrics);
+                            self.draw_settings_write_status(ui, 142, metrics, suppress_tooltips);
                             let mut value = self.touchpad_settings.auto_layer_enable;
                             let resp = crate::ui_style::settings_switch_sized_stable(
                                 ui,
@@ -485,7 +485,7 @@ impl EntropyApp {
                         },
                         dropdown_width + status_width,
                         |ui| {
-                            self.draw_settings_write_status(ui, 143, metrics);
+                            self.draw_settings_write_status(ui, 143, metrics, suppress_tooltips);
                             let dropdown_id = ui.make_persistent_id("touchpad_auto_layer_dropdown");
                             let (_, picked) = Self::draw_touchpad_select_control(
                                 ui,

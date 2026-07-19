@@ -374,8 +374,9 @@ fn should_write_dynamic_entries(
     entries_dirty: bool,
     keycode_picker_open: bool,
     _active_hid_is_bluetooth: bool,
+    hid_write_task_active: bool,
 ) -> bool {
-    entries_dirty && !keycode_picker_open
+    entries_dirty && !keycode_picker_open && !hid_write_task_active
 }
 
 pub(super) fn combo_write_lifecycle_plan(
@@ -407,19 +408,24 @@ mod tests {
 
     #[test]
     fn dirty_dynamic_entries_write_over_bluetooth() {
-        assert!(should_write_dynamic_entries(true, false, true));
+        assert!(should_write_dynamic_entries(true, false, true, false));
     }
 
     #[test]
     fn dynamic_entries_wait_while_key_picker_is_open() {
-        assert!(!should_write_dynamic_entries(true, true, true));
-        assert!(!should_write_dynamic_entries(true, true, false));
+        assert!(!should_write_dynamic_entries(true, true, true, false));
+        assert!(!should_write_dynamic_entries(true, true, false, false));
     }
 
     #[test]
     fn clean_dynamic_entries_do_not_write() {
-        assert!(!should_write_dynamic_entries(false, false, true));
-        assert!(!should_write_dynamic_entries(false, false, false));
+        assert!(!should_write_dynamic_entries(false, false, true, false));
+        assert!(!should_write_dynamic_entries(false, false, false, false));
+    }
+
+    #[test]
+    fn dirty_dynamic_entries_wait_while_hid_is_owned_by_another_write_task() {
+        assert!(!should_write_dynamic_entries(true, false, false, true));
     }
 
     fn combo(keys: [u16; 4], output: u16) -> ComboEntry {
@@ -1224,15 +1230,13 @@ impl eframe::App for EntropyApp {
             .map(|hid| hid.is_bluetooth_transport())
             .unwrap_or(false);
         #[cfg(not(target_arch = "wasm32"))]
-        let hid_lifecycle_writes_available =
-            hid_lifecycle_writes_available(self.hid_write_task_active());
+        let hid_write_task_active = self.hid_write_task_active();
         #[cfg(target_arch = "wasm32")]
-        let hid_lifecycle_writes_available = true;
+        let hid_write_task_active = false;
 
-        if hid_lifecycle_writes_available
-            && self.keycode_picker.macros_dirty
-            && !self.keycode_picker.open
-        {
+        self.flush_pending_key_override_writes();
+
+        if self.keycode_picker.macros_dirty && !self.keycode_picker.open && !hid_write_task_active {
             if self.unlock_open || self.vial_unlock_polling {
                 // Defer macro write until unlock flow fully finishes.
             } else if self.is_vial_locked() {
@@ -1260,7 +1264,6 @@ impl eframe::App for EntropyApp {
                                     .into()
                                 }
                                 Err(e) => {
-                                    self.keycode_picker.macros_dirty = false;
                                     self.status_msg = crate::i18n::tr_catalog_format(
                                         self.app_settings.language,
                                         "status_messages.macro_write_error",
@@ -1270,7 +1273,6 @@ impl eframe::App for EntropyApp {
                             }
                         }
                         Err(e) => {
-                            self.keycode_picker.macros_dirty = false;
                             self.status_msg = crate::i18n::tr_catalog_format(
                                 self.app_settings.language,
                                 "status_messages.macro_write_error",
@@ -1279,7 +1281,6 @@ impl eframe::App for EntropyApp {
                         }
                     }
                 } else {
-                    self.keycode_picker.macros_dirty = false;
                     self.status_msg = crate::i18n::tr_catalog_format(
                         self.app_settings.language,
                         "status_messages.macro_write_error",
@@ -1289,20 +1290,22 @@ impl eframe::App for EntropyApp {
             }
         }
 
-        if hid_lifecycle_writes_available
-            && self.combo_term_dirty
+        if self.combo_term_dirty
             && !self.keycode_picker.open
             && !active_hid_is_bluetooth
+            && !hid_write_task_active
         {
-            let mut term_save_ok = true;
+            let mut term_save_ok = false;
             if let (Some(hid), Some(value)) = (&self.hid_device, self.combo_term) {
-                if let Err(e) = hid.set_qmk_setting_u16(2, value) {
-                    self.status_msg = crate::i18n::tr_catalog_format(
-                        self.app_settings.language,
-                        "status_messages.combo_timeout_write_error",
-                        &[("error", &e.to_string())],
-                    );
-                    term_save_ok = false;
+                match hid.set_qmk_setting_u16(2, value) {
+                    Ok(()) => term_save_ok = true,
+                    Err(e) => {
+                        self.status_msg = crate::i18n::tr_catalog_format(
+                            self.app_settings.language,
+                            "status_messages.combo_timeout_write_error",
+                            &[("error", &e.to_string())],
+                        );
+                    }
                 }
             }
             if term_save_ok {
@@ -1334,18 +1337,17 @@ impl eframe::App for EntropyApp {
             self.combo_colors_dirty = false;
         }
 
-        if hid_lifecycle_writes_available {
+        if !hid_write_task_active {
             self.flush_due_tap_hold_numeric_writes();
         }
 
         // Write tap dance to device if changed
-        if hid_lifecycle_writes_available
-            && should_write_dynamic_entries(
-                self.keycode_picker.tap_dance_dirty,
-                self.keycode_picker.open,
-                active_hid_is_bluetooth,
-            )
-        {
+        if should_write_dynamic_entries(
+            self.keycode_picker.tap_dance_dirty,
+            self.keycode_picker.open,
+            active_hid_is_bluetooth,
+            hid_write_task_active,
+        ) {
             let entries_to_write = tap_dance_entries_to_write(
                 &self.keycode_picker.tap_dance_entries,
                 &self.keycode_picker.tap_dance_synced_entries,

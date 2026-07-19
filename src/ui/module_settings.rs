@@ -173,7 +173,7 @@ impl EntropyApp {
                     tooltip.as_deref(),
                     switch_width + status_width,
                     |ui| {
-                        self.draw_settings_write_status(ui, field.qsid, metrics);
+                        self.draw_settings_write_status(ui, field.qsid, metrics, suppress_tooltips);
                         let resp = crate::ui_style::settings_switch_sized_stable(
                             ui,
                             ("module_settings", group_idx, field.qsid, field.bit),
@@ -202,7 +202,7 @@ impl EntropyApp {
                     tooltip.as_deref(),
                     field_width + status_width,
                     |ui| {
-                        self.draw_settings_write_status(ui, field.qsid, metrics);
+                        self.draw_settings_write_status(ui, field.qsid, metrics, suppress_tooltips);
                         let edit_id = egui::Id::new(("module_setting_edit", group_idx, field.qsid));
                         let current = raw_value.clamp(field.min, field.max);
                         let mut text = ui.ctx().data_mut(|d| {
@@ -259,7 +259,7 @@ impl EntropyApp {
                     tooltip.as_deref(),
                     dropdown_width + status_width,
                     |ui| {
-                        self.draw_settings_write_status(ui, field.qsid, metrics);
+                        self.draw_settings_write_status(ui, field.qsid, metrics, suppress_tooltips);
                         let dropdown_id = ui.make_persistent_id((
                             "module_setting_dropdown",
                             group_idx,

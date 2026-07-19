@@ -64,10 +64,12 @@ impl EntropyApp {
         }
     }
 
-    fn write_all_key_overrides(&mut self) {
+    fn write_all_key_overrides(&mut self) -> bool {
+        let mut saved = true;
         for idx in 0..self.key_override_entries.len() {
-            self.write_key_override(idx);
+            saved &= self.write_key_override(idx);
         }
+        saved
     }
 
     fn key_override_entry_exists(entry: &KeyOverrideEntry) -> bool {
@@ -89,14 +91,19 @@ impl EntropyApp {
         entry.options.enabled = Self::key_override_entry_exists(entry);
     }
 
-    pub(super) fn write_key_override(&mut self, idx: usize) {
+    pub(super) fn write_key_override(&mut self, idx: usize) -> bool {
         let Some(entry) = self.key_override_entries.get_mut(idx) else {
-            return;
+            return true;
         };
         Self::normalize_key_override_entry(entry);
         let entry = entry.clone();
+        if self.hid_write_task_active() {
+            self.key_override_dirty = true;
+            return false;
+        }
         let Some(hid) = &self.hid_device else {
-            return;
+            self.key_override_dirty = true;
+            return false;
         };
         if let Err(e) = hid.set_key_override(
             idx as u8,
@@ -110,6 +117,19 @@ impl EntropyApp {
         ) {
             self.status_msg = format!("Failed to save Key Override {}: {}", idx + 1, e);
             log::warn!("set_key_override({idx}) failed: {e}");
+            self.key_override_dirty = true;
+            false
+        } else {
+            true
+        }
+    }
+
+    pub(super) fn flush_pending_key_override_writes(&mut self) {
+        if self.key_override_dirty
+            && !self.hid_write_task_active()
+            && self.write_all_key_overrides()
+        {
+            self.key_override_dirty = false;
         }
     }
 
