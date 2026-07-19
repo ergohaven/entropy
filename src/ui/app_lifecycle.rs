@@ -407,10 +407,10 @@ mod tests {
     use super::super::settings_write_queue::SettingsWriteStatus;
     use super::*;
     use crate::app::app_state::{
-        DeviceAboutInfo, ModuleSettingField, ModuleSettingKind, ModuleSettingRefreshEntry,
-        ModuleSettingRefreshOutcome, ModuleSettingsDeviceIdentity, ModuleSettingsGroup,
-        ModuleSettingsGroupKind, ModuleSettingsRefreshReport, ModuleSettingsRefreshTask,
-        ModuleSettingsRefreshTaskResult,
+        DeferredHidSettings, DeviceAboutInfo, ModuleSettingField, ModuleSettingKind,
+        ModuleSettingRefreshEntry, ModuleSettingRefreshOutcome, ModuleSettingsDeviceIdentity,
+        ModuleSettingsGroup, ModuleSettingsGroupKind, ModuleSettingsRefreshReport,
+        ModuleSettingsRefreshTask, ModuleSettingsRefreshTaskResult,
     };
     use crate::keyboard::{KeyboardLayout, LayoutOption, PhysicalKey};
 
@@ -840,6 +840,43 @@ mod tests {
                 "modules_settings.refresh_disconnected"
             )
         );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn deferred_settings_do_not_block_exit_with_healthy_hid() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid_device, _) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        app.deferred_hid_settings = Some(DeferredHidSettings {
+            identity: ModuleSettingsDeviceIdentity {
+                path: "usb:previous-device".to_owned(),
+                keyboard_id: 1,
+            },
+            macro_texts: vec![],
+            macros_dirty: false,
+            combo_entries: vec![],
+            combo_term: None,
+            combo_term_dirty: false,
+            tap_dance_entries: vec![],
+            pending_tap_hold_numeric_writes: Default::default(),
+            tap_hold_numeric_write_due: None,
+        });
+        app.exit_after_hid_write = true;
+
+        let close_output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+            app.finish_deferred_exit_after_hid_write(&ctx);
+        });
+
+        assert!(!app.exit_after_hid_write);
+        assert!(close_output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .expect("root viewport output exists")
+            .commands
+            .contains(&egui::ViewportCommand::Close));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
