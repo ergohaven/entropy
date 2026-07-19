@@ -182,11 +182,6 @@ fn module_settings_refresh_identity_matches(
 
 impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn hid_write_task_active(&self) -> bool {
-        self.layer_write_task.is_some() || self.module_settings_refresh_task.is_some()
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
     fn current_module_settings_device_identity(&self) -> Option<ModuleSettingsDeviceIdentity> {
         self.device_about_info
             .as_ref()

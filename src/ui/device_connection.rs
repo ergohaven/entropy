@@ -45,13 +45,28 @@ impl EntropyApp {
             return;
         };
         let macros_dirty = self.keycode_picker.macros_dirty;
-        let combo_dirty = self.combo_dirty;
         let combo_term_dirty = self.combo_term_dirty;
-        let tap_dance_dirty = self.keycode_picker.tap_dance_dirty;
+        let combo_entries = self
+            .combo_entries
+            .iter()
+            .enumerate()
+            .filter(|(index, entry)| self.combo_synced_entries.get(*index) != Some(*entry))
+            .map(|(index, entry)| (index, entry.clone()))
+            .collect::<Vec<_>>();
+        let tap_dance_entries = self
+            .keycode_picker
+            .tap_dance_entries
+            .iter()
+            .enumerate()
+            .filter(|(index, entry)| {
+                self.keycode_picker.tap_dance_synced_entries.get(*index) != Some(*entry)
+            })
+            .map(|(index, entry)| (index, entry.clone()))
+            .collect::<Vec<_>>();
         if !macros_dirty
-            && !combo_dirty
+            && combo_entries.is_empty()
             && !combo_term_dirty
-            && !tap_dance_dirty
+            && tap_dance_entries.is_empty()
             && self.pending_tap_hold_numeric_writes.is_empty()
         {
             return;
@@ -64,13 +79,10 @@ impl EntropyApp {
             },
             macro_texts: self.keycode_picker.macro_texts.clone(),
             macros_dirty,
-            combo_entries: self.combo_entries.clone(),
-            combo_dirty,
+            combo_entries,
             combo_term: self.combo_term,
             combo_term_dirty,
-            tap_dance_entries: self.keycode_picker.tap_dance_entries.clone(),
-            tap_dance_synced_entries: self.keycode_picker.tap_dance_synced_entries.clone(),
-            tap_dance_dirty,
+            tap_dance_entries,
             pending_tap_hold_numeric_writes: self.pending_tap_hold_numeric_writes.clone(),
             tap_hold_numeric_write_due: self.tap_hold_numeric_write_due,
         });
@@ -78,7 +90,7 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn restore_deferred_hid_settings_after_connect(&mut self, about: &DeviceAboutInfo) {
-        let Some(deferred) = self.deferred_hid_settings.take() else {
+        let Some(deferred) = self.deferred_hid_settings.as_ref() else {
             return;
         };
         if deferred.identity.path != about.path
@@ -86,6 +98,11 @@ impl EntropyApp {
         {
             return;
         }
+
+        let deferred = self
+            .deferred_hid_settings
+            .take()
+            .expect("deferred settings checked above");
 
         if deferred.macros_dirty {
             self.keycode_picker.macro_texts = deferred.macro_texts;
@@ -97,17 +114,28 @@ impl EntropyApp {
                 .collect();
             self.keycode_picker.macros_dirty = true;
         }
-        if deferred.combo_dirty {
-            self.combo_entries = deferred.combo_entries;
+        if !deferred.combo_entries.is_empty() {
+            for (index, entry) in deferred.combo_entries {
+                if self.combo_entries.len() <= index {
+                    self.combo_entries.resize(index + 1, ComboEntry::default());
+                }
+                self.combo_entries[index] = entry;
+            }
             self.combo_dirty = true;
         }
         if deferred.combo_term_dirty {
             self.combo_term = deferred.combo_term;
             self.combo_term_dirty = true;
         }
-        if deferred.tap_dance_dirty {
-            self.keycode_picker.tap_dance_entries = deferred.tap_dance_entries;
-            self.keycode_picker.tap_dance_synced_entries = deferred.tap_dance_synced_entries;
+        if !deferred.tap_dance_entries.is_empty() {
+            for (index, entry) in deferred.tap_dance_entries {
+                if self.keycode_picker.tap_dance_entries.len() <= index {
+                    self.keycode_picker
+                        .tap_dance_entries
+                        .resize(index + 1, Default::default());
+                }
+                self.keycode_picker.tap_dance_entries[index] = entry;
+            }
             self.keycode_picker.tap_dance_dirty = true;
         }
         if !deferred.pending_tap_hold_numeric_writes.is_empty() {
@@ -316,32 +344,65 @@ mod tests {
         app.device_about_info = Some(about.clone());
         app.keycode_picker.macro_texts = vec![vec![1, 2, 3]];
         app.keycode_picker.macros_dirty = true;
-        app.combo_entries = vec![ComboEntry {
+        let dirty_combo = ComboEntry {
             keys: [0x0004, 0x0005, 0, 0],
             output: 0x0006,
-        }];
+        };
+        let clean_combo = ComboEntry {
+            keys: [0x0007, 0x0008, 0, 0],
+            output: 0x0009,
+        };
+        app.combo_entries = vec![dirty_combo.clone(), clean_combo.clone()];
+        app.combo_synced_entries = vec![ComboEntry::default(), clean_combo];
         app.combo_dirty = true;
         app.combo_term = Some(175);
         app.combo_term_dirty = true;
-        app.keycode_picker.tap_dance_entries = vec![crate::keycode_picker::TapDanceEntry {
+        let dirty_tap_dance = crate::keycode_picker::TapDanceEntry {
             on_tap: 0x0004,
             ..Default::default()
-        }];
-        app.keycode_picker.tap_dance_synced_entries = vec![Default::default()];
+        };
+        let clean_tap_dance = crate::keycode_picker::TapDanceEntry {
+            on_tap: 0x0007,
+            ..Default::default()
+        };
+        app.keycode_picker.tap_dance_entries =
+            vec![dirty_tap_dance.clone(), clean_tap_dance.clone()];
+        app.keycode_picker.tap_dance_synced_entries = vec![Default::default(), clean_tap_dance];
         app.keycode_picker.tap_dance_dirty = true;
         app.pending_tap_hold_numeric_writes.insert(7, 175);
 
         app.preserve_deferred_hid_settings_for_disconnect();
         app.clear_connected_keyboard_state("disconnected");
 
+        let other_device = DeviceAboutInfo {
+            path: "bluetooth:phenom".to_owned(),
+            keyboard_id: 42,
+            ..Default::default()
+        };
+        app.restore_deferred_hid_settings_after_connect(&other_device);
+        assert!(app.deferred_hid_settings.is_some());
+
         app.keycode_picker.macro_texts = vec![Vec::new()];
         app.keycode_picker.macros_dirty = false;
-        app.combo_entries = vec![ComboEntry::default()];
+        app.combo_entries = vec![
+            ComboEntry::default(),
+            ComboEntry {
+                keys: [0x000a, 0x000b, 0, 0],
+                output: 0x000c,
+            },
+        ];
+        app.combo_synced_entries = app.combo_entries.clone();
         app.combo_dirty = false;
         app.combo_term = Some(50);
         app.combo_term_dirty = false;
-        app.keycode_picker.tap_dance_entries = vec![Default::default()];
-        app.keycode_picker.tap_dance_synced_entries = vec![Default::default()];
+        app.keycode_picker.tap_dance_entries = vec![
+            Default::default(),
+            crate::keycode_picker::TapDanceEntry {
+                on_tap: 0x000a,
+                ..Default::default()
+            },
+        ];
+        app.keycode_picker.tap_dance_synced_entries = app.keycode_picker.tap_dance_entries.clone();
         app.keycode_picker.tap_dance_dirty = false;
 
         app.restore_deferred_hid_settings_after_connect(&about);
@@ -349,10 +410,12 @@ mod tests {
         assert_eq!(app.keycode_picker.macro_texts, vec![vec![1, 2, 3]]);
         assert!(app.keycode_picker.macros_dirty);
         assert_eq!(app.combo_entries[0].output, 0x0006);
+        assert_eq!(app.combo_entries[1].output, 0x000c);
         assert!(app.combo_dirty);
         assert_eq!(app.combo_term, Some(175));
         assert!(app.combo_term_dirty);
         assert_eq!(app.keycode_picker.tap_dance_entries[0].on_tap, 0x0004);
+        assert_eq!(app.keycode_picker.tap_dance_entries[1].on_tap, 0x000a);
         assert!(app.keycode_picker.tap_dance_dirty);
         assert_eq!(app.pending_tap_hold_numeric_writes.get(&7), Some(&175));
     }
