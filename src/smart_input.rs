@@ -26,6 +26,9 @@ static RECENT_FOREGROUND_APPS: OnceLock<Mutex<Vec<TextExpanderAppCandidate>>> = 
 static HOST_TEXT_TRANSPORT_DECODER: OnceLock<
     Mutex<crate::host_text_transport::HostTextTransportDecoder>,
 > = OnceLock::new();
+#[cfg(target_os = "linux")]
+static LINUX_X11_BACKEND_READY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 fn text_expander_config() -> &'static RwLock<TextExpansionConfig> {
     TEXT_EXPANDER_CONFIG.get_or_init(|| RwLock::new(TextExpansionConfig::default()))
@@ -244,10 +247,8 @@ pub fn text_expander_runs_outside_entropy_process() -> bool {
 /// method can provide that decoder.
 #[cfg(target_os = "linux")]
 pub fn emoji_assignment_backend_ready() -> bool {
-    // DISPLAY, installed engine bytes, and an installer marker prove setup,
-    // not that a decoder owns the current session. Keep firmware assignment
-    // disabled until the host protocol has an active runtime handshake.
-    false
+    matches!(linux_session_kind(), LinuxSessionKind::X11)
+        && LINUX_X11_BACKEND_READY.load(std::sync::atomic::Ordering::Acquire)
 }
 
 #[cfg(target_os = "macos")]
@@ -255,7 +256,12 @@ pub fn emoji_assignment_backend_ready() -> bool {
     macos_universal_symbols_status().event_tap_active
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(target_os = "windows")]
+pub fn emoji_assignment_backend_ready() -> bool {
+    smart_input_windows::emoji_assignment_backend_ready()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 pub fn emoji_assignment_backend_ready() -> bool {
     true
 }
@@ -1281,6 +1287,11 @@ mod linux_x11 {
                 }
             }
             (xlib.XFlush)(display);
+            if keycodes.is_empty() {
+                log::warn!("Smart Input: X11 does not expose F13-F20 transport keys");
+                return;
+            }
+            LINUX_X11_BACKEND_READY.store(true, std::sync::atomic::Ordering::Release);
 
             loop {
                 let mut event: x11_dl::xlib::XEvent = std::mem::zeroed();
@@ -1463,8 +1474,9 @@ mod tests {
 
     #[test]
     fn host_text_transport_reserves_unmodified_f20_from_static_symbols() {
-        assert!(smart_symbol_for_keycode(crate::host_text_transport::START_TRIGGER_KEYCODE)
-            .is_none());
+        assert!(
+            smart_symbol_for_keycode(crate::host_text_transport::START_TRIGGER_KEYCODE).is_none()
+        );
         let mut decoder = crate::host_text_transport::HostTextTransportDecoder::default();
         assert_eq!(
             decoder.handle(

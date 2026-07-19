@@ -126,6 +126,15 @@ pub(super) fn foreground_app_blacklisted(app_blacklist: &[String]) -> bool {
 }
 
 #[cfg(target_os = "windows")]
+static EMOJI_ASSIGNMENT_BACKEND_READY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_os = "windows")]
+pub(super) fn emoji_assignment_backend_ready() -> bool {
+    EMOJI_ASSIGNMENT_BACKEND_READY.load(std::sync::atomic::Ordering::Acquire)
+}
+
+#[cfg(target_os = "windows")]
 pub(super) fn start() {
     use std::sync::Once;
     static START: Once = Once::new();
@@ -234,6 +243,7 @@ unsafe fn run_windows_keyboard_hook_loop() {
         log::warn!("Smart Input: failed to install keyboard hook");
         return;
     }
+    EMOJI_ASSIGNMENT_BACKEND_READY.store(true, std::sync::atomic::Ordering::Release);
 
     remember_current_foreground_app();
     let foreground_hook = SetWinEventHook(
@@ -259,6 +269,7 @@ unsafe fn run_windows_keyboard_hook_loop() {
         UnhookWinEvent(foreground_hook);
     }
     UnhookWindowsHookEx(hook);
+    EMOJI_ASSIGNMENT_BACKEND_READY.store(false, std::sync::atomic::Ordering::Release);
 }
 
 #[cfg(target_os = "windows")]

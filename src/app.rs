@@ -76,16 +76,16 @@ mod device_connection;
 mod device_scan;
 #[path = "ui/device_settings_helpers.rs"]
 mod device_settings_helpers;
+#[path = "ui/emoji_assignment.rs"]
+mod emoji_assignment;
 #[path = "ui/encoder_visibility_settings.rs"]
 mod encoder_visibility_settings_ui;
 #[path = "ui/grave_escape_settings.rs"]
 mod grave_escape_settings_ui;
 #[path = "ui/key_assignment.rs"]
 mod key_assignment;
-#[path = "ui/emoji_assignment.rs"]
-mod emoji_assignment;
 #[cfg(not(target_arch = "wasm32"))]
-use emoji_assignment::{EmojiAssignmentTarget, EmojiAssignmentTask};
+use emoji_assignment::{EmojiAssignmentReclaimTask, EmojiAssignmentTarget, EmojiAssignmentTask};
 #[path = "ui/layer_operations.rs"]
 mod layer_operations;
 #[cfg(not(target_arch = "wasm32"))]

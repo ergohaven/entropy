@@ -2916,6 +2916,10 @@ pub struct EntropyApp {
     /// Serialized macro-buffer then target-key write for emoji assignment.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) emoji_assignment_task: Option<EmojiAssignmentTask>,
+    /// A cancelled emoji worker still owns its HID handle. Its result is drained
+    /// solely to reclaim that handle; it can never restore the invalidated UI.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) emoji_assignment_reclaim_task: Option<EmojiAssignmentReclaimTask>,
     /// Incremented whenever the active keyboard state is cleared so worker
     /// completions cannot restore HID or mutate a replacement connection.
     #[cfg(not(target_arch = "wasm32"))]

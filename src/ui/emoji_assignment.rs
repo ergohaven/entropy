@@ -28,6 +28,18 @@ pub(super) struct EmojiAssignmentTask {
     started_at: std::time::Instant,
 }
 
+pub(super) struct EmojiAssignmentReclaimTask {
+    receiver: std::sync::mpsc::Receiver<EmojiAssignmentResult>,
+}
+
+impl EmojiAssignmentTask {
+    pub(super) fn into_reclaim(self) -> EmojiAssignmentReclaimTask {
+        EmojiAssignmentReclaimTask {
+            receiver: self.receiver,
+        }
+    }
+}
+
 struct EmojiAssignmentResult {
     hid_device: Option<crate::hid::HidDevice>,
     result: Result<(), String>,
@@ -67,8 +79,13 @@ fn write_target(
             ..
         } => {
             hid_device.set_encoder(*layer as u8, *encoder_idx, *direction, keycode)?;
-            let (clockwise, counter_clockwise) = hid_device.get_encoder(*layer as u8, *encoder_idx)?;
-            let actual = if *direction == 0 { clockwise } else { counter_clockwise };
+            let (clockwise, counter_clockwise) =
+                hid_device.get_encoder(*layer as u8, *encoder_idx)?;
+            let actual = if *direction == 0 {
+                clockwise
+            } else {
+                counter_clockwise
+            };
             if actual != keycode {
                 anyhow::bail!("encoder readback did not match requested assignment");
             }
@@ -197,6 +214,7 @@ impl EntropyApp {
     }
 
     pub(super) fn poll_emoji_assignment(&mut self, ctx: &egui::Context) {
+        self.poll_abandoned_emoji_assignment(ctx);
         if self
             .emoji_assignment_task
             .as_ref()
@@ -206,6 +224,8 @@ impl EntropyApp {
                 .emoji_assignment_task
                 .take()
                 .expect("emoji task checked above");
+            let assignment = task.assignment.clone();
+            self.emoji_assignment_reclaim_task = Some(task.into_reclaim());
             // The worker still owns the HID handle. Invalidate this connection
             // before allowing another scan so a late write cannot leave a live
             // layout paired with no handle.
@@ -214,7 +234,7 @@ impl EntropyApp {
                 "key_picker.emoji_worker_stopped",
             ));
             self.restore_emoji_assignment(
-                task,
+                assignment,
                 crate::keycode_picker::EmojiAssignmentError::WorkerStopped,
                 None,
             );
@@ -239,23 +259,22 @@ impl EntropyApp {
                         match result.result {
                             Ok(()) => self.finish_emoji_assignment(task),
                             Err(error) => self.restore_emoji_assignment(
-                                task,
+                                task.assignment,
                                 crate::keycode_picker::EmojiAssignmentError::SaveFailed,
                                 Some(error),
                             ),
                         }
                     }
                     None => {
-                        let error = result
-                            .result
-                            .err()
-                            .unwrap_or_else(|| "emoji assignment worker returned no HID handle".into());
+                        let error = result.result.err().unwrap_or_else(|| {
+                            "emoji assignment worker returned no HID handle".into()
+                        });
                         self.handoff_hid_worker_disconnect(crate::i18n::tr_catalog(
                             self.app_settings.language,
                             "key_picker.emoji_save_failed",
                         ));
                         self.restore_emoji_assignment(
-                            task,
+                            task.assignment,
                             crate::keycode_picker::EmojiAssignmentError::SaveFailed,
                             Some(error),
                         );
@@ -275,7 +294,7 @@ impl EntropyApp {
                     "key_picker.emoji_worker_stopped",
                 ));
                 self.restore_emoji_assignment(
-                    task,
+                    task.assignment,
                     crate::keycode_picker::EmojiAssignmentError::WorkerStopped,
                     None,
                 );
@@ -288,11 +307,30 @@ impl EntropyApp {
             return;
         };
         self.hid_connection_generation = self.hid_connection_generation.wrapping_add(1);
+        let assignment = task.assignment.clone();
+        self.emoji_assignment_reclaim_task = Some(task.into_reclaim());
         self.restore_emoji_assignment(
-            task,
+            assignment,
             crate::keycode_picker::EmojiAssignmentError::WorkerStopped,
             None,
         );
+    }
+
+    fn poll_abandoned_emoji_assignment(&mut self, ctx: &egui::Context) {
+        let result = match self.emoji_assignment_reclaim_task.as_ref() {
+            Some(task) => task.receiver.try_recv(),
+            None => return,
+        };
+        match result {
+            Ok(_) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                // The session was invalidated before this worker completed. Drop
+                // its returned HID handle without restoring UI or firmware state.
+                self.emoji_assignment_reclaim_task = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            }
+        }
     }
 
     fn finish_emoji_assignment(&mut self, task: EmojiAssignmentTask) {
@@ -349,11 +387,11 @@ impl EntropyApp {
 
     fn restore_emoji_assignment(
         &mut self,
-        task: EmojiAssignmentTask,
+        assignment: crate::keycode_picker::EmojiAssignment,
         reason: crate::keycode_picker::EmojiAssignmentError,
         error: Option<String>,
     ) {
-        self.keycode_picker.emoji_assignment = Some(task.assignment);
+        self.keycode_picker.emoji_assignment = Some(assignment);
         self.keycode_picker.emoji_assignment_error = Some(reason);
         self.keycode_picker.result = None;
         self.keycode_picker.open = true;
@@ -368,9 +406,7 @@ impl EntropyApp {
     }
 }
 
-fn emoji_assignment_error_key(
-    error: crate::keycode_picker::EmojiAssignmentError,
-) -> &'static str {
+fn emoji_assignment_error_key(error: crate::keycode_picker::EmojiAssignmentError) -> &'static str {
     use crate::keycode_picker::EmojiAssignmentError;
 
     match error {
@@ -436,7 +472,11 @@ mod tests {
             .expect_err("macro write must fail");
 
         assert!(error.to_string().contains("macro-buffer write failed"));
-        assert_eq!(request_count(&recorder, 0x0F), 2, "failed write plus rollback");
+        assert_eq!(
+            request_count(&recorder, 0x0F),
+            2,
+            "failed write plus rollback"
+        );
         assert_eq!(request_count(&recorder, 0x05), 1, "rollback target write");
         assert_eq!(hid_device.test_macro_entries(16), previous);
         assert_eq!(hid_device.test_keycode(0, 0, 0), 0);
@@ -446,8 +486,11 @@ mod tests {
     fn partial_macro_write_failure_rolls_back_full_buffer() {
         // A 56-byte buffer forces two macro-write requests. Disconnect on the
         // second chunk and verify rollback rewrites both old chunks.
-        let (hid_device, recorder) = crate::hid::HidDevice::
-            test_device_with_macro_buffer_size_and_disconnect_after_requests(56, Some(2));
+        let (hid_device, recorder) =
+            crate::hid::HidDevice::test_device_with_macro_buffer_size_and_disconnect_after_requests(
+                56,
+                Some(2),
+            );
         let mut previous = vec![Vec::new(); 16];
         previous[0] = vec![0x01; 40];
         let mut desired = previous.clone();
@@ -478,8 +521,16 @@ mod tests {
             .expect_err("target write must fail");
 
         assert!(error.to_string().contains("target write failed"));
-        assert_eq!(request_count(&recorder, 0x0F), 2, "save then rollback macro buffer");
-        assert_eq!(request_count(&recorder, 0x05), 2, "failed target write then rollback");
+        assert_eq!(
+            request_count(&recorder, 0x0F),
+            2,
+            "save then rollback macro buffer"
+        );
+        assert_eq!(
+            request_count(&recorder, 0x05),
+            2,
+            "failed target write then rollback"
+        );
         assert_eq!(hid_device.test_macro_entries(16), previous);
         assert_eq!(hid_device.test_keycode(0, 0, 0), 0);
     }
@@ -493,7 +544,9 @@ mod tests {
         let error = write_emoji_assignment(&hid_device, &target(), &previous, &desired, 0x7700)
             .expect_err("macro readback mismatch must fail");
 
-        assert!(error.to_string().contains("macro buffer readback did not match"));
+        assert!(error
+            .to_string()
+            .contains("macro buffer readback did not match"));
         assert_eq!(hid_device.test_macro_entries(16), previous);
         assert_eq!(hid_device.test_keycode(0, 0, 0), 0);
     }
@@ -510,6 +563,36 @@ mod tests {
         assert!(error.to_string().contains("keycode writeback mismatch"));
         assert_eq!(hid_device.test_macro_entries(16), previous);
         assert_eq!(hid_device.test_keycode(0, 0, 0), 0);
+    }
+
+    #[test]
+    fn persistent_disconnect_reports_rollback_failure_without_claiming_restore() {
+        let (hid_device, _recorder) =
+            crate::hid::HidDevice::test_device_with_persistent_disconnect_after_requests(2);
+        let mut previous = vec![Vec::new(); 16];
+        previous[0] = vec![0x01; 40];
+        let mut desired = previous.clone();
+        desired[0] = vec![0x02; 40];
+
+        let error = write_emoji_assignment(&hid_device, &target(), &previous, &desired, 0x7700)
+            .expect_err("persistent disconnect must fail the transaction");
+
+        assert!(error.to_string().contains("rollback failed"));
+        assert_ne!(hid_device.test_macro_entries(16), previous);
+    }
+
+    #[test]
+    fn successful_assignment_writes_each_transaction_step_once() {
+        let (hid_device, recorder) = crate::hid::HidDevice::test_device();
+        let (previous, desired) = macros_with_emoji();
+
+        write_emoji_assignment(&hid_device, &target(), &previous, &desired, 0x7700)
+            .expect("transaction must succeed");
+
+        assert_eq!(request_count(&recorder, 0x0F), 1);
+        assert_eq!(request_count(&recorder, 0x0E), 1);
+        assert_eq!(request_count(&recorder, 0x05), 1);
+        assert_eq!(request_count(&recorder, 0x04), 1);
     }
 
     #[test]
@@ -558,7 +641,8 @@ mod tests {
 
         assert!(app.emoji_assignment_task.is_none());
         assert_eq!(app.hid_connection_generation, generation.wrapping_add(1));
-        assert!(!app.hid_write_task_active());
+        assert!(app.emoji_assignment_reclaim_task.is_some());
+        assert!(app.hid_write_task_active());
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -596,16 +680,33 @@ mod tests {
         app.poll_emoji_assignment(&ctx);
 
         assert!(app.emoji_assignment_task.is_none());
-        assert!(!app.hid_write_task_active());
+        assert!(app.emoji_assignment_reclaim_task.is_some());
+        assert!(app.hid_write_task_active());
         assert_eq!(app.hid_connection_generation, generation.wrapping_add(1));
         assert!(app.current_device_name.is_empty());
         assert!(app.hid_device.is_none());
+        app.device_manager.replace_devices(vec![crate::device::Device {
+            name: "Reconnect target".to_owned(),
+            vendor_id: 0,
+            product_id: 0,
+            manufacturer: String::new(),
+            serial_number: String::new(),
+            bus_type: String::new(),
+            path: "test:reconnect".to_owned(),
+            firmware: crate::firmware::FirmwareProtocol::Vial,
+        }]);
+        app.start_connect(0);
+        assert!(matches!(app.connect_state, ConnectState::Idle));
         assert!(sender
             .send(EmojiAssignmentResult {
                 hid_device: None,
                 result: Ok(()),
             })
-            .is_err());
+            .is_ok());
+        app.poll_emoji_assignment(&ctx);
+        assert!(!app.hid_write_task_active());
+        app.start_connect(0);
+        assert!(matches!(app.connect_state, ConnectState::Loading { .. }));
         assert_eq!(
             app.keycode_picker.emoji_assignment_error,
             Some(crate::keycode_picker::EmojiAssignmentError::WorkerStopped)
@@ -627,7 +728,8 @@ mod tests {
 
         assert!(!app.defer_exit_until_hid_write_returns(&ctx));
         assert!(app.emoji_assignment_task.is_none());
-        assert!(!app.hid_write_task_active());
+        assert!(app.emoji_assignment_reclaim_task.is_some());
+        assert!(app.hid_write_task_active());
         assert!(!app.exit_after_hid_write);
     }
 
@@ -651,8 +753,10 @@ mod tests {
                 hid_device: None,
                 result: Ok(()),
             })
-            .is_err());
+            .is_ok());
+        app.poll_emoji_assignment(&ctx);
         assert!(app.emoji_assignment_task.is_none());
+        assert!(app.emoji_assignment_reclaim_task.is_none());
         assert_eq!(app.keycode_picker.macro_texts[0], Vec::<u8>::new());
     }
 

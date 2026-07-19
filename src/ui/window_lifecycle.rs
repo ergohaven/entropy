@@ -27,6 +27,14 @@ impl EntropyApp {
         // emoji assignment; any late result is generation-invalidated.
         self.abandon_emoji_assignment();
 
+        // Process exit cannot reconnect or schedule more HID I/O. Let it
+        // proceed rather than wait indefinitely for a reclaim-only worker.
+        if self.emoji_assignment_reclaim_task.is_some()
+            && !self.hid_write_task_active_except_emoji_reclaim()
+        {
+            return false;
+        }
+
         if !self.hid_write_task_active() {
             return false;
         }

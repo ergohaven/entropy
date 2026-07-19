@@ -252,7 +252,9 @@ impl EntropyApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.hid_connection_generation = self.hid_connection_generation.wrapping_add(1);
-            self.emoji_assignment_task = None;
+            if let Some(task) = self.emoji_assignment_task.take() {
+                self.emoji_assignment_reclaim_task = Some(task.into_reclaim());
+            }
         }
         self.layout = None;
         self.selected_key = None;

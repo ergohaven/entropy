@@ -160,6 +160,7 @@ impl TestHidRecorder {
 #[derive(Clone, Copy)]
 pub(crate) enum TestHidFault {
     Disconnect,
+    PersistentDisconnect,
     WorkerPanic,
 }
 
@@ -304,10 +305,7 @@ impl HidDevice {
     pub(crate) fn test_device_with_fault_after_requests(
         fault_after_requests: Option<(usize, TestHidFault)>,
     ) -> (Self, TestHidRecorder) {
-        Self::test_device_with_macro_buffer_size_and_fault_after_requests(
-            28,
-            fault_after_requests,
-        )
+        Self::test_device_with_macro_buffer_size_and_fault_after_requests(28, fault_after_requests)
     }
 
     #[cfg(test)]
@@ -317,6 +315,16 @@ impl HidDevice {
         Self::test_device_with_fault_after_requests(
             disconnect_after_requests.map(|count| (count, TestHidFault::Disconnect)),
         )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_device_with_persistent_disconnect_after_requests(
+        disconnect_after_requests: usize,
+    ) -> (Self, TestHidRecorder) {
+        Self::test_device_with_fault_after_requests(Some((
+            disconnect_after_requests,
+            TestHidFault::PersistentDisconnect,
+        )))
     }
 
     #[cfg(test)]
@@ -599,7 +607,10 @@ impl HidDevice {
                         .lock()
                         .unwrap_or_else(|error| error.into_inner());
                     match pending.as_mut() {
-                        Some((remaining, _)) if *remaining == 0 => pending.take(),
+                        Some((remaining, fault)) if *remaining == 0 => match fault {
+                            TestHidFault::PersistentDisconnect => Some((0, *fault)),
+                            _ => pending.take(),
+                        },
                         Some((remaining, _)) => {
                             *remaining -= 1;
                             None
@@ -609,7 +620,9 @@ impl HidDevice {
                 };
                 if let Some((_, fault)) = fault {
                     match fault {
-                        TestHidFault::Disconnect => bail!("HID device disconnected"),
+                        TestHidFault::Disconnect | TestHidFault::PersistentDisconnect => {
+                            bail!("HID device disconnected")
+                        }
                         TestHidFault::WorkerPanic => panic!("test HID worker stopped"),
                     }
                 }
