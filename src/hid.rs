@@ -149,6 +149,13 @@ impl TestHidRecorder {
     }
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub(crate) enum TestHidFault {
+    Disconnect,
+    WorkerPanic,
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 enum HidBackend {
     Local {
@@ -163,6 +170,7 @@ enum HidBackend {
         recorder: TestHidRecorder,
         combo: std::sync::Mutex<([u16; 4], u16)>,
         qmk_settings: std::sync::Mutex<std::collections::BTreeMap<u16, u16>>,
+        fault_after_requests: std::sync::Mutex<Option<(usize, TestHidFault)>>,
     },
 }
 
@@ -276,6 +284,13 @@ fn device_info_matches(
 impl HidDevice {
     #[cfg(test)]
     pub(crate) fn test_device() -> (Self, TestHidRecorder) {
+        Self::test_device_with_fault_after_requests(None)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_device_with_fault_after_requests(
+        fault_after_requests: Option<(usize, TestHidFault)>,
+    ) -> (Self, TestHidRecorder) {
         let recorder = TestHidRecorder {
             requests: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
@@ -284,6 +299,7 @@ impl HidDevice {
                 recorder: recorder.clone(),
                 combo: std::sync::Mutex::new(([0; 4], 0)),
                 qmk_settings: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+                fault_after_requests: std::sync::Mutex::new(fault_after_requests),
             },
         };
         (device, recorder)
@@ -468,6 +484,7 @@ impl HidDevice {
                 recorder,
                 combo,
                 qmk_settings,
+                fault_after_requests,
             } => {
                 let mut request = [0; MSG_LEN];
                 let len = data.len().min(MSG_LEN);
@@ -477,6 +494,26 @@ impl HidDevice {
                     .lock()
                     .unwrap_or_else(|error| error.into_inner())
                     .push(request);
+
+                let fault = {
+                    let mut pending = fault_after_requests
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    match pending.as_mut() {
+                        Some((remaining, _)) if *remaining == 0 => pending.take(),
+                        Some((remaining, _)) => {
+                            *remaining -= 1;
+                            None
+                        }
+                        None => None,
+                    }
+                };
+                if let Some((_, fault)) = fault {
+                    match fault {
+                        TestHidFault::Disconnect => bail!("HID device disconnected"),
+                        TestHidFault::WorkerPanic => panic!("test HID worker stopped"),
+                    }
+                }
 
                 let mut response = [0; MSG_LEN];
                 match (request[0], request[1], request[2]) {

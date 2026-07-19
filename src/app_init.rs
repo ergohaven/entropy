@@ -34,6 +34,8 @@ impl EntropyApp {
             layer_write_task: None,
             #[cfg(not(target_arch = "wasm32"))]
             combo_write_task: None,
+            settings_write_task: None,
+            settings_write_queue: SettingsWriteQueueState::default(),
             #[cfg(not(target_arch = "wasm32"))]
             qmk_hid_hosts: std::collections::HashMap::new(),
             firmware: FirmwareProtocol::Vial,
@@ -135,6 +137,7 @@ impl EntropyApp {
             combo_pick_target: None,
             key_override_entries: Vec::new(),
             key_override_names: vec![],
+            key_override_dirty: false,
             key_override_visible_count: 1,
             key_override_undo_stack: Vec::new(),
             text_expander_deleted_rules: Vec::new(),

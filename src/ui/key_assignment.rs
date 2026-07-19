@@ -76,6 +76,12 @@ impl EntropyApp {
         encoder_visual_idx: usize,
         kc_value: u16,
     ) {
+        if self.qmk_settings_write_busy() {
+            self.status_msg =
+                crate::i18n::tr_catalog(self.app_settings.language, "settings_write.busy")
+                    .to_owned();
+            return;
+        }
         let encoder = match self
             .layout
             .as_ref()
@@ -251,6 +257,12 @@ impl EntropyApp {
     }
 
     pub(super) fn assign_keycode(&mut self, layer: usize, ki: usize, kc_value: u16) {
+        if self.qmk_settings_write_busy() {
+            self.status_msg =
+                crate::i18n::tr_catalog(self.app_settings.language, "settings_write.busy")
+                    .to_owned();
+            return;
+        }
         let old_kc = self
             .layout
             .as_ref()

@@ -986,6 +986,7 @@ impl EntropyApp {
             Ok(result) => {
                 self.layer_write_task = None;
                 self.finish_layer_write(result);
+                self.continue_pending_settings_writes(ctx);
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 ctx.request_repaint_after(std::time::Duration::from_millis(16));
@@ -1013,6 +1014,7 @@ impl EntropyApp {
                         ("layer", &task.fallback.layer.to_string()),
                     ],
                 );
+                self.continue_pending_settings_writes(ctx);
             }
         }
     }
