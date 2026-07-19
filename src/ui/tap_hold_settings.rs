@@ -529,16 +529,7 @@ impl EntropyApp {
                             text = clamped.to_string();
                         }
                         if commit_tap_hold_edit {
-                            if let Some(new_value) =
-                                self.pending_tap_hold_numeric_writes.remove(&qsid)
-                            {
-                                if new_value != current {
-                                    self.write_tap_hold_numeric_setting(qsid, new_value);
-                                }
-                                if self.pending_tap_hold_numeric_writes.is_empty() {
-                                    self.tap_hold_numeric_write_due = None;
-                                }
-                            }
+                            self.commit_pending_tap_hold_numeric_write(qsid, current);
                         }
                         ui.ctx().data_mut(|d| d.insert_temp(edit_id, text));
                     },
@@ -667,6 +658,22 @@ impl EntropyApp {
         self.flush_pending_tap_hold_numeric_writes();
     }
 
+    fn commit_pending_tap_hold_numeric_write(&mut self, qsid: u16, current: u16) {
+        let Some(new_value) = self.pending_tap_hold_numeric_writes.remove(&qsid) else {
+            return;
+        };
+
+        if new_value != current && !self.write_tap_hold_numeric_setting(qsid, new_value) {
+            self.pending_tap_hold_numeric_writes.insert(qsid, new_value);
+        }
+        if self.pending_tap_hold_numeric_writes.is_empty() {
+            self.tap_hold_numeric_write_due = None;
+        } else {
+            self.tap_hold_numeric_write_due =
+                Some(std::time::Instant::now() + TAP_HOLD_WRITE_DEBOUNCE);
+        }
+    }
+
     pub(super) fn flush_pending_tap_hold_numeric_writes(&mut self) {
         self.tap_hold_numeric_write_due = None;
         let pending = std::mem::take(&mut self.pending_tap_hold_numeric_writes);
@@ -744,6 +751,20 @@ mod tests {
         app.pending_tap_hold_numeric_writes.insert(7, 175);
 
         app.flush_pending_tap_hold_numeric_writes();
+
+        assert_eq!(app.pending_tap_hold_numeric_writes.get(&7), Some(&175));
+        assert!(app.tap_hold_numeric_write_due.is_some());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn committed_numeric_write_is_requeued_when_hid_is_unavailable() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        app.pending_tap_hold_numeric_writes.insert(7, 175);
+
+        app.commit_pending_tap_hold_numeric_write(7, 150);
 
         assert_eq!(app.pending_tap_hold_numeric_writes.get(&7), Some(&175));
         assert!(app.tap_hold_numeric_write_due.is_some());

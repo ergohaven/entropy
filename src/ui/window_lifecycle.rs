@@ -38,14 +38,13 @@ impl EntropyApp {
             return;
         }
 
-        // Keep unsaved state and its failure status for a later retry, but do
-        // not block close forever when no transport remains to drain it.
+        // A refresh can lose its HID handle after close was deferred. Keep the
+        // pending settings for the matching reconnect instead of closing and
+        // abandoning the only path that can write them.
         if self.hid_device.is_none() {
             self.exit_after_hid_write = false;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
-
         self.flush_pending_tap_hold_numeric_writes();
         self.fallback_entropy_display_presets_before_exit();
 

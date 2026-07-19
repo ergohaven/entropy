@@ -686,6 +686,96 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn module_refresh_close_uses_real_lifecycle_to_drain_all_hid_writes() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid_device, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        app.device_about_info = Some(DeviceAboutInfo {
+            path: "usb:phenom".to_owned(),
+            keyboard_id: 42,
+            ..Default::default()
+        });
+        app.module_settings.groups = vec![ModuleSettingsGroup {
+            title: "Modules".to_owned(),
+            kind: ModuleSettingsGroupKind::Other,
+            fields: vec![],
+        }];
+        app.refresh_module_settings_values();
+        assert!(app.hid_write_task_active());
+
+        app.keycode_picker.macro_texts = vec![vec![1, 2, 3]];
+        app.keycode_picker.macros_dirty = true;
+        app.combo_entries = vec![combo([0x0004, 0x0005, 0, 0], 0x0006)];
+        app.combo_synced_entries = vec![ComboEntry::default()];
+        app.combo_dirty = true;
+        app.combo_edit_revision = 1;
+        app.combo_term = Some(150);
+        app.combo_term_dirty = true;
+        app.keycode_picker.tap_dance_entries = vec![crate::keycode_picker::TapDanceEntry {
+            on_tap: 0x0004,
+            tapping_term: 175,
+            ..Default::default()
+        }];
+        app.keycode_picker.tap_dance_synced_entries = vec![Default::default()];
+        app.keycode_picker.tap_dance_dirty = true;
+        app.pending_tap_hold_numeric_writes.insert(7, 175);
+        app.tap_hold_numeric_write_due = Some(std::time::Instant::now());
+        app.app_settings.minimize_to_tray_on_close = false;
+        app.app_settings.close_to_tray_behavior = CloseToTrayBehavior::Close;
+
+        let mut close_input = egui::RawInput::default();
+        close_input
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .expect("root viewport exists")
+            .events
+            .push(egui::ViewportEvent::Close);
+        let close_output = ctx.run_ui(close_input, |_ui| app.handle_close_to_tray(&ctx));
+        assert!(close_output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .expect("root viewport output exists")
+            .commands
+            .contains(&egui::ViewportCommand::CancelClose));
+        assert!(app.exit_after_hid_write);
+
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut close_sent = false;
+        for _ in 0..100 {
+            eframe::App::logic(&mut app, &ctx, &mut frame);
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                eframe::App::ui(&mut app, ui, &mut frame);
+            });
+            close_sent |= output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .is_some_and(|viewport| viewport.commands.contains(&egui::ViewportCommand::Close));
+            if close_sent {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        assert!(close_sent);
+        assert!(!app.exit_after_hid_write);
+        assert!(app.pending_tap_hold_numeric_writes.is_empty());
+        let requests = recorder.requests();
+        assert!(requests.iter().any(|request| request[0] == 0x0f));
+        assert!(requests
+            .iter()
+            .any(|request| request[..3] == [0xfe, 0x0d, 0x04]));
+        assert!(requests
+            .iter()
+            .any(|request| request[..3] == [0xfe, 0x0d, 0x02]));
+        assert!(requests
+            .iter()
+            .any(|request| request[..4] == [0xfe, 0x0b, 7, 0]));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
     fn module_refresh_disconnect_preserves_dirty_settings_for_reconnect() {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
@@ -712,6 +802,7 @@ mod tests {
             receiver,
             identity: identity.clone(),
         });
+        app.exit_after_hid_write = true;
 
         sender
             .send(ModuleSettingsRefreshTaskResult {
@@ -732,6 +823,16 @@ mod tests {
         assert_eq!(deferred.combo_entries[0].1.output, 0x0006);
         assert_eq!(deferred.pending_tap_hold_numeric_writes.get(&7), Some(&175));
         assert!(app.device_about_info.is_none());
+        let close_output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+            app.finish_deferred_exit_after_hid_write(&ctx);
+        });
+        assert!(!app.exit_after_hid_write);
+        assert!(!close_output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .expect("root viewport output exists")
+            .commands
+            .contains(&egui::ViewportCommand::Close));
         assert_eq!(
             app.status_msg,
             crate::i18n::tr_catalog(
