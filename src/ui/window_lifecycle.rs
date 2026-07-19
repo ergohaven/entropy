@@ -11,6 +11,16 @@ fn should_keep_vial_unlock_visible(unlock_open: bool, unlock_polling: bool) -> b
 
 impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
+    fn deferred_exit_has_pending_hid_writes(&self) -> bool {
+        self.keycode_picker.macros_dirty
+            || self.combo_dirty
+            || self.combo_term_dirty
+            || self.keycode_picker.tap_dance_dirty
+            || self.key_override_dirty
+            || !self.pending_tap_hold_numeric_writes.is_empty()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn defer_exit_until_hid_write_returns(&mut self, ctx: &egui::Context) -> bool {
         if !self.hid_write_task_active() {
             return false;
@@ -28,9 +38,15 @@ impl EntropyApp {
             return;
         }
 
-        self.exit_after_hid_write = false;
         self.flush_pending_tap_hold_numeric_writes();
         self.fallback_entropy_display_presets_before_exit();
+
+        if self.deferred_exit_has_pending_hid_writes() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            return;
+        }
+
+        self.exit_after_hid_write = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 

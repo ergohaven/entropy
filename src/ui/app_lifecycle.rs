@@ -428,6 +428,76 @@ mod tests {
         assert!(!should_write_dynamic_entries(true, false, false, true));
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn settings_task_defers_and_drains_hid_writes_before_exit() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid_device, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        app.queue_touchpad_setting_write("Sniper sensitivity".to_owned(), 121, 1, 1, 2);
+        assert!(app.settings_write_task.is_some());
+
+        app.keycode_picker.macro_texts = vec![vec![1, 2, 3]];
+        app.keycode_picker.macros_dirty = true;
+        app.combo_entries = vec![combo([0x0004, 0x0005, 0, 0], 0x0006)];
+        app.combo_synced_entries = vec![ComboEntry::default()];
+        app.combo_dirty = true;
+        app.combo_edit_revision = 1;
+        app.combo_term = Some(150);
+        app.combo_term_dirty = true;
+        app.keycode_picker.tap_dance_entries = vec![crate::keycode_picker::TapDanceEntry {
+            on_tap: 0x0004,
+            tapping_term: 175,
+            ..Default::default()
+        }];
+        app.keycode_picker.tap_dance_synced_entries = vec![Default::default()];
+        app.keycode_picker.tap_dance_dirty = true;
+        app.key_override_entries = vec![KeyOverrideEntry::default()];
+        app.key_override_pick_target = Some(KeyOverridePickField::Trigger);
+        app.keycode_picker.result = Some(0x0004);
+        app.pending_tap_hold_numeric_writes.insert(7, 175);
+        app.tap_hold_numeric_write_due = Some(std::time::Instant::now());
+        app.exit_after_hid_write = true;
+
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut close_sent = false;
+        for _ in 0..200 {
+            app.update_native_background(&ctx, 0.0, true, true);
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                eframe::App::ui(&mut app, ui, &mut frame);
+            });
+            close_sent |= output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .is_some_and(|viewport| viewport.commands.contains(&egui::ViewportCommand::Close));
+            if close_sent {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        assert!(close_sent);
+        assert!(!app.hid_write_task_active());
+        assert!(!app.keycode_picker.macros_dirty);
+        assert!(!app.combo_dirty);
+        assert!(!app.combo_term_dirty);
+        assert!(!app.keycode_picker.tap_dance_dirty);
+        assert!(!app.key_override_dirty);
+        assert!(app.pending_tap_hold_numeric_writes.is_empty());
+        let requests = recorder.requests();
+        assert!(requests
+            .iter()
+            .any(|request| request[..3] == [0xfe, 0x0d, 0x04]));
+        assert!(requests
+            .iter()
+            .any(|request| request[..3] == [0xfe, 0x0d, 0x02]));
+        assert!(requests
+            .iter()
+            .any(|request| request[..4] == [0xfe, 0x0b, 7, 0]));
+    }
+
     fn combo(keys: [u16; 4], output: u16) -> ComboEntry {
         ComboEntry { keys, output }
     }
@@ -595,6 +665,7 @@ mod tests {
         assert!(app.keycode_picker.result.is_none());
         app.apply_picker_results();
         assert_eq!(app.key_override_entries[0].trigger, 0x0004);
+        app.flush_pending_key_override_writes();
 
         let final_close_output = ctx.run_ui(egui::RawInput::default(), |_ui| {
             app.finish_deferred_exit_after_hid_write(&ctx);
