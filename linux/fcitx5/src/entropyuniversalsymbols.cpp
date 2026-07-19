@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 #include "fcitx-utils/handlertable.h"
 #include "fcitx-utils/key.h"
 #include "fcitx-utils/keysym.h"
@@ -28,7 +29,7 @@ constexpr uint16_t MOD_CTRL = 0x0100;
 constexpr uint16_t MOD_SHIFT = 0x0200;
 constexpr uint16_t MOD_ALT = 0x0400;
 constexpr uint16_t MOD_GUI = 0x0800;
-constexpr uint16_t HOST_TEXT_START_TRIGGER = MOD_GUI | (KC_F13 + 7);
+constexpr uint16_t HOST_TEXT_START_TRIGGER = KC_F13 + 7;
 constexpr std::size_t HOST_TEXT_COUNT_DIGITS = 2;
 constexpr std::size_t HOST_TEXT_CODEPOINT_DIGITS = 7;
 
@@ -37,8 +38,8 @@ struct SmartSymbol {
     const char *symbol;
 };
 
-const std::array<SmartSymbol, 75> SMART_SYMBOLS{{
-    // F13..F20
+const std::array<SmartSymbol, 74> SMART_SYMBOLS{{
+    // F13..F19. Unmodified F20 is reserved for host-text frames.
     {KC_F13, "{"},
     {uint16_t(KC_F13 + 1), "}"},
     {uint16_t(KC_F13 + 2), "["},
@@ -46,7 +47,6 @@ const std::array<SmartSymbol, 75> SMART_SYMBOLS{{
     {uint16_t(KC_F13 + 4), "("},
     {uint16_t(KC_F13 + 5), ")"},
     {uint16_t(KC_F13 + 6), "<"},
-    {uint16_t(KC_F13 + 7), ">"},
 
     // Shift+F13..F20
     {uint16_t(MOD_SHIFT | KC_F13), "!"},
@@ -186,10 +186,8 @@ public:
             reset();
         }
 
-        const uint16_t trigger = baseKeycode | modifiers;
         if (!active_) {
-            if (baseKeycode != (HOST_TEXT_START_TRIGGER & 0x00FF) ||
-                !(trigger & MOD_GUI) || released) {
+            if (baseKeycode != HOST_TEXT_START_TRIGGER || modifiers != 0 || released) {
                 return {false, std::nullopt};
             }
             active_ = true;
@@ -242,6 +240,12 @@ public:
         return {true, std::move(output)};
     }
 
+#ifdef ENTROPY_HOST_TEXT_TEST
+    void expireForTest() {
+        lastEvent_ = std::chrono::steady_clock::now() - std::chrono::seconds(3);
+    }
+#endif
+
 private:
     static bool appendUtf8(std::string &output, uint32_t codepoint) {
         if (codepoint > 0x10FFFF ||
@@ -290,6 +294,58 @@ private:
 };
 
 } // namespace
+
+#ifdef ENTROPY_HOST_TEXT_TEST
+int entropyHostTextTransportSelfTest() {
+    const auto digits = [](uint32_t value, std::size_t count) {
+        std::vector<uint16_t> output;
+        output.reserve(count);
+        for (std::size_t shift = count; shift-- > 0;) {
+            output.push_back(KC_F13 + ((value >> (shift * 3)) & 7));
+        }
+        return output;
+    };
+
+    HostTextTransportDecoder decoder;
+    if (!decoder.process(HOST_TEXT_START_TRIGGER, 0, false).handled) {
+        return 1;
+    }
+    std::optional<std::string> completed;
+    for (const auto keycode : digits(1, HOST_TEXT_COUNT_DIGITS)) {
+        completed = decoder.process(keycode, 0, false).text;
+    }
+    for (const auto keycode : digits(0x1F600, HOST_TEXT_CODEPOINT_DIGITS)) {
+        const auto result = decoder.process(keycode, 0, false);
+        if (result.text) {
+            completed = result.text;
+        }
+    }
+    if (completed != std::optional<std::string>{"\xF0\x9F\x98\x80"}) {
+        return 2;
+    }
+
+    HostTextTransportDecoder invalid;
+    if (invalid.process(HOST_TEXT_START_TRIGGER, MOD_GUI, false).handled ||
+        !invalid.process(HOST_TEXT_START_TRIGGER, 0, false).handled ||
+        !invalid.process(KC_F13, 0, false).handled ||
+        !invalid.process(KC_F13, 0, false).handled ||
+        invalid.process(KC_F13, 0, false).handled) {
+        return 3;
+    }
+
+    HostTextTransportDecoder interrupted;
+    interrupted.process(HOST_TEXT_START_TRIGGER, 0, false);
+    if (!interrupted.process(KC_F13 - 1, 0, false).handled ||
+        interrupted.process(KC_F13, 0, false).handled) {
+        return 4;
+    }
+
+    HostTextTransportDecoder timed_out;
+    timed_out.process(HOST_TEXT_START_TRIGGER, 0, false);
+    timed_out.expireForTest();
+    return timed_out.process(KC_F13, 0, false).handled ? 5 : 0;
+}
+#endif
 
 class EntropyUniversalSymbols final : public AddonInstance {
 public:
@@ -341,5 +397,11 @@ class EntropyUniversalSymbolsFactory final : public AddonFactory {
 
 } // namespace fcitx
 
+#ifndef ENTROPY_HOST_TEXT_TEST
 FCITX_ADDON_FACTORY_V2(entropyuniversalsymbols,
                        fcitx::EntropyUniversalSymbolsFactory);
+#else
+int main() {
+    return fcitx::entropyHostTextTransportSelfTest();
+}
+#endif

@@ -98,7 +98,7 @@ MOD_CTRL = 0x0100
 MOD_SHIFT = 0x0200
 MOD_ALT = 0x0400
 MOD_GUI = 0x0800
-HOST_TEXT_START_TRIGGER = MOD_GUI | (KC_F13 + 7)
+HOST_TEXT_START_TRIGGER = KC_F13 + 7
 HOST_TEXT_COUNT_DIGITS = 2
 HOST_TEXT_CODEPOINT_DIGITS = 7
 HOST_TEXT_TIMEOUT_US = 2_000_000
@@ -124,8 +124,8 @@ def _symbol_entries():
     def add(offset, symbol, modifiers=0):
         entries.append((KC_F13 + offset, modifiers, symbol))
 
-    # F13..F20
-    for idx, symbol in enumerate(["{", "}", "[", "]", "(", ")", "<", ">"]):
+    # F13..F19. Unmodified F20 is reserved for host-text frames.
+    for idx, symbol in enumerate(["{", "}", "[", "]", "(", ")", "<"]):
         add(idx, symbol)
 
     # Shift+F13..F20
@@ -193,11 +193,10 @@ class HostTextTransportDecoder:
         ):
             self.reset()
 
-        trigger = base_keycode | modifiers
         if not self.active:
             if (
-                base_keycode != (HOST_TEXT_START_TRIGGER & 0x00FF)
-                or not trigger & MOD_GUI
+                base_keycode != HOST_TEXT_START_TRIGGER
+                or modifiers != 0
                 or released
             ):
                 return False, None
@@ -241,6 +240,37 @@ class HostTextTransportDecoder:
         output = "".join(self.output)
         self.reset()
         return True, output
+
+
+def _host_text_transport_self_test():
+    def octal_digits(value, count):
+        return [KC_F13 + ((value >> (shift * 3)) & 7) for shift in range(count - 1, -1, -1)]
+
+    decoder = HostTextTransportDecoder()
+    assert decoder.process(HOST_TEXT_START_TRIGGER, 0, False) == (True, None)
+    completed = None
+    for keycode in octal_digits(1, HOST_TEXT_COUNT_DIGITS) + octal_digits(0x1F600, HOST_TEXT_CODEPOINT_DIGITS):
+        handled, text = decoder.process(keycode, 0, False)
+        assert handled
+        completed = text or completed
+    assert completed == "😀"
+
+    decoder = HostTextTransportDecoder()
+    assert decoder.process(HOST_TEXT_START_TRIGGER, MOD_GUI, False) == (False, None)
+    assert decoder.process(HOST_TEXT_START_TRIGGER, 0, False) == (True, None)
+    assert decoder.process(KC_F13, 0, False) == (True, None)
+    assert decoder.process(KC_F13, 0, False) == (True, None)
+    assert decoder.process(KC_F13, 0, False) == (False, None)
+
+    decoder = HostTextTransportDecoder()
+    assert decoder.process(HOST_TEXT_START_TRIGGER, 0, False) == (True, None)
+    assert decoder.process(KC_F13 - 1, 0, False) == (True, None)
+    assert decoder.process(KC_F13, 0, False) == (False, None)
+
+    decoder = HostTextTransportDecoder()
+    assert decoder.process(HOST_TEXT_START_TRIGGER, 0, False) == (True, None)
+    decoder.last_event_us = GLib.get_monotonic_time() - HOST_TEXT_TIMEOUT_US - 1
+    assert decoder.process(KC_F13, 0, False) == (False, None)
 
 
 def _config_home():
@@ -964,6 +994,10 @@ class EntropyEngineFactory(IBus.Factory):
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--entropy-check":
         print("Entropy IBus backend dependencies ok")
+        return 0
+    if len(sys.argv) > 1 and sys.argv[1] == "--entropy-transport-test":
+        _host_text_transport_self_test()
+        print("Entropy IBus host-text transport tests passed")
         return 0
 
     IBus.init()

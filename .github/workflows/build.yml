@@ -8,6 +8,37 @@ on:
     branches: [main]
 
 jobs:
+  fcitx5-addon:
+    name: Build Fcitx5 addon
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Fcitx5 development dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ extra-cmake-modules fcitx5-dev
+
+      - name: Configure and build addon
+        run: |
+          cmake -S linux/fcitx5 -B build/fcitx5 -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/fcitx5 --parallel
+          ctest --test-dir build/fcitx5 --output-on-failure
+
+  ibus-backend:
+    name: Test IBus backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install IBus dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi gir1.2-ibus-1.0
+
+      - name: Run host-text transport behavior tests
+        run: python3 linux/ibus/entropy-ibus-engine --entropy-transport-test
+
   build:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

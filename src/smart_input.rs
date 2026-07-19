@@ -239,6 +239,32 @@ pub fn text_expander_runs_outside_entropy_process() -> bool {
     matches!(linux_session_kind(), LinuxSessionKind::Wayland)
 }
 
+/// Firmware emoji macros require a local decoder that understands the current
+/// unmodified-F20 transport. On Wayland, only an installed and current input
+/// method can provide that decoder.
+#[cfg(target_os = "linux")]
+pub fn emoji_assignment_backend_ready() -> bool {
+    match linux_session_kind() {
+        LinuxSessionKind::X11 => std::env::var_os("DISPLAY").is_some(),
+        LinuxSessionKind::Wayland => match linux_recommended_input_backend() {
+            LinuxRecommendedInputBackend::IBus => linux_ibus_backend_ready(),
+            LinuxRecommendedInputBackend::Fcitx5 => linux_fcitx5_backend_ready(),
+            LinuxRecommendedInputBackend::X11Native => false,
+        },
+        LinuxSessionKind::Unknown => false,
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn emoji_assignment_backend_ready() -> bool {
+    macos_universal_symbols_status().event_tap_active
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn emoji_assignment_backend_ready() -> bool {
+    true
+}
+
 #[cfg(not(target_os = "linux"))]
 pub fn text_expander_runs_outside_entropy_process() -> bool {
     false
@@ -321,6 +347,41 @@ fn linux_installed_ibus_engine_path() -> Option<std::path::PathBuf> {
                 .map(|home| home.join(".local/share"))
         })?;
     Some(data_home.join("entropy/ibus/entropy-ibus-engine"))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_entropy_data_home() -> Option<std::path::PathBuf> {
+    std::env::var_os("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .map(|home| home.join(".local/share"))
+        })
+        .map(|data_home| data_home.join("entropy"))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_ibus_backend_ready() -> bool {
+    let Some(source) = linux_bundled_ibus_engine_path() else {
+        return false;
+    };
+    let Some(installed) = linux_installed_ibus_engine_path() else {
+        return false;
+    };
+    linux_input_method_env().contains("ibus")
+        && linux_command_available("ibus")
+        && std::fs::read(source).ok() == std::fs::read(installed).ok()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_fcitx5_backend_ready() -> bool {
+    linux_input_method_env().contains("fcitx")
+        && linux_command_available("fcitx5")
+        && linux_entropy_data_home()
+            .map(|path| path.join("fcitx5/host-text-protocol-version"))
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .is_some_and(|version| version.trim() == "2")
 }
 
 #[cfg(target_os = "linux")]
@@ -1406,14 +1467,18 @@ mod tests {
     }
 
     #[test]
-    fn host_text_start_chord_is_not_a_static_symbol() {
-        assert!(
-            smart_symbol_for_keycode(crate::host_text_transport::START_TRIGGER_KEYCODE).is_none()
+    fn host_text_transport_reserves_unmodified_f20_from_static_symbols() {
+        assert!(smart_symbol_for_keycode(crate::host_text_transport::START_TRIGGER_KEYCODE)
+            .is_none());
+        let mut decoder = crate::host_text_transport::HostTextTransportDecoder::default();
+        assert_eq!(
+            decoder.handle(
+                crate::host_text_transport::START_TRIGGER_KEYCODE | MOD_SHIFT | MOD_CTRL,
+                true,
+                std::time::Instant::now(),
+            ),
+            crate::host_text_transport::TransportOutcome::PassThrough
         );
-        assert!(smart_symbol_for_keycode(
-            crate::host_text_transport::START_TRIGGER_KEYCODE | MOD_SHIFT | MOD_CTRL
-        )
-        .is_none());
         assert!(windows_smart_symbol_for_keycode(
             crate::host_text_transport::START_TRIGGER_KEYCODE
         )
@@ -1445,8 +1510,8 @@ mod tests {
             false,
             false,
             false,
-            true,
-            MOD_GUI,
+            false,
+            0,
             true,
         );
         assert_eq!(start, crate::host_text_transport::TransportOutcome::Started);
@@ -1456,8 +1521,8 @@ mod tests {
                 false,
                 false,
                 false,
-                true,
-                MOD_GUI,
+                false,
+                0,
                 false,
             ),
             crate::host_text_transport::TransportOutcome::Consumed

@@ -11,6 +11,14 @@ impl KeycodePicker {
                 .color(Color32::from_gray(150)),
         );
         ui.add_space(4.0 * scale);
+        if !self.emoji_assignment_backend_ready {
+            ui.label(
+                RichText::new("Finish Universal Symbols setup before assigning emoji macros.")
+                    .size(10.0 * scale)
+                    .color(Color32::from_rgb(200, 110, 90)),
+            );
+            return;
+        }
         ui.label(
             RichText::new(tr_picker(self.language, "key_picker.emoji_assignment_hint"))
                 .size(10.0 * scale)
@@ -151,12 +159,17 @@ impl KeycodePicker {
             return;
         };
 
-        if write_macro {
-            self.ensure_macro_meta_len(slot);
-            self.macro_actions[slot] = actions;
-            self.encode_macro(slot);
-            self.macros_dirty = true;
-        }
+        self.ensure_macro_meta_len(slot);
+        let text = write_macro
+            .then(|| super::keycode_picker_macro::encode_macro_actions(&actions))
+            .unwrap_or_else(|| self.macro_texts[slot].clone());
+        self.emoji_assignment = Some(EmojiAssignment {
+            slot,
+            previous_actions: self.macro_actions[slot].clone(),
+            previous_text: self.macro_texts[slot].clone(),
+            actions,
+            text,
+        });
         self.emoji_assignment_error = false;
         self.result = Some(0x7700 + slot as u16);
         self.open = false;
@@ -171,6 +184,23 @@ impl KeycodePicker {
                 == Some(emoji)
         }) {
             return Some((slot, false));
+        }
+
+        if self.emoji_target_slot_reusable {
+            if let Some(slot) = self
+                .emoji_target_keycode
+                .and_then(|keycode| keycode.checked_sub(0x7700))
+                .map(usize::from)
+                .filter(|slot| {
+                    self.macro_actions
+                        .get(*slot)
+                        .and_then(|actions| decode_emoji_macro(actions))
+                        .is_some()
+                        && self.macro_buffer_fits(*slot, encoded_len)
+                })
+            {
+                return Some((slot, true));
+            }
         }
 
         (0..self.macro_count.min(u8::MAX as usize + 1))
@@ -208,27 +238,18 @@ impl KeycodePicker {
     }
 }
 
-const KC_LGUI: u16 = 0x00e3;
-
 fn emoji_macro_actions(emoji: &str) -> Option<Vec<MacroAction>> {
     let payload = crate::host_text_transport::encode_text_payload(emoji)?;
-    let mut actions = Vec::with_capacity(payload.len() + 3);
-    actions.push(MacroAction::Down(KC_LGUI));
+    let mut actions = Vec::with_capacity(payload.len() + 1);
     actions.push(MacroAction::Tap(crate::host_text_transport::KC_F20));
-    actions.push(MacroAction::Up(KC_LGUI));
     actions.extend(payload.into_iter().map(MacroAction::Tap));
     Some(actions)
 }
 
-fn decode_emoji_macro(actions: &[MacroAction]) -> Option<String> {
+pub(crate) fn decode_emoji_macro(actions: &[MacroAction]) -> Option<String> {
     if !matches!(
         actions,
-        [
-            MacroAction::Down(KC_LGUI),
-            MacroAction::Tap(crate::host_text_transport::KC_F20),
-            MacroAction::Up(KC_LGUI),
-            ..
-        ]
+        [MacroAction::Tap(crate::host_text_transport::KC_F20), ..]
     ) {
         return None;
     }
@@ -241,7 +262,7 @@ fn decode_emoji_macro(actions: &[MacroAction]) -> Option<String> {
         return None;
     }
 
-    let payload = &actions[3..];
+    let payload = &actions[1..];
     for (idx, action) in payload.iter().enumerate() {
         let MacroAction::Tap(keycode) = action else {
             return None;
@@ -438,10 +459,11 @@ mod tests {
 
         assert_eq!(picker.result, Some(0x7701));
         assert_eq!(
-            decode_emoji_macro(&picker.macro_actions[1]).as_deref(),
+            decode_emoji_macro(&picker.emoji_assignment.as_ref().unwrap().actions).as_deref(),
             Some("🚀")
         );
-        assert!(picker.macros_dirty);
+        assert!(picker.macro_actions[1].is_empty());
+        assert!(!picker.macros_dirty);
         assert!(!picker.open);
     }
 
@@ -463,7 +485,7 @@ mod tests {
 
         assert_eq!(picker.result, Some(0x7703));
         assert_eq!(
-            decode_emoji_macro(&picker.macro_actions[3]).as_deref(),
+            decode_emoji_macro(&picker.emoji_assignment.as_ref().unwrap().actions).as_deref(),
             Some("😀")
         );
         assert!(!picker.macros_dirty);
@@ -487,7 +509,35 @@ mod tests {
 
         assert_eq!(picker.result, Some(0x7700));
         assert_eq!(
-            decode_emoji_macro(&picker.macro_actions[0]).as_deref(),
+            decode_emoji_macro(&picker.emoji_assignment.as_ref().unwrap().actions).as_deref(),
+            Some("😀")
+        );
+        assert_eq!(
+            decode_emoji_macro(&picker.macro_actions[3]).as_deref(),
+            Some("🚀")
+        );
+    }
+
+    #[test]
+    fn reassignment_reuses_an_unshared_generated_macro_slot() {
+        let smile = crate::emoji_catalog::EMOJI_CATALOG
+            .iter()
+            .find(|entry| entry.emoji == "😀")
+            .unwrap();
+        let mut picker = KeycodePicker {
+            macro_buffer_size: Some(8192),
+            emoji_target_keycode: Some(0x7703),
+            emoji_target_slot_reusable: true,
+            ..Default::default()
+        };
+        picker.macro_actions[3] = emoji_macro_actions("🚀").unwrap();
+        picker.encode_macro(3);
+
+        picker.assign_emoji(smile, crate::emoji_catalog::EmojiSkinTone::Default);
+
+        assert_eq!(picker.result, Some(0x7703));
+        assert_eq!(
+            decode_emoji_macro(&picker.emoji_assignment.as_ref().unwrap().actions).as_deref(),
             Some("😀")
         );
         assert_eq!(

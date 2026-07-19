@@ -1,9 +1,126 @@
 use super::*;
 
 impl EntropyApp {
-    pub(super) fn apply_picker_results(&mut self) {
+    fn emoji_target_slot_reusable(
+        &self,
+        target_keycode: Option<u16>,
+        key_target: Option<usize>,
+        encoder_target: Option<usize>,
+    ) -> bool {
+        let Some(slot) = target_keycode
+            .and_then(|keycode| keycode.checked_sub(0x7700))
+            .map(usize::from)
+        else {
+            return false;
+        };
+        let macro_keycode = 0x7700 + slot as u16;
+        let keycode_is_referenced = |keycode: u16| keycode == macro_keycode;
+
+        if let Some(layout) = &self.layout {
+            for layer in 0..layout.layers.len() {
+                for key_idx in 0..layout.keys.len() {
+                    if !(layer == self.selected_layer && Some(key_idx) == key_target)
+                        && keycode_is_referenced(layout.get_keycode(layer, key_idx))
+                    {
+                        return false;
+                    }
+                }
+                for encoder_idx in 0..layout.encoders.len() {
+                    if !(layer == self.selected_layer && Some(encoder_idx) == encoder_target)
+                        && keycode_is_referenced(layout.get_encoder_keycode(layer, encoder_idx))
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        if self
+            .combo_entries
+            .iter()
+            .any(|entry| {
+                entry.keys.iter().copied().any(keycode_is_referenced)
+                    || keycode_is_referenced(entry.output)
+            })
+            || self.keycode_picker.tap_dance_entries.iter().any(|entry| {
+                [entry.on_tap, entry.on_hold, entry.on_double_tap, entry.on_tap_hold]
+                    .into_iter()
+                    .any(keycode_is_referenced)
+            })
+            || self.key_override_entries.iter().any(|entry| {
+                keycode_is_referenced(entry.trigger) || keycode_is_referenced(entry.replacement)
+            })
+            || self.alt_repeat_entries.iter().any(|entry| {
+                keycode_is_referenced(entry.keycode) || keycode_is_referenced(entry.alt_keycode)
+            })
+            || self.keycode_picker.macro_actions.iter().enumerate().any(|(index, actions)| {
+                index != slot
+                    && actions.iter().any(|action| {
+                        matches!(action, MacroAction::Tap(keycode) | MacroAction::Down(keycode) | MacroAction::Up(keycode) if keycode_is_referenced(*keycode))
+                    })
+            })
+        {
+            return false;
+        }
+
+        self.keycode_picker
+            .macro_actions
+            .get(slot)
+            .and_then(|actions| {
+                crate::keycode_picker::keycode_picker_emoji::decode_emoji_macro(actions)
+            })
+            .is_some()
+    }
+
+    pub(super) fn apply_picker_results(&mut self, ctx: &egui::Context) {
         #[cfg(not(target_arch = "wasm32"))]
         if self.hid_write_task_active() {
+            return;
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(assignment) = self
+            .keycode_picker
+            .result
+            .is_some()
+            .then(|| self.keycode_picker.emoji_assignment.take())
+            .flatten()
+        {
+            let target = self
+                .selected_encoder
+                .and_then(|(layer, encoder_visual_idx)| {
+                    let layout = self.layout.as_ref()?;
+                    let encoder = layout.encoders.get(encoder_visual_idx)?;
+                    Some(EmojiAssignmentTarget::Encoder {
+                        layer,
+                        encoder_visual_idx,
+                        encoder_idx: encoder.encoder_idx,
+                        direction: encoder.direction,
+                        old_keycode: layout.get_encoder_keycode(layer, encoder_visual_idx),
+                    })
+                })
+                .or_else(|| {
+                    self.selected_key.and_then(|(layer, key_idx)| {
+                        let layout = self.layout.as_ref()?;
+                        let key = layout.keys.get(key_idx)?;
+                        Some(EmojiAssignmentTarget::Key {
+                            layer,
+                            key_idx,
+                            row: key.row,
+                            col: key.col,
+                            old_keycode: layout.get_keycode(layer, key_idx),
+                        })
+                    })
+                });
+            if let Some(target) = target {
+                self.start_emoji_assignment(ctx, target, assignment);
+            } else {
+                self.keycode_picker.emoji_assignment = Some(assignment);
+                self.keycode_picker.emoji_assignment_error = true;
+                self.keycode_picker.result = None;
+                self.keycode_picker.open = true;
+                self.status_msg = "Emoji assignment target is no longer available".into();
+            }
             return;
         }
 
@@ -156,7 +273,12 @@ impl EntropyApp {
         self.keycode_picker.open = true;
         self.keycode_picker.result = None;
         self.keycode_picker.emoji_target_keycode = current_keycode;
+        self.keycode_picker.emoji_target_slot_reusable = self
+            .emoji_target_slot_reusable(current_keycode, key_target, encoder_target);
+        self.keycode_picker.emoji_assignment_backend_ready =
+            crate::smart_input::emoji_assignment_backend_ready();
         self.keycode_picker.emoji_assignment_error = false;
+        self.keycode_picker.emoji_assignment = None;
         self.keycode_picker.emoji_selected = None;
         self.keycode_picker.emoji_skin_tone = Default::default();
         self.keycode_picker.search_query.clear();

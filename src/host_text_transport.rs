@@ -1,6 +1,6 @@
 //! Framed host-text transport over keycodes available to ordinary Vial/QMK macros.
 //!
-//! GUI+F20 starts a frame. F13..F20 then carry octal digits: two digits for
+//! Unmodified F20 starts a frame. F13..F20 then carry octal digits: two digits for
 //! Unicode scalar count, followed by seven digits per scalar. Host Smart Input
 //! backends consume the frame and emit reconstructed text.
 
@@ -8,8 +8,7 @@ use std::time::{Duration, Instant};
 
 pub const KC_F13: u16 = 0x0068;
 pub const KC_F20: u16 = KC_F13 + 7;
-pub const MOD_GUI: u16 = 0x0800;
-pub const START_TRIGGER_KEYCODE: u16 = MOD_GUI | KC_F20;
+pub const START_TRIGGER_KEYCODE: u16 = KC_F20;
 
 const COUNT_DIGITS: usize = 2;
 const CODEPOINT_DIGITS: usize = 7;
@@ -74,7 +73,7 @@ impl HostTextTransportDecoder {
         }
 
         if matches!(self.state, DecodeState::Idle) {
-            if base_keycode != KC_F20 || trigger_keycode & MOD_GUI == 0 {
+            if trigger_keycode != START_TRIGGER_KEYCODE {
                 return TransportOutcome::PassThrough;
             }
             if !pressed {
@@ -229,22 +228,13 @@ mod tests {
     }
 
     #[test]
-    fn ignores_held_modifiers_during_framed_text() {
+    fn requires_unmodified_f20_to_start_a_frame() {
         let start = Instant::now();
         let mut decoder = HostTextTransportDecoder::default();
         assert_eq!(
             decoder.handle(START_TRIGGER_KEYCODE | 0x0300, true, start),
-            TransportOutcome::Started
+            TransportOutcome::PassThrough
         );
-
-        let mut completed = None;
-        for keycode in encode_text_payload("👍🏽").unwrap() {
-            let outcome = decoder.handle(keycode | 0x0300, true, start);
-            if let TransportOutcome::Complete(value) = outcome {
-                completed = Some(value);
-            }
-        }
-        assert_eq!(completed.as_deref(), Some("👍🏽"));
     }
 
     #[test]

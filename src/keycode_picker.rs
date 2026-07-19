@@ -22,7 +22,7 @@ use keycode_picker_popups::*;
 #[path = "keycode_picker_basic.rs"]
 mod keycode_picker_basic;
 #[path = "keycode_picker_emoji.rs"]
-mod keycode_picker_emoji;
+pub(crate) mod keycode_picker_emoji;
 #[path = "keycode_picker_lighting_quantum.rs"]
 mod keycode_picker_lighting_quantum;
 #[path = "keycode_picker_macro.rs"]
@@ -107,6 +107,15 @@ pub enum MacroAction {
     Raw(Vec<u8>),
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct EmojiAssignment {
+    pub slot: usize,
+    pub previous_actions: Vec<MacroAction>,
+    pub previous_text: Vec<u8>,
+    pub actions: Vec<MacroAction>,
+    pub text: Vec<u8>,
+}
+
 pub(crate) const MACRO_NAME_CHAR_LIMIT: usize = 7;
 pub(crate) const MACRO_DESCRIPTION_CHAR_LIMIT: usize = 120;
 
@@ -185,7 +194,10 @@ pub struct KeycodePicker {
     pub emoji_skin_tone: crate::emoji_catalog::EmojiSkinTone,
     pub emoji_selected: Option<&'static crate::emoji_catalog::EmojiEntry>,
     pub emoji_target_keycode: Option<u16>,
+    pub emoji_target_slot_reusable: bool,
+    pub emoji_assignment_backend_ready: bool,
     pub emoji_assignment_error: bool,
+    pub emoji_assignment: Option<EmojiAssignment>,
     popup_state: PopupState,
     pub language: crate::i18n::Language,
     pub key_legend_layout: KeyLegendLayout,
@@ -387,7 +399,10 @@ impl Default for KeycodePicker {
             emoji_skin_tone: crate::emoji_catalog::EmojiSkinTone::Default,
             emoji_selected: None,
             emoji_target_keycode: None,
+            emoji_target_slot_reusable: false,
+            emoji_assignment_backend_ready: false,
             emoji_assignment_error: false,
+            emoji_assignment: None,
             macros_dirty: false,
             popup_state: PopupState::default(),
             language: crate::i18n::default_language(),
@@ -568,7 +583,10 @@ impl KeycodePicker {
         self.vial_quantum_pending_mt = None;
         self.vial_layer_pending = None;
         self.emoji_target_keycode = None;
+        self.emoji_target_slot_reusable = false;
+        self.emoji_assignment_backend_ready = false;
         self.emoji_assignment_error = false;
+        self.emoji_assignment = None;
     }
 
     pub(crate) fn open_full_key_picker(&mut self, selected_tab: KeycodeTab) {
@@ -585,7 +603,10 @@ impl KeycodePicker {
         self.td_key_pick = None;
         self.td_mod_key_pick = None;
         self.emoji_target_keycode = None;
+        self.emoji_target_slot_reusable = false;
+        self.emoji_assignment_backend_ready = false;
         self.emoji_assignment_error = false;
+        self.emoji_assignment = None;
         self.selected_tab = selected_tab;
     }
 

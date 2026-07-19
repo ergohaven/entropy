@@ -13,7 +13,7 @@ pub(super) const MOD_GUI: u16 = 0x0800;
 
 #[cfg(not(target_os = "windows"))]
 const MAC_FRIENDLY_SMART_SYMBOLS: &[SmartSymbol] = &[
-    // F13..F20
+    // F13..F19. Unmodified F20 is reserved for host-text frames.
     SmartSymbol {
         trigger_keycode: KC_F13,
         symbol: '{',
@@ -48,11 +48,6 @@ const MAC_FRIENDLY_SMART_SYMBOLS: &[SmartSymbol] = &[
         trigger_keycode: KC_F13 + 6,
         symbol: '<',
         name: "Less-than",
-    },
-    SmartSymbol {
-        trigger_keycode: KC_F13 + 7,
-        symbol: '>',
-        name: "Greater-than",
     },
     // Shift+F13..F20
     SmartSymbol {
@@ -439,11 +434,6 @@ const WINDOWS_SMART_SYMBOLS: &[SmartSymbol] = &[
         name: "Less-than",
     },
     SmartSymbol {
-        trigger_keycode: KC_F13 + 7,
-        symbol: '>',
-        name: "Greater-than",
-    },
-    SmartSymbol {
         trigger_keycode: KC_F13 + 8,
         symbol: '#',
         name: "Number sign",
@@ -811,8 +801,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn universal_symbol_catalog_stays_at_75_entries() {
-        assert_eq!(SMART_SYMBOLS.len(), 75);
+    fn universal_symbol_catalog_reserves_unmodified_f20_for_host_text() {
+        assert_eq!(SMART_SYMBOLS.len(), 74);
     }
 
     #[test]
@@ -835,7 +825,7 @@ mod tests {
 
     #[test]
     fn windows_universal_symbols_avoid_gui_transport_slots() {
-        assert_eq!(WINDOWS_SMART_SYMBOLS.len(), 75);
+        assert_eq!(WINDOWS_SMART_SYMBOLS.len(), 74);
         assert!(WINDOWS_SMART_SYMBOLS
             .iter()
             .all(|symbol| symbol.trigger_keycode & MOD_GUI == 0));

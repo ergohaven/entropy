@@ -2913,6 +2913,9 @@ pub struct EntropyApp {
     /// change to an indistinguishable sibling keyboard.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) deferred_hid_settings: Vec<DeferredHidSettings>,
+    /// Serialized macro-buffer then target-key write for emoji assignment.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) emoji_assignment_task: Option<EmojiAssignmentTask>,
     /// Built-in qmk-hid-host bridges for displays/presets that need host data
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) qmk_hid_hosts:
