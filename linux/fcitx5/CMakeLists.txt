@@ -4,6 +4,7 @@ project(entropy-fcitx5 LANGUAGES CXX)
 include(CTest)
 
 find_package(Fcitx5Core REQUIRED)
+find_package(Fcitx5Module REQUIRED)
 
 add_fcitx5_addon(entropyuniversalsymbols src/entropyuniversalsymbols.cpp)
 target_link_libraries(entropyuniversalsymbols Fcitx5::Core)
