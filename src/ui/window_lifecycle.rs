@@ -45,10 +45,9 @@ impl EntropyApp {
             return;
         }
 
-        // A refresh can lose its HID handle after close was deferred. Keep the
-        // pending settings for the matching reconnect instead of closing and
-        // abandoning the only path that can write them.
-        if self.hid_device.is_none() || self.deferred_hid_settings.is_some() {
+        // A refresh can lose its HID handle after close was deferred. Keep
+        // pending settings for reconnect instead of closing before they write.
+        if self.hid_device.is_none() {
             self.exit_after_hid_write = false;
             return;
         }
