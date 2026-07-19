@@ -93,7 +93,7 @@ impl EntropyApp {
 
     pub(super) fn write_key_override(&mut self, idx: usize) -> bool {
         let Some(entry) = self.key_override_entries.get_mut(idx) else {
-            return true;
+            return false;
         };
         Self::normalize_key_override_entry(entry);
         let entry = entry.clone();

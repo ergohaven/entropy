@@ -169,6 +169,7 @@ enum HidBackend {
     Test {
         recorder: TestHidRecorder,
         combo: std::sync::Mutex<([u16; 4], u16)>,
+        tap_dance: std::sync::Mutex<Vec<(u16, u16, u16, u16, u16)>>,
         qmk_settings: std::sync::Mutex<std::collections::BTreeMap<u16, u16>>,
         fault_after_requests: std::sync::Mutex<Option<(usize, TestHidFault)>>,
     },
@@ -298,6 +299,7 @@ impl HidDevice {
             backend: HidBackend::Test {
                 recorder: recorder.clone(),
                 combo: std::sync::Mutex::new(([0; 4], 0)),
+                tap_dance: std::sync::Mutex::new(Vec::new()),
                 qmk_settings: std::sync::Mutex::new(std::collections::BTreeMap::new()),
                 fault_after_requests: std::sync::Mutex::new(fault_after_requests),
             },
@@ -483,6 +485,7 @@ impl HidDevice {
             HidBackend::Test {
                 recorder,
                 combo,
+                tap_dance,
                 qmk_settings,
                 fault_after_requests,
             } => {
@@ -537,6 +540,45 @@ impl HidDevice {
                             response[offset..offset + 2].copy_from_slice(&key.to_le_bytes());
                         }
                         response[9..11].copy_from_slice(&output.to_le_bytes());
+                    }
+                    (
+                        CMD_VIA_VIAL_PREFIX,
+                        CMD_VIAL_DYNAMIC_ENTRY_OP,
+                        DYNAMIC_VIAL_TAP_DANCE_SET,
+                    ) => {
+                        let entry = (
+                            u16::from_le_bytes([request[4], request[5]]),
+                            u16::from_le_bytes([request[6], request[7]]),
+                            u16::from_le_bytes([request[8], request[9]]),
+                            u16::from_le_bytes([request[10], request[11]]),
+                            u16::from_le_bytes([request[12], request[13]]),
+                        );
+                        let index = request[3] as usize;
+                        let mut entries =
+                            tap_dance.lock().unwrap_or_else(|error| error.into_inner());
+                        if entries.len() <= index {
+                            entries.resize(index + 1, (0, 0, 0, 0, 0));
+                        }
+                        entries[index] = entry;
+                    }
+                    (
+                        CMD_VIA_VIAL_PREFIX,
+                        CMD_VIAL_DYNAMIC_ENTRY_OP,
+                        DYNAMIC_VIAL_TAP_DANCE_GET,
+                    ) => {
+                        let entry = tap_dance
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .get(request[3] as usize)
+                            .copied()
+                            .unwrap_or((0, 0, 0, 0, 0));
+                        for (offset, value) in [entry.0, entry.1, entry.2, entry.3, entry.4]
+                            .iter()
+                            .enumerate()
+                        {
+                            let start = 1 + offset * 2;
+                            response[start..start + 2].copy_from_slice(&value.to_le_bytes());
+                        }
                     }
                     (CMD_VIA_VIAL_PREFIX, CMD_VIAL_QMK_SETTINGS_SET, _) => {
                         let qsid = u16::from_le_bytes([request[2], request[3]]);

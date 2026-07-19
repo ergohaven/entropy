@@ -177,7 +177,7 @@ fn module_settings_refresh_identity_matches(
     expected: &ModuleSettingsDeviceIdentity,
     current: Option<&ModuleSettingsDeviceIdentity>,
 ) -> bool {
-    current == Some(expected)
+    current.is_some_and(|current| expected.matches(current))
 }
 
 impl EntropyApp {
@@ -185,10 +185,7 @@ impl EntropyApp {
     fn current_module_settings_device_identity(&self) -> Option<ModuleSettingsDeviceIdentity> {
         self.device_about_info
             .as_ref()
-            .map(|info| ModuleSettingsDeviceIdentity {
-                path: info.path.clone(),
-                keyboard_id: info.keyboard_id,
-            })
+            .map(ModuleSettingsDeviceIdentity::from_about)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1069,14 +1066,23 @@ mod tests {
     fn module_settings_refresh_result_requires_the_same_connected_device() {
         let expected = ModuleSettingsDeviceIdentity {
             path: "usb:phenom".to_owned(),
+            serial_number: None,
+            vendor_id: 0,
+            product_id: 0,
             keyboard_id: 42,
         };
         let changed_path = ModuleSettingsDeviceIdentity {
             path: "bluetooth:phenom".to_owned(),
+            serial_number: None,
+            vendor_id: 0,
+            product_id: 0,
             keyboard_id: 42,
         };
         let changed_keyboard = ModuleSettingsDeviceIdentity {
             path: expected.path.clone(),
+            serial_number: None,
+            vendor_id: 0,
+            product_id: 0,
             keyboard_id: 43,
         };
 

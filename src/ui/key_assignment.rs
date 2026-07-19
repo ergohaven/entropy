@@ -32,7 +32,10 @@ impl EntropyApp {
                     }
                     Self::normalize_key_override_entry(entry);
                 }
-                self.write_key_override(idx);
+                if !self.write_key_override(idx) {
+                    self.keycode_picker.result = Some(kc_value);
+                    self.key_override_pick_target = Some(field);
+                }
             } else if let Some(field) = self.alt_repeat_pick_target.take() {
                 let idx = self
                     .selected_alt_repeat
@@ -43,7 +46,10 @@ impl EntropyApp {
                         AltRepeatPickField::AltKey => entry.alt_keycode = kc_value,
                     }
                 }
-                self.write_alt_repeat_entry(idx);
+                if !self.write_alt_repeat_entry(idx) {
+                    self.keycode_picker.result = Some(kc_value);
+                    self.alt_repeat_pick_target = Some(field);
+                }
             } else if let Some((layer, encoder_visual_idx)) = self.selected_encoder {
                 #[cfg(not(target_arch = "wasm32"))]
                 self.assign_encoder_keycode(layer, encoder_visual_idx, kc_value);

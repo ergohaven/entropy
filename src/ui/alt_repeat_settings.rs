@@ -67,14 +67,14 @@ impl EntropyApp {
         entry.options.enabled = Self::alt_repeat_entry_exists(entry);
     }
 
-    pub(super) fn write_alt_repeat_entry(&mut self, idx: usize) {
+    pub(super) fn write_alt_repeat_entry(&mut self, idx: usize) -> bool {
         let Some(entry) = self.alt_repeat_entries.get_mut(idx) else {
-            return;
+            return false;
         };
         Self::normalize_alt_repeat_entry(entry);
         let entry = entry.clone();
         let Some(hid) = &self.hid_device else {
-            return;
+            return false;
         };
         if let Err(e) = hid.set_alt_repeat_key(
             idx as u8,
@@ -85,7 +85,9 @@ impl EntropyApp {
         ) {
             self.status_msg = format!("Failed to save Alt Repeat {}: {}", idx + 1, e);
             log::warn!("set_alt_repeat_key({idx}) failed: {e}");
+            return false;
         }
+        true
     }
 
     fn open_alt_repeat_picker(&mut self, target: AltRepeatPickField) {

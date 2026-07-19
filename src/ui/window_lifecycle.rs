@@ -52,12 +52,17 @@ impl EntropyApp {
             return;
         }
 
-        self.exit_after_hid_write = false;
+        // Close bypasses debounce so every queued setting gets one verified
+        // write attempt. Failures remain queued and keep Close cancelled.
         self.flush_pending_tap_hold_numeric_writes();
-        self.fallback_entropy_display_presets_before_exit();
-
-        if self.deferred_exit_has_pending_hid_writes() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        // UI lifecycle schedules and verifies writes before reaching this point.
+        // Do not turn a failed or still-pending write into a successful close.
+        if self.has_pending_hid_mutations() {
+            ctx.request_repaint();
+            return;
+        }
+        if !self.fallback_entropy_display_presets_before_exit() {
+            ctx.request_repaint();
             return;
         }
 

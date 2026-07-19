@@ -286,6 +286,7 @@ pub(crate) struct DeviceAboutInfo {
     pub(crate) product: String,
     pub(crate) vendor_id: u16,
     pub(crate) product_id: u16,
+    pub(crate) serial_number: String,
     pub(crate) path: String,
     pub(crate) firmware_version: Option<String>,
     pub(crate) battery_halves: Option<crate::hid::BatteryHalves>,
@@ -898,20 +899,85 @@ impl ModuleSettingsRefreshReport {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ModuleSettingsDeviceIdentity {
     pub(crate) path: String,
+    pub(crate) serial_number: Option<String>,
+    pub(crate) vendor_id: u16,
+    pub(crate) product_id: u16,
     pub(crate) keyboard_id: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ModuleSettingsDeviceIdentity {
+    pub(crate) fn from_about(info: &DeviceAboutInfo) -> Self {
+        Self {
+            path: info.path.clone(),
+            serial_number: (!info.serial_number.trim().is_empty())
+                .then(|| info.serial_number.clone()),
+            vendor_id: info.vendor_id,
+            product_id: info.product_id,
+            keyboard_id: info.keyboard_id,
+        }
+    }
+
+    /// Serial-backed identities survive HID-path changes. With no serial, path is
+    /// deliberately required: identical keyboards cannot otherwise be told apart.
+    pub(crate) fn matches(&self, other: &Self) -> bool {
+        self.vendor_id == other.vendor_id
+            && self.product_id == other.product_id
+            && self.keyboard_id == other.keyboard_id
+            && match (&self.serial_number, &other.serial_number) {
+                (Some(left), Some(right)) => left == right,
+                (None, None) => self.path == other.path,
+                _ => false,
+            }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct DeferredHidSettings {
     pub(crate) identity: ModuleSettingsDeviceIdentity,
-    pub(crate) macro_texts: Vec<Vec<u8>>,
-    pub(crate) macros_dirty: bool,
+    /// Only locally edited macro slots. Reconnect readback remains authoritative
+    /// for every other slot.
+    pub(crate) macro_entries: Vec<(usize, Vec<u8>)>,
     pub(crate) combo_entries: Vec<(usize, ComboEntry)>,
     pub(crate) combo_term: Option<u16>,
     pub(crate) combo_term_dirty: bool,
     pub(crate) tap_dance_entries: Vec<(usize, crate::keycode_picker::TapDanceEntry)>,
     pub(crate) pending_tap_hold_numeric_writes: std::collections::BTreeMap<u16, u16>,
     pub(crate) tap_hold_numeric_write_due: Option<std::time::Instant>,
+    pub(crate) picker_mutation: Option<DeferredPickerMutation>,
+}
+
+/// A completed picker choice that could not safely mutate firmware while another
+/// worker owned the HID handle. Keeping this typed prevents reconnect/reset from
+/// dropping either the choice or its intended target.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DeferredPickerMutation {
+    Combo {
+        index: usize,
+        field: ComboPickField,
+        keycode: u16,
+    },
+    KeyOverride {
+        index: usize,
+        field: KeyOverridePickField,
+        keycode: u16,
+    },
+    AltRepeat {
+        index: usize,
+        field: AltRepeatPickField,
+        keycode: u16,
+    },
+    Key {
+        layer: usize,
+        index: usize,
+        keycode: u16,
+    },
+    Encoder {
+        layer: usize,
+        index: usize,
+        keycode: u16,
+    },
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1610,13 +1676,13 @@ pub(super) enum UndoAction {
     },
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum KeyOverridePickField {
     Trigger,
     Replacement,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AltRepeatPickField {
     LastKey,
     AltKey,
@@ -1629,7 +1695,7 @@ pub(crate) enum MainMenuTab {
     Settings,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ComboPickField {
     Trigger(usize),
     Output,
@@ -2944,9 +3010,11 @@ pub struct EntropyApp {
     /// Background module settings refresh. Owns the HID handle while active.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) module_settings_refresh_task: Option<ModuleSettingsRefreshTask>,
-    /// Dirty firmware settings retained across a module-refresh disconnect.
+    /// Dirty firmware settings retained per physical keyboard across a HID-worker
+    /// disconnect. Entries without a serial stay path-bound to avoid applying a
+    /// change to an indistinguishable sibling keyboard.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) deferred_hid_settings: Option<DeferredHidSettings>,
+    pub(crate) deferred_hid_settings: Vec<DeferredHidSettings>,
     /// Built-in qmk-hid-host bridges for displays/presets that need host data
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) qmk_hid_hosts:

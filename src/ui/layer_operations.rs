@@ -1013,7 +1013,15 @@ impl EntropyApp {
                     .layer_write_task
                     .take()
                     .expect("layer write task checked above");
-                self.hid_device = None;
+                let status_msg = crate::i18n::tr_catalog_format(
+                    self.app_settings.language,
+                    "layer_actions.write_task_failed",
+                    &[
+                        ("action", &task.fallback.action),
+                        ("layer", &task.fallback.layer.to_string()),
+                    ],
+                );
+                self.handoff_hid_worker_disconnect(status_msg);
                 if let LayerUndoBehavior::RetryDesired { requires_firmware } =
                     task.fallback.undo_behavior
                 {
@@ -1023,22 +1031,16 @@ impl EntropyApp {
                         requires_firmware,
                     });
                 }
-                self.status_msg = crate::i18n::tr_catalog_format(
-                    self.app_settings.language,
-                    "layer_actions.write_task_failed",
-                    &[
-                        ("action", &task.fallback.action),
-                        ("layer", &task.fallback.layer.to_string()),
-                    ],
-                );
-                self.continue_pending_settings_writes(ctx);
-                self.resume_pending_device_connect();
             }
         }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn finish_layer_write(&mut self, result: LayerWriteResult) {
+        if result.hid_device.is_none() {
+            self.handoff_hid_worker_disconnect("Layer write disconnected");
+            return;
+        }
         self.hid_device = result.hid_device;
         if let Some(layout) = &mut self.layout {
             apply_layer_updates(

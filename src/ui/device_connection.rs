@@ -44,7 +44,16 @@ impl EntropyApp {
         let Some(about) = self.device_about_info.as_ref() else {
             return;
         };
-        let macros_dirty = self.keycode_picker.macros_dirty;
+        let macro_entries = self
+            .keycode_picker
+            .macro_texts
+            .iter()
+            .enumerate()
+            .filter(|(index, text)| {
+                self.keycode_picker.macro_synced_texts.get(*index) != Some(*text)
+            })
+            .map(|(index, text)| (index, text.clone()))
+            .collect::<Vec<_>>();
         let combo_term_dirty = self.combo_term_dirty;
         let combo_entries = self
             .combo_entries
@@ -63,49 +72,62 @@ impl EntropyApp {
             })
             .map(|(index, entry)| (index, entry.clone()))
             .collect::<Vec<_>>();
-        if !macros_dirty
+        let picker_mutation = self.deferred_picker_mutation();
+        if macro_entries.is_empty()
             && combo_entries.is_empty()
             && !combo_term_dirty
             && tap_dance_entries.is_empty()
             && self.pending_tap_hold_numeric_writes.is_empty()
+            && picker_mutation.is_none()
         {
             return;
         }
 
-        self.deferred_hid_settings = Some(DeferredHidSettings {
-            identity: ModuleSettingsDeviceIdentity {
-                path: about.path.clone(),
-                keyboard_id: about.keyboard_id,
-            },
-            macro_texts: self.keycode_picker.macro_texts.clone(),
-            macros_dirty,
+        let identity = ModuleSettingsDeviceIdentity::from_about(about);
+        let deferred = DeferredHidSettings {
+            identity: identity.clone(),
+            macro_entries,
             combo_entries,
             combo_term: self.combo_term,
             combo_term_dirty,
             tap_dance_entries,
             pending_tap_hold_numeric_writes: self.pending_tap_hold_numeric_writes.clone(),
             tap_hold_numeric_write_due: self.tap_hold_numeric_write_due,
-        });
+            picker_mutation,
+        };
+        if let Some(existing) = self
+            .deferred_hid_settings
+            .iter_mut()
+            .find(|existing| existing.identity.matches(&identity))
+        {
+            *existing = deferred;
+        } else {
+            self.deferred_hid_settings.push(deferred);
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn restore_deferred_hid_settings_after_connect(&mut self, about: &DeviceAboutInfo) {
-        let Some(deferred) = self.deferred_hid_settings.as_ref() else {
+        let identity = ModuleSettingsDeviceIdentity::from_about(about);
+        let Some(index) = self
+            .deferred_hid_settings
+            .iter()
+            .position(|deferred| deferred.identity.matches(&identity))
+        else {
             return;
         };
-        if deferred.identity.path != about.path
-            || deferred.identity.keyboard_id != about.keyboard_id
-        {
-            return;
-        }
 
-        let deferred = self
-            .deferred_hid_settings
-            .take()
-            .expect("deferred settings checked above");
+        let deferred = self.deferred_hid_settings.remove(index);
 
-        if deferred.macros_dirty {
-            self.keycode_picker.macro_texts = deferred.macro_texts;
+        if !deferred.macro_entries.is_empty() {
+            for (index, text) in deferred.macro_entries {
+                if self.keycode_picker.macro_texts.len() <= index {
+                    self.keycode_picker
+                        .macro_texts
+                        .resize(index + 1, Vec::new());
+                }
+                self.keycode_picker.macro_texts[index] = text;
+            }
             self.keycode_picker.macro_actions = self
                 .keycode_picker
                 .macro_texts
@@ -144,6 +166,102 @@ impl EntropyApp {
                 .tap_hold_numeric_write_due
                 .or_else(|| Some(std::time::Instant::now()));
         }
+        if let Some(mutation) = deferred.picker_mutation {
+            self.restore_deferred_picker_mutation(mutation);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn deferred_picker_mutation(&self) -> Option<DeferredPickerMutation> {
+        let keycode = self.keycode_picker.result?;
+        if let Some((index, field)) = self.combo_pick_target {
+            return Some(DeferredPickerMutation::Combo {
+                index,
+                field,
+                keycode,
+            });
+        }
+        if let Some(field) = self.key_override_pick_target {
+            return Some(DeferredPickerMutation::KeyOverride {
+                index: self.selected_key_override,
+                field,
+                keycode,
+            });
+        }
+        if let Some(field) = self.alt_repeat_pick_target {
+            return Some(DeferredPickerMutation::AltRepeat {
+                index: self.selected_alt_repeat,
+                field,
+                keycode,
+            });
+        }
+        if let Some((layer, index)) = self.selected_key {
+            return Some(DeferredPickerMutation::Key {
+                layer,
+                index,
+                keycode,
+            });
+        }
+        self.selected_encoder
+            .map(|(layer, index)| DeferredPickerMutation::Encoder {
+                layer,
+                index,
+                keycode,
+            })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn restore_deferred_picker_mutation(&mut self, mutation: DeferredPickerMutation) {
+        match mutation {
+            DeferredPickerMutation::Combo {
+                index,
+                field,
+                keycode,
+            } => {
+                self.combo_pick_target = Some((index, field));
+                self.keycode_picker.result = Some(keycode);
+            }
+            DeferredPickerMutation::KeyOverride {
+                index,
+                field,
+                keycode,
+            } => {
+                self.selected_key_override = index;
+                self.key_override_pick_target = Some(field);
+                self.keycode_picker.result = Some(keycode);
+            }
+            DeferredPickerMutation::AltRepeat {
+                index,
+                field,
+                keycode,
+            } => {
+                self.selected_alt_repeat = index;
+                self.alt_repeat_pick_target = Some(field);
+                self.keycode_picker.result = Some(keycode);
+            }
+            DeferredPickerMutation::Key {
+                layer,
+                index,
+                keycode,
+            } => {
+                self.selected_key = Some((layer, index));
+                self.keycode_picker.result = Some(keycode);
+            }
+            DeferredPickerMutation::Encoder {
+                layer,
+                index,
+                keycode,
+            } => {
+                self.selected_encoder = Some((layer, index));
+                self.keycode_picker.result = Some(keycode);
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn handoff_hid_worker_disconnect(&mut self, status_msg: impl Into<String>) {
+        self.preserve_deferred_hid_settings_for_disconnect();
+        self.clear_connected_keyboard_state(status_msg);
     }
 
     pub(super) fn clear_connected_keyboard_state(&mut self, status_msg: impl Into<String>) {
@@ -337,7 +455,10 @@ mod tests {
         let creation_context = eframe::CreationContext::_new_kittest(ctx);
         let mut app = EntropyApp::new(&creation_context);
         let about = DeviceAboutInfo {
-            path: "usb:phenom".to_owned(),
+            path: "/dev/hidraw0".to_owned(),
+            serial_number: "same-device".to_owned(),
+            vendor_id: 0xe126,
+            product_id: 0x0042,
             keyboard_id: 42,
             ..Default::default()
         };
@@ -375,14 +496,20 @@ mod tests {
         app.clear_connected_keyboard_state("disconnected");
 
         let other_device = DeviceAboutInfo {
-            path: "bluetooth:phenom".to_owned(),
+            path: "/dev/hidraw1".to_owned(),
+            serial_number: "other-identical-device".to_owned(),
+            vendor_id: about.vendor_id,
+            product_id: about.product_id,
             keyboard_id: 42,
             ..Default::default()
         };
         app.restore_deferred_hid_settings_after_connect(&other_device);
-        assert!(app.deferred_hid_settings.is_some());
+        assert!(!app.deferred_hid_settings.is_empty());
 
-        app.keycode_picker.macro_texts = vec![Vec::new()];
+        // Fresh readback has a newer clean macro in slot 1. Reconnect must
+        // overlay only our dirty slot, not replace this whole buffer.
+        app.keycode_picker.macro_texts = vec![Vec::new(), vec![8, 9]];
+        app.keycode_picker.macro_synced_texts = app.keycode_picker.macro_texts.clone();
         app.keycode_picker.macros_dirty = false;
         app.combo_entries = vec![
             ComboEntry::default(),
@@ -405,9 +532,14 @@ mod tests {
         app.keycode_picker.tap_dance_synced_entries = app.keycode_picker.tap_dance_entries.clone();
         app.keycode_picker.tap_dance_dirty = false;
 
-        app.restore_deferred_hid_settings_after_connect(&about);
+        let replugged_about = DeviceAboutInfo {
+            path: "/dev/hidraw7".to_owned(),
+            ..about
+        };
+        app.restore_deferred_hid_settings_after_connect(&replugged_about);
 
-        assert_eq!(app.keycode_picker.macro_texts, vec![vec![1, 2, 3]]);
+        assert_eq!(app.keycode_picker.macro_texts[0], vec![1, 2, 3]);
+        assert_eq!(app.keycode_picker.macro_texts[1], vec![8, 9]);
         assert!(app.keycode_picker.macros_dirty);
         assert_eq!(app.combo_entries[0].output, 0x0006);
         assert_eq!(app.combo_entries[1].output, 0x000c);

@@ -80,6 +80,16 @@ fn connection_replaces_layout_canvas(connect_state: &ConnectState) -> bool {
     matches!(connect_state, ConnectState::Loading { .. })
 }
 impl EntropyApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn has_pending_hid_mutations(&self) -> bool {
+        self.keycode_picker.macros_dirty
+            || self.combo_dirty
+            || self.combo_term_dirty
+            || self.keycode_picker.tap_dance_dirty
+            || !self.pending_tap_hold_numeric_writes.is_empty()
+            || self.deferred_picker_mutation().is_some()
+    }
+
     fn main_window_hidden_to_tray(&self) -> bool {
         #[cfg(target_os = "windows")]
         {
@@ -430,10 +440,10 @@ mod tests {
     use super::super::settings_write_queue::SettingsWriteStatus;
     use super::*;
     use crate::app::app_state::{
-        DeferredHidSettings, DeviceAboutInfo, ModuleSettingField, ModuleSettingKind,
-        ModuleSettingRefreshEntry, ModuleSettingRefreshOutcome, ModuleSettingsDeviceIdentity,
-        ModuleSettingsGroup, ModuleSettingsGroupKind, ModuleSettingsRefreshReport,
-        ModuleSettingsRefreshTask, ModuleSettingsRefreshTaskResult,
+        DeferredHidSettings, DeferredPickerMutation, DeviceAboutInfo, ModuleSettingField,
+        ModuleSettingKind, ModuleSettingRefreshEntry, ModuleSettingRefreshOutcome,
+        ModuleSettingsDeviceIdentity, ModuleSettingsGroup, ModuleSettingsGroupKind,
+        ModuleSettingsRefreshReport, ModuleSettingsRefreshTask, ModuleSettingsRefreshTaskResult,
     };
     use crate::keyboard::{KeyboardLayout, LayoutOption, PhysicalKey};
 
@@ -609,6 +619,9 @@ mod tests {
         let mut app = EntropyApp::new(&creation_context);
         let identity = ModuleSettingsDeviceIdentity {
             path: "usb:phenom".to_owned(),
+            serial_number: None,
+            vendor_id: 0,
+            product_id: 0,
             keyboard_id: 42,
         };
         app.device_about_info = Some(DeviceAboutInfo {
@@ -697,12 +710,24 @@ mod tests {
         assert!(!app.hid_write_task_active());
         assert!(app.hid_device.is_some());
 
-        app.apply_picker_results();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut close_sent = false;
+        for _ in 0..100 {
+            eframe::App::logic(&mut app, &ctx, &mut frame);
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                eframe::App::ui(&mut app, ui, &mut frame);
+            });
+            close_sent |= output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .is_some_and(|viewport| viewport.commands.contains(&egui::ViewportCommand::Close));
+            if close_sent {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(close_sent);
         assert_eq!(app.key_override_entries[0].trigger, 0x0004);
-        assert!(app.keycode_picker.result.is_none());
-        app.apply_picker_results();
-        assert_eq!(app.key_override_entries[0].trigger, 0x0004);
-        app.finish_deferred_exit_after_hid_write(&ctx);
         assert!(!app.exit_after_hid_write);
         assert!(app.pending_tap_hold_numeric_writes.is_empty());
 
@@ -746,6 +771,9 @@ mod tests {
 
         app.keycode_picker.macro_texts = vec![vec![1, 2, 3]];
         app.keycode_picker.macros_dirty = true;
+        app.key_override_entries = vec![KeyOverrideEntry::default()];
+        app.key_override_pick_target = Some(KeyOverridePickField::Trigger);
+        app.keycode_picker.result = Some(0x0004);
         app.combo_entries = vec![combo([0x0004, 0x0005, 0, 0], 0x0006)];
         app.combo_synced_entries = vec![ComboEntry::default()];
         app.combo_dirty = true;
@@ -801,16 +829,38 @@ mod tests {
         assert!(!app.exit_after_hid_write);
         assert!(app.pending_tap_hold_numeric_writes.is_empty());
         let requests = recorder.requests();
-        assert!(requests.iter().any(|request| request[0] == 0x0f));
-        assert!(requests
-            .iter()
-            .any(|request| request[..3] == [0xfe, 0x0d, 0x04]));
-        assert!(requests
-            .iter()
-            .any(|request| request[..3] == [0xfe, 0x0d, 0x02]));
-        assert!(requests
-            .iter()
-            .any(|request| request[..4] == [0xfe, 0x0b, 7, 0]));
+        assert_eq!(
+            requests.iter().filter(|request| request[0] == 0x0f).count(),
+            1
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request[..3] == [0xfe, 0x0d, 0x04])
+                .count(),
+            1
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request[..3] == [0xfe, 0x0d, 0x02])
+                .count(),
+            1
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request[..4] == [0xfe, 0x0b, 7, 0])
+                .count(),
+            1
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request[..3] == [0xfe, 0x0d, 0x06])
+                .count(),
+            1
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -821,6 +871,9 @@ mod tests {
         let mut app = EntropyApp::new(&creation_context);
         let identity = ModuleSettingsDeviceIdentity {
             path: "usb:phenom".to_owned(),
+            serial_number: None,
+            vendor_id: 0,
+            product_id: 0,
             keyboard_id: 42,
         };
         app.device_about_info = Some(DeviceAboutInfo {
@@ -830,6 +883,9 @@ mod tests {
         });
         app.keycode_picker.macro_texts = vec![vec![1, 2, 3]];
         app.keycode_picker.macros_dirty = true;
+        app.key_override_entries = vec![KeyOverrideEntry::default()];
+        app.key_override_pick_target = Some(KeyOverridePickField::Trigger);
+        app.keycode_picker.result = Some(0x0004);
         app.combo_entries = vec![ComboEntry {
             keys: [0x0004, 0x0005, 0, 0],
             output: 0x0006,
@@ -855,12 +911,19 @@ mod tests {
 
         let deferred = app
             .deferred_hid_settings
-            .as_ref()
+            .first()
             .expect("disconnect preserves pending HID-backed settings");
-        assert!(deferred.macros_dirty);
-        assert_eq!(deferred.macro_texts, vec![vec![1, 2, 3]]);
+        assert_eq!(deferred.macro_entries, vec![(0, vec![1, 2, 3])]);
         assert_eq!(deferred.combo_entries[0].1.output, 0x0006);
         assert_eq!(deferred.pending_tap_hold_numeric_writes.get(&7), Some(&175));
+        assert_eq!(
+            deferred.picker_mutation,
+            Some(DeferredPickerMutation::KeyOverride {
+                index: 0,
+                field: KeyOverridePickField::Trigger,
+                keycode: 0x0004,
+            })
+        );
         assert!(app.device_about_info.is_none());
         let close_output = ctx.run_ui(egui::RawInput::default(), |_ui| {
             app.finish_deferred_exit_after_hid_write(&ctx);
@@ -889,20 +952,23 @@ mod tests {
         let mut app = EntropyApp::new(&creation_context);
         let (hid_device, _) = crate::hid::HidDevice::test_device();
         app.hid_device = Some(hid_device);
-        app.deferred_hid_settings = Some(DeferredHidSettings {
+        app.deferred_hid_settings = vec![DeferredHidSettings {
             identity: ModuleSettingsDeviceIdentity {
                 path: "usb:previous-device".to_owned(),
+                serial_number: None,
+                vendor_id: 0,
+                product_id: 0,
                 keyboard_id: 1,
             },
-            macro_texts: vec![],
-            macros_dirty: false,
+            macro_entries: vec![],
             combo_entries: vec![],
             combo_term: None,
             combo_term_dirty: false,
             tap_dance_entries: vec![],
             pending_tap_hold_numeric_writes: Default::default(),
             tap_hold_numeric_write_due: None,
-        });
+            picker_mutation: None,
+        }];
         app.exit_after_hid_write = true;
 
         let close_output = ctx.run_ui(egui::RawInput::default(), |_ui| {
@@ -926,6 +992,9 @@ mod tests {
         let mut app = EntropyApp::new(&creation_context);
         let expected = ModuleSettingsDeviceIdentity {
             path: "usb:phenom".to_owned(),
+            serial_number: None,
+            vendor_id: 0,
+            product_id: 0,
             keyboard_id: 42,
         };
         app.device_about_info = Some(DeviceAboutInfo {
@@ -1078,7 +1147,32 @@ mod tests {
         assert!(!app.hid_write_task_active());
         assert!(app.hid_device.is_some());
 
-        app.apply_picker_results();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut close_sent = false;
+        for _ in 0..100 {
+            eframe::App::logic(&mut app, &ctx, &mut frame);
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                eframe::App::ui(&mut app, ui, &mut frame);
+            });
+            close_sent |= output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .is_some_and(|viewport| viewport.commands.contains(&egui::ViewportCommand::Close));
+            if close_sent {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(
+            close_sent,
+            "pending: macros={} combo={} term={} tap_dance={} tap_hold={} picker={}",
+            app.keycode_picker.macros_dirty,
+            app.combo_dirty,
+            app.combo_term_dirty,
+            app.keycode_picker.tap_dance_dirty,
+            !app.pending_tap_hold_numeric_writes.is_empty(),
+            app.deferred_picker_mutation().is_some(),
+        );
         assert_eq!(app.key_override_entries[0].trigger, 0x0004);
         assert!(app.keycode_picker.result.is_none());
         app.apply_picker_results();
@@ -1091,12 +1185,6 @@ mod tests {
         assert!(!app.exit_after_hid_write);
         assert!(app.pending_tap_hold_numeric_writes.is_empty());
         assert_eq!(app.layout_options_value, Some(0));
-        assert!(final_close_output
-            .viewport_output
-            .get(&egui::ViewportId::ROOT)
-            .expect("root viewport output exists")
-            .commands
-            .contains(&egui::ViewportCommand::Close));
 
         let completed_requests = recorder.requests();
         assert_eq!(
@@ -1368,7 +1456,7 @@ impl eframe::App for EntropyApp {
         #[cfg(not(target_arch = "wasm32"))]
         if !self.hid_write_task_active() {
             self.flush_pending_tap_hold_numeric_writes();
-            self.fallback_entropy_display_presets_before_exit();
+            let _ = self.fallback_entropy_display_presets_before_exit();
         }
         #[cfg(target_arch = "wasm32")]
         self.flush_pending_tap_hold_numeric_writes();
@@ -1921,6 +2009,8 @@ impl eframe::App for EntropyApp {
                             );
                             match hid.set_macro_buffer(&buf) {
                                 Ok(()) => {
+                                    self.keycode_picker.macro_synced_texts =
+                                        self.keycode_picker.macro_texts.clone();
                                     self.keycode_picker.macros_dirty = false;
                                     self.status_msg = crate::i18n::tr_catalog(
                                         self.app_settings.language,
@@ -2071,9 +2161,10 @@ impl eframe::App for EntropyApp {
                 &self.keycode_picker.tap_dance_names,
                 &self.current_device_name,
             );
-            // Consume this attempt. Failed device entries remain different from the
-            // synced snapshot and retry after the next edit or picker close.
-            self.keycode_picker.tap_dance_dirty = false;
+            // Keep failed slots dirty so a deferred close cannot report success
+            // before every firmware mutation has a successful writeback.
+            self.keycode_picker.tap_dance_dirty = self.keycode_picker.tap_dance_entries
+                != self.keycode_picker.tap_dance_synced_entries;
             if td_save_ok {
                 if self.status_msg.is_empty() || self.status_msg.starts_with("✓") {
                     self.status_msg = crate::i18n::tr_catalog(
