@@ -98,15 +98,15 @@ impl EntropyApp {
         self.poll_settings_write(ctx);
         self.flush_due_qmk_setting_writes();
         if should_poll_device_scan(main_window_hidden_to_tray) {
-            if hid_lifecycle_writes_available(self.hid_write_task_active()) {
+            if hid_lifecycle_writes_available(self.hid_write_lifecycle_busy()) {
                 self.handle_pending_imports(ctx, now);
             }
-            if !self.hid_write_task_active() {
+            if !self.hid_write_lifecycle_busy() {
                 self.poll_device_scan(ctx);
             }
 
             let is_connecting = matches!(self.connect_state, ConnectState::Loading { .. });
-            let hid_write_active = self.hid_write_task_active();
+            let hid_write_active = self.hid_write_lifecycle_busy();
             #[cfg(target_os = "macos")]
             let hid_session_active = self.hid_device.is_some();
             #[cfg(not(target_os = "macos"))]

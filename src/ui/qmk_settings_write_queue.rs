@@ -144,6 +144,29 @@ mod tests {
         EntropyApp::new(&creation_context)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn drain_hid_writes(app: &mut EntropyApp, ctx: &egui::Context) {
+        for _ in 0..200 {
+            app.poll_layer_write(ctx);
+            app.poll_combo_write(ctx);
+            app.poll_settings_write(ctx);
+            if !app.hid_write_task_active() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("HID write tasks did not drain");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn qsid_request_count(recorder: &crate::hid::TestHidRecorder, qsid: u16) -> usize {
+        recorder
+            .requests()
+            .iter()
+            .filter(|request| request[2] == qsid as u8 && request[3] == (qsid >> 8) as u8)
+            .count()
+    }
+
     fn request(
         qsid: u16,
         old_value: u16,
@@ -215,7 +238,7 @@ mod tests {
     }
 
     #[test]
-    fn device_switch_cancels_debounced_write_before_selecting_next_device() {
+    fn device_switch_cancels_debounced_write_without_transport() {
         let mut app = test_app();
         app.touchpad_settings.scroll_sens = 12;
         app.qmk_settings_write_queue
@@ -228,43 +251,86 @@ mod tests {
     }
 
     #[test]
-    fn disconnect_clears_debounced_write_before_resetting_device_state() {
+    fn disconnect_then_reconnect_cancels_old_debounce_and_writes_new_value() {
         let mut app = test_app();
+        app.touchpad_settings.scroll_sens = 12;
         app.qmk_settings_write_queue
             .enqueue(request(122, 8, 12, std::time::Instant::now()));
 
         app.clear_connected_keyboard_state("device disconnected");
 
         assert!(!app.qmk_settings_write_pending());
+        assert_eq!(app.touchpad_settings.scroll_sens, 8);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let ctx = egui::Context::default();
+            let (hid_device, recorder) = crate::hid::HidDevice::test_device();
+            app.hid_device = Some(hid_device);
+            app.touchpad_settings.scroll_sens = 14;
+            app.qmk_settings_write_queue
+                .enqueue(request(122, 8, 14, std::time::Instant::now()));
+            app.flush_pending_qmk_setting_writes();
+            drain_hid_writes(&mut app, &ctx);
+
+            assert_eq!(app.touchpad_settings.scroll_sens, 14);
+            assert_eq!(qsid_request_count(&recorder, 122), 2);
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn debounced_write_waits_in_background_queue_while_hid_is_owned() {
+    fn debounced_write_waits_for_combo_then_writes_only_newest_value() {
+        let ctx = egui::Context::default();
         let mut app = test_app();
-        app.start_settings_write_for_test();
-        app.qmk_settings_write_queue
-            .enqueue(request(122, 8, 12, std::time::Instant::now()));
+        let (hid_device, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        app.combo_entries = vec![ComboEntry {
+            keys: [0x0004, 0x0005, 0, 0],
+            output: 0x0006,
+        }];
+        app.combo_synced_entries = vec![ComboEntry::default()];
+        app.mark_combo_dirty();
+        app.maybe_start_combo_write(&ctx);
+        assert!(app.combo_write_task.is_some());
 
-        app.flush_pending_qmk_setting_writes();
+        app.qmk_settings_write_queue
+            .enqueue(request(122, 8, 9, std::time::Instant::now()));
+        app.qmk_settings_write_queue
+            .enqueue(request(122, 9, 12, std::time::Instant::now()));
+
+        app.flush_due_qmk_setting_writes();
 
         assert_eq!(app.pending_settings_write_value(122), Some(12));
         assert!(!app.qmk_settings_write_pending());
+        drain_hid_writes(&mut app, &ctx);
+
+        assert_eq!(
+            app.settings_write_queue.status(122),
+            Some(&SettingsWriteStatus::Saved)
+        );
+        assert_eq!(app.touchpad_settings.scroll_sens, 12);
+        assert_eq!(qsid_request_count(&recorder, 122), 2);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn device_switch_waits_for_active_settings_write() {
+    fn device_switch_waits_for_real_debounced_settings_write() {
         let ctx = egui::Context::default();
         let mut app = test_app();
-        app.start_settings_write_for_test();
+        let (hid_device, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        app.qmk_settings_write_queue
+            .enqueue(request(122, 8, 12, std::time::Instant::now()));
 
         app.start_connect(usize::MAX);
         assert_eq!(app.pending_device_connect, Some(usize::MAX));
+        assert!(app.settings_write_task.is_some());
 
-        app.poll_settings_write(&ctx);
+        drain_hid_writes(&mut app, &ctx);
 
         assert!(app.pending_device_connect.is_none());
         assert_eq!(app.status_msg, "Device not found");
+        assert_eq!(qsid_request_count(&recorder, 122), 2);
     }
 }

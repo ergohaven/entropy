@@ -85,6 +85,11 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn hid_write_lifecycle_busy(&self) -> bool {
+        self.hid_write_task_active() || self.qmk_settings_write_pending()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn maybe_start_combo_write(&mut self, ctx: &egui::Context) {
         if self.hid_write_task_active()
             || self.combo_attempted_revision == Some(self.combo_edit_revision)
@@ -177,6 +182,7 @@ impl EntropyApp {
                 self.combo_write_task = None;
                 self.finish_combo_write(result);
                 self.continue_pending_settings_writes(ctx);
+                self.resume_pending_device_connect();
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 ctx.request_repaint_after(std::time::Duration::from_millis(16));
@@ -202,6 +208,7 @@ impl EntropyApp {
                     )],
                 );
                 self.continue_pending_settings_writes(ctx);
+                self.resume_pending_device_connect();
             }
         }
     }
