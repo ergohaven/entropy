@@ -398,8 +398,12 @@ class EntropyUniversalSymbolsFactory final : public AddonFactory {
 } // namespace fcitx
 
 #ifndef ENTROPY_HOST_TEXT_TEST
-FCITX_ADDON_FACTORY_V2(entropyuniversalsymbols,
-                       fcitx::EntropyUniversalSymbolsFactory);
+#ifdef FCITX_ADDON_FACTORY_V2_BACKWARDS
+FCITX_ADDON_FACTORY_V2_BACKWARDS(entropyuniversalsymbols,
+                                 fcitx::EntropyUniversalSymbolsFactory);
+#else
+FCITX_ADDON_FACTORY(fcitx::EntropyUniversalSymbolsFactory);
+#endif
 #else
 int main() {
     return fcitx::entropyHostTextTransportSelfTest();
