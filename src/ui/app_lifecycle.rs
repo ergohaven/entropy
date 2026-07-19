@@ -403,8 +403,10 @@ fn tap_dance_entries_to_write(
 #[cfg(test)]
 mod tests {
     use super::super::combo_write::ComboWritePlan;
+    use super::super::layer_operations::LayerSnapshot;
+    use super::super::settings_write_queue::SettingsWriteStatus;
     use super::*;
-    use crate::keyboard::{KeyboardLayout, LayoutOption};
+    use crate::keyboard::{KeyboardLayout, LayoutOption, PhysicalKey};
 
     #[test]
     fn dirty_dynamic_entries_write_over_bluetooth() {
@@ -709,6 +711,174 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn combo_completion_starts_settings_queued_behind_it() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid_device, _recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        app.combo_entries = vec![combo([0x0004, 0x0005, 0, 0], 0x0006)];
+        app.combo_synced_entries = vec![ComboEntry::default()];
+        app.combo_dirty = true;
+        app.combo_edit_revision = 1;
+        app.maybe_start_combo_write(&ctx);
+        app.queue_touchpad_setting_write("Sniper sensitivity".to_owned(), 121, 1, 1, 2);
+        assert!(app.settings_write_task.is_none());
+
+        for _ in 0..100 {
+            app.poll_combo_write(&ctx);
+            if app.settings_write_task.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        assert!(app.settings_write_task.is_some());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn layer_completion_starts_settings_queued_behind_it() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid_device, _recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        app.layout = Some(KeyboardLayout {
+            name: "Test".into(),
+            rows: 1,
+            cols: 1,
+            keys: vec![PhysicalKey {
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+                row: 0,
+                col: 0,
+                label: "0".into(),
+                rotation: 0.0,
+                rotation_x: 0.0,
+                rotation_y: 0.0,
+                layout_condition: None,
+            }],
+            encoders: vec![],
+            layers: vec![vec![0x0004]],
+            encoder_layers: vec![vec![]],
+            layer_names: vec![],
+            custom_keycodes: vec![],
+            layout_options: vec![],
+            live_features: Default::default(),
+            supports_rgb: false,
+            lighting_mode: None,
+            firmware: FirmwareProtocol::Vial,
+        });
+        app.apply_layer_snapshot(
+            0,
+            LayerSnapshot {
+                keycodes: vec![0x0005],
+                encoder_keycodes: vec![],
+            },
+            "layer_actions.paste",
+        );
+        assert!(app.layer_write_task.is_some());
+        app.queue_touchpad_setting_write("Sniper sensitivity".to_owned(), 121, 1, 1, 2);
+        assert!(app.settings_write_task.is_none());
+
+        for _ in 0..100 {
+            app.poll_layer_write(&ctx);
+            if app.settings_write_task.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        assert!(app.settings_write_task.is_some());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn settings_worker_fault_allows_deferred_exit(fault: crate::hid::TestHidFault) {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid_device, recorder) =
+            crate::hid::HidDevice::test_device_with_fault_after_requests(Some((2, fault)));
+        app.hid_device = Some(hid_device);
+        app.combo_entries = vec![combo([0x0004, 0x0005, 0, 0], 0x0006)];
+        app.combo_synced_entries = vec![ComboEntry::default()];
+        app.combo_dirty = true;
+        app.combo_edit_revision = 1;
+        app.maybe_start_combo_write(&ctx);
+        app.queue_touchpad_setting_write("Sniper sensitivity".to_owned(), 121, 1, 1, 2);
+        app.keycode_picker.macros_dirty = true;
+        app.exit_after_hid_write = true;
+
+        let mut close_count = 0;
+        for _ in 0..200 {
+            let output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+                app.update_native_background(&ctx, 0.0, true, false);
+            });
+            close_count += output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .into_iter()
+                .flat_map(|viewport| &viewport.commands)
+                .filter(|command| **command == egui::ViewportCommand::Close)
+                .count();
+            if close_count == 1 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        assert_eq!(close_count, 1);
+        assert!(!app.exit_after_hid_write);
+        assert!(app.hid_device.is_none());
+        assert!(!app.qmk_settings_write_busy());
+        assert!(matches!(
+            app.settings_write_status(121),
+            Some(SettingsWriteStatus::Failed(_))
+        ));
+        assert!(!app.combo_dirty);
+        assert!(app.keycode_picker.macros_dirty);
+        let requests = recorder.requests();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request[..3] == [0xfe, 0x0d, 0x04])
+                .count(),
+            1
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| u16::from_le_bytes([request[2], request[3]]) == 121)
+                .count(),
+            1
+        );
+
+        let output = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+        assert!(!output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .into_iter()
+            .flat_map(|viewport| &viewport.commands)
+            .any(|command| *command == egui::ViewportCommand::Close));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn settings_disconnect_allows_deferred_exit_after_completed_combo() {
+        settings_worker_fault_allows_deferred_exit(crate::hid::TestHidFault::Disconnect);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn settings_worker_channel_failure_allows_deferred_exit_after_completed_combo() {
+        settings_worker_fault_allows_deferred_exit(crate::hid::TestHidFault::WorkerPanic);
     }
 
     #[test]

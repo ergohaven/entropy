@@ -176,6 +176,7 @@ impl EntropyApp {
             Ok(result) => {
                 self.combo_write_task = None;
                 self.finish_combo_write(result);
+                self.continue_pending_settings_writes(ctx);
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 ctx.request_repaint_after(std::time::Duration::from_millis(16));
@@ -200,6 +201,7 @@ impl EntropyApp {
                         ),
                     )],
                 );
+                self.continue_pending_settings_writes(ctx);
             }
         }
     }

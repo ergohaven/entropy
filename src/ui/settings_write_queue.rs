@@ -244,6 +244,11 @@ impl EntropyApp {
         self.settings_write_queue.pending_value(qsid)
     }
 
+    #[cfg(test)]
+    pub(super) fn settings_write_status(&self, qsid: u16) -> Option<&SettingsWriteStatus> {
+        self.settings_write_queue.status(qsid)
+    }
+
     pub(super) fn draw_settings_write_status(
         &self,
         ui: &mut egui::Ui,
@@ -423,6 +428,18 @@ impl EntropyApp {
         });
     }
 
+    /// Continue Settings work in same frame that another HID owner returns
+    /// transport, rather than waiting for background-update cadence.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn continue_pending_settings_writes(&mut self, ctx: &egui::Context) {
+        self.cancel_pending_settings_writes_without_transport();
+        self.start_next_settings_write();
+
+        if self.qmk_settings_write_busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+    }
+
     #[cfg(target_arch = "wasm32")]
     fn start_next_settings_write(&mut self) {}
 
@@ -431,11 +448,7 @@ impl EntropyApp {
         let result = match self.settings_write_task.as_ref() {
             Some(task) => task.receiver.try_recv(),
             None => {
-                self.cancel_pending_settings_writes_without_transport();
-                self.start_next_settings_write();
-                if self.qmk_settings_write_busy() {
-                    ctx.request_repaint_after(std::time::Duration::from_millis(16));
-                }
+                self.continue_pending_settings_writes(ctx);
                 return;
             }
         };
@@ -444,7 +457,7 @@ impl EntropyApp {
             Ok(result) => {
                 self.settings_write_task = None;
                 self.finish_settings_write(result);
-                self.start_next_settings_write();
+                self.continue_pending_settings_writes(ctx);
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 ctx.request_repaint_after(std::time::Duration::from_millis(16));
@@ -474,6 +487,7 @@ impl EntropyApp {
                         ("error", &error),
                     ],
                 );
+                self.continue_pending_settings_writes(ctx);
             }
         }
     }
