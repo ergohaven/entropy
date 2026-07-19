@@ -124,6 +124,7 @@ impl EntropyApp {
 
         self.poll_layer_write(ctx);
         self.poll_combo_write(ctx);
+        self.maybe_start_combo_write(ctx);
         self.finish_deferred_exit_after_hid_write(ctx);
         self.poll_text_expander_deferred_save(now);
         self.auto_reload_text_expander_rules_file(now);
@@ -630,6 +631,35 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn background_lifecycle_chains_combo_writes_before_deferred_exit() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid_device, _recorder) = crate::hid::HidDevice::test_device();
+        let first = combo([0x0004, 0x0005, 0, 0], 0x0006);
+        let second = combo([0x0007, 0x0008, 0, 0], 0x0009);
+        app.hid_device = Some(hid_device);
+        app.combo_entries = vec![first.clone(), second];
+        app.combo_synced_entries = vec![ComboEntry::default(), ComboEntry::default()];
+        app.combo_dirty = true;
+        app.combo_edit_revision = 1;
+        app.exit_after_hid_write = true;
+        app.maybe_start_combo_write(&ctx);
+
+        for _ in 0..100 {
+            app.update_native_background(&ctx, 0.0, true, true);
+            if app.combo_synced_entries.first() == Some(&first) && app.combo_write_task.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        assert_eq!(app.combo_synced_entries.first(), Some(&first));
+        assert!(app.combo_write_task.is_some());
+        assert!(app.exit_after_hid_write);
     }
 
     #[test]
