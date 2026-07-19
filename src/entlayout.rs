@@ -1496,7 +1496,10 @@ impl EntropyApp {
         self.combo_term = bundle.data.combos.term.or(self.combo_term);
         save_combo_names(&self.combo_names, &self.current_device_name);
         save_combo_colors(&self.combo_colors, &self.current_device_name);
+        self.combo_synced_entries = self.combo_entries.clone();
         self.combo_dirty = false;
+        self.combo_edit_revision = self.combo_edit_revision.wrapping_add(1);
+        self.combo_attempted_revision = None;
         self.combo_names_dirty = false;
         self.combo_colors_dirty = false;
         self.combo_term_dirty = false;

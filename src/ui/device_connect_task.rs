@@ -446,7 +446,7 @@ fn supports_vial_macro_ext_keycodes(vial_protocol: u32, json: &serde_json::Value
 impl EntropyApp {
     pub(super) fn refresh_current_device_data(&mut self) {
         let lang = self.app_settings.language;
-        if self.layer_write_task.is_some() {
+        if self.hid_write_task_active() {
             self.status_msg =
                 crate::i18n::tr_catalog(lang, "status_messages.refresh_device_data_pending_write")
                     .to_owned();
@@ -485,7 +485,7 @@ impl EntropyApp {
     }
 
     pub(super) fn start_connect(&mut self, device_idx: usize) {
-        if self.layer_write_task.is_some() {
+        if self.hid_write_task_active() {
             return;
         }
         let dev = match self.device_manager.devices().get(device_idx) {
@@ -502,6 +502,7 @@ impl EntropyApp {
         self.selected_encoder = None;
         self.selected_layer = 0;
         self.layer_write_task = None;
+        self.combo_write_task = None;
         self.hid_device = None;
         self.undo_stack.clear();
         self.device_about_info = None;
@@ -510,6 +511,9 @@ impl EntropyApp {
         self.combo_undo_stack.clear();
         self.combo_pick_target = None;
         self.combo_dirty = false;
+        self.combo_synced_entries.clear();
+        self.combo_edit_revision = self.combo_edit_revision.wrapping_add(1);
+        self.combo_attempted_revision = None;
         self.combo_names_dirty = false;
         self.combo_colors_dirty = false;
         self.combo_term_dirty = false;

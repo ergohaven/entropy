@@ -67,6 +67,10 @@ fn app_visuals(dark_mode: bool) -> egui::Visuals {
     visuals
 }
 
+fn hid_lifecycle_writes_available(hid_write_task_active: bool) -> bool {
+    !hid_write_task_active
+}
+
 impl EntropyApp {
     fn main_window_hidden_to_tray(&self) -> bool {
         #[cfg(target_os = "windows")]
@@ -92,11 +96,15 @@ impl EntropyApp {
         selected_device_is_bluetooth: bool,
     ) {
         if should_poll_device_scan(main_window_hidden_to_tray) {
-            self.handle_pending_imports(ctx, now);
-            self.poll_device_scan(ctx);
+            if hid_lifecycle_writes_available(self.hid_write_task_active()) {
+                self.handle_pending_imports(ctx, now);
+            }
+            if !self.hid_write_task_active() {
+                self.poll_device_scan(ctx);
+            }
 
             let is_connecting = matches!(self.connect_state, ConnectState::Loading { .. });
-            let layer_write_active = self.layer_write_task.is_some();
+            let hid_write_active = self.hid_write_task_active();
             #[cfg(target_os = "macos")]
             let hid_session_active = self.hid_device.is_some();
             #[cfg(not(target_os = "macos"))]
@@ -105,7 +113,7 @@ impl EntropyApp {
                 && (self.last_device_scan_at == 0.0 || now - self.last_device_scan_at >= 1.0)
                 && !self.vial_unlock_polling
                 && !is_connecting
-                && !layer_write_active
+                && !hid_write_active
                 && !hid_session_active
             {
                 self.scan_frame = self.scan_frame.wrapping_add(1);
@@ -115,6 +123,9 @@ impl EntropyApp {
         }
 
         self.poll_layer_write(ctx);
+        self.poll_combo_write(ctx);
+        self.maybe_start_combo_write(ctx);
+        self.finish_deferred_exit_after_hid_write(ctx);
         self.poll_text_expander_deferred_save(now);
         self.auto_reload_text_expander_rules_file(now);
         self.poll_single_instance_signal(ctx);
@@ -366,6 +377,16 @@ fn should_write_dynamic_entries(
     entries_dirty && !keycode_picker_open
 }
 
+pub(super) fn combo_write_lifecycle_plan(
+    combo_dirty: bool,
+    keycode_picker_open: bool,
+    entries: &[ComboEntry],
+    synced_entries: &[ComboEntry],
+) -> Option<super::combo_write::ComboWritePlan> {
+    (combo_dirty && !keycode_picker_open)
+        .then(|| super::combo_write::next_combo_write(entries, synced_entries))
+}
+
 fn tap_dance_entries_to_write(
     entries: &[crate::keycode_picker::TapDanceEntry],
     synced_entries: &[crate::keycode_picker::TapDanceEntry],
@@ -379,7 +400,9 @@ fn tap_dance_entries_to_write(
 
 #[cfg(test)]
 mod tests {
+    use super::super::combo_write::ComboWritePlan;
     use super::*;
+    use crate::keyboard::{KeyboardLayout, LayoutOption};
 
     #[test]
     fn dirty_dynamic_entries_write_over_bluetooth() {
@@ -396,6 +419,41 @@ mod tests {
     fn clean_dynamic_entries_do_not_write() {
         assert!(!should_write_dynamic_entries(false, false, true));
         assert!(!should_write_dynamic_entries(false, false, false));
+    }
+
+    fn combo(keys: [u16; 4], output: u16) -> ComboEntry {
+        ComboEntry { keys, output }
+    }
+
+    #[test]
+    fn combo_lifecycle_keeps_incomplete_draft_off_hid_path() {
+        let entries = [combo([0x0004, 0, 0, 0], 0x0005)];
+        let synced = [ComboEntry::default()];
+
+        assert_eq!(
+            combo_write_lifecycle_plan(true, false, &entries, &synced),
+            Some(ComboWritePlan::Incomplete { index: 0 })
+        );
+    }
+
+    #[test]
+    fn combo_lifecycle_schedules_only_changed_valid_slot() {
+        let unchanged = combo([0x0004, 0x0005, 0, 0], 0x0006);
+        let changed = combo([0x0007, 0x0008, 0, 0], 0x0009);
+        let previous = combo([0x0007, 0x0008, 0, 0], 0x000a);
+
+        assert_eq!(
+            combo_write_lifecycle_plan(
+                true,
+                false,
+                &[unchanged.clone(), changed.clone(), unchanged.clone()],
+                &[unchanged.clone(), previous, unchanged]
+            ),
+            Some(ComboWritePlan::Write {
+                index: 1,
+                entry: changed,
+            })
+        );
     }
 
     #[test]
@@ -417,6 +475,191 @@ mod tests {
             ),
             vec![1]
         );
+    }
+
+    #[test]
+    fn combo_task_defers_settings_changes_refresh_and_exit_writes_until_handle_returns() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid_device, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        app.combo_entries = vec![combo([0x0004, 0x0005, 0, 0], 0x0006)];
+        app.combo_synced_entries = vec![ComboEntry::default()];
+        app.combo_dirty = true;
+        app.combo_edit_revision = 1;
+        app.maybe_start_combo_write(&ctx);
+        assert!(app.hid_write_task_active());
+
+        app.key_override_entries = vec![KeyOverrideEntry::default()];
+        app.key_override_pick_target = Some(KeyOverridePickField::Trigger);
+        app.keycode_picker.result = Some(0x0004);
+        app.pending_tap_hold_numeric_writes.insert(7, 175);
+        app.layout = Some(KeyboardLayout {
+            name: "Test".into(),
+            rows: 0,
+            cols: 0,
+            keys: vec![],
+            encoders: vec![],
+            layers: vec![],
+            encoder_layers: vec![],
+            layer_names: vec![],
+            custom_keycodes: vec![],
+            layout_options: vec![LayoutOption {
+                label: "Display preset".into(),
+                choices: vec!["Disabled".into(), "Clock".into()],
+            }],
+            live_features: Default::default(),
+            supports_rgb: false,
+            lighting_mode: None,
+            firmware: FirmwareProtocol::Vial,
+        });
+        app.layout_options_value = Some(1);
+
+        app.apply_picker_results();
+        assert_eq!(app.keycode_picker.result, Some(0x0004));
+        assert_eq!(app.key_override_entries[0].trigger, 0);
+
+        app.refresh_current_device_data();
+        assert_eq!(
+            app.status_msg,
+            crate::i18n::tr_catalog(
+                app.app_settings.language,
+                "status_messages.refresh_device_data_pending_write"
+            )
+        );
+        app.app_settings.minimize_to_tray_on_close = false;
+        app.app_settings.close_to_tray_behavior = CloseToTrayBehavior::Close;
+        let mut close_input = egui::RawInput::default();
+        close_input
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .expect("root viewport exists")
+            .events
+            .push(egui::ViewportEvent::Close);
+        let close_output = ctx.run_ui(close_input, |_ui| {
+            app.handle_close_to_tray(&ctx);
+        });
+        assert!(close_output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .expect("root viewport output exists")
+            .commands
+            .contains(&egui::ViewportCommand::CancelClose));
+        assert!(app.exit_after_hid_write);
+        eframe::App::on_exit(&mut app, None);
+        assert_eq!(app.pending_tap_hold_numeric_writes.get(&7), Some(&175));
+
+        let active_requests = recorder.requests();
+        assert_eq!(
+            active_requests
+                .iter()
+                .filter(|request| request[..3] == [0xfe, 0x0d, 0x06])
+                .count(),
+            0
+        );
+        assert_eq!(
+            active_requests
+                .iter()
+                .filter(|request| request[..2] == [0xfe, 0x0b])
+                .count(),
+            0
+        );
+        assert_eq!(
+            active_requests
+                .iter()
+                .filter(|request| request[..6] == [0x03, 0x02, 0, 0, 0, 0])
+                .count(),
+            0
+        );
+
+        for _ in 0..100 {
+            app.poll_combo_write(&ctx);
+            if !app.hid_write_task_active() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(!app.hid_write_task_active());
+        assert!(app.hid_device.is_some());
+
+        app.apply_picker_results();
+        assert_eq!(app.key_override_entries[0].trigger, 0x0004);
+        assert!(app.keycode_picker.result.is_none());
+        app.apply_picker_results();
+        assert_eq!(app.key_override_entries[0].trigger, 0x0004);
+
+        let final_close_output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+            app.finish_deferred_exit_after_hid_write(&ctx);
+        });
+        assert!(!app.exit_after_hid_write);
+        assert!(app.pending_tap_hold_numeric_writes.is_empty());
+        assert_eq!(app.layout_options_value, Some(0));
+        assert!(final_close_output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .expect("root viewport output exists")
+            .commands
+            .contains(&egui::ViewportCommand::Close));
+
+        let completed_requests = recorder.requests();
+        assert_eq!(
+            completed_requests
+                .iter()
+                .filter(|request| request[..3] == [0xfe, 0x0d, 0x04])
+                .count(),
+            1
+        );
+        assert_eq!(
+            completed_requests
+                .iter()
+                .filter(|request| request[..3] == [0xfe, 0x0d, 0x06])
+                .count(),
+            1
+        );
+        assert_eq!(
+            completed_requests
+                .iter()
+                .filter(|request| request[..2] == [0xfe, 0x0b])
+                .count(),
+            1
+        );
+        assert_eq!(
+            completed_requests
+                .iter()
+                .filter(|request| request[..6] == [0x03, 0x02, 0, 0, 0, 0])
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn background_lifecycle_chains_combo_writes_before_deferred_exit() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid_device, _recorder) = crate::hid::HidDevice::test_device();
+        let first = combo([0x0004, 0x0005, 0, 0], 0x0006);
+        let second = combo([0x0007, 0x0008, 0, 0], 0x0009);
+        app.hid_device = Some(hid_device);
+        app.combo_entries = vec![first.clone(), second];
+        app.combo_synced_entries = vec![ComboEntry::default(), ComboEntry::default()];
+        app.combo_dirty = true;
+        app.combo_edit_revision = 1;
+        app.exit_after_hid_write = true;
+        app.maybe_start_combo_write(&ctx);
+
+        for _ in 0..100 {
+            app.update_native_background(&ctx, 0.0, true, true);
+            if app.combo_synced_entries.first() == Some(&first) && app.combo_write_task.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        assert_eq!(app.combo_synced_entries.first(), Some(&first));
+        assert!(app.combo_write_task.is_some());
+        assert!(app.exit_after_hid_write);
     }
 
     #[test]
@@ -458,9 +701,13 @@ impl eframe::App for EntropyApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.flush_pending_tap_hold_numeric_writes();
         #[cfg(not(target_arch = "wasm32"))]
-        self.fallback_entropy_display_presets_before_exit();
+        if !self.hid_write_task_active() {
+            self.flush_pending_tap_hold_numeric_writes();
+            self.fallback_entropy_display_presets_before_exit();
+        }
+        #[cfg(target_arch = "wasm32")]
+        self.flush_pending_tap_hold_numeric_writes();
         self.flush_pending_text_expander_settings();
         self.app_settings.dark_mode = self.dark_mode;
         save_app_settings(&self.app_settings);
@@ -548,12 +795,17 @@ impl eframe::App for EntropyApp {
         if let Some((layer, ki, kc)) = self.pending_handed_swap {
             if !ctx.input(|i| i.modifiers.ctrl) {
                 #[cfg(not(target_arch = "wasm32"))]
-                self.assign_keycode(layer, ki, kc);
-                #[cfg(target_arch = "wasm32")]
-                if let Some(layout) = &mut self.layout {
-                    layout.set_keycode(layer, ki, kc);
+                if !self.hid_write_task_active() {
+                    self.assign_keycode(layer, ki, kc);
+                    self.pending_handed_swap = None;
                 }
-                self.pending_handed_swap = None;
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if let Some(layout) = &mut self.layout {
+                        layout.set_keycode(layer, ki, kc);
+                    }
+                    self.pending_handed_swap = None;
+                }
             }
         }
         let accent_color = self.app_settings.accent_color;
@@ -612,7 +864,7 @@ impl eframe::App for EntropyApp {
         // Check if loading
         #[cfg(not(target_arch = "wasm32"))]
         let is_loading = matches!(self.connect_state, ConnectState::Loading { .. })
-            || self.layer_write_task.is_some();
+            || self.hid_write_task_active();
         #[cfg(target_arch = "wasm32")]
         let is_loading = false;
 
@@ -970,8 +1222,16 @@ impl eframe::App for EntropyApp {
             .as_ref()
             .map(|hid| hid.is_bluetooth_transport())
             .unwrap_or(false);
+        #[cfg(not(target_arch = "wasm32"))]
+        let hid_lifecycle_writes_available =
+            hid_lifecycle_writes_available(self.hid_write_task_active());
+        #[cfg(target_arch = "wasm32")]
+        let hid_lifecycle_writes_available = true;
 
-        if self.keycode_picker.macros_dirty && !self.keycode_picker.open {
+        if hid_lifecycle_writes_available
+            && self.keycode_picker.macros_dirty
+            && !self.keycode_picker.open
+        {
             if self.unlock_open || self.vial_unlock_polling {
                 // Defer macro write until unlock flow fully finishes.
             } else if self.is_vial_locked() {
@@ -1028,40 +1288,11 @@ impl eframe::App for EntropyApp {
             }
         }
 
-        // Write combos to device if changed
-        if should_write_dynamic_entries(
-            self.combo_dirty,
-            self.keycode_picker.open,
-            active_hid_is_bluetooth,
-        ) {
-            let mut combo_save_ok = true;
-            if let Some(hid) = &self.hid_device {
-                for (i, combo) in self.combo_entries.iter().enumerate() {
-                    match hid.set_combo(i as u8, combo.keys, combo.output) {
-                        Ok(()) => {}
-                        Err(e) => {
-                            self.status_msg = crate::i18n::tr_catalog_format(
-                                self.app_settings.language,
-                                "status_messages.combo_write_error",
-                                &[("error", &e.to_string())],
-                            );
-                            combo_save_ok = false;
-                            break;
-                        }
-                    }
-                }
-            }
-            if combo_save_ok {
-                self.combo_dirty = false;
-                self.status_msg = crate::i18n::tr_catalog(
-                    self.app_settings.language,
-                    "status_messages.combos_saved",
-                )
-                .into();
-            }
-        }
-
-        if self.combo_term_dirty && !self.keycode_picker.open && !active_hid_is_bluetooth {
+        if hid_lifecycle_writes_available
+            && self.combo_term_dirty
+            && !self.keycode_picker.open
+            && !active_hid_is_bluetooth
+        {
             let mut term_save_ok = true;
             if let (Some(hid), Some(value)) = (&self.hid_device, self.combo_term) {
                 if let Err(e) = hid.set_qmk_setting_u16(2, value) {
@@ -1102,14 +1333,18 @@ impl eframe::App for EntropyApp {
             self.combo_colors_dirty = false;
         }
 
-        self.flush_due_tap_hold_numeric_writes();
+        if hid_lifecycle_writes_available {
+            self.flush_due_tap_hold_numeric_writes();
+        }
 
         // Write tap dance to device if changed
-        if should_write_dynamic_entries(
-            self.keycode_picker.tap_dance_dirty,
-            self.keycode_picker.open,
-            active_hid_is_bluetooth,
-        ) {
+        if hid_lifecycle_writes_available
+            && should_write_dynamic_entries(
+                self.keycode_picker.tap_dance_dirty,
+                self.keycode_picker.open,
+                active_hid_is_bluetooth,
+            )
+        {
             let entries_to_write = tap_dance_entries_to_write(
                 &self.keycode_picker.tap_dance_entries,
                 &self.keycode_picker.tap_dance_synced_entries,
@@ -1180,6 +1415,11 @@ impl eframe::App for EntropyApp {
                 }
             }
         }
+
+        // Start background combo I/O after synchronous dynamic-entry writes have finished
+        // using the shared HID handle for this frame.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.maybe_start_combo_write(ctx);
 
         let mut settings_page_navigation_handled = false;
         if self.can_return_from_settings_page(

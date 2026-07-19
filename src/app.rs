@@ -60,6 +60,10 @@ mod app_settings_ui;
 mod auto_shift_settings_ui;
 #[path = "ui/bluetooth_settings.rs"]
 mod bluetooth_settings_ui;
+#[path = "ui/combo_write.rs"]
+mod combo_write;
+#[cfg(not(target_arch = "wasm32"))]
+use combo_write::ComboWriteTask;
 #[path = "ui/combo_settings.rs"]
 mod combo_settings_ui;
 #[path = "ui/device_connect_apply.rs"]

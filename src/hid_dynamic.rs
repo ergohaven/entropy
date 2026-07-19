@@ -7,6 +7,20 @@ use super::HidDevice;
 use anyhow::Result;
 
 type TapDanceData = (u16, u16, u16, u16, u16);
+type ComboData = ([u16; 4], u16);
+
+fn verify_combo_writeback(index: u8, requested: ComboData, readback: ComboData) -> Result<()> {
+    if readback == requested {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "combo writeback mismatch at index {}: wrote {:?}, read back {:?}",
+        index,
+        requested,
+        readback
+    )
+}
 
 fn verify_tap_dance_writeback(
     index: u8,
@@ -59,6 +73,7 @@ impl HidDevice {
 
     /// Set combo entry
     pub fn set_combo(&self, idx: u8, keys: [u16; 4], output: u16) -> Result<()> {
+        let requested = (keys, output);
         let mut cmd = [0u8; 32];
         cmd[0] = CMD_VIA_VIAL_PREFIX;
         cmd[1] = CMD_VIAL_DYNAMIC_ENTRY_OP;
@@ -77,7 +92,8 @@ impl HidDevice {
         if resp[0] != 0 {
             anyhow::bail!("combo set error: {}", resp[0]);
         }
-        Ok(())
+        let readback = self.get_combo(idx)?;
+        verify_combo_writeback(idx, requested, readback)
     }
 
     /// Get number of key override entries available
@@ -239,5 +255,23 @@ mod tests {
 
         assert!(error.to_string().contains("tap dance writeback mismatch"));
         assert!(error.to_string().contains("index 0"));
+    }
+
+    #[test]
+    fn combo_writeback_accepts_matching_entry() {
+        let entry = ([0x002C, 0x002D, 0, 0], 0x002E);
+
+        assert!(verify_combo_writeback(3, entry, entry).is_ok());
+    }
+
+    #[test]
+    fn combo_writeback_rejects_stale_entry() {
+        let requested = ([0x002C, 0x002D, 0, 0], 0x002E);
+        let stale = ([0x002C, 0x002D, 0, 0], 0);
+
+        let error = verify_combo_writeback(3, requested, stale).unwrap_err();
+
+        assert!(error.to_string().contains("combo writeback mismatch"));
+        assert!(error.to_string().contains("index 3"));
     }
 }

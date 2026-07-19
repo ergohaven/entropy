@@ -613,13 +613,17 @@ impl EntropyApp {
                     ),
                     button_size,
                 );
+                #[cfg(not(target_arch = "wasm32"))]
+                let refresh_enabled = !self.hid_write_task_active();
+                #[cfg(target_arch = "wasm32")]
+                let refresh_enabled = true;
                 crate::ui_style::allocate_ui_at_rect(ui, actions_rect, |ui| {
                     ui.set_min_size(actions_rect.size());
                     if crate::ui_style::modern_button(
                         ui,
                         refresh_device_data_label(lang),
                         button_size,
-                        true,
+                        refresh_enabled,
                     )
                     .on_hover_text(refresh_device_data_tooltip(lang))
                     .clicked()

@@ -796,7 +796,7 @@ impl EntropyApp {
         action_key: &'static str,
         undo_behavior: LayerUndoBehavior,
     ) {
-        if self.layer_write_task.is_some() {
+        if self.hid_write_task_active() {
             if let LayerUndoBehavior::RetryDesired { requires_firmware } = undo_behavior {
                 self.undo_stack.push(UndoAction::Layer {
                     layer,

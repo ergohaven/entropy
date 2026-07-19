@@ -131,6 +131,10 @@ impl EntropyApp {
                 self.keycode_picker.tap_dance_entries = r.tap_dance_entries.clone();
                 self.keycode_picker.tap_dance_synced_entries = r.tap_dance_entries.clone();
                 self.combo_entries = r.combo_entries.clone();
+                self.combo_synced_entries = r.combo_entries.clone();
+                self.combo_dirty = false;
+                self.combo_edit_revision = self.combo_edit_revision.wrapping_add(1);
+                self.combo_attempted_revision = None;
                 self.key_override_entries = r.key_override_entries.clone();
                 self.alt_repeat_entries = r.alt_repeat_entries.clone();
                 self.alt_repeat_names = load_alt_repeat_names(&self.current_device_name);

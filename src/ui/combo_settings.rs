@@ -508,7 +508,7 @@ impl EntropyApp {
                                 if value != 0 {
                                     self.push_combo_undo();
                                     self.combo_entries[combo_idx].keys[key_idx] = 0;
-                                    self.combo_dirty = true;
+                                    self.mark_combo_dirty();
                                 }
                             }
                         }
@@ -559,7 +559,7 @@ impl EntropyApp {
                             if value != 0 {
                                 self.push_combo_undo();
                                 self.combo_entries[combo_idx].output = 0;
-                                self.combo_dirty = true;
+                                self.mark_combo_dirty();
                             }
                         }
                     },
@@ -688,7 +688,7 @@ impl EntropyApp {
                     if let Some(color) = self.combo_colors.get_mut(combo_idx) {
                         *color = COMBO_NO_COLOR;
                     }
-                    self.combo_dirty = true;
+                    self.mark_combo_dirty();
                     self.combo_names_dirty = true;
                     self.combo_colors_dirty = true;
                 }
@@ -712,7 +712,7 @@ impl EntropyApp {
                         self.selected_combo = snapshot
                             .selected
                             .min(self.combo_visible_count.saturating_sub(1));
-                        self.combo_dirty = true;
+                        self.mark_combo_dirty();
                         self.combo_names_dirty = true;
                         self.combo_colors_dirty = true;
                         self.combo_term_dirty = true;

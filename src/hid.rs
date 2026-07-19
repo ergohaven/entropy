@@ -133,6 +133,22 @@ pub struct HidDevice {
     backend: HidBackend,
 }
 
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct TestHidRecorder {
+    requests: std::sync::Arc<std::sync::Mutex<Vec<[u8; MSG_LEN]>>>,
+}
+
+#[cfg(test)]
+impl TestHidRecorder {
+    pub(crate) fn requests(&self) -> Vec<[u8; MSG_LEN]> {
+        self.requests
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 enum HidBackend {
     Local {
@@ -142,6 +158,12 @@ enum HidBackend {
     },
     #[cfg(target_os = "windows")]
     Proxy(HidProxy),
+    #[cfg(test)]
+    Test {
+        recorder: TestHidRecorder,
+        combo: std::sync::Mutex<([u16; 4], u16)>,
+        qmk_settings: std::sync::Mutex<std::collections::BTreeMap<u16, u16>>,
+    },
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -165,6 +187,8 @@ impl HidDevice {
             HidBackend::Local { transport, .. } => transport.is_bluetooth(),
             #[cfg(target_os = "windows")]
             HidBackend::Proxy(proxy) => proxy.is_bluetooth_transport(),
+            #[cfg(test)]
+            HidBackend::Test { .. } => false,
         }
     }
 }
@@ -250,6 +274,21 @@ fn device_info_matches(
 
 #[cfg(not(target_arch = "wasm32"))]
 impl HidDevice {
+    #[cfg(test)]
+    pub(crate) fn test_device() -> (Self, TestHidRecorder) {
+        let recorder = TestHidRecorder {
+            requests: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
+        let device = Self {
+            backend: HidBackend::Test {
+                recorder: recorder.clone(),
+                combo: std::sync::Mutex::new(([0; 4], 0)),
+                qmk_settings: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+            },
+        };
+        (device, recorder)
+    }
+
     pub fn open(path: &str) -> Result<Self> {
         #[cfg(target_os = "macos")]
         let _hid_lock = macos_hid_operation_lock();
@@ -424,6 +463,63 @@ impl HidDevice {
             } => usb_send_local(device, *transport, path.as_deref(), data),
             #[cfg(target_os = "windows")]
             HidBackend::Proxy(proxy) => proxy.usb_send(data),
+            #[cfg(test)]
+            HidBackend::Test {
+                recorder,
+                combo,
+                qmk_settings,
+            } => {
+                let mut request = [0; MSG_LEN];
+                let len = data.len().min(MSG_LEN);
+                request[..len].copy_from_slice(&data[..len]);
+                recorder
+                    .requests
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .push(request);
+
+                let mut response = [0; MSG_LEN];
+                match (request[0], request[1], request[2]) {
+                    (CMD_VIA_VIAL_PREFIX, CMD_VIAL_DYNAMIC_ENTRY_OP, DYNAMIC_VIAL_COMBO_SET) => {
+                        let mut keys = [0; 4];
+                        for (index, key) in keys.iter_mut().enumerate() {
+                            let offset = 4 + index * 2;
+                            *key = u16::from_le_bytes([request[offset], request[offset + 1]]);
+                        }
+                        let output = u16::from_le_bytes([request[12], request[13]]);
+                        *combo.lock().unwrap_or_else(|error| error.into_inner()) = (keys, output);
+                    }
+                    (CMD_VIA_VIAL_PREFIX, CMD_VIAL_DYNAMIC_ENTRY_OP, DYNAMIC_VIAL_COMBO_GET) => {
+                        let (keys, output) =
+                            *combo.lock().unwrap_or_else(|error| error.into_inner());
+                        for (index, key) in keys.iter().enumerate() {
+                            let offset = 1 + index * 2;
+                            response[offset..offset + 2].copy_from_slice(&key.to_le_bytes());
+                        }
+                        response[9..11].copy_from_slice(&output.to_le_bytes());
+                    }
+                    (CMD_VIA_VIAL_PREFIX, CMD_VIAL_QMK_SETTINGS_SET, _) => {
+                        let qsid = u16::from_le_bytes([request[2], request[3]]);
+                        let value = u16::from_le_bytes([request[4], request[5]]);
+                        qmk_settings
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .insert(qsid, value);
+                    }
+                    (CMD_VIA_VIAL_PREFIX, CMD_VIAL_QMK_SETTINGS_GET, _) => {
+                        let qsid = u16::from_le_bytes([request[2], request[3]]);
+                        let value = qmk_settings
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .get(&qsid)
+                            .copied()
+                            .unwrap_or_default();
+                        response[1..3].copy_from_slice(&value.to_le_bytes());
+                    }
+                    _ => {}
+                }
+                Ok(response)
+            }
         }
     }
 }

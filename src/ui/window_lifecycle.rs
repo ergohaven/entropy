@@ -10,6 +10,30 @@ fn should_keep_vial_unlock_visible(unlock_open: bool, unlock_polling: bool) -> b
 }
 
 impl EntropyApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn defer_exit_until_hid_write_returns(&mut self, ctx: &egui::Context) -> bool {
+        if !self.hid_write_task_active() {
+            return false;
+        }
+
+        self.exit_after_hid_write = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        true
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn finish_deferred_exit_after_hid_write(&mut self, ctx: &egui::Context) {
+        if !self.exit_after_hid_write || self.hid_write_task_active() {
+            return;
+        }
+
+        self.exit_after_hid_write = false;
+        self.flush_pending_tap_hold_numeric_writes();
+        self.fallback_entropy_display_presets_before_exit();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
     fn keep_vial_unlock_visible(&mut self, ctx: &egui::Context) {
         self.restore_from_tray(ctx);
         self.status_msg = crate::i18n::tr_catalog(
@@ -130,10 +154,18 @@ impl EntropyApp {
 
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         if self.consume_tray_quit_request() {
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.defer_exit_until_hid_write_returns(ctx) {
+                return;
+            }
             return;
         }
 
         if self.force_close_requested {
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.defer_exit_until_hid_write_returns(ctx) {
+                return;
+            }
             return;
         }
 
@@ -155,7 +187,12 @@ impl EntropyApp {
                 self.close_to_tray_prompt_remember = false;
                 ctx.request_repaint();
             }
-            CloseToTrayBehavior::Ask | CloseToTrayBehavior::Close | CloseToTrayBehavior::Tray => {}
+            CloseToTrayBehavior::Ask | CloseToTrayBehavior::Close | CloseToTrayBehavior::Tray => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.defer_exit_until_hid_write_returns(ctx);
+                }
+            }
         }
     }
 

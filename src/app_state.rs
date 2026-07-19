@@ -454,7 +454,7 @@ pub(crate) fn vial_layer_retarget_base(kc: u16) -> Option<u16> {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ComboEntry {
     pub(crate) keys: [u16; 4],
     pub(crate) output: u16,
@@ -2699,6 +2699,9 @@ pub struct EntropyApp {
     /// Background whole-layer HID write. Owns the device handle while active.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) layer_write_task: Option<LayerWriteTask>,
+    /// Background combo HID write. Owns the device handle while active.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) combo_write_task: Option<ComboWriteTask>,
     /// Built-in qmk-hid-host bridges for displays/presets that need host data
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) qmk_hid_hosts:
@@ -2754,12 +2757,17 @@ pub struct EntropyApp {
     pub(crate) close_to_tray_prompt_open: bool,
     pub(crate) close_to_tray_prompt_remember: bool,
     pub(crate) force_close_requested: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) exit_after_hid_write: bool,
     pub(crate) main_menu_tab: MainMenuTab,
     pub(crate) combo_entries: Vec<ComboEntry>,
+    pub(crate) combo_synced_entries: Vec<ComboEntry>,
     pub(crate) combo_names: Vec<String>,
     pub(crate) combo_colors: Vec<u32>,
     pub(crate) selected_combo: usize,
     pub(crate) combo_dirty: bool,
+    pub(crate) combo_edit_revision: u64,
+    pub(crate) combo_attempted_revision: Option<u64>,
     pub(crate) combo_names_dirty: bool,
     pub(crate) combo_colors_dirty: bool,
     pub(crate) combo_term: Option<u16>,
