@@ -46,6 +46,10 @@ impl SettingsWriteTarget {
         }
     }
 
+    fn is_touchpad(&self) -> bool {
+        matches!(self, Self::Touchpad { .. })
+    }
+
     fn reconcile_readback(
         &self,
         module_settings: &mut ModuleSettingsState,
@@ -519,6 +523,10 @@ impl EntropyApp {
         let newer_debounced_value = self.pending_qmk_settings_write_value(request.qsid);
         match result {
             Ok(readback) => {
+                if request.target.is_touchpad() {
+                    self.qmk_settings_write_queue
+                        .record_confirmed_value(request.qsid, readback);
+                }
                 let current = self.settings_write_queue.complete(
                     request.id,
                     request.qsid,
@@ -546,6 +554,12 @@ impl EntropyApp {
                 );
             }
             Err(error) => {
+                if request.target.is_touchpad() {
+                    if let ModuleSettingWritebackError::ReadbackMismatch { actual, .. } = &error {
+                        self.qmk_settings_write_queue
+                            .record_confirmed_value(request.qsid, *actual);
+                    }
+                }
                 let error_text = error.to_string();
                 let current = self.settings_write_queue.complete(
                     request.id,
@@ -606,7 +620,6 @@ impl EntropyApp {
         self.settings_write_generation = self.settings_write_generation.wrapping_add(1);
         self.settings_write_queue.clear();
     }
-
 }
 
 #[cfg(test)]
@@ -837,5 +850,56 @@ mod tests {
 
         assert_eq!(app.touchpad_settings.scroll_sens, 12);
         assert_eq!(app.pending_qmk_settings_write_value(122), Some(12));
+    }
+
+    #[test]
+    fn confirmed_readback_updates_pending_debounce_rollback_value() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        app.touchpad_settings.scroll_sens = 12;
+        app.debounce_touchpad_setting_write(&ctx, "Scroll sensitivity".to_owned(), 122, 8, 12);
+        app.settings_write_queue.enqueue(request(122, 10));
+        let request = app
+            .settings_write_queue
+            .pop_front()
+            .expect("queued setting write");
+
+        app.finish_settings_write(SettingsWriteResult {
+            hid_device: None,
+            request,
+            result: Ok(10),
+            disconnected: false,
+        });
+        app.flush_pending_qmk_setting_writes();
+
+        assert_eq!(app.touchpad_settings.scroll_sens, 10);
+        assert!(!app.qmk_settings_write_pending());
+    }
+
+    #[test]
+    fn readback_mismatch_updates_pending_debounce_rollback_value() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        app.touchpad_settings.scroll_sens = 12;
+        app.debounce_touchpad_setting_write(&ctx, "Scroll sensitivity".to_owned(), 122, 8, 12);
+        app.settings_write_queue.enqueue(request(122, 10));
+        let request = app
+            .settings_write_queue
+            .pop_front()
+            .expect("queued setting write");
+
+        app.finish_settings_write(SettingsWriteResult {
+            hid_device: None,
+            request,
+            result: Err(ModuleSettingWritebackError::ReadbackMismatch {
+                expected: 10,
+                actual: 9,
+            }),
+            disconnected: false,
+        });
+        app.flush_pending_qmk_setting_writes();
+
+        assert_eq!(app.touchpad_settings.scroll_sens, 9);
+        assert!(!app.qmk_settings_write_pending());
     }
 }

@@ -14,14 +14,18 @@ struct QmkSettingWriteRequest {
 #[derive(Default)]
 pub(super) struct QmkSettingsWriteQueue {
     pending: std::collections::BTreeMap<u16, QmkSettingWriteRequest>,
+    confirmed_values: std::collections::BTreeMap<u16, u16>,
 }
 
 impl QmkSettingsWriteQueue {
     fn enqueue(&mut self, mut request: QmkSettingWriteRequest) -> bool {
-        if let Some(previous) = self.pending.get(&request.qsid) {
-            // Keep the confirmed pre-burst value so returning to it cancels the write.
-            request.old_value = previous.old_value;
-        }
+        let confirmed_value = *self
+            .confirmed_values
+            .entry(request.qsid)
+            .or_insert(request.old_value);
+        // Keep the last verified pre-burst value. An active worker may not have
+        // reached readback yet, so its optimistic value is not safe to restore.
+        request.old_value = confirmed_value;
         if request.requested == request.old_value {
             self.pending.remove(&request.qsid);
             return false;
@@ -54,8 +58,20 @@ impl QmkSettingsWriteQueue {
         self.pending.get(&qsid).map(|request| request.requested)
     }
 
+    pub(super) fn record_confirmed_value(&mut self, qsid: u16, value: u16) {
+        self.confirmed_values.insert(qsid, value);
+        let discard_pending = self.pending.get_mut(&qsid).is_some_and(|request| {
+            request.old_value = value;
+            request.requested == value
+        });
+        if discard_pending {
+            self.pending.remove(&qsid);
+        }
+    }
+
     pub(super) fn clear(&mut self) {
         self.pending.clear();
+        self.confirmed_values.clear();
     }
 }
 
@@ -137,6 +153,7 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::settings_write_queue::SettingsWriteStatus;
 
     fn test_app() -> EntropyApp {
         let ctx = egui::Context::default();
@@ -260,7 +277,7 @@ mod tests {
         app.clear_connected_keyboard_state("device disconnected");
 
         assert!(!app.qmk_settings_write_pending());
-        assert_eq!(app.touchpad_settings.scroll_sens, 8);
+        assert_eq!(app.touchpad_settings.scroll_sens, 0);
 
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -306,7 +323,7 @@ mod tests {
         drain_hid_writes(&mut app, &ctx);
 
         assert_eq!(
-            app.settings_write_queue.status(122),
+            app.settings_write_status(122),
             Some(&SettingsWriteStatus::Saved)
         );
         assert_eq!(app.touchpad_settings.scroll_sens, 12);
@@ -332,5 +349,40 @@ mod tests {
         assert!(app.pending_device_connect.is_none());
         assert_eq!(app.status_msg, "Device not found");
         assert_eq!(qsid_request_count(&recorder, 122), 2);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn active_worker_disconnect_restores_last_confirmed_debounced_value() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        let (hid_device, _) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+            1,
+            crate::hid::TestHidFault::Disconnect,
+        )));
+        app.hid_device = Some(hid_device);
+        app.touchpad_settings.scroll_sens = 10;
+
+        app.debounce_touchpad_setting_write(&ctx, "Scroll sensitivity".to_owned(), 122, 8, 10);
+        app.flush_pending_qmk_setting_writes();
+        assert!(app.settings_write_task.is_some());
+
+        app.touchpad_settings.scroll_sens = 12;
+        app.debounce_touchpad_setting_write(&ctx, "Scroll sensitivity".to_owned(), 122, 10, 12);
+
+        for _ in 0..200 {
+            app.poll_settings_write(&ctx);
+            if app.hid_device.is_none() && app.settings_write_task.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(app.hid_device.is_none());
+        assert!(app.settings_write_task.is_none());
+
+        app.flush_pending_qmk_setting_writes();
+
+        assert_eq!(app.touchpad_settings.scroll_sens, 8);
+        assert!(!app.qmk_settings_write_pending());
     }
 }
