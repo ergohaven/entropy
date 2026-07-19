@@ -103,7 +103,7 @@ impl EntropyApp {
 
     fn write_module_setting_value(
         &mut self,
-        ctx: &egui::Context,
+        _ctx: &egui::Context,
         group_idx: usize,
         field: &ModuleSettingField,
         value: u16,

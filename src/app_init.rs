@@ -37,8 +37,10 @@ impl EntropyApp {
             combo_write_task: None,
             settings_write_task: None,
             settings_write_queue: SettingsWriteQueueState::default(),
+            settings_write_generation: 0,
             #[cfg(not(target_arch = "wasm32"))]
             qmk_hid_hosts: std::collections::HashMap::new(),
+            pending_device_connect: None,
             firmware: FirmwareProtocol::Vial,
             undo_stack: Vec::new(),
             layer_clipboard: None,

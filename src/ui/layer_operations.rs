@@ -987,6 +987,7 @@ impl EntropyApp {
                 self.layer_write_task = None;
                 self.finish_layer_write(result);
                 self.continue_pending_settings_writes(ctx);
+                self.resume_pending_device_connect();
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 ctx.request_repaint_after(std::time::Duration::from_millis(16));
@@ -1015,6 +1016,7 @@ impl EntropyApp {
                     ],
                 );
                 self.continue_pending_settings_writes(ctx);
+                self.resume_pending_device_connect();
             }
         }
     }

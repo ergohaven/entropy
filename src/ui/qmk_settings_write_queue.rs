@@ -50,6 +50,10 @@ impl QmkSettingsWriteQueue {
         self.pending.is_empty()
     }
 
+    fn pending_value(&self, qsid: u16) -> Option<u16> {
+        self.pending.get(&qsid).map(|request| request.requested)
+    }
+
     pub(super) fn clear(&mut self) {
         self.pending.clear();
     }
@@ -58,6 +62,10 @@ impl QmkSettingsWriteQueue {
 impl EntropyApp {
     pub(super) fn qmk_settings_write_pending(&self) -> bool {
         !self.qmk_settings_write_queue.is_empty()
+    }
+
+    pub(super) fn pending_qmk_settings_write_value(&self, qsid: u16) -> Option<u16> {
+        self.qmk_settings_write_queue.pending_value(qsid)
     }
 
     pub(super) fn debounce_touchpad_setting_write(
@@ -84,7 +92,29 @@ impl EntropyApp {
         let requests = self
             .qmk_settings_write_queue
             .take_due(std::time::Instant::now());
+        self.enqueue_debounced_qmk_setting_writes(requests);
+    }
+
+    pub(super) fn flush_pending_qmk_setting_writes(&mut self) {
+        let requests = self.qmk_settings_write_queue.take_all();
+        self.enqueue_debounced_qmk_setting_writes(requests);
+    }
+
+    fn enqueue_debounced_qmk_setting_writes(&mut self, requests: Vec<QmkSettingWriteRequest>) {
         for request in requests {
+            if !self.qmk_setting_transport_available() {
+                self.set_touchpad_numeric_value(request.qsid, request.old_value);
+                let error = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "settings_write.device_not_connected",
+                );
+                self.status_msg = crate::i18n::tr_catalog_format(
+                    self.app_settings.language,
+                    "settings_write.failed_status",
+                    &[("setting", &request.display_label), ("error", error)],
+                );
+                continue;
+            }
             // The worker queue owns the HID handle and retains this request while a
             // layer write is in flight. It also provides verified readback.
             self.queue_touchpad_setting_write(
@@ -107,6 +137,12 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_app() -> EntropyApp {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        EntropyApp::new(&creation_context)
+    }
 
     fn request(
         qsid: u16,
@@ -136,7 +172,8 @@ mod tests {
         ));
 
         assert!(queue.take_due(now + QMK_SETTINGS_WRITE_DEBOUNCE).is_empty());
-        let writes = queue.take_due(now + QMK_SETTINGS_WRITE_DEBOUNCE + std::time::Duration::from_millis(60));
+        let writes = queue
+            .take_due(now + QMK_SETTINGS_WRITE_DEBOUNCE + std::time::Duration::from_millis(60));
         assert_eq!(writes.len(), 1);
         assert_eq!(writes[0].old_value, 8);
         assert_eq!(writes[0].requested, 12);
@@ -162,5 +199,72 @@ mod tests {
 
         assert_eq!(requests.len(), 2);
         assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn cancellation_restores_confirmed_touchpad_value() {
+        let mut app = test_app();
+        app.touchpad_settings.scroll_sens = 12;
+        app.qmk_settings_write_queue
+            .enqueue(request(122, 8, 12, std::time::Instant::now()));
+
+        app.cancel_pending_qmk_setting_writes();
+
+        assert_eq!(app.touchpad_settings.scroll_sens, 8);
+        assert!(!app.qmk_settings_write_pending());
+    }
+
+    #[test]
+    fn device_switch_cancels_debounced_write_before_selecting_next_device() {
+        let mut app = test_app();
+        app.touchpad_settings.scroll_sens = 12;
+        app.qmk_settings_write_queue
+            .enqueue(request(122, 8, 12, std::time::Instant::now()));
+
+        app.start_connect(usize::MAX);
+
+        assert_eq!(app.touchpad_settings.scroll_sens, 8);
+        assert!(!app.qmk_settings_write_pending());
+    }
+
+    #[test]
+    fn disconnect_clears_debounced_write_before_resetting_device_state() {
+        let mut app = test_app();
+        app.qmk_settings_write_queue
+            .enqueue(request(122, 8, 12, std::time::Instant::now()));
+
+        app.clear_connected_keyboard_state("device disconnected");
+
+        assert!(!app.qmk_settings_write_pending());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn debounced_write_waits_in_background_queue_while_hid_is_owned() {
+        let mut app = test_app();
+        app.start_settings_write_for_test();
+        app.qmk_settings_write_queue
+            .enqueue(request(122, 8, 12, std::time::Instant::now()));
+
+        app.flush_pending_qmk_setting_writes();
+
+        assert_eq!(app.pending_settings_write_value(122), Some(12));
+        assert!(!app.qmk_settings_write_pending());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn device_switch_waits_for_active_settings_write() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        app.start_settings_write_for_test();
+
+        app.start_connect(usize::MAX);
+        assert_eq!(app.pending_device_connect, Some(usize::MAX));
+
+        app.poll_settings_write(&ctx);
+
+        assert!(app.pending_device_connect.is_none());
+        assert_eq!(app.status_msg, "Device not found");
     }
 }

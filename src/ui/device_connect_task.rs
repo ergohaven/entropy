@@ -486,9 +486,17 @@ impl EntropyApp {
 
     pub(super) fn start_connect(&mut self, device_idx: usize) {
         if self.hid_write_task_active() {
+            self.pending_device_connect = Some(device_idx);
             return;
         }
-        self.cancel_pending_qmk_setting_writes();
+        if self.qmk_settings_write_pending() {
+            self.pending_device_connect = Some(device_idx);
+            self.flush_pending_qmk_setting_writes();
+            if self.qmk_settings_write_busy() {
+                return;
+            }
+        }
+        self.pending_device_connect = None;
         let dev = match self.device_manager.devices().get(device_idx) {
             Some(d) => d.clone(),
             None => {
@@ -505,7 +513,7 @@ impl EntropyApp {
         self.layer_write_task = None;
         self.combo_write_task = None;
         self.settings_write_task = None;
-        self.settings_write_queue.clear();
+        self.reset_settings_write_context();
         self.qmk_settings_write_queue.clear();
         self.hid_device = None;
         self.undo_stack.clear();
@@ -1358,6 +1366,15 @@ impl EntropyApp {
 
             let _ = tx.send(ConnectTaskMessage::Done(Box::new(result)));
         });
+    }
+
+    pub(super) fn resume_pending_device_connect(&mut self) {
+        if self.layer_write_task.is_some() || self.qmk_settings_write_busy() {
+            return;
+        }
+        if let Some(device_idx) = self.pending_device_connect.take() {
+            self.start_connect(device_idx);
+        }
     }
 }
 
