@@ -874,14 +874,6 @@ impl EntropyApp {
         widths
     }
 
-    fn module_setting_words(value: &str) -> Vec<String> {
-        value
-            .split(|character: char| !character.is_ascii_alphanumeric())
-            .filter(|word| !word.is_empty())
-            .map(str::to_ascii_lowercase)
-            .collect()
-    }
-
     fn module_settings_kind_from_words(words: &[String]) -> Option<ModuleSettingsGroupKind> {
         match words.first().map(String::as_str) {
             Some("left") => Some(ModuleSettingsGroupKind::Left),
@@ -901,12 +893,12 @@ impl EntropyApp {
             .iter()
             .filter_map(|key| value.get(key).and_then(serde_json::Value::as_str))
             .find_map(|side| {
-                Self::module_settings_kind_from_words(&Self::module_setting_words(side))
+                Self::module_settings_kind_from_words(&Self::settings_title_words(side))
             })
     }
 
     fn is_module_settings_title(title: &str) -> bool {
-        let words = Self::module_setting_words(title);
+        let words = Self::settings_title_words(title);
         let identifies_side = words
             .iter()
             .any(|word| matches!(word.as_str(), "left" | "right"));
@@ -927,7 +919,7 @@ impl EntropyApp {
     }
 
     fn is_module_setting_field_title(title: &str) -> bool {
-        let words = Self::module_setting_words(title);
+        let words = Self::settings_title_words(title);
         if Self::module_settings_kind_from_words(&words).is_none() {
             return false;
         }
@@ -990,7 +982,7 @@ impl EntropyApp {
             };
             let tab_metadata_kind = Self::module_settings_metadata_kind(tab);
             let tab_kind = tab_metadata_kind.or_else(|| {
-                Self::module_settings_kind_from_words(&Self::module_setting_words(title))
+                Self::module_settings_kind_from_words(&Self::settings_title_words(title))
             });
             let title_identifies_modules = Self::is_module_settings_title(title);
             let Some(raw_fields) = tab.get("fields").and_then(serde_json::Value::as_array) else {
@@ -1004,7 +996,7 @@ impl EntropyApp {
                         Self::parse_module_setting_field(raw_field, supported_qmk_settings)?;
                     let metadata_kind = Self::module_settings_metadata_kind(raw_field);
                     let title_kind = Self::module_settings_kind_from_words(
-                        &Self::module_setting_words(&field.title),
+                        &Self::settings_title_words(&field.title),
                     );
                     let identifies_modules = metadata_kind.is_some()
                         || Self::is_module_setting_field_title(&field.title);
@@ -1047,13 +1039,32 @@ impl EntropyApp {
             );
         }
 
-        groups.sort_by_key(|group| match group.kind {
+        let mut coalesced_side_groups = Vec::<ModuleSettingsGroup>::new();
+        for group in groups {
+            if matches!(
+                group.kind,
+                ModuleSettingsGroupKind::Left
+                    | ModuleSettingsGroupKind::Right
+                    | ModuleSettingsGroupKind::AutoLayer
+            ) {
+                if let Some(existing) = coalesced_side_groups
+                    .iter_mut()
+                    .find(|existing| existing.kind == group.kind)
+                {
+                    existing.fields.extend(group.fields);
+                    continue;
+                }
+            }
+            coalesced_side_groups.push(group);
+        }
+
+        coalesced_side_groups.sort_by_key(|group| match group.kind {
             ModuleSettingsGroupKind::Left => 0,
             ModuleSettingsGroupKind::Right => 1,
             ModuleSettingsGroupKind::AutoLayer => 2,
             ModuleSettingsGroupKind::Other => 3,
         });
-        groups
+        coalesced_side_groups
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1524,6 +1535,73 @@ mod tests {
         assert_eq!(groups[1].kind, ModuleSettingsGroupKind::Right);
         assert_eq!(groups[1].fields[0].title, "Right Mode");
         assert_eq!(groups[2].kind, ModuleSettingsGroupKind::AutoLayer);
+    }
+
+    #[test]
+    fn module_settings_groups_coalesce_kinds_across_tabs() {
+        let json = serde_json::json!({
+            "settings": [
+                {
+                    "name": "Left Modules",
+                    "fields": [module_select_field("Left Mode", 120)]
+                },
+                {
+                    "name": "Right Modules",
+                    "fields": [module_select_field("Right Mode", 121)]
+                },
+                {
+                    "name": "Auto Layer",
+                    "fields": [module_select_field("Timeout", 122)]
+                },
+                {
+                    "name": "Controller Settings",
+                    "fields": [
+                        module_select_field("Left Scroll Sens", 123),
+                        module_select_field("Right Scroll Sens", 124),
+                        module_select_field("Auto Layer Timeout", 125)
+                    ]
+                }
+            ]
+        });
+
+        let groups = EntropyApp::module_settings_groups(&json, &[120, 121, 122, 123, 124, 125]);
+
+        assert_eq!(groups.len(), 3);
+        assert_eq!(groups[0].kind, ModuleSettingsGroupKind::Left);
+        assert_eq!(
+            groups[0]
+                .fields
+                .iter()
+                .map(|field| field.qsid)
+                .collect::<Vec<_>>(),
+            vec![120, 123]
+        );
+        assert_eq!(groups[1].kind, ModuleSettingsGroupKind::Right);
+        assert_eq!(
+            groups[1]
+                .fields
+                .iter()
+                .map(|field| field.qsid)
+                .collect::<Vec<_>>(),
+            vec![121, 124]
+        );
+        assert_eq!(groups[2].kind, ModuleSettingsGroupKind::AutoLayer);
+        assert_eq!(
+            groups[2]
+                .fields
+                .iter()
+                .map(|field| field.qsid)
+                .collect::<Vec<_>>(),
+            vec![122, 125]
+        );
+        let mut state = ModuleSettingsState {
+            groups,
+            selected_module_group: 0,
+            ..Default::default()
+        };
+        assert_eq!(state.selected_module_group(), Some(0));
+        state.set_selected_module_group(1);
+        assert_eq!(state.selected_module_group(), Some(1));
     }
 
     #[test]
