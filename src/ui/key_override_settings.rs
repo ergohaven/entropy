@@ -131,6 +131,7 @@ impl EntropyApp {
         {
             self.key_override_dirty = false;
         }
+        true
     }
 
     fn open_key_override_picker(&mut self, target: KeyOverridePickField) {

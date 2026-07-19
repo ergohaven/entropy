@@ -163,6 +163,9 @@ pub struct KeycodePicker {
     pub macro_inline_selected: Option<u8>,
     /// Macro editor bytecode buffers (one per macro)
     pub macro_texts: Vec<Vec<u8>>,
+    /// Macro buffers from the most recent device readback or successful write.
+    /// Used to retain only changed slots across a reconnect.
+    pub macro_synced_texts: Vec<Vec<u8>>,
     /// User-visible names for macros (optional)
     pub macro_names: Vec<String>,
     /// User-visible descriptions for macros (optional, local metadata)
@@ -369,6 +372,7 @@ impl Default for KeycodePicker {
             td_key_pick: None,
             td_mod_key_pick: None,
             macro_texts: vec![Vec::new(); 16],
+            macro_synced_texts: vec![Vec::new(); 16],
             macro_names: vec![String::new(); 16],
             macro_descriptions: vec![String::new(); 16],
             macro_metadata_dirty: false,

@@ -188,11 +188,7 @@ impl EntropyApp {
                     .combo_write_task
                     .take()
                     .expect("combo write task checked above");
-                self.hid_device = None;
-                self.combo_dirty = self.combo_entries != self.combo_synced_entries;
-                self.combo_attempted_revision =
-                    (self.combo_edit_revision == task.revision).then_some(task.revision);
-                self.status_msg = crate::i18n::tr_catalog_format(
+                let status_msg = crate::i18n::tr_catalog_format(
                     self.app_settings.language,
                     "status_messages.combo_write_error",
                     &[(
@@ -203,13 +199,27 @@ impl EntropyApp {
                         ),
                     )],
                 );
-                self.continue_pending_settings_writes(ctx);
+                self.handoff_hid_worker_disconnect(status_msg);
+                self.combo_attempted_revision =
+                    (self.combo_edit_revision == task.revision).then_some(task.revision);
             }
         }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn finish_combo_write(&mut self, result: ComboWriteResult) {
+        if result.hid_device.is_none() {
+            let error = result
+                .result
+                .err()
+                .unwrap_or_else(|| "device disconnected".to_owned());
+            self.handoff_hid_worker_disconnect(crate::i18n::tr_catalog_format(
+                self.app_settings.language,
+                "status_messages.combo_write_error",
+                &[("error", &error)],
+            ));
+            return;
+        }
         self.hid_device = result.hid_device;
         match result.result {
             Ok(()) => {

@@ -1149,12 +1149,12 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn fallback_entropy_display_presets_before_exit(&mut self) {
+    pub(super) fn fallback_entropy_display_presets_before_exit(&mut self) -> bool {
         let Some(layout) = self.layout.as_ref() else {
-            return;
+            return true;
         };
         if layout.layout_options.is_empty() {
-            return;
+            return true;
         }
 
         let mut values = Self::unpack_layout_option_values(
@@ -1190,19 +1190,22 @@ impl EntropyApp {
         }
 
         if !changed {
-            return;
+            return true;
         }
 
         let original_packed = self.layout_options_value.unwrap_or(0);
         let packed = Self::pack_layout_option_values(&layout.layout_options, &values);
         self.save_display_preset_restore(original_packed);
+        let Some(hid) = &self.hid_device else {
+            return false;
+        };
+        if let Err(e) = hid.set_layout_options(packed) {
+            log::warn!("fallback display preset before exit failed: {e}");
+            return false;
+        }
         self.layout_options_value = Some(packed);
         self.qmk_hid_hosts.clear();
-        if let Some(hid) = &self.hid_device {
-            if let Err(e) = hid.set_layout_options(packed) {
-                log::warn!("fallback display preset before exit failed: {e}");
-            }
-        }
+        true
     }
 
     #[cfg(not(target_arch = "wasm32"))]

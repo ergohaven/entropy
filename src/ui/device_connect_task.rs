@@ -541,6 +541,7 @@ impl EntropyApp {
         self.encoder_visibility.clear();
         self.keycode_picker.macro_count = 0;
         self.keycode_picker.macro_texts.clear();
+        self.keycode_picker.macro_synced_texts.clear();
         self.keycode_picker.macro_names.clear();
         self.keycode_picker.macro_descriptions.clear();
         self.keycode_picker.macro_actions.clear();
@@ -1302,6 +1303,7 @@ impl EntropyApp {
                     product: dev.name.clone(),
                     vendor_id: dev.vendor_id,
                     product_id: dev.product_id,
+                    serial_number: dev.serial_number.clone(),
                     path: dev.path.clone(),
                     firmware_version,
                     battery_halves,
