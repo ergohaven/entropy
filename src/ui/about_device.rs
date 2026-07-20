@@ -614,7 +614,7 @@ impl EntropyApp {
                     button_size,
                 );
                 #[cfg(not(target_arch = "wasm32"))]
-                let refresh_enabled = !self.hid_write_task_active();
+                let refresh_enabled = !self.hid_write_lifecycle_busy();
                 #[cfg(target_arch = "wasm32")]
                 let refresh_enabled = true;
                 crate::ui_style::allocate_ui_at_rect(ui, actions_rect, |ui| {

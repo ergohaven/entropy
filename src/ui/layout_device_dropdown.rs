@@ -150,7 +150,7 @@ impl EntropyApp {
                                     {
                                         let is_selected = self.selected_device == Some(i);
                                         #[cfg(not(target_arch = "wasm32"))]
-                                        let switch_enabled = !self.hid_write_task_active();
+                                        let switch_enabled = !self.hid_write_lifecycle_busy();
                                         #[cfg(target_arch = "wasm32")]
                                         let switch_enabled = true;
                                         let cached_display_name = self

@@ -46,6 +46,10 @@ impl SettingsWriteTarget {
         }
     }
 
+    fn is_touchpad(&self) -> bool {
+        matches!(self, Self::Touchpad { .. })
+    }
+
     fn reconcile_readback(
         &self,
         module_settings: &mut ModuleSettingsState,
@@ -72,6 +76,7 @@ impl SettingsWriteTarget {
 #[derive(Clone, Debug)]
 struct SettingsWriteRequest {
     id: u64,
+    generation: u64,
     qsid: u16,
     width: u8,
     old_value: u16,
@@ -261,7 +266,10 @@ impl EntropyApp {
             metrics.settings_control_height(),
         );
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
-        let status = self.settings_write_queue.status(qsid).cloned();
+        let status = self
+            .pending_qmk_settings_write_value(qsid)
+            .map(|_| SettingsWriteStatus::Pending)
+            .or_else(|| self.settings_write_queue.status(qsid).cloned());
         let tooltip = match status.as_ref() {
             Some(SettingsWriteStatus::Pending) => {
                 ui.put(
@@ -321,6 +329,7 @@ impl EntropyApp {
     ) {
         self.queue_settings_write(SettingsWriteRequest {
             id: 0,
+            generation: self.settings_write_generation,
             qsid,
             width,
             old_value,
@@ -343,6 +352,7 @@ impl EntropyApp {
     ) {
         self.queue_settings_write(SettingsWriteRequest {
             id: 0,
+            generation: self.settings_write_generation,
             qsid,
             width,
             old_value,
@@ -458,6 +468,7 @@ impl EntropyApp {
                 self.settings_write_task = None;
                 self.finish_settings_write(result);
                 self.continue_pending_settings_writes(ctx);
+                self.resume_pending_device_connect();
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 ctx.request_repaint_after(std::time::Duration::from_millis(16));
@@ -467,6 +478,9 @@ impl EntropyApp {
                     .settings_write_task
                     .take()
                     .expect("settings write task checked above");
+                if task.request.generation != self.settings_write_generation {
+                    return;
+                }
                 self.hid_device = None;
                 let error = crate::i18n::tr_catalog(
                     self.app_settings.language,
@@ -488,6 +502,7 @@ impl EntropyApp {
                     ],
                 );
                 self.continue_pending_settings_writes(ctx);
+                self.resume_pending_device_connect();
             }
         }
     }
@@ -500,16 +515,24 @@ impl EntropyApp {
             result,
             disconnected,
         } = result;
+        if request.generation != self.settings_write_generation {
+            return;
+        }
         self.hid_device = hid_device;
         let context = request.target.log_context();
+        let newer_debounced_value = self.pending_qmk_settings_write_value(request.qsid);
         match result {
             Ok(readback) => {
+                if request.target.is_touchpad() {
+                    self.qmk_settings_write_queue
+                        .record_confirmed_value(request.qsid, readback);
+                }
                 let current = self.settings_write_queue.complete(
                     request.id,
                     request.qsid,
                     SettingsWriteStatus::Saved,
                 );
-                if current {
+                if current && newer_debounced_value.is_none() {
                     request.target.reconcile_readback(
                         &mut self.module_settings,
                         &mut self.touchpad_settings,
@@ -531,13 +554,19 @@ impl EntropyApp {
                 );
             }
             Err(error) => {
+                if request.target.is_touchpad() {
+                    if let ModuleSettingWritebackError::ReadbackMismatch { actual, .. } = &error {
+                        self.qmk_settings_write_queue
+                            .record_confirmed_value(request.qsid, *actual);
+                    }
+                }
                 let error_text = error.to_string();
                 let current = self.settings_write_queue.complete(
                     request.id,
                     request.qsid,
                     SettingsWriteStatus::Failed(error_text.clone()),
                 );
-                if current {
+                if current && newer_debounced_value.is_none() {
                     if let ModuleSettingWritebackError::ReadbackMismatch { actual, .. } = &error {
                         request.target.reconcile_readback(
                             &mut self.module_settings,
@@ -586,6 +615,11 @@ impl EntropyApp {
         );
         self.settings_write_queue.fail_pending(error);
     }
+
+    pub(super) fn reset_settings_write_context(&mut self) {
+        self.settings_write_generation = self.settings_write_generation.wrapping_add(1);
+        self.settings_write_queue.clear();
+    }
 }
 
 #[cfg(test)]
@@ -595,6 +629,7 @@ mod tests {
     fn request(qsid: u16, requested: u16) -> SettingsWriteRequest {
         SettingsWriteRequest {
             id: 0,
+            generation: 0,
             qsid,
             width: 1,
             old_value: 1,
@@ -774,5 +809,97 @@ mod tests {
                 .to_owned()
             ))
         );
+    }
+
+    #[test]
+    fn reset_context_discards_stale_worker_result() {
+        let mut app = test_app();
+        let request = request(122, 10);
+        app.touchpad_settings.scroll_sens = 8;
+        app.reset_settings_write_context();
+
+        app.finish_settings_write(SettingsWriteResult {
+            hid_device: None,
+            request,
+            result: Ok(10),
+            disconnected: false,
+        });
+
+        assert_eq!(app.touchpad_settings.scroll_sens, 8);
+        assert!(app.hid_device.is_none());
+    }
+
+    #[test]
+    fn older_readback_does_not_replace_newer_debounced_value() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        app.settings_write_queue.enqueue(request(122, 10));
+        let request = app
+            .settings_write_queue
+            .pop_front()
+            .expect("queued setting write");
+        app.touchpad_settings.scroll_sens = 12;
+        app.debounce_touchpad_setting_write(&ctx, "Scroll sensitivity".to_owned(), 122, 10, 12);
+
+        app.finish_settings_write(SettingsWriteResult {
+            hid_device: None,
+            request,
+            result: Ok(10),
+            disconnected: false,
+        });
+
+        assert_eq!(app.touchpad_settings.scroll_sens, 12);
+        assert_eq!(app.pending_qmk_settings_write_value(122), Some(12));
+    }
+
+    #[test]
+    fn confirmed_readback_updates_pending_debounce_rollback_value() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        app.touchpad_settings.scroll_sens = 12;
+        app.debounce_touchpad_setting_write(&ctx, "Scroll sensitivity".to_owned(), 122, 8, 12);
+        app.settings_write_queue.enqueue(request(122, 10));
+        let request = app
+            .settings_write_queue
+            .pop_front()
+            .expect("queued setting write");
+
+        app.finish_settings_write(SettingsWriteResult {
+            hid_device: None,
+            request,
+            result: Ok(10),
+            disconnected: false,
+        });
+        app.flush_pending_qmk_setting_writes();
+
+        assert_eq!(app.touchpad_settings.scroll_sens, 10);
+        assert!(!app.qmk_settings_write_pending());
+    }
+
+    #[test]
+    fn readback_mismatch_updates_pending_debounce_rollback_value() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        app.touchpad_settings.scroll_sens = 12;
+        app.debounce_touchpad_setting_write(&ctx, "Scroll sensitivity".to_owned(), 122, 8, 12);
+        app.settings_write_queue.enqueue(request(122, 10));
+        let request = app
+            .settings_write_queue
+            .pop_front()
+            .expect("queued setting write");
+
+        app.finish_settings_write(SettingsWriteResult {
+            hid_device: None,
+            request,
+            result: Err(ModuleSettingWritebackError::ReadbackMismatch {
+                expected: 10,
+                actual: 9,
+            }),
+            disconnected: false,
+        });
+        app.flush_pending_qmk_setting_writes();
+
+        assert_eq!(app.touchpad_settings.scroll_sens, 9);
+        assert!(!app.qmk_settings_write_pending());
     }
 }

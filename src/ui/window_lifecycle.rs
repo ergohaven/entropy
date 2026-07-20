@@ -18,11 +18,12 @@ impl EntropyApp {
             || self.keycode_picker.tap_dance_dirty
             || self.key_override_dirty
             || !self.pending_tap_hold_numeric_writes.is_empty()
+            || self.qmk_settings_write_pending()
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn defer_exit_until_hid_write_returns(&mut self, ctx: &egui::Context) -> bool {
-        if !self.hid_write_task_active() {
+        if !self.hid_write_lifecycle_busy() && !self.deferred_exit_has_pending_hid_writes() {
             return false;
         }
 
@@ -34,7 +35,13 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn finish_deferred_exit_after_hid_write(&mut self, ctx: &egui::Context) {
-        if !self.exit_after_hid_write || self.hid_write_task_active() {
+        if !self.exit_after_hid_write {
+            return;
+        }
+
+        self.flush_pending_qmk_setting_writes();
+        if self.hid_write_lifecycle_busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
             return;
         }
 
@@ -170,6 +177,9 @@ impl EntropyApp {
             return;
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
+        self.flush_pending_qmk_setting_writes();
+
         if should_keep_vial_unlock_visible(self.unlock_open, self.vial_unlock_polling) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.keep_vial_unlock_visible(ctx);
@@ -210,6 +220,7 @@ impl EntropyApp {
                 self.close_to_tray_prompt_open = true;
                 self.close_to_tray_prompt_remember = false;
                 ctx.request_repaint();
+                return;
             }
             CloseToTrayBehavior::Ask | CloseToTrayBehavior::Close | CloseToTrayBehavior::Tray => {
                 #[cfg(not(target_arch = "wasm32"))]
@@ -1018,5 +1029,56 @@ mod tests {
         assert!(should_keep_vial_unlock_visible(false, true));
         assert!(should_keep_vial_unlock_visible(true, true));
         assert!(!should_keep_vial_unlock_visible(false, false));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn deferred_exit_flushes_debounce_added_after_close_request() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid_device, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        app.exit_after_hid_write = true;
+        app.touchpad_settings.scroll_sens = 12;
+        app.debounce_touchpad_setting_write(&ctx, "Scroll sensitivity".to_owned(), 122, 8, 12);
+
+        let first_output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+            app.finish_deferred_exit_after_hid_write(&ctx);
+        });
+        assert!(app.settings_write_task.is_some());
+        assert!(!first_output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .into_iter()
+            .flat_map(|viewport| &viewport.commands)
+            .any(|command| *command == egui::ViewportCommand::Close));
+
+        let mut close_sent = false;
+        for _ in 0..200 {
+            app.poll_settings_write(&ctx);
+            let output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+                app.finish_deferred_exit_after_hid_write(&ctx);
+            });
+            close_sent |= output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .is_some_and(|viewport| viewport.commands.contains(&egui::ViewportCommand::Close));
+            if close_sent {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        assert!(close_sent);
+        assert!(!app.qmk_settings_write_pending());
+        assert!(
+            recorder
+                .requests()
+                .iter()
+                .filter(|request| request[2] == 122 && request[3] == 0)
+                .count()
+                >= 2
+        );
     }
 }
