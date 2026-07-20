@@ -361,6 +361,12 @@ pub(crate) struct ConnectResult {
     pub(crate) alt_repeat_entries: Vec<AltRepeatKeyEntry>,
     /// Feature bits reported by Vial dynamic entries.
     pub(crate) vial_features: VialFeatureSupport,
+    /// Per-layer flag: true where the firmware returned a stored layer name via
+    /// QSID read, so locally-saved names are only applied to the rest.
+    pub(crate) layer_names_from_firmware: Vec<bool>,
+    /// QMK setting ids the firmware exposes, so later layer-name writes can tell
+    /// unsupported storage apart from a transport error.
+    pub(crate) supported_qmk_settings: Vec<u16>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2715,6 +2721,11 @@ pub struct EntropyApp {
         std::collections::HashMap<String, crate::qmk_hid_host::QmkHidHostBridge>,
     /// Current firmware type (mirrors layout.firmware)
     pub(crate) firmware: FirmwareProtocol,
+    /// QMK setting ids the connected firmware exposes (from the connect probe).
+    /// Used to tell "storage genuinely unsupported" apart from a transport error
+    /// when persisting layer names, so imports never report a false success.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) supported_qmk_settings: Vec<u16>,
     /// Undo stack for key, encoder, and whole-layer assignments
     pub(super) undo_stack: Vec<UndoAction>,
     /// In-memory whole-layer clipboard. Kept across device reconnects so keyboards

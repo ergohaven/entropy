@@ -772,6 +772,7 @@ impl EntropyApp {
                 }
                 layout.layer_names.truncate(layer_count);
                 let mut current_firmware_layer_names = vec![None; layer_count];
+                let mut layer_names_from_firmware = vec![false; layer_count];
                 if has_qmk_setting(200) {
                     for (layer, current_firmware_name) in
                         current_firmware_layer_names.iter_mut().enumerate()
@@ -785,6 +786,7 @@ impl EntropyApp {
                                 *current_firmware_name = Some(name.clone());
                                 if !name.is_empty() {
                                     layout.layer_names[layer] = name;
+                                    layer_names_from_firmware[layer] = true;
                                 }
                             }
                             Err(e) => {
@@ -1337,6 +1339,7 @@ impl EntropyApp {
                     keyboard_id,
                     hid_device: Some(dev_conn),
                     about_info,
+                    layer_names_from_firmware,
                     macro_texts,
                     supports_macro_ext_keycodes,
                     macro_ext_keycodes_disabled_reason,
@@ -1361,6 +1364,7 @@ impl EntropyApp {
                     vial_features,
                     layout,
                     layer_count,
+                    supported_qmk_settings,
                 })
             })();
 

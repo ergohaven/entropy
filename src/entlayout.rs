@@ -644,9 +644,39 @@ impl EntropyApp {
         bundle: &EntLayoutFile,
     ) -> Result<(Vec<String>, EntLayoutImportMapping)> {
         let mapping = self.entlayout_import_mapping(bundle)?;
-        let firmware_failures = self.apply_entlayout_firmware_state(bundle, &mapping)?;
+        let mut firmware_failures = self.apply_entlayout_firmware_state(bundle, &mapping)?;
         self.apply_entlayout_local_state(bundle, &mapping)?;
         self.refresh_layer_picker_content_flags();
+
+        // Persist the imported layer names into firmware now that self.layer_names
+        // holds the final target values. The shared writer continues past a
+        // failing layer and reports which ones failed, so stale firmware slots
+        // aren't left to win over the local names on the next reconnect.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let names = self.layer_names.clone();
+            let failed = self.write_layer_names_to_firmware(&names);
+            if !failed.is_empty() {
+                let lang = self.app_settings.language;
+                let layers = failed
+                    .iter()
+                    .map(|layer| layer.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                firmware_failures.push(crate::i18n::tr_catalog_format(
+                    lang,
+                    "entlayout.firmware_failure",
+                    &[
+                        (
+                            "section",
+                            crate::i18n::tr_catalog(lang, "entlayout.layer_names"),
+                        ),
+                        ("error", &format!("layers {layers}")),
+                    ],
+                ));
+            }
+        }
+
         Ok((firmware_failures, mapping))
     }
 
@@ -1007,6 +1037,10 @@ impl EntropyApp {
                 ],
             ));
         }
+
+        // Layer names are written after local state sets self.layer_names, via
+        // the shared write_layer_names_to_firmware writer (see apply_entlayout),
+        // so a single failing layer no longer aborts the rest.
 
         if let Err(err) = (|| -> Result<()> {
             for (source_layer_idx, layer_codes) in bundle.data.encoder_keymap.iter().enumerate() {
