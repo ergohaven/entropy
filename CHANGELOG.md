@@ -5,6 +5,41 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.2.8 - Public Beta
+
+### Main Features
+
+- Added Layout/List views to key pickers, including macro, Mod-Tap, and Tap Dance dialogs (@IgorArkhipov, #49)
+- Added whole-layer copy/paste, None/Inherit fill, geometry-aware mirroring, and one-step undo (@IgorArkhipov, #76)
+- Added printable PDF export with one selected keyboard layer per A4 page and automatic orientation (@ImmortalDragonm, #78)
+- Added nonblocking, verified module and touchpad setting saves with Saving, Saved, and Failed states, plus debouncing for rapid slider changes (@IgorArkhipov, #89, #90)
+- Added reliable discovery and separate grouping for left/right split touchpad and controller settings (@IgorArkhipov, #94)
+- Added automatic firmware-aware cache invalidation and a Refresh Device Data action under About Device (@IgorArkhipov, #87)
+- Added runtime firmware-version reporting, Qube Live Features metadata, and separate battery levels for split devices
+- Added ASCII hyphen-minus to Universal Symbols with platform-safe transport mappings (@IgorArkhipov, #71)
+- Macro names and descriptions now persist across restarts, reconnects, and `.entlayout` import/export (@IgorArkhipov, #70)
+- Imported layer names now persist to compatible firmware and survive reconnects (@ImmortalDragonm, #77)
+
+### Fixes
+
+- Prevented incomplete Combo drafts from reaching firmware, moved changed-slot saves off the UI thread, and verified saved values through readback (@IgorArkhipov, #82)
+- Fixed Tap Dance and Tap-Hold writeback, stale module-setting readbacks, and mismatched QMK settings responses (@IgorArkhipov, #73, #75, #92)
+- Kept Vial unlock sessions recoverable after transient polling failures (@IgorArkhipov, #68)
+- Fixed multiline Text Expander output on Windows and prevented the X11 smart-input backend from starting in Wayland sessions (@IgorArkhipov, #72, #84)
+- Reduced Windows idle CPU usage and hidden tray background polling (@IgorArkhipov, #69)
+- Stabilized module settings grouping for mixed Left, Right, Auto Layer, and shared firmware tabs (@IgorArkhipov, #91)
+- Fixed RMK layout apply timing, HID-open recovery, firmware cache refreshes, and stale Live Features media data
+- Persisted app theme selection and made Universal Symbols transport safe for Windows shortcuts
+- Improved layer editing: dimmed inherited `KC_TRNS` legends, fixed wheel navigation, limited bulk None/Inherit to the selected layer, and kept the layout visible during background operations
+- Completed Russian localization for module settings and Bluetooth sleep timeouts
+- Restored the standard scrollbar gutter on the Modules page
+- Made the device-selection state compact, content-sized, and scrollable only when more than six devices are available
+
+### Contributors
+
+- Special thanks to @IgorArkhipov for 25 merged PRs across key pickers, layer tools, HID reliability, module settings, platform input, and lifecycle fixes
+- Special thanks to @ImmortalDragonm for persistent imported layer names and PDF export (#77, #78)
+
 ## v0.2.0 - Public Beta
 
 ### Main Features

@@ -109,42 +109,19 @@ jobs:
       - name: Write release notes
         shell: bash
         run: |
-          cat > RELEASE_NOTES.md <<'EOF'
-          ## What's new
+          awk -v version="${GITHUB_REF_NAME}" '
+            /^## / {
+              if (capturing) exit
+              if ($2 == version) capturing = 1
+            }
+            capturing { print }
+            END { if (!capturing) exit 1 }
+          ' CHANGELOG.md > RELEASE_NOTES.md
 
-          ### Main features
-
-          - Added the local Typing Trainer under Advanced with timed and word-count runs, focus mode, EN/RU language packs, punctuation/digits modifiers, result actions, and run history.
-          - Added Live Features layout sync for ru/en custom firmware keys, with an on/off switch.
-          - Added optional macro descriptions for picker tooltips and `.entlayout` export/import.
-          - Added an automatic About Entropy update indicator when a newer GitHub Release is available.
-          - Remapped Universal Symbols transport from F21-F24 to F13-F20 modifier banks for better cross-platform input compatibility (@IgorArkhipov, #51).
-          - Added One-Shot Mod chord choices for Ctrl+Shift, Ctrl+Alt, Shift+Alt, and Shift+GUI in the keycode picker (@IgorArkhipov, #55).
-          - Allowed custom keycodes in Tap Dance hold fields while keeping macros limited to tap-style fields (@IgorArkhipov, #52).
-
-          ### Fixes
-
-          - Fixed the Linux udev autoconnect loop.
-          - Key picker now opens on the tab that matches the clicked key's current keycode.
-          - Saved combo entries correctly over Bluetooth (@IgorArkhipov, #33).
-          - Detected Bluetooth HID transport on macOS (@IgorArkhipov, #24).
-          - Retried macOS DMG creation when packaging hits transient detach timing (@IgorArkhipov, #57).
-          - Throttled tray background updates to reduce idle CPU usage (@IgorArkhipov, #54).
-          - Tried the macOS event tap even when the permission preflight is stale (@IgorArkhipov, #62).
-          - Fixed rapid Windows Universal Symbols punctuation pairs (@IgorArkhipov, #53).
-          - Verified keycode writebacks to catch silent device write failures (@IgorArkhipov, #61).
-          - Verified module setting writebacks to catch silent device write failures (@IgorArkhipov, #56).
-          - Guarded unsupported RMK macro layer actions (@IgorArkhipov, #60).
-          - Hid unsupported Tap-Hold settings when firmware support is absent (@IgorArkhipov, #63).
-          - Improved connect crash diagnostics for failure reports (@IgorArkhipov, #48).
-          - Polished Typing Trainer history, focus mode, final stats, language controls, and punctuation/digits toggles.
-
-          ## Downloads
-
-          - Linux: download the `.AppImage`, make it executable, and run it.
-          - Windows: download and run the portable `.exe`.
-          - macOS: download the unsigned `.dmg` for your Mac (`arm64` for Apple Silicon, `x86_64` for Intel), drag Entropy to Applications, then remove quarantine if macOS blocks the app.
-          EOF
+          printf '\n## Downloads\n\n' >> RELEASE_NOTES.md
+          printf '%s\n' '- Linux: download the `.AppImage`, make it executable, and run it.' >> RELEASE_NOTES.md
+          printf '%s\n' '- Windows: download and run the portable `.exe`.' >> RELEASE_NOTES.md
+          printf '%s\n' '- macOS: download the unsigned `.dmg` for your Mac (`arm64` for Apple Silicon, `x86_64` for Intel), drag Entropy to Applications, then remove quarantine if macOS blocks the app.' >> RELEASE_NOTES.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
