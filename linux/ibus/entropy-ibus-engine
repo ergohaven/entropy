@@ -160,6 +160,10 @@ def _symbol_entries():
     for idx, symbol in enumerate(["←", "↑", "→", "↓", "↔"]):
         add(idx, symbol, MOD_GUI | MOD_SHIFT)
 
+    # Host text: German letters (Ctrl+Super+F13..F16)
+    for idx, symbol in enumerate(["ä", "ö", "ü", "ß"]):
+        add(idx, symbol, MOD_CTRL | MOD_GUI)
+
     return entries
 
 

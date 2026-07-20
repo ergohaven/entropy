@@ -31,7 +31,7 @@ struct SmartSymbol {
     const char *symbol;
 };
 
-const std::array<SmartSymbol, 75> SMART_SYMBOLS{{
+const std::array<SmartSymbol, 79> SMART_SYMBOLS{{
     // F13..F20
     {KC_F13, "{"},
     {uint16_t(KC_F13 + 1), "}"},
@@ -126,6 +126,12 @@ const std::array<SmartSymbol, 75> SMART_SYMBOLS{{
     {uint16_t(MOD_GUI | MOD_SHIFT | (KC_F13 + 2)), "→"},
     {uint16_t(MOD_GUI | MOD_SHIFT | (KC_F13 + 3)), "↓"},
     {uint16_t(MOD_GUI | MOD_SHIFT | (KC_F13 + 4)), "↔"},
+
+    // Ctrl+Super+F13..F16: German letters
+    {uint16_t(MOD_CTRL | MOD_GUI | KC_F13), "ä"},
+    {uint16_t(MOD_CTRL | MOD_GUI | (KC_F13 + 1)), "ö"},
+    {uint16_t(MOD_CTRL | MOD_GUI | (KC_F13 + 2)), "ü"},
+    {uint16_t(MOD_CTRL | MOD_GUI | (KC_F13 + 3)), "ß"},
 }};
 
 std::optional<uint16_t> baseKeycodeForSym(KeySym sym) {

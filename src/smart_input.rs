@@ -1315,6 +1315,22 @@ mod tests {
     }
 
     #[test]
+    fn windows_transport_decodes_german_host_text_chords() {
+        for (offset, symbol) in ['ä', 'ö', 'ü', 'ß'].into_iter().enumerate() {
+            let decoded = windows_smart_symbol_for_transport(
+                KC_F13 + 7 + offset as u16,
+                true,
+                true,
+                true,
+                false,
+                0,
+            )
+            .unwrap();
+            assert_eq!(decoded.0, symbol);
+        }
+    }
+
+    #[test]
     fn linux_x11_backend_only_starts_for_x11_sessions() {
         assert!(should_start_linux_x11_backend(LinuxSessionKind::X11));
         assert!(!should_start_linux_x11_backend(LinuxSessionKind::Wayland));
