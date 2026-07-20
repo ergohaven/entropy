@@ -20,10 +20,16 @@ fn export_text(lang: crate::i18n::Language, key: &str) -> &'static str {
         (crate::i18n::Language::Russian, "title") => "Экспорт картинки раскладки",
         (crate::i18n::Language::English, "title") => "Export layout image",
         (crate::i18n::Language::Russian, "description") => {
-            "PNG или SVG с выбранными слоями, темой и легендами клавиш"
+            "PNG, SVG или PDF с выбранными слоями, темой и легендами клавиш"
         }
         (crate::i18n::Language::English, "description") => {
-            "PNG or SVG with selected layers, theme, and key legends"
+            "PNG, SVG, or PDF with selected layers, theme, and key legends"
+        }
+        (crate::i18n::Language::Russian, "pdf_pages_hint") => {
+            "PDF для печати: каждый выбранный слой на отдельной странице A4"
+        }
+        (crate::i18n::Language::English, "pdf_pages_hint") => {
+            "Printable PDF: each selected layer on its own A4 page"
         }
         (crate::i18n::Language::Russian, "format") => "Формат",
         (crate::i18n::Language::English, "format") => "Format",
@@ -78,6 +84,7 @@ fn export_format_label(
     match format {
         LayoutImageExportFormat::Png => "PNG",
         LayoutImageExportFormat::Svg => "SVG",
+        LayoutImageExportFormat::Pdf => "PDF",
     }
 }
 
@@ -199,7 +206,11 @@ fn draw_format_dropdown(
         |ui| {
             ui.set_min_width(metrics.settings_control_width());
             ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
-            for format in [LayoutImageExportFormat::Png, LayoutImageExportFormat::Svg] {
+            for format in [
+                LayoutImageExportFormat::Png,
+                LayoutImageExportFormat::Svg,
+                LayoutImageExportFormat::Pdf,
+            ] {
                 let selected = format == *selected_format;
                 let (option_rect, option_resp) =
                     ui.allocate_exact_size(metrics.size(168.0, 28.0), Sense::click());
@@ -417,6 +428,14 @@ impl EntropyApp {
                         .size(metrics.value(13.0))
                         .color(app_muted_text(dark)),
                 );
+                if self.app_settings.layout_image_export.format == LayoutImageExportFormat::Pdf {
+                    ui.add_space(metrics.value(4.0));
+                    ui.label(
+                        RichText::new(export_text(lang, "pdf_pages_hint"))
+                            .size(metrics.value(13.0))
+                            .color(app_muted_text(dark)),
+                    );
+                }
                 ui.add_space(metrics.value(24.0));
 
                 let total_rows = 4 + layer_count;
@@ -681,10 +700,12 @@ impl EntropyApp {
         let extension = match format {
             LayoutImageExportFormat::Png => "png",
             LayoutImageExportFormat::Svg => "svg",
+            LayoutImageExportFormat::Pdf => "pdf",
         };
         let filter_label = match format {
             LayoutImageExportFormat::Png => "PNG image",
             LayoutImageExportFormat::Svg => "SVG image",
+            LayoutImageExportFormat::Pdf => "PDF document",
         };
         let file_name = format!("{}-layout.{extension}", device_id_slug(&layout.name));
         let Some(mut path) = rfd::FileDialog::new()
@@ -715,6 +736,9 @@ impl EntropyApp {
             LayoutImageExportFormat::Svg => self
                 .render_layout_svg(layout, &selected_layers)
                 .and_then(|svg| std::fs::write(&path, svg).map_err(|e| anyhow::anyhow!("{e}"))),
+            LayoutImageExportFormat::Pdf => self
+                .render_layout_pdf(layout, &selected_layers)
+                .and_then(|pdf| std::fs::write(&path, pdf).map_err(|e| anyhow::anyhow!("{e}"))),
         };
 
         match result {
@@ -979,6 +1003,28 @@ impl EntropyApp {
         }
 
         Ok(image)
+    }
+
+    /// One A4 page per selected layer, each page embedding that layer's
+    /// raster render, so the file is ready for printing as-is.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn render_layout_pdf(
+        &self,
+        layout: &KeyboardLayout,
+        selected_layers: &[usize],
+    ) -> anyhow::Result<Vec<u8>> {
+        // Every page is a single layer of the same layout, so all pages share
+        // one geometry. Compute it once up front so the PDF builder can enforce
+        // the pixel budget from the declared size *before* rendering allocates a
+        // page. Render one layer at a time so only one page's pixels are live.
+        let geometry =
+            self.export_layout_geometry(layout, &[*selected_layers.first().unwrap_or(&0)])?;
+        let page_size = (geometry.width as u32, geometry.height as u32);
+        crate::pdf::build_layer_pdf(
+            selected_layers.len(),
+            |_page| page_size,
+            |page| self.render_layout_image(layout, &[selected_layers[page]]),
+        )
     }
 
     #[cfg(not(target_arch = "wasm32"))]
