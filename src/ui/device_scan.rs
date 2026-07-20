@@ -10,8 +10,8 @@ enum DeviceScanResultAction {
     Apply,
 }
 
-fn device_scan_result_action(refresh_blocked: bool, devices_empty: bool) -> DeviceScanResultAction {
-    if devices_empty || !refresh_blocked {
+fn device_scan_result_action(refresh_blocked: bool) -> DeviceScanResultAction {
+    if !refresh_blocked {
         DeviceScanResultAction::Apply
     } else {
         DeviceScanResultAction::Discard
@@ -42,6 +42,13 @@ impl EntropyApp {
         if !matches!(self.device_scan_state, DeviceScanState::Idle) {
             return false;
         }
+        // hidapi's macOS IOHIDManager cannot enumerate while this process owns
+        // an open handle. Automatic liveness uses that handle directly instead.
+        #[cfg(target_os = "macos")]
+        if self.hid_device.is_some() {
+            log::debug!("skipping macOS HID scan while a device handle is open");
+            return false;
+        }
         #[cfg(target_os = "macos")]
         if crate::hid::macos_hid_scan_disabled_for_rosetta() {
             if self.status_msg.is_empty() {
@@ -53,7 +60,7 @@ impl EntropyApp {
         let (tx, rx) = mpsc::channel();
         self.device_scan_state = DeviceScanState::Scanning { rx, trigger };
         std::thread::spawn(move || {
-            let _ = tx.send(DeviceManager::scan_devices());
+            let _ = tx.send(DeviceManager::scan_devices().map_err(|error| error.to_string()));
         });
         true
     }
@@ -83,18 +90,29 @@ impl EntropyApp {
         let devices = match &self.device_scan_state {
             DeviceScanState::Idle => return,
             DeviceScanState::Scanning { rx, .. } => match rx.try_recv() {
-                Ok(devices) => Some(devices),
+                Ok(Ok(devices)) => Some(devices),
+                Ok(Err(error)) => {
+                    self.device_scan_state = DeviceScanState::Idle;
+                    self.status_msg = format!("Device scan failed: {error}");
+                    log::warn!("device scan worker failed: {error}");
+                    return;
+                }
                 Err(mpsc::TryRecvError::Empty) => {
                     ctx.request_repaint_after(std::time::Duration::from_millis(25));
                     return;
                 }
-                Err(mpsc::TryRecvError::Disconnected) => Some(Vec::new()),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.device_scan_state = DeviceScanState::Idle;
+                    self.status_msg = "Device scan worker stopped".into();
+                    log::warn!("device scan worker stopped before returning a result");
+                    return;
+                }
             },
         };
 
         self.device_scan_state = DeviceScanState::Idle;
         if let Some(devices) = devices {
-            match device_scan_result_action(self.device_refresh_blocked(), devices.is_empty()) {
+            match device_scan_result_action(self.device_refresh_blocked()) {
                 DeviceScanResultAction::Apply => self.apply_device_scan_result(devices, trigger),
                 DeviceScanResultAction::Discard => {}
             }
@@ -245,7 +263,7 @@ mod tests {
     #[test]
     fn pending_settings_work_discards_nonempty_scan_results() {
         assert_eq!(
-            device_scan_result_action(true, false),
+            device_scan_result_action(true),
             DeviceScanResultAction::Discard
         );
     }
@@ -253,11 +271,7 @@ mod tests {
     #[test]
     fn automatic_scan_applies_when_connected_to_detect_disconnects() {
         assert_eq!(
-            device_scan_result_action(false, false),
-            DeviceScanResultAction::Apply
-        );
-        assert_eq!(
-            device_scan_result_action(true, true),
+            device_scan_result_action(false),
             DeviceScanResultAction::Apply
         );
     }
@@ -267,11 +281,11 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = test_app();
         let device = test_device("/test/keyboard");
-        app.device_manager.replace_devices(vec![device]);
+        app.device_manager.replace_devices(vec![device.clone()]);
         app.selected_device = Some(0);
         app.hid_device = Some(crate::hid::HidDevice::test_device().0);
         let (tx, rx) = mpsc::channel();
-        tx.send(Vec::new()).unwrap();
+        tx.send(Ok(Vec::new())).unwrap();
         app.device_scan_state = DeviceScanState::Scanning {
             rx,
             trigger: DeviceScanTrigger::Automatic,
@@ -285,16 +299,16 @@ mod tests {
     }
 
     #[test]
-    fn automatic_empty_scan_clears_connected_keyboard_with_pending_combo() {
+    fn automatic_empty_scan_preserves_pending_combo() {
         let ctx = egui::Context::default();
         let mut app = test_app();
         let device = test_device("/test/keyboard");
-        app.device_manager.replace_devices(vec![device]);
+        app.device_manager.replace_devices(vec![device.clone()]);
         app.selected_device = Some(0);
         app.hid_device = Some(crate::hid::HidDevice::test_device().0);
         app.combo_dirty = true;
         let (tx, rx) = mpsc::channel();
-        tx.send(Vec::new()).unwrap();
+        tx.send(Ok(Vec::new())).unwrap();
         app.device_scan_state = DeviceScanState::Scanning {
             rx,
             trigger: DeviceScanTrigger::Automatic,
@@ -302,8 +316,10 @@ mod tests {
 
         app.poll_device_scan(&ctx);
 
-        assert!(app.hid_device.is_none());
-        assert!(app.selected_device.is_none());
+        assert!(app.hid_device.is_some());
+        assert_eq!(app.selected_device, Some(0));
+        assert!(app.combo_dirty);
+        assert_eq!(app.device_manager.devices()[0].path, device.path);
         assert!(matches!(app.device_scan_state, DeviceScanState::Idle));
     }
 
@@ -317,7 +333,7 @@ mod tests {
         app.hid_device = Some(crate::hid::HidDevice::test_device().0);
         app.combo_dirty = true;
         let (tx, rx) = mpsc::channel();
-        tx.send(vec![test_device("/test/keyboard-b")]).unwrap();
+        tx.send(Ok(vec![test_device("/test/keyboard-b")])).unwrap();
         app.device_scan_state = DeviceScanState::Scanning {
             rx,
             trigger: DeviceScanTrigger::Automatic,
@@ -339,7 +355,7 @@ mod tests {
         app.selected_device = Some(0);
         app.hid_device = Some(crate::hid::HidDevice::test_device().0);
         let (tx, rx) = mpsc::channel();
-        tx.send(vec![device]).unwrap();
+        tx.send(Ok(vec![device])).unwrap();
         app.device_scan_state = DeviceScanState::Scanning {
             rx,
             trigger: DeviceScanTrigger::Manual,
@@ -363,7 +379,7 @@ mod tests {
         app.selected_device = Some(0);
         app.hid_device = Some(crate::hid::HidDevice::test_device().0);
         let (tx, rx) = mpsc::channel();
-        tx.send(vec![reenumerated]).unwrap();
+        tx.send(Ok(vec![reenumerated])).unwrap();
         app.device_scan_state = DeviceScanState::Scanning {
             rx,
             trigger: DeviceScanTrigger::Automatic,
@@ -388,5 +404,38 @@ mod tests {
 
         assert!(app.hid_device.is_some());
         assert!(matches!(app.connect_state, ConnectState::Idle));
+    }
+
+    #[test]
+    fn scan_worker_failure_preserves_connected_session() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        let device = test_device("/test/keyboard");
+        app.device_manager.replace_devices(vec![device]);
+        app.selected_device = Some(0);
+        app.hid_device = Some(crate::hid::HidDevice::test_device().0);
+        let (tx, rx) = mpsc::channel();
+        tx.send(Err("hidapi initialization failed".to_owned()))
+            .unwrap();
+        app.device_scan_state = DeviceScanState::Scanning {
+            rx,
+            trigger: DeviceScanTrigger::Automatic,
+        };
+
+        app.poll_device_scan(&ctx);
+
+        assert!(app.hid_device.is_some());
+        assert_eq!(app.selected_device, Some(0));
+        assert!(app.status_msg.starts_with("Device scan failed:"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_manual_scan_never_enumerates_with_open_hid() {
+        let mut app = test_app();
+        app.hid_device = Some(crate::hid::HidDevice::test_device().0);
+
+        assert!(!app.start_manual_device_scan());
+        assert!(matches!(app.device_scan_state, DeviceScanState::Idle));
     }
 }

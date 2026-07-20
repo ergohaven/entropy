@@ -59,44 +59,47 @@ impl DeviceManager {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn scan_devices() -> Vec<Device> {
+    pub fn scan_devices() -> anyhow::Result<Vec<Device>> {
         let mut devices = Vec::new();
 
         #[cfg(target_os = "macos")]
         if crate::hid::macos_hid_scan_disabled_for_rosetta() {
-            return devices;
+            return Ok(devices);
         }
 
         #[cfg(target_os = "macos")]
         let _hid_lock = crate::hid::macos_hid_operation_lock();
-        if let Ok(api) = hidapi::HidApi::new() {
-            for info in api.device_list() {
-                // Filter: Vial usage page 0xFF60, usage 0x61
-                if info.usage_page() == 0xFF60 && info.usage() == 0x61 {
-                    devices.push(Device {
-                        name: info
-                            .product_string()
-                            .unwrap_or("Unknown Keyboard")
-                            .to_string(),
-                        vendor_id: info.vendor_id(),
-                        product_id: info.product_id(),
-                        manufacturer: info.manufacturer_string().unwrap_or("").to_string(),
-                        serial_number: info.serial_number().unwrap_or("").to_string(),
-                        bus_type: format!("{:?}", info.bus_type()),
-                        path: info.path().to_string_lossy().to_string(),
-                        firmware: FirmwareProtocol::Vial,
-                    });
-                }
+        let api =
+            hidapi::HidApi::new().map_err(|error| anyhow::anyhow!("HID scan failed: {error}"))?;
+        for info in api.device_list() {
+            // Filter: Vial usage page 0xFF60, usage 0x61
+            if info.usage_page() == 0xFF60 && info.usage() == 0x61 {
+                devices.push(Device {
+                    name: info
+                        .product_string()
+                        .unwrap_or("Unknown Keyboard")
+                        .to_string(),
+                    vendor_id: info.vendor_id(),
+                    product_id: info.product_id(),
+                    manufacturer: info.manufacturer_string().unwrap_or("").to_string(),
+                    serial_number: info.serial_number().unwrap_or("").to_string(),
+                    bus_type: format!("{:?}", info.bus_type()),
+                    path: info.path().to_string_lossy().to_string(),
+                    firmware: FirmwareProtocol::Vial,
+                });
             }
         }
 
-        devices
+        Ok(devices)
     }
 
     pub fn scan(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.devices = Self::scan_devices();
+            match Self::scan_devices() {
+                Ok(devices) => self.devices = devices,
+                Err(error) => log::warn!("device scan failed: {error}"),
+            }
         }
 
         log::info!("Found {} Vial device(s)", self.devices.len());

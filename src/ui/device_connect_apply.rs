@@ -303,6 +303,8 @@ mod tests {
         let failed = sync_layer_names_to_store(&store, &names, 2);
         assert!(failed.is_empty());
         assert!(store.writes.borrow().is_empty());
+    }
+
     #[test]
     fn reconnect_selection_is_preserved_and_clamped() {
         assert_eq!(restored_selection(3, 5), 3);

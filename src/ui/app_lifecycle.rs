@@ -71,6 +71,16 @@ fn hid_lifecycle_writes_available(hid_write_task_active: bool) -> bool {
     !hid_write_task_active
 }
 
+#[cfg(target_os = "macos")]
+fn macos_hid_liveness_check_due(
+    last_check_at: f64,
+    now: f64,
+    hid_present: bool,
+    refresh_blocked: bool,
+) -> bool {
+    hid_present && !refresh_blocked && (last_check_at == 0.0 || now - last_check_at >= 1.0)
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn connection_replaces_layout_canvas(connect_state: &ConnectState) -> bool {
     matches!(connect_state, ConnectState::Loading { .. })
@@ -110,6 +120,9 @@ impl EntropyApp {
                 self.poll_device_scan(ctx);
             }
 
+            #[cfg(target_os = "macos")]
+            self.poll_macos_hid_liveness(now);
+
             let is_connecting = matches!(self.connect_state, ConnectState::Loading { .. });
             let hid_write_active = self.hid_write_lifecycle_busy();
             #[cfg(target_os = "macos")]
@@ -137,6 +150,35 @@ impl EntropyApp {
         self.auto_reload_text_expander_rules_file(now);
         self.poll_single_instance_signal(ctx);
         self.poll_connect(ctx);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn poll_macos_hid_liveness(&mut self, now: f64) {
+        if !macos_hid_liveness_check_due(
+            self.last_device_liveness_check_at,
+            now,
+            self.hid_device.is_some(),
+            self.device_refresh_blocked(),
+        ) {
+            return;
+        }
+        self.last_device_liveness_check_at = now;
+
+        let error = self
+            .hid_device
+            .as_ref()
+            .and_then(|hid| hid.get_protocol_version().err());
+        match error {
+            Some(error) if crate::hid::is_disconnect_error(&error) => {
+                self.selected_device = None;
+                self.clear_connected_keyboard_state(crate::i18n::tr(
+                    self.app_settings.language,
+                    crate::i18n::Key::NoDevicesFound,
+                ));
+            }
+            Some(error) => log::warn!("macOS HID liveness check failed: {error}"),
+            None => {}
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -428,6 +470,15 @@ mod tests {
     use super::*;
     use crate::keyboard::{KeyboardLayout, LayoutOption, PhysicalKey};
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_liveness_uses_open_handle_without_enumeration() {
+        assert!(macos_hid_liveness_check_due(0.0, 1.0, true, false));
+        assert!(!macos_hid_liveness_check_due(1.0, 1.5, true, false));
+        assert!(!macos_hid_liveness_check_due(1.0, 2.0, false, false));
+        assert!(!macos_hid_liveness_check_due(1.0, 2.0, true, true));
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn only_device_connection_replaces_the_layout_canvas() {
@@ -468,19 +519,25 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn background_starts_disconnect_scan_while_hid_is_connected() {
+    fn background_uses_platform_safe_connected_liveness() {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
         app.hid_device = Some(crate::hid::HidDevice::test_device().0);
         app.last_device_scan_at = 0.0;
 
-        app.update_native_background(&ctx, 0.0, false, false);
+        app.update_native_background(&ctx, 1.0, false, false);
 
+        #[cfg(not(target_os = "macos"))]
         assert!(matches!(
             app.device_scan_state,
             DeviceScanState::Scanning { .. }
         ));
+        #[cfg(target_os = "macos")]
+        {
+            assert!(matches!(app.device_scan_state, DeviceScanState::Idle));
+            assert_eq!(app.last_device_liveness_check_at, 1.0);
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]

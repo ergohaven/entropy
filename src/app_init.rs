@@ -48,6 +48,8 @@ impl EntropyApp {
             layer_clipboard: None,
             scan_frame: 0,
             last_device_scan_at: 0.0,
+            #[cfg(target_os = "macos")]
+            last_device_liveness_check_at: 0.0,
             hover_layer: None,
             last_layout_geometry: None,
             prev_hovered_key: None,

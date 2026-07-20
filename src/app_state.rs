@@ -396,7 +396,7 @@ pub(crate) enum DeviceScanTrigger {
 pub(crate) enum DeviceScanState {
     Idle,
     Scanning {
-        rx: mpsc::Receiver<Vec<Device>>,
+        rx: mpsc::Receiver<Result<Vec<Device>, String>>,
         trigger: DeviceScanTrigger,
     },
 }
@@ -2838,6 +2838,10 @@ pub struct EntropyApp {
     pub(crate) scan_frame: u32,
     /// Last device scan timestamp in egui seconds
     pub(crate) last_device_scan_at: f64,
+    /// Last direct HID liveness check on macOS, where enumeration cannot run
+    /// while an open HID handle exists.
+    #[cfg(target_os = "macos")]
+    pub(crate) last_device_liveness_check_at: f64,
     /// Layer to preview on hover (None = show selected_layer)
     pub(crate) hover_layer: Option<usize>,
     /// Last main keyboard layout geometry: offset_x, offset_y, unit, padding
