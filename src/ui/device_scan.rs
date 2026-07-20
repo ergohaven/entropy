@@ -6,23 +6,27 @@ fn should_wait_for_manual_device_selection(status_msg: &str) -> bool {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DeviceScanResultAction {
-    Wait,
+    Discard,
     Apply,
 }
 
-fn device_scan_result_action(refresh_blocked: bool) -> DeviceScanResultAction {
-    if refresh_blocked {
-        DeviceScanResultAction::Wait
-    } else {
+fn device_scan_result_action(refresh_blocked: bool, devices_empty: bool) -> DeviceScanResultAction {
+    if devices_empty || !refresh_blocked {
         DeviceScanResultAction::Apply
+    } else {
+        DeviceScanResultAction::Discard
     }
 }
 
 fn same_keyboard_after_reenumeration(previous: &Device, candidate: &Device) -> bool {
-    previous.vendor_id == candidate.vendor_id
-        && previous.product_id == candidate.product_id
-        && !previous.serial_number.is_empty()
-        && previous.serial_number == candidate.serial_number
+    if previous.vendor_id != candidate.vendor_id || previous.product_id != candidate.product_id {
+        return false;
+    }
+    if !previous.serial_number.is_empty() || !candidate.serial_number.is_empty() {
+        return !previous.serial_number.is_empty()
+            && previous.serial_number == candidate.serial_number;
+    }
+    previous.name == candidate.name && previous.manufacturer == candidate.manufacturer
 }
 
 impl EntropyApp {
@@ -38,10 +42,6 @@ impl EntropyApp {
         if !matches!(self.device_scan_state, DeviceScanState::Idle) {
             return false;
         }
-        if self.device_refresh_blocked() {
-            return false;
-        }
-
         #[cfg(target_os = "macos")]
         if crate::hid::macos_hid_scan_disabled_for_rosetta() {
             if self.status_msg.is_empty() {
@@ -80,15 +80,6 @@ impl EntropyApp {
             DeviceScanState::Idle => return,
             DeviceScanState::Scanning { trigger, .. } => *trigger,
         };
-        let action = device_scan_result_action(self.device_refresh_blocked());
-        match action {
-            DeviceScanResultAction::Wait => {
-                ctx.request_repaint_after(std::time::Duration::from_millis(25));
-                return;
-            }
-            DeviceScanResultAction::Apply => {}
-        }
-
         let devices = match &self.device_scan_state {
             DeviceScanState::Idle => return,
             DeviceScanState::Scanning { rx, .. } => match rx.try_recv() {
@@ -103,7 +94,10 @@ impl EntropyApp {
 
         self.device_scan_state = DeviceScanState::Idle;
         if let Some(devices) = devices {
-            self.apply_device_scan_result(devices, trigger);
+            match device_scan_result_action(self.device_refresh_blocked(), devices.is_empty()) {
+                DeviceScanResultAction::Apply => self.apply_device_scan_result(devices, trigger),
+                DeviceScanResultAction::Discard => {}
+            }
         }
     }
 
@@ -130,13 +124,16 @@ impl EntropyApp {
                 self.selected_device = None;
                 self.clear_connected_keyboard_state(crate::i18n::tr(
                     self.app_settings.language,
-                    TrKey::NoDevicesFound,
+                    crate::i18n::Key::NoDevicesFound,
                 ));
             } else {
                 self.qmk_hid_hosts.clear();
                 if trigger == DeviceScanTrigger::Manual {
-                    self.status_msg =
-                        crate::i18n::tr(self.app_settings.language, TrKey::NoDevicesFound).into();
+                    self.status_msg = crate::i18n::tr(
+                        self.app_settings.language,
+                        crate::i18n::Key::NoDevicesFound,
+                    )
+                    .into();
                 }
             }
             return;
@@ -170,10 +167,20 @@ impl EntropyApp {
         }
 
         if let Some(previous_device) = previous_device {
-            if let Some(idx) = self.device_manager.devices().iter().position(|candidate| {
+            let exact_match = self.device_manager.devices().iter().position(|candidate| {
                 candidate.display_name_cache_key() == previous_device.display_name_cache_key()
-                    || same_keyboard_after_reenumeration(&previous_device, candidate)
-            }) {
+            });
+            let reenumerated_match = exact_match.or_else(|| {
+                let mut matches = self.device_manager.devices().iter().enumerate().filter_map(
+                    |(idx, candidate)| {
+                        same_keyboard_after_reenumeration(&previous_device, candidate)
+                            .then_some(idx)
+                    },
+                );
+                let matched = matches.next()?;
+                matches.next().is_none().then_some(matched)
+            });
+            if let Some(idx) = reenumerated_match {
                 let reenumerated = self.device_manager.devices()[idx].display_name_cache_key()
                     != previous_device.display_name_cache_key();
                 self.selected_device = Some(idx);
@@ -190,7 +197,7 @@ impl EntropyApp {
                 self.selected_device = None;
                 self.clear_connected_keyboard_state(crate::i18n::tr(
                     self.app_settings.language,
-                    TrKey::NoDevicesFound,
+                    crate::i18n::Key::NoDevicesFound,
                 ));
                 return;
             }
@@ -236,17 +243,21 @@ mod tests {
     }
 
     #[test]
-    fn pending_settings_work_defers_scan_results() {
+    fn pending_settings_work_discards_nonempty_scan_results() {
         assert_eq!(
-            device_scan_result_action(true),
-            DeviceScanResultAction::Wait
+            device_scan_result_action(true, false),
+            DeviceScanResultAction::Discard
         );
     }
 
     #[test]
     fn automatic_scan_applies_when_connected_to_detect_disconnects() {
         assert_eq!(
-            device_scan_result_action(false),
+            device_scan_result_action(false, false),
+            DeviceScanResultAction::Apply
+        );
+        assert_eq!(
+            device_scan_result_action(true, true),
             DeviceScanResultAction::Apply
         );
     }
@@ -274,6 +285,52 @@ mod tests {
     }
 
     #[test]
+    fn automatic_empty_scan_clears_connected_keyboard_with_pending_combo() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        let device = test_device("/test/keyboard");
+        app.device_manager.replace_devices(vec![device]);
+        app.selected_device = Some(0);
+        app.hid_device = Some(crate::hid::HidDevice::test_device().0);
+        app.combo_dirty = true;
+        let (tx, rx) = mpsc::channel();
+        tx.send(Vec::new()).unwrap();
+        app.device_scan_state = DeviceScanState::Scanning {
+            rx,
+            trigger: DeviceScanTrigger::Automatic,
+        };
+
+        app.poll_device_scan(&ctx);
+
+        assert!(app.hid_device.is_none());
+        assert!(app.selected_device.is_none());
+        assert!(matches!(app.device_scan_state, DeviceScanState::Idle));
+    }
+
+    #[test]
+    fn pending_combo_discards_nonempty_automatic_scan_result() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        let previous = test_device("/test/keyboard-a");
+        app.device_manager.replace_devices(vec![previous.clone()]);
+        app.selected_device = Some(0);
+        app.hid_device = Some(crate::hid::HidDevice::test_device().0);
+        app.combo_dirty = true;
+        let (tx, rx) = mpsc::channel();
+        tx.send(vec![test_device("/test/keyboard-b")]).unwrap();
+        app.device_scan_state = DeviceScanState::Scanning {
+            rx,
+            trigger: DeviceScanTrigger::Automatic,
+        };
+
+        app.poll_device_scan(&ctx);
+
+        assert!(app.hid_device.is_some());
+        assert_eq!(app.device_manager.devices()[0].path, previous.path);
+        assert!(matches!(app.device_scan_state, DeviceScanState::Idle));
+    }
+
+    #[test]
     fn manual_same_device_scan_reopens_stale_hid() {
         let ctx = egui::Context::default();
         let mut app = test_app();
@@ -286,6 +343,30 @@ mod tests {
         app.device_scan_state = DeviceScanState::Scanning {
             rx,
             trigger: DeviceScanTrigger::Manual,
+        };
+
+        app.poll_device_scan(&ctx);
+
+        assert!(app.hid_device.is_none());
+        assert!(matches!(app.connect_state, ConnectState::Loading { .. }));
+    }
+
+    #[test]
+    fn automatic_empty_serial_reenumeration_reopens_hid() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        let mut previous = test_device("/test/keyboard-old");
+        previous.serial_number.clear();
+        let mut reenumerated = test_device("/test/keyboard-new");
+        reenumerated.serial_number.clear();
+        app.device_manager.replace_devices(vec![previous]);
+        app.selected_device = Some(0);
+        app.hid_device = Some(crate::hid::HidDevice::test_device().0);
+        let (tx, rx) = mpsc::channel();
+        tx.send(vec![reenumerated]).unwrap();
+        app.device_scan_state = DeviceScanState::Scanning {
+            rx,
+            trigger: DeviceScanTrigger::Automatic,
         };
 
         app.poll_device_scan(&ctx);

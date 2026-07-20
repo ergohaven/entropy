@@ -468,6 +468,23 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn background_starts_disconnect_scan_while_hid_is_connected() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        app.hid_device = Some(crate::hid::HidDevice::test_device().0);
+        app.last_device_scan_at = 0.0;
+
+        app.update_native_background(&ctx, 0.0, false, false);
+
+        assert!(matches!(
+            app.device_scan_state,
+            DeviceScanState::Scanning { .. }
+        ));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
     fn settings_task_defers_and_drains_hid_writes_before_exit() {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
