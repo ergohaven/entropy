@@ -1013,11 +1013,18 @@ impl EntropyApp {
         layout: &KeyboardLayout,
         selected_layers: &[usize],
     ) -> anyhow::Result<Vec<u8>> {
-        // Render one layer at a time so only a single page's pixels are held in
-        // memory, not every page (a 32-layer export would otherwise be huge).
-        crate::pdf::build_layer_pdf(selected_layers.len(), |page| {
-            self.render_layout_image(layout, &[selected_layers[page]])
-        })
+        // Every page is a single layer of the same layout, so all pages share
+        // one geometry. Compute it once up front so the PDF builder can enforce
+        // the pixel budget from the declared size *before* rendering allocates a
+        // page. Render one layer at a time so only one page's pixels are live.
+        let geometry =
+            self.export_layout_geometry(layout, &[*selected_layers.first().unwrap_or(&0)])?;
+        let page_size = (geometry.width as u32, geometry.height as u32);
+        crate::pdf::build_layer_pdf(
+            selected_layers.len(),
+            |_page| page_size,
+            |page| self.render_layout_image(layout, &[selected_layers[page]]),
+        )
     }
 
     #[cfg(not(target_arch = "wasm32"))]

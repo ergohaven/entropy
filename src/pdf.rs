@@ -163,11 +163,18 @@ fn write_xref(pdf: &mut Vec<u8>, offsets: &[usize], object_count: usize) {
     );
 }
 
-/// Build a PDF of `page_count` A4 pages, calling `render_page(i)` for each page
-/// image just before it is encoded, so only one page's pixels are live at a time.
-pub fn build_layer_pdf<F>(page_count: usize, mut render_page: F) -> Result<Vec<u8>>
+/// Build a PDF of `page_count` A4 pages. `page_dimensions(i)` reports a page's
+/// pixel size *without rendering it*, so the pixel budget is enforced before
+/// `render_page(i)` allocates the image. Only one page's pixels are live at a
+/// time (rendered, encoded, dropped before the next).
+pub fn build_layer_pdf<D, R>(
+    page_count: usize,
+    page_dimensions: D,
+    mut render_page: R,
+) -> Result<Vec<u8>>
 where
-    F: FnMut(usize) -> Result<RgbaImage>,
+    D: Fn(usize) -> (u32, u32),
+    R: FnMut(usize) -> Result<RgbaImage>,
 {
     anyhow::ensure!(page_count > 0, "no layers to export");
 
@@ -192,14 +199,17 @@ where
 
     let mut total_pixels: u64 = 0;
     for page in 0..page_count {
-        let image = render_page(page)?;
+        // Enforce the budget from the declared size *before* rendering, so an
+        // oversized page is rejected without ever allocating its RGBA buffer.
+        let (width, height) = page_dimensions(page);
         total_pixels = accumulate_pixel_budget(
-            image.width(),
-            image.height(),
+            width,
+            height,
             total_pixels,
             MAX_PAGE_PIXELS,
             MAX_TOTAL_PIXELS,
         )?;
+        let image = render_page(page)?;
         write_page(&mut pdf, &mut offsets, page, &image)?;
         drop(image);
     }
@@ -220,7 +230,12 @@ mod tests {
     #[test]
     fn builds_one_page_per_layer_with_orientation() {
         let sizes = [(200u32, 100u32), (100, 200)];
-        let pdf = build_layer_pdf(sizes.len(), |i| Ok(img(sizes[i].0, sizes[i].1))).unwrap();
+        let pdf = build_layer_pdf(
+            sizes.len(),
+            |i| sizes[i],
+            |i| Ok(img(sizes[i].0, sizes[i].1)),
+        )
+        .unwrap();
         assert!(pdf.starts_with(b"%PDF-1.4"));
         assert!(pdf.ends_with(b"%%EOF\n"));
         let text = String::from_utf8_lossy(&pdf);
@@ -232,7 +247,7 @@ mod tests {
 
     #[test]
     fn rejects_empty_selection() {
-        assert!(build_layer_pdf(0, |_| Ok(img(4, 4))).is_err());
+        assert!(build_layer_pdf(0, |_| (4, 4), |_| Ok(img(4, 4))).is_err());
     }
 
     #[test]
@@ -241,12 +256,33 @@ mod tests {
         // that lets it drop each before rendering the next (structurally, the
         // loop holds a single `image` binding, never a collection of them).
         let mut calls = Vec::new();
-        let _pdf = build_layer_pdf(4, |page| {
-            calls.push(page);
-            Ok(img(10, 10))
-        })
+        let _pdf = build_layer_pdf(
+            4,
+            |_| (10, 10),
+            |page| {
+                calls.push(page);
+                Ok(img(10, 10))
+            },
+        )
         .unwrap();
         assert_eq!(calls, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn oversized_page_is_rejected_before_rendering() {
+        // A page declared larger than the per-page cap must fail the build
+        // *without* the render closure ever running (i.e. before allocation).
+        let mut rendered = false;
+        let result = build_layer_pdf(
+            1,
+            |_| (20_000, 20_000), // 400 MP, over MAX_PAGE_PIXELS
+            |_| {
+                rendered = true;
+                Ok(img(20_000, 20_000))
+            },
+        );
+        assert!(result.is_err());
+        assert!(!rendered, "render must not run for an over-budget page");
     }
 
     #[test]
@@ -272,12 +308,16 @@ mod tests {
 
     #[test]
     fn render_error_aborts_the_build() {
-        let result = build_layer_pdf(3, |page| {
-            if page == 1 {
-                anyhow::bail!("boom");
-            }
-            Ok(img(10, 10))
-        });
+        let result = build_layer_pdf(
+            3,
+            |_| (10, 10),
+            |page| {
+                if page == 1 {
+                    anyhow::bail!("boom");
+                }
+                Ok(img(10, 10))
+            },
+        );
         assert!(result.is_err());
     }
 
@@ -311,7 +351,7 @@ mod tests {
 
     #[test]
     fn xref_offsets_follow_trailer_and_cover_all_objects() {
-        let pdf = build_layer_pdf(2, |_| Ok(img(4, 4))).unwrap();
+        let pdf = build_layer_pdf(2, |_| (4, 4), |_| Ok(img(4, 4))).unwrap();
 
         // Follow the trailer's startxref pointer to the xref table, as a reader
         // would — using raw bytes, since the header contains non-UTF-8 bytes.
