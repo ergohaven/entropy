@@ -76,6 +76,8 @@ pub(crate) struct AppSettings {
     pub(crate) text_expander_rule_files: Vec<String>,
     #[serde(default)]
     pub(crate) text_expansion_rules: Vec<crate::text_expander::TextExpansionRule>,
+    #[serde(default)]
+    pub(crate) host_text_actions: Vec<crate::smart_input::HostTextAction>,
     #[serde(default = "default_layout_sync_enabled")]
     pub(crate) layout_sync_enabled: bool,
     #[serde(default)]
@@ -184,6 +186,7 @@ impl Default for AppSettings {
             text_expander_app_blacklist: String::new(),
             text_expander_rule_files: Vec::new(),
             text_expansion_rules: Vec::new(),
+            host_text_actions: crate::smart_input::default_host_text_actions(),
             layout_sync_enabled: default_layout_sync_enabled(),
             typing_trainer: TypingTrainerSettings::default(),
             typing_trainer_history: Vec::new(),

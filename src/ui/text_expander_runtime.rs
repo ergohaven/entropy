@@ -48,6 +48,21 @@ impl EntropyApp {
         );
     }
 
+    pub(super) fn save_host_text_actions(&mut self) {
+        crate::smart_input::normalize_host_text_actions(&mut self.keycode_picker.host_text_actions);
+        self.app_settings.host_text_actions = self.keycode_picker.host_text_actions.clone();
+        self.keycode_picker.host_text_actions_dirty = false;
+        save_app_settings(&self.app_settings);
+        crate::smart_input::set_host_text_actions(self.app_settings.host_text_actions.clone());
+    }
+
+    pub(super) fn sync_host_text_actions(&mut self) {
+        crate::smart_input::normalize_host_text_actions(&mut self.app_settings.host_text_actions);
+        self.keycode_picker.host_text_actions = self.app_settings.host_text_actions.clone();
+        self.keycode_picker.host_text_actions_dirty = false;
+        crate::smart_input::set_host_text_actions(self.app_settings.host_text_actions.clone());
+    }
+
     pub(super) fn save_text_expander_settings(&mut self) {
         self.text_expander_settings_save_pending = false;
         save_text_expansion_rules(&self.app_settings.text_expansion_rules);

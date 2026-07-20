@@ -189,6 +189,10 @@ impl KeycodePicker {
                                 self.show_tap_dance_macro_section(ui, td_idx, field);
                             }
                         }
+                        if let Some(value) = self.show_host_text_actions(ui, false) {
+                            self.set_tap_dance_field(td_idx, field, value);
+                            self.td_key_pick = None;
+                        }
                     }
                 });
         });
@@ -202,6 +206,10 @@ impl KeycodePicker {
         if self.popup_view_mode == PickerViewMode::Layout {
             let key_choices = self.tap_dance_regular_key_choices();
             if let Some(value) = self.show_popup_key_choice_view(ui, key_choices, false) {
+                self.set_tap_dance_field(td_idx, field, value);
+                self.td_key_pick = None;
+            }
+            if let Some(value) = self.show_host_text_actions(ui, false) {
                 self.set_tap_dance_field(td_idx, field, value);
                 self.td_key_pick = None;
             }
@@ -266,6 +274,10 @@ impl KeycodePicker {
         self.show_tap_dance_universal_symbol_sections(ui, td_idx, field);
         self.show_tap_dance_layer_section(ui, td_idx, field);
         self.show_tap_dance_custom_keycode_section(ui, td_idx, field);
+        if let Some(value) = self.show_host_text_actions(ui, false) {
+            self.set_tap_dance_field(td_idx, field, value);
+            self.td_key_pick = None;
+        }
     }
 
     fn show_tap_dance_custom_keycode_section(

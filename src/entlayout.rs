@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 const ENTLAYOUT_FORMAT: &str = "entropy.layout";
-const ENTLAYOUT_VERSION: u16 = 3;
+const ENTLAYOUT_VERSION: u16 = 4;
+const ENTLAYOUT_HOST_TEXT_VERSION: u16 = 4;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct EntLayoutFile {
@@ -40,11 +41,21 @@ struct EntLayoutData {
     layout_options: Option<u32>,
     layer_names: Vec<String>,
     text_expander: EntTextExpanderData,
+    #[serde(default)]
+    host_text: EntHostTextData,
     macros: EntMacroData,
     combos: EntComboData,
     tap_dance: EntTapDanceData,
     key_overrides: EntKeyOverrideData,
     alt_repeat: EntAltRepeatData,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct EntHostTextData {
+    #[serde(default)]
+    actions: Vec<crate::smart_input::HostTextAction>,
+    #[serde(default)]
+    transport_keycodes: Vec<u16>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -435,6 +446,12 @@ impl EntropyApp {
                 layout_options: self.layout_options_value,
                 layer_names: self.layer_names.clone(),
                 text_expander: self.text_expander_entlayout_snapshot(),
+                host_text: EntHostTextData {
+                    actions: self.app_settings.host_text_actions.clone(),
+                    transport_keycodes: (0..crate::smart_input::HOST_TEXT_ACTION_CAPACITY)
+                        .filter_map(crate::smart_input::host_text_transport_keycode)
+                        .collect(),
+                },
                 macros: EntMacroData {
                     bytecode_base64: self
                         .keycode_picker
@@ -1401,6 +1418,12 @@ impl EntropyApp {
         self.app_settings.text_expander_rule_files =
             normalize_text_expander_rule_files(&bundle.data.text_expander.rule_files);
         self.app_settings.text_expansion_rules = bundle.data.text_expander.primary_rules.clone();
+        if bundle.version >= ENTLAYOUT_HOST_TEXT_VERSION {
+            self.app_settings.host_text_actions = bundle.data.host_text.actions.clone();
+            crate::smart_input::normalize_host_text_actions(
+                &mut self.app_settings.host_text_actions,
+            );
+        }
         save_app_settings(&self.app_settings);
         save_text_expansion_rules(&self.app_settings.text_expansion_rules);
         for file in &bundle.data.text_expander.extra_files {
@@ -1414,6 +1437,7 @@ impl EntropyApp {
         self.text_expander_rules_signature =
             text_expander_rules_signature(&self.app_settings.text_expander_rule_files);
         self.sync_text_expander_runtime();
+        self.sync_host_text_actions();
 
         if self.current_device_is_likely_rmk() {
             return Ok(());
@@ -1875,9 +1899,22 @@ fn try_map_entlayout_keycode(
     limits: EntLayoutKeycodeImportLimits,
 ) -> Option<u16> {
     let keycode = map_custom_keycode_by_name(keycode, bundle, layout).flatten()?;
+    let keycode = map_host_text_keycode(keycode, bundle);
     validate_macro_keycode(keycode, limits.macro_count)?;
     validate_tap_dance_keycode(keycode, limits.tap_dance_count)?;
     map_layer_keycode(keycode, limits.layer_count)
+}
+
+fn map_host_text_keycode(keycode: u16, bundle: &EntLayoutFile) -> u16 {
+    map_host_text_transport_keycode(&bundle.data.host_text.transport_keycodes, keycode)
+}
+
+fn map_host_text_transport_keycode(source_transport_keycodes: &[u16], keycode: u16) -> u16 {
+    source_transport_keycodes
+        .iter()
+        .position(|source| *source == keycode)
+        .and_then(crate::smart_input::host_text_transport_keycode)
+        .unwrap_or(keycode)
 }
 
 fn map_custom_keycode_by_name(
@@ -2303,5 +2340,23 @@ mod tests {
                 "last".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn host_text_transport_keycodes_remap_by_slot() {
+        let source = vec![0x1968, 0x1969];
+        assert_eq!(
+            map_host_text_transport_keycode(&source, source[1]),
+            crate::smart_input::host_text_transport_keycode(1).unwrap()
+        );
+        assert_eq!(map_host_text_transport_keycode(&source, 0x0004), 0x0004);
+    }
+
+    #[test]
+    fn host_text_data_accepts_partial_layout_payloads() {
+        let data: EntHostTextData = serde_json::from_str(r#"{"transport_keycodes":[2408]}"#)
+            .unwrap();
+        assert!(data.actions.is_empty());
+        assert_eq!(data.transport_keycodes, vec![2408]);
     }
 }

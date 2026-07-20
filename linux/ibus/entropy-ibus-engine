@@ -160,10 +160,6 @@ def _symbol_entries():
     for idx, symbol in enumerate(["←", "↑", "→", "↓", "↔"]):
         add(idx, symbol, MOD_GUI | MOD_SHIFT)
 
-    # Host text: German letters (Ctrl+Super+F13..F16)
-    for idx, symbol in enumerate(["ä", "ö", "ü", "ß"]):
-        add(idx, symbol, MOD_CTRL | MOD_GUI)
-
     return entries
 
 
@@ -640,6 +636,41 @@ class TextExpanderRuntime:
 SHARED_TEXT_EXPANDER_RUNTIME = TextExpanderRuntime()
 
 
+class HostTextRuntime:
+    def __init__(self):
+        self.actions = []
+        self._mtime = object()
+
+    def reload_if_needed(self):
+        try:
+            mtime = os.path.getmtime(_app_settings_path())
+        except OSError:
+            mtime = None
+        if mtime == self._mtime:
+            return
+        self._mtime = mtime
+        settings = _read_json_file(_app_settings_path())
+        raw_actions = settings.get("host_text_actions", []) if isinstance(settings, dict) else []
+        self.actions = raw_actions if isinstance(raw_actions, list) else []
+
+    def text_for_transport(self, base_keycode, modifiers):
+        if modifiers != (MOD_CTRL | MOD_GUI):
+            return None
+        slot = base_keycode - KC_F13
+        if slot < 0 or slot >= 5 or slot >= len(self.actions):
+            return None
+        action = self.actions[slot]
+        text = action.get("text", "") if isinstance(action, dict) else ""
+        if not isinstance(text, str) or not text or any(
+            ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in text
+        ):
+            return None
+        return text
+
+
+SHARED_HOST_TEXT_RUNTIME = HostTextRuntime()
+
+
 def _transport_keycode_from_keyval(keyval):
     if XK_F13 <= keyval <= XK_F13 + 7:
         return KC_F13 + (keyval - XK_F13)
@@ -674,6 +705,7 @@ class EntropyEngine(IBus.Engine):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._text_expander = SHARED_TEXT_EXPANDER_RUNTIME
+        self._host_text = SHARED_HOST_TEXT_RUNTIME
         self._client = ""
         self._client_capabilities = 0
         self._input_purpose = IBus.InputPurpose.FREE_FORM
@@ -697,8 +729,14 @@ class EntropyEngine(IBus.Engine):
         base_keycode, source = _transport_keycode_from_event(keyval, keycode)
         if base_keycode is not None:
             modifiers = _transport_modifiers(state)
-            symbol = SMART_SYMBOLS.get((base_keycode, modifiers))
+            self._host_text.reload_if_needed()
             del source
+            host_text = self._host_text.text_for_transport(base_keycode, modifiers)
+            if host_text is not None:
+                if not (state & IBus.ModifierType.RELEASE_MASK):
+                    self.commit_text(IBus.Text.new_from_string(host_text))
+                return True
+            symbol = SMART_SYMBOLS.get((base_keycode, modifiers))
             if symbol is not None:
                 # Commit text on key-down only.
                 if not (state & IBus.ModifierType.RELEASE_MASK):

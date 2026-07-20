@@ -697,6 +697,9 @@ pub fn keycode_label_with_names(value: u16, custom: &[CustomKeycode], layer_name
     if let Some(label) = smart_symbol_label(value) {
         return label;
     }
+    if let Some(label) = crate::smart_input::host_text_label_for_keycode(value) {
+        return label;
+    }
     if let Some(kc) = find_keycode(value) {
         return kc.label.to_string();
     }
@@ -993,6 +996,9 @@ pub fn keycode_tooltip(value: u16, custom: &[CustomKeycode], layer_names: &[Stri
         return tip;
     }
     if let Some(tip) = smart_symbol_tooltip(value) {
+        return tip;
+    }
+    if let Some(tip) = crate::smart_input::host_text_tooltip_for_keycode(value) {
         return tip;
     }
 

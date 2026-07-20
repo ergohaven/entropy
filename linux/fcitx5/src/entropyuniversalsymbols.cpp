@@ -3,6 +3,8 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdlib>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -31,7 +33,7 @@ struct SmartSymbol {
     const char *symbol;
 };
 
-const std::array<SmartSymbol, 79> SMART_SYMBOLS{{
+const std::array<SmartSymbol, 75> SMART_SYMBOLS{{
     // F13..F20
     {KC_F13, "{"},
     {uint16_t(KC_F13 + 1), "}"},
@@ -127,11 +129,6 @@ const std::array<SmartSymbol, 79> SMART_SYMBOLS{{
     {uint16_t(MOD_GUI | MOD_SHIFT | (KC_F13 + 3)), "↓"},
     {uint16_t(MOD_GUI | MOD_SHIFT | (KC_F13 + 4)), "↔"},
 
-    // Ctrl+Super+F13..F16: German letters
-    {uint16_t(MOD_CTRL | MOD_GUI | KC_F13), "ä"},
-    {uint16_t(MOD_CTRL | MOD_GUI | (KC_F13 + 1)), "ö"},
-    {uint16_t(MOD_CTRL | MOD_GUI | (KC_F13 + 2)), "ü"},
-    {uint16_t(MOD_CTRL | MOD_GUI | (KC_F13 + 3)), "ß"},
 }};
 
 std::optional<uint16_t> baseKeycodeForSym(KeySym sym) {
@@ -172,6 +169,33 @@ std::optional<std::string> symbolForKey(const Key &key) {
     return std::nullopt;
 }
 
+std::optional<std::string> hostTextForKey(const Key &key) {
+    const auto base = baseKeycodeForSym(key.sym());
+    if (!base || transportModifiers(key.states()) != (MOD_CTRL | MOD_GUI) ||
+        *base < KC_F13 || *base >= KC_F13 + 5) {
+        return std::nullopt;
+    }
+
+    const char *configHome = std::getenv("XDG_CONFIG_HOME");
+    std::string path = configHome ? configHome : "";
+    if (path.empty()) {
+        const char *home = std::getenv("HOME");
+        if (!home) {
+            return std::nullopt;
+        }
+        path = std::string(home) + "/.config";
+    }
+    std::ifstream file(path + "/entropy/host_text_actions.tsv");
+    const auto wantedSlot = std::to_string(*base - KC_F13) + "\t";
+    std::string line;
+    while (std::getline(file, line)) {
+        if (line.rfind(wantedSlot, 0) == 0 && line.size() > wantedSlot.size()) {
+            return line.substr(wantedSlot.size());
+        }
+    }
+    return std::nullopt;
+}
+
 } // namespace
 
 class EntropyUniversalSymbols final : public AddonInstance {
@@ -185,7 +209,10 @@ public:
 private:
     void handleKeyEvent(Event &event) {
         auto &keyEvent = static_cast<KeyEvent &>(event);
-        const auto symbol = symbolForKey(keyEvent.key());
+        auto symbol = hostTextForKey(keyEvent.key());
+        if (!symbol) {
+            symbol = symbolForKey(keyEvent.key());
+        }
         if (!symbol) {
             return;
         }

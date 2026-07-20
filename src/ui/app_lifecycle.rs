@@ -1484,6 +1484,9 @@ impl eframe::App for EntropyApp {
                 self.app_settings.show_shifted_number_symbols;
             self.keycode_picker.show(ctx);
             self.apply_picker_results();
+            if self.keycode_picker.host_text_actions_dirty {
+                self.save_host_text_actions();
+            }
         }
 
         if self.combo_pick_target.is_some()

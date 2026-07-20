@@ -18,6 +18,8 @@ impl EntropyApp {
             },
             parse_text_expander_blacklist(&app_settings.text_expander_app_blacklist),
         );
+        crate::smart_input::normalize_host_text_actions(&mut app_settings.host_text_actions);
+        crate::smart_input::set_host_text_actions(app_settings.host_text_actions.clone());
         #[cfg(target_os = "linux")]
         crate::smart_input::refresh_installed_ibus_backend();
         crate::smart_input::start();
@@ -26,6 +28,8 @@ impl EntropyApp {
             text_expander_rules_signature(&app_settings.text_expander_rule_files);
         let typing_trainer = TypingTrainerState::from_settings(app_settings.typing_trainer);
         let dark_mode = app_settings.dark_mode;
+        let mut keycode_picker = KeycodePicker::default();
+        keycode_picker.host_text_actions = app_settings.host_text_actions.clone();
 
         Self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -64,7 +68,7 @@ impl EntropyApp {
             selected_encoder: None,
             layout: None,
             layer_count: 4,
-            keycode_picker: KeycodePicker::default(),
+            keycode_picker,
             status_msg: String::new(),
             import_report_open: false,
             import_report_title: String::new(),

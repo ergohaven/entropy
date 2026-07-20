@@ -137,19 +137,34 @@ pub(super) fn start() {
 }
 
 #[cfg(target_os = "windows")]
-fn symbol_for_vk(vk: u32) -> Option<(char, u16)> {
+enum TransportAction {
+    Symbol(char, u16),
+    HostText(String, u16),
+}
+
+#[cfg(target_os = "windows")]
+fn transport_action_for_vk(vk: u32) -> Option<TransportAction> {
     let base_keycode = match vk {
         0x7C..=0x87 => KC_F13 + (vk - 0x7C) as u16,
         _ => return None,
     };
-    windows_smart_symbol_for_transport(
+    let ctrl = modifier_down(VK_CONTROL);
+    let shift = modifier_down(VK_SHIFT);
+    let alt = modifier_down(VK_MENU);
+    let gui = modifier_down(VK_LWIN) || modifier_down(VK_RWIN);
+    let observed_modifiers = active_transport_modifiers();
+    if let Some((text, trigger_keycode)) = windows_host_text_for_transport(
         base_keycode,
-        modifier_down(VK_CONTROL),
-        modifier_down(VK_SHIFT),
-        modifier_down(VK_MENU),
-        modifier_down(VK_LWIN) || modifier_down(VK_RWIN),
-        active_transport_modifiers(),
-    )
+        ctrl,
+        shift,
+        alt,
+        gui,
+        observed_modifiers,
+    ) {
+        return Some(TransportAction::HostText(text, trigger_keycode));
+    }
+    windows_smart_symbol_for_transport(base_keycode, ctrl, shift, alt, gui, observed_modifiers)
+        .map(|(symbol, trigger_keycode)| TransportAction::Symbol(symbol, trigger_keycode))
 }
 
 #[cfg(target_os = "windows")]
@@ -315,10 +330,21 @@ unsafe extern "system" fn keyboard_proc(n_code: i32, w_param: usize, l_param: is
                 }
             }
 
-            if let Some((symbol, trigger_keycode)) = symbol_for_vk(info.vkCode) {
+            if let Some(action) = transport_action_for_vk(info.vkCode) {
                 if is_key_down {
+                    let trigger_keycode = match &action {
+                        TransportAction::Symbol(_, trigger_keycode)
+                        | TransportAction::HostText(_, trigger_keycode) => *trigger_keycode,
+                    };
                     suppress_transport_modifier_keyups(trigger_keycode);
-                    schedule_unicode_char(symbol, trigger_keycode);
+                    match action {
+                        TransportAction::Symbol(symbol, _) => {
+                            schedule_unicode_char(symbol, trigger_keycode);
+                        }
+                        TransportAction::HostText(text, _) => {
+                            schedule_host_text(text, trigger_keycode);
+                        }
+                    }
                 }
                 if is_key_down || is_key_up {
                     return 1;
@@ -651,6 +677,21 @@ fn schedule_unicode_char(symbol: char, trigger_keycode: u16) {
     std::thread::spawn(move || unsafe {
         std::thread::sleep(std::time::Duration::from_millis(2));
         send_unicode_char(symbol, trigger_keycode);
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn schedule_host_text(text: String, trigger_keycode: u16) {
+    std::thread::spawn(move || unsafe {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        neutralize_transport_alt_menu(trigger_keycode);
+        neutralize_transport_gui_menu(trigger_keycode);
+        release_transport_modifiers(trigger_keycode);
+        if should_paste_universal_symbol_for_foreground_app() && paste_text_with_clipboard_restore(&text)
+        {
+            return;
+        }
+        send_unicode_text(&text);
     });
 }
 

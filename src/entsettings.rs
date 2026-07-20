@@ -185,6 +185,7 @@ impl EntropyApp {
         self.text_expander_rules_signature =
             text_expander_rules_signature(&self.app_settings.text_expander_rule_files);
         self.sync_text_expander_runtime();
+        self.sync_host_text_actions();
         ctx.request_repaint();
         Ok(())
     }

@@ -10,6 +10,20 @@ pub(super) const MOD_CTRL: u16 = 0x0100;
 pub(super) const MOD_SHIFT: u16 = 0x0200;
 pub(super) const MOD_ALT: u16 = 0x0400;
 pub(super) const MOD_GUI: u16 = 0x0800;
+pub const HOST_TEXT_ACTION_CAPACITY: usize = 5;
+
+pub fn host_text_transport_keycode(slot: usize) -> Option<u16> {
+    (slot < HOST_TEXT_ACTION_CAPACITY).then_some(MOD_CTRL | MOD_GUI | (KC_F13 + slot as u16))
+}
+
+#[cfg(any(target_os = "windows", test))]
+pub(super) fn windows_host_text_transport_keycode(slot: usize) -> Option<u16> {
+    host_text_transport_keycode(slot)
+}
+
+pub fn host_text_slot_for_keycode(keycode: u16) -> Option<usize> {
+    (0..HOST_TEXT_ACTION_CAPACITY).find(|&slot| host_text_transport_keycode(slot) == Some(keycode))
+}
 
 #[cfg(not(target_os = "windows"))]
 const MAC_FRIENDLY_SMART_SYMBOLS: &[SmartSymbol] = &[
@@ -398,27 +412,6 @@ const MAC_FRIENDLY_SMART_SYMBOLS: &[SmartSymbol] = &[
         symbol: '↔',
         name: "Left right arrow",
     },
-    // Host text: German letters (Ctrl+Gui+F13..F16)
-    SmartSymbol {
-        trigger_keycode: MOD_CTRL | MOD_GUI | KC_F13,
-        symbol: 'ä',
-        name: "Latin small letter a with diaeresis",
-    },
-    SmartSymbol {
-        trigger_keycode: MOD_CTRL | MOD_GUI | (KC_F13 + 1),
-        symbol: 'ö',
-        name: "Latin small letter o with diaeresis",
-    },
-    SmartSymbol {
-        trigger_keycode: MOD_CTRL | MOD_GUI | (KC_F13 + 2),
-        symbol: 'ü',
-        name: "Latin small letter u with diaeresis",
-    },
-    SmartSymbol {
-        trigger_keycode: MOD_CTRL | MOD_GUI | (KC_F13 + 3),
-        symbol: 'ß',
-        name: "Latin small letter sharp s",
-    },
 ];
 
 #[cfg(any(target_os = "windows", test))]
@@ -744,27 +737,6 @@ const WINDOWS_SMART_SYMBOLS: &[SmartSymbol] = &[
         symbol: 'Ё',
         name: "Cyrillic Yo",
     },
-    // Host text: German letters (Ctrl+Alt+Shift+F20..F23)
-    SmartSymbol {
-        trigger_keycode: MOD_CTRL | MOD_ALT | MOD_SHIFT | (KC_F13 + 7),
-        symbol: 'ä',
-        name: "Latin small letter a with diaeresis",
-    },
-    SmartSymbol {
-        trigger_keycode: MOD_CTRL | MOD_ALT | MOD_SHIFT | (KC_F13 + 8),
-        symbol: 'ö',
-        name: "Latin small letter o with diaeresis",
-    },
-    SmartSymbol {
-        trigger_keycode: MOD_CTRL | MOD_ALT | MOD_SHIFT | (KC_F13 + 9),
-        symbol: 'ü',
-        name: "Latin small letter u with diaeresis",
-    },
-    SmartSymbol {
-        trigger_keycode: MOD_CTRL | MOD_ALT | MOD_SHIFT | (KC_F13 + 10),
-        symbol: 'ß',
-        name: "Latin small letter sharp s",
-    },
     // Ctrl+Shift+F13..F24
     SmartSymbol {
         trigger_keycode: MOD_CTRL | MOD_SHIFT | KC_F13,
@@ -853,8 +825,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn universal_symbol_catalog_stays_at_79_entries() {
-        assert_eq!(SMART_SYMBOLS.len(), 79);
+    fn universal_symbol_catalog_stays_at_75_entries() {
+        assert_eq!(SMART_SYMBOLS.len(), 75);
     }
 
     #[test]
@@ -877,7 +849,7 @@ mod tests {
 
     #[test]
     fn windows_universal_symbols_avoid_gui_transport_slots() {
-        assert_eq!(WINDOWS_SMART_SYMBOLS.len(), 79);
+        assert_eq!(WINDOWS_SMART_SYMBOLS.len(), 75);
         assert!(WINDOWS_SMART_SYMBOLS
             .iter()
             .all(|symbol| symbol.trigger_keycode & MOD_GUI == 0));
@@ -965,59 +937,28 @@ mod tests {
     }
 
     #[test]
-    fn universal_symbol_catalog_includes_german_letters() {
-        for symbol in ['ä', 'ö', 'ü', 'ß'] {
-            assert!(
-                SMART_SYMBOLS
-                    .iter()
-                    .any(|smart_symbol| smart_symbol.symbol == symbol),
-                "catalog is missing {symbol}"
-            );
-        }
-    }
-
-    #[test]
-    fn german_host_text_uses_platform_safe_transport_slots() {
-        for (offset, symbol) in ['ä', 'ö', 'ü', 'ß'].into_iter().enumerate() {
+    fn host_text_uses_platform_safe_transport_slots() {
+        for slot in 0..HOST_TEXT_ACTION_CAPACITY {
             #[cfg(not(target_os = "windows"))]
             assert_eq!(
-                smart_symbol_for_keycode(MOD_CTRL | MOD_GUI | (KC_F13 + offset as u16))
-                    .map(|smart_symbol| smart_symbol.symbol),
-                Some(symbol)
+                host_text_transport_keycode(slot),
+                Some(MOD_CTRL | MOD_GUI | (KC_F13 + slot as u16))
             );
             assert_eq!(
-                windows_smart_symbol_for_keycode(
-                    MOD_CTRL | MOD_ALT | MOD_SHIFT | (KC_F13 + 7 + offset as u16)
-                )
-                .map(|smart_symbol| smart_symbol.symbol),
-                Some(symbol)
+                windows_host_text_transport_keycode(slot),
+                Some(MOD_CTRL | MOD_GUI | (KC_F13 + slot as u16))
             );
         }
     }
 
     #[test]
-    fn linux_input_method_backends_include_german_letters() {
-        let ibus_backend = include_str!("../linux/ibus/entropy-ibus-engine");
-        let fcitx5_backend = include_str!("../linux/fcitx5/src/entropyuniversalsymbols.cpp");
-
-        for symbol in ["ä", "ö", "ü", "ß"] {
-            assert!(
-                ibus_backend.contains(symbol),
-                "IBus backend is missing {symbol}"
-            );
-            assert!(
-                fcitx5_backend.contains(symbol),
-                "Fcitx5 backend is missing {symbol}"
+    fn host_text_slots_round_trip_from_transport_keycodes() {
+        for slot in 0..HOST_TEXT_ACTION_CAPACITY {
+            assert_eq!(
+                host_text_slot_for_keycode(host_text_transport_keycode(slot).unwrap()),
+                Some(slot)
             );
         }
-        assert!(
-            ibus_backend.contains("for idx, symbol in enumerate([\"ä\", \"ö\", \"ü\", \"ß\"]):")
-        );
-        assert!(ibus_backend.contains("add(idx, symbol, MOD_CTRL | MOD_GUI)"));
-        assert!(fcitx5_backend.contains("{uint16_t(MOD_CTRL | MOD_GUI | KC_F13), \"ä\"},"));
-        assert!(
-            fcitx5_backend.contains("{uint16_t(MOD_CTRL | MOD_GUI | (KC_F13 + 3)), \"ß\"},")
-        );
     }
 
     #[test]

@@ -10,8 +10,11 @@ mod smart_input_symbols;
 mod smart_input_windows;
 #[cfg(any(target_os = "windows", test))]
 use smart_input_symbols::windows_smart_symbol_for_keycode;
+#[cfg(any(target_os = "windows", test))]
+use smart_input_symbols::windows_host_text_transport_keycode;
 pub use smart_input_symbols::{smart_symbol_for_keycode, SMART_SYMBOLS};
 use smart_input_symbols::{KC_F13, MOD_ALT, MOD_CTRL, MOD_GUI, MOD_SHIFT};
+pub use smart_input_symbols::{host_text_slot_for_keycode, host_text_transport_keycode, HOST_TEXT_ACTION_CAPACITY};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextExpanderAppCandidate {
     pub exe: String,
@@ -23,6 +26,103 @@ type ForegroundCacheState = Option<(std::time::Instant, Option<TextExpanderAppCa
 static TEXT_EXPANDER_CONFIG: OnceLock<RwLock<TextExpansionConfig>> = OnceLock::new();
 static TEXT_EXPANDER_ENGINE: OnceLock<Mutex<TextExpansionEngine>> = OnceLock::new();
 static RECENT_FOREGROUND_APPS: OnceLock<Mutex<Vec<TextExpanderAppCandidate>>> = OnceLock::new();
+static HOST_TEXT_ACTIONS: OnceLock<RwLock<Vec<HostTextAction>>> = OnceLock::new();
+
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct HostTextAction {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub text: String,
+}
+
+impl HostTextAction {
+    pub fn is_usable(&self) -> bool {
+        !self.text.is_empty() && !self.text.chars().any(char::is_control)
+    }
+}
+
+pub fn normalize_host_text_actions(actions: &mut Vec<HostTextAction>) {
+    actions.truncate(HOST_TEXT_ACTION_CAPACITY);
+    actions.resize_with(HOST_TEXT_ACTION_CAPACITY, HostTextAction::default);
+}
+
+pub fn default_host_text_actions() -> Vec<HostTextAction> {
+    let mut actions = Vec::new();
+    normalize_host_text_actions(&mut actions);
+    actions
+}
+
+fn host_text_actions() -> &'static RwLock<Vec<HostTextAction>> {
+    HOST_TEXT_ACTIONS.get_or_init(|| {
+        RwLock::new(default_host_text_actions())
+    })
+}
+
+pub fn set_host_text_actions(mut actions: Vec<HostTextAction>) {
+    normalize_host_text_actions(&mut actions);
+    #[cfg(all(target_os = "linux", not(test)))]
+    write_linux_host_text_actions(&actions);
+    if let Ok(mut guard) = host_text_actions().write() {
+        *guard = actions;
+    }
+}
+
+#[cfg(all(target_os = "linux", not(test)))]
+fn write_linux_host_text_actions(actions: &[HostTextAction]) {
+    let Some(dir) = dirs::config_dir().map(|dir| dir.join("entropy")) else {
+        return;
+    };
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let contents = actions
+        .iter()
+        .enumerate()
+        .filter(|(_, action)| action.is_usable())
+        .map(|(slot, action)| format!("{slot}\t{}\n", action.text))
+        .collect::<String>();
+    if let Err(error) = std::fs::write(dir.join("host_text_actions.tsv"), contents) {
+        log::warn!("write Linux Host Text actions failed: {error}");
+    }
+}
+
+pub fn host_text_for_keycode(keycode: u16) -> Option<String> {
+    let slot = host_text_slot_for_keycode(keycode)?;
+    host_text_for_slot(slot)
+}
+
+pub fn host_text_label_for_keycode(keycode: u16) -> Option<String> {
+    let slot = host_text_slot_for_keycode(keycode)?;
+    host_text_actions()
+        .read()
+        .ok()
+        .and_then(|actions| actions.get(slot).filter(|action| action.is_usable()).cloned())
+        .map(|action| {
+            if action.name.trim().is_empty() {
+                action.text
+            } else {
+                action.name
+            }
+        })
+}
+
+pub fn host_text_tooltip_for_keycode(keycode: u16) -> Option<String> {
+    let slot = host_text_slot_for_keycode(keycode)?;
+    host_text_actions()
+        .read()
+        .ok()
+        .and_then(|actions| actions.get(slot).filter(|action| action.is_usable()).cloned())
+        .map(|action| format!("Host Text: {}", action.text))
+}
+
+fn host_text_for_slot(slot: usize) -> Option<String> {
+    host_text_actions()
+        .read()
+        .ok()
+        .and_then(|actions| actions.get(slot).filter(|action| action.is_usable()).cloned())
+        .map(|action| action.text)
+}
 
 fn text_expander_config() -> &'static RwLock<TextExpansionConfig> {
     TEXT_EXPANDER_CONFIG.get_or_init(|| RwLock::new(TextExpansionConfig::default()))
@@ -400,6 +500,29 @@ fn smart_symbol_for_transport(
     smart_symbol_for_keycode(trigger_keycode).map(|symbol| (symbol.symbol, trigger_keycode))
 }
 
+fn host_text_for_transport(
+    base_keycode: u16,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    gui: bool,
+) -> Option<(String, u16)> {
+    let mut trigger_keycode = base_keycode;
+    if ctrl {
+        trigger_keycode |= MOD_CTRL;
+    }
+    if shift {
+        trigger_keycode |= MOD_SHIFT;
+    }
+    if alt {
+        trigger_keycode |= MOD_ALT;
+    }
+    if gui {
+        trigger_keycode |= MOD_GUI;
+    }
+    host_text_for_keycode(trigger_keycode).map(|text| (text, trigger_keycode))
+}
+
 #[cfg(any(target_os = "windows", test))]
 fn windows_smart_symbol_for_transport(
     base_keycode: u16,
@@ -423,6 +546,33 @@ fn windows_smart_symbol_for_transport(
         trigger_keycode |= MOD_GUI;
     }
     windows_smart_symbol_for_keycode(trigger_keycode).map(|symbol| (symbol.symbol, trigger_keycode))
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_host_text_for_transport(
+    base_keycode: u16,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    gui: bool,
+    observed_modifiers: u16,
+) -> Option<(String, u16)> {
+    let mut trigger_keycode = base_keycode;
+    if ctrl || observed_modifiers & MOD_CTRL != 0 {
+        trigger_keycode |= MOD_CTRL;
+    }
+    if shift || observed_modifiers & MOD_SHIFT != 0 {
+        trigger_keycode |= MOD_SHIFT;
+    }
+    if alt || observed_modifiers & MOD_ALT != 0 {
+        trigger_keycode |= MOD_ALT;
+    }
+    if gui || observed_modifiers & MOD_GUI != 0 {
+        trigger_keycode |= MOD_GUI;
+    }
+    let slot = (0..HOST_TEXT_ACTION_CAPACITY)
+        .find(|&slot| windows_host_text_transport_keycode(slot) == Some(trigger_keycode))?;
+    host_text_for_slot(slot).map(|text| (text, trigger_keycode))
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -766,6 +916,14 @@ mod macos {
         let command = flags & K_CG_EVENT_FLAG_MASK_COMMAND != 0;
 
         if let Some(base_keycode) = mac_keycode_to_qmk_f_key(keycode) {
+            if let Some((text, _trigger_keycode)) =
+                host_text_for_transport(base_keycode, ctrl, shift, alt, command)
+            {
+                if event_type == K_CG_EVENT_KEY_DOWN {
+                    schedule_unicode_text(text);
+                }
+                return null_mut();
+            }
             if let Some((symbol, _trigger_keycode)) =
                 smart_symbol_for_transport(base_keycode, ctrl, shift, alt, command)
             {
@@ -1024,6 +1182,14 @@ end tell"#;
         });
     }
 
+    fn schedule_unicode_text(text: String) {
+        std::thread::spawn(move || unsafe {
+            MACOS_EXPANDING_TEXT.store(true, Ordering::Relaxed);
+            send_unicode_text(&text);
+            MACOS_EXPANDING_TEXT.store(false, Ordering::Relaxed);
+        });
+    }
+
     unsafe fn send_unicode_char(symbol: char) {
         let mut buffer = [0u16; 2];
         let units = symbol.encode_utf16(&mut buffer);
@@ -1158,11 +1324,19 @@ mod linux_x11 {
                 let shift = xkey.state & SHIFT_MASK != 0;
                 let alt = xkey.state & MOD1_MASK != 0;
                 let gui = xkey.state & MOD4_MASK != 0;
+                if let Some((text, _trigger_keycode)) =
+                    host_text_for_transport(*base_keycode, ctrl, shift, alt, gui)
+                {
+                    if event_type == KEY_PRESS {
+                        type_unicode(&text);
+                    }
+                    continue;
+                }
                 if let Some((symbol, _trigger_keycode)) =
                     smart_symbol_for_transport(*base_keycode, ctrl, shift, alt, gui)
                 {
                     if event_type == KEY_PRESS {
-                        type_unicode(symbol);
+                        type_unicode(&symbol.to_string());
                     }
                 }
             }
@@ -1198,11 +1372,14 @@ mod linux_x11 {
         masks
     }
 
-    fn type_unicode(symbol: char) {
+    fn type_unicode(text: &str) {
         let status = Command::new("xdotool")
             .arg("type")
             .arg("--clearmodifiers")
-            .arg(symbol.to_string())
+            .arg("--args")
+            .arg("1")
+            .arg("--")
+            .arg(text)
             .status();
         if !matches!(status, Ok(status) if status.success()) {
             log::warn!("Smart Input: xdotool failed or is not installed");
@@ -1215,6 +1392,7 @@ mod tests {
     use super::*;
 
     static TEXT_EXPANDER_TEST_LOCK: Mutex<()> = Mutex::new(());
+    static HOST_TEXT_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn rule(trigger: &str, replacement: &str) -> TextExpansionRule {
         TextExpansionRule {
@@ -1315,19 +1493,63 @@ mod tests {
     }
 
     #[test]
-    fn windows_transport_decodes_german_host_text_chords() {
-        for (offset, symbol) in ['ä', 'ö', 'ü', 'ß'].into_iter().enumerate() {
-            let decoded = windows_smart_symbol_for_transport(
-                KC_F13 + 7 + offset as u16,
-                true,
-                true,
+    fn windows_transport_decodes_configured_host_text_chords() {
+        let _guard = HOST_TEXT_TEST_LOCK.lock().unwrap();
+        set_host_text_actions(vec![
+            HostTextAction {
+                name: "German".to_owned(),
+                text: "äöüß".to_owned(),
+            },
+            HostTextAction {
+                name: "Polish".to_owned(),
+                text: "ąćęłńóśźż".to_owned(),
+            },
+        ]);
+
+        for (offset, text) in ["äöüß", "ąćęłńóśźż"].into_iter().enumerate() {
+            let decoded = windows_host_text_for_transport(
+                KC_F13 + offset as u16,
                 true,
                 false,
+                false,
+                true,
                 0,
             )
             .unwrap();
-            assert_eq!(decoded.0, symbol);
+            assert_eq!(decoded.0, text);
         }
+        set_host_text_actions(default_host_text_actions());
+    }
+
+    #[test]
+    fn host_text_actions_are_fixed_size_and_reject_control_characters() {
+        let mut actions = vec![HostTextAction {
+            name: "French".to_owned(),
+            text: "àçéèêëîïôùûüÿœæ".to_owned(),
+        }];
+        normalize_host_text_actions(&mut actions);
+        assert_eq!(actions.len(), HOST_TEXT_ACTION_CAPACITY);
+        assert!(actions[0].is_usable());
+        actions[0].text = "line\nbreak".to_owned();
+        assert!(!actions[0].is_usable());
+    }
+
+    #[test]
+    fn host_text_transport_requires_exact_modifier_chord() {
+        let _guard = HOST_TEXT_TEST_LOCK.lock().unwrap();
+        set_host_text_actions(vec![HostTextAction {
+            name: "Polish".to_owned(),
+            text: "ąćęłńóśźż".to_owned(),
+        }]);
+        assert_eq!(
+            host_text_for_transport(KC_F13, true, false, false, true),
+            Some(("ąćęłńóśźż".to_owned(), MOD_CTRL | MOD_GUI | KC_F13))
+        );
+        assert_eq!(
+            host_text_for_transport(KC_F13, true, true, false, true),
+            None
+        );
+        set_host_text_actions(default_host_text_actions());
     }
 
     #[test]

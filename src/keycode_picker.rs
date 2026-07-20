@@ -184,6 +184,9 @@ pub struct KeycodePicker {
     pub language: crate::i18n::Language,
     pub key_legend_layout: KeyLegendLayout,
     pub show_shifted_number_symbols: bool,
+    /// Named local text actions, emitted by platform smart-input backends.
+    pub host_text_actions: Vec<crate::smart_input::HostTextAction>,
+    pub host_text_actions_dirty: bool,
 }
 
 fn tr_picker(language: crate::i18n::Language, key: &'static str) -> &'static str {
@@ -197,7 +200,7 @@ const UNIVERSAL_MAIN_SYMBOL_ORDER: &[char] = &[
 
 const UNIVERSAL_EXTRA_SYMBOL_ORDER: &[char] = &[
     '₽', '€', '«', '»', '‘', '’', '„', '“', '”', '—', '–', '←', '↑', '→', '↓', '↔', '•', '×', '±',
-    '≠', '≈', '✓', '§', '°', '‰', '′', '″', '™', '№', 'ä', 'ö', 'ü', 'ß',
+    '≠', '≈', '✓', '§', '°', '‰', '′', '″', '™', '№',
 ];
 
 #[cfg(test)]
@@ -207,13 +210,6 @@ mod tests {
     #[test]
     fn universal_extra_symbols_include_common_arrows() {
         for symbol in ['←', '↑', '→', '↓', '↔'] {
-            assert!(UNIVERSAL_EXTRA_SYMBOL_ORDER.contains(&symbol));
-        }
-    }
-
-    #[test]
-    fn universal_extra_symbols_include_german_letters() {
-        for symbol in ['ä', 'ö', 'ü', 'ß'] {
             assert!(UNIVERSAL_EXTRA_SYMBOL_ORDER.contains(&symbol));
         }
     }
@@ -390,6 +386,8 @@ impl Default for KeycodePicker {
             language: crate::i18n::default_language(),
             key_legend_layout: KeyLegendLayout::default(),
             show_shifted_number_symbols: true,
+            host_text_actions: crate::smart_input::default_host_text_actions(),
+            host_text_actions_dirty: false,
         }
     }
 }
@@ -1050,6 +1048,9 @@ impl KeycodePicker {
                                     self.finish_regular_key_pick(value);
                                 }
                             }
+                        }
+                        if let Some(value) = self.show_host_text_actions(ui, false) {
+                            self.finish_regular_key_pick(value);
                         }
                     }
                 });

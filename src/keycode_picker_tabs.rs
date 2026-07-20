@@ -193,6 +193,71 @@ impl KeycodePicker {
         ) {
             self.assign_keycode_value(value);
         }
+
+        ui.add_space(10.0);
+        if let Some(value) = self.show_host_text_actions(ui, true) {
+            self.assign_keycode_value(value);
+        }
+    }
+
+    pub(super) fn show_host_text_actions(
+        &mut self,
+        ui: &mut egui::Ui,
+        editable: bool,
+    ) -> Option<u16> {
+        let mut picked = None;
+        let mut changed = false;
+        ui.label(
+            RichText::new(tr_picker(self.language, "key_picker.section_host_text"))
+                .size(11.0)
+                .color(Color32::from_gray(150)),
+        );
+        ui.label(
+            RichText::new(tr_picker(self.language, "key_picker.host_text_intro"))
+                .size(10.0)
+                .color(Color32::from_gray(120)),
+        );
+        ui.add_space(4.0);
+        for (slot, action) in self.host_text_actions.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                if editable {
+                    changed |= ui
+                        .add(
+                            egui::TextEdit::singleline(&mut action.name)
+                                .hint_text(tr_picker(self.language, "key_picker.host_text_name")),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::TextEdit::singleline(&mut action.text)
+                                .hint_text(tr_picker(self.language, "key_picker.host_text_text")),
+                        )
+                        .changed();
+                }
+                if action.is_usable() {
+                    let label = if action.name.trim().is_empty() {
+                        action.text.clone()
+                    } else {
+                        action.name.clone()
+                    };
+                    let resp = ui
+                        .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(label))
+                        .on_hover_text(crate::i18n::tr_catalog_format(
+                            self.language,
+                            "key_picker.host_text_types",
+                            &[("text", &action.text)],
+                        ));
+                    if resp.clicked() {
+                        picked = crate::smart_input::host_text_transport_keycode(slot);
+                    }
+                }
+            });
+        }
+        if changed {
+            crate::smart_input::normalize_host_text_actions(&mut self.host_text_actions);
+            self.host_text_actions_dirty = true;
+        }
+        picked
     }
 
     pub(super) fn show_vial_generic(&mut self, ui: &mut egui::Ui) {
