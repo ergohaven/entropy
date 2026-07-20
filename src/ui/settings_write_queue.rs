@@ -28,12 +28,14 @@ enum SettingsWriteTarget {
     Touchpad {
         display_label: String,
     },
+    ComboTerm,
 }
 
 impl SettingsWriteTarget {
     fn display_label(&self) -> &str {
         match self {
             Self::Module { display_label, .. } | Self::Touchpad { display_label } => display_label,
+            Self::ComboTerm => "Combo timeout",
         }
     }
 
@@ -47,6 +49,7 @@ impl SettingsWriteTarget {
             Self::Touchpad { display_label } => {
                 format!("touchpad field={display_label:?}")
             }
+            Self::ComboTerm => "combo timeout".to_owned(),
         }
     }
 
@@ -58,6 +61,7 @@ impl SettingsWriteTarget {
         &self,
         module_settings: &mut ModuleSettingsState,
         touchpad_settings: &mut TouchpadSettingsState,
+        combo_term: &mut Option<u16>,
         qsid: u16,
         readback: u16,
     ) {
@@ -73,7 +77,12 @@ impl SettingsWriteTarget {
                 143 => touchpad_settings.auto_layer = readback.min(u8::MAX as u16) as u8,
                 _ => {}
             },
+            Self::ComboTerm => *combo_term = Some(readback),
         }
+    }
+
+    fn clears_combo_term_dirty(&self) -> bool {
+        matches!(self, Self::ComboTerm)
     }
 }
 
@@ -411,6 +420,17 @@ impl EntropyApp {
         self.start_next_settings_write();
     }
 
+    pub(super) fn queue_combo_term_write(&mut self, old_value: u16, requested: u16) {
+        self.queue_settings_write(SettingsWriteRequest {
+            id: 0,
+            qsid: 2,
+            width: 2,
+            old_value,
+            requested,
+            target: SettingsWriteTarget::ComboTerm,
+        });
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn start_next_settings_write(&mut self) {
         if self.hid_write_task_owner_active() {
@@ -553,9 +573,14 @@ impl EntropyApp {
                     request.target.reconcile_readback(
                         &mut self.module_settings,
                         &mut self.touchpad_settings,
+                        &mut self.combo_term,
                         request.qsid,
                         readback,
                     );
+                    if request.target.clears_combo_term_dirty() {
+                        self.combo_term_dirty = false;
+                    }
+                    self.record_verified_qmk_readback(request.qsid, readback);
                     self.status_msg = crate::i18n::tr_catalog_format(
                         self.app_settings.language,
                         "settings_write.saved_status",
@@ -588,6 +613,7 @@ impl EntropyApp {
                         request.target.reconcile_readback(
                             &mut self.module_settings,
                             &mut self.touchpad_settings,
+                            &mut self.combo_term,
                             request.qsid,
                             *actual,
                         );
@@ -721,20 +747,42 @@ mod tests {
     fn readback_reconciliation_updates_module_and_touchpad_state() {
         let mut module_settings = ModuleSettingsState::default();
         let mut touchpad_settings = TouchpadSettingsState::default();
+        let mut combo_term = None;
 
         SettingsWriteTarget::Module {
             group_title: "Modules".to_owned(),
             field_title: "Mode".to_owned(),
             display_label: "Mode".to_owned(),
         }
-        .reconcile_readback(&mut module_settings, &mut touchpad_settings, 7, 3);
+        .reconcile_readback(
+            &mut module_settings,
+            &mut touchpad_settings,
+            &mut combo_term,
+            7,
+            3,
+        );
         SettingsWriteTarget::Touchpad {
             display_label: "Scroll sensitivity".to_owned(),
         }
-        .reconcile_readback(&mut module_settings, &mut touchpad_settings, 122, 9);
+        .reconcile_readback(
+            &mut module_settings,
+            &mut touchpad_settings,
+            &mut combo_term,
+            122,
+            9,
+        );
+        SettingsWriteTarget::ComboTerm.reconcile_readback(
+            &mut module_settings,
+            &mut touchpad_settings,
+            &mut combo_term,
+            2,
+            77,
+        );
 
         assert_eq!(module_settings.value(7), 3);
         assert_eq!(touchpad_settings.scroll_sens, 9);
+        assert_eq!(combo_term, Some(77));
+        assert!(SettingsWriteTarget::ComboTerm.clears_combo_term_dirty());
     }
 
     #[test]

@@ -700,6 +700,10 @@ impl EntropyApp {
         match result {
             Ok(()) => {
                 self.set_tap_hold_numeric_value(qsid, value);
+                self.record_verified_qmk_value(
+                    qsid,
+                    crate::app::portable_settings::PortableValue::Unsigned(value.into()),
+                );
                 true
             }
             Err(e) => {
@@ -722,7 +726,13 @@ impl EntropyApp {
             return;
         };
         match hid.set_qmk_setting_u8_verified(qsid, u8::from(value)) {
-            Ok(()) => self.set_tap_hold_bool_value(qsid, value),
+            Ok(()) => {
+                self.set_tap_hold_bool_value(qsid, value);
+                self.record_verified_qmk_value(
+                    qsid,
+                    crate::app::portable_settings::PortableValue::Boolean(value),
+                );
+            }
             Err(e) => {
                 self.tap_hold_write_error(qsid, &e.to_string());
                 log::warn!("set_qmk_setting_u8(tap_hold qsid {qsid}) failed: {e}");

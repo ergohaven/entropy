@@ -1629,3 +1629,6 @@ change_body = "Firmware fingerprint changed. {changed} compatible settings can b
 restore = "Restore selected"
 keep_current = "Keep current"
 later = "Later"
+completed = "Settings recovery: {restored} restored, {failed} failed"
+disconnected = "Settings recovery stopped because keyboard disconnected"
+worker_failed = "Settings recovery stopped unexpectedly"

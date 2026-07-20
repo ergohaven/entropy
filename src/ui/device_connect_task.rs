@@ -299,31 +299,6 @@ fn has_firmware_layer_names(names: &[String]) -> bool {
         .any(|(index, name)| !is_default_layer_name(index, name))
 }
 
-fn layer_name_sync_updates(
-    names: &[String],
-    current_names: &[Option<String>],
-    supported_qmk_settings: &[u16],
-) -> Vec<(u16, String)> {
-    names
-        .iter()
-        .enumerate()
-        .filter_map(|(layer, name)| {
-            let qsid = u16::try_from(layer).ok()?.checked_add(200)?;
-            if !supported_qmk_settings.contains(&qsid) {
-                return None;
-            }
-
-            let current = current_names.get(layer)?.as_deref()?;
-            let name = name.trim();
-            if name.is_empty() || current == name {
-                None
-            } else {
-                Some((qsid, name.to_owned()))
-            }
-        })
-        .collect()
-}
-
 fn json_string_value(value: &serde_json::Value) -> Option<String> {
     match value {
         serde_json::Value::String(text) => {
@@ -363,7 +338,8 @@ fn canonical_json(value: &serde_json::Value, output: &mut String) {
         serde_json::Value::Bool(value) => output.push_str(if *value { "true" } else { "false" }),
         serde_json::Value::Number(value) => output.push_str(&value.to_string()),
         serde_json::Value::String(value) => {
-            output.push_str(&serde_json::to_string(value).expect("string serialization cannot fail"));
+            output
+                .push_str(&serde_json::to_string(value).expect("string serialization cannot fail"));
         }
         serde_json::Value::Array(values) => {
             output.push('[');
@@ -378,7 +354,9 @@ fn canonical_json(value: &serde_json::Value, output: &mut String) {
             let mut keys = values.keys().collect::<Vec<_>>();
             keys.sort_unstable();
             for key in keys {
-                output.push_str(&serde_json::to_string(key).expect("object key serialization cannot fail"));
+                output.push_str(
+                    &serde_json::to_string(key).expect("object key serialization cannot fail"),
+                );
                 output.push(':');
                 canonical_json(&values[key], output);
                 output.push(',');
@@ -398,10 +376,13 @@ fn portable_schema_hash(
     let mut supported = supported_qmk_settings.to_vec();
     supported.sort_unstable();
     supported.dedup();
-    canonical.push_str(&serde_json::to_string(&supported).expect("u16 list serialization cannot fail"));
+    canonical
+        .push_str(&serde_json::to_string(&supported).expect("u16 list serialization cannot fail"));
     let mut specs = specs.to_vec();
     specs.sort_by(|left, right| left.id.cmp(&right.id));
-    canonical.push_str(&serde_json::to_string(&specs).expect("portable specs serialization cannot fail"));
+    canonical.push_str(
+        &serde_json::to_string(&specs).expect("portable specs serialization cannot fail"),
+    );
     let mut hash = 0xcbf29ce484222325u64;
     for byte in canonical.bytes() {
         hash ^= u64::from(byte);
@@ -412,20 +393,29 @@ fn portable_schema_hash(
 
 fn capture_portable_setting(
     spec: crate::app::portable_settings::PortableSettingSpec,
-    read: impl FnOnce(&crate::app::portable_settings::PortableSettingSpec) -> Result<crate::app::portable_settings::PortableValue, String>,
+    read: impl FnOnce(
+        &crate::app::portable_settings::PortableSettingSpec,
+    ) -> Result<crate::app::portable_settings::PortableValue, String>,
 ) -> PortableCaptureEntry {
     use crate::app::portable_settings::{PortableSetting, StrictCaptureState};
     let state = match read(&spec) {
         Ok(value) => PortableSetting::new(spec.clone(), value)
             .map(StrictCaptureState::Captured)
-            .unwrap_or_else(|_| StrictCaptureState::Unavailable("value violates advertised contract".into())),
+            .unwrap_or_else(|_| {
+                StrictCaptureState::Unavailable("value violates advertised contract".into())
+            }),
         Err(error) => StrictCaptureState::Unavailable(error),
     };
     PortableCaptureEntry { spec, state }
 }
 
-fn portable_rgb_specs(rgb: &RgbSettingsState) -> Vec<crate::app::portable_settings::PortableSettingSpec> {
-    use crate::app::portable_settings::{PortableCategory, PortableSettingId, PortableSettingSpec, PortableValueKind, ValueRange, WireWidth};
+fn portable_rgb_specs(
+    rgb: &RgbSettingsState,
+) -> Vec<crate::app::portable_settings::PortableSettingSpec> {
+    use crate::app::portable_settings::{
+        PortableCategory, PortableSettingId, PortableSettingSpec, PortableValueKind, ValueRange,
+        WireWidth,
+    };
     if !rgb.supported || matches!(rgb.kind, RgbSupportKind::None) {
         return Vec::new();
     }
@@ -434,18 +424,29 @@ fn portable_rgb_specs(rgb: &RgbSettingsState) -> Vec<crate::app::portable_settin
         RgbSupportKind::VialRgb => "vialrgb",
         RgbSupportKind::None => return Vec::new(),
     };
-    let make = |semantic: &str, wire_width, max, ordered_variants: Vec<String>| PortableSettingSpec {
-        id: PortableSettingId::named(namespace, PortableCategory::Rgb, semantic),
-        category: PortableCategory::Rgb,
-        kind: PortableValueKind::Unsigned,
-        wire_width,
-        range: Some(ValueRange::new(0, max)),
-        bit_meanings: Vec::new(),
-        ordered_variants,
-    };
+    let make =
+        |semantic: &str, wire_width, max, ordered_variants: Vec<String>| PortableSettingSpec {
+            id: PortableSettingId::named(namespace, PortableCategory::Rgb, semantic),
+            category: PortableCategory::Rgb,
+            kind: PortableValueKind::Unsigned,
+            wire_width,
+            range: Some(ValueRange::new(0, max)),
+            bit_meanings: Vec::new(),
+            ordered_variants,
+        };
     vec![
-        make("effect", WireWidth::Bits16, u16::MAX.into(), rgb.supported_effects.iter().map(u16::to_string).collect()),
-        make("brightness", WireWidth::Bits8, rgb.max_brightness.into(), Vec::new()),
+        make(
+            "effect",
+            WireWidth::Bits16,
+            u16::MAX.into(),
+            rgb.supported_effects.iter().map(u16::to_string).collect(),
+        ),
+        make(
+            "brightness",
+            WireWidth::Bits8,
+            rgb.max_brightness.into(),
+            Vec::new(),
+        ),
         make("speed", WireWidth::Bits8, u8::MAX.into(), Vec::new()),
         make("hue", WireWidth::Bits8, u8::MAX.into(), Vec::new()),
         make("saturation", WireWidth::Bits8, u8::MAX.into(), Vec::new()),
@@ -456,31 +457,39 @@ fn portable_rgb_specs(rgb: &RgbSettingsState) -> Vec<crate::app::portable_settin
 fn read_portable_qmk_setting(
     hid: &crate::hid::HidDevice,
     spec: &crate::app::portable_settings::PortableSettingSpec,
-) -> Result<crate::app::portable_settings::PortableValue, String> {
+) -> anyhow::Result<crate::app::portable_settings::PortableValue> {
     use crate::app::portable_settings::{PortableValue, PortableValueKind, WireWidth};
-    let qsid = spec.id.primary_qsid.ok_or_else(|| "portable QMK setting has no QSID".to_owned())?;
+    let qsid = spec
+        .id
+        .primary_qsid
+        .ok_or_else(|| anyhow::anyhow!("portable QMK setting has no QSID"))?;
     if matches!(spec.kind, PortableValueKind::Text) {
-        return hid.get_qmk_setting_string(qsid).map(PortableValue::Text).map_err(|error| error.to_string());
+        return hid.get_qmk_setting_string(qsid).map(PortableValue::Text);
     }
     let read_numeric = |qsid| match spec.wire_width {
-        WireWidth::Bits16 => hid.get_qmk_setting_u16(qsid).map(u64::from).map_err(|error| error.to_string()),
-        WireWidth::Bit | WireWidth::Bits8 => hid.get_qmk_setting_u8(qsid).map(u64::from).map_err(|error| error.to_string()),
-        WireWidth::Utf8 => Err("non-text setting advertised UTF-8 width".into()),
+        WireWidth::Bits16 => hid.get_qmk_setting_u16(qsid).map(u64::from),
+        WireWidth::Bit | WireWidth::Bits8 => hid.get_qmk_setting_u8(qsid).map(u64::from),
+        WireWidth::Utf8 => Err(anyhow::anyhow!("non-text setting advertised UTF-8 width")),
     };
     let raw = read_numeric(qsid)?;
     for linked_qsid in &spec.id.linked_qsids {
         let linked = read_numeric(*linked_qsid)?;
         if linked != raw {
-            return Err(format!("linked qsid {linked_qsid} value {linked} differs from primary qsid {qsid} value {raw}"));
+            anyhow::bail!("linked qsid {linked_qsid} value {linked} differs from primary qsid {qsid} value {raw}");
         }
     }
     Ok(match spec.kind {
         PortableValueKind::Boolean => {
-            let bit = spec.bit_meanings.iter().position(|meaning| !meaning.is_empty());
+            let bit = spec
+                .bit_meanings
+                .iter()
+                .position(|meaning| !meaning.is_empty());
             PortableValue::Boolean(bit.map_or(raw != 0, |bit| raw & (1u64 << bit) != 0))
         }
         PortableValueKind::Unsigned => PortableValue::Unsigned(raw),
-        PortableValueKind::Select => PortableValue::Select(u16::try_from(raw).map_err(|_| "select value exceeds u16".to_owned())?),
+        PortableValueKind::Select => PortableValue::Select(
+            u16::try_from(raw).map_err(|_| anyhow::anyhow!("select value exceeds u16"))?,
+        ),
         PortableValueKind::Text => unreachable!("text handled above"),
     })
 }
@@ -489,24 +498,35 @@ fn read_portable_qmk_setting(
 fn read_portable_rgb_setting(
     hid: &crate::hid::HidDevice,
     spec: &crate::app::portable_settings::PortableSettingSpec,
-) -> Result<crate::app::portable_settings::PortableValue, String> {
+) -> anyhow::Result<crate::app::portable_settings::PortableValue> {
     use crate::app::portable_settings::PortableValue;
     let value = match spec.id.namespace.as_str() {
         "vialrgb" => {
-            let (effect, speed, hue, saturation, brightness) = hid.get_vialrgb_mode().map_err(|error| error.to_string())?;
+            let (effect, speed, hue, saturation, brightness) = hid.get_vialrgb_mode()?;
             match spec.id.semantic.as_str() {
-                "effect" => u64::from(effect), "brightness" => u64::from(brightness), "speed" => u64::from(speed),
-                "hue" => u64::from(hue), "saturation" => u64::from(saturation), _ => return Err("unknown VialRGB portable field".into()),
+                "effect" => u64::from(effect),
+                "brightness" => u64::from(brightness),
+                "speed" => u64::from(speed),
+                "hue" => u64::from(hue),
+                "saturation" => u64::from(saturation),
+                _ => anyhow::bail!("unknown VialRGB portable field"),
             }
         }
         "qmk_rgblight" => match spec.id.semantic.as_str() {
-            "effect" => u64::from(hid.get_qmk_rgblight_effect().map_err(|error| error.to_string())?),
-            "brightness" => u64::from(hid.get_qmk_rgblight_brightness().map_err(|error| error.to_string())?),
-            "speed" => u64::from(hid.get_qmk_rgblight_effect_speed().map_err(|error| error.to_string())?),
-            "hue" | "saturation" => { let (hue, saturation) = hid.get_qmk_rgblight_color().map_err(|error| error.to_string())?; u64::from(if spec.id.semantic == "hue" { hue } else { saturation }) }
-            _ => return Err("unknown QMK RGBLight portable field".into()),
+            "effect" => u64::from(hid.get_qmk_rgblight_effect()?),
+            "brightness" => u64::from(hid.get_qmk_rgblight_brightness()?),
+            "speed" => u64::from(hid.get_qmk_rgblight_effect_speed()?),
+            "hue" | "saturation" => {
+                let (hue, saturation) = hid.get_qmk_rgblight_color()?;
+                u64::from(if spec.id.semantic == "hue" {
+                    hue
+                } else {
+                    saturation
+                })
+            }
+            _ => anyhow::bail!("unknown QMK RGBLight portable field"),
         },
-        _ => return Err("unknown portable RGB namespace".into()),
+        _ => anyhow::bail!("unknown portable RGB namespace"),
     };
     Ok(PortableValue::Unsigned(value))
 }
@@ -515,10 +535,29 @@ fn read_portable_rgb_setting(
 pub(super) fn capture_portable_settings_from_hid(
     hid: &crate::hid::HidDevice,
     entries: &[PortableCaptureEntry],
-) -> Vec<PortableCaptureEntry> {
-    entries.iter().map(|entry| capture_portable_setting(entry.spec.clone(), |spec| {
-        if spec.id.primary_qsid.is_some() { read_portable_qmk_setting(hid, spec) } else { read_portable_rgb_setting(hid, spec) }
-    })).collect()
+) -> anyhow::Result<Vec<PortableCaptureEntry>> {
+    use crate::app::portable_settings::{PortableSetting, StrictCaptureState};
+    entries
+        .iter()
+        .map(|entry| {
+            let spec = entry.spec.clone();
+            let read = if spec.id.primary_qsid.is_some() {
+                read_portable_qmk_setting(hid, &spec)
+            } else {
+                read_portable_rgb_setting(hid, &spec)
+            };
+            let state = match read {
+                Ok(value) => PortableSetting::new(spec.clone(), value)
+                    .map(StrictCaptureState::Captured)
+                    .unwrap_or_else(|_| {
+                        StrictCaptureState::Unavailable("value violates advertised contract".into())
+                    }),
+                Err(error) if crate::hid::is_disconnect_error(&error) => return Err(error),
+                Err(error) => StrictCaptureState::Unavailable(error.to_string()),
+            };
+            Ok(PortableCaptureEntry { spec, state })
+        })
+        .collect()
 }
 
 fn supports_battery_halves_from_vial_json(json: &serde_json::Value) -> bool {
@@ -935,19 +974,15 @@ impl EntropyApp {
                         .extend((start..layer_count).map(|layer| layer.to_string()));
                 }
                 layout.layer_names.truncate(layer_count);
-                let mut current_firmware_layer_names = vec![None; layer_count];
                 let mut layer_names_from_firmware = vec![false; layer_count];
                 if has_qmk_setting(200) {
-                    for (layer, current_firmware_name) in
-                        current_firmware_layer_names.iter_mut().enumerate()
-                    {
+                    for layer in 0..layer_count {
                         let qsid = 200 + layer as u16;
                         if !has_qmk_setting(qsid) {
                             continue;
                         }
                         match dev_conn.get_qmk_setting_string(qsid) {
                             Ok(name) => {
-                                *current_firmware_name = Some(name.clone());
                                 if !name.is_empty() {
                                     layout.layer_names[layer] = name;
                                     layer_names_from_firmware[layer] = true;
@@ -968,22 +1003,6 @@ impl EntropyApp {
                             if !name.trim().is_empty() {
                                 layout.layer_names[layer] = name;
                             }
-                        }
-                    }
-                }
-
-                let layer_name_updates = layer_name_sync_updates(
-                    &layout.layer_names,
-                    &current_firmware_layer_names,
-                    &supported_qmk_settings,
-                );
-                if !layer_name_updates.is_empty() {
-                    progress("Syncing layer names…");
-                    for (qsid, name) in layer_name_updates {
-                        if let Err(e) = dev_conn.set_qmk_setting_string(qsid, &name) {
-                            log::warn!(
-                                "Vial set_qmk_setting_string failed while syncing qsid {qsid}: {e}"
-                            );
                         }
                     }
                 }
@@ -1407,8 +1426,10 @@ impl EntropyApp {
                         capture_portable_setting(spec, |spec| {
                             if spec.id.primary_qsid.is_some() {
                                 read_portable_qmk_setting(&dev_conn, spec)
+                                    .map_err(|error| error.to_string())
                             } else {
                                 read_portable_rgb_setting(&dev_conn, spec)
+                                    .map_err(|error| error.to_string())
                             }
                         })
                     })
@@ -1586,29 +1607,6 @@ mod tests {
     fn reported_layer_count_is_never_zero() {
         assert_eq!(normalize_reported_layer_count(0), 1);
         assert_eq!(normalize_reported_layer_count(4), 4);
-    }
-
-    #[test]
-    fn unsupported_layer_name_qsids_do_not_schedule_hid_requests() {
-        let names = vec!["Main".to_owned(), "Nav".to_owned()];
-        let current = vec![None, None];
-
-        assert!(layer_name_sync_updates(&names, &current, &[1, 2, 3]).is_empty());
-    }
-
-    #[test]
-    fn layer_name_sync_only_writes_supported_changed_names() {
-        let names = vec!["Main".to_owned(), "Nav".to_owned(), "Symbols".to_owned()];
-        let current = vec![
-            Some("Main".to_owned()),
-            Some(String::new()),
-            Some("Old symbols".to_owned()),
-        ];
-
-        assert_eq!(
-            layer_name_sync_updates(&names, &current, &[200, 201]),
-            vec![(201, "Nav".to_owned())]
-        );
     }
 
     #[test]

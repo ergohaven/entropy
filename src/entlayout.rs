@@ -1050,6 +1050,7 @@ impl EntropyApp {
             .clone();
         let limits = self.entlayout_keycode_import_limits();
         let mut failures = Vec::new();
+        let mut verified_portable_settings = Vec::new();
 
         if let Err(err) = (|| -> Result<()> {
             for (source_layer_idx, layer_codes) in bundle.data.keymap.iter().enumerate() {
@@ -1175,11 +1176,12 @@ impl EntropyApp {
             if !compatible {
                 continue;
             }
-            if let Err(error) = crate::app::settings_recovery_ui::write_setting(hid, setting) {
-                failures.push(format!(
+            match crate::app::settings_recovery_ui::write_setting(hid, setting) {
+                Ok(()) => verified_portable_settings.push(setting.clone()),
+                Err(error) => failures.push(format!(
                     "portable setting {} ({error})",
                     setting.spec.id.semantic
-                ));
+                )),
             }
         }
 
@@ -1340,6 +1342,9 @@ impl EntropyApp {
             Ok(())
         })() {
             failures.push(format!("alt repeat ({err})"));
+        }
+        for setting in verified_portable_settings {
+            self.record_verified_portable_setting(setting);
         }
         Ok(failures)
     }

@@ -168,13 +168,24 @@ impl RecoveryHistory {
             return false;
         }
 
-        if let Some(newest) = self.snapshots.first_mut() {
-            if newest.fingerprint == fingerprint {
-                newest.fields.extend(fields);
-                newest.trusted_at = trusted_at;
-                newest.source = source;
-                return true;
+        if let Some(index) = self
+            .snapshots
+            .iter()
+            .position(|snapshot| snapshot.fingerprint == fingerprint)
+        {
+            let mut snapshot = self.snapshots.remove(index);
+            match source {
+                TrustSource::Restore | TrustSource::KeepCurrent => {
+                    snapshot.fields = fields;
+                }
+                TrustSource::VerifiedWrite | TrustSource::Import => {
+                    snapshot.fields.extend(fields);
+                }
             }
+            snapshot.trusted_at = trusted_at;
+            snapshot.source = source;
+            self.snapshots.insert(0, snapshot);
+            return true;
         }
 
         self.snapshots.insert(
@@ -483,6 +494,68 @@ mod tests {
                 [],
             )));
         assert_eq!(history.snapshots()[1].fields.len(), 2);
+    }
+
+    #[test]
+    fn full_capture_replaces_stale_fields_on_same_fingerprint() {
+        let mut history = RecoveryHistory::new(identity());
+        history.apply_verified(
+            fingerprint("fw-a"),
+            10,
+            TrustSource::VerifiedWrite,
+            [setting(25, 200), setting(7, 1)],
+        );
+
+        history.apply_verified(
+            fingerprint("fw-a"),
+            11,
+            TrustSource::KeepCurrent,
+            [setting(25, 175)],
+        );
+
+        assert_eq!(history.snapshots().len(), 1);
+        assert_eq!(history.snapshots()[0].fields.len(), 1);
+        assert_eq!(
+            history.snapshots()[0]
+                .fields
+                .get(&PortableSettingId::qmk(
+                    crate::app::portable_settings::PortableCategory::TapHold,
+                    "quick_tap_term",
+                    25,
+                    [],
+                ))
+                .expect("retained setting")
+                .value,
+            PortableValue::Unsigned(175)
+        );
+    }
+
+    #[test]
+    fn full_capture_replaces_matching_non_newest_snapshot() {
+        let mut history = RecoveryHistory::new(identity());
+        history.apply_verified(
+            fingerprint("fw-a"),
+            10,
+            TrustSource::VerifiedWrite,
+            [setting(25, 200), setting(7, 1)],
+        );
+        history.apply_verified(
+            fingerprint("fw-b"),
+            11,
+            TrustSource::KeepCurrent,
+            [setting(25, 150)],
+        );
+
+        history.apply_verified(
+            fingerprint("fw-a"),
+            12,
+            TrustSource::Restore,
+            [setting(25, 175)],
+        );
+
+        assert_eq!(history.snapshots()[0].fingerprint, fingerprint("fw-a"));
+        assert_eq!(history.snapshots()[0].fields.len(), 1);
+        assert_eq!(history.snapshots().len(), 2);
     }
 
     #[test]

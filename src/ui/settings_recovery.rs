@@ -42,11 +42,20 @@ pub(crate) struct RecoveryWriteTask {
 
 struct RecoveryTaskResult {
     generation: u64,
-    hid: crate::hid::HidDevice,
+    hid: Option<crate::hid::HidDevice>,
     report: RecoveryReport,
     fingerprint: RecoveryFingerprint,
     history: RecoveryHistory,
-    verified: Vec<PortableSetting>,
+    capture: Vec<PortableCaptureEntry>,
+    action: RecoveryAction,
+    attempted_mutation: bool,
+    disconnected: bool,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum RecoveryAction {
+    KeepCurrent,
+    Restore,
 }
 
 fn recovery_store() -> RecoveryStore {
@@ -78,11 +87,11 @@ fn write_qmk_setting(
     hid: &crate::hid::HidDevice,
     qsid: u16,
     setting: &PortableSetting,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     match (&setting.value, setting.spec.wire_width) {
-        (PortableValue::Text(value), WireWidth::Utf8) => hid
-            .set_qmk_setting_string_recovery_verified(qsid, value)
-            .map_err(|error| error.to_string()),
+        (PortableValue::Text(value), WireWidth::Utf8) => {
+            hid.set_qmk_setting_string_recovery_verified(qsid, value)
+        }
         (PortableValue::Boolean(value), WireWidth::Bits8 | WireWidth::Bit) => {
             let desired = match setting
                 .spec
@@ -91,9 +100,7 @@ fn write_qmk_setting(
                 .position(|meaning| !meaning.is_empty())
             {
                 Some(bit) => {
-                    let current = hid
-                        .get_qmk_setting_u8(qsid)
-                        .map_err(|error| error.to_string())?;
+                    let current = hid.get_qmk_setting_u8(qsid)?;
                     if *value {
                         current | (1 << bit)
                     } else {
@@ -103,42 +110,38 @@ fn write_qmk_setting(
                 None => u8::from(*value),
             };
             hid.set_qmk_setting_u8_recovery_verified(qsid, desired)
-                .map_err(|error| error.to_string())
         }
         (PortableValue::Select(value), WireWidth::Bits8 | WireWidth::Bit) => hid
             .set_qmk_setting_u8_recovery_verified(
                 qsid,
-                u8::try_from(*value).map_err(|_| "value exceeds u8".to_owned())?,
-            )
-            .map_err(|error| error.to_string()),
+                u8::try_from(*value).map_err(|_| anyhow::anyhow!("value exceeds u8"))?,
+            ),
         (PortableValue::Unsigned(value), WireWidth::Bits8 | WireWidth::Bit) => hid
             .set_qmk_setting_u8_recovery_verified(
                 qsid,
-                u8::try_from(*value).map_err(|_| "value exceeds u8".to_owned())?,
-            )
-            .map_err(|error| error.to_string()),
-        (PortableValue::Select(value), WireWidth::Bits16) => hid
-            .set_qmk_setting_u16_recovery_verified(qsid, *value)
-            .map_err(|error| error.to_string()),
+                u8::try_from(*value).map_err(|_| anyhow::anyhow!("value exceeds u8"))?,
+            ),
+        (PortableValue::Select(value), WireWidth::Bits16) => {
+            hid.set_qmk_setting_u16_recovery_verified(qsid, *value)
+        }
         (PortableValue::Unsigned(value), WireWidth::Bits16) => hid
             .set_qmk_setting_u16_recovery_verified(
                 qsid,
-                u16::try_from(*value).map_err(|_| "value exceeds u16".to_owned())?,
-            )
-            .map_err(|error| error.to_string()),
-        _ => Err("portable value does not match wire format".to_owned()),
+                u16::try_from(*value).map_err(|_| anyhow::anyhow!("value exceeds u16"))?,
+            ),
+        _ => Err(anyhow::anyhow!("portable value does not match wire format")),
     }
 }
 
 pub(crate) fn write_setting(
     hid: &crate::hid::HidDevice,
     setting: &PortableSetting,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     let qsid = setting
         .spec
         .id
         .primary_qsid
-        .ok_or_else(|| "setting transport is not restorable".to_owned())?;
+        .ok_or_else(|| anyhow::anyhow!("setting transport is not restorable"))?;
     write_qmk_setting(hid, qsid, setting)?;
     for linked_qsid in &setting.spec.id.linked_qsids {
         write_qmk_setting(hid, *linked_qsid, setting)?;
@@ -172,7 +175,18 @@ impl EntropyApp {
             }
         };
         let current = captured(&capture);
-        let Some(newest) = history.snapshots().first() else {
+        if history
+            .snapshots()
+            .iter()
+            .any(|snapshot| snapshot.fingerprint == fingerprint)
+        {
+            return;
+        }
+        let Some(newest) = history
+            .snapshots()
+            .iter()
+            .find(|snapshot| snapshot.fingerprint != fingerprint)
+        else {
             let unavailable = capture.len().saturating_sub(current.len());
             self.settings_recovery = SettingsRecoveryState::Enrollment(PendingRecovery {
                 fingerprint,
@@ -185,10 +199,6 @@ impl EntropyApp {
             });
             return;
         };
-        if newest.fingerprint == fingerprint {
-            return;
-        }
-
         let trusted = newest.fields.clone();
         let diff = grouped_diff(trusted.values(), current.iter());
         let selected: BTreeSet<_> = diff
@@ -224,26 +234,7 @@ impl EntropyApp {
     }
 
     fn keep_current_settings(&mut self) {
-        let state = std::mem::take(&mut self.settings_recovery);
-        let pending = match state {
-            SettingsRecoveryState::Enrollment(pending)
-            | SettingsRecoveryState::Restore(pending) => pending,
-            other => {
-                self.settings_recovery = other;
-                return;
-            }
-        };
-        let mut history = pending.history;
-        history.apply_verified(
-            pending.fingerprint,
-            unix_timestamp(),
-            TrustSource::KeepCurrent,
-            captured(&pending.capture),
-        );
-        if let Err(error) = recovery_store().save(&history) {
-            log::warn!("settings recovery history save failed: {error}");
-        }
-        self.settings_recovery = SettingsRecoveryState::Idle;
+        self.start_settings_action(RecoveryAction::KeepCurrent);
     }
 
     fn defer_settings_recovery(&mut self) {
@@ -260,16 +251,32 @@ impl EntropyApp {
     }
 
     fn start_settings_restore(&mut self) {
+        self.start_settings_action(RecoveryAction::Restore);
+    }
+
+    fn start_settings_action(&mut self, action: RecoveryAction) {
         let state = std::mem::take(&mut self.settings_recovery);
-        let pending = match state {
-            SettingsRecoveryState::Restore(pending) => pending,
+        let (pending, restore_enrollment) = match state {
+            SettingsRecoveryState::Restore(pending) if action == RecoveryAction::Restore => {
+                (pending, false)
+            }
+            SettingsRecoveryState::Enrollment(pending) if action == RecoveryAction::KeepCurrent => {
+                (pending, true)
+            }
+            SettingsRecoveryState::Restore(pending) if action == RecoveryAction::KeepCurrent => {
+                (pending, false)
+            }
             other => {
                 self.settings_recovery = other;
                 return;
             }
         };
         let Some(hid) = self.hid_device.take() else {
-            self.settings_recovery = SettingsRecoveryState::Restore(pending);
+            self.settings_recovery = if restore_enrollment {
+                SettingsRecoveryState::Enrollment(pending)
+            } else {
+                SettingsRecoveryState::Restore(pending)
+            };
             return;
         };
         let generation = self.connection_generation;
@@ -278,38 +285,114 @@ impl EntropyApp {
         let worker_cancel = Arc::clone(&cancel);
         std::thread::spawn(move || {
             let mut report = RecoveryReport::default();
-            let mut verified = Vec::new();
-            for (id, setting) in &pending.trusted {
-                if worker_cancel.load(Ordering::Relaxed) {
-                    break;
-                }
-                if !pending.selected.contains(id) {
-                    report.outcomes.push(RecoveryFieldOutcome::Skipped {
-                        id: id.clone(),
-                        reason: "not selected or incompatible".to_owned(),
+            let fresh_capture = match super::device_connect_task::capture_portable_settings_from_hid(
+                &hid,
+                &pending.capture,
+            ) {
+                Ok(capture) => capture,
+                Err(error) => {
+                    let disconnected = crate::hid::is_disconnect_error(&error);
+                    log::warn!("settings recovery action capture failed: {error}");
+                    let _ = tx.send(RecoveryTaskResult {
+                        generation,
+                        hid: (!disconnected).then_some(hid),
+                        report,
+                        fingerprint: pending.fingerprint,
+                        history: pending.history,
+                        capture: Vec::new(),
+                        action,
+                        attempted_mutation: false,
+                        disconnected,
                     });
-                    continue;
+                    return;
                 }
-                match write_setting(&hid, setting) {
-                    Ok(()) => {
-                        verified.push(setting.clone());
-                        report
-                            .outcomes
-                            .push(RecoveryFieldOutcome::Restored(id.clone()));
+            };
+            let mut attempted_mutation = false;
+            if action == RecoveryAction::Restore {
+                let current = captured(&fresh_capture)
+                    .into_iter()
+                    .map(|setting| (setting.id().clone(), setting))
+                    .collect::<BTreeMap<_, _>>();
+                for (id, setting) in &pending.trusted {
+                    if worker_cancel.load(Ordering::Relaxed) {
+                        break;
                     }
-                    Err(reason) => report.outcomes.push(RecoveryFieldOutcome::Failed {
-                        id: id.clone(),
-                        reason,
-                    }),
+                    if !pending.selected.contains(id) || current.get(id) == Some(setting) {
+                        report.outcomes.push(RecoveryFieldOutcome::Skipped {
+                            id: id.clone(),
+                            reason: "not selected, incompatible, or already current".to_owned(),
+                        });
+                        continue;
+                    }
+                    attempted_mutation = true;
+                    match write_setting(&hid, setting) {
+                        Ok(()) => report
+                            .outcomes
+                            .push(RecoveryFieldOutcome::Restored(id.clone())),
+                        Err(error) if crate::hid::is_disconnect_error(&error) => {
+                            log::warn!("settings recovery restore disconnected: {error}");
+                            let _ = tx.send(RecoveryTaskResult {
+                                generation,
+                                hid: None,
+                                report,
+                                fingerprint: pending.fingerprint,
+                                history: pending.history,
+                                capture: Vec::new(),
+                                action,
+                                attempted_mutation,
+                                disconnected: true,
+                            });
+                            return;
+                        }
+                        Err(error) => {
+                            log::warn!("settings recovery restore failed for {id:?}: {error}");
+                            report.outcomes.push(RecoveryFieldOutcome::Failed {
+                                id: id.clone(),
+                                reason: error.to_string(),
+                            });
+                        }
+                    }
                 }
             }
+            let capture = if attempted_mutation {
+                match super::device_connect_task::capture_portable_settings_from_hid(
+                    &hid,
+                    &pending.capture,
+                ) {
+                    Ok(capture) => capture,
+                    Err(error) if crate::hid::is_disconnect_error(&error) => {
+                        log::warn!("settings recovery readback disconnected: {error}");
+                        let _ = tx.send(RecoveryTaskResult {
+                            generation,
+                            hid: None,
+                            report,
+                            fingerprint: pending.fingerprint,
+                            history: pending.history,
+                            capture: Vec::new(),
+                            action,
+                            attempted_mutation,
+                            disconnected: true,
+                        });
+                        return;
+                    }
+                    Err(error) => {
+                        log::warn!("settings recovery readback failed: {error}");
+                        fresh_capture
+                    }
+                }
+            } else {
+                fresh_capture
+            };
             let _ = tx.send(RecoveryTaskResult {
                 generation,
-                hid,
+                hid: Some(hid),
                 report,
                 fingerprint: pending.fingerprint,
                 history: pending.history,
-                verified,
+                capture,
+                action,
+                attempted_mutation,
+                disconnected: false,
             });
         });
         self.recovery_write_task = Some(RecoveryWriteTask {
@@ -329,9 +412,6 @@ impl EntropyApp {
             if let Some(task) = &self.recovery_write_task {
                 task.cancel.store(true, Ordering::Relaxed);
             }
-            self.recovery_write_task = None;
-            self.settings_recovery = SettingsRecoveryState::Idle;
-            return;
         }
         let Some(task) = self.recovery_write_task.as_ref() else {
             return;
@@ -345,7 +425,10 @@ impl EntropyApp {
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.recovery_write_task = None;
                 self.settings_recovery = SettingsRecoveryState::Idle;
-                self.status_msg = "Settings recovery task failed".to_owned();
+                self.clear_connected_keyboard_state(crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "settings_recovery.worker_failed",
+                ));
                 return;
             }
         };
@@ -353,18 +436,37 @@ impl EntropyApp {
         if result.generation != self.connection_generation {
             return;
         }
-        self.hid_device = Some(result.hid);
-        if !result.verified.is_empty() {
-            result.history.apply_verified(
-                result.fingerprint,
-                unix_timestamp(),
-                TrustSource::Restore,
-                result.verified,
+        if result.disconnected || result.hid.is_none() {
+            self.settings_recovery = SettingsRecoveryState::Idle;
+            self.clear_connected_keyboard_state(crate::i18n::tr_catalog(
+                self.app_settings.language,
+                "settings_recovery.disconnected",
+            ));
+            return;
+        }
+        let refresh_after_restore =
+            result.action == RecoveryAction::Restore && result.attempted_mutation;
+        self.hid_device = result.hid;
+        let verified = captured(&result.capture);
+        if result.attempted_mutation {
+            log::debug!(
+                "settings recovery reconciled {} values after a firmware mutation",
+                verified.len()
             );
+        }
+        if !verified.is_empty() {
+            let source = match result.action {
+                RecoveryAction::KeepCurrent => TrustSource::KeepCurrent,
+                RecoveryAction::Restore => TrustSource::Restore,
+            };
+            result
+                .history
+                .apply_verified(result.fingerprint, unix_timestamp(), source, verified);
             if let Err(error) = recovery_store().save(&result.history) {
                 log::warn!("settings recovery history save failed: {error}");
             }
         }
+        self.recovery_capture = result.capture;
         let restored = result.report.restored_count();
         let failed = result
             .report
@@ -373,11 +475,24 @@ impl EntropyApp {
             .filter(|outcome| matches!(outcome, RecoveryFieldOutcome::Failed { .. }))
             .count();
         self.settings_recovery = SettingsRecoveryState::Idle;
-        self.status_msg = format!("Settings recovery: {restored} restored, {failed} failed");
+        self.restore_entropy_display_preset_after_connect();
+        self.status_msg = crate::i18n::tr_catalog_format(
+            self.app_settings.language,
+            "settings_recovery.completed",
+            &[
+                ("restored", &restored.to_string()),
+                ("failed", &failed.to_string()),
+            ],
+        );
+        if refresh_after_restore {
+            if let Some(device_idx) = self.selected_device {
+                self.start_connect(device_idx);
+            }
+        }
     }
 
     pub(super) fn abort_settings_recovery_task(&mut self) {
-        if let Some(task) = self.recovery_write_task.take() {
+        if let Some(task) = &self.recovery_write_task {
             task.cancel.store(true, Ordering::Relaxed);
         }
     }
@@ -412,6 +527,64 @@ impl EntropyApp {
         ) {
             if let Err(error) = store.save(&history) {
                 log::warn!("settings recovery history save failed after verified write: {error}");
+            }
+        }
+    }
+
+    pub(super) fn record_verified_qmk_readback(&mut self, qsid: u16, readback: u16) {
+        let Some(entry) = self
+            .recovery_capture
+            .iter()
+            .find(|entry| entry.spec.id.primary_qsid == Some(qsid))
+        else {
+            return;
+        };
+        let value = match entry.spec.kind {
+            crate::app::portable_settings::PortableValueKind::Boolean => {
+                let bit = entry
+                    .spec
+                    .bit_meanings
+                    .iter()
+                    .position(|meaning| !meaning.is_empty());
+                PortableValue::Boolean(bit.map_or(readback != 0, |bit| readback & (1 << bit) != 0))
+            }
+            crate::app::portable_settings::PortableValueKind::Unsigned => {
+                PortableValue::Unsigned(readback.into())
+            }
+            crate::app::portable_settings::PortableValueKind::Select => {
+                PortableValue::Select(readback)
+            }
+            crate::app::portable_settings::PortableValueKind::Text => return,
+        };
+        self.record_verified_qmk_value(qsid, value);
+    }
+
+    pub(super) fn record_verified_portable_setting(&mut self, setting: PortableSetting) {
+        let Some(identity) = self.recovery_identity.clone() else {
+            return;
+        };
+        let Some(fingerprint) = self.recovery_fingerprint.clone() else {
+            return;
+        };
+        if let Some(entry) = self
+            .recovery_capture
+            .iter_mut()
+            .find(|entry| entry.spec.id == setting.spec.id)
+        {
+            entry.state = StrictCaptureState::Captured(setting.clone());
+        }
+        let store = recovery_store();
+        let mut history = store
+            .load(&identity)
+            .unwrap_or_else(|_| RecoveryHistory::new(identity));
+        if history.apply_verified(
+            fingerprint,
+            unix_timestamp(),
+            TrustSource::Import,
+            [setting],
+        ) {
+            if let Err(error) = store.save(&history) {
+                log::warn!("settings recovery history save failed after import: {error}");
             }
         }
     }
@@ -574,5 +747,117 @@ mod tests {
     #[test]
     fn recovery_retry_schedule_is_delayed_and_bounded() {
         assert_eq!([20_u64, 80, 200].iter().sum::<u64>(), 300);
+    }
+
+    #[test]
+    fn keep_current_without_hid_preserves_enrollment_prompt() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        let fingerprint = RecoveryFingerprint::new(Some("fw-test"), Some("schema-test")).unwrap();
+        let identity = RecoveryIdentity::new(1, 2, "keyboard", Some("serial")).unwrap();
+        app.settings_recovery = SettingsRecoveryState::Enrollment(PendingRecovery {
+            fingerprint,
+            history: RecoveryHistory::new(identity),
+            capture: Vec::new(),
+            trusted: BTreeMap::new(),
+            selected: BTreeSet::new(),
+            changed: 0,
+            unavailable: 0,
+        });
+
+        app.keep_current_settings();
+
+        assert!(matches!(
+            app.settings_recovery,
+            SettingsRecoveryState::Enrollment(_)
+        ));
+    }
+
+    #[test]
+    fn linked_qsid_failure_preserves_partial_write_evidence() {
+        let mut spec = crate::app::portable_settings::known_qmk_setting(25).unwrap();
+        spec.id.linked_qsids = vec![26];
+        let setting = PortableSetting::new(spec, PortableValue::Unsigned(175)).unwrap();
+        let (hid, recorder) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+            2,
+            crate::hid::TestHidFault::Disconnect,
+        )));
+
+        let error = write_setting(&hid, &setting).expect_err("linked write disconnects");
+        assert!(crate::hid::is_disconnect_error(&error));
+        let qsids = recorder
+            .requests()
+            .into_iter()
+            .map(|request| u16::from_le_bytes([request[2], request[3]]))
+            .collect::<Vec<_>>();
+        assert_eq!(qsids, vec![25, 25, 26]);
+    }
+
+    #[test]
+    fn viewport_close_waits_for_recovery_owner_then_closes_once() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        app.app_settings.minimize_to_tray_on_close = false;
+        app.app_settings.close_to_tray_behavior = CloseToTrayBehavior::Close;
+
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        let (tx, rx) = mpsc::channel();
+        let fingerprint = RecoveryFingerprint::new(Some("fw-test"), Some("schema-test")).unwrap();
+        let identity = RecoveryIdentity::new(1, 2, "keyboard", Some("serial")).unwrap();
+        app.recovery_write_task = Some(RecoveryWriteTask {
+            generation: app.connection_generation,
+            rx,
+            cancel: Arc::new(AtomicBool::new(false)),
+        });
+        app.settings_recovery = SettingsRecoveryState::Working;
+
+        let mut close_input = egui::RawInput::default();
+        close_input
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .expect("root viewport exists")
+            .events
+            .push(egui::ViewportEvent::Close);
+        let deferred_close = ctx.run_ui(close_input, |_ui| app.handle_close_to_tray(&ctx));
+        assert!(deferred_close
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .expect("root viewport output exists")
+            .commands
+            .contains(&egui::ViewportCommand::CancelClose));
+        assert!(app.exit_after_hid_write);
+
+        tx.send(RecoveryTaskResult {
+            generation: app.connection_generation,
+            hid: Some(hid),
+            report: RecoveryReport::default(),
+            fingerprint,
+            history: RecoveryHistory::new(identity),
+            capture: Vec::new(),
+            action: RecoveryAction::KeepCurrent,
+            attempted_mutation: false,
+            disconnected: false,
+        })
+        .unwrap();
+        let final_close = ctx.run_ui(egui::RawInput::default(), |_ui| {
+            app.poll_settings_recovery(&ctx);
+            app.finish_deferred_exit_after_hid_write(&ctx);
+        });
+        let commands = &final_close
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .expect("root viewport output exists")
+            .commands;
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| **command == egui::ViewportCommand::Close)
+                .count(),
+            1
+        );
+        assert!(!app.exit_after_hid_write);
+        assert!(recorder.requests().is_empty());
     }
 }

@@ -530,6 +530,10 @@ impl EntropyApp {
                 self.hid_device = r.hid_device;
                 self.supported_qmk_settings = r.supported_qmk_settings;
 
+                if matches!(self.settings_recovery, SettingsRecoveryState::Idle) {
+                    self.restore_entropy_display_preset_after_connect();
+                }
+
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     self.sync_qmk_hid_host_bridges();

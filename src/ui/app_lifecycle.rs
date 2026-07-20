@@ -531,7 +531,7 @@ mod tests {
             .any(|request| request[..3] == [0xfe, 0x0d, 0x04]));
         assert!(requests
             .iter()
-            .any(|request| request[..3] == [0xfe, 0x0d, 0x02]));
+            .any(|request| request[..3] == [0xfe, 0x0b, 0x02]));
         assert!(requests
             .iter()
             .any(|request| request[..4] == [0xfe, 0x0b, 7, 0]));
@@ -1449,6 +1449,7 @@ impl eframe::App for EntropyApp {
         }
 
         self.draw_close_to_tray_prompt(ctx);
+        self.draw_settings_recovery(ctx);
 
         // Keycode picker modal
         self.draw_vial_unlock_overlay(ctx);
@@ -1581,26 +1582,8 @@ impl eframe::App for EntropyApp {
             && !active_hid_is_bluetooth
             && !hid_write_task_active
         {
-            let mut term_save_ok = false;
-            if let (Some(hid), Some(value)) = (&self.hid_device, self.combo_term) {
-                match hid.set_qmk_setting_u16(2, value) {
-                    Ok(()) => term_save_ok = true,
-                    Err(e) => {
-                        self.status_msg = crate::i18n::tr_catalog_format(
-                            self.app_settings.language,
-                            "status_messages.combo_timeout_write_error",
-                            &[("error", &e.to_string())],
-                        );
-                    }
-                }
-            }
-            if term_save_ok {
-                self.combo_term_dirty = false;
-                self.status_msg = crate::i18n::tr_catalog(
-                    self.app_settings.language,
-                    "status_messages.combo_timeout_saved",
-                )
-                .into();
+            if let Some(value) = self.combo_term {
+                self.queue_combo_term_write(value, value);
             }
         }
 
