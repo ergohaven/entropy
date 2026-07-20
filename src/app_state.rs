@@ -2753,8 +2753,33 @@ pub struct EntropyApp {
     pub(crate) import_report_open: bool,
     pub(crate) import_report_title: String,
     pub(crate) import_report_body: String,
+    /// In-flight native file dialog running on a background thread so the UI
+    /// thread never blocks on the (portal/D-Bus) picker. Only one at a time.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) pending_entlayout_import_path: Option<std::path::PathBuf>,
+    pub(crate) pending_file_dialog: Option<(
+        super::file_dialog::FileDialogAction,
+        // Connection generation captured when the dialog was opened, so a
+        // device-scoped import/export can be rejected if the device changed
+        // while the picker was up.
+        u64,
+        std::sync::mpsc::Receiver<Option<std::path::PathBuf>>,
+    )>,
+    /// Bumped on every connect and disconnect. Used to detect that the active
+    /// device changed while a file dialog was open.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) connection_generation: u64,
+    /// Raw handles of the main window, cached each frame so file dialogs can be
+    /// parented to it — otherwise the native picker can open behind the window.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) parent_window_handle: Option<raw_window_handle::RawWindowHandle>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) parent_display_handle: Option<raw_window_handle::RawDisplayHandle>,
+    #[cfg(not(target_arch = "wasm32"))]
+    /// Deferred `.entlayout` import: the chosen path plus the connection
+    /// generation when it was chosen. The generation is re-checked just before
+    /// the firmware write so an import picked for device A is not applied to a
+    /// device B that connected in the meantime.
+    pub(crate) pending_entlayout_import_path: Option<(std::path::PathBuf, u64)>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) pending_entsettings_import_path: Option<std::path::PathBuf>,
     #[cfg(not(target_arch = "wasm32"))]

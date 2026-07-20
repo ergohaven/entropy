@@ -324,14 +324,29 @@ impl EntropyApp {
             return;
         };
         let file_name = format!("{}.entlayout", device_id_slug(&bundle.keyboard.name));
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("Entropy layout", &["entlayout"])
-            .set_file_name(&file_name)
-            .save_file()
-        else {
+        // The picker runs on a worker thread; the actual write happens in
+        // write_entlayout_export once a path comes back. Snapshotting again then
+        // keeps the export current even if the dialog was open for a while.
+        self.spawn_file_dialog(
+            crate::app::file_dialog::FileDialogAction::ExportEntlayout,
+            rfd::FileDialog::new()
+                .add_filter("Entropy layout", &["entlayout"])
+                .set_file_name(&file_name),
+            true,
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn write_entlayout_export(&mut self, path: &Path) {
+        let Some(bundle) = self.entlayout_snapshot() else {
+            self.status_msg = crate::i18n::tr_catalog(
+                self.app_settings.language,
+                "entlayout.connect_keyboard_before_exporting_layout",
+            )
+            .into();
             return;
         };
-        match write_entlayout_file(&path, &bundle, self.app_settings.language) {
+        match write_entlayout_file(path, &bundle, self.app_settings.language) {
             Ok(()) => {
                 self.status_msg = crate::i18n::tr_catalog_format(
                     self.app_settings.language,
@@ -351,13 +366,18 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn import_entlayout_dialog(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("Entropy layout", &["entlayout"])
-            .pick_file()
-        else {
-            return;
-        };
-        self.pending_entlayout_import_path = Some(path);
+        self.spawn_file_dialog(
+            crate::app::file_dialog::FileDialogAction::ImportEntlayout,
+            rfd::FileDialog::new().add_filter("Entropy layout", &["entlayout"]),
+            false,
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn begin_entlayout_import(&mut self, path: std::path::PathBuf) {
+        // Remember which connection this import belongs to; the deferred write
+        // in handle_pending_imports re-checks it before touching the device.
+        self.pending_entlayout_import_path = Some((path, self.connection_generation));
         self.import_progress_started_at = None;
         self.import_progress_title =
             crate::i18n::tr_catalog(self.app_settings.language, "entlayout.importing_layout")

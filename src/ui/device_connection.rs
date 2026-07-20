@@ -40,6 +40,10 @@ fn device_selection_needs_scroll(device_count: usize) -> bool {
 
 impl EntropyApp {
     pub(super) fn clear_connected_keyboard_state(&mut self, status_msg: impl Into<String>) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.connection_generation = self.connection_generation.wrapping_add(1);
+        }
         self.layout = None;
         self.selected_key = None;
         self.selected_encoder = None;

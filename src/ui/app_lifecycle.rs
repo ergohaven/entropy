@@ -161,7 +161,21 @@ impl EntropyApp {
             return;
         }
 
-        if let Some(path) = self.pending_entlayout_import_path.take() {
+        if let Some((path, opened_generation)) = self.pending_entlayout_import_path.take() {
+            if super::file_dialog::device_generation_stale(
+                opened_generation,
+                self.connection_generation,
+            ) {
+                // The device changed between choosing the file and this deferred
+                // write; do not program the new device with the old one's import.
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "status_messages.file_dialog_device_changed",
+                )
+                .into();
+                self.import_progress_started_at = None;
+                return;
+            }
             match self.import_entlayout_from_path(&path) {
                 Ok(report) => {
                     self.status_msg = crate::i18n::tr_catalog(
@@ -990,6 +1004,9 @@ impl eframe::App for EntropyApp {
             self.cache_windows_hwnd(frame);
             #[cfg(target_os = "macos")]
             self.cache_macos_ns_window(frame);
+            // Cache the winit window/display handles so native file dialogs can be
+            // parented to the main window instead of opening behind it.
+            self.cache_parent_window_handles(frame);
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             self.handle_tray_quit_request(ctx);
             #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -1083,6 +1100,11 @@ impl eframe::App for EntropyApp {
             ctx.set_visuals(app_visuals(self.dark_mode));
             self.last_applied_theme = Some((self.dark_mode, accent_color));
         }
+
+        // Deliver results from any background file dialog (import/export pickers
+        // run off the UI thread so the portal round-trip never freezes egui).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_file_dialog(ctx);
 
         self.apply_picker_results();
 

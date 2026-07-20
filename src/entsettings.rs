@@ -26,15 +26,19 @@ struct EntSettingsTextExpanderRuleFile {
 impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn export_entsettings_dialog(&mut self) {
+        self.spawn_file_dialog(
+            crate::app::file_dialog::FileDialogAction::ExportEntsettings,
+            rfd::FileDialog::new()
+                .add_filter("Entropy app settings", &["entsettings"])
+                .set_file_name("entropy-app-settings.entsettings"),
+            true,
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn write_entsettings_export(&mut self, path: &Path) {
         let bundle = self.entsettings_snapshot();
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("Entropy app settings", &["entsettings"])
-            .set_file_name("entropy-app-settings.entsettings")
-            .save_file()
-        else {
-            return;
-        };
-        match write_entsettings_file(&path, &bundle, self.app_settings.language) {
+        match write_entsettings_file(path, &bundle, self.app_settings.language) {
             Ok(()) => {
                 self.status_msg = crate::i18n::tr_catalog_format(
                     self.app_settings.language,
@@ -53,13 +57,16 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn import_entsettings_dialog(&mut self, ctx: &egui::Context) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("Entropy app settings", &["entsettings"])
-            .pick_file()
-        else {
-            return;
-        };
+    pub(super) fn import_entsettings_dialog(&mut self) {
+        self.spawn_file_dialog(
+            crate::app::file_dialog::FileDialogAction::ImportEntsettings,
+            rfd::FileDialog::new().add_filter("Entropy app settings", &["entsettings"]),
+            false,
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn begin_entsettings_import(&mut self, path: std::path::PathBuf) {
         self.pending_entsettings_import_path = Some(path);
         self.import_progress_started_at = None;
         self.import_progress_title = crate::i18n::tr_catalog(
@@ -72,7 +79,6 @@ impl EntropyApp {
             "entsettings.applying_app_settings",
         )
         .into();
-        ctx.request_repaint();
     }
 
     #[cfg(not(target_arch = "wasm32"))]

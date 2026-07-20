@@ -348,6 +348,9 @@ impl EntropyApp {
                     "{}",
                     connect_apply_start_log(&r.device_name, r.layer_count, r.layout.firmware)
                 );
+                // A new device is now active; invalidate any file dialog that was
+                // opened against the previous connection.
+                self.connection_generation = self.connection_generation.wrapping_add(1);
                 self.layer_count = r.layer_count;
                 self.firmware = r.layout.firmware;
                 self.current_device_name = r.device_name.clone();

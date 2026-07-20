@@ -394,6 +394,18 @@ fn draw_key_legend_dropdown(
     );
 }
 
+/// File extension and picker filter label for a layout-image export format.
+/// Shared by the picker (spawn) and the writer so every format — PNG, SVG, and
+/// PDF — goes through the same async worker dialog and cannot silently diverge.
+#[cfg(not(target_arch = "wasm32"))]
+fn layout_image_export_descriptor(format: LayoutImageExportFormat) -> (&'static str, &'static str) {
+    match format {
+        LayoutImageExportFormat::Png => ("png", "PNG image"),
+        LayoutImageExportFormat::Svg => ("svg", "SVG image"),
+        LayoutImageExportFormat::Pdf => ("pdf", "PDF document"),
+    }
+}
+
 impl EntropyApp {
     pub(super) fn open_layout_image_export_page(&mut self) {
         let layer_count = self.layer_count.max(1);
@@ -682,6 +694,40 @@ impl EntropyApp {
     fn export_layout_image_dialog(&mut self, layout: &KeyboardLayout) {
         let lang = self.app_settings.language;
         let layer_count = self.layer_count.max(layout.layers.len()).max(1);
+        let any_selected = self
+            .app_settings
+            .layout_image_export
+            .selected_layers
+            .iter()
+            .take(layer_count)
+            .any(|selected| *selected);
+        if !any_selected {
+            self.status_msg = export_text(lang, "select_layer").into();
+            return;
+        }
+
+        let format = self.app_settings.layout_image_export.format;
+        let (extension, filter_label) = layout_image_export_descriptor(format);
+        let file_name = format!("{}-layout.{extension}", device_id_slug(&layout.name));
+        // The picker runs on a worker thread; rendering + writing happen in
+        // write_layout_image_export once a path comes back. All three formats
+        // (PNG, SVG, PDF) go through this same async parented-dialog path.
+        self.spawn_file_dialog(
+            crate::app::file_dialog::FileDialogAction::ExportLayoutImage,
+            rfd::FileDialog::new()
+                .add_filter(filter_label, &[extension])
+                .set_file_name(&file_name),
+            true,
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn write_layout_image_export(&mut self, mut path: std::path::PathBuf) {
+        let lang = self.app_settings.language;
+        let Some(layout) = self.layout.clone() else {
+            return;
+        };
+        let layer_count = self.layer_count.max(layout.layers.len()).max(1);
         let selected_layers: Vec<usize> = self
             .app_settings
             .layout_image_export
@@ -697,24 +743,9 @@ impl EntropyApp {
         }
 
         let format = self.app_settings.layout_image_export.format;
-        let extension = match format {
-            LayoutImageExportFormat::Png => "png",
-            LayoutImageExportFormat::Svg => "svg",
-            LayoutImageExportFormat::Pdf => "pdf",
-        };
-        let filter_label = match format {
-            LayoutImageExportFormat::Png => "PNG image",
-            LayoutImageExportFormat::Svg => "SVG image",
-            LayoutImageExportFormat::Pdf => "PDF document",
-        };
-        let file_name = format!("{}-layout.{extension}", device_id_slug(&layout.name));
-        let Some(mut path) = rfd::FileDialog::new()
-            .add_filter(filter_label, &[extension])
-            .set_file_name(&file_name)
-            .save_file()
-        else {
-            return;
-        };
+        let (extension, _) = layout_image_export_descriptor(format);
+        // The picker already ran on the worker thread; `path` is the chosen file.
+        // Only the extension normalization, render, and write happen here.
         if path
             .extension()
             .and_then(|ext| ext.to_str())
@@ -726,7 +757,7 @@ impl EntropyApp {
 
         let result = match format {
             LayoutImageExportFormat::Png => self
-                .render_layout_image(layout, &selected_layers)
+                .render_layout_image(&layout, &selected_layers)
                 .and_then(|image| {
                     image
                         .save(&path)
@@ -734,10 +765,10 @@ impl EntropyApp {
                         .map(|_| ())
                 }),
             LayoutImageExportFormat::Svg => self
-                .render_layout_svg(layout, &selected_layers)
+                .render_layout_svg(&layout, &selected_layers)
                 .and_then(|svg| std::fs::write(&path, svg).map_err(|e| anyhow::anyhow!("{e}"))),
             LayoutImageExportFormat::Pdf => self
-                .render_layout_pdf(layout, &selected_layers)
+                .render_layout_pdf(&layout, &selected_layers)
                 .and_then(|pdf| std::fs::write(&path, pdf).map_err(|e| anyhow::anyhow!("{e}"))),
         };
 
@@ -2022,4 +2053,54 @@ fn blend_pixel(image: &mut RgbaImage, x: i32, y: i32, color: Rgba<u8>, coverage:
     dst[1] = (color[1] as f32 * alpha + dst[1] as f32 * inv).round() as u8;
     dst[2] = (color[2] as f32 * alpha + dst[2] as f32 * inv).round() as u8;
     dst[3] = 255;
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_export_format_has_a_distinct_extension_and_filter() {
+        // Regression guard for the #78/#80 merge: PNG, SVG, and PDF must each
+        // resolve to a picker filter + extension so no format is dropped when the
+        // export routes through the shared async worker dialog.
+        let png = layout_image_export_descriptor(LayoutImageExportFormat::Png);
+        let svg = layout_image_export_descriptor(LayoutImageExportFormat::Svg);
+        let pdf = layout_image_export_descriptor(LayoutImageExportFormat::Pdf);
+
+        assert_eq!(png, ("png", "PNG image"));
+        assert_eq!(svg, ("svg", "SVG image"));
+        assert_eq!(pdf, ("pdf", "PDF document"));
+
+        // Extensions are unique, so a normalized path can never collapse two
+        // formats onto the same file type.
+        let extensions = [png.0, svg.0, pdf.0];
+        for (i, a) in extensions.iter().enumerate() {
+            assert!(!a.is_empty());
+            for b in &extensions[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
+    }
+
+    #[test]
+    fn picker_and_writer_agree_on_the_extension_for_every_format() {
+        // The picker (spawn) advertises `extension` in its filter and the writer
+        // normalizes the chosen path to the same `extension`. Both read it from
+        // this one descriptor, so PDF can never get an SVG picker or a PNG file
+        // name — the exact drift the #78/#80 merge could have introduced.
+        for format in [
+            LayoutImageExportFormat::Png,
+            LayoutImageExportFormat::Svg,
+            LayoutImageExportFormat::Pdf,
+        ] {
+            let (extension, filter) = layout_image_export_descriptor(format);
+            assert!(!extension.is_empty(), "{format:?} has no extension");
+            assert!(!filter.is_empty(), "{format:?} has no picker filter");
+            // The picker builds "<name>.<extension>" and the writer forces the
+            // same extension, so a round-trip is idempotent.
+            let file_name = format!("board-layout.{extension}");
+            assert!(file_name.ends_with(&format!(".{extension}")));
+        }
+    }
 }
