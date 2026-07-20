@@ -7,6 +7,10 @@ const SETTINGS_WRITEBACK_DELAYS: [std::time::Duration; MODULE_SETTING_READBACK_A
 ];
 const SETTINGS_WRITE_STATUS_WIDTH: f32 = 22.0;
 
+fn settings_write_control_reserve(control_width: f32, status_width: f32, item_spacing: f32) -> f32 {
+    control_width + status_width + item_spacing
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum SettingsWriteStatus {
     Pending,
@@ -243,6 +247,19 @@ impl EntropyApp {
         metrics: crate::ui_style::ResponsiveMetrics,
     ) -> f32 {
         metrics.value(SETTINGS_WRITE_STATUS_WIDTH)
+    }
+
+    pub(super) fn settings_write_control_width(
+        &self,
+        ui: &egui::Ui,
+        metrics: crate::ui_style::ResponsiveMetrics,
+        control_width: f32,
+    ) -> f32 {
+        settings_write_control_reserve(
+            control_width,
+            self.settings_write_status_width(metrics),
+            ui.spacing().item_spacing.x,
+        )
     }
 
     pub(super) fn pending_settings_write_value(&self, qsid: u16) -> Option<u16> {
@@ -625,6 +642,11 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_write_control_reserve_includes_inter_item_spacing() {
+        assert_eq!(settings_write_control_reserve(46.0, 22.0, 8.0), 76.0);
+    }
 
     fn request(qsid: u16, requested: u16) -> SettingsWriteRequest {
         SettingsWriteRequest {

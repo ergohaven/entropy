@@ -236,11 +236,11 @@ impl EntropyApp {
         let raw_value = self
             .pending_settings_write_value(field.qsid)
             .unwrap_or_else(|| self.module_settings.value(field.qsid));
-        let status_width = self.settings_write_status_width(metrics);
         match field.kind {
             ModuleSettingKind::Boolean => {
                 let switch_width = metrics.value(46.0);
                 let switch_size = metrics.size(46.0, 24.0);
+                let control_width = self.settings_write_control_width(ui, metrics, switch_width);
                 let mask = 1u16 << field.bit;
                 let mut checked = raw_value & mask != 0;
                 crate::ui_style::settings_list_row_with_tooltip(
@@ -250,7 +250,7 @@ impl EntropyApp {
                     label.as_str(),
                     true,
                     tooltip.as_deref(),
-                    switch_width + status_width,
+                    control_width,
                     |ui| {
                         self.draw_settings_write_status(ui, field.qsid, metrics, suppress_tooltips);
                         let resp = crate::ui_style::settings_switch_sized_stable(
@@ -272,6 +272,7 @@ impl EntropyApp {
             }
             ModuleSettingKind::Integer => {
                 let field_width = metrics.value(86.0);
+                let control_width = self.settings_write_control_width(ui, metrics, field_width);
                 crate::ui_style::settings_list_row_with_tooltip(
                     ui,
                     content_width,
@@ -279,7 +280,7 @@ impl EntropyApp {
                     label.as_str(),
                     true,
                     tooltip.as_deref(),
-                    field_width + status_width,
+                    control_width,
                     |ui| {
                         self.draw_settings_write_status(ui, field.qsid, metrics, suppress_tooltips);
                         let edit_id = egui::Id::new(("module_setting_edit", group_idx, field.qsid));
@@ -328,6 +329,7 @@ impl EntropyApp {
             }
             ModuleSettingKind::Select => {
                 let dropdown_width = metrics.value(120.0);
+                let control_width = self.settings_write_control_width(ui, metrics, dropdown_width);
                 let selected_idx = (raw_value as usize).min(field.variants.len().saturating_sub(1));
                 let variants = field
                     .variants
@@ -343,7 +345,7 @@ impl EntropyApp {
                     label.as_str(),
                     true,
                     tooltip.as_deref(),
-                    dropdown_width + status_width,
+                    control_width,
                     |ui| {
                         self.draw_settings_write_status(ui, field.qsid, metrics, suppress_tooltips);
                         let dropdown_id = ui.make_persistent_id((
