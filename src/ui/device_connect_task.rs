@@ -395,8 +395,8 @@ fn capture_portable_setting(
     spec: crate::app::portable_settings::PortableSettingSpec,
     read: impl FnOnce(
         &crate::app::portable_settings::PortableSettingSpec,
-    ) -> Result<crate::app::portable_settings::PortableValue, String>,
-) -> PortableCaptureEntry {
+    ) -> anyhow::Result<crate::app::portable_settings::PortableValue>,
+) -> anyhow::Result<PortableCaptureEntry> {
     use crate::app::portable_settings::{PortableSetting, StrictCaptureState};
     let state = match read(&spec) {
         Ok(value) => PortableSetting::new(spec.clone(), value)
@@ -404,9 +404,10 @@ fn capture_portable_setting(
             .unwrap_or_else(|_| {
                 StrictCaptureState::Unavailable("value violates advertised contract".into())
             }),
-        Err(error) => StrictCaptureState::Unavailable(error),
+        Err(error) if crate::hid::is_disconnect_error(&error) => return Err(error),
+        Err(error) => StrictCaptureState::Unavailable(error.to_string()),
     };
-    PortableCaptureEntry { spec, state }
+    Ok(PortableCaptureEntry { spec, state })
 }
 
 fn portable_rgb_specs(
@@ -1426,14 +1427,13 @@ impl EntropyApp {
                         capture_portable_setting(spec, |spec| {
                             if spec.id.primary_qsid.is_some() {
                                 read_portable_qmk_setting(&dev_conn, spec)
-                                    .map_err(|error| error.to_string())
                             } else {
                                 read_portable_rgb_setting(&dev_conn, spec)
-                                    .map_err(|error| error.to_string())
                             }
                         })
                     })
-                    .collect::<Vec<_>>();
+                    .collect::<anyhow::Result<Vec<_>>>()
+                    .map_err(|error| format!("Portable settings capture failed: {error}"))?;
 
                 progress("Reading tap dance entries…");
                 let tap_dance_entries = {
@@ -1602,6 +1602,15 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn portable_capture_propagates_disconnects() {
+        let spec = crate::app::portable_settings::known_qmk_setting(25).unwrap();
+        let error = capture_portable_setting(spec, |_| Err(anyhow::anyhow!("device disconnected")))
+            .expect_err("physical disconnect must abort initial connection");
+
+        assert!(crate::hid::is_disconnect_error(&error));
+    }
 
     #[test]
     fn reported_layer_count_is_never_zero() {

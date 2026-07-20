@@ -454,14 +454,14 @@ impl EntropyApp {
                 verified.len()
             );
         }
-        if !verified.is_empty() {
-            let source = match result.action {
-                RecoveryAction::KeepCurrent => TrustSource::KeepCurrent,
-                RecoveryAction::Restore => TrustSource::Restore,
-            };
-            result
-                .history
-                .apply_verified(result.fingerprint, unix_timestamp(), source, verified);
+        let source = match result.action {
+            RecoveryAction::KeepCurrent => TrustSource::KeepCurrent,
+            RecoveryAction::Restore => TrustSource::Restore,
+        };
+        if result
+            .history
+            .apply_verified(result.fingerprint, unix_timestamp(), source, verified)
+        {
             if let Err(error) = recovery_store().save(&result.history) {
                 log::warn!("settings recovery history save failed: {error}");
             }
@@ -598,16 +598,24 @@ impl EntropyApp {
                 .anchor(egui::Align2::CENTER_TOP, [0.0, 12.0])
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
-                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    crate::ui_style::modal_window_frame(
+                        ui.style(),
+                        ctx.global_style().visuals.dark_mode,
+                    )
+                    .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(crate::i18n::tr_catalog_format(
                                 lang,
                                 "settings_recovery.banner",
                                 &[("count", &changed.to_string())],
                             ));
-                            review_deferred = ui
-                                .button(crate::i18n::tr_catalog(lang, "settings_recovery.review"))
-                                .clicked();
+                            review_deferred = crate::ui_style::modern_button(
+                                ui,
+                                &crate::i18n::tr_catalog(lang, "settings_recovery.review"),
+                                egui::vec2(88.0, 30.0),
+                                true,
+                            )
+                            .clicked();
                         });
                     });
                 });
@@ -641,21 +649,30 @@ impl EntropyApp {
                 pending.selected.len(),
             ),
             SettingsRecoveryState::Working => {
-                egui::Window::new(crate::i18n::tr_catalog(
-                    lang,
-                    "settings_recovery.restoring_title",
-                ))
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                self.draw_settings_recovery_backdrop(ctx);
+                let mut open = true;
+                crate::ui_style::centered_modal_window(
+                    ctx,
+                    &crate::i18n::tr_catalog(lang, "settings_recovery.restoring_title"),
+                    egui::Id::new("settings_recovery_working"),
+                    &mut open,
+                    egui::vec2(420.0, 150.0),
+                )
                 .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(crate::i18n::tr_catalog(
-                            lang,
-                            "settings_recovery.restoring_body",
-                        ));
-                    });
+                    crate::ui_style::modal_content(
+                        ui,
+                        crate::ui_style::ModalLayout::new(360.0).with_top_padding(14.0),
+                        |ui| {
+                            ui.horizontal_centered(|ui| {
+                                ui.add(egui::Spinner::new().size(20.0));
+                                ui.add_space(10.0);
+                                ui.label(crate::i18n::tr_catalog(
+                                    lang,
+                                    "settings_recovery.restoring_body",
+                                ));
+                            });
+                        },
+                    );
                 });
                 return;
             }
@@ -663,64 +680,79 @@ impl EntropyApp {
         };
 
         let mut action = 0u8;
-        egui::Window::new(crate::i18n::tr_catalog(
-            lang,
-            if enrollment {
-                "settings_recovery.enrollment_title"
-            } else {
-                "settings_recovery.change_title"
-            },
-        ))
-        .collapsible(false)
-        .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        self.draw_settings_recovery_backdrop(ctx);
+        let mut open = true;
+        crate::ui_style::centered_modal_window(
+            ctx,
+            &crate::i18n::tr_catalog(
+                lang,
+                if enrollment {
+                    "settings_recovery.enrollment_title"
+                } else {
+                    "settings_recovery.change_title"
+                },
+            ),
+            egui::Id::new("settings_recovery_prompt"),
+            &mut open,
+            egui::vec2(480.0, 220.0),
+        )
         .show(ctx, |ui| {
-            if enrollment {
-                ui.label(crate::i18n::tr_catalog(
-                    lang,
-                    "settings_recovery.enrollment_body",
-                ));
-            } else {
-                ui.label(crate::i18n::tr_catalog_format(
-                    lang,
-                    "settings_recovery.change_body",
-                    &[
-                        ("changed", &changed.to_string()),
-                        ("unavailable", &unavailable.to_string()),
-                    ],
-                ));
-            }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if !enrollment
-                    && ui
-                        .add_enabled(
-                            selected > 0,
-                            egui::Button::new(crate::i18n::tr_catalog(
-                                lang,
-                                "settings_recovery.restore",
-                            )),
+            crate::ui_style::modal_content(
+                ui,
+                crate::ui_style::ModalLayout::new(400.0).with_top_padding(10.0),
+                |ui| {
+                    if enrollment {
+                        ui.label(crate::i18n::tr_catalog(
+                            lang,
+                            "settings_recovery.enrollment_body",
+                        ));
+                    } else {
+                        ui.label(crate::i18n::tr_catalog_format(
+                            lang,
+                            "settings_recovery.change_body",
+                            &[
+                                ("changed", &changed.to_string()),
+                                ("unavailable", &unavailable.to_string()),
+                            ],
+                        ));
+                    }
+                    ui.add_space(16.0);
+                    ui.horizontal_centered(|ui| {
+                        let button_size = crate::ui_style::modal_action_button_size();
+                        if crate::ui_style::modern_button(
+                            ui,
+                            &crate::i18n::tr_catalog(lang, "settings_recovery.keep_current"),
+                            button_size,
+                            true,
                         )
                         .clicked()
-                {
-                    action = 1;
-                }
-                if ui
-                    .button(crate::i18n::tr_catalog(
-                        lang,
-                        "settings_recovery.keep_current",
-                    ))
-                    .clicked()
-                {
-                    action = 2;
-                }
-                if ui
-                    .button(crate::i18n::tr_catalog(lang, "settings_recovery.later"))
-                    .clicked()
-                {
-                    action = 3;
-                }
-            });
+                        {
+                            action = 2;
+                        }
+                        if crate::ui_style::modern_button(
+                            ui,
+                            &crate::i18n::tr_catalog(lang, "settings_recovery.later"),
+                            button_size,
+                            true,
+                        )
+                        .clicked()
+                        {
+                            action = 3;
+                        }
+                        if !enrollment
+                            && crate::ui_style::modern_button(
+                                ui,
+                                &crate::i18n::tr_catalog(lang, "settings_recovery.restore"),
+                                button_size,
+                                selected > 0,
+                            )
+                            .clicked()
+                        {
+                            action = 1;
+                        }
+                    });
+                },
+            );
         });
         match action {
             1 => self.start_settings_restore(),
@@ -728,6 +760,28 @@ impl EntropyApp {
             3 => self.defer_settings_recovery(),
             _ => {}
         }
+    }
+
+    fn draw_settings_recovery_backdrop(&self, ctx: &egui::Context) {
+        let screen_rect = ctx.content_rect();
+        egui::Area::new("settings_recovery_backdrop".into())
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen_rect.min)
+            .show(ctx, |ui| {
+                let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen_rect.size());
+                ui.interact(
+                    rect,
+                    egui::Id::new("settings_recovery_backdrop_blocker"),
+                    egui::Sense::click_and_drag(),
+                );
+                ui.painter().rect_filled(
+                    rect,
+                    0.0,
+                    egui::Color32::from_black_alpha(crate::ui_style::modal_backdrop_alpha(
+                        ctx.global_style().visuals.dark_mode,
+                    )),
+                );
+            });
     }
 }
 

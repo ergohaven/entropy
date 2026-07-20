@@ -164,7 +164,7 @@ impl RecoveryHistory {
             .into_iter()
             .map(|setting| (setting.id().clone(), setting))
             .collect();
-        if fields.is_empty() {
+        if fields.is_empty() && matches!(source, TrustSource::VerifiedWrite | TrustSource::Import) {
             return false;
         }
 
@@ -528,6 +528,34 @@ mod tests {
                 .value,
             PortableValue::Unsigned(175)
         );
+    }
+
+    #[test]
+    fn full_capture_replaces_stale_fields_when_every_field_is_unavailable() {
+        let mut history = RecoveryHistory::new(identity());
+        history.apply_verified(
+            fingerprint("fw-a"),
+            10,
+            TrustSource::VerifiedWrite,
+            [setting(25, 200)],
+        );
+
+        assert!(history.apply_verified(
+            fingerprint("fw-a"),
+            11,
+            TrustSource::KeepCurrent,
+            std::iter::empty(),
+        ));
+        assert!(history.snapshots()[0].fields.is_empty());
+
+        assert!(history.apply_verified(
+            fingerprint("fw-b"),
+            12,
+            TrustSource::Restore,
+            std::iter::empty(),
+        ));
+        assert_eq!(history.snapshots()[0].fingerprint, fingerprint("fw-b"));
+        assert!(history.snapshots()[0].fields.is_empty());
     }
 
     #[test]

@@ -423,6 +423,7 @@ impl EntropyApp {
     pub(super) fn queue_combo_term_write(&mut self, old_value: u16, requested: u16) {
         self.queue_settings_write(SettingsWriteRequest {
             id: 0,
+            generation: self.settings_write_generation,
             qsid: 2,
             width: 2,
             old_value,
