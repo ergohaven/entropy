@@ -48,6 +48,55 @@ fn dialog_result_stale(
     action.is_device_scoped() && device_generation_stale(opened_generation, current_generation)
 }
 
+/// A new dialog may start only when none is in flight — the single-slot
+/// invariant that stops overlapping portal round-trips from racing each other.
+#[cfg(not(target_arch = "wasm32"))]
+fn can_start_file_dialog(dialog_in_flight: bool) -> bool {
+    !dialog_in_flight
+}
+
+/// The decision a single `poll_file_dialog` step makes for one `try_recv`
+/// outcome. Split out from the method so the whole lifecycle — success, cancel,
+/// stale device, and a lost worker — is testable without a live dialog thread or
+/// an egui context.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum FileDialogPoll {
+    /// No result yet; keep waiting.
+    Pending,
+    /// The user closed the dialog without choosing a file.
+    Cancelled,
+    /// A path was chosen, but the active device changed meanwhile; discard it.
+    StaleDevice,
+    /// A path was chosen and is safe to dispatch.
+    Dispatch(std::path::PathBuf),
+    /// The worker vanished (e.g. panicked) without ever sending a result.
+    WorkerLost,
+}
+
+/// Classify one channel poll into the next lifecycle step. `Pending` is the only
+/// non-terminal outcome; every other result frees the dialog slot.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn classify_file_dialog_poll(
+    recv: Result<Option<std::path::PathBuf>, std::sync::mpsc::TryRecvError>,
+    action: FileDialogAction,
+    opened_generation: u64,
+    current_generation: u64,
+) -> FileDialogPoll {
+    match recv {
+        Ok(Some(path)) => {
+            if dialog_result_stale(action, opened_generation, current_generation) {
+                FileDialogPoll::StaleDevice
+            } else {
+                FileDialogPoll::Dispatch(path)
+            }
+        }
+        Ok(None) => FileDialogPoll::Cancelled,
+        Err(std::sync::mpsc::TryRecvError::Empty) => FileDialogPoll::Pending,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => FileDialogPoll::WorkerLost,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,6 +154,112 @@ mod tests {
         assert!(!device_generation_stale(3, 3));
         assert!(device_generation_stale(3, 4));
     }
+
+    use std::path::PathBuf;
+    use std::sync::mpsc::TryRecvError;
+
+    #[test]
+    fn only_one_dialog_runs_at_a_time() {
+        // No dialog in flight → a new one may start; one already running → not.
+        assert!(can_start_file_dialog(false));
+        assert!(!can_start_file_dialog(true));
+    }
+
+    #[test]
+    fn poll_pending_keeps_waiting_without_freeing_the_slot() {
+        let poll = classify_file_dialog_poll(
+            Err(TryRecvError::Empty),
+            FileDialogAction::ImportEntlayout,
+            5,
+            5,
+        );
+        assert_eq!(poll, FileDialogPoll::Pending);
+    }
+
+    #[test]
+    fn poll_success_dispatches_the_chosen_path() {
+        let path = PathBuf::from("/tmp/layout.entlayout");
+        let poll = classify_file_dialog_poll(
+            Ok(Some(path.clone())),
+            FileDialogAction::ImportEntlayout,
+            5,
+            5,
+        );
+        assert_eq!(poll, FileDialogPoll::Dispatch(path));
+    }
+
+    #[test]
+    fn poll_cancel_frees_the_slot_without_dispatching() {
+        let poll = classify_file_dialog_poll(Ok(None), FileDialogAction::ExportLayoutImage, 5, 5);
+        assert_eq!(poll, FileDialogPoll::Cancelled);
+    }
+
+    #[test]
+    fn poll_stale_device_discards_a_device_scoped_result() {
+        // Device changed (5 → 6) while a device-scoped picker was open.
+        let poll = classify_file_dialog_poll(
+            Ok(Some(PathBuf::from("/tmp/b.entlayout"))),
+            FileDialogAction::ExportEntlayout,
+            5,
+            6,
+        );
+        assert_eq!(poll, FileDialogPoll::StaleDevice);
+    }
+
+    #[test]
+    fn poll_device_change_still_dispatches_app_settings() {
+        // App-settings actions are device-independent, so a generation change
+        // does not make the result stale.
+        let path = PathBuf::from("/tmp/settings.entsettings");
+        let poll = classify_file_dialog_poll(
+            Ok(Some(path.clone())),
+            FileDialogAction::ImportEntsettings,
+            5,
+            6,
+        );
+        assert_eq!(poll, FileDialogPoll::Dispatch(path));
+    }
+
+    #[test]
+    fn poll_worker_disconnect_is_surfaced_not_swallowed() {
+        let poll = classify_file_dialog_poll(
+            Err(TryRecvError::Disconnected),
+            FileDialogAction::ImportEntlayout,
+            5,
+            5,
+        );
+        assert_eq!(poll, FileDialogPoll::WorkerLost);
+    }
+
+    #[test]
+    fn every_terminal_poll_outcome_frees_the_slot() {
+        // Only `Pending` keeps the dialog slot occupied; all other outcomes are
+        // terminal so the single-slot invariant can never wedge permanently.
+        let terminal = [
+            classify_file_dialog_poll(Ok(None), FileDialogAction::ImportEntlayout, 1, 1),
+            classify_file_dialog_poll(
+                Ok(Some(PathBuf::from("/tmp/x"))),
+                FileDialogAction::ImportEntlayout,
+                1,
+                1,
+            ),
+            classify_file_dialog_poll(
+                Ok(Some(PathBuf::from("/tmp/x"))),
+                FileDialogAction::ExportEntlayout,
+                1,
+                2,
+            ),
+            classify_file_dialog_poll(
+                Err(TryRecvError::Disconnected),
+                FileDialogAction::ImportEntlayout,
+                1,
+                1,
+            ),
+        ];
+        for outcome in terminal {
+            assert_ne!(outcome, FileDialogPoll::Pending);
+        }
+    }
 }
 
 /// Owns the main window's raw handles so a file dialog can be parented to it.
@@ -158,7 +313,7 @@ impl EntropyApp {
         mut dialog: rfd::FileDialog,
         save: bool,
     ) {
-        if self.pending_file_dialog.is_some() {
+        if !can_start_file_dialog(self.pending_file_dialog.is_some()) {
             return;
         }
         // Parent the picker to the main window so it opens in front instead of
@@ -201,31 +356,43 @@ impl EntropyApp {
         };
         let action = *action;
         let generation = *generation;
-        match rx.try_recv() {
-            Ok(result) => {
-                self.pending_file_dialog = None;
-                self.recover_input_after_dialog(ctx);
-                let Some(path) = result else {
-                    return;
-                };
-                // Reject a device-scoped result if the active device changed
-                // while the picker was open — otherwise we could save device B's
-                // layout under device A's filename, or program B with A's data.
-                if dialog_result_stale(action, generation, self.connection_generation) {
-                    self.status_msg =
-                        "Device changed while the file dialog was open — please try again."
-                            .to_owned();
-                    return;
-                }
-                self.handle_file_dialog_result(action, path);
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => {
+        let recv = rx.try_recv();
+        match classify_file_dialog_poll(recv, action, generation, self.connection_generation) {
+            FileDialogPoll::Pending => {
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
             }
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                // Worker vanished (e.g. panicked). Clear state and run the same
-                // input recovery so a lost dialog can't leave the UI wedged.
+            FileDialogPoll::Cancelled => {
                 self.pending_file_dialog = None;
+                self.recover_input_after_dialog(ctx);
+            }
+            FileDialogPoll::StaleDevice => {
+                // The active device changed while the picker was open — otherwise
+                // we could save device B's layout under device A's filename, or
+                // program B with A's data. Discard the result.
+                self.pending_file_dialog = None;
+                self.recover_input_after_dialog(ctx);
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "status_messages.file_dialog_device_changed",
+                )
+                .into();
+            }
+            FileDialogPoll::Dispatch(path) => {
+                self.pending_file_dialog = None;
+                self.recover_input_after_dialog(ctx);
+                self.handle_file_dialog_result(action, path);
+            }
+            FileDialogPoll::WorkerLost => {
+                // Worker vanished (e.g. the dialog thread panicked) without ever
+                // sending a result. Surface it instead of swallowing it, then run
+                // the same input recovery so a lost dialog can't wedge the UI.
+                log::error!("file dialog worker disconnected before returning a result");
+                self.pending_file_dialog = None;
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "status_messages.file_dialog_worker_lost",
+                )
+                .into();
                 self.recover_input_after_dialog(ctx);
             }
         }

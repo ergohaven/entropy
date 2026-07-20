@@ -74,12 +74,12 @@ mod device_connect_task;
 mod device_connection;
 #[path = "ui/device_scan.rs"]
 mod device_scan;
-#[path = "ui/file_dialog.rs"]
-mod file_dialog;
 #[path = "ui/device_settings_helpers.rs"]
 mod device_settings_helpers;
 #[path = "ui/encoder_visibility_settings.rs"]
 mod encoder_visibility_settings_ui;
+#[path = "ui/file_dialog.rs"]
+mod file_dialog;
 #[path = "ui/grave_escape_settings.rs"]
 mod grave_escape_settings_ui;
 #[path = "ui/key_assignment.rs"]

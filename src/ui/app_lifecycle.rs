@@ -168,8 +168,11 @@ impl EntropyApp {
             ) {
                 // The device changed between choosing the file and this deferred
                 // write; do not program the new device with the old one's import.
-                self.status_msg =
-                    "Device changed while the file dialog was open — please try again.".to_owned();
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "status_messages.file_dialog_device_changed",
+                )
+                .into();
                 self.import_progress_started_at = None;
                 return;
             }
