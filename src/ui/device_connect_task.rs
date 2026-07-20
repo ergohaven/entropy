@@ -1354,6 +1354,7 @@ impl EntropyApp {
                     vial_features,
                     layout,
                     layer_count,
+                    supported_qmk_settings,
                 })
             })();
 

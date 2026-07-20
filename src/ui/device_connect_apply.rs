@@ -136,6 +136,153 @@ mod tests {
         let names = resolve_layer_names(&s(&["A", "B", "C"]), &[true, true, true], None, 2);
         assert_eq!(names, s(&["A", "B"]));
     }
+
+    use std::cell::RefCell;
+    use std::collections::{BTreeSet, HashMap};
+
+    /// In-memory [`LayerNameStore`] standing in for the HID device so the
+    /// production sync path can be tested without hardware. Records every read
+    /// and write and lets a test inject transport errors per qsid.
+    struct MockStore {
+        supported: BTreeSet<u16>,
+        stored: RefCell<HashMap<u16, String>>,
+        read_errors: BTreeSet<u16>,
+        write_errors: BTreeSet<u16>,
+        reads: RefCell<Vec<u16>>,
+        writes: RefCell<Vec<(u16, String)>>,
+    }
+
+    impl MockStore {
+        fn new(supported: &[u16]) -> Self {
+            MockStore {
+                supported: supported.iter().copied().collect(),
+                stored: RefCell::new(HashMap::new()),
+                read_errors: BTreeSet::new(),
+                write_errors: BTreeSet::new(),
+                reads: RefCell::new(Vec::new()),
+                writes: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn with_stored(mut self, qsid: u16, value: &str) -> Self {
+            self.stored.get_mut().insert(qsid, value.to_string());
+            self
+        }
+
+        fn failing_reads(mut self, qsids: &[u16]) -> Self {
+            self.read_errors = qsids.iter().copied().collect();
+            self
+        }
+
+        fn failing_writes(mut self, qsids: &[u16]) -> Self {
+            self.write_errors = qsids.iter().copied().collect();
+            self
+        }
+    }
+
+    impl LayerNameStore for MockStore {
+        fn is_supported(&self, qsid: u16) -> bool {
+            self.supported.contains(&qsid)
+        }
+
+        fn get_string(&self, qsid: u16) -> anyhow::Result<String> {
+            self.reads.borrow_mut().push(qsid);
+            if self.read_errors.contains(&qsid) {
+                anyhow::bail!("read transport error on qsid {qsid}");
+            }
+            Ok(self.stored.borrow().get(&qsid).cloned().unwrap_or_default())
+        }
+
+        fn set_string(&self, qsid: u16, value: &str) -> anyhow::Result<()> {
+            self.writes.borrow_mut().push((qsid, value.to_string()));
+            if self.write_errors.contains(&qsid) {
+                anyhow::bail!("write transport error on qsid {qsid}");
+            }
+            self.stored.borrow_mut().insert(qsid, value.to_string());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn sync_unsupported_storage_is_not_a_failure_and_never_touches_the_wire() {
+        // Firmware advertises no layer-name settings at all.
+        let store = MockStore::new(&[]);
+        let failed = sync_layer_names_to_store(&store, &s(&["BASE", "LOWER"]), 2);
+        assert!(failed.is_empty());
+        assert!(store.reads.borrow().is_empty());
+        assert!(store.writes.borrow().is_empty());
+    }
+
+    #[test]
+    fn sync_transient_first_layer_read_failure_is_reported_not_swallowed() {
+        // Regression: a read error on layer 0 used to be treated as "storage
+        // unsupported", aborting the sync and reporting success. Now the layer
+        // is reported failed and later layers still get written.
+        let store = MockStore::new(&[200, 201]).failing_reads(&[200]);
+        let failed = sync_layer_names_to_store(&store, &s(&["BASE", "LOWER"]), 2);
+        assert_eq!(failed, vec![0]);
+        // Layer 1 was still read and written back.
+        assert_eq!(
+            store.writes.borrow().as_slice(),
+            &[(201, "LOWER".to_string())]
+        );
+        assert_eq!(
+            store.stored.borrow().get(&201).map(String::as_str),
+            Some("LOWER")
+        );
+    }
+
+    #[test]
+    fn sync_middle_layer_read_failure_only_fails_that_layer() {
+        let store = MockStore::new(&[200, 201, 202]).failing_reads(&[201]);
+        let failed = sync_layer_names_to_store(&store, &s(&["BASE", "LOWER", "RAISE"]), 3);
+        assert_eq!(failed, vec![1]);
+        assert_eq!(
+            store.stored.borrow().get(&200).map(String::as_str),
+            Some("BASE")
+        );
+        assert_eq!(
+            store.stored.borrow().get(&202).map(String::as_str),
+            Some("RAISE")
+        );
+    }
+
+    #[test]
+    fn sync_set_failure_reports_layer_but_continues() {
+        let store = MockStore::new(&[200, 201]).failing_writes(&[200]);
+        let failed = sync_layer_names_to_store(&store, &s(&["BASE", "LOWER"]), 2);
+        assert_eq!(failed, vec![0]);
+        // The later layer still persisted despite the earlier SET error.
+        assert_eq!(
+            store.stored.borrow().get(&201).map(String::as_str),
+            Some("LOWER")
+        );
+    }
+
+    #[test]
+    fn sync_skips_matching_and_empty_names() {
+        let store = MockStore::new(&[200, 201]).with_stored(201, "LOWER");
+        // Layer 0 empty (skipped, no read); layer 1 already matches (no write).
+        let failed = sync_layer_names_to_store(&store, &s(&["", "LOWER"]), 2);
+        assert!(failed.is_empty());
+        assert_eq!(store.reads.borrow().as_slice(), &[201]);
+        assert!(store.writes.borrow().is_empty());
+    }
+
+    #[test]
+    fn sync_persists_then_is_idempotent_on_reconnect() {
+        let names = s(&["BASE", "LOWER"]);
+        let store = MockStore::new(&[200, 201]);
+        // First sync writes both names.
+        let failed = sync_layer_names_to_store(&store, &names, 2);
+        assert!(failed.is_empty());
+        assert_eq!(store.writes.borrow().len(), 2);
+        // A second sync (as after a reconnect) reads them back and writes nothing.
+        store.writes.borrow_mut().clear();
+        let failed = sync_layer_names_to_store(&store, &names, 2);
+        assert!(failed.is_empty());
+        assert!(store.writes.borrow().is_empty());
+    }
 }
 
 impl EntropyApp {
@@ -371,6 +518,7 @@ impl EntropyApp {
                 // open-once/reload/use model. Avoid Entropy-only reopen churn when switching
                 // between qmk-vial and RMK devices.
                 self.hid_device = r.hid_device;
+                self.supported_qmk_settings = r.supported_qmk_settings;
 
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -405,44 +553,96 @@ impl EntropyApp {
 
     /// Write `names` to firmware (qsid 200 + layer), one layer at a time so a
     /// single failing SET does not abort the rest. Skips names that already
-    /// match. Returns the indices of layers whose write failed (empty on full
-    /// success or when the firmware exposes no layer-name storage), so callers
-    /// like the .entlayout import can aggregate and report them.
+    /// match. Returns the indices of layers whose write did not land, so callers
+    /// like the .entlayout import can aggregate and report them. An empty result
+    /// means every non-empty name was already correct or was written back —
+    /// never a masked transport error.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn write_layer_names_to_firmware(&self, names: &[String]) -> Vec<usize> {
-        let mut failed = Vec::new();
         if self.firmware != FirmwareProtocol::Vial {
-            return failed;
+            return Vec::new();
         }
         let Some(dev) = &self.hid_device else {
-            return failed;
+            return Vec::new();
         };
+        let store = HidLayerNameStore {
+            dev,
+            supported: &self.supported_qmk_settings,
+        };
+        sync_layer_names_to_store(&store, names, self.layer_count)
+    }
+}
 
-        for (layer, name) in names.iter().enumerate().take(self.layer_count) {
-            let qsid = 200 + layer as u16;
-            let name = name.trim();
-            if name.is_empty() {
-                continue;
+/// Storage seam for layer-name persistence, so the sync loop can be exercised
+/// without a real HID device. `is_supported` reports whether the firmware
+/// exposes storage for the setting id at all — used to keep genuine
+/// "unsupported storage" apart from a transient read/write failure.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) trait LayerNameStore {
+    fn is_supported(&self, qsid: u16) -> bool;
+    fn get_string(&self, qsid: u16) -> anyhow::Result<String>;
+    fn set_string(&self, qsid: u16, value: &str) -> anyhow::Result<()>;
+}
+
+/// Production [`LayerNameStore`] backed by the open HID connection and the
+/// setting ids the firmware advertised during connect.
+#[cfg(not(target_arch = "wasm32"))]
+struct HidLayerNameStore<'a> {
+    dev: &'a crate::hid::HidDevice,
+    supported: &'a [u16],
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl LayerNameStore for HidLayerNameStore<'_> {
+    fn is_supported(&self, qsid: u16) -> bool {
+        self.supported.contains(&qsid)
+    }
+    fn get_string(&self, qsid: u16) -> anyhow::Result<String> {
+        self.dev.get_qmk_setting_string(qsid)
+    }
+    fn set_string(&self, qsid: u16, value: &str) -> anyhow::Result<()> {
+        self.dev.set_qmk_setting_string(qsid, value)
+    }
+}
+
+/// Persist `names` to `store`, one layer at a time. A layer is reported failed
+/// only when its storage is supported yet a read or write actually errors — an
+/// unsupported id is skipped silently (the name lives on in the local per-device
+/// store), and a transport error never masquerades as "unsupported".
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn sync_layer_names_to_store<S: LayerNameStore>(
+    store: &S,
+    names: &[String],
+    layer_count: usize,
+) -> Vec<usize> {
+    let mut failed = Vec::new();
+    for (layer, name) in names.iter().enumerate().take(layer_count) {
+        let qsid = 200 + layer as u16;
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        if !store.is_supported(qsid) {
+            // Firmware exposes no storage for this layer name; nothing to persist.
+            continue;
+        }
+        match store.get_string(qsid) {
+            Ok(current) if current == name => {}
+            Ok(_) => {
+                if let Err(e) = store.set_string(qsid, name) {
+                    log::warn!(
+                        "Vial set_qmk_setting_string failed while syncing layer {layer}: {e}"
+                    );
+                    failed.push(layer);
+                }
             }
-            match dev.get_qmk_setting_string(qsid) {
-                Ok(current) if current == name => {}
-                Ok(_) => {
-                    if let Err(e) = dev.set_qmk_setting_string(qsid, name) {
-                        log::warn!(
-                            "Vial set_qmk_setting_string failed while syncing layer {layer}: {e}"
-                        );
-                        failed.push(layer);
-                    }
-                }
-                Err(e) => {
-                    log::debug!("Vial layer name qsid {qsid} not synced: {e}");
-                    if layer == 0 {
-                        // Firmware exposes no layer-name storage; stop probing.
-                        break;
-                    }
-                }
+            Err(e) => {
+                // The id is advertised as supported, so a read error is a real
+                // transport failure, not missing storage — surface it.
+                log::warn!("Vial get_qmk_setting_string failed while syncing layer {layer}: {e}");
+                failed.push(layer);
             }
         }
-        failed
     }
+    failed
 }

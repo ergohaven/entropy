@@ -39,6 +39,8 @@ impl EntropyApp {
             #[cfg(not(target_arch = "wasm32"))]
             qmk_hid_hosts: std::collections::HashMap::new(),
             firmware: FirmwareProtocol::Vial,
+            #[cfg(not(target_arch = "wasm32"))]
+            supported_qmk_settings: Vec::new(),
             undo_stack: Vec::new(),
             layer_clipboard: None,
             scan_frame: 0,
