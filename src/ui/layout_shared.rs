@@ -527,7 +527,19 @@ fn draw_key_label_with_colors(
 }
 
 pub(crate) fn inherited_key_label_color(dark: bool) -> Color32 {
-    app_muted_text(dark)
+    if dark {
+        Color32::from_gray(104)
+    } else {
+        Color32::from_gray(178)
+    }
+}
+
+pub(crate) fn inherited_key_label_or_marker(label: String) -> String {
+    if label.is_empty() {
+        "▽".to_owned()
+    } else {
+        label
+    }
 }
 
 pub(crate) fn draw_key_label_dimmed(
@@ -631,18 +643,24 @@ mod tests {
     }
 
     #[test]
-    fn inherited_key_label_color_is_muted_but_legible_in_both_themes() {
+    fn inherited_key_label_color_is_visibly_dimmed_in_both_themes() {
         for (dark, keycap) in [
             (true, Color32::from_rgb(48, 48, 52)),
             (false, Color32::WHITE),
         ] {
             let color = inherited_key_label_color(dark);
+            let contrast = contrast_ratio(color, keycap);
 
-            assert_eq!(color, app_muted_text(dark));
             assert!(
-                contrast_ratio(color, keycap) >= 4.0,
-                "inherited label contrast is too low for dark={dark}"
+                (1.8..=2.8).contains(&contrast),
+                "inherited label should be dim but readable for dark={dark}, got {contrast}"
             );
         }
+    }
+
+    #[test]
+    fn inherited_key_without_effective_label_keeps_transparent_marker() {
+        assert_eq!(inherited_key_label_or_marker(String::new()), "▽");
+        assert_eq!(inherited_key_label_or_marker("A".to_owned()), "A");
     }
 }

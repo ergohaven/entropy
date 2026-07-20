@@ -332,8 +332,10 @@ impl EntropyApp {
             let key_border = combo_outline
                 .or(layer_led_outline)
                 .unwrap_or(neutral_border);
-            let key_border_stroke =
-                Stroke::new(if has_combo_outline { 2.0_f32 } else { 1.0_f32 }, key_border);
+            let key_border_stroke = Stroke::new(
+                if has_combo_outline { 2.0_f32 } else { 1.0_f32 },
+                key_border,
+            );
 
             if kc == 0x0001 {
                 paint_layout_keycap(painter, draw_rect, key.rotation, bg, key_border_stroke);
@@ -355,6 +357,7 @@ impl EntropyApp {
                             self.app_settings.key_legend_layout,
                         )
                     };
+                    let label = inherited_key_label_or_marker(label);
                     let label = number_row_shifted_label(
                         label,
                         self.app_settings.show_shifted_number_symbols,
@@ -451,7 +454,10 @@ impl EntropyApp {
                     center.y + rad.sin() * r,
                 ));
             }
-            painter.add(egui::Shape::line(points.clone(), Stroke::new(1.7_f32, color)));
+            painter.add(egui::Shape::line(
+                points.clone(),
+                Stroke::new(1.7_f32, color),
+            ));
             if points.len() >= 2 {
                 let end = points[points.len() - 1];
                 let prev = points[points.len() - 2];

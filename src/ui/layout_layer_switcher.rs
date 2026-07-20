@@ -1,5 +1,18 @@
 use super::*;
 
+fn layer_after_wheel(selected: usize, layer_count: usize, wheel_delta: f32) -> usize {
+    if layer_count == 0 {
+        return 0;
+    }
+    if wheel_delta < 0.0 {
+        (selected + 1).min(layer_count - 1)
+    } else if wheel_delta > 0.0 {
+        selected.saturating_sub(1)
+    } else {
+        selected.min(layer_count - 1)
+    }
+}
+
 impl EntropyApp {
     pub(super) fn draw_layout_layer_switcher_and_hints(
         &mut self,
@@ -156,11 +169,22 @@ impl EntropyApp {
 
                 // Scroll wheel over the whole layer bar switches layers (down = next, up = prev)
                 if wheel_r.hovered() {
-                    let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-                    if scroll < 0.0 && selected > 0 {
-                        self.selected_layer = selected - 1;
-                    } else if scroll > 0.0 && selected + 1 < layer_count {
-                        self.selected_layer = selected + 1;
+                    // Use the raw wheel event once. The smoothed delta persists across
+                    // repaint frames and used to race through every layer per notch.
+                    let scroll = ui.input(|i| {
+                        i.raw
+                            .events
+                            .iter()
+                            .find_map(|event| match event {
+                                egui::Event::MouseWheel { delta, .. } => Some(delta.y),
+                                _ => None,
+                            })
+                            .unwrap_or(0.0)
+                    });
+                    let next_layer = layer_after_wheel(selected, layer_count, scroll);
+                    if next_layer != selected {
+                        self.selected_layer = next_layer;
+                        self.jump_back_stack.clear();
                     }
                 }
 
@@ -240,5 +264,24 @@ impl EntropyApp {
                 self.draw_layout_bottom_hints(ui, center_x, name_r.hovered());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::layer_after_wheel;
+
+    #[test]
+    fn wheel_event_moves_exactly_one_layer_without_wrapping() {
+        assert_eq!(layer_after_wheel(0, 6, -120.0), 1);
+        assert_eq!(layer_after_wheel(1, 6, 120.0), 0);
+        assert_eq!(layer_after_wheel(5, 6, -120.0), 5);
+        assert_eq!(layer_after_wheel(0, 6, 120.0), 0);
+    }
+
+    #[test]
+    fn wheel_magnitude_does_not_skip_layers() {
+        assert_eq!(layer_after_wheel(2, 8, -10_000.0), 3);
+        assert_eq!(layer_after_wheel(2, 8, 10_000.0), 1);
     }
 }

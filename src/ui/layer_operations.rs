@@ -232,6 +232,20 @@ fn filled_layer_snapshot(
     Some(snapshot)
 }
 
+fn apply_layer_updates(
+    layout: &mut KeyboardLayout,
+    layer: usize,
+    key_updates: &[(usize, u16)],
+    encoder_updates: &[(usize, u16)],
+) {
+    for &(key_idx, keycode) in key_updates {
+        layout.set_keycode(layer, key_idx, keycode);
+    }
+    for &(encoder_idx, keycode) in encoder_updates {
+        layout.set_encoder_keycode(layer, encoder_idx, keycode);
+    }
+}
+
 fn mirror_key_mapping(keys: &[PhysicalKey]) -> Result<Vec<usize>, LayerOperationError> {
     let count = keys.len();
     if count == 0 || !count.is_multiple_of(2) {
@@ -505,10 +519,11 @@ impl EntropyApp {
     }
 
     fn fill_selected_layer(&mut self, keycode: u16) {
+        let target_layer = self.selected_layer;
         let desired = self
             .layout
             .as_ref()
-            .and_then(|layout| filled_layer_snapshot(layout, self.selected_layer, keycode));
+            .and_then(|layout| filled_layer_snapshot(layout, target_layer, keycode));
         let Some(desired) = desired else {
             self.report_layer_operation_error(LayerOperationError::MissingLayer);
             return;
@@ -518,7 +533,7 @@ impl EntropyApp {
         } else {
             "layer_actions.fill_none"
         };
-        self.apply_layer_snapshot(self.selected_layer, desired, action_key);
+        self.apply_layer_snapshot(target_layer, desired, action_key);
     }
 
     fn mirror_selected_layer(&mut self, mapping: &[usize]) {
@@ -882,15 +897,16 @@ impl EntropyApp {
         }
 
         let Some(hid_device) = self.hid_device.take() else {
-            for (key_idx, _, _, keycode) in key_changes {
-                if let Some(layout) = &mut self.layout {
-                    layout.set_keycode(layer, key_idx, keycode);
-                }
-            }
-            for (encoder_idx, _, _, keycode) in encoder_changes {
-                if let Some(layout) = &mut self.layout {
-                    layout.set_encoder_keycode(layer, encoder_idx, keycode);
-                }
+            let key_updates = key_changes
+                .iter()
+                .map(|(key_idx, _, _, keycode)| (*key_idx, *keycode))
+                .collect::<Vec<_>>();
+            let encoder_updates = encoder_changes
+                .iter()
+                .map(|(encoder_idx, _, _, keycode)| (*encoder_idx, *keycode))
+                .collect::<Vec<_>>();
+            if let Some(layout) = &mut self.layout {
+                apply_layer_updates(layout, layer, &key_updates, &encoder_updates);
             }
             if matches!(undo_behavior, LayerUndoBehavior::RecordOld) {
                 self.undo_stack.push(UndoAction::Layer {
@@ -1024,15 +1040,13 @@ impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn finish_layer_write(&mut self, result: LayerWriteResult) {
         self.hid_device = result.hid_device;
-        for &(key_idx, keycode) in &result.progress.key_updates {
-            if let Some(layout) = &mut self.layout {
-                layout.set_keycode(result.context.layer, key_idx, keycode);
-            }
-        }
-        for &(encoder_idx, keycode) in &result.progress.encoder_updates {
-            if let Some(layout) = &mut self.layout {
-                layout.set_encoder_keycode(result.context.layer, encoder_idx, keycode);
-            }
+        if let Some(layout) = &mut self.layout {
+            apply_layer_updates(
+                layout,
+                result.context.layer,
+                &result.progress.key_updates,
+                &result.progress.encoder_updates,
+            );
         }
 
         let touched =
@@ -1330,6 +1344,20 @@ mod tests {
         assert_eq!(inherit.keycodes, vec![0x0001; 4]);
         assert_eq!(none.encoder_keycodes, vec![20, 21]);
         assert_eq!(inherit.encoder_keycodes, vec![20, 21]);
+    }
+
+    #[test]
+    fn fill_updates_stay_on_the_selected_raw_layer() {
+        let mut target = layout(&[(0.0, 0.0), (1.0, 0.0)], &[10, 11], &[20]);
+        target.layers = vec![vec![10, 11], vec![12, 13], vec![14, 15]];
+        target.encoder_layers = vec![vec![20], vec![21], vec![22]];
+
+        apply_layer_updates(&mut target, 1, &[(0, 0x0001), (1, 0x0001)], &[]);
+
+        assert_eq!(target.layers[0], vec![10, 11]);
+        assert_eq!(target.layers[1], vec![0x0001, 0x0001]);
+        assert_eq!(target.layers[2], vec![14, 15]);
+        assert_eq!(target.encoder_layers, vec![vec![20], vec![21], vec![22]]);
     }
 
     #[test]

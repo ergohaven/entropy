@@ -1,5 +1,62 @@
 use super::*;
 
+fn plural_catalog_key(
+    value: u32,
+    one: &'static str,
+    few: &'static str,
+    many: &'static str,
+) -> &'static str {
+    let last_two = value % 100;
+    let last = value % 10;
+    if last == 1 && last_two != 11 {
+        one
+    } else if (2..=4).contains(&last) && !(12..=14).contains(&last_two) {
+        few
+    } else {
+        many
+    }
+}
+
+fn bluetooth_timeout_variant_label(language: crate::i18n::Language, variant: &str) -> String {
+    let normalized = variant.trim().to_ascii_lowercase();
+    if normalized == "never" {
+        return crate::i18n::tr_catalog(language, "bluetooth_settings.timeout_never").to_owned();
+    }
+
+    let mut parts = normalized.split_whitespace();
+    let value = parts.next().and_then(|value| value.parse::<u32>().ok());
+    let unit = parts.next();
+    if parts.next().is_none() {
+        if let (Some(value), Some(unit)) = (value, unit) {
+            let key = match unit {
+                "minute" | "minutes" => Some(plural_catalog_key(
+                    value,
+                    "bluetooth_settings.timeout_minutes_one",
+                    "bluetooth_settings.timeout_minutes_few",
+                    "bluetooth_settings.timeout_minutes_many",
+                )),
+                "hour" | "hours" => Some(plural_catalog_key(
+                    value,
+                    "bluetooth_settings.timeout_hours_one",
+                    "bluetooth_settings.timeout_hours_few",
+                    "bluetooth_settings.timeout_hours_many",
+                )),
+                _ => None,
+            };
+            if let Some(key) = key {
+                let value_text = value.to_string();
+                return crate::i18n::tr_catalog_format(
+                    language,
+                    key,
+                    &[("value", value_text.as_str())],
+                );
+            }
+        }
+    }
+
+    crate::i18n::tr_text(language, variant)
+}
+
 #[derive(Clone, Copy)]
 enum BluetoothRow {
     SleepTimeout,
@@ -132,7 +189,13 @@ impl EntropyApp {
                     let Some(setting) = self.bluetooth_settings.sleep_timeout.clone() else {
                         continue;
                     };
-                    let variants = self.bluetooth_variant_labels(&setting.variants);
+                    let variants = setting
+                        .variants
+                        .iter()
+                        .map(|variant| {
+                            bluetooth_timeout_variant_label(self.app_settings.language, variant)
+                        })
+                        .collect();
                     self.draw_bluetooth_select_row(
                         ui,
                         content_width,
@@ -273,5 +336,36 @@ impl EntropyApp {
                 setting.qsid
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bluetooth_timeout_variant_label;
+    use crate::i18n::Language;
+
+    #[test]
+    fn bluetooth_sleep_timeout_options_are_localized_in_russian() {
+        for (source, expected) in [
+            ("Never", "Никогда"),
+            ("10 minutes", "10 минут"),
+            ("45 minutes", "45 минут"),
+            ("1 hour", "1 час"),
+            ("2 hours", "2 часа"),
+            ("5 hours", "5 часов"),
+        ] {
+            assert_eq!(
+                bluetooth_timeout_variant_label(Language::Russian, source),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_bluetooth_option_keeps_catalog_fallback() {
+        assert_eq!(
+            bluetooth_timeout_variant_label(Language::Russian, "Firmware default"),
+            "Firmware default"
+        );
     }
 }
