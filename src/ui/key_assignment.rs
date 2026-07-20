@@ -117,8 +117,12 @@ impl EntropyApp {
             } else {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    self.picker_retry_due =
-                        Some(std::time::Instant::now() + std::time::Duration::from_millis(100));
+                    // The picker stays open and target state is restored by the
+                    // failed write path. Clear this attempted choice so a
+                    // persistent device error cannot retry HID I/O every frame;
+                    // choosing a key again is an explicit retry.
+                    self.keycode_picker.result = None;
+                    self.picker_retry_due = None;
                 }
             }
         }
@@ -428,7 +432,7 @@ mod tests {
         app.hid_device = Some(hid);
         app.apply_picker_results();
         assert_eq!(app.key_override_entries[0].trigger, 0x0004);
-        assert_eq!(app.keycode_picker.result, Some(0x0005));
+        assert!(app.keycode_picker.result.is_none());
         assert!(!app.key_override_dirty);
 
         app.picker_retry_due = None;
@@ -446,6 +450,34 @@ mod tests {
         app.hid_device = Some(hid);
         app.apply_picker_results();
         assert_eq!(app.alt_repeat_entries[0].keycode, 0x0004);
-        assert_eq!(app.keycode_picker.result, Some(0x0006));
+        assert!(app.keycode_picker.result.is_none());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn persistent_picker_failure_requires_an_explicit_new_choice_before_retrying() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        app.key_override_entries = vec![KeyOverrideEntry {
+            trigger: 0x0004,
+            ..Default::default()
+        }];
+        app.key_override_pick_target = Some(KeyOverridePickField::Trigger);
+        app.keycode_picker.result = Some(0x0005);
+        let (hid, recorder) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+            0,
+            crate::hid::TestHidFault::WriteError,
+        )));
+        app.hid_device = Some(hid);
+
+        app.apply_picker_results();
+        for _ in 0..5 {
+            app.apply_picker_results();
+        }
+
+        assert_eq!(app.key_override_entries[0].trigger, 0x0004);
+        assert!(app.keycode_picker.result.is_none());
+        assert_eq!(recorder.requests().len(), 1);
     }
 }

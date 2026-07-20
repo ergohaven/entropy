@@ -951,6 +951,18 @@ pub(crate) struct DeferredHidSettings {
     pub(crate) layer_write: Option<DeferredLayerWrite>,
 }
 
+/// A deferred edit can only move to a changed HID path after the user confirms
+/// that the newly connected keyboard is the original target.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DeferredHidSettingsPrompt {
+    Reattach {
+        deferred_identity: ModuleSettingsDeviceIdentity,
+        connected_identity: ModuleSettingsDeviceIdentity,
+    },
+    DiscardBeforeClose,
+}
+
 /// A completed picker choice that could not safely mutate firmware while another
 /// worker owned the HID handle. Keeping this typed prevents reconnect/reset from
 /// dropping either the choice or its intended target.
@@ -3028,6 +3040,8 @@ pub struct EntropyApp {
     /// change to an indistinguishable sibling keyboard.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) deferred_hid_settings: Vec<DeferredHidSettings>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) deferred_hid_settings_prompt: Option<DeferredHidSettingsPrompt>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) pending_layer_write: Option<DeferredLayerWrite>,
     #[cfg(not(target_arch = "wasm32"))]

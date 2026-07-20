@@ -154,6 +154,7 @@ impl TestHidRecorder {
 pub(crate) enum TestHidFault {
     Disconnect,
     WorkerPanic,
+    WriteError,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -521,6 +522,7 @@ impl HidDevice {
                     match fault {
                         TestHidFault::Disconnect => bail!("HID device disconnected"),
                         TestHidFault::WorkerPanic => panic!("test HID worker stopped"),
+                        TestHidFault::WriteError => bail!("test HID write failed"),
                     }
                 }
 

@@ -21,25 +21,47 @@ impl EntropyApp {
             || self.qmk_settings_write_pending()
     }
 
-    fn discard_deferred_hid_settings_for_exit(&mut self) {
-        if self.deferred_hid_settings.is_empty() {
+    fn request_deferred_hid_settings_discard_confirmation(&mut self, ctx: &egui::Context) {
+        if matches!(
+            self.deferred_hid_settings_prompt,
+            Some(DeferredHidSettingsPrompt::Reattach { .. })
+        ) {
+            self.exit_after_hid_write = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.request_repaint();
             return;
         }
-        log::warn!(
-            "discarding {} unmatched deferred HID setting group(s) on explicit close",
-            self.deferred_hid_settings.len()
-        );
+        self.deferred_hid_settings_prompt = Some(DeferredHidSettingsPrompt::DiscardBeforeClose);
+        self.exit_after_hid_write = false;
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        ctx.request_repaint();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn discard_deferred_hid_settings_after_confirmation(&mut self) {
         self.deferred_hid_settings.clear();
         self.pending_layer_write = None;
+        self.deferred_hid_settings_prompt = None;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn cancel_deferred_hid_settings_prompt(&mut self) {
+        if !matches!(
+            self.deferred_hid_settings_prompt,
+            Some(DeferredHidSettingsPrompt::Reattach { .. })
+        ) {
+            self.deferred_hid_settings_prompt = None;
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn defer_exit_until_hid_write_returns(&mut self, ctx: &egui::Context) -> bool {
-        if !self.hid_write_task_active()
+        if !self.hid_write_lifecycle_busy()
             && !self.has_pending_hid_mutations()
             && !self.deferred_hid_settings.is_empty()
         {
-            self.discard_deferred_hid_settings_for_exit();
+            self.request_deferred_hid_settings_discard_confirmation(ctx);
+            return true;
         }
         if !self.hid_write_lifecycle_busy() && !self.deferred_exit_has_pending_hid_writes() {
             return false;
@@ -67,9 +89,12 @@ impl EntropyApp {
         // pending settings for reconnect instead of closing before they write.
         if self.hid_device.is_none() {
             if !self.has_pending_hid_mutations() {
-                self.discard_deferred_hid_settings_for_exit();
-                self.exit_after_hid_write = false;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                if self.deferred_hid_settings.is_empty() {
+                    self.exit_after_hid_write = false;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                } else {
+                    self.request_deferred_hid_settings_discard_confirmation(ctx);
+                }
                 return;
             }
             self.exit_after_hid_write = false;
@@ -85,7 +110,10 @@ impl EntropyApp {
             ctx.request_repaint();
             return;
         }
-        self.discard_deferred_hid_settings_for_exit();
+        if !self.deferred_hid_settings.is_empty() {
+            self.request_deferred_hid_settings_discard_confirmation(ctx);
+            return;
+        }
         if !self.fallback_entropy_display_presets_before_exit() {
             ctx.request_repaint();
             return;
@@ -93,6 +121,74 @@ impl EntropyApp {
 
         self.exit_after_hid_write = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn draw_deferred_hid_settings_prompt(&mut self, ctx: &egui::Context) {
+        let Some(prompt) = self.deferred_hid_settings_prompt.clone() else {
+            return;
+        };
+        let lang = self.app_settings.language;
+        let (title, body, confirm_label, discard_label, cancel_label) = match prompt {
+            DeferredHidSettingsPrompt::Reattach { .. } => (
+                crate::i18n::tr_catalog(lang, "modules_settings.deferred_changes_title"),
+                crate::i18n::tr_catalog(lang, "modules_settings.deferred_changes_reattach_body"),
+                crate::i18n::tr_catalog(lang, "modules_settings.deferred_changes_reattach"),
+                crate::i18n::tr_catalog(lang, "modules_settings.deferred_changes_discard"),
+                crate::i18n::tr_catalog(lang, "modules_settings.deferred_changes_cancel"),
+            ),
+            DeferredHidSettingsPrompt::DiscardBeforeClose => (
+                crate::i18n::tr_catalog(lang, "modules_settings.deferred_changes_title"),
+                crate::i18n::tr_catalog(lang, "modules_settings.deferred_changes_close_body"),
+                crate::i18n::tr_catalog(lang, "modules_settings.deferred_changes_discard_close"),
+                "",
+                crate::i18n::tr_catalog(lang, "modules_settings.deferred_changes_cancel"),
+            ),
+        };
+        let mut confirm = false;
+        let mut discard = false;
+        let mut cancel = false;
+        egui::Window::new(title)
+            .id(egui::Id::new("deferred_hid_settings_prompt"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.set_min_width(420.0);
+                ui.label(body);
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    confirm = ui.button(confirm_label).clicked();
+                    if !discard_label.is_empty() {
+                        discard = ui.button(discard_label).clicked();
+                    }
+                    cancel = ui.button(cancel_label).clicked();
+                });
+            });
+
+        if confirm {
+            match &prompt {
+                DeferredHidSettingsPrompt::Reattach { .. } => {
+                    self.confirm_deferred_hid_settings_reattach();
+                }
+                DeferredHidSettingsPrompt::DiscardBeforeClose => {
+                    self.discard_deferred_hid_settings_after_confirmation();
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        } else if discard {
+            match &prompt {
+                DeferredHidSettingsPrompt::Reattach {
+                    deferred_identity, ..
+                } => self.discard_deferred_hid_settings_for_identity(deferred_identity),
+                DeferredHidSettingsPrompt::DiscardBeforeClose => {
+                    self.discard_deferred_hid_settings_after_confirmation();
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        } else if cancel {
+            self.cancel_deferred_hid_settings_prompt();
+        }
     }
 
     fn keep_vial_unlock_visible(&mut self, ctx: &egui::Context) {

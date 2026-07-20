@@ -277,7 +277,7 @@ mod tests {
         app.clear_connected_keyboard_state("device disconnected");
 
         assert!(!app.qmk_settings_write_pending());
-        assert_eq!(app.touchpad_settings.scroll_sens, 0);
+        assert_eq!(app.touchpad_settings.scroll_sens, 8);
 
         #[cfg(not(target_arch = "wasm32"))]
         {

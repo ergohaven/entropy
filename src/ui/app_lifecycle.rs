@@ -71,10 +71,6 @@ fn app_visuals(dark_mode: bool) -> egui::Visuals {
     visuals
 }
 
-fn hid_lifecycle_writes_available(hid_write_task_active: bool) -> bool {
-    !hid_write_task_active
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 fn connection_replaces_layout_canvas(connect_state: &ConnectState) -> bool {
     matches!(connect_state, ConnectState::Loading { .. })
@@ -930,12 +926,17 @@ mod tests {
             app.finish_deferred_exit_after_hid_write(&ctx);
         });
         assert!(!app.exit_after_hid_write);
-        assert!(close_output
+        assert!(!close_output
             .viewport_output
             .get(&egui::ViewportId::ROOT)
             .expect("root viewport output exists")
             .commands
             .contains(&egui::ViewportCommand::Close));
+
+        assert!(matches!(
+            app.deferred_hid_settings_prompt,
+            Some(DeferredHidSettingsPrompt::DiscardBeforeClose)
+        ));
         assert_eq!(
             app.status_msg,
             crate::i18n::tr_catalog(
@@ -947,7 +948,7 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn explicit_close_discards_unmatched_deferred_settings() {
+    fn explicit_close_requires_confirmation_before_discarding_unmatched_deferred_settings() {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -979,18 +980,73 @@ mod tests {
         });
 
         assert!(!app.exit_after_hid_write);
-        assert!(app.deferred_hid_settings.is_empty());
-        assert!(close_output
+        assert_eq!(app.deferred_hid_settings.len(), 1);
+        assert!(matches!(
+            app.deferred_hid_settings_prompt,
+            Some(DeferredHidSettingsPrompt::DiscardBeforeClose)
+        ));
+        assert!(!close_output
             .viewport_output
             .get(&egui::ViewportId::ROOT)
             .expect("root viewport output exists")
             .commands
             .contains(&egui::ViewportCommand::Close));
+
+        app.discard_deferred_hid_settings_after_confirmation();
+        assert!(app.deferred_hid_settings.is_empty());
+        assert!(app.deferred_hid_settings_prompt.is_none());
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn deferred_close_without_hid_discards_unmatched_settings_and_closes() {
+    fn reattach_prompt_survives_cancel_and_close_request() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let deferred_identity = ModuleSettingsDeviceIdentity {
+            path: "usb:previous-device".to_owned(),
+            serial_number: Some("duplicate".to_owned()),
+            vendor_id: 0xe126,
+            product_id: 0x0042,
+            keyboard_id: 1,
+        };
+        let connected_identity = ModuleSettingsDeviceIdentity {
+            path: "usb:reconnected-device".to_owned(),
+            ..deferred_identity.clone()
+        };
+        app.deferred_hid_settings = vec![DeferredHidSettings {
+            identity: deferred_identity.clone(),
+            macro_entries: vec![],
+            combo_entries: vec![],
+            combo_term: None,
+            combo_term_dirty: false,
+            key_override_entries: vec![],
+            tap_dance_entries: vec![],
+            pending_tap_hold_numeric_writes: Default::default(),
+            tap_hold_numeric_write_due: None,
+            picker_mutation: None,
+            layer_write: None,
+        }];
+        app.deferred_hid_settings_prompt = Some(DeferredHidSettingsPrompt::Reattach {
+            deferred_identity,
+            connected_identity,
+        });
+
+        app.cancel_deferred_hid_settings_prompt();
+        assert!(matches!(
+            app.deferred_hid_settings_prompt,
+            Some(DeferredHidSettingsPrompt::Reattach { .. })
+        ));
+        assert!(app.defer_exit_until_hid_write_returns(&ctx));
+        assert!(matches!(
+            app.deferred_hid_settings_prompt,
+            Some(DeferredHidSettingsPrompt::Reattach { .. })
+        ));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn deferred_close_without_hid_requires_confirmation_before_discarding_settings() {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -1019,8 +1075,12 @@ mod tests {
             app.finish_deferred_exit_after_hid_write(&ctx);
         });
 
-        assert!(app.deferred_hid_settings.is_empty());
-        assert!(output
+        assert_eq!(app.deferred_hid_settings.len(), 1);
+        assert!(matches!(
+            app.deferred_hid_settings_prompt,
+            Some(DeferredHidSettingsPrompt::DiscardBeforeClose)
+        ));
+        assert!(!output
             .viewport_output
             .get(&egui::ViewportId::ROOT)
             .expect("root viewport output exists")
@@ -1414,7 +1474,7 @@ mod tests {
                 .flat_map(|viewport| &viewport.commands)
                 .filter(|command| **command == egui::ViewportCommand::Close)
                 .count();
-            if close_count == 1 {
+            if app.deferred_hid_settings_prompt.is_some() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -1422,7 +1482,7 @@ mod tests {
 
         assert_eq!(
             close_count,
-            1,
+            0,
             "exit={} hid={} deferred={} pending={} macros={} combo={} term={} tap_dance={} key_override={}",
             app.exit_after_hid_write,
             app.hid_device.is_some(),
@@ -1439,7 +1499,11 @@ mod tests {
         assert!(!app.qmk_settings_write_busy());
         assert!(!app.combo_dirty);
         assert!(!app.keycode_picker.macros_dirty);
-        assert!(app.deferred_hid_settings.is_empty());
+        assert_eq!(app.deferred_hid_settings.len(), 1);
+        assert!(matches!(
+            app.deferred_hid_settings_prompt,
+            Some(DeferredHidSettingsPrompt::DiscardBeforeClose)
+        ));
         let requests = recorder.requests();
         assert_eq!(
             requests
@@ -1618,10 +1682,15 @@ impl eframe::App for EntropyApp {
         let import_pending_at_frame_start = self.import_pending();
         #[cfg(target_arch = "wasm32")]
         let import_pending_at_frame_start = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        let deferred_hid_settings_prompt_open = self.deferred_hid_settings_prompt.is_some();
+        #[cfg(target_arch = "wasm32")]
+        let deferred_hid_settings_prompt_open = false;
         let modal_or_popup_open_at_frame_start = self.keycode_picker.open
             || self.unlock_open
             || self.vial_unlock_polling
             || self.close_to_tray_prompt_open
+            || deferred_hid_settings_prompt_open
             || self.import_report_open
             || self.typing_trainer_history_open
             || import_pending_at_frame_start
@@ -2000,6 +2069,8 @@ impl eframe::App for EntropyApp {
         }
 
         self.draw_close_to_tray_prompt(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.draw_deferred_hid_settings_prompt(ctx);
 
         // Keycode picker modal
         self.draw_vial_unlock_overlay(ctx);

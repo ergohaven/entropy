@@ -1077,6 +1077,16 @@ impl EntropyApp {
             self.refresh_layer_picker_content_flags();
         }
 
+        if result.progress.disconnect {
+            self.pending_layer_write = Some(DeferredLayerWrite {
+                layer: result.context.layer,
+                keycodes: result.context.desired.keycodes,
+                encoder_keycodes: result.context.desired.encoder_keycodes,
+            });
+            self.handoff_hid_worker_disconnect("Layer write disconnected");
+            return;
+        }
+
         let layer = result.context.layer.to_string();
         let written = result.progress.written.to_string();
         self.status_msg = if let Some(error) = result.progress.error {

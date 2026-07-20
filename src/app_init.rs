@@ -43,6 +43,8 @@ impl EntropyApp {
             #[cfg(not(target_arch = "wasm32"))]
             deferred_hid_settings: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
+            deferred_hid_settings_prompt: None,
+            #[cfg(not(target_arch = "wasm32"))]
             pending_layer_write: None,
             #[cfg(not(target_arch = "wasm32"))]
             picker_retry_due: None,

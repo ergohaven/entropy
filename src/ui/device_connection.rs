@@ -144,18 +144,30 @@ impl EntropyApp {
             .iter()
             .position(|deferred| deferred.identity.matches(&identity))
         else {
-            if self.deferred_hid_settings.iter().any(|deferred| {
-                deferred.identity.serial_number.is_none()
-                    && identity.serial_number.is_none()
-                    && deferred.identity.vendor_id == identity.vendor_id
+            if let Some(deferred) = self.deferred_hid_settings.iter().find(|deferred| {
+                deferred.identity.vendor_id == identity.vendor_id
                     && deferred.identity.product_id == identity.product_id
                     && deferred.identity.keyboard_id == identity.keyboard_id
+                    && deferred.identity.serial_number == identity.serial_number
             }) {
-                self.status_msg = "Unsaved settings remain bound to the previous HID path; reconnect that keyboard to apply them.".into();
+                self.deferred_hid_settings_prompt = Some(DeferredHidSettingsPrompt::Reattach {
+                    deferred_identity: deferred.identity.clone(),
+                    connected_identity: identity,
+                });
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "modules_settings.deferred_changes_confirmation_needed",
+                )
+                .to_owned();
             }
             return;
         };
 
+        self.restore_deferred_hid_settings_at(index);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn restore_deferred_hid_settings_at(&mut self, index: usize) {
         let deferred = self.deferred_hid_settings.remove(index);
 
         if !deferred.macro_entries.is_empty() {
@@ -230,6 +242,46 @@ impl EntropyApp {
             );
         }
         self.pending_layer_write = None;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn confirm_deferred_hid_settings_reattach(&mut self) {
+        let Some(DeferredHidSettingsPrompt::Reattach {
+            deferred_identity,
+            connected_identity,
+        }) = self.deferred_hid_settings_prompt.take()
+        else {
+            return;
+        };
+        let current = self
+            .device_about_info
+            .as_ref()
+            .map(ModuleSettingsDeviceIdentity::from_about);
+        if current.as_ref() != Some(&connected_identity) {
+            self.status_msg = crate::i18n::tr_catalog(
+                self.app_settings.language,
+                "modules_settings.deferred_changes_target_changed",
+            )
+            .to_owned();
+            return;
+        }
+        if let Some(index) = self
+            .deferred_hid_settings
+            .iter()
+            .position(|deferred| deferred.identity == deferred_identity)
+        {
+            self.restore_deferred_hid_settings_at(index);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn discard_deferred_hid_settings_for_identity(
+        &mut self,
+        identity: &ModuleSettingsDeviceIdentity,
+    ) {
+        self.deferred_hid_settings
+            .retain(|deferred| deferred.identity != *identity);
+        self.deferred_hid_settings_prompt = None;
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -340,11 +392,10 @@ impl EntropyApp {
         self.combo_write_task = None;
         self.settings_write_task = None;
         self.reset_settings_write_context();
-        self.cancel_pending_qmk_setting_writes();
-        self.qmk_settings_write_queue.clear();
         self.pending_device_connect = None;
         self.settings_write_queue.clear();
         self.module_settings_refresh_task = None;
+        self.deferred_hid_settings_prompt = None;
         self.hid_device = None;
         self.supported_qmk_settings.clear();
         self.undo_stack.clear();
@@ -365,6 +416,10 @@ impl EntropyApp {
         self.touchpad_settings = TouchpadSettingsState::default();
         self.bluetooth_settings = BluetoothSettingsState::default();
         self.module_settings = ModuleSettingsState::default();
+        // Cancellation restores the last confirmed QMK values into this fresh
+        // device-scoped state. Do it after defaults, not before them.
+        self.cancel_pending_qmk_setting_writes();
+        self.qmk_settings_write_queue.clear();
         self.tap_hold_settings = TapHoldSettingsState::default();
         self.pending_tap_hold_numeric_writes.clear();
         self.tap_hold_numeric_write_due = None;
@@ -623,7 +678,7 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn no_serial_path_change_keeps_deferred_settings_pending_for_confirmation() {
+    fn no_serial_path_change_requires_confirmation_before_restoring_deferred_settings() {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx);
         let mut app = EntropyApp::new(&creation_context);
@@ -641,13 +696,63 @@ mod tests {
         app.clear_connected_keyboard_state("disconnected");
         app.keycode_picker.macro_texts.clear();
 
-        app.restore_deferred_hid_settings_after_connect(&DeviceAboutInfo {
+        let reconnected = DeviceAboutInfo {
             path: "/dev/hidraw7".to_owned(),
             ..original
-        });
+        };
+        app.device_about_info = Some(reconnected.clone());
+        app.restore_deferred_hid_settings_after_connect(&reconnected);
 
         assert_eq!(app.deferred_hid_settings.len(), 1);
         assert!(app.keycode_picker.macro_texts.is_empty());
-        assert!(app.status_msg.contains("previous HID path"));
+        assert_eq!(
+            app.status_msg,
+            crate::i18n::tr_catalog(
+                app.app_settings.language,
+                "modules_settings.deferred_changes_confirmation_needed"
+            )
+        );
+        assert!(matches!(
+            app.deferred_hid_settings_prompt,
+            Some(DeferredHidSettingsPrompt::Reattach { .. })
+        ));
+
+        app.confirm_deferred_hid_settings_reattach();
+        assert!(app.deferred_hid_settings.is_empty());
+        assert_eq!(app.keycode_picker.macro_texts, vec![vec![1, 2, 3]]);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn duplicate_serial_on_a_changed_path_requires_confirmation_before_reattach() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        let original = DeviceAboutInfo {
+            path: "/dev/hidraw0".to_owned(),
+            serial_number: "shared-serial".to_owned(),
+            vendor_id: 0xe126,
+            product_id: 0x0042,
+            keyboard_id: 42,
+            ..Default::default()
+        };
+        app.device_about_info = Some(original.clone());
+        app.keycode_picker.macro_texts = vec![vec![1, 2, 3]];
+        app.keycode_picker.macros_dirty = true;
+        app.preserve_deferred_hid_settings_for_disconnect();
+        app.clear_connected_keyboard_state("disconnected");
+
+        let reconnected = DeviceAboutInfo {
+            path: "/dev/hidraw7".to_owned(),
+            ..original
+        };
+        app.device_about_info = Some(reconnected.clone());
+        app.restore_deferred_hid_settings_after_connect(&reconnected);
+
+        assert_eq!(app.deferred_hid_settings.len(), 1);
+        assert!(matches!(
+            app.deferred_hid_settings_prompt,
+            Some(DeferredHidSettingsPrompt::Reattach { .. })
+        ));
     }
 }

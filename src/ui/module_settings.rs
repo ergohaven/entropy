@@ -944,7 +944,7 @@ impl EntropyApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{module_setting_catalog_keys, module_setting_variant_label};
+    use super::*;
 
     #[test]
     fn all_firmware_module_fields_have_catalog_entries_case_insensitively() {
@@ -984,11 +984,6 @@ mod tests {
             "Нет"
         );
     }
-
-    use super::{
-        module_setting_diagnostic_labels, ModuleSettingField, ModuleSettingKind,
-        ModuleSettingsGroup, ModuleSettingsGroupKind,
-    };
 
     fn diagnostic_field(qsid: u16, title: &str) -> ModuleSettingField {
         ModuleSettingField {
