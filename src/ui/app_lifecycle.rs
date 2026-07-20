@@ -71,6 +71,11 @@ fn hid_lifecycle_writes_available(hid_write_task_active: bool) -> bool {
     !hid_write_task_active
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn connection_replaces_layout_canvas(connect_state: &ConnectState) -> bool {
+    matches!(connect_state, ConnectState::Loading { .. })
+}
+
 impl EntropyApp {
     fn main_window_hidden_to_tray(&self) -> bool {
         #[cfg(target_os = "windows")]
@@ -408,6 +413,22 @@ mod tests {
     use super::super::settings_write_queue::SettingsWriteStatus;
     use super::*;
     use crate::keyboard::{KeyboardLayout, LayoutOption, PhysicalKey};
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn only_device_connection_replaces_the_layout_canvas() {
+        let idle = ConnectState::Idle;
+        assert!(!connection_replaces_layout_canvas(&idle));
+
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        let now = std::time::Instant::now();
+        let loading = ConnectState::Loading {
+            rx: receiver,
+            started_at: now,
+            last_progress_at: now,
+        };
+        assert!(connection_replaces_layout_canvas(&loading));
+    }
 
     #[test]
     fn dirty_dynamic_entries_write_over_bluetooth() {
@@ -1110,10 +1131,10 @@ impl eframe::App for EntropyApp {
             });
         }
 
-        // Check if loading
+        // Only a device connection replaces the canvas. Background HID writes keep the
+        // current layer visible until their result is applied.
         #[cfg(not(target_arch = "wasm32"))]
-        let is_loading = matches!(self.connect_state, ConnectState::Loading { .. })
-            || self.hid_write_task_active();
+        let is_loading = connection_replaces_layout_canvas(&self.connect_state);
         #[cfg(target_arch = "wasm32")]
         let is_loading = false;
 
