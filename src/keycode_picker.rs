@@ -100,6 +100,9 @@ pub struct TapDanceEntry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MacroAction {
     Text(String),
+    /// UTF-8 text carried through Entropy's reserved Universal Symbols transport.
+    /// Requires Entropy to be running on the host.
+    HostText(String),
     Tap(u16),   // QMK/Vial keycode
     Down(u16),  // key press
     Up(u16),    // key release

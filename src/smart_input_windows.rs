@@ -153,6 +153,29 @@ fn symbol_for_vk(vk: u32) -> Option<(char, u16)> {
 }
 
 #[cfg(target_os = "windows")]
+fn host_text_trigger_for_vk(vk: u32) -> Option<u16> {
+    let base_keycode = match vk {
+        0x7C..=0x83 => KC_F13 + (vk - 0x7C) as u16,
+        _ => return None,
+    };
+    let mut trigger_keycode = base_keycode;
+    let observed_modifiers = active_transport_modifiers();
+    if modifier_down(VK_CONTROL) || observed_modifiers & MOD_CTRL != 0 {
+        trigger_keycode |= MOD_CTRL;
+    }
+    if modifier_down(VK_SHIFT) || observed_modifiers & MOD_SHIFT != 0 {
+        trigger_keycode |= MOD_SHIFT;
+    }
+    if modifier_down(VK_MENU) || observed_modifiers & MOD_ALT != 0 {
+        trigger_keycode |= MOD_ALT;
+    }
+    if modifier_down(VK_LWIN) || modifier_down(VK_RWIN) || observed_modifiers & MOD_GUI != 0 {
+        trigger_keycode |= MOD_GUI;
+    }
+    super::is_host_text_transport_trigger(trigger_keycode).then_some(trigger_keycode)
+}
+
+#[cfg(target_os = "windows")]
 fn modifier_down(vk: i32) -> bool {
     unsafe { GetAsyncKeyState(vk) & 0x8000u16 as i16 != 0 }
 }
@@ -282,7 +305,7 @@ unsafe extern "system" fn keyboard_proc(n_code: i32, w_param: usize, l_param: is
         let injected = info.flags & LLKHF_INJECTED != 0;
         if !injected {
             update_active_transport_modifier_state(info.vkCode, is_key_down, is_key_up);
-            if is_key_down {
+            if is_key_down && !is_transport_modifier_vk(info.vkCode) {
                 remember_current_foreground_app();
             }
             if foreground_is_current_process() {
@@ -290,6 +313,20 @@ unsafe extern "system" fn keyboard_proc(n_code: i32, w_param: usize, l_param: is
             }
             if is_key_up && should_suppress_transport_modifier_keyup(info.vkCode) {
                 return 1;
+            }
+            if is_key_down {
+                match super::host_text_transport_key_down(
+                    host_text_trigger_for_vk(info.vkCode).unwrap_or_default(),
+                ) {
+                    super::HostTextTransportEvent::Complete(text) => {
+                        let trigger_keycode = host_text_trigger_for_vk(info.vkCode).unwrap();
+                        suppress_transport_modifier_keyups(trigger_keycode);
+                        schedule_host_text(text, trigger_keycode);
+                        return 1;
+                    }
+                    super::HostTextTransportEvent::Consumed => return 1,
+                    super::HostTextTransportEvent::NotHandled => {}
+                }
             }
             if is_key_down && text_expander_enabled() {
                 if text_expander_suppressed_for_context() {
@@ -315,6 +352,12 @@ unsafe extern "system" fn keyboard_proc(n_code: i32, w_param: usize, l_param: is
                 }
             }
 
+            if let Some(trigger_keycode) = host_text_trigger_for_vk(info.vkCode) {
+                if is_key_down || is_key_up {
+                    return 1;
+                }
+            }
+
             if let Some((symbol, trigger_keycode)) = symbol_for_vk(info.vkCode) {
                 if is_key_down {
                     suppress_transport_modifier_keyups(trigger_keycode);
@@ -327,6 +370,11 @@ unsafe extern "system" fn keyboard_proc(n_code: i32, w_param: usize, l_param: is
         }
     }
     CallNextHookEx(std::ptr::null_mut(), n_code, w_param, l_param)
+}
+
+#[cfg(target_os = "windows")]
+fn is_transport_modifier_vk(vk_code: u32) -> bool {
+    matches!(vk_code, 0x10 | 0x11 | 0x12 | 0x5B | 0x5C | 0xA0..=0xA5)
 }
 
 #[cfg(target_os = "windows")]
@@ -651,6 +699,19 @@ fn schedule_unicode_char(symbol: char, trigger_keycode: u16) {
     std::thread::spawn(move || unsafe {
         std::thread::sleep(std::time::Duration::from_millis(2));
         send_unicode_char(symbol, trigger_keycode);
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn schedule_host_text(text: String, trigger_keycode: u16) {
+    std::thread::spawn(move || unsafe {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        neutralize_transport_alt_menu(trigger_keycode);
+        neutralize_transport_gui_menu(trigger_keycode);
+        release_transport_modifiers(trigger_keycode);
+        if !should_use_clipboard_paste(&text) || !paste_text_with_clipboard_restore(&text) {
+            send_unicode_text(&text);
+        }
     });
 }
 

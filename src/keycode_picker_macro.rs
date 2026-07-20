@@ -9,6 +9,18 @@ const VIAL_MACRO_EXT_TAP: u8 = 5;
 const VIAL_MACRO_EXT_DOWN: u8 = 6;
 const VIAL_MACRO_EXT_UP: u8 = 7;
 
+// Host Text uses otherwise-unassigned Universal Symbols transport chords. The
+// payload is UTF-8 encoded as three base-8 digits per byte, so firmware needs
+// no custom opcode and Vial continues to execute the macro normally.
+const HOST_TEXT_CTRL: u16 = 0x00E0;
+const HOST_TEXT_SHIFT: u16 = 0x00E1;
+const HOST_TEXT_ALT: u16 = 0x00E2;
+const HOST_TEXT_GUI: u16 = 0x00E3;
+const HOST_TEXT_F13: u16 = 0x0068;
+const HOST_TEXT_START: u16 = 0x006F; // Hyper+F20
+const HOST_TEXT_END: u16 = 0x006E; // Hyper+F19
+const HOST_TEXT_CHAR_LIMIT: usize = 24;
+
 fn append_macro_key_action(encoded: &mut Vec<u8>, basic_opcode: u8, ext_opcode: u8, keycode: u16) {
     encoded.push(SS_QMK_PREFIX);
     if keycode < 0x0100 {
@@ -123,7 +135,7 @@ pub(crate) fn decode_macro_actions(bytes: &[u8]) -> Vec<MacroAction> {
             push_macro_text_or_raw(&mut actions, &bytes[start..i]);
         }
     }
-    actions
+    collapse_host_text_actions(actions)
 }
 
 fn is_send_string_keycode(keycode: u8) -> bool {
@@ -135,6 +147,9 @@ pub(crate) fn encode_macro_actions(actions: &[MacroAction]) -> Vec<u8> {
     for action in actions {
         match action {
             MacroAction::Text(s) => encoded.extend_from_slice(s.as_bytes()),
+            MacroAction::HostText(s) => {
+                encoded.extend(encode_macro_actions(&host_text_actions(s)));
+            }
             MacroAction::Tap(kc) => {
                 append_macro_key_action(&mut encoded, SS_TAP_CODE, VIAL_MACRO_EXT_TAP, *kc);
             }
@@ -156,6 +171,98 @@ pub(crate) fn encode_macro_actions(actions: &[MacroAction]) -> Vec<u8> {
         }
     }
     encoded
+}
+
+fn host_text_actions(text: &str) -> Vec<MacroAction> {
+    let mut actions = vec![
+        MacroAction::Down(HOST_TEXT_CTRL),
+        MacroAction::Down(HOST_TEXT_SHIFT),
+        MacroAction::Down(HOST_TEXT_ALT),
+        MacroAction::Down(HOST_TEXT_GUI),
+        MacroAction::Tap(HOST_TEXT_START),
+        MacroAction::Up(HOST_TEXT_SHIFT),
+    ];
+    for byte in text.bytes() {
+        actions.push(MacroAction::Tap(
+            HOST_TEXT_F13 + ((byte >> 6) & 0x07) as u16,
+        ));
+        actions.push(MacroAction::Tap(
+            HOST_TEXT_F13 + ((byte >> 3) & 0x07) as u16,
+        ));
+        actions.push(MacroAction::Tap(HOST_TEXT_F13 + (byte & 0x07) as u16));
+    }
+    actions.extend([
+        MacroAction::Down(HOST_TEXT_SHIFT),
+        MacroAction::Tap(HOST_TEXT_END),
+        MacroAction::Up(HOST_TEXT_GUI),
+        MacroAction::Up(HOST_TEXT_ALT),
+        MacroAction::Up(HOST_TEXT_SHIFT),
+        MacroAction::Up(HOST_TEXT_CTRL),
+    ]);
+    actions
+}
+
+fn collapse_host_text_actions(actions: Vec<MacroAction>) -> Vec<MacroAction> {
+    let mut collapsed = Vec::with_capacity(actions.len());
+    let mut offset = 0;
+    while offset < actions.len() {
+        if let Some((text, next_offset)) = decode_host_text_actions(&actions, offset) {
+            collapsed.push(MacroAction::HostText(text));
+            offset = next_offset;
+        } else {
+            collapsed.push(actions[offset].clone());
+            offset += 1;
+        }
+    }
+    collapsed
+}
+
+fn decode_host_text_actions(actions: &[MacroAction], offset: usize) -> Option<(String, usize)> {
+    let prefix = [
+        MacroAction::Down(HOST_TEXT_CTRL),
+        MacroAction::Down(HOST_TEXT_SHIFT),
+        MacroAction::Down(HOST_TEXT_ALT),
+        MacroAction::Down(HOST_TEXT_GUI),
+        MacroAction::Tap(HOST_TEXT_START),
+        MacroAction::Up(HOST_TEXT_SHIFT),
+    ];
+    if actions.get(offset..offset + prefix.len()) != Some(prefix.as_slice()) {
+        return None;
+    }
+
+    let mut digits = Vec::new();
+    let mut cursor = offset + prefix.len();
+    while let Some(MacroAction::Tap(keycode)) = actions.get(cursor) {
+        if !(HOST_TEXT_F13..=HOST_TEXT_F13 + 7).contains(keycode) {
+            break;
+        }
+        digits.push((keycode - HOST_TEXT_F13) as u8);
+        cursor += 1;
+    }
+    let suffix = [
+        MacroAction::Down(HOST_TEXT_SHIFT),
+        MacroAction::Tap(HOST_TEXT_END),
+        MacroAction::Up(HOST_TEXT_GUI),
+        MacroAction::Up(HOST_TEXT_ALT),
+        MacroAction::Up(HOST_TEXT_SHIFT),
+        MacroAction::Up(HOST_TEXT_CTRL),
+    ];
+    if digits.len() % 3 != 0
+        || actions.get(cursor..cursor + suffix.len()) != Some(suffix.as_slice())
+    {
+        return None;
+    }
+
+    let mut bytes = Vec::with_capacity(digits.len() / 3);
+    for digit_group in digits.chunks_exact(3) {
+        if digit_group[0] > 3 {
+            return None;
+        }
+        bytes.push((digit_group[0] << 6) | (digit_group[1] << 3) | digit_group[2]);
+    }
+    String::from_utf8(bytes)
+        .ok()
+        .map(|text| (text, cursor + suffix.len()))
 }
 
 fn push_macro_text_or_raw(actions: &mut Vec<MacroAction>, bytes: &[u8]) {
@@ -378,6 +485,14 @@ impl KeycodePicker {
                                 "macro_editor.types_text_characters_one_by_one",
                             ),
                         ),
+                        MacroAction::HostText(_) => (
+                            crate::i18n::tr_catalog(self.language, "macro_editor.host_text"),
+                            Color32::from_rgb(126, 184, 112),
+                            crate::i18n::tr_catalog(
+                                self.language,
+                                "macro_editor.host_text_requires_entropy_running",
+                            ),
+                        ),
                         MacroAction::Tap(_) => (
                             crate::i18n::tr_catalog(self.language, "macro_editor.tap"),
                             crate::ui_style::accent(),
@@ -448,6 +563,30 @@ impl KeycodePicker {
                             .on_hover_text(crate::i18n::tr_catalog(
                                 self.language,
                                 "macro_editor.characters_to_type_when_this_macro_runs",
+                            ))
+                            .changed()
+                            {
+                                macro_changed = true;
+                            }
+                        }
+                        MacroAction::HostText(text) => {
+                            let text_w = (avail_w - 220.0 * scale).max(150.0 * scale);
+                            if crate::ui_style::modern_text_field_sized(
+                                ui,
+                                ui.make_persistent_id(("macro_host_text_action", grid_id, n, i)),
+                                text,
+                                text_w,
+                                32.0 * scale,
+                                crate::i18n::tr_catalog(
+                                    self.language,
+                                    "macro_editor.type_unicode_text_here",
+                                ),
+                                HOST_TEXT_CHAR_LIMIT,
+                                egui::Align::Min,
+                            )
+                            .on_hover_text(crate::i18n::tr_catalog(
+                                self.language,
+                                "macro_editor.unicode_text_requires_entropy_running",
                             ))
                             .changed()
                             {
@@ -631,6 +770,22 @@ impl KeycodePicker {
             .clicked()
             {
                 self.macro_actions[n].push(MacroAction::Text(String::new()));
+                macro_changed = true;
+            }
+            if picker_button(
+                ui,
+                crate::i18n::tr_catalog(self.language, "macro_editor.plus_host_text"),
+                picker_scaled_size(ui.ctx(), 94.0, 30.0),
+                true,
+                false,
+            )
+            .on_hover_text(crate::i18n::tr_catalog(
+                self.language,
+                "macro_editor.unicode_text_requires_entropy_running",
+            ))
+            .clicked()
+            {
+                self.macro_actions[n].push(MacroAction::HostText(String::new()));
                 macro_changed = true;
             }
             if picker_button(
@@ -968,5 +1123,23 @@ mod tests {
             vec![MacroAction::Down(0xE0), MacroAction::Up(0xE0)]
         );
         assert_eq!(encode_macro_actions(&actions), raw_macro);
+    }
+
+    #[test]
+    fn encodes_and_decodes_host_text_macro() {
+        let actions = vec![MacroAction::HostText("Straße 😀".to_owned())];
+
+        let encoded = encode_macro_actions(&actions);
+
+        assert!(encoded.len() > "Straße 😀".len());
+        assert_eq!(decode_macro_actions(&encoded), actions);
+    }
+
+    #[test]
+    fn host_text_ui_limit_fits_a_one_kib_macro_buffer() {
+        let text = "😀".repeat(HOST_TEXT_CHAR_LIMIT);
+        let encoded = encode_macro_actions(&[MacroAction::HostText(text)]);
+
+        assert!(encoded.len() <= 1024);
     }
 }

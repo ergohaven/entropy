@@ -870,6 +870,19 @@ mod tests {
     }
 
     #[test]
+    fn host_text_transport_slots_do_not_collide_with_universal_symbols() {
+        for base_keycode in KC_F13..=KC_F13 + 7 {
+            assert!(
+                smart_symbol_for_keycode(MOD_CTRL | MOD_ALT | MOD_GUI | base_keycode).is_none()
+            );
+            assert!(smart_symbol_for_keycode(
+                MOD_CTRL | MOD_SHIFT | MOD_ALT | MOD_GUI | base_keycode
+            )
+            .is_none());
+        }
+    }
+
+    #[test]
     fn remapped_universal_symbols_use_mac_friendly_transport_slots() {
         let expected = [
             (MOD_ALT | MOD_SHIFT | KC_F13, '#'),

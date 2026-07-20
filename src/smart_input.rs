@@ -23,6 +23,92 @@ type ForegroundCacheState = Option<(std::time::Instant, Option<TextExpanderAppCa
 static TEXT_EXPANDER_CONFIG: OnceLock<RwLock<TextExpansionConfig>> = OnceLock::new();
 static TEXT_EXPANDER_ENGINE: OnceLock<Mutex<TextExpansionEngine>> = OnceLock::new();
 static RECENT_FOREGROUND_APPS: OnceLock<Mutex<Vec<TextExpanderAppCandidate>>> = OnceLock::new();
+static HOST_TEXT_DECODER: OnceLock<Mutex<HostTextDecoder>> = OnceLock::new();
+
+const HOST_TEXT_F13: u16 = KC_F13;
+const HOST_TEXT_START_TRIGGER: u16 = MOD_CTRL | MOD_SHIFT | MOD_ALT | MOD_GUI | (KC_F13 + 7);
+const HOST_TEXT_END_TRIGGER: u16 = MOD_CTRL | MOD_SHIFT | MOD_ALT | MOD_GUI | (KC_F13 + 6);
+const HOST_TEXT_DATA_MODIFIERS: u16 = MOD_CTRL | MOD_ALT | MOD_GUI;
+const HOST_TEXT_MAX_DIGITS: usize = 3 * 1024;
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum HostTextTransportEvent {
+    NotHandled,
+    Consumed,
+    Complete(String),
+}
+
+#[derive(Default)]
+struct HostTextDecoder {
+    active: bool,
+    digits: Vec<u8>,
+}
+
+impl HostTextDecoder {
+    fn receive(&mut self, trigger_keycode: u16) -> HostTextTransportEvent {
+        if trigger_keycode == HOST_TEXT_START_TRIGGER {
+            self.active = true;
+            self.digits.clear();
+            return HostTextTransportEvent::Consumed;
+        }
+        if !self.active {
+            return HostTextTransportEvent::NotHandled;
+        }
+        if trigger_keycode == HOST_TEXT_END_TRIGGER {
+            self.active = false;
+            let digits = std::mem::take(&mut self.digits);
+            return decode_host_text_digits(&digits)
+                .map(HostTextTransportEvent::Complete)
+                .unwrap_or(HostTextTransportEvent::Consumed);
+        }
+        if trigger_keycode & !0x00ff == HOST_TEXT_DATA_MODIFIERS
+            && (HOST_TEXT_F13..=HOST_TEXT_F13 + 7).contains(&(trigger_keycode & 0x00ff))
+        {
+            if self.digits.len() < HOST_TEXT_MAX_DIGITS {
+                self.digits
+                    .push((trigger_keycode & 0x00ff) as u8 - HOST_TEXT_F13 as u8);
+            } else {
+                self.active = false;
+                self.digits.clear();
+            }
+            return HostTextTransportEvent::Consumed;
+        }
+        self.active = false;
+        self.digits.clear();
+        HostTextTransportEvent::NotHandled
+    }
+}
+
+fn decode_host_text_digits(digits: &[u8]) -> Option<String> {
+    if digits.len() % 3 != 0 {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(digits.len() / 3);
+    for group in digits.chunks_exact(3) {
+        if group[0] > 3 || group[1] > 7 || group[2] > 7 {
+            return None;
+        }
+        bytes.push((group[0] << 6) | (group[1] << 3) | group[2]);
+    }
+    String::from_utf8(bytes).ok()
+}
+
+pub(crate) fn is_host_text_transport_trigger(trigger_keycode: u16) -> bool {
+    trigger_keycode == HOST_TEXT_START_TRIGGER
+        || trigger_keycode == HOST_TEXT_END_TRIGGER
+        || (trigger_keycode & !0x00ff == HOST_TEXT_DATA_MODIFIERS
+            && (HOST_TEXT_F13..=HOST_TEXT_F13 + 7).contains(&(trigger_keycode & 0x00ff)))
+}
+
+pub(crate) fn host_text_transport_key_down(trigger_keycode: u16) -> HostTextTransportEvent {
+    let Ok(mut decoder) = HOST_TEXT_DECODER
+        .get_or_init(|| Mutex::new(HostTextDecoder::default()))
+        .lock()
+    else {
+        return HostTextTransportEvent::NotHandled;
+    };
+    decoder.receive(trigger_keycode)
+}
 
 fn text_expander_config() -> &'static RwLock<TextExpansionConfig> {
     TEXT_EXPANDER_CONFIG.get_or_init(|| RwLock::new(TextExpansionConfig::default()))
@@ -765,7 +851,37 @@ mod macos {
         let alt = flags & K_CG_EVENT_FLAG_MASK_ALTERNATE != 0;
         let command = flags & K_CG_EVENT_FLAG_MASK_COMMAND != 0;
 
-        if let Some(base_keycode) = mac_keycode_to_qmk_f_key(keycode) {
+        let transport_trigger = mac_keycode_to_qmk_f_key(keycode).map(|base_keycode| {
+            let mut trigger_keycode = base_keycode;
+            if ctrl {
+                trigger_keycode |= MOD_CTRL;
+            }
+            if shift {
+                trigger_keycode |= MOD_SHIFT;
+            }
+            if alt {
+                trigger_keycode |= MOD_ALT;
+            }
+            if command {
+                trigger_keycode |= MOD_GUI;
+            }
+            trigger_keycode
+        });
+        if event_type == K_CG_EVENT_KEY_DOWN && !is_transport_modifier_key(keycode) {
+            match host_text_transport_key_down(transport_trigger.unwrap_or_default()) {
+                HostTextTransportEvent::Complete(text) => {
+                    schedule_unicode_text(text);
+                    return null_mut();
+                }
+                HostTextTransportEvent::Consumed => return null_mut(),
+                HostTextTransportEvent::NotHandled => {}
+            }
+        }
+        if let Some(trigger_keycode) = transport_trigger {
+            if is_host_text_transport_trigger(trigger_keycode) {
+                return null_mut();
+            }
+            let base_keycode = trigger_keycode & 0x00ff;
             if let Some((symbol, _trigger_keycode)) =
                 smart_symbol_for_transport(base_keycode, ctrl, shift, alt, command)
             {
@@ -784,6 +900,10 @@ mod macos {
             handle_text_expander_key_down(event, keycode, flags);
         }
         event
+    }
+
+    fn is_transport_modifier_key(keycode: u16) -> bool {
+        matches!(keycode, 54 | 55 | 56 | 58 | 59 | 60 | 61 | 62)
     }
 
     pub(super) fn foreground_app_blacklisted(app_blacklist: &[String]) -> bool {
@@ -1024,6 +1144,12 @@ end tell"#;
         });
     }
 
+    fn schedule_unicode_text(text: String) {
+        std::thread::spawn(move || unsafe {
+            send_unicode_text(&text);
+        });
+    }
+
     unsafe fn send_unicode_char(symbol: char) {
         let mut buffer = [0u16; 2];
         let units = symbol.encode_utf16(&mut buffer);
@@ -1158,11 +1284,25 @@ mod linux_x11 {
                 let shift = xkey.state & SHIFT_MASK != 0;
                 let alt = xkey.state & MOD1_MASK != 0;
                 let gui = xkey.state & MOD4_MASK != 0;
-                if let Some((symbol, _trigger_keycode)) =
-                    smart_symbol_for_transport(*base_keycode, ctrl, shift, alt, gui)
-                {
-                    if event_type == KEY_PRESS {
-                        type_unicode(symbol);
+                let trigger_keycode = *base_keycode
+                    | if ctrl { MOD_CTRL } else { 0 }
+                    | if shift { MOD_SHIFT } else { 0 }
+                    | if alt { MOD_ALT } else { 0 }
+                    | if gui { MOD_GUI } else { 0 };
+                if event_type == KEY_PRESS {
+                    match host_text_transport_key_down(trigger_keycode) {
+                        HostTextTransportEvent::Complete(text) => type_unicode_text(&text),
+                        HostTextTransportEvent::Consumed => continue,
+                        HostTextTransportEvent::NotHandled => {}
+                    }
+                }
+                if !is_host_text_transport_trigger(trigger_keycode) {
+                    if let Some((symbol, _trigger_keycode)) =
+                        smart_symbol_for_transport(*base_keycode, ctrl, shift, alt, gui)
+                    {
+                        if event_type == KEY_PRESS {
+                            type_unicode(symbol);
+                        }
                     }
                 }
             }
@@ -1199,10 +1339,14 @@ mod linux_x11 {
     }
 
     fn type_unicode(symbol: char) {
+        type_unicode_text(&symbol.to_string());
+    }
+
+    fn type_unicode_text(text: &str) {
         let status = Command::new("xdotool")
             .arg("type")
             .arg("--clearmodifiers")
-            .arg(symbol.to_string())
+            .arg(text)
             .status();
         if !matches!(status, Ok(status) if status.success()) {
             log::warn!("Smart Input: xdotool failed or is not installed");
@@ -1332,5 +1476,66 @@ mod tests {
     #[test]
     fn macos_active_event_tap_counts_as_input_monitoring_granted() {
         assert!(macos_effective_input_monitoring_granted(false, true));
+    }
+
+    #[test]
+    fn host_text_transport_decodes_utf8_payload() {
+        let mut decoder = HostTextDecoder::default();
+        assert_eq!(
+            decoder.receive(HOST_TEXT_START_TRIGGER),
+            HostTextTransportEvent::Consumed
+        );
+        for byte in "ß😀".bytes() {
+            for digit in [(byte >> 6) & 0x07, (byte >> 3) & 0x07, byte & 0x07] {
+                assert_eq!(
+                    decoder.receive(HOST_TEXT_DATA_MODIFIERS | HOST_TEXT_F13 + digit as u16),
+                    HostTextTransportEvent::Consumed
+                );
+            }
+        }
+        assert_eq!(
+            decoder.receive(HOST_TEXT_END_TRIGGER),
+            HostTextTransportEvent::Complete("ß😀".to_owned())
+        );
+    }
+
+    #[test]
+    fn host_text_transport_rejects_invalid_utf8() {
+        let mut decoder = HostTextDecoder::default();
+        decoder.receive(HOST_TEXT_START_TRIGGER);
+        for digit in [3, 7, 7] {
+            decoder.receive(HOST_TEXT_DATA_MODIFIERS | HOST_TEXT_F13 + digit);
+        }
+        assert_eq!(
+            decoder.receive(HOST_TEXT_END_TRIGGER),
+            HostTextTransportEvent::Consumed
+        );
+    }
+
+    #[test]
+    fn host_text_transport_resets_after_an_unrelated_key() {
+        let mut decoder = HostTextDecoder::default();
+        decoder.receive(HOST_TEXT_START_TRIGGER);
+
+        assert_eq!(decoder.receive(KC_F13), HostTextTransportEvent::NotHandled);
+        assert_eq!(
+            decoder.receive(HOST_TEXT_END_TRIGGER),
+            HostTextTransportEvent::NotHandled
+        );
+    }
+
+    #[test]
+    fn host_text_transport_aborts_when_digit_limit_is_exceeded() {
+        let mut decoder = HostTextDecoder {
+            active: true,
+            digits: vec![0; HOST_TEXT_MAX_DIGITS],
+        };
+
+        assert_eq!(
+            decoder.receive(HOST_TEXT_DATA_MODIFIERS | HOST_TEXT_F13),
+            HostTextTransportEvent::Consumed
+        );
+        assert!(!decoder.active);
+        assert!(decoder.digits.is_empty());
     }
 }

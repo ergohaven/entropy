@@ -84,4 +84,27 @@ impl HidDevice {
     pub fn encode_macros(macros: &[Vec<u8>], buf_size: u16) -> Vec<u8> {
         encode_macro_buffer(macros, buf_size)
     }
+
+    /// Number of bytes required to write all macro entries without truncation.
+    pub fn encoded_macros_len(macros: &[Vec<u8>]) -> usize {
+        macros
+            .iter()
+            .map(|macro_bytes| macro_bytes.len() + 1)
+            .sum::<usize>()
+            .max(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HidDevice;
+
+    #[test]
+    fn encoded_macros_len_includes_each_terminator() {
+        assert_eq!(
+            HidDevice::encoded_macros_len(&[b"a".to_vec(), b"bc".to_vec()]),
+            5
+        );
+        assert_eq!(HidDevice::encoded_macros_len(&[]), 1);
+    }
 }

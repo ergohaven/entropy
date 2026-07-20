@@ -98,6 +98,10 @@ MOD_CTRL = 0x0100
 MOD_SHIFT = 0x0200
 MOD_ALT = 0x0400
 MOD_GUI = 0x0800
+HOST_TEXT_START_TRIGGER = MOD_CTRL | MOD_SHIFT | MOD_ALT | MOD_GUI | (KC_F13 + 7)
+HOST_TEXT_END_TRIGGER = MOD_CTRL | MOD_SHIFT | MOD_ALT | MOD_GUI | (KC_F13 + 6)
+HOST_TEXT_DATA_MODIFIERS = MOD_CTRL | MOD_ALT | MOD_GUI
+HOST_TEXT_MAX_DIGITS = 3 * 1024
 EVDEV_F13_KEYCODE = 183
 XKB_F13_KEYCODE = EVDEV_F13_KEYCODE + 8
 TERMINAL_CLIENT_MARKERS = (
@@ -666,6 +670,45 @@ def _transport_modifiers(state):
     return modifiers
 
 
+def _host_text_transport_trigger(base_keycode, modifiers):
+    trigger = base_keycode | modifiers
+    return (
+        trigger == HOST_TEXT_START_TRIGGER
+        or trigger == HOST_TEXT_END_TRIGGER
+        or (
+            modifiers == HOST_TEXT_DATA_MODIFIERS
+            and KC_F13 <= base_keycode <= KC_F13 + 7
+        )
+    )
+
+
+def _transport_modifier_key(keyval):
+    return keyval in {
+        IBus.KEY_Shift_L,
+        IBus.KEY_Shift_R,
+        IBus.KEY_Control_L,
+        IBus.KEY_Control_R,
+        IBus.KEY_Alt_L,
+        IBus.KEY_Alt_R,
+        IBus.KEY_Super_L,
+        IBus.KEY_Super_R,
+    }
+
+
+def _decode_host_text_digits(digits):
+    if len(digits) % 3:
+        return None
+    payload = []
+    for high, middle, low in zip(digits[::3], digits[1::3], digits[2::3]):
+        if high > 3 or middle > 7 or low > 7:
+            return None
+        payload.append((high << 6) | (middle << 3) | low)
+    try:
+        return bytes(payload).decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
 class EntropyEngine(IBus.Engine):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -673,6 +716,7 @@ class EntropyEngine(IBus.Engine):
         self._client = ""
         self._client_capabilities = 0
         self._input_purpose = IBus.InputPurpose.FREE_FORM
+        self._host_text_digits = None
 
     def do_focus_in_id(self, object_path, client):
         del object_path
@@ -681,6 +725,7 @@ class EntropyEngine(IBus.Engine):
     def do_focus_out_id(self, object_path):
         del object_path
         self._client = ""
+        self._host_text_digits = None
 
     def do_set_capabilities(self, caps):
         self._client_capabilities = int(caps)
@@ -693,6 +738,14 @@ class EntropyEngine(IBus.Engine):
         base_keycode, source = _transport_keycode_from_event(keyval, keycode)
         if base_keycode is not None:
             modifiers = _transport_modifiers(state)
+            if _host_text_transport_trigger(base_keycode, modifiers):
+                if not (state & IBus.ModifierType.RELEASE_MASK):
+                    text = self._process_host_text_transport(base_keycode | modifiers)
+                    if text:
+                        self.commit_text(IBus.Text.new_from_string(text))
+                return True
+            if not (state & IBus.ModifierType.RELEASE_MASK):
+                self._host_text_digits = None
             symbol = SMART_SYMBOLS.get((base_keycode, modifiers))
             del source
             if symbol is not None:
@@ -701,7 +754,28 @@ class EntropyEngine(IBus.Engine):
                     self._commit_text_expander_aware_text(symbol)
             return True
 
+        if not (state & IBus.ModifierType.RELEASE_MASK) and not _transport_modifier_key(keyval):
+            self._host_text_digits = None
         return self._process_text_expander_key(keyval, keycode, state)
+
+    def _process_host_text_transport(self, trigger):
+        if trigger == HOST_TEXT_START_TRIGGER:
+            self._host_text_digits = []
+            return None
+        if self._host_text_digits is None:
+            return None
+        if trigger == HOST_TEXT_END_TRIGGER:
+            digits = self._host_text_digits
+            self._host_text_digits = None
+            return _decode_host_text_digits(digits)
+        if trigger & ~0xFF == HOST_TEXT_DATA_MODIFIERS:
+            if len(self._host_text_digits) >= HOST_TEXT_MAX_DIGITS:
+                self._host_text_digits = None
+                return None
+            self._host_text_digits.append((trigger & 0xFF) - KC_F13)
+            return None
+        self._host_text_digits = None
+        return None
 
     def _process_text_expander_key(self, keyval, keycode, state):
         del keycode

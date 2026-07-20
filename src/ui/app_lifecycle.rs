@@ -1535,25 +1535,41 @@ impl eframe::App for EntropyApp {
                 if let Some(hid) = &self.hid_device {
                     match hid.get_macro_buffer_size() {
                         Ok(size) => {
-                            let buf = crate::hid::HidDevice::encode_macros(
+                            let required = crate::hid::HidDevice::encoded_macros_len(
                                 &self.keycode_picker.macro_texts,
-                                size,
                             );
-                            match hid.set_macro_buffer(&buf) {
-                                Ok(()) => {
-                                    self.keycode_picker.macros_dirty = false;
-                                    self.status_msg = crate::i18n::tr_catalog(
-                                        self.app_settings.language,
-                                        "status_messages.macros_saved",
-                                    )
-                                    .into()
-                                }
-                                Err(e) => {
-                                    self.status_msg = crate::i18n::tr_catalog_format(
-                                        self.app_settings.language,
-                                        "status_messages.macro_write_error",
-                                        &[("error", &e.to_string())],
-                                    )
+                            if required > size as usize {
+                                self.status_msg = crate::i18n::tr_catalog_format(
+                                    self.app_settings.language,
+                                    "status_messages.macro_write_error",
+                                    &[(
+                                        "error",
+                                        &format!(
+                                            "macros require {required} bytes but device buffer holds {size}"
+                                        ),
+                                    )],
+                                );
+                            } else {
+                                let buf = crate::hid::HidDevice::encode_macros(
+                                    &self.keycode_picker.macro_texts,
+                                    size,
+                                );
+                                match hid.set_macro_buffer(&buf) {
+                                    Ok(()) => {
+                                        self.keycode_picker.macros_dirty = false;
+                                        self.status_msg = crate::i18n::tr_catalog(
+                                            self.app_settings.language,
+                                            "status_messages.macros_saved",
+                                        )
+                                        .into()
+                                    }
+                                    Err(e) => {
+                                        self.status_msg = crate::i18n::tr_catalog_format(
+                                            self.app_settings.language,
+                                            "status_messages.macro_write_error",
+                                            &[("error", &e.to_string())],
+                                        )
+                                    }
                                 }
                             }
                         }
