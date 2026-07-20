@@ -34,11 +34,12 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 - Completed Russian localization for module settings and Bluetooth sleep timeouts
 - Restored the standard scrollbar gutter on the Modules page
 - Made the device-selection state compact, content-sized, and scrollable only when more than six devices are available
+- Kept native import/export dialogs in front of Entropy without blocking the UI, and unified asynchronous PNG/SVG/PDF export handling (@ImmortalDragonm, #80)
 
 ### Contributors
 
 - Special thanks to @IgorArkhipov for 25 merged PRs across key pickers, layer tools, HID reliability, module settings, platform input, and lifecycle fixes
-- Special thanks to @ImmortalDragonm for persistent imported layer names and PDF export (#77, #78)
+- Special thanks to @ImmortalDragonm for persistent imported layer names, PDF export, and nonblocking native file dialogs (#77, #78, #80)
 
 ## v0.2.0 - Public Beta
 
