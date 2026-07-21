@@ -340,36 +340,7 @@ impl EntropyApp {
             if kc == 0x0001 {
                 paint_layout_keycap(painter, draw_rect, key.rotation, bg, key_border_stroke);
                 if !is_hovering {
-                    let fallback_kc = (0..layer)
-                        .rev()
-                        .map(|l| layout.get_keycode(l, *ki))
-                        .find(|&k| k != 0x0001)
-                        .unwrap_or(0x0000);
-                    let label = if fallback_kc == 0x0000 || fallback_kc == 0x0001 {
-                        String::new()
-                    } else {
-                        keycode_label_with_macro_names(
-                            fallback_kc,
-                            &layout.custom_keycodes,
-                            &self.layer_names,
-                            &self.keycode_picker.macro_names,
-                            &self.keycode_picker.tap_dance_names,
-                            self.app_settings.key_legend_layout,
-                        )
-                    };
-                    let label = inherited_key_label_or_marker(label);
-                    let label = number_row_shifted_label(
-                        label,
-                        self.app_settings.show_shifted_number_symbols,
-                        self.app_settings.key_legend_layout,
-                    );
-                    draw_key_label_dimmed(
-                        painter,
-                        draw_rect,
-                        &label,
-                        dark,
-                        key.rotation.to_radians(),
-                    );
+                    draw_key_label_dimmed(painter, draw_rect, "▽", dark, key.rotation.to_radians());
                 }
             } else if kc == 0x0000 {
                 paint_layout_keycap(painter, draw_rect, key.rotation, bg, key_border_stroke);
@@ -413,21 +384,10 @@ impl EntropyApp {
             )
             .replace('\n', " ")
         };
-        let encoder_label = |layer_idx: usize, visual_idx: usize, kc: u16| -> (String, bool) {
+        let encoder_label = |_layer_idx: usize, _visual_idx: usize, kc: u16| -> (String, bool) {
             match kc {
                 0x0000 => (String::new(), false),
-                0x0001 => {
-                    let fallback = (0..layer_idx)
-                        .rev()
-                        .map(|fallback_layer| {
-                            layout.get_encoder_keycode(fallback_layer, visual_idx)
-                        })
-                        .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
-                    match fallback {
-                        Some(fallback_kc) => (encoder_value_label(fallback_kc), true),
-                        None => ("▽".to_string(), false),
-                    }
-                }
+                0x0001 => ("▽".to_string(), true),
                 value => (encoder_value_label(value), false),
             }
         };
