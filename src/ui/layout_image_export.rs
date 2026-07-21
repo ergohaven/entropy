@@ -931,26 +931,7 @@ impl EntropyApp {
             let kc = layout.get_keycode(layer_idx, key_idx);
             let (label, dimmed) = match kc {
                 0x0000 => (String::new(), false),
-                0x0001 => {
-                    let fallback = (0..layer_idx)
-                        .rev()
-                        .map(|fallback_layer| layout.get_keycode(fallback_layer, key_idx))
-                        .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
-                    match fallback {
-                        Some(fallback_kc) => (
-                            export_keycode_label_with_macro_names(
-                                fallback_kc,
-                                &layout.custom_keycodes,
-                                &self.layer_names,
-                                &self.keycode_picker.macro_names,
-                                &self.keycode_picker.tap_dance_names,
-                                self.app_settings.layout_image_export.key_legend_layout,
-                            ),
-                            true,
-                        ),
-                        None => (String::new(), false),
-                    }
-                }
+                0x0001 => ("▽".to_string(), true),
                 value => (
                     export_keycode_label_with_macro_names(
                         value,
@@ -1111,26 +1092,7 @@ impl EntropyApp {
             let kc = layout.get_keycode(layer_idx, key_idx);
             let (label, dimmed) = match kc {
                 0x0000 => (String::new(), false),
-                0x0001 => {
-                    let fallback = (0..layer_idx)
-                        .rev()
-                        .map(|fallback_layer| layout.get_keycode(fallback_layer, key_idx))
-                        .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
-                    match fallback {
-                        Some(fallback_kc) => (
-                            export_keycode_label_with_macro_names(
-                                fallback_kc,
-                                &layout.custom_keycodes,
-                                &self.layer_names,
-                                &self.keycode_picker.macro_names,
-                                &self.keycode_picker.tap_dance_names,
-                                self.app_settings.layout_image_export.key_legend_layout,
-                            ),
-                            true,
-                        ),
-                        None => (String::new(), false),
-                    }
-                }
+                0x0001 => ("▽".to_string(), true),
                 value => (
                     export_keycode_label_with_macro_names(
                         value,
@@ -1444,19 +1406,10 @@ fn draw_encoder_export(
         )
         .replace('\n', " ")
     };
-    let encoder_label = |visual_idx: usize, kc: u16| -> (String, bool) {
+    let encoder_label = |_visual_idx: usize, kc: u16| -> (String, bool) {
         match kc {
             0x0000 => (String::new(), false),
-            0x0001 => {
-                let fallback = (0..layer_idx)
-                    .rev()
-                    .map(|fallback_layer| layout.get_encoder_keycode(fallback_layer, visual_idx))
-                    .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
-                match fallback {
-                    Some(fallback_kc) => (encoder_value_label(fallback_kc), true),
-                    None => ("▽".to_string(), false),
-                }
-            }
+            0x0001 => ("▽".to_string(), true),
             value => (encoder_value_label(value), false),
         }
     };
@@ -1575,19 +1528,10 @@ fn write_encoder_svg(
         )
         .replace('\n', " ")
     };
-    let encoder_label = |visual_idx: usize, kc: u16| -> (String, bool) {
+    let encoder_label = |_visual_idx: usize, kc: u16| -> (String, bool) {
         match kc {
             0x0000 => (String::new(), false),
-            0x0001 => {
-                let fallback = (0..layer_idx)
-                    .rev()
-                    .map(|fallback_layer| layout.get_encoder_keycode(fallback_layer, visual_idx))
-                    .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
-                match fallback {
-                    Some(fallback_kc) => (encoder_value_label(fallback_kc), true),
-                    None => ("▽".to_string(), false),
-                }
-            }
+            0x0001 => ("▽".to_string(), true),
             value => (encoder_value_label(value), false),
         }
     };

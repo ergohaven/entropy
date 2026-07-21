@@ -762,26 +762,7 @@ impl EntropyApp {
                 let (press_label, press_dimmed) = {
                     let kc = layout.get_keycode(layer, press_ki);
                     if kc == 0x0001 {
-                        let fallback_kc = (0..layer)
-                            .rev()
-                            .map(|l| layout.get_keycode(l, press_ki))
-                            .find(|&k| !matches!(k, 0x0000 | 0x0001))
-                            .unwrap_or(0x0000);
-                        if fallback_kc == 0x0000 {
-                            ("▽".to_string(), false)
-                        } else {
-                            (
-                                keycode_label_with_macro_names(
-                                    fallback_kc,
-                                    &layout.custom_keycodes,
-                                    &self.layer_names,
-                                    &self.keycode_picker.macro_names,
-                                    &self.keycode_picker.tap_dance_names,
-                                    self.app_settings.key_legend_layout,
-                                ),
-                                true,
-                            )
-                        }
+                        ("▽".to_string(), true)
                     } else if kc == 0x0000 {
                         (String::new(), false)
                     } else {

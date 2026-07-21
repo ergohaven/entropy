@@ -78,7 +78,10 @@ fn draw_sticky_encoder_arrow(
             center.y + rad.sin() * r,
         ));
     }
-    painter.add(egui::Shape::line(points.clone(), Stroke::new(1.7_f32, color)));
+    painter.add(egui::Shape::line(
+        points.clone(),
+        Stroke::new(1.7_f32, color),
+    ));
     if points.len() >= 2 {
         let end = points[points.len() - 1];
         let prev = points[points.len() - 2];
@@ -425,30 +428,22 @@ impl EntropyApp {
                 continue;
             }
 
-            let label_kc = if is_transparent {
-                (0..key_layer)
-                    .rev()
-                    .map(|fallback_layer| layout.get_keycode(fallback_layer, *ki))
-                    .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001))
-                    .unwrap_or(0x0000)
+            let label = if is_transparent {
+                "▽".to_string()
             } else {
-                kc
-            };
-            if label_kc == 0x0000 {
-                continue;
-            }
-            let label = number_row_shifted_label(
-                keycode_label_with_macro_names(
-                    label_kc,
-                    &layout.custom_keycodes,
-                    layer_names,
-                    macro_names,
-                    tap_dance_names,
+                number_row_shifted_label(
+                    keycode_label_with_macro_names(
+                        kc,
+                        &layout.custom_keycodes,
+                        layer_names,
+                        macro_names,
+                        tap_dance_names,
+                        key_legend_layout,
+                    ),
+                    show_shifted_number_symbols,
                     key_legend_layout,
-                ),
-                show_shifted_number_symbols,
-                key_legend_layout,
-            );
+                )
+            };
             draw_sticky_key_label(
                 &painter,
                 *key_rect,
@@ -471,23 +466,12 @@ impl EntropyApp {
             .replace('\n', " ")
         };
         let label_for = |encoder_target: Option<(usize, u16)>| -> (String, bool) {
-            let Some((visual_idx, kc)) = encoder_target else {
+            let Some((_visual_idx, kc)) = encoder_target else {
                 return (String::new(), false);
             };
             let (label, dimmed) = match kc {
                 0x0000 => (String::new(), false),
-                0x0001 => {
-                    let fallback = (0..layer)
-                        .rev()
-                        .map(|fallback_layer| {
-                            layout.get_encoder_keycode(fallback_layer, visual_idx)
-                        })
-                        .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
-                    match fallback {
-                        Some(fallback_kc) => (encoder_value_label(fallback_kc), true),
-                        None => ("▽".to_string(), false),
-                    }
-                }
+                0x0001 => ("▽".to_string(), true),
                 value => (encoder_value_label(value), false),
             };
             (sticky_compact_label(&label, 9), dimmed)
@@ -662,26 +646,7 @@ impl EntropyApp {
                         .unwrap_or(layer);
                     let kc = layout.get_keycode(press_layer, press_ki);
                     if kc == 0x0001 {
-                        let fallback_kc = (0..press_layer)
-                            .rev()
-                            .map(|fallback_layer| layout.get_keycode(fallback_layer, press_ki))
-                            .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001))
-                            .unwrap_or(0x0000);
-                        if fallback_kc == 0x0000 {
-                            ("▽".to_string(), false)
-                        } else {
-                            (
-                                keycode_label_with_macro_names(
-                                    fallback_kc,
-                                    &layout.custom_keycodes,
-                                    layer_names,
-                                    macro_names,
-                                    tap_dance_names,
-                                    key_legend_layout,
-                                ),
-                                true,
-                            )
-                        }
+                        ("▽".to_string(), true)
                     } else if kc == 0x0000 {
                         (String::new(), false)
                     } else {
