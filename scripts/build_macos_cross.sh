@@ -99,10 +99,13 @@ log "Packing $ZIP"
 # 5b. Best-effort .dmg from Linux (genisoimage HFS hybrid -> compressed UDIF)
 if command -v genisoimage >/dev/null 2>&1 && command -v dmg >/dev/null 2>&1; then
 	log "Packing $DMG"
+	stage="$(mktemp -d)"
+	cp -a "$APP" "$stage/"
+	ln -s /Applications "$stage/Applications"
 	raw="$(mktemp -u).dmg"
-	genisoimage -quiet -V "$APP_NAME" -D -R -apple -no-pad -o "$raw" "$APP"
+	genisoimage -quiet -V "$APP_NAME" -D -R -apple -no-pad -o "$raw" "$stage"
 	dmg dmg "$raw" "$DMG"
-	rm -f "$raw"
+	rm -rf "$raw" "$stage"
 	log "Built $DMG"
 else
 	echo "genisoimage or libdmg-hfsplus 'dmg' not found; skipped .dmg (zip is available)" >&2
