@@ -87,27 +87,6 @@ const SETUP_IBUS_ACTION: UniversalSymbolsAction = UniversalSymbolsAction {
 };
 
 #[cfg(target_os = "linux")]
-const SETUP_FCITX5_ACTION: UniversalSymbolsAction = UniversalSymbolsAction {
-    label_key: "universal_symbols_setup.wayland_fcitx5",
-    tooltip_key: "universal_symbols_setup.wayland_fcitx5_tooltip",
-    button_key: "universal_symbols_setup.setup_fcitx5",
-};
-
-#[cfg(target_os = "linux")]
-const SETUP_ALTERNATIVE_FCITX5_ACTION: UniversalSymbolsAction = UniversalSymbolsAction {
-    label_key: "universal_symbols_setup.alternative_backend",
-    tooltip_key: "universal_symbols_setup.alternative_backend_tooltip",
-    button_key: "universal_symbols_setup.setup_fcitx5",
-};
-
-#[cfg(target_os = "linux")]
-const SETUP_TEXT_EXPANSION_IBUS_ACTION: UniversalSymbolsAction = UniversalSymbolsAction {
-    label_key: "universal_symbols_setup.text_expansion_backend",
-    tooltip_key: "universal_symbols_setup.text_expansion_backend_tooltip",
-    button_key: "universal_symbols_setup.setup_ibus",
-};
-
-#[cfg(target_os = "linux")]
 const REMOVE_IBUS_ACTION: UniversalSymbolsAction = UniversalSymbolsAction {
     label_key: "universal_symbols_setup.remove_ibus_source",
     tooltip_key: "universal_symbols_setup.remove_ibus_source_tooltip",
@@ -513,21 +492,6 @@ impl EntropyApp {
                         );
                     }
                 }
-                crate::smart_input::LinuxRecommendedInputBackend::Fcitx5 => {
-                    if crate::ui_style::modern_button(
-                        ui,
-                        crate::i18n::tr_catalog(lang, "universal_symbols_setup.setup_fcitx5"),
-                        metrics.size(168.0, 34.0),
-                        true,
-                    )
-                    .clicked()
-                    {
-                        self.run_linux_universal_symbols_setup(
-                            "linux/fcitx5/install-user.sh",
-                            "Fcitx5",
-                        );
-                    }
-                }
             }
         }
 
@@ -633,67 +597,14 @@ impl EntropyApp {
             });
             ui.add_space(metrics.value(2.0));
 
-            match crate::smart_input::linux_recommended_input_backend() {
-                crate::smart_input::LinuxRecommendedInputBackend::X11Native => {
-                    let ibus_clicked =
-                        draw_universal_symbols_action_row(ui, row, SETUP_IBUS_ACTION);
-                    if ibus_clicked {
-                        self.run_linux_universal_symbols_setup(
-                            "linux/ibus/install-user.sh",
-                            "IBus",
-                        );
-                    }
+            let ibus_clicked = draw_universal_symbols_action_row(ui, row, SETUP_IBUS_ACTION);
+            if ibus_clicked {
+                self.run_linux_universal_symbols_setup("linux/ibus/install-user.sh", "IBus");
+            }
 
-                    let fcitx5_clicked =
-                        draw_universal_symbols_action_row(ui, row, SETUP_FCITX5_ACTION);
-                    if fcitx5_clicked {
-                        self.run_linux_universal_symbols_setup(
-                            "linux/fcitx5/install-user.sh",
-                            "Fcitx5",
-                        );
-                    }
-                }
-                crate::smart_input::LinuxRecommendedInputBackend::IBus => {
-                    let alternative_clicked =
-                        draw_universal_symbols_action_row(ui, row, SETUP_ALTERNATIVE_FCITX5_ACTION);
-                    if alternative_clicked {
-                        self.run_linux_universal_symbols_setup(
-                            "linux/fcitx5/install-user.sh",
-                            "Fcitx5",
-                        );
-                    }
-
-                    let remove_clicked =
-                        draw_universal_symbols_action_row(ui, row, REMOVE_IBUS_ACTION);
-                    if remove_clicked {
-                        self.run_linux_universal_symbols_setup(
-                            "linux/ibus/uninstall-user.sh",
-                            "IBus",
-                        );
-                    }
-                }
-                crate::smart_input::LinuxRecommendedInputBackend::Fcitx5 => {
-                    let text_expansion_clicked = draw_universal_symbols_action_row(
-                        ui,
-                        row,
-                        SETUP_TEXT_EXPANSION_IBUS_ACTION,
-                    );
-                    if text_expansion_clicked {
-                        self.run_linux_universal_symbols_setup(
-                            "linux/ibus/install-user.sh",
-                            "IBus",
-                        );
-                    }
-
-                    let remove_clicked =
-                        draw_universal_symbols_action_row(ui, row, REMOVE_IBUS_ACTION);
-                    if remove_clicked {
-                        self.run_linux_universal_symbols_setup(
-                            "linux/ibus/uninstall-user.sh",
-                            "IBus",
-                        );
-                    }
-                }
+            let remove_clicked = draw_universal_symbols_action_row(ui, row, REMOVE_IBUS_ACTION);
+            if remove_clicked {
+                self.run_linux_universal_symbols_setup("linux/ibus/uninstall-user.sh", "IBus");
             }
         }
 
@@ -722,7 +633,7 @@ impl EntropyApp {
         self.status_msg = match output {
             Ok(output) if output.status.success() => crate::i18n::tr_catalog(
                 self.app_settings.language,
-                linux_setup_success_status_key(script, backend),
+                linux_setup_success_status_key(script),
             )
             .to_owned(),
             Ok(output) => {
@@ -1059,9 +970,6 @@ fn universal_symbols_intro_key() -> &'static str {
             crate::smart_input::LinuxRecommendedInputBackend::IBus => {
                 "universal_symbols_setup.intro_linux_ibus"
             }
-            crate::smart_input::LinuxRecommendedInputBackend::Fcitx5 => {
-                "universal_symbols_setup.intro_linux_fcitx5"
-            }
         }
     }
     #[cfg(target_os = "windows")]
@@ -1088,9 +996,6 @@ fn universal_symbols_backend_value_key() -> &'static str {
             crate::smart_input::LinuxRecommendedInputBackend::IBus => {
                 "universal_symbols_setup.backend_linux_ibus"
             }
-            crate::smart_input::LinuxRecommendedInputBackend::Fcitx5 => {
-                "universal_symbols_setup.backend_linux_fcitx5"
-            }
         }
     }
     #[cfg(target_os = "windows")]
@@ -1116,9 +1021,6 @@ fn universal_symbols_finish_step_2_key() -> &'static str {
             }
             crate::smart_input::LinuxRecommendedInputBackend::IBus => {
                 "universal_symbols_setup.finish_step_2_ibus"
-            }
-            crate::smart_input::LinuxRecommendedInputBackend::Fcitx5 => {
-                "universal_symbols_setup.finish_step_2_fcitx5"
             }
         }
     }
@@ -1162,9 +1064,6 @@ fn universal_symbols_finish_step_3_key() -> &'static str {
             crate::smart_input::LinuxRecommendedInputBackend::IBus => {
                 "universal_symbols_setup.finish_step_3_ibus"
             }
-            crate::smart_input::LinuxRecommendedInputBackend::Fcitx5 => {
-                "universal_symbols_setup.finish_step_3_fcitx5"
-            }
         }
     }
     #[cfg(target_os = "windows")]
@@ -1207,9 +1106,6 @@ fn universal_symbols_text_expander_key() -> &'static str {
             crate::smart_input::LinuxRecommendedInputBackend::IBus => {
                 "universal_symbols_setup.text_expander_ibus"
             }
-            crate::smart_input::LinuxRecommendedInputBackend::Fcitx5 => {
-                "universal_symbols_setup.text_expander_fcitx5"
-            }
         }
     }
     #[cfg(target_os = "windows")]
@@ -1227,11 +1123,9 @@ fn universal_symbols_text_expander_key() -> &'static str {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_setup_success_status_key(script: &str, backend: &str) -> &'static str {
+fn linux_setup_success_status_key(script: &str) -> &'static str {
     if script.contains("uninstall") {
         "universal_symbols_setup.ibus_uninstalled_status"
-    } else if backend == "Fcitx5" {
-        "universal_symbols_setup.fcitx5_installed_status"
     } else {
         "universal_symbols_setup.ibus_installed_status"
     }

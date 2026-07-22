@@ -943,7 +943,6 @@ fn exact_text_catalog_key(text: &str) -> Option<&'static str> {
         "Restart Entropy after changing permissions" => Some("universal_symbols_setup.restart_entropy_after_changing_permissions"),
         "X11: install xdotool and keep Entropy running" => Some("universal_symbols_setup.x11_install_xdotool_and_keep_entropy_running"),
         "Wayland + IBus: install Entropy Universal Symbols and select it as an input source" => Some("universal_symbols_setup.wayland_plus_ibus_install_entropy_universal_symbols_and_select_it_as_a"),
-        "Wayland + Fcitx5: install the addon, restart Fcitx5, and enable Entropy Universal Symbols" => Some("universal_symbols_setup.wayland_plus_fcitx5_install_the_addon_restart_fcitx5_and_enable_entrop"),
         "Universal Symbols are not supported on this OS yet" => Some("universal_symbols_setup.universal_symbols_are_not_supported_on_this_os_yet"),
         "Open Config → Universal Symbols to finish permissions setup" => Some("universal_symbols_setup.open_config_to_universal_symbols_to_finish_permissions_setup"),
         "Open Config → Universal Symbols to finish Linux setup" => Some("universal_symbols_setup.open_config_to_universal_symbols_to_finish_linux_setup"),
@@ -2002,27 +2001,21 @@ pub fn tr_text(language: Language, text: &str) -> String {
                 "hold Shift for",
                 tr_catalog(language, "dynamic_tooltips.hold_shift_for"),
             ),
-        other
-            if other
-                .starts_with("Universal output backend: Wayland via IBus/Fcitx5 input method") =>
-        {
+        other if other.starts_with("Universal output backend: Wayland via IBus input method") => {
             other.replacen(
-                "Universal output backend: Wayland via IBus/Fcitx5 input method",
-                tr_catalog(language, "dynamic_tooltips.backend_wayland_ibus_fcitx5"),
+                "Universal output backend: Wayland via IBus input method",
+                tr_catalog(language, "dynamic_tooltips.backend_wayland_ibus"),
                 1,
             )
         }
         other if other.starts_with("Universal output backend: Linux X11 native") => other.replacen(
-            "Universal output backend: Linux X11 native; Wayland uses IBus/Fcitx5",
+            "Universal output backend: Linux X11 native; Wayland uses IBus",
             tr_catalog(language, "dynamic_tooltips.backend_linux_x11_native"),
             1,
         ),
-        other
-            if other
-                .starts_with("Universal output backend: Linux; use IBus/Fcitx5 for Wayland") =>
-        {
+        other if other.starts_with("Universal output backend: Linux; use IBus for Wayland") => {
             other.replacen(
-                "Universal output backend: Linux; use IBus/Fcitx5 for Wayland",
+                "Universal output backend: Linux; use IBus for Wayland",
                 tr_catalog(language, "dynamic_tooltips.backend_linux_wayland_hint"),
                 1,
             )

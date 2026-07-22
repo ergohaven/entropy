@@ -157,14 +157,14 @@ pub fn universal_output_status() -> String {
     let input_method = linux_input_method_hint();
     match session {
         LinuxSessionKind::Wayland => format!(
-            "Universal output backend: Wayland via IBus/Fcitx5 input method{}",
+            "Universal output backend: Wayland via IBus input method{}",
             input_method
         ),
         LinuxSessionKind::X11 => {
-            "Universal output backend: Linux X11 native; Wayland uses IBus/Fcitx5".to_owned()
+            "Universal output backend: Linux X11 native; Wayland uses IBus".to_owned()
         }
         LinuxSessionKind::Unknown => format!(
-            "Universal output backend: Linux; use IBus/Fcitx5 for Wayland{}",
+            "Universal output backend: Linux; use IBus for Wayland{}",
             input_method
         ),
     }
@@ -204,25 +204,13 @@ fn should_start_linux_x11_backend(session: LinuxSessionKind) -> bool {
 pub enum LinuxRecommendedInputBackend {
     X11Native,
     IBus,
-    Fcitx5,
 }
 
 #[cfg(target_os = "linux")]
 pub fn linux_recommended_input_backend() -> LinuxRecommendedInputBackend {
     match linux_session_kind() {
         LinuxSessionKind::X11 => LinuxRecommendedInputBackend::X11Native,
-        LinuxSessionKind::Wayland | LinuxSessionKind::Unknown => {
-            let input_method = linux_input_method_env();
-            if input_method.contains("fcitx") {
-                LinuxRecommendedInputBackend::Fcitx5
-            } else if input_method.contains("ibus") {
-                LinuxRecommendedInputBackend::IBus
-            } else if linux_command_available("fcitx5") && !linux_command_available("ibus") {
-                LinuxRecommendedInputBackend::Fcitx5
-            } else {
-                LinuxRecommendedInputBackend::IBus
-            }
-        }
+        LinuxSessionKind::Wayland | LinuxSessionKind::Unknown => LinuxRecommendedInputBackend::IBus,
     }
 }
 
@@ -239,9 +227,7 @@ pub fn text_expander_runs_outside_entropy_process() -> bool {
 #[cfg(target_os = "linux")]
 fn linux_input_method_hint() -> &'static str {
     let combined = linux_input_method_env();
-    if combined.contains("fcitx") {
-        " — Fcitx detected"
-    } else if combined.contains("ibus") {
+    if combined.contains("ibus") {
         " — IBus detected"
     } else {
         ""

@@ -206,9 +206,6 @@ fn text_expander_backend_hint_key() -> &'static str {
             crate::smart_input::LinuxRecommendedInputBackend::IBus => {
                 "text_expander.backend_hint_linux_ibus"
             }
-            crate::smart_input::LinuxRecommendedInputBackend::Fcitx5 => {
-                "text_expander.backend_hint_linux_fcitx5"
-            }
         }
     }
     #[cfg(target_os = "macos")]

@@ -115,7 +115,7 @@ Based on internal build `v1.13.153`.
 - App settings for language, key legends, shifted number symbols, accent color, UI scale, background mode, startup, and Linux Vial udev rules
 - Diagnostics mode in App Settings writes focused rotating troubleshooting logs when enabled
 - Local Text Expander and Universal Symbols integrations
-- Linux IBus and Fcitx5 helper backends for Wayland input-method workflows
+- Linux IBus helper backend for Wayland input-method workflows
 
 ### Distribution
 
@@ -131,7 +131,7 @@ Based on internal build `v1.13.153`.
 
 ### Fixes
 
-- Linux setup actions can run bundled IBus, Fcitx5, and udev scripts from packaged builds
+- Linux setup actions can run bundled IBus and udev scripts from packaged builds
 - Encoder visibility now respects Vial layout-display conditions, so Phenom encoder press keys hide together with their encoder controls
 - Segmented controls now shrink long localized labels to stay inside their button bounds
 - Windows now keeps Entropy single-instance: repeated launches restore the existing tray instance instead of starting a second app

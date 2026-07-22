@@ -47,4 +47,4 @@ Required distro packages are usually:
 
 ## Scope
 
-This is the IBus backend. Fcitx5 currently handles Universal Symbols only.
+This is the sole Wayland backend for Universal Symbols and Text Expander.

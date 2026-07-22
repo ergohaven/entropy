@@ -906,28 +906,21 @@ mod tests {
     }
 
     #[test]
-    fn linux_input_method_backends_include_arrow_symbols() {
+    fn linux_ibus_backend_includes_arrow_symbols() {
         let ibus_backend = include_str!("../linux/ibus/entropy-ibus-engine");
-        let fcitx5_backend = include_str!("../linux/fcitx5/src/entropyuniversalsymbols.cpp");
 
         for symbol in ["←", "↑", "→", "↓", "↔"] {
             assert!(
                 ibus_backend.contains(symbol),
                 "IBus backend is missing {symbol}"
             );
-            assert!(
-                fcitx5_backend.contains(symbol),
-                "Fcitx5 backend is missing {symbol}"
-            );
         }
     }
 
     #[test]
-    fn linux_input_method_backends_include_hyphen_minus_transport() {
+    fn linux_ibus_backend_includes_hyphen_minus_transport() {
         let ibus_backend = include_str!("../linux/ibus/entropy-ibus-engine");
-        let fcitx5_backend = include_str!("../linux/fcitx5/src/entropyuniversalsymbols.cpp");
 
         assert!(ibus_backend.contains("[\"§\", \"”\", \"™\", \"~\", \"_\", \"-\"]"));
-        assert!(fcitx5_backend.contains("{uint16_t(MOD_GUI | (KC_F13 + 5)), \"-\"},"));
     }
 }

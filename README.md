@@ -44,7 +44,7 @@ and firmware settings from one coherent interface.
 - Advanced pages for Auto Shift, Mouse Keys, Tap-Hold, One Shot, Grave Escape,
   Magic, Layer LEDs, touchpad settings, and modules
 - Light/dark themes, accent color, UI scaling, settings import/export, and tray mode
-- Linux udev helper plus optional IBus/Fcitx5 integrations for Wayland input workflows
+- Linux udev helper plus optional IBus integration for Wayland input workflows
 
 ## Platforms
 
