@@ -160,6 +160,8 @@ impl EntropyApp {
             sticky_layout_prev_pressed: Vec::new(),
             sticky_layout_pressed_key_layers: Vec::new(),
             sticky_layout_toggled_layers: Vec::new(),
+            sticky_layout_active_combos: Vec::new(),
+            sticky_layout_tap_dance_states: Vec::new(),
             sticky_layout_base_layer: 0,
             sticky_layout_last_size: None,
             sticky_layout_resize_opacity_hold_frames: 0,

@@ -466,6 +466,22 @@ pub(crate) struct ComboEntry {
     pub(crate) output: u16,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) enum StickyLayoutTapDanceState {
+    #[default]
+    Idle,
+    Pressed {
+        entry: usize,
+        pressed_at: std::time::Instant,
+        tap_count: u8,
+        hold_active: bool,
+    },
+    WaitingForSecondTap {
+        entry: usize,
+        released_at: std::time::Instant,
+    },
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ComboUndoSnapshot {
     pub(crate) entries: Vec<ComboEntry>,
@@ -2926,6 +2942,8 @@ pub struct EntropyApp {
     pub(crate) sticky_layout_prev_pressed: Vec<bool>,
     pub(crate) sticky_layout_pressed_key_layers: Vec<Option<usize>>,
     pub(crate) sticky_layout_toggled_layers: Vec<bool>,
+    pub(crate) sticky_layout_active_combos: Vec<bool>,
+    pub(crate) sticky_layout_tap_dance_states: Vec<StickyLayoutTapDanceState>,
     pub(crate) sticky_layout_base_layer: usize,
     pub(crate) sticky_layout_last_size: Option<Vec2>,
     pub(crate) sticky_layout_resize_opacity_hold_frames: u8,

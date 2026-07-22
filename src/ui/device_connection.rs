@@ -90,6 +90,8 @@ impl EntropyApp {
         self.sticky_layout_prev_pressed.clear();
         self.sticky_layout_pressed_key_layers.clear();
         self.sticky_layout_toggled_layers.clear();
+        self.sticky_layout_active_combos.clear();
+        self.sticky_layout_tap_dance_states.clear();
         self.sticky_layout_base_layer = 0;
         self.status_msg = status_msg.into();
     }
