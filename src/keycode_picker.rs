@@ -21,8 +21,6 @@ mod keycode_picker_popups;
 use keycode_picker_popups::*;
 #[path = "keycode_picker_basic.rs"]
 mod keycode_picker_basic;
-#[path = "keycode_picker_emoji.rs"]
-mod keycode_picker_emoji;
 #[path = "keycode_picker_lighting_quantum.rs"]
 mod keycode_picker_lighting_quantum;
 #[path = "keycode_picker_macro.rs"]
@@ -177,9 +175,6 @@ pub struct KeycodePicker {
     macro_undo_stack: Vec<(usize, Vec<MacroAction>)>,
     /// Macro key picker: (macro_idx, action_idx) being edited
     macro_key_pick: Option<(usize, usize)>,
-    pub emoji_search_query: String,
-    pub emoji_skin_tone: crate::emoji_catalog::EmojiSkinTone,
-    pub emoji_selected: Option<&'static crate::emoji_catalog::EmojiEntry>,
     popup_state: PopupState,
     pub language: crate::i18n::Language,
     pub key_legend_layout: KeyLegendLayout,
@@ -375,9 +370,6 @@ impl Default for KeycodePicker {
             macro_actions: vec![vec![]; 16],
             macro_undo_stack: Vec::new(),
             macro_key_pick: None,
-            emoji_search_query: String::new(),
-            emoji_skin_tone: crate::emoji_catalog::EmojiSkinTone::Default,
-            emoji_selected: None,
             macros_dirty: false,
             popup_state: PopupState::default(),
             language: crate::i18n::default_language(),
