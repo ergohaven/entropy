@@ -1,0 +1,4 @@
+# Vial-compatible HID devices: grant access to the active local user.
+# TAG+="uaccess" hands the device to the logged-in session via systemd-logind,
+# so no static group membership is required.
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{serial}=="*vial:f64c2b3c*", MODE="0660", TAG+="uaccess", TAG+="udev-acl"

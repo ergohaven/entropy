@@ -1,5 +1,8 @@
 /target
 /dist
+/.cache
+/assets/icons
+/assets/entropy.icns
 *.swp
 .DS_Store
 

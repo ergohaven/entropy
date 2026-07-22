@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Entropy
+GenericName=Keyboard Configurator
+Comment=Configure Vial-QMK and Vial-RMK programmable keyboards and input devices
+Exec=entropy
+Icon=entropy
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=keyboard;vial;qmk;rmk;hid;keymap;macropad;
+StartupWMClass=entropy

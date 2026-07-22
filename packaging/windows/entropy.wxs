@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MSI definition for Entropy, built from Linux with wixl (msitools):
+    wixl -a x64 -D Version=$VERSION -D ExeSource=path/to/entropy.exe \
+         -o entropy-$VERSION-x64.msi packaging/windows/entropy.wxs
+  Component GUIDs are fixed on purpose so major-upgrade component rules stay stable.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Name="Entropy" Id="*" UpgradeCode="F1E55C49-6BE0-4E42-A918-4F2A689E2B5B"
+           Language="1033" Codepage="1252" Version="$(var.Version)" Manufacturer="Ergohaven">
+    <Package Id="*" Keywords="Installer" Description="Entropy keyboard configurator"
+             Manufacturer="Ergohaven" InstallerVersion="200" Languages="1033"
+             Compressed="yes" SummaryCodepage="1252" InstallScope="perMachine"/>
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Entropy is already installed."/>
+    <Media Id="1" Cabinet="entropy.cab" EmbedCab="yes"/>
+
+    <Icon Id="entropy.ico" SourceFile="assets/entropy.ico"/>
+    <Property Id="ARPPRODUCTICON" Value="entropy.ico"/>
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/ergohaven/entropy"/>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="CompanyDir" Name="Ergohaven">
+          <Directory Id="INSTALLDIR" Name="Entropy">
+            <Component Id="MainExecutable" Guid="8F3A9C10-0001-4E42-A918-4F2A689E2B5B" Win64="yes">
+              <File Id="entropyExe" Name="entropy.exe" Source="$(var.ExeSource)" KeyPath="yes">
+                <Shortcut Id="startMenuShortcut" Directory="ProgramMenuDir" Name="Entropy"
+                          WorkingDirectory="INSTALLDIR" Icon="entropy.ico" IconIndex="0" Advertise="yes"/>
+                <Shortcut Id="desktopShortcut" Directory="DesktopFolder" Name="Entropy"
+                          WorkingDirectory="INSTALLDIR" Icon="entropy.ico" IconIndex="0" Advertise="yes"/>
+              </File>
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ProgramMenuDir" Name="Entropy">
+          <Component Id="ProgramMenuDir" Guid="8F3A9C10-0002-4E42-A918-4F2A689E2B5B">
+            <RemoveFolder Id="ProgramMenuDir" On="uninstall"/>
+            <RegistryValue Root="HKCU" Key="Software\Ergohaven\Entropy" Name="installed"
+                           Type="integer" Value="1" KeyPath="yes"/>
+          </Component>
+        </Directory>
+      </Directory>
+
+      <Directory Id="DesktopFolder" Name="Desktop"/>
+    </Directory>
+
+    <Feature Id="Complete" Title="Entropy" Level="1">
+      <ComponentRef Id="MainExecutable"/>
+      <ComponentRef Id="ProgramMenuDir"/>
+    </Feature>
+  </Product>
+</Wix>

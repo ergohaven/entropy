@@ -1,0 +1,8 @@
+.git
+target
+dist
+.cache
+assets/icons
+*.AppImage
+*.swp
+.DS_Store
