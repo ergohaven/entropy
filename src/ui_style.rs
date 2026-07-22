@@ -411,27 +411,6 @@ pub fn modern_button_with_font(
     resp
 }
 
-pub fn modern_text_field(
-    ui: &mut Ui,
-    id: egui::Id,
-    text: &mut String,
-    width: f32,
-    hint: &str,
-    char_limit: usize,
-    horizontal_align: egui::Align,
-) -> egui::Response {
-    modern_text_field_interactive(
-        ui,
-        id,
-        text,
-        width,
-        hint,
-        char_limit,
-        horizontal_align,
-        true,
-    )
-}
-
 pub fn modern_text_field_sized(
     ui: &mut Ui,
     id: egui::Id,
@@ -718,7 +697,10 @@ pub fn modern_toggle_pill(
         surface_fill(dark)
     };
     let stroke = if selected {
-        Stroke::new(1.1_f32, mix(modal_outline_stroke(dark).color, accent(), 0.42))
+        Stroke::new(
+            1.1_f32,
+            mix(modal_outline_stroke(dark).color, accent(), 0.42),
+        )
     } else {
         modal_outline_stroke(dark)
     };
@@ -820,22 +802,6 @@ pub fn modal_action_button_size() -> Vec2 {
     Vec2::new(104.0, 32.0)
 }
 
-pub fn modal_tab_button_size() -> Vec2 {
-    Vec2::new(52.0, 28.0)
-}
-
-pub fn modal_tab_add_button_size() -> Vec2 {
-    Vec2::new(28.0, 28.0)
-}
-
-pub fn modal_field_button_height() -> f32 {
-    34.0
-}
-
-pub fn modal_field_button_size(width: f32) -> Vec2 {
-    Vec2::new(width, modal_field_button_height())
-}
-
 pub fn modal_small_button_size(width: f32) -> Vec2 {
     Vec2::new(width, 32.0)
 }
@@ -846,10 +812,6 @@ pub fn modal_space_xs() -> f32 {
 
 pub fn modal_space_sm() -> f32 {
     8.0
-}
-
-pub fn modal_space_md() -> f32 {
-    12.0
 }
 
 pub fn modal_window_frame(style: &egui::Style, dark: bool) -> egui::Frame {
@@ -922,10 +884,6 @@ pub fn modal_content(ui: &mut Ui, layout: ModalLayout, add_contents: impl FnOnce
     });
 }
 
-pub fn modal_section_title(ui: &mut Ui, title: &str) {
-    ui.label(RichText::new(title).size(12.5).strong());
-}
-
 pub fn modal_intro(ui: &mut Ui, text: &str) {
     ui.label(
         RichText::new(text)
@@ -954,11 +912,6 @@ pub fn modal_empty_state(ui: &mut Ui, title: &str, detail: Option<&str>) {
     });
 }
 
-pub fn modal_action_row(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui)) {
-    ui.add_space(18.0);
-    ui.horizontal_centered(add_contents);
-}
-
 #[allow(dead_code)]
 pub fn modal_centered_text_block(ui: &mut Ui, width: f32, add_contents: impl FnOnce(&mut Ui)) {
     ui.horizontal_centered(|ui| {
@@ -968,64 +921,6 @@ pub fn modal_centered_text_block(ui: &mut Ui, width: f32, add_contents: impl FnO
             add_contents,
         );
     });
-}
-
-pub fn modal_checkbox_label_row(
-    ui: &mut Ui,
-    content_width: f32,
-    row_height: f32,
-    checked: &mut bool,
-    label: &str,
-    checkbox_label_gap: f32,
-) -> bool {
-    let mut changed = false;
-    ui.allocate_ui_with_layout(
-        egui::vec2(content_width, row_height),
-        egui::Layout::left_to_right(egui::Align::Center),
-        |ui| {
-            ui.horizontal_centered(|ui| {
-                let resp = ui.add(egui::Checkbox::without_text(checked));
-                if resp.hovered() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                }
-                if resp.changed() {
-                    changed = true;
-                }
-                if checkbox_label_gap > 0.0 {
-                    ui.add_space(checkbox_label_gap);
-                }
-                ui.label(label);
-            });
-        },
-    );
-    changed
-}
-
-pub fn modal_labeled_row(
-    ui: &mut Ui,
-    content_width: f32,
-    label_width: f32,
-    row_height: f32,
-    add_label: impl FnOnce(&mut Ui),
-    add_control: impl FnOnce(&mut Ui),
-) {
-    let control_width = (content_width - label_width).max(0.0);
-    ui.allocate_ui_with_layout(
-        egui::vec2(content_width, row_height),
-        egui::Layout::left_to_right(egui::Align::Center),
-        |ui| {
-            ui.allocate_ui_with_layout(
-                egui::vec2(label_width, row_height),
-                egui::Layout::left_to_right(egui::Align::Center),
-                add_label,
-            );
-            ui.allocate_ui_with_layout(
-                egui::vec2(control_width, row_height),
-                egui::Layout::left_to_right(egui::Align::Center),
-                add_control,
-            );
-        },
-    );
 }
 
 pub fn settings_list_row(

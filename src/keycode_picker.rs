@@ -1,7 +1,7 @@
 /// Keycode picker modal for Vial/QMK keycodes.
 use crate::app::MacroExtKeycodesDisabledReason;
 use crate::keycode::{
-    gui_label, gui_mod_name, gui_sym, key_label_font_sizes, keycode_label_with_names_and_layout,
+    gui_label, gui_mod_name, key_label_font_sizes, keycode_label_with_names_and_layout,
     keycode_tooltip, modifier_label_from_bits, KeyLegendLayout, KeycodeCategory, KEYCODES,
 };
 use crate::popup_state::{PopupKey, PopupState};
@@ -39,10 +39,6 @@ fn plain_modifier_tooltip(mod_name: &str) -> String {
     format!(
         "Use {mod_name} by itself as a held modifier\nLeft click assigns Left {mod_name}\nRight click assigns Right {mod_name}"
     )
-}
-
-fn one_sided_modifier_tooltip(mod_name: &str, side: &str) -> String {
-    format!("Use {side} {mod_name} by itself as a held modifier")
 }
 
 fn mod_combo_tooltip(mod_name: &str, has_right_side: bool) -> String {
@@ -138,8 +134,7 @@ pub struct KeycodePicker {
     pub layer_names: Vec<String>,
     pub layer_count: usize,
     pub layer_has_content: Vec<bool>,
-    pub listening: bool,
-    // Vial Quantum tab pending state
+    // Pending key selection for Mod+Key and Mod-Tap actions
     pub vial_quantum_pending_mod: Option<u16>,
     pub vial_quantum_pending_mt: Option<u16>,
     pub vial_layer_pending: Option<u16>,
@@ -346,7 +341,6 @@ impl Default for KeycodePicker {
             layer_names: (0..16).map(|i| i.to_string()).collect(),
             layer_count: 4,
             layer_has_content: vec![true; 16],
-            listening: false,
             vial_quantum_pending_mod: None,
             vial_quantum_pending_mt: None,
             vial_layer_pending: None,
@@ -535,10 +529,6 @@ impl KeycodePicker {
         self.td_mod_key_pick = None;
     }
 
-    pub(crate) fn open_regular_key_picker(&mut self) {
-        self.open_regular_key_picker_with_mod_key(false);
-    }
-
     pub(crate) fn open_regular_key_picker_with_mod_key(&mut self, allow_mod_key: bool) {
         self.result = None;
         self.open = true;
@@ -586,7 +576,6 @@ impl KeycodePicker {
         let layer_pick_open = self.vial_layer_pending.is_some();
         let pending_key_pick_open =
             self.vial_quantum_pending_mod.is_some() || self.vial_quantum_pending_mt.is_some();
-        let tap_dance_editor_open = self.tap_dance_editor_open.is_some();
         let td_key_pick_open = self.td_key_pick.is_some() || self.td_mod_key_pick.is_some();
 
         self.popup_state
@@ -599,8 +588,6 @@ impl KeycodePicker {
             .begin_frame(PopupKey::PickLayerWindow, layer_pick_open);
         self.popup_state
             .begin_frame(PopupKey::PendingKeyPickWindow, pending_key_pick_open);
-        self.popup_state
-            .begin_frame(PopupKey::TapDanceEditorWindow, tap_dance_editor_open);
         self.popup_state
             .begin_frame(PopupKey::TdKeyPickWindow, td_key_pick_open);
 
@@ -1398,7 +1385,6 @@ impl KeycodePicker {
             KeycodeTab::Symbols => self.show_vial_symbols(ui),
             KeycodeTab::Layers => self.show_vial_layers(ui),
             KeycodeTab::Modifiers => self.show_vial_modifiers(ui),
-            KeycodeTab::Quantum => self.show_vial_quantum(ui),
             KeycodeTab::Rgb => self.show_vial_rgb(ui),
             KeycodeTab::Macro => self.show_vial_macros(ui),
             KeycodeTab::TapDance => self.show_vial_tap_dance(ui),

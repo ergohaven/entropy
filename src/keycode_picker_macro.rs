@@ -838,13 +838,6 @@ impl KeycodePicker {
             .filter(|s| !s.is_empty())
     }
 
-    fn macro_custom_name(&self, n: usize) -> Option<String> {
-        self.macro_names
-            .get(n)
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-    }
-
     pub(super) fn encode_macro(&mut self, n: usize) {
         while self.macro_texts.len() <= n {
             self.macro_texts.push(Vec::new());

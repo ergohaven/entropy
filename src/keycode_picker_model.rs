@@ -199,18 +199,13 @@ impl BasicPickerLayout {
 pub enum KeycodeTab {
     Basic,
     Symbols,
-    Function,
-    Navigation,
     Modifiers,
     Layers,
     Media,
-    Mouse,
-    Numpad,
     Special,
     Rgb,
     Macro,
     TapDance,
-    Quantum,
     Custom,
 }
 
@@ -230,18 +225,13 @@ impl KeycodeTab {
         match self {
             KeycodeTab::Basic => "key_picker.tab_basic",
             KeycodeTab::Symbols => "key_picker.tab_symbols",
-            KeycodeTab::Function => "key_picker.tab_function",
-            KeycodeTab::Navigation => "key_picker.tab_navigation",
             KeycodeTab::Modifiers => "key_picker.tab_modifiers",
             KeycodeTab::Layers => "key_picker.tab_layers",
             KeycodeTab::Media => "key_picker.tab_media",
-            KeycodeTab::Mouse => "key_picker.tab_mouse",
-            KeycodeTab::Numpad => "key_picker.tab_numpad",
             KeycodeTab::Special => "key_picker.tab_special",
             KeycodeTab::Rgb => "key_picker.tab_rgb",
             KeycodeTab::Macro => "key_picker.tab_macro",
             KeycodeTab::TapDance => "key_picker.tab_tap_dance",
-            KeycodeTab::Quantum => "key_picker.tab_quantum",
             KeycodeTab::Custom => "key_picker.tab_custom",
         }
     }
@@ -254,17 +244,11 @@ impl KeycodeTab {
             KeycodeTab::Symbols => {
                 matches!(kc.category, KeycodeCategory::Basic) && is_symbol(kc.value)
             }
-            KeycodeTab::Function => {
-                matches!(kc.category, KeycodeCategory::Function) && kc.value <= 0x0045
-            }
-            KeycodeTab::Navigation => matches!(kc.category, KeycodeCategory::Navigation),
             KeycodeTab::Modifiers => matches!(kc.category, KeycodeCategory::Modifier),
             KeycodeTab::Layers => matches!(kc.category, KeycodeCategory::Layer),
             KeycodeTab::Media => {
                 matches!(kc.category, KeycodeCategory::Media | KeycodeCategory::Mouse)
             }
-            KeycodeTab::Mouse => matches!(kc.category, KeycodeCategory::Mouse),
-            KeycodeTab::Numpad => matches!(kc.category, KeycodeCategory::Numpad),
             KeycodeTab::Special => matches!(kc.category, KeycodeCategory::Special),
             _ => false,
         }
