@@ -1,6 +1,6 @@
 # Self-contained cross-build + packaging toolchain for Entropy.
 # Builds Linux (native) and Windows (cargo-zigbuild, mingw) targets and packages
-# deb/rpm/archlinux (nfpm), AppImage (linuxdeploy), MSI (wixl) and NSIS installers.
+# deb/rpm/archlinux (nfpm), AppImage (appimagetool) and MSI (wixl).
 # macOS is built on a real Mac (hybrid model); the darwin Rust targets and zig are
 # installed here only for the optional/experimental cross-build path.
 ARG RUST_VERSION=1.97
@@ -25,7 +25,6 @@ RUN set -eux; \
 		libxcb-xfixes0-dev \
 		libgl1-mesa-dev \
 		libssl-dev \
-		nsis \
 		wixl \
 		imagemagick \
 		librsvg2-bin \
@@ -36,9 +35,6 @@ RUN set -eux; \
 		fakeroot \
 		zip \
 		xz-utils \
-		jq \
-		uuid-runtime \
-		osslsigncode \
 		ca-certificates \
 		curl \
 		git; \
@@ -64,12 +60,16 @@ RUN set -eux; \
 	dpkg -i /tmp/task.deb; \
 	rm /tmp/task.deb
 
-# AppImage tooling.
+# AppImage tooling: appimagetool baked in and pinned so the container needs no
+# network at packaging time. build_linux_appimage.sh picks it up via APPIMAGETOOL;
+# APPIMAGE_EXTRACT_AND_RUN lets it run without FUSE inside a plain container.
+ARG APPIMAGETOOL_VERSION=1.9.1
 RUN set -eux; \
 	case "$(uname -m)" in x86_64) aia=x86_64 ;; aarch64) aia=aarch64 ;; *) aia="$(uname -m)" ;; esac; \
-	curl -fsSL "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${aia}.AppImage" -o /usr/local/bin/linuxdeploy.AppImage; \
-	curl -fsSL "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh" -o /usr/local/bin/linuxdeploy-plugin-gtk.sh; \
-	chmod +x /usr/local/bin/linuxdeploy.AppImage /usr/local/bin/linuxdeploy-plugin-gtk.sh
+	curl -fsSL "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-${aia}.AppImage" -o /usr/local/bin/appimagetool; \
+	chmod +x /usr/local/bin/appimagetool
+ENV APPIMAGETOOL=/usr/local/bin/appimagetool
+ENV APPIMAGE_EXTRACT_AND_RUN=1
 
 # macOS-cross tooling (EXPERIMENTAL path): quill (Mach-O signing from Linux),
 # konoui lipo (universal binaries) and libdmg-hfsplus (.dmg from Linux).
@@ -91,12 +91,14 @@ RUN set -eux; \
 	install -m 0755 /tmp/libdmg/build/dmg/dmg /usr/local/bin/dmg; \
 	rm -rf /tmp/libdmg
 
-# Rust cross targets + cargo-zigbuild.
+# Rust cross targets + cargo-zigbuild. Pinned to the 0.19 line, which matches the
+# pinned Zig 0.13; newer cargo-zigbuild tracks newer Zig releases.
+ARG CARGO_ZIGBUILD_VERSION=~0.19
 RUN set -eux; \
 	rustup target add \
 		x86_64-pc-windows-gnu \
 		x86_64-apple-darwin \
 		aarch64-apple-darwin; \
-	cargo install cargo-zigbuild --locked
+	cargo install cargo-zigbuild --version "${CARGO_ZIGBUILD_VERSION}" --locked
 
 WORKDIR /work

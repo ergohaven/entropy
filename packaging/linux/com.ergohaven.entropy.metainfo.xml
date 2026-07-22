@@ -29,6 +29,21 @@
   <url type="homepage">https://github.com/ergohaven/entropy</url>
   <url type="bugtracker">https://github.com/ergohaven/entropy/issues</url>
 
+  <screenshots>
+    <screenshot type="default">
+      <caption>Layout editor</caption>
+      <image>https://raw.githubusercontent.com/ergohaven/entropy/main/assets/entropy-layout-screenshot.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Key picker</caption>
+      <image>https://raw.githubusercontent.com/ergohaven/entropy/main/assets/key-picker-dark.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Matrix tester</caption>
+      <image>https://raw.githubusercontent.com/ergohaven/entropy/main/assets/matrix-tester.png</image>
+    </screenshot>
+  </screenshots>
+
   <content_rating type="oars-1.1" />
 
   <categories>

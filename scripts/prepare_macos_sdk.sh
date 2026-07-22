@@ -3,6 +3,11 @@
 # cache (git-ignored). Idempotent: re-running is a no-op once the SDK is present.
 # Prints the SDK directory path to stdout; all logs go to stderr so the caller can
 # capture it as SDKROOT:  SDKROOT="$(scripts/prepare_macos_sdk.sh)"
+#
+# NOTE: this is only for the EXPERIMENTAL Linux->macOS cross-build. Apple's SDK is
+# licensed for use on Apple-branded hardware; using it to cross-compile from Linux
+# is a legal grey area, which is why the cross path is opt-in and never the default.
+# Set MACOS_SDK_SHA256 to verify the download (checksums are on the SDK release page).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

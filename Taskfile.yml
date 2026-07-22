@@ -1,12 +1,17 @@
 # https://taskfile.dev
 #
-# Unified cross-platform build & packaging for Entropy.
-#   task build            - release binary for the host
-#   task package          - packages for the host OS (Linux: deb/rpm/arch/AppImage)
-#   task release          - everything reachable from the current host
-#   task docker:release   - Linux + Windows packages from a throwaway container
+# Cross-platform build & packaging for Entropy.
 #
-# macOS is built on a real Mac (hybrid): `task package:macos` there.
+# Two strategies, split by task namespace:
+#   native  — build/package for the CURRENT host OS (best quality: real signing,
+#             native .dmg). Entry points: `task build`, `task package`.
+#   docker  — reproducible cross-build of Linux + Windows from a Linux container,
+#             runnable from any host with Docker. Entry point: `task docker:dist`.
+#
+# What each host can produce (see README for the full matrix):
+#   Linux   : deb/rpm/arch, AppImage, Windows exe+MSI, (macOS only via docker:macos-cross)
+#   macOS   : macOS .app/.dmg/.zip natively; Linux/Windows only via Docker
+#   Windows : native exe; everything else via Docker
 version: '3'
 
 vars:
@@ -31,8 +36,10 @@ tasks:
 
   clean:
     desc: Remove build/packaging artifacts
+    # assets/entropy.ico is committed (build.rs needs it for Windows builds); the
+    # icons task regenerates it, but clean must not delete a tracked file.
     cmds:
-      - rm -rf {{.DIST}} target/appimage assets/icons
+      - rm -rf {{.DIST}} target/appimage assets/icons assets/entropy.icns
 
   # ---- assets -------------------------------------------------------------
   icons:
@@ -41,6 +48,7 @@ tasks:
       - assets/entropy.svg
     generates:
       - assets/icons/hicolor/256x256/apps/entropy.png
+      - assets/entropy.ico
     cmds:
       - |
         set -e
@@ -50,15 +58,21 @@ tasks:
           elif command -v inkscape >/dev/null 2>&1; then
             inkscape assets/entropy.svg -w "$1" -h "$1" -o "$2" >/dev/null 2>&1
           else
-            echo "need rsvg-convert (librsvg2-bin / librsvg-tools) or inkscape to rasterize SVG" >&2
+            echo "need rsvg-convert (librsvg2-bin) or inkscape to rasterize SVG" >&2
             exit 1
           fi
+        }
+        # ImageMagick 7 ships `magick`; ImageMagick 6 (e.g. Debian bookworm) only `convert`.
+        im() {
+          if command -v magick >/dev/null 2>&1; then magick "$@";
+          elif command -v convert >/dev/null 2>&1; then convert "$@";
+          else echo "need ImageMagick (magick or convert) to build the .ico" >&2; exit 1; fi
         }
         for s in 16 32 48 64 128 256 512; do
           mkdir -p "assets/icons/hicolor/${s}x${s}/apps"
           render "$s" "assets/icons/hicolor/${s}x${s}/apps/entropy.png"
         done
-        magick \
+        im \
           assets/icons/hicolor/16x16/apps/entropy.png \
           assets/icons/hicolor/32x32/apps/entropy.png \
           assets/icons/hicolor/48x48/apps/entropy.png \
@@ -77,25 +91,35 @@ tasks:
           echo "png2icns not found (icnsutils); skipping .icns (build it on macOS or in the container)" >&2
         fi
 
-  # ---- build --------------------------------------------------------------
+  # ---- native build & package (current host) ------------------------------
   build:
-    desc: Release binary for the host platform
+    desc: Release binary for the current host
     cmds:
       - cargo build --release --locked
 
-  build:windows:
-    desc: Cross-build entropy.exe for Windows (x86_64-gnu) via cargo-zigbuild
+  package:
+    desc: Native package(s) for the current host OS
     cmds:
-      - cargo zigbuild --release --locked --target {{.WIN_TARGET}}
+      - task: 'package:{{OS}}'
 
-  # ---- Linux packaging ----------------------------------------------------
   package:linux:
-    desc: Build deb, rpm and archlinux packages with nfpm
+    cmds:
+      - task: linux:all
+  package:darwin:
+    cmds:
+      - task: macos:all
+  package:windows:
+    cmds:
+      - task: windows:all
+
+  # ---- Linux targets ------------------------------------------------------
+  linux:nfpm:
+    internal: true
     deps: [build, icons]
     vars:
       PKG_ARCH: '{{default "amd64" .PKG_ARCH}}'
       ENTROPY_BIN: '{{default "target/release/entropy" .ENTROPY_BIN}}'
-      FORMATS: deb rpm archlinux
+      FORMATS: '{{.FORMATS}}'
     env:
       PKG_ARCH: '{{.PKG_ARCH}}'
       VERSION: '{{.VERSION}}'
@@ -106,96 +130,138 @@ tasks:
       - for: {var: FORMATS}
         cmd: nfpm package -f {{.DIST}}/linux/nfpm.generated.yaml -p {{.ITEM}} -t {{.DIST}}/linux/
 
-  package:appimage:
+  linux:deb:
+    desc: Build the .deb package with nfpm
+    cmds:
+      - task: linux:nfpm
+        vars: {FORMATS: deb}
+
+  linux:rpm:
+    desc: Build the .rpm package with nfpm
+    cmds:
+      - task: linux:nfpm
+        vars: {FORMATS: rpm}
+
+  linux:arch:
+    desc: Build the archlinux package with nfpm
+    cmds:
+      - task: linux:nfpm
+        vars: {FORMATS: archlinux}
+
+  linux:pkg:
+    desc: Build deb, rpm and archlinux packages
+    cmds:
+      - task: linux:nfpm
+        vars: {FORMATS: deb rpm archlinux}
+
+  linux:appimage:
     desc: Build a Linux AppImage
-    deps: [build]
+    deps: [build, icons]
     cmds:
       - scripts/build_linux_appimage.sh "v{{.VERSION}}" "{{.DIST}}/linux/{{.APP}}-v{{.VERSION}}-x86_64.AppImage"
 
-  # ---- Windows packaging --------------------------------------------------
-  package:windows:
-    desc: Build portable exe, MSI (wixl) and NSIS installer
-    deps: [build:windows, icons]
+  linux:all:
+    desc: All Linux artifacts (deb/rpm/arch + AppImage)
+    cmds:
+      - task: linux:pkg
+      - task: linux:appimage
+
+  # ---- Windows targets (cross-built with cargo-zigbuild) ------------------
+  windows:build:
+    desc: Cross-build entropy.exe (x86_64-gnu) via cargo-zigbuild
+    deps: [icons]
+    cmds:
+      - cargo zigbuild --release --locked --target {{.WIN_TARGET}}
+
+  windows:portable:
+    desc: Portable entropy.exe
+    deps: [windows:build]
     vars:
       EXE: target/{{.WIN_TARGET}}/release/entropy.exe
     cmds:
       - mkdir -p {{.DIST}}/windows
       - cp {{.EXE}} {{.DIST}}/windows/{{.APP}}-v{{.VERSION}}-windows-x86_64.exe
-      - wixl -a x64 -D Version={{.VERSION}} -D ExeSource={{.EXE}} -o {{.DIST}}/windows/{{.APP}}-v{{.VERSION}}-x64.msi packaging/windows/entropy.wxs
-      - makensis -DVERSION={{.VERSION}} -DEXE_SOURCE={{.ROOT_DIR}}/{{.EXE}} -DICON={{.ROOT_DIR}}/assets/entropy.ico -DLICENSE_FILE={{.ROOT_DIR}}/LICENSE -DOUTFILE={{.ROOT_DIR}}/{{.DIST}}/windows/{{.APP}}-setup-v{{.VERSION}}.exe packaging/windows/entropy.nsi
 
-  # ---- macOS packaging (run on a Mac) -------------------------------------
-  prepare:macos-sdk:
-    desc: Download the pinned macOS SDK into .cache (for the experimental cross-build)
+  windows:msi:
+    desc: MSI installer (wixl)
+    deps: [windows:build, icons]
+    vars:
+      EXE: target/{{.WIN_TARGET}}/release/entropy.exe
     cmds:
-      - scripts/prepare_macos_sdk.sh
+      - mkdir -p {{.DIST}}/windows
+      - wixl -a x64 -D Version={{.VERSION}} -D ExeSource={{.EXE}} -o {{.DIST}}/windows/{{.APP}}-v{{.VERSION}}-x64.msi packaging/windows/entropy.wxs
 
-  package:macos:
-    desc: Build the macOS .app bundle and .dmg (run on macOS)
+  windows:all:
+    desc: Portable exe + MSI installer
+    cmds:
+      - task: windows:portable
+      - task: windows:msi
+
+  # ---- macOS targets ------------------------------------------------------
+  # Native path (real signing + .dmg): run on a Mac. TARGET selects the arch.
+  macos:app:
+    desc: "macOS .app + .dmg + .zip (run on macOS)"
     cmds:
       - scripts/build_macos_app.sh
 
-  # Alias so `task package` resolves on macOS ({{OS}} == "darwin").
-  package:darwin:
+  macos:all:
+    desc: "macOS artifacts (run on macOS)"
     cmds:
-      - task: package:macos
+      - task: macos:app
 
-  package:macos-cross:
-    desc: "EXPERIMENTAL: macOS universal .app + .dmg cross-built from Linux (zig+SDK+quill)"
+  macos:cross:
+    desc: "EXPERIMENTAL: universal macOS .app + .dmg cross-built from Linux (zig+SDK+quill)"
     deps: [icons]
     cmds:
       - scripts/build_macos_cross.sh
 
-  # ---- aggregates ---------------------------------------------------------
-  package:
-    desc: Package for the current host OS
+  macos:prepare-sdk:
+    desc: Download the pinned macOS SDK into .cache (for the cross-build)
     cmds:
-      - task: 'package:{{OS}}'
+      - scripts/prepare_macos_sdk.sh
 
-  package:linux:all:
-    cmds:
-      - task: package:linux
-      - task: package:appimage
-
-  release:
-    desc: All artifacts reachable from this host (Linux+Windows on Linux; macOS on Mac)
-    cmds:
-      - task: 'release:{{OS}}'
-
-  release:linux:
-    cmds:
-      - task: package:linux
-      - task: package:appimage
-      - task: package:windows
-
-  release:darwin:
-    cmds:
-      - task: package:macos
-
-  release:windows:
-    cmds:
-      - task: package:windows
-
-  # ---- containerized build ------------------------------------------------
+  # ---- reproducible cross-build via Docker --------------------------------
   docker:image:
     desc: Build the local cross-build toolchain image
     cmds:
-      - docker build -f Dockerfile.build -t {{.IMAGE}} .
+      - docker build -t {{.IMAGE}} .
 
-  docker:release:
-    desc: Build Linux + Windows packages inside the toolchain container
+  docker:run:
+    internal: true
+    vars:
+      UID: {sh: id -u}
+      GID: {sh: id -g}
+    cmds:
+      - >
+        docker run --rm
+        -e HOST_UID={{.UID}} -e HOST_GID={{.GID}}
+        -v "$PWD":/work -w /work {{.IMAGE}}
+        sh -c 'task {{.TASKS}} && chown -R "$HOST_UID:$HOST_GID" {{.DIST}} target .task 2>/dev/null || true'
+
+  docker:linux:
+    desc: Linux artifacts (deb/rpm/arch + AppImage) from the toolchain container
     deps: [docker:image]
     cmds:
-      - docker run --rm -v "$PWD":/work -w /work {{.IMAGE}} task release:linux
+      - task: docker:run
+        vars: {TASKS: linux:all}
+
+  docker:windows:
+    desc: Windows artifacts (portable exe + MSI) from the toolchain container
+    deps: [docker:image]
+    cmds:
+      - task: docker:run
+        vars: {TASKS: windows:all}
+
+  docker:dist:
+    desc: Linux + Windows artifacts from the toolchain container
+    deps: [docker:image]
+    cmds:
+      - task: docker:run
+        vars: {TASKS: linux:all windows:all}
 
   docker:macos-cross:
     desc: "EXPERIMENTAL: cross-build the macOS .app + .dmg inside the container"
     deps: [docker:image]
     cmds:
-      - docker run --rm -v "$PWD":/work -w /work {{.IMAGE}} task package:macos-cross
-
-  docker:release-all:
-    desc: "EXPERIMENTAL: Linux + Windows + macOS(cross) inside the container"
-    deps: [docker:image]
-    cmds:
-      - docker run --rm -v "$PWD":/work -w /work {{.IMAGE}} sh -c "task release:linux && task package:macos-cross"
+      - task: docker:run
+        vars: {TASKS: macos:cross}

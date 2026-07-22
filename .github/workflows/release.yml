@@ -9,93 +9,78 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build (${{ matrix.os }})
-    # Stable tags such as v0.1.2 publish as latest releases.
-    # Suffix tags such as v0.1.2-rc.1 publish as prereleases.
+  # Linux (deb/rpm/arch + AppImage) and Windows (portable exe + MSI) are built in
+  # the pinned toolchain container, so CI runs the exact same path as local `task`.
+  # Stable tags such as v0.1.2 publish as latest releases; suffix tags such as
+  # v0.1.2-rc.1 publish as prereleases.
+  linux:
+    name: Linux + Windows packages
+    if: ${{ startsWith(github.ref_name, 'v0.') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install go-task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Linux + Windows artifacts
+        run: task docker:dist
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-windows
+          path: dist/**/*
+
+  # macOS artifacts are built natively on Mac runners for real code signing and a
+  # native .dmg (the Linux cross-build path exists for local use but stays unsigned).
+  macos:
+    name: macOS (${{ matrix.arch }})
     if: ${{ startsWith(github.ref_name, 'v0.') }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            kind: linux
-          - os: windows-latest
-            kind: windows
           - os: macos-26
-            kind: macos
             arch: arm64
             target: aarch64-apple-darwin
           - os: macos-26-intel
-            kind: macos
             arch: x86_64
             target: x86_64-apple-darwin
-
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
-      - name: Install macOS Rust target
-        if: matrix.kind == 'macos'
-        run: rustup target add ${{ matrix.target }}
+      - name: Install go-task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install Linux dependencies
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libhidapi-dev \
-            libudev-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libxkbcommon-dev \
-            libssl-dev \
-            libgtk-3-dev
+      - name: Build macOS .app + .dmg
+        run: TARGET=${{ matrix.target }} task macos:all
 
-      - name: Build
-        if: matrix.kind == 'windows'
-        run: cargo build --release
-
-      - name: Package Linux artifact
-        if: matrix.kind == 'linux'
-        shell: bash
-        run: |
-          asset="entropy-${GITHUB_REF_NAME}-x86_64.AppImage"
-          scripts/build_linux_appimage.sh "${GITHUB_REF_NAME}" "dist/release/$asset"
-
-      - name: Package Windows artifact
-        if: matrix.kind == 'windows'
-        shell: bash
-        run: |
-          mkdir -p dist/release
-          asset="entropy-${GITHUB_REF_NAME}-windows-x86_64.exe"
-          cp target/release/entropy.exe "dist/release/$asset"
-
-      - name: Build macOS app bundle and DMG
-        if: matrix.kind == 'macos'
-        shell: bash
-        run: |
-          TARGET="${{ matrix.target }}" scripts/build_macos_app.sh
-          mkdir -p dist/release
-          asset="entropy-${GITHUB_REF_NAME}-macos-${{ matrix.arch }}.dmg"
-          cp dist/macos/*.dmg "dist/release/$asset"
-
-      - name: Upload artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: release-assets-${{ matrix.os }}
-          path: dist/release/*
+          name: release-macos-${{ matrix.arch }}
+          path: dist/macos/*
 
   release:
     name: Create Release
-    needs: build
+    needs: [linux, macos]
     if: ${{ startsWith(github.ref_name, 'v0.') }}
     runs-on: ubuntu-latest
     steps:
@@ -141,8 +126,8 @@ jobs:
 
           ## Downloads
 
-          - Linux: download the `.AppImage`, make it executable, and run it.
-          - Windows: download and run the portable `.exe`.
+          - Linux: install the `.deb`, `.rpm` or Arch `.pkg.tar.zst` for your distro, or download the `.AppImage`, make it executable, and run it.
+          - Windows: run the `.msi` installer, or download and run the portable `.exe`.
           - macOS: download the unsigned `.dmg` for your Mac (`arm64` for Apple Silicon, `x86_64` for Intel), drag Entropy to Applications, then remove quarantine if macOS blocks the app.
           EOF
 

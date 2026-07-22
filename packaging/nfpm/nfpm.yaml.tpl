@@ -3,15 +3,18 @@
 #   PKG_ARCH     nfpm arch (amd64 / arm64)
 #   VERSION      package version (from Cargo.toml)
 #   ENTROPY_BIN  path to the already-built entropy binary for PKG_ARCH
-# Dependencies are pinned per-format on purpose: auto-detection (ldd/find-requires)
-# is unreliable under cross-compilation, so depends are declared by hand.
+# Depends declared by hand: auto-detection (ldd/find-requires) is unreliable under
+# cross-compilation, and the binary link-loads its GUI stack (libGL, xkbcommon,
+# X11/xcb) via dlopen, so those must be listed explicitly rather than derived.
+# Only libc is a real ELF dependency; hidapi uses the pure-Rust hidraw backend
+# (no libudev) and file dialogs go through xdg-desktop-portal, not GTK.
 name: ergohaven-entropy
 arch: ${PKG_ARCH}
 platform: linux
 version: ${VERSION}
 section: utils
 priority: optional
-maintainer: Ergohaven <noreply@ergohaven.example>
+maintainer: Ergohaven <ergohaven@users.noreply.github.com>
 description: |
   Desktop app for configuring Vial-QMK and Vial-RMK programmable keyboards.
   Modern interface for layouts, keycodes, macros, lighting, pointing controls
@@ -23,27 +26,26 @@ overrides:
   deb:
     depends:
       - libc6
-      - libgtk-3-0
       - libxkbcommon0
       - libx11-6
       - libxcb1
       - libgl1
-      - libudev1
+    recommends:
+      - xdg-desktop-portal
   rpm:
     depends:
-      - gtk3
       - libxkbcommon
       - libX11
       - libxcb
       - mesa-libGL
+    recommends:
+      - xdg-desktop-portal
   archlinux:
     depends:
-      - gtk3
       - libxkbcommon
       - libx11
       - libxcb
       - libglvnd
-      - systemd-libs
 
 contents:
   - src: ${ENTROPY_BIN}
