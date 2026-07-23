@@ -54,6 +54,10 @@ impl EntropyApp {
         }
 
         self.flush_pending_tap_hold_numeric_writes();
+        if self.hid_write_lifecycle_busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            return;
+        }
         self.fallback_entropy_display_presets_before_exit();
 
         if self.deferred_exit_has_pending_hid_writes() {

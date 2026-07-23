@@ -24,12 +24,21 @@ enum SettingsWriteTarget {
     Touchpad {
         display_label: String,
     },
+    TapHold {
+        display_label: String,
+    },
+    OneShot {
+        display_label: String,
+    },
 }
 
 impl SettingsWriteTarget {
     fn display_label(&self) -> &str {
         match self {
-            Self::Module { display_label, .. } | Self::Touchpad { display_label } => display_label,
+            Self::Module { display_label, .. }
+            | Self::Touchpad { display_label }
+            | Self::TapHold { display_label }
+            | Self::OneShot { display_label } => display_label,
         }
     }
 
@@ -42,6 +51,12 @@ impl SettingsWriteTarget {
             } => format!("module group={group_title:?} field={field_title:?}"),
             Self::Touchpad { display_label } => {
                 format!("touchpad field={display_label:?}")
+            }
+            Self::TapHold { display_label } => {
+                format!("tap-hold field={display_label:?}")
+            }
+            Self::OneShot { display_label } => {
+                format!("one-shot field={display_label:?}")
             }
         }
     }
@@ -58,6 +73,8 @@ impl SettingsWriteTarget {
         &self,
         module_settings: &mut ModuleSettingsState,
         touchpad_settings: &mut TouchpadSettingsState,
+        tap_hold_settings: &mut TapHoldSettingsState,
+        one_shot_settings: &mut OneShotSettingsState,
         qsid: u16,
         readback: u16,
     ) {
@@ -71,6 +88,24 @@ impl SettingsWriteTarget {
                 124 => touchpad_settings.bits = readback.min(u8::MAX as u16) as u8,
                 142 => touchpad_settings.auto_layer_enable = readback != 0,
                 143 => touchpad_settings.auto_layer = readback.min(u8::MAX as u16) as u8,
+                _ => {}
+            },
+            Self::TapHold { .. } => match qsid {
+                7 => tap_hold_settings.tapping_term = readback,
+                18 => tap_hold_settings.tap_code_delay = readback,
+                19 => tap_hold_settings.tap_hold_caps_delay = readback,
+                20 => tap_hold_settings.tapping_toggle = readback,
+                22 => tap_hold_settings.permissive_hold = readback != 0,
+                23 => tap_hold_settings.hold_on_other_key_press = readback != 0,
+                24 => tap_hold_settings.retro_tapping = readback != 0,
+                25 => tap_hold_settings.quick_tap_term = readback,
+                26 => tap_hold_settings.chordal_hold = readback != 0,
+                27 => tap_hold_settings.flow_tap = readback,
+                _ => {}
+            },
+            Self::OneShot { .. } => match qsid {
+                5 => one_shot_settings.tap_toggle = readback.min(u8::MAX as u16) as u8,
+                6 => one_shot_settings.timeout = readback,
                 _ => {}
             },
         }
@@ -367,6 +402,44 @@ impl EntropyApp {
         });
     }
 
+    pub(super) fn queue_tap_hold_setting_write(
+        &mut self,
+        display_label: String,
+        qsid: u16,
+        width: u8,
+        old_value: u16,
+        requested: u16,
+    ) {
+        self.queue_settings_write(SettingsWriteRequest {
+            id: 0,
+            generation: self.settings_write_generation,
+            qsid,
+            width,
+            old_value,
+            requested,
+            target: SettingsWriteTarget::TapHold { display_label },
+        });
+    }
+
+    pub(super) fn queue_one_shot_setting_write(
+        &mut self,
+        display_label: String,
+        qsid: u16,
+        width: u8,
+        old_value: u16,
+        requested: u16,
+    ) {
+        self.queue_settings_write(SettingsWriteRequest {
+            id: 0,
+            generation: self.settings_write_generation,
+            qsid,
+            width,
+            old_value,
+            requested,
+            target: SettingsWriteTarget::OneShot { display_label },
+        });
+    }
+
     fn queue_settings_write(&mut self, request: SettingsWriteRequest) {
         let label = request.target.display_label().to_owned();
         let context = request.target.log_context();
@@ -549,6 +622,8 @@ impl EntropyApp {
                     request.target.reconcile_readback(
                         &mut self.module_settings,
                         &mut self.touchpad_settings,
+                        &mut self.tap_hold_settings,
+                        &mut self.one_shot_settings,
                         request.qsid,
                         readback,
                     );
@@ -586,6 +661,8 @@ impl EntropyApp {
                         request.target.reconcile_readback(
                             &mut self.module_settings,
                             &mut self.touchpad_settings,
+                            &mut self.tap_hold_settings,
+                            &mut self.one_shot_settings,
                             request.qsid,
                             *actual,
                         );
@@ -714,20 +791,95 @@ mod tests {
     fn readback_reconciliation_updates_module_and_touchpad_state() {
         let mut module_settings = ModuleSettingsState::default();
         let mut touchpad_settings = TouchpadSettingsState::default();
+        let mut tap_hold_settings = TapHoldSettingsState::default();
+        let mut one_shot_settings = OneShotSettingsState::default();
 
         SettingsWriteTarget::Module {
             group_title: "Modules".to_owned(),
             field_title: "Mode".to_owned(),
             display_label: "Mode".to_owned(),
         }
-        .reconcile_readback(&mut module_settings, &mut touchpad_settings, 7, 3);
+        .reconcile_readback(
+            &mut module_settings,
+            &mut touchpad_settings,
+            &mut tap_hold_settings,
+            &mut one_shot_settings,
+            7,
+            3,
+        );
         SettingsWriteTarget::Touchpad {
             display_label: "Scroll sensitivity".to_owned(),
         }
-        .reconcile_readback(&mut module_settings, &mut touchpad_settings, 122, 9);
+        .reconcile_readback(
+            &mut module_settings,
+            &mut touchpad_settings,
+            &mut tap_hold_settings,
+            &mut one_shot_settings,
+            122,
+            9,
+        );
+        SettingsWriteTarget::TapHold {
+            display_label: "Tap-hold timeout".to_owned(),
+        }
+        .reconcile_readback(
+            &mut module_settings,
+            &mut touchpad_settings,
+            &mut tap_hold_settings,
+            &mut one_shot_settings,
+            7,
+            175,
+        );
+        SettingsWriteTarget::OneShot {
+            display_label: "One-shot timeout".to_owned(),
+        }
+        .reconcile_readback(
+            &mut module_settings,
+            &mut touchpad_settings,
+            &mut tap_hold_settings,
+            &mut one_shot_settings,
+            6,
+            800,
+        );
 
         assert_eq!(module_settings.value(7), 3);
         assert_eq!(touchpad_settings.scroll_sens, 9);
+        assert_eq!(tap_hold_settings.tapping_term, 175);
+        assert_eq!(one_shot_settings.timeout, 800);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn tap_hold_and_one_shot_writes_match_vial_set_without_readback() {
+        let (hid_device, recorder) = crate::hid::HidDevice::test_device();
+        let tap_hold = SettingsWriteRequest {
+            id: 1,
+            generation: 0,
+            qsid: 7,
+            width: 2,
+            old_value: 250,
+            requested: 175,
+            target: SettingsWriteTarget::TapHold {
+                display_label: "Tap-hold timeout".to_owned(),
+            },
+        };
+        let one_shot = SettingsWriteRequest {
+            id: 2,
+            generation: 0,
+            qsid: 6,
+            width: 2,
+            old_value: 500,
+            requested: 800,
+            target: SettingsWriteTarget::OneShot {
+                display_label: "One-shot timeout".to_owned(),
+            },
+        };
+
+        assert_eq!(run_settings_write(&hid_device, &tap_hold).0, Ok(175));
+        assert_eq!(run_settings_write(&hid_device, &one_shot).0, Ok(800));
+
+        let requests = recorder.requests();
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().all(|request| request[1] == 0x0B));
     }
 
     #[test]

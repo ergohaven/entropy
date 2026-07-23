@@ -705,18 +705,37 @@ mod tests {
         assert_eq!(app.key_override_entries[0].trigger, 0x0004);
         app.flush_pending_key_override_writes();
 
-        let final_close_output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+        let first_close_output = ctx.run_ui(egui::RawInput::default(), |_ui| {
             app.finish_deferred_exit_after_hid_write(&ctx);
         });
-        assert!(!app.exit_after_hid_write);
+        assert!(app.exit_after_hid_write);
         assert!(app.pending_tap_hold_numeric_writes.is_empty());
-        assert_eq!(app.layout_options_value, Some(0));
-        assert!(final_close_output
+        assert!(app.settings_write_task.is_some());
+        assert!(!first_close_output
             .viewport_output
             .get(&egui::ViewportId::ROOT)
-            .expect("root viewport output exists")
-            .commands
-            .contains(&egui::ViewportCommand::Close));
+            .into_iter()
+            .flat_map(|viewport| &viewport.commands)
+            .any(|command| *command == egui::ViewportCommand::Close));
+
+        let mut close_sent = false;
+        for _ in 0..200 {
+            app.poll_settings_write(&ctx);
+            let output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+                app.finish_deferred_exit_after_hid_write(&ctx);
+            });
+            close_sent |= output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .is_some_and(|viewport| viewport.commands.contains(&egui::ViewportCommand::Close));
+            if close_sent {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(close_sent);
+        assert!(!app.exit_after_hid_write);
+        assert_eq!(app.layout_options_value, Some(0));
 
         let completed_requests = recorder.requests();
         assert_eq!(
