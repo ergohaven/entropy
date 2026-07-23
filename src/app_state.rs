@@ -854,6 +854,27 @@ impl ModuleDeviceKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PointerModeKind {
+    Normal,
+    Sniper,
+    Scroll,
+    Text,
+    Other,
+}
+
+impl PointerModeKind {
+    pub(crate) fn from_variant(variant: &str) -> Self {
+        match variant.trim().to_ascii_lowercase().as_str() {
+            "normal" => Self::Normal,
+            "sniper" => Self::Sniper,
+            "scroll" => Self::Scroll,
+            "text" => Self::Text,
+            _ => Self::Other,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ModuleSettingField {
     pub(crate) title: String,
@@ -921,12 +942,35 @@ impl ModuleSettingsGroup {
         })
     }
 
+    pub(crate) fn mode_selector_field(&self) -> Option<&ModuleSettingField> {
+        self.fields.iter().find(|field| {
+            matches!(field.kind, ModuleSettingKind::Select)
+                && self
+                    .kind
+                    .field_base_title(&field.title)
+                    .trim()
+                    .eq_ignore_ascii_case("mode")
+                && field
+                    .variants
+                    .iter()
+                    .any(|variant| PointerModeKind::from_variant(variant) != PointerModeKind::Other)
+        })
+    }
+
     pub(crate) fn selected_module_kind(&self, value: u16) -> Option<ModuleDeviceKind> {
         let field = self.module_selector_field()?;
         field
             .variants
             .get(value as usize)
             .map(|variant| ModuleDeviceKind::from_variant(variant))
+    }
+
+    pub(crate) fn selected_pointer_mode(&self, value: u16) -> Option<PointerModeKind> {
+        let field = self.mode_selector_field()?;
+        field
+            .variants
+            .get(value as usize)
+            .map(|variant| PointerModeKind::from_variant(variant))
     }
 
     pub(crate) fn field_visible_for_module(
@@ -961,6 +1005,62 @@ impl ModuleSettingsGroup {
             | "sticky mode"
             | "led blinks" => selected.is_pointing(),
             _ => true,
+        }
+    }
+
+    pub(crate) fn field_visible_for_pointer_mode(
+        &self,
+        field: &ModuleSettingField,
+        selected: PointerModeKind,
+    ) -> bool {
+        if selected == PointerModeKind::Other {
+            return true;
+        }
+        let title = self
+            .kind
+            .field_base_title(&field.title)
+            .trim()
+            .to_ascii_lowercase();
+        match title.as_str() {
+            "sniper sens" | "sniper sensitivity" | "auto layer in sniper" => {
+                selected == PointerModeKind::Sniper
+            }
+            "scroll sens"
+            | "scroll sensitivity"
+            | "invert scroll"
+            | "invert scroll vertical"
+            | "invert scroll horizontal"
+            | "auto layer in scroll" => selected == PointerModeKind::Scroll,
+            "text sens"
+            | "text sensitivity"
+            | "invert text"
+            | "invert text vertical"
+            | "invert text horizontal"
+            | "auto layer in text" => selected == PointerModeKind::Text,
+            "auto layer in normal" => selected == PointerModeKind::Normal,
+            _ => true,
+        }
+    }
+
+    pub(crate) fn field_visible_for_selection(
+        &self,
+        field: &ModuleSettingField,
+        selected_module: Option<ModuleDeviceKind>,
+        selected_mode: Option<PointerModeKind>,
+    ) -> bool {
+        match self.kind {
+            ModuleSettingsGroupKind::Left | ModuleSettingsGroupKind::Right => {
+                selected_module
+                    .map(|selected| self.field_visible_for_module(field, selected))
+                    .unwrap_or(true)
+                    && selected_mode
+                        .map(|selected| self.field_visible_for_pointer_mode(field, selected))
+                        .unwrap_or(true)
+            }
+            ModuleSettingsGroupKind::AutoLayer => selected_mode
+                .map(|selected| self.field_visible_for_pointer_mode(field, selected))
+                .unwrap_or(true),
+            ModuleSettingsGroupKind::Other => true,
         }
     }
 }

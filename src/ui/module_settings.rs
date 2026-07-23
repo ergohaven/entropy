@@ -345,11 +345,13 @@ impl EntropyApp {
         let selected_side_group = self.module_settings.selected_module_group();
         let selected_module =
             selected_side_group.and_then(|group_idx| self.selected_module_kind(group_idx));
+        let selected_mode =
+            selected_side_group.and_then(|group_idx| self.selected_pointer_mode(group_idx));
         if side_groups.len() > 1 {
             rows.push(ModuleSettingsRow::SideSelector);
         }
         if let Some(group_idx) = selected_side_group {
-            rows.extend(self.module_settings_field_rows(group_idx));
+            rows.extend(self.module_settings_field_rows(group_idx, selected_module, selected_mode));
         }
         for (group_idx, group) in self.module_settings.groups.iter().enumerate() {
             if matches!(
@@ -367,7 +369,7 @@ impl EntropyApp {
                 continue;
             }
             rows.push(ModuleSettingsRow::Section(group_idx));
-            rows.extend(self.module_settings_field_rows(group_idx));
+            rows.extend(self.module_settings_field_rows(group_idx, selected_module, selected_mode));
         }
         rows
     }
@@ -381,19 +383,30 @@ impl EntropyApp {
         group.selected_module_kind(value)
     }
 
-    fn module_settings_field_rows(&self, group_idx: usize) -> Vec<ModuleSettingsRow> {
+    fn selected_pointer_mode(&self, group_idx: usize) -> Option<PointerModeKind> {
+        let group = self.module_settings.groups.get(group_idx)?;
+        let field = group.mode_selector_field()?;
+        let value = self
+            .pending_settings_write_value(field.qsid)
+            .unwrap_or_else(|| self.module_settings.value(field.qsid));
+        group.selected_pointer_mode(value)
+    }
+
+    fn module_settings_field_rows(
+        &self,
+        group_idx: usize,
+        selected_module: Option<ModuleDeviceKind>,
+        selected_mode: Option<PointerModeKind>,
+    ) -> Vec<ModuleSettingsRow> {
         let Some(group) = self.module_settings.groups.get(group_idx) else {
             return Vec::new();
         };
-        let selected_module = self.selected_module_kind(group_idx);
         group
             .fields
             .iter()
             .enumerate()
             .filter(|(_, field)| {
-                selected_module
-                    .map(|selected| group.field_visible_for_module(field, selected))
-                    .unwrap_or(true)
+                group.field_visible_for_selection(field, selected_module, selected_mode)
             })
             .map(|(field_idx, _)| ModuleSettingsRow::Field {
                 group_idx,
@@ -685,6 +698,15 @@ mod tests {
             "Trackball".to_owned(),
             "Touchpad".to_owned(),
         ];
+        let mut mode = module_filter_field("Mode", 134);
+        mode.variants = vec![
+            "Normal".to_owned(),
+            "Sniper".to_owned(),
+            "Scroll".to_owned(),
+            "Text".to_owned(),
+            "Experimental".to_owned(),
+        ];
+        mode.max = 4;
         app.module_settings.groups = vec![
             ModuleSettingsGroup {
                 title: "Left Modules".to_owned(),
@@ -692,23 +714,38 @@ mod tests {
                 fields: vec![
                     selector,
                     module_filter_field("Encoder interval", 325),
-                    module_filter_field("Mode", 134),
+                    mode,
                     module_filter_field("Ball axis", 130),
                     module_filter_field("Touch axis", 132),
                     module_filter_field("Ball DPI", 120),
                     module_filter_field("Touch DPI", 122),
                     module_filter_field("Scroll sens", 125),
+                    module_filter_field("Sniper sens", 124),
+                    module_filter_field("Text sens", 126),
                     module_filter_field("Touch gestures", 151),
+                    module_filter_field("Invert scroll vertical", 136),
+                    module_filter_field("Invert scroll horizontal", 327),
+                    module_filter_field("Invert text vertical", 147),
+                    module_filter_field("Invert text horizontal", 329),
                     module_filter_field("Acceleration", 137),
+                    module_filter_field("Sticky mode", 140),
                 ],
             },
             ModuleSettingsGroup {
                 title: "Auto Layer".to_owned(),
                 kind: ModuleSettingsGroupKind::AutoLayer,
-                fields: vec![module_filter_field("Auto layer", 143)],
+                fields: vec![
+                    module_filter_field("Auto layer", 143),
+                    module_filter_field("Auto layer in Normal", 142),
+                    module_filter_field("Auto layer in Sniper", 144),
+                    module_filter_field("Auto layer in Scroll", 145),
+                    module_filter_field("Auto layer in Text", 146),
+                    module_filter_field("Auto layer timeout", 324),
+                ],
             },
         ];
         app.module_settings.values.insert(149, 0);
+        app.module_settings.values.insert(134, 0);
     }
 
     fn visible_module_qsids(app: &EntropyApp) -> Vec<u16> {
@@ -794,13 +831,59 @@ mod tests {
         app.module_settings.set_value(149, 2);
         assert_eq!(
             visible_module_qsids(&app),
-            vec![149, 134, 130, 120, 125, 137, 143]
+            vec![149, 134, 130, 120, 137, 140, 143, 142, 324]
         );
 
         app.module_settings.set_value(149, 3);
         assert_eq!(
             visible_module_qsids(&app),
-            vec![149, 134, 132, 122, 125, 151, 137, 143]
+            vec![149, 134, 132, 122, 151, 137, 140, 143, 142, 324]
+        );
+    }
+
+    #[test]
+    fn selected_pointer_mode_filters_rows_to_relevant_settings() {
+        let mut app = test_app();
+        add_filterable_module_groups(&mut app);
+        app.module_settings.set_value(149, 2);
+
+        assert_eq!(
+            visible_module_qsids(&app),
+            vec![149, 134, 130, 120, 137, 140, 143, 142, 324]
+        );
+
+        app.module_settings.set_value(134, 1);
+        assert_eq!(
+            visible_module_qsids(&app),
+            vec![149, 134, 130, 120, 124, 137, 140, 143, 144, 324]
+        );
+
+        app.module_settings.set_value(134, 2);
+        assert_eq!(
+            visible_module_qsids(&app),
+            vec![149, 134, 130, 120, 125, 136, 327, 137, 140, 143, 145, 324]
+        );
+
+        app.module_settings.set_value(134, 3);
+        assert_eq!(
+            visible_module_qsids(&app),
+            vec![149, 134, 130, 120, 126, 147, 329, 137, 140, 143, 146, 324]
+        );
+    }
+
+    #[test]
+    fn unknown_pointer_mode_keeps_all_mode_fields_visible() {
+        let mut app = test_app();
+        add_filterable_module_groups(&mut app);
+        app.module_settings.set_value(149, 2);
+        app.module_settings.set_value(134, 4);
+
+        assert_eq!(
+            visible_module_qsids(&app),
+            vec![
+                149, 134, 130, 120, 125, 124, 126, 136, 327, 147, 329, 137, 140, 143, 142, 144,
+                145, 146, 324
+            ]
         );
     }
 
@@ -818,11 +901,33 @@ mod tests {
 
         assert_eq!(
             visible_module_qsids(&app),
-            vec![149, 134, 130, 120, 125, 137, 143]
+            vec![149, 134, 130, 120, 137, 140, 143, 142, 324]
         );
 
         drain_hid_writes(&mut app, &ctx);
         assert_eq!(app.module_settings.value(149), 2);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn pending_pointer_mode_updates_visible_rows_immediately() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        let (hid_device, _) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        add_filterable_module_groups(&mut app);
+        app.module_settings.set_value(149, 3);
+        let mode = app.module_settings.groups[0].fields[2].clone();
+
+        app.write_module_setting_value(0, &mode, 2);
+
+        assert_eq!(
+            visible_module_qsids(&app),
+            vec![149, 134, 132, 122, 125, 151, 136, 327, 137, 140, 143, 145, 324]
+        );
+
+        drain_hid_writes(&mut app, &ctx);
+        assert_eq!(app.module_settings.value(134), 2);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
