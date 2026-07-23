@@ -1,4 +1,5 @@
 use super::*;
+use crate::keyboard::LayoutCondition;
 
 #[derive(Clone, Copy)]
 pub(crate) struct LayoutGeometry {
@@ -260,6 +261,77 @@ pub(crate) fn layout_physical_encoder_rect(
             encoder.h * geometry.unit - geometry.padding * 2.0,
         ),
     )
+}
+
+pub(crate) fn encoder_press_key_rects(
+    layout: &KeyboardLayout,
+    key_rects: &[(usize, egui::Rect)],
+    encoder_group_rects: &[(u8, egui::Rect)],
+) -> Vec<(usize, egui::Rect)> {
+    let mut press_rects = Vec::new();
+
+    for (encoder_idx, group_rect) in encoder_group_rects {
+        let center = group_rect.center();
+        let radius = group_rect.width().min(group_rect.height()) * 0.5;
+        let group_condition = encoder_group_layout_condition(layout, *encoder_idx);
+        let mut best_key: Option<(usize, bool, f32)> = None;
+
+        for (key_idx, key_rect) in key_rects {
+            if press_rects
+                .iter()
+                .any(|(assigned_key_idx, _)| assigned_key_idx == key_idx)
+            {
+                continue;
+            }
+
+            let distance = key_rect.center().distance(center);
+            let condition_matches = group_condition.is_some()
+                && layout
+                    .keys
+                    .get(*key_idx)
+                    .is_some_and(|key| key.layout_condition == group_condition);
+            if !condition_matches && distance > radius * 0.38 {
+                continue;
+            }
+
+            match best_key {
+                Some((_, best_condition_matches, _))
+                    if best_condition_matches && !condition_matches => {}
+                Some((_, best_condition_matches, best_distance))
+                    if best_condition_matches == condition_matches && distance >= best_distance => {
+                }
+                _ => best_key = Some((*key_idx, condition_matches, distance)),
+            }
+        }
+
+        if let Some((key_idx, _, _)) = best_key {
+            let press_rect = egui::Rect::from_center_size(
+                center,
+                Vec2::new(
+                    (radius * 0.88).min(group_rect.width() * 0.44),
+                    (radius * 0.48).min(group_rect.height() * 0.22),
+                ),
+            );
+            press_rects.push((key_idx, press_rect));
+        }
+    }
+
+    press_rects
+}
+
+fn encoder_group_layout_condition(
+    layout: &KeyboardLayout,
+    encoder_idx: u8,
+) -> Option<LayoutCondition> {
+    let mut conditions = layout
+        .encoders
+        .iter()
+        .filter(|encoder| encoder.encoder_idx == encoder_idx)
+        .map(|encoder| encoder.layout_condition);
+    let condition = conditions.next().flatten()?;
+    conditions
+        .all(|candidate| candidate == Some(condition))
+        .then_some(condition)
 }
 
 pub(crate) fn paint_layout_keycap(
@@ -621,6 +693,124 @@ pub(crate) fn draw_key_label(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn physical_key(layout_condition: Option<LayoutCondition>) -> PhysicalKey {
+        PhysicalKey {
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+            row: 0,
+            col: 0,
+            label: "0,0".to_owned(),
+            rotation: 0.0,
+            rotation_x: 0.0,
+            rotation_y: 0.0,
+            layout_condition,
+        }
+    }
+
+    fn physical_encoder(
+        direction: u8,
+        layout_condition: Option<LayoutCondition>,
+    ) -> PhysicalEncoder {
+        PhysicalEncoder {
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+            label: format!("0,{direction}"),
+            encoder_idx: 0,
+            direction,
+            rotation: 0.0,
+            rotation_x: 0.0,
+            rotation_y: 0.0,
+            layout_condition,
+        }
+    }
+
+    fn encoder_test_layout(
+        key_conditions: &[Option<LayoutCondition>],
+        encoder_condition: Option<LayoutCondition>,
+    ) -> KeyboardLayout {
+        KeyboardLayout {
+            name: "Encoder test".to_owned(),
+            rows: 1,
+            cols: key_conditions.len().max(1),
+            keys: key_conditions.iter().copied().map(physical_key).collect(),
+            encoders: vec![
+                physical_encoder(0, encoder_condition),
+                physical_encoder(1, encoder_condition),
+            ],
+            layers: vec![vec![0; key_conditions.len()]],
+            encoder_layers: vec![vec![0; 2]],
+            layer_names: vec![],
+            custom_keycodes: vec![],
+            layout_options: vec![],
+            live_features: Default::default(),
+            supports_rgb: false,
+            lighting_mode: None,
+            firmware: crate::firmware::FirmwareProtocol::Vial,
+        }
+    }
+
+    #[test]
+    fn encoder_press_uses_matching_layout_option_outside_circle_center() {
+        let module_condition = LayoutCondition {
+            option_idx: 0,
+            value: 0,
+        };
+        let layout = encoder_test_layout(&[None, Some(module_condition)], Some(module_condition));
+        let group_rect =
+            egui::Rect::from_center_size(egui::pos2(50.0, 50.0), egui::vec2(80.0, 80.0));
+        let key_rects = vec![
+            (
+                0,
+                egui::Rect::from_center_size(egui::pos2(50.0, 50.0), egui::vec2(20.0, 20.0)),
+            ),
+            (
+                1,
+                egui::Rect::from_center_size(egui::pos2(180.0, 50.0), egui::vec2(20.0, 20.0)),
+            ),
+        ];
+
+        let press_rects = encoder_press_key_rects(&layout, &key_rects, &[(0, group_rect)]);
+
+        assert_eq!(press_rects.len(), 1);
+        assert_eq!(press_rects[0].0, 1);
+        assert_eq!(press_rects[0].1.center(), group_rect.center());
+    }
+
+    #[test]
+    fn encoder_press_keeps_geometric_macro_pad_matching() {
+        let layout = encoder_test_layout(&[None], None);
+        let group_rect =
+            egui::Rect::from_center_size(egui::pos2(50.0, 50.0), egui::vec2(80.0, 80.0));
+        let key_rects = vec![(
+            0,
+            egui::Rect::from_center_size(egui::pos2(52.0, 50.0), egui::vec2(20.0, 20.0)),
+        )];
+
+        let press_rects = encoder_press_key_rects(&layout, &key_rects, &[(0, group_rect)]);
+
+        assert_eq!(press_rects.len(), 1);
+        assert_eq!(press_rects[0].0, 0);
+    }
+
+    #[test]
+    fn encoder_press_leaves_unrelated_distant_key_separate() {
+        let layout = encoder_test_layout(&[None], None);
+        let group_rect =
+            egui::Rect::from_center_size(egui::pos2(50.0, 50.0), egui::vec2(80.0, 80.0));
+        let key_rects = vec![(
+            0,
+            egui::Rect::from_center_size(egui::pos2(180.0, 50.0), egui::vec2(20.0, 20.0)),
+        )];
+
+        let press_rects = encoder_press_key_rects(&layout, &key_rects, &[(0, group_rect)]);
+
+        assert!(press_rects.is_empty());
+    }
 
     fn relative_luminance(color: Color32) -> f32 {
         let linear = |channel: u8| {

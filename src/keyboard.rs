@@ -45,7 +45,7 @@ pub struct PhysicalEncoder {
     pub layout_condition: Option<LayoutCondition>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LayoutCondition {
     pub option_idx: usize,
     pub value: u32,

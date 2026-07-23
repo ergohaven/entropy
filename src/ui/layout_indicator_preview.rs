@@ -78,7 +78,10 @@ fn draw_sticky_encoder_arrow(
             center.y + rad.sin() * r,
         ));
     }
-    painter.add(egui::Shape::line(points.clone(), Stroke::new(1.7_f32, color)));
+    painter.add(egui::Shape::line(
+        points.clone(),
+        Stroke::new(1.7_f32, color),
+    ));
     if points.len() >= 2 {
         let end = points[points.len() - 1];
         let prev = points[points.len() - 2];
@@ -349,38 +352,11 @@ impl EntropyApp {
             }
         }
 
-        let mut encoder_press_rects: Vec<(usize, egui::Rect)> = Vec::new();
-        for (_, group_rect, _, _) in &encoder_groups {
-            let center = group_rect.center();
-            let radius = group_rect.width().min(group_rect.height()) * 0.5;
-            let mut best_key: Option<(usize, f32)> = None;
-            for (ki, key_rect) in &key_rects {
-                if encoder_press_rects
-                    .iter()
-                    .any(|(assigned_ki, _)| assigned_ki == ki)
-                {
-                    continue;
-                }
-                let dist = key_rect.center().distance(center);
-                if dist > radius * 0.38 {
-                    continue;
-                }
-                match best_key {
-                    Some((_, best_dist)) if dist >= best_dist => {}
-                    _ => best_key = Some((*ki, dist)),
-                }
-            }
-            if let Some((ki, _)) = best_key {
-                let press_rect = egui::Rect::from_center_size(
-                    center,
-                    Vec2::new(
-                        (radius * 0.88).min(group_rect.width() * 0.44),
-                        (radius * 0.48).min(group_rect.height() * 0.22),
-                    ),
-                );
-                encoder_press_rects.push((ki, press_rect));
-            }
-        }
+        let encoder_group_rects: Vec<(u8, egui::Rect)> = encoder_groups
+            .iter()
+            .map(|(encoder_idx, rect, _, _)| (*encoder_idx, *rect))
+            .collect();
+        let encoder_press_rects = encoder_press_key_rects(layout, &key_rects, &encoder_group_rects);
 
         for (ki, key_rect) in &key_rects {
             if encoder_press_rects
