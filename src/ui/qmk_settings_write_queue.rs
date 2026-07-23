@@ -318,7 +318,10 @@ mod tests {
 
         app.flush_due_qmk_setting_writes();
 
-        assert_eq!(app.pending_settings_write_value(122), Some(12));
+        assert_eq!(
+            app.settings_write_status(122),
+            Some(&SettingsWriteStatus::Pending)
+        );
         assert!(!app.qmk_settings_write_pending());
         drain_hid_writes(&mut app, &ctx);
 

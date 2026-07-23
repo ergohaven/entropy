@@ -7,10 +7,6 @@ const SETTINGS_WRITEBACK_DELAYS: [std::time::Duration; MODULE_SETTING_READBACK_A
 ];
 const SETTINGS_WRITE_STATUS_WIDTH: f32 = 22.0;
 
-fn settings_write_control_reserve(control_width: f32, status_width: f32, item_spacing: f32) -> f32 {
-    control_width + status_width + item_spacing
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum SettingsWriteStatus {
     Pending,
@@ -20,49 +16,31 @@ pub(super) enum SettingsWriteStatus {
 
 #[derive(Clone, Debug)]
 enum SettingsWriteTarget {
-    Module {
-        group_title: String,
-        field_title: String,
-        display_label: String,
-    },
-    Touchpad {
-        display_label: String,
-    },
+    Touchpad { display_label: String },
 }
 
 impl SettingsWriteTarget {
     fn display_label(&self) -> &str {
         match self {
-            Self::Module { display_label, .. } | Self::Touchpad { display_label } => display_label,
+            Self::Touchpad { display_label } => display_label,
         }
     }
 
     fn log_context(&self) -> String {
         match self {
-            Self::Module {
-                group_title,
-                field_title,
-                ..
-            } => format!("module group={group_title:?} field={field_title:?}"),
             Self::Touchpad { display_label } => {
                 format!("touchpad field={display_label:?}")
             }
         }
     }
 
-    fn is_touchpad(&self) -> bool {
-        matches!(self, Self::Touchpad { .. })
-    }
-
     fn reconcile_readback(
         &self,
-        module_settings: &mut ModuleSettingsState,
         touchpad_settings: &mut TouchpadSettingsState,
         qsid: u16,
         readback: u16,
     ) {
         match self {
-            Self::Module { .. } => module_settings.set_value(qsid, readback),
             Self::Touchpad { .. } => match qsid {
                 120 => touchpad_settings.dpi = readback,
                 121 => touchpad_settings.sniper_sens = readback.min(u8::MAX as u16) as u8,
@@ -91,7 +69,6 @@ struct SettingsWriteRequest {
 #[derive(Clone, Debug)]
 struct SettingsWriteStatusEntry {
     request_id: u64,
-    requested: u16,
     status: SettingsWriteStatus,
 }
 
@@ -110,7 +87,6 @@ impl SettingsWriteQueueState {
             request.qsid,
             SettingsWriteStatusEntry {
                 request_id: request.id,
-                requested: request.requested,
                 status: SettingsWriteStatus::Pending,
             },
         );
@@ -125,11 +101,6 @@ impl SettingsWriteQueueState {
 
     fn status(&self, qsid: u16) -> Option<&SettingsWriteStatus> {
         self.statuses.get(&qsid).map(|entry| &entry.status)
-    }
-
-    fn pending_value(&self, qsid: u16) -> Option<u16> {
-        let entry = self.statuses.get(&qsid)?;
-        matches!(entry.status, SettingsWriteStatus::Pending).then_some(entry.requested)
     }
 
     fn complete(&mut self, request_id: u64, qsid: u16, status: SettingsWriteStatus) -> bool {
@@ -249,23 +220,6 @@ impl EntropyApp {
         metrics.value(SETTINGS_WRITE_STATUS_WIDTH)
     }
 
-    pub(super) fn settings_write_control_width(
-        &self,
-        ui: &egui::Ui,
-        metrics: crate::ui_style::ResponsiveMetrics,
-        control_width: f32,
-    ) -> f32 {
-        settings_write_control_reserve(
-            control_width,
-            self.settings_write_status_width(metrics),
-            ui.spacing().item_spacing.x,
-        )
-    }
-
-    pub(super) fn pending_settings_write_value(&self, qsid: u16) -> Option<u16> {
-        self.settings_write_queue.pending_value(qsid)
-    }
-
     #[cfg(test)]
     pub(super) fn settings_write_status(&self, qsid: u16) -> Option<&SettingsWriteStatus> {
         self.settings_write_queue.status(qsid)
@@ -332,31 +286,6 @@ impl EntropyApp {
                 response.on_hover_text(tooltip);
             }
         }
-    }
-
-    pub(super) fn queue_module_setting_write(
-        &mut self,
-        group_title: String,
-        field_title: String,
-        display_label: String,
-        qsid: u16,
-        width: u8,
-        old_value: u16,
-        requested: u16,
-    ) {
-        self.queue_settings_write(SettingsWriteRequest {
-            id: 0,
-            generation: self.settings_write_generation,
-            qsid,
-            width,
-            old_value,
-            requested,
-            target: SettingsWriteTarget::Module {
-                group_title,
-                field_title,
-                display_label,
-            },
-        });
     }
 
     pub(super) fn queue_touchpad_setting_write(
@@ -540,10 +469,8 @@ impl EntropyApp {
         let newer_debounced_value = self.pending_qmk_settings_write_value(request.qsid);
         match result {
             Ok(readback) => {
-                if request.target.is_touchpad() {
-                    self.qmk_settings_write_queue
-                        .record_confirmed_value(request.qsid, readback);
-                }
+                self.qmk_settings_write_queue
+                    .record_confirmed_value(request.qsid, readback);
                 let current = self.settings_write_queue.complete(
                     request.id,
                     request.qsid,
@@ -551,7 +478,6 @@ impl EntropyApp {
                 );
                 if current && newer_debounced_value.is_none() {
                     request.target.reconcile_readback(
-                        &mut self.module_settings,
                         &mut self.touchpad_settings,
                         request.qsid,
                         readback,
@@ -571,11 +497,9 @@ impl EntropyApp {
                 );
             }
             Err(error) => {
-                if request.target.is_touchpad() {
-                    if let ModuleSettingWritebackError::ReadbackMismatch { actual, .. } = &error {
-                        self.qmk_settings_write_queue
-                            .record_confirmed_value(request.qsid, *actual);
-                    }
+                if let ModuleSettingWritebackError::ReadbackMismatch { actual, .. } = &error {
+                    self.qmk_settings_write_queue
+                        .record_confirmed_value(request.qsid, *actual);
                 }
                 let error_text = error.to_string();
                 let current = self.settings_write_queue.complete(
@@ -586,7 +510,6 @@ impl EntropyApp {
                 if current && newer_debounced_value.is_none() {
                     if let ModuleSettingWritebackError::ReadbackMismatch { actual, .. } = &error {
                         request.target.reconcile_readback(
-                            &mut self.module_settings,
                             &mut self.touchpad_settings,
                             request.qsid,
                             *actual,
@@ -643,11 +566,6 @@ impl EntropyApp {
 mod tests {
     use super::*;
 
-    #[test]
-    fn settings_write_control_reserve_includes_inter_item_spacing() {
-        assert_eq!(settings_write_control_reserve(46.0, 22.0, 8.0), 76.0);
-    }
-
     fn request(qsid: u16, requested: u16) -> SettingsWriteRequest {
         SettingsWriteRequest {
             id: 0,
@@ -685,13 +603,10 @@ mod tests {
         let first_id = queue.enqueue(request(122, 10));
         let second_id = queue.enqueue(request(122, 11));
 
-        assert_eq!(queue.pending_value(122), Some(11));
         assert!(!queue.complete(first_id, 122, SettingsWriteStatus::Saved));
         assert_eq!(queue.status(122), Some(&SettingsWriteStatus::Pending));
-        assert_eq!(queue.pending_value(122), Some(11));
         assert!(queue.complete(second_id, 122, SettingsWriteStatus::Saved));
         assert_eq!(queue.status(122), Some(&SettingsWriteStatus::Saved));
-        assert_eq!(queue.pending_value(122), None);
     }
 
     #[test]
@@ -718,53 +633,21 @@ mod tests {
     }
 
     #[test]
-    fn readback_reconciliation_updates_module_and_touchpad_state() {
-        let mut module_settings = ModuleSettingsState::default();
+    fn readback_reconciliation_updates_touchpad_state() {
         let mut touchpad_settings = TouchpadSettingsState::default();
 
-        SettingsWriteTarget::Module {
-            group_title: "Modules".to_owned(),
-            field_title: "Mode".to_owned(),
-            display_label: "Mode".to_owned(),
-        }
-        .reconcile_readback(&mut module_settings, &mut touchpad_settings, 7, 3);
         SettingsWriteTarget::Touchpad {
             display_label: "Scroll sensitivity".to_owned(),
         }
-        .reconcile_readback(&mut module_settings, &mut touchpad_settings, 122, 9);
+        .reconcile_readback(&mut touchpad_settings, 122, 9);
 
-        assert_eq!(module_settings.value(7), 3);
         assert_eq!(touchpad_settings.scroll_sens, 9);
     }
 
     #[test]
-    fn readback_mismatch_reconciles_module_and_touchpad_state() {
+    fn readback_mismatch_reconciles_touchpad_state() {
         let mut app = test_app();
-        let mut module_request = request(7, 3);
-        module_request.target = SettingsWriteTarget::Module {
-            group_title: "Modules".to_owned(),
-            field_title: "Mode".to_owned(),
-            display_label: "Mode".to_owned(),
-        };
-        app.settings_write_queue.enqueue(module_request);
-        let module_request = app
-            .settings_write_queue
-            .pop_front()
-            .expect("queued module request");
-        app.finish_settings_write(SettingsWriteResult {
-            hid_device: None,
-            request: module_request,
-            result: Err(ModuleSettingWritebackError::ReadbackMismatch {
-                expected: 3,
-                actual: 2,
-            }),
-            disconnected: false,
-        });
-
-        let mut touchpad_request = request(122, 9);
-        touchpad_request.target = SettingsWriteTarget::Touchpad {
-            display_label: "Scroll sensitivity".to_owned(),
-        };
+        let touchpad_request = request(122, 9);
         app.settings_write_queue.enqueue(touchpad_request);
         let touchpad_request = app
             .settings_write_queue
@@ -780,7 +663,6 @@ mod tests {
             disconnected: false,
         });
 
-        assert_eq!(app.module_settings.value(7), 2);
         assert_eq!(app.touchpad_settings.scroll_sens, 7);
     }
 

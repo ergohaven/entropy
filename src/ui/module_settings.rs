@@ -129,6 +129,12 @@ enum ModuleSettingsRow {
     Field { group_idx: usize, field_idx: usize },
 }
 
+const MODULE_SETTING_WRITEBACK_DELAYS: [std::time::Duration; MODULE_SETTING_READBACK_ATTEMPTS] = [
+    std::time::Duration::from_millis(20),
+    std::time::Duration::from_millis(80),
+    std::time::Duration::from_millis(200),
+];
+
 impl EntropyApp {
     fn module_setting_display_title<'a>(
         &self,
@@ -181,32 +187,86 @@ impl EntropyApp {
 
     fn write_module_setting_value(
         &mut self,
-        _ctx: &egui::Context,
         group_idx: usize,
         field: &ModuleSettingField,
         value: u16,
     ) {
-        let group = self.module_settings.groups.get(group_idx);
-        let group_title = group
+        let group_title = self
+            .module_settings
+            .groups
+            .get(group_idx)
             .map(|group| group.title.clone())
             .unwrap_or_else(|| "Modules".to_owned());
-        let group_kind = group
-            .map(|group| group.kind)
-            .unwrap_or(ModuleSettingsGroupKind::Other);
         let field_title = field.title.clone();
-        let display_label = self.module_setting_label(group_kind, &field_title);
         let old_value = self.module_settings.value(field.qsid);
         let requested = Self::module_setting_transport_value(field, value);
 
-        self.queue_module_setting_write(
-            group_title,
-            field_title,
-            display_label,
+        let Some(hid) = self.hid_device.as_ref() else {
+            let error = crate::i18n::tr_catalog(
+                self.app_settings.language,
+                "settings_write.device_not_connected",
+            );
+            self.status_msg = crate::i18n::tr_catalog_format(
+                self.app_settings.language,
+                "settings_write.failed_status",
+                &[("setting", &field_title), ("error", error)],
+            );
+            log::warn!(
+                "module setting write skipped: group={group_title:?} field={field_title:?} qsid={} old={} requested={} readback=unavailable error=device not connected",
+                field.qsid,
+                old_value,
+                requested,
+            );
+            return;
+        };
+
+        let mut readback_attempt = 0;
+        let result = self.module_settings.write_verified_value(
             field.qsid,
-            field.width,
-            old_value,
             requested,
+            || {
+                if field.width > 1 {
+                    hid.set_qmk_setting_u16(field.qsid, requested)
+                } else {
+                    hid.set_qmk_setting_u8(field.qsid, requested as u8)
+                }
+                .map_err(|error| error.to_string())
+            },
+            || {
+                let delay = MODULE_SETTING_WRITEBACK_DELAYS
+                    [readback_attempt.min(MODULE_SETTING_WRITEBACK_DELAYS.len() - 1)];
+                readback_attempt += 1;
+                std::thread::sleep(delay);
+                if field.width > 1 {
+                    hid.get_qmk_setting_u16(field.qsid)
+                } else {
+                    hid.get_qmk_setting_u8(field.qsid)
+                        .map(|readback| readback as u16)
+                }
+                .map_err(|error| error.to_string())
+            },
         );
+
+        if let Err(error) = result {
+            let readback = match &error {
+                ModuleSettingWritebackError::ReadbackMismatch { actual, .. } => actual.to_string(),
+                _ => "unavailable".to_owned(),
+            };
+            let error_text = error.to_string();
+            self.status_msg = crate::i18n::tr_catalog_format(
+                self.app_settings.language,
+                "settings_write.failed_status",
+                &[("setting", &field_title), ("error", &error_text)],
+            );
+            log::warn!(
+                "module setting writeback failed: group={group_title:?} field={field_title:?} qsid={} old={} requested={} readback={} error={}",
+                field.qsid,
+                old_value,
+                requested,
+                readback,
+                error,
+            );
+        }
     }
 
     fn draw_module_settings_field_row(
@@ -233,14 +293,11 @@ impl EntropyApp {
         } else {
             Some(self.module_setting_tooltip(group_kind, &field))
         };
-        let raw_value = self
-            .pending_settings_write_value(field.qsid)
-            .unwrap_or_else(|| self.module_settings.value(field.qsid));
+        let raw_value = self.module_settings.value(field.qsid);
         match field.kind {
             ModuleSettingKind::Boolean => {
                 let switch_width = metrics.value(46.0);
                 let switch_size = metrics.size(46.0, 24.0);
-                let control_width = self.settings_write_control_width(ui, metrics, switch_width);
                 let mask = 1u16 << field.bit;
                 let mut checked = raw_value & mask != 0;
                 crate::ui_style::settings_list_row_with_tooltip(
@@ -250,9 +307,8 @@ impl EntropyApp {
                     label.as_str(),
                     true,
                     tooltip.as_deref(),
-                    control_width,
+                    switch_width,
                     |ui| {
-                        self.draw_settings_write_status(ui, field.qsid, metrics, suppress_tooltips);
                         let resp = crate::ui_style::settings_switch_sized_stable(
                             ui,
                             ("module_settings", group_idx, field.qsid, field.bit),
@@ -265,14 +321,13 @@ impl EntropyApp {
                             } else {
                                 raw_value & !mask
                             };
-                            self.write_module_setting_value(ui.ctx(), group_idx, &field, new_value);
+                            self.write_module_setting_value(group_idx, &field, new_value);
                         }
                     },
                 );
             }
             ModuleSettingKind::Integer => {
                 let field_width = metrics.value(86.0);
-                let control_width = self.settings_write_control_width(ui, metrics, field_width);
                 crate::ui_style::settings_list_row_with_tooltip(
                     ui,
                     content_width,
@@ -280,9 +335,8 @@ impl EntropyApp {
                     label.as_str(),
                     true,
                     tooltip.as_deref(),
-                    control_width,
+                    field_width,
                     |ui| {
-                        self.draw_settings_write_status(ui, field.qsid, metrics, suppress_tooltips);
                         let edit_id = egui::Id::new(("module_setting_edit", group_idx, field.qsid));
                         let current = raw_value.clamp(field.min, field.max);
                         let mut text = ui.ctx().data_mut(|d| {
@@ -311,12 +365,7 @@ impl EntropyApp {
                                 Ok(value) => {
                                     let value = value.clamp(field.min, field.max);
                                     if value != raw_value {
-                                        self.write_module_setting_value(
-                                            ui.ctx(),
-                                            group_idx,
-                                            &field,
-                                            value,
-                                        );
+                                        self.write_module_setting_value(group_idx, &field, value);
                                     }
                                     text = value.to_string();
                                 }
@@ -329,7 +378,6 @@ impl EntropyApp {
             }
             ModuleSettingKind::Select => {
                 let dropdown_width = metrics.value(120.0);
-                let control_width = self.settings_write_control_width(ui, metrics, dropdown_width);
                 let selected_idx = (raw_value as usize).min(field.variants.len().saturating_sub(1));
                 let variants = field
                     .variants
@@ -345,9 +393,8 @@ impl EntropyApp {
                     label.as_str(),
                     true,
                     tooltip.as_deref(),
-                    control_width,
+                    dropdown_width,
                     |ui| {
-                        self.draw_settings_write_status(ui, field.qsid, metrics, suppress_tooltips);
                         let dropdown_id = ui.make_persistent_id((
                             "module_setting_dropdown",
                             group_idx,
@@ -362,12 +409,7 @@ impl EntropyApp {
                             dropdown_width,
                         );
                         if let Some(picked) = picked {
-                            self.write_module_setting_value(
-                                ui.ctx(),
-                                group_idx,
-                                &field,
-                                picked as u16,
-                            );
+                            self.write_module_setting_value(group_idx, &field, picked as u16);
                         }
                     },
                 );
@@ -640,7 +682,13 @@ impl EntropyApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{module_setting_catalog_keys, module_setting_variant_label};
+    use super::*;
+
+    fn test_app() -> EntropyApp {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        EntropyApp::new(&creation_context)
+    }
 
     #[test]
     fn all_firmware_module_fields_have_catalog_entries_case_insensitively() {
@@ -678,6 +726,50 @@ mod tests {
         assert_eq!(
             module_setting_variant_label(crate::i18n::Language::Russian, "none"),
             "Нет"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn module_setting_write_is_synchronous_and_bypasses_async_queues() {
+        let mut app = test_app();
+        let (hid_device, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        let field = ModuleSettingField {
+            title: "Mode".to_owned(),
+            qsid: 134,
+            kind: ModuleSettingKind::Select,
+            bit: 0,
+            width: 1,
+            min: 0,
+            max: 3,
+            variants: vec![
+                "Normal".to_owned(),
+                "Sniper".to_owned(),
+                "Scroll".to_owned(),
+                "Text".to_owned(),
+            ],
+        };
+        app.module_settings.groups.push(ModuleSettingsGroup {
+            title: "Left Modules".to_owned(),
+            kind: ModuleSettingsGroupKind::Left,
+            fields: vec![field.clone()],
+        });
+
+        app.write_module_setting_value(0, &field, 2);
+
+        assert_eq!(app.module_settings.value(field.qsid), 2);
+        assert!(!app.qmk_settings_write_busy());
+        assert_eq!(app.pending_qmk_settings_write_value(field.qsid), None);
+        assert_eq!(
+            recorder
+                .requests()
+                .iter()
+                .filter(|request| {
+                    request[2] == field.qsid as u8 && request[3] == (field.qsid >> 8) as u8
+                })
+                .count(),
+            2
         );
     }
 }
