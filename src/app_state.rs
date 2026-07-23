@@ -829,6 +829,31 @@ pub(crate) enum ModuleSettingKind {
     Select,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ModuleDeviceKind {
+    None,
+    Encoder,
+    Trackball,
+    Touchpad,
+    Other,
+}
+
+impl ModuleDeviceKind {
+    pub(crate) fn from_variant(variant: &str) -> Self {
+        match variant.trim().to_ascii_lowercase().as_str() {
+            "none" => Self::None,
+            "encoder" => Self::Encoder,
+            "trackball" => Self::Trackball,
+            "touchpad" | "trackpad" => Self::Touchpad,
+            _ => Self::Other,
+        }
+    }
+
+    pub(crate) fn is_pointing(self) -> bool {
+        matches!(self, Self::Trackball | Self::Touchpad)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ModuleSettingField {
     pub(crate) title: String,
@@ -849,11 +874,95 @@ pub(crate) enum ModuleSettingsGroupKind {
     Other,
 }
 
+impl ModuleSettingsGroupKind {
+    pub(crate) fn field_base_title<'a>(self, title: &'a str) -> &'a str {
+        if matches!(self, Self::Left | Self::Right) {
+            title
+                .get(..5)
+                .filter(|prefix| {
+                    prefix.eq_ignore_ascii_case("left ") || prefix.eq_ignore_ascii_case("right ")
+                })
+                .and_then(|_| title.get(5..))
+                .unwrap_or(title)
+        } else {
+            title
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ModuleSettingsGroup {
     pub(crate) title: String,
     pub(crate) kind: ModuleSettingsGroupKind,
     pub(crate) fields: Vec<ModuleSettingField>,
+}
+
+impl ModuleSettingsGroup {
+    pub(crate) fn module_selector_field(&self) -> Option<&ModuleSettingField> {
+        self.fields.iter().find(|field| {
+            matches!(field.kind, ModuleSettingKind::Select)
+                && self
+                    .kind
+                    .field_base_title(&field.title)
+                    .trim()
+                    .eq_ignore_ascii_case("module")
+                && field.variants.iter().any(|variant| {
+                    ModuleDeviceKind::from_variant(variant) != ModuleDeviceKind::Other
+                })
+        })
+    }
+
+    pub(crate) fn supports_module_kind(&self, kind: ModuleDeviceKind) -> bool {
+        self.module_selector_field().is_some_and(|field| {
+            field
+                .variants
+                .iter()
+                .any(|variant| ModuleDeviceKind::from_variant(variant) == kind)
+        })
+    }
+
+    pub(crate) fn selected_module_kind(&self, value: u16) -> Option<ModuleDeviceKind> {
+        let field = self.module_selector_field()?;
+        field
+            .variants
+            .get(value as usize)
+            .map(|variant| ModuleDeviceKind::from_variant(variant))
+    }
+
+    pub(crate) fn field_visible_for_module(
+        &self,
+        field: &ModuleSettingField,
+        selected: ModuleDeviceKind,
+    ) -> bool {
+        let title = self
+            .kind
+            .field_base_title(&field.title)
+            .trim()
+            .to_ascii_lowercase();
+        match title.as_str() {
+            "module" => true,
+            "encoder interval" => selected == ModuleDeviceKind::Encoder,
+            "ball axis" | "ball dpi" => selected == ModuleDeviceKind::Trackball,
+            "touch axis" | "touch dpi" | "touch gestures" => selected == ModuleDeviceKind::Touchpad,
+            "mode"
+            | "scroll sens"
+            | "scroll sensitivity"
+            | "sniper sens"
+            | "sniper sensitivity"
+            | "text sens"
+            | "text sensitivity"
+            | "invert scroll"
+            | "invert scroll vertical"
+            | "invert scroll horizontal"
+            | "invert text"
+            | "invert text vertical"
+            | "invert text horizontal"
+            | "acceleration"
+            | "sticky mode"
+            | "led blinks" => selected.is_pointing(),
+            _ => true,
+        }
+    }
 }
 
 /// Keyboard-specific module settings exposed by firmware QMK Settings.

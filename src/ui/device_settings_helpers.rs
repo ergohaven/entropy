@@ -65,38 +65,11 @@ impl EntropyApp {
         }
     }
 
-    fn module_setting_base_title<'a>(
-        group_kind: ModuleSettingsGroupKind,
-        title: &'a str,
-    ) -> &'a str {
-        if matches!(
-            group_kind,
-            ModuleSettingsGroupKind::Left | ModuleSettingsGroupKind::Right
-        ) {
-            title
-                .strip_prefix("Left ")
-                .or_else(|| title.strip_prefix("Right "))
-                .unwrap_or(title)
-        } else {
-            title
-        }
-    }
-
-    fn module_setting_variant_is_encoder(variant: &str) -> bool {
-        variant.trim().eq_ignore_ascii_case("encoder")
-    }
-
     fn module_group_encoder_field(group: &ModuleSettingsGroup) -> Option<&ModuleSettingField> {
-        group.fields.iter().find(|field| {
-            matches!(field.kind, ModuleSettingKind::Select)
-                && Self::module_setting_base_title(group.kind, &field.title)
-                    .trim()
-                    .eq_ignore_ascii_case("module")
-                && field
-                    .variants
-                    .iter()
-                    .any(|variant| Self::module_setting_variant_is_encoder(variant))
-        })
+        group
+            .supports_module_kind(ModuleDeviceKind::Encoder)
+            .then(|| group.module_selector_field())
+            .flatten()
     }
 
     fn module_settings_encoder_visible_for_position(
@@ -122,12 +95,13 @@ impl EntropyApp {
         let Some(field) = Self::module_group_encoder_field(group) else {
             return true;
         };
-        let selected_idx = module_settings.value(field.qsid) as usize;
-        field
-            .variants
-            .get(selected_idx)
-            .map(|variant| Self::module_setting_variant_is_encoder(variant))
-            .unwrap_or(true)
+        match group.selected_module_kind(module_settings.value(field.qsid)) {
+            Some(ModuleDeviceKind::Encoder) => true,
+            Some(
+                ModuleDeviceKind::None | ModuleDeviceKind::Trackball | ModuleDeviceKind::Touchpad,
+            ) => false,
+            Some(ModuleDeviceKind::Other) | None => true,
+        }
     }
 
     pub(super) fn module_settings_encoder_visible(
