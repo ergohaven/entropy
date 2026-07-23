@@ -130,7 +130,14 @@ fn module_setting_variant_label(language: crate::i18n::Language, variant: &str) 
 enum ModuleSettingsRow {
     SideSelector,
     Section(usize),
-    Field { group_idx: usize, field_idx: usize },
+    Field {
+        group_idx: usize,
+        field_idx: usize,
+    },
+    EncoderVisibility {
+        encoder_idx: usize,
+        option_idx: usize,
+    },
 }
 
 impl EntropyApp {
@@ -388,6 +395,16 @@ impl EntropyApp {
         }
         if let Some(group_idx) = selected_side_group {
             rows.extend(self.module_settings_field_rows(group_idx, selected_module, selected_mode));
+            if selected_module == Some(ModuleDeviceKind::Encoder) {
+                if let Some((encoder_idx, option_idx)) =
+                    self.module_encoder_visibility_entry(group_idx)
+                {
+                    rows.push(ModuleSettingsRow::EncoderVisibility {
+                        encoder_idx,
+                        option_idx,
+                    });
+                }
+            }
         }
         for (group_idx, group) in self.module_settings.groups.iter().enumerate() {
             if matches!(
@@ -464,6 +481,33 @@ impl EntropyApp {
                 .then_some(idx)
             })
             .collect()
+    }
+
+    fn module_encoder_visibility_entry(&self, group_idx: usize) -> Option<(usize, usize)> {
+        let layout = self.layout.as_ref()?;
+        let group = self.module_settings.groups.get(group_idx)?;
+        group
+            .supports_module_kind(ModuleDeviceKind::Encoder)
+            .then(|| Self::encoder_visibility_entry_for_module_group(layout, group.kind))
+            .flatten()
+    }
+
+    pub(super) fn module_settings_include_encoder_visibility(
+        &self,
+        layout: &KeyboardLayout,
+    ) -> bool {
+        self.module_settings.supported
+            && self
+                .module_settings_side_group_indices()
+                .into_iter()
+                .any(|group_idx| {
+                    let Some(group) = self.module_settings.groups.get(group_idx) else {
+                        return false;
+                    };
+                    group.supports_module_kind(ModuleDeviceKind::Encoder)
+                        && Self::encoder_visibility_entry_for_module_group(layout, group.kind)
+                            .is_some()
+                })
     }
 
     fn module_settings_group_label(&self, group: &ModuleSettingsGroup) -> String {
@@ -595,6 +639,17 @@ impl EntropyApp {
                 content_width,
                 row_height,
                 suppress_tooltips,
+            ),
+            ModuleSettingsRow::EncoderVisibility {
+                encoder_idx,
+                option_idx,
+            } => self.draw_encoder_visibility_setting_row(
+                ui,
+                content_width,
+                row_height,
+                suppress_tooltips,
+                encoder_idx,
+                Some(option_idx),
             ),
         }
     }
@@ -785,6 +840,71 @@ mod tests {
         app.module_settings.values.insert(134, 0);
     }
 
+    fn encoder_visibility_layout(left_label: &str, right_label: &str) -> KeyboardLayout {
+        KeyboardLayout {
+            name: "Modular keyboard".to_owned(),
+            rows: 1,
+            cols: 1,
+            keys: Vec::new(),
+            encoders: [0, 1]
+                .into_iter()
+                .map(|encoder_idx| PhysicalEncoder {
+                    x: encoder_idx as f32,
+                    y: 0.0,
+                    w: 1.0,
+                    h: 1.0,
+                    label: String::new(),
+                    encoder_idx,
+                    direction: 0,
+                    rotation: 0.0,
+                    rotation_x: 0.0,
+                    rotation_y: 0.0,
+                    layout_condition: None,
+                })
+                .collect(),
+            layers: Vec::new(),
+            encoder_layers: Vec::new(),
+            layer_names: Vec::new(),
+            custom_keycodes: Vec::new(),
+            layout_options: vec![
+                LayoutOption {
+                    label: left_label.to_owned(),
+                    choices: Vec::new(),
+                },
+                LayoutOption {
+                    label: right_label.to_owned(),
+                    choices: Vec::new(),
+                },
+            ],
+            live_features: Default::default(),
+            supports_rgb: false,
+            lighting_mode: None,
+            firmware: FirmwareProtocol::Vial,
+        }
+    }
+
+    fn add_encoder_module_groups(app: &mut EntropyApp) {
+        let mut left_selector = module_filter_field("Module", 149);
+        left_selector.variants = vec!["Encoder".to_owned(), "Trackball".to_owned()];
+        let mut right_selector = module_filter_field("Module", 150);
+        right_selector.variants = left_selector.variants.clone();
+        app.module_settings.groups = vec![
+            ModuleSettingsGroup {
+                title: "Left Modules".to_owned(),
+                kind: ModuleSettingsGroupKind::Left,
+                fields: vec![left_selector],
+            },
+            ModuleSettingsGroup {
+                title: "Right Modules".to_owned(),
+                kind: ModuleSettingsGroupKind::Right,
+                fields: vec![right_selector],
+            },
+        ];
+        app.module_settings.values.insert(149, 0);
+        app.module_settings.values.insert(150, 0);
+        app.module_settings.supported = true;
+    }
+
     fn visible_module_qsids(app: &EntropyApp) -> Vec<u16> {
         app.module_settings_rows()
             .into_iter()
@@ -798,7 +918,9 @@ mod tests {
                     .get(group_idx)
                     .and_then(|group| group.fields.get(field_idx))
                     .map(|field| field.qsid),
-                ModuleSettingsRow::SideSelector | ModuleSettingsRow::Section(_) => None,
+                ModuleSettingsRow::SideSelector
+                | ModuleSettingsRow::Section(_)
+                | ModuleSettingsRow::EncoderVisibility { .. } => None,
             })
             .collect()
     }
@@ -814,6 +936,83 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         panic!("HID writes did not drain");
+    }
+
+    #[test]
+    fn modular_encoder_visibility_moves_into_selected_side_settings() {
+        let mut app = test_app();
+        add_encoder_module_groups(&mut app);
+        app.layout = Some(encoder_visibility_layout(
+            "Hide left encoder module",
+            "Hide right encoder module",
+        ));
+
+        assert!(
+            app.module_settings_include_encoder_visibility(app.layout.as_ref().expect("layout"))
+        );
+        assert!(
+            !app.show_separate_encoder_visibility_settings(app.layout.as_ref().expect("layout"))
+        );
+        assert!(app.module_settings_rows().iter().any(|row| matches!(
+            row,
+            ModuleSettingsRow::EncoderVisibility {
+                encoder_idx: 0,
+                option_idx: 0
+            }
+        )));
+
+        app.module_settings.set_selected_module_group(1);
+        assert!(app.module_settings_rows().iter().any(|row| matches!(
+            row,
+            ModuleSettingsRow::EncoderVisibility {
+                encoder_idx: 1,
+                option_idx: 1
+            }
+        )));
+    }
+
+    #[test]
+    fn phenom_encoder_labels_are_owned_by_module_settings() {
+        let mut app = test_app();
+        add_encoder_module_groups(&mut app);
+        app.layout = Some(encoder_visibility_layout(
+            "Hide left encoder",
+            "Hide right encoder",
+        ));
+
+        assert!(
+            app.module_settings_include_encoder_visibility(app.layout.as_ref().expect("layout"))
+        );
+    }
+
+    #[test]
+    fn encoder_visibility_row_is_hidden_for_selected_pointing_module() {
+        let mut app = test_app();
+        add_encoder_module_groups(&mut app);
+        app.layout = Some(encoder_visibility_layout(
+            "Hide left encoder",
+            "Hide right encoder",
+        ));
+        app.module_settings.values.insert(149, 1);
+
+        assert!(!app
+            .module_settings_rows()
+            .iter()
+            .any(|row| matches!(row, ModuleSettingsRow::EncoderVisibility { .. })));
+    }
+
+    #[test]
+    fn keyboards_without_module_settings_keep_separate_encoder_page() {
+        let mut app = test_app();
+        app.layout = Some(encoder_visibility_layout(
+            "Hide left encoder",
+            "Hide right encoder",
+        ));
+
+        assert!(
+            !app.module_settings_include_encoder_visibility(app.layout.as_ref().expect("layout"))
+        );
+        assert!(app.show_separate_encoder_visibility_settings(app.layout.as_ref().expect("layout")));
     }
 
     #[test]

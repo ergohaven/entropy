@@ -1849,6 +1849,8 @@ mod tests {
     fn encoder_layout_option_requires_boolean_hide_label() {
         for label in [
             "Hide encoder",
+            "Hide left encoder",
+            "Hide right encoder",
             "Hide left encoder module",
             "Hide right encoder module",
         ] {

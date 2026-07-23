@@ -31,7 +31,7 @@ impl EntropyApp {
             let layer_leds_available_for_menu = self.layer_led_settings.supported;
             let show_rgb_item = rgb_available_for_menu;
             let show_layer_leds_item = layer_leds_available_for_menu;
-            let show_encoders_item = layout.encoder_count() > 0;
+            let show_encoders_item = self.show_separate_encoder_visibility_settings(layout);
             let show_layout_options_item = layout
                 .layout_options
                 .iter()
