@@ -1243,8 +1243,22 @@ pub(crate) struct OneShotSettingsState {
     pub(crate) tap_toggle: u8,
     /// qsid 6: Timeout in milliseconds before one-shot state is released
     pub(crate) timeout: u16,
-    /// Whether qsid 5 was readable (firmware support flag)
+    /// Bitset of one-shot qsids advertised by this firmware.
+    pub(crate) supported_qsids: u64,
+    /// Whether at least one one-shot setting was readable.
     pub(crate) supported: bool,
+}
+
+impl OneShotSettingsState {
+    pub(crate) fn set_qsid_supported(&mut self, qsid: u16) {
+        if qsid < u64::BITS as u16 {
+            self.supported_qsids |= 1u64 << qsid;
+        }
+    }
+
+    pub(crate) fn supports_qsid(&self, qsid: u16) -> bool {
+        qsid < u64::BITS as u16 && self.supported_qsids & (1u64 << qsid) != 0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]

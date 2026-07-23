@@ -1167,24 +1167,29 @@ impl EntropyApp {
 
                 let one_shot_settings = {
                     let mut os = OneShotSettingsState::default();
-                    match has_qmk_setting(5).then(|| dev_conn.get_qmk_setting_u8(5)) {
-                        Some(Ok(v)) => {
-                            os.tap_toggle = v;
-                            os.supported = true;
-                            os.timeout = if has_qmk_setting(6) {
-                                dev_conn.get_qmk_setting_u16(6).unwrap_or_else(|e| {
-                                    log::warn!("get_qmk_setting_u16(one_shot timeout qsid 6): {e}");
-                                    0
-                                })
-                            } else {
-                                0
-                            };
+                    if has_qmk_setting(5) {
+                        match dev_conn.get_qmk_setting_u8(5) {
+                            Ok(value) => {
+                                os.tap_toggle = value;
+                                os.set_qsid_supported(5);
+                            }
+                            Err(e) => {
+                                log::warn!("get_qmk_setting_u8(one_shot tap toggle qsid 5): {e}");
+                            }
                         }
-                        Some(Err(e)) => {
-                            log::warn!("get_qmk_setting_u8(one_shot tap toggle qsid 5): {e}");
-                        }
-                        None => {}
                     }
+                    if has_qmk_setting(6) {
+                        match dev_conn.get_qmk_setting_u16(6) {
+                            Ok(value) => {
+                                os.timeout = value;
+                                os.set_qsid_supported(6);
+                            }
+                            Err(e) => {
+                                log::warn!("get_qmk_setting_u16(one_shot timeout qsid 6): {e}");
+                            }
+                        }
+                    }
+                    os.supported = os.supported_qsids != 0;
                     os
                 };
 

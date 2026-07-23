@@ -54,6 +54,20 @@ fn push_tap_hold_row(
     }
 }
 
+fn push_one_shot_row(
+    rows: &mut Vec<SettingsRow>,
+    settings: &OneShotSettingsState,
+    row: SettingsRow,
+) {
+    let SettingsRow::Setting { qsid, .. } = row else {
+        rows.push(row);
+        return;
+    };
+    if settings.supports_qsid(qsid) {
+        rows.push(row);
+    }
+}
+
 fn tap_hold_one_shot_rows(
     lang: crate::i18n::Language,
     tap_hold_settings: &TapHoldSettingsState,
@@ -264,7 +278,9 @@ fn tap_hold_one_shot_rows(
                 "tap_hold_settings.one_shot_keys",
             )));
         }
-        rows.extend([
+        push_one_shot_row(
+            &mut rows,
+            one_shot_settings,
             SettingsRow::Setting {
                 kind: SettingsRowKind::OneShot,
                 qsid: 5,
@@ -276,6 +292,10 @@ fn tap_hold_one_shot_rows(
                 is_bool: false,
                 max: ONE_SHOT_TAP_TOGGLE_MAX_TAPS,
             },
+        );
+        push_one_shot_row(
+            &mut rows,
+            one_shot_settings,
             SettingsRow::Setting {
                 kind: SettingsRowKind::OneShot,
                 qsid: 6,
@@ -287,7 +307,7 @@ fn tap_hold_one_shot_rows(
                 is_bool: false,
                 max: ONE_SHOT_TIMEOUT_MAX_MS,
             },
-        ]);
+        );
     }
     rows
 }
@@ -826,6 +846,29 @@ mod tests {
         assert_eq!(labels.get(&19), Some(&"Caps Lock tap interval"));
         assert_eq!(labels.get(&26), Some(&"Same-hand tap"));
         assert_eq!(labels.get(&27), Some(&"Fast-typing window"));
+    }
+
+    #[test]
+    fn one_shot_rows_follow_advertised_qsids_independently() {
+        let mut one_shot = OneShotSettingsState::default();
+        one_shot.supported = true;
+        one_shot.set_qsid_supported(6);
+
+        let rows = tap_hold_one_shot_rows(
+            crate::i18n::Language::English,
+            &TapHoldSettingsState::default(),
+            &one_shot,
+            true,
+        );
+        let qsids: Vec<u16> = rows
+            .iter()
+            .filter_map(|row| match row {
+                SettingsRow::Setting { qsid, .. } => Some(*qsid),
+                SettingsRow::Section(_) => None,
+            })
+            .collect();
+
+        assert_eq!(qsids, vec![6]);
     }
 
     #[test]

@@ -37,6 +37,13 @@ fn truncate_qmk_string_payload(value: &str, max_decoded: usize, max_escaped: usi
 
 use anyhow::Result;
 
+fn qmk_setting_set_succeeded(command: &[u8; MSG_LEN], response: &[u8; MSG_LEN]) -> bool {
+    // Vial/QMK returns a status byte. RMK built-in behavior settings echo the
+    // complete SET report, while RMK device settings replace only byte zero
+    // with the success status.
+    response[0] == 0 || response == command
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct BatteryHalves {
     pub(crate) left: Option<u8>,
@@ -193,7 +200,7 @@ impl HidDevice {
         cmd[2..4].copy_from_slice(&qsid.to_le_bytes());
         cmd[4] = value;
         let resp = self.usb_send(&cmd)?;
-        if resp[0] != 0 {
+        if !qmk_setting_set_succeeded(&cmd, &resp) {
             anyhow::bail!("qmk setting set error or unsupported qsid: {qsid}");
         }
         Ok(())
@@ -218,7 +225,7 @@ impl HidDevice {
         cmd[2..4].copy_from_slice(&qsid.to_le_bytes());
         cmd[4..6].copy_from_slice(&value.to_le_bytes());
         let resp = self.usb_send(&cmd)?;
-        if resp[0] != 0 {
+        if !qmk_setting_set_succeeded(&cmd, &resp) {
             anyhow::bail!("qmk setting set error or unsupported qsid: {qsid}");
         }
         Ok(())
@@ -255,7 +262,7 @@ impl HidDevice {
         cmd[4 + payload.len()] = 0;
 
         let resp = self.usb_send(&cmd)?;
-        if resp[0] != 0 {
+        if !qmk_setting_set_succeeded(&cmd, &resp) {
             anyhow::bail!("qmk setting set error or unsupported qsid: {qsid}");
         }
         Ok(())
@@ -389,6 +396,40 @@ impl HidDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepts_vial_status_and_rmk_echo_setting_set_responses() {
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_VIAL_PREFIX;
+        command[1] = CMD_VIAL_QMK_SETTINGS_SET;
+        command[2..4].copy_from_slice(&7u16.to_le_bytes());
+        command[4..6].copy_from_slice(&175u16.to_le_bytes());
+
+        let vial_success = [0u8; MSG_LEN];
+        let mut rmk_device_setting_success = command;
+        rmk_device_setting_success[0] = 0;
+        let rmk_builtin_success = command;
+
+        assert!(qmk_setting_set_succeeded(&command, &vial_success));
+        assert!(qmk_setting_set_succeeded(
+            &command,
+            &rmk_device_setting_success
+        ));
+        assert!(qmk_setting_set_succeeded(&command, &rmk_builtin_success));
+    }
+
+    #[test]
+    fn rejects_qmk_setting_set_error_response() {
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_VIAL_PREFIX;
+        command[1] = CMD_VIAL_QMK_SETTINGS_SET;
+        command[2..4].copy_from_slice(&7u16.to_le_bytes());
+
+        let mut error = [0u8; MSG_LEN];
+        error[0] = u8::MAX;
+
+        assert!(!qmk_setting_set_succeeded(&command, &error));
+    }
 
     #[test]
     fn truncate_short_ascii_is_unchanged() {
