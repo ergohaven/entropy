@@ -789,6 +789,12 @@ pub(crate) struct BluetoothSelectSetting {
     pub(crate) variants: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct BluetoothBooleanSetting {
+    pub(crate) qsid: u16,
+    pub(crate) value: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BluetoothProfileColorSetting {
     pub(crate) profile: usize,
@@ -800,6 +806,8 @@ pub(crate) struct BluetoothProfileColorSetting {
 pub(crate) struct BluetoothSettingsState {
     /// Sleep timeout before the keyboard enters Bluetooth sleep mode
     pub(crate) sleep_timeout: Option<BluetoothSelectSetting>,
+    /// Whether the halves show yellow/green battery charging status on their LEDs
+    pub(crate) charge_indicator: Option<BluetoothBooleanSetting>,
     /// Palette color index for each firmware-supported Bluetooth profile
     pub(crate) profile_colors: Vec<BluetoothProfileColorSetting>,
     /// Whether any Bluetooth setting was readable and advertised by firmware
@@ -808,7 +816,9 @@ pub(crate) struct BluetoothSettingsState {
 
 impl BluetoothSettingsState {
     pub(crate) fn row_count(&self) -> usize {
-        self.sleep_timeout.is_some() as usize + self.profile_colors.len()
+        self.sleep_timeout.is_some() as usize
+            + self.charge_indicator.is_some() as usize
+            + self.profile_colors.len()
     }
 }
 

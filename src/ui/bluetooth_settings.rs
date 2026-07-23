@@ -60,6 +60,7 @@ fn bluetooth_timeout_variant_label(language: crate::i18n::Language, variant: &st
 #[derive(Clone, Copy)]
 enum BluetoothRow {
     SleepTimeout,
+    ChargeIndicator,
     ProfileColor(usize),
 }
 
@@ -162,6 +163,9 @@ impl EntropyApp {
         if self.bluetooth_settings.sleep_timeout.is_some() {
             rows.push(BluetoothRow::SleepTimeout);
         }
+        if self.bluetooth_settings.charge_indicator.is_some() {
+            rows.push(BluetoothRow::ChargeIndicator);
+        }
         rows.extend(
             (0..self.bluetooth_settings.profile_colors.len()).map(BluetoothRow::ProfileColor),
         );
@@ -179,6 +183,8 @@ impl EntropyApp {
         let content_width = metrics.settings_row_content_width();
         let row_height = metrics.settings_row_height();
         let dropdown_width = metrics.value(156.0);
+        let switch_width = metrics.value(46.0);
+        let switch_size = metrics.size(46.0, 24.0);
 
         for row_idx in row_range {
             let Some(row) = rows.get(row_idx).copied() else {
@@ -219,6 +225,42 @@ impl EntropyApp {
                         },
                         setting,
                         variants,
+                    );
+                }
+                BluetoothRow::ChargeIndicator => {
+                    let Some(setting) = self.bluetooth_settings.charge_indicator else {
+                        continue;
+                    };
+                    let mut enabled = setting.value;
+                    crate::ui_style::settings_list_row_with_tooltip(
+                        ui,
+                        content_width,
+                        row_height,
+                        crate::i18n::tr_catalog(
+                            self.app_settings.language,
+                            "bluetooth_settings.charge_indicator",
+                        ),
+                        true,
+                        if suppress_tooltips {
+                            None
+                        } else {
+                            Some(crate::i18n::tr_catalog(
+                                self.app_settings.language,
+                                "bluetooth_settings.charge_indicator_tooltip",
+                            ))
+                        },
+                        switch_width,
+                        |ui| {
+                            let response = crate::ui_style::settings_switch_sized_stable(
+                                ui,
+                                ("bluetooth_settings", "charge_indicator", setting.qsid),
+                                &mut enabled,
+                                switch_size,
+                            );
+                            if response.changed() {
+                                self.write_bluetooth_charge_indicator(setting, enabled);
+                            }
+                        },
                     );
                 }
                 BluetoothRow::ProfileColor(idx) => {
@@ -337,11 +379,41 @@ impl EntropyApp {
             );
         }
     }
+
+    fn write_bluetooth_charge_indicator(
+        &mut self,
+        setting: BluetoothBooleanSetting,
+        enabled: bool,
+    ) {
+        let Some(hid) = &self.hid_device else {
+            return;
+        };
+        match hid.set_qmk_setting_u8(setting.qsid, u8::from(enabled)) {
+            Ok(()) => {
+                if let Some(current) = &mut self.bluetooth_settings.charge_indicator {
+                    if current.qsid == setting.qsid {
+                        current.value = enabled;
+                    }
+                }
+            }
+            Err(e) => {
+                self.status_msg = format!(
+                    "Failed to save Bluetooth setting (qsid {}): {}",
+                    setting.qsid, e
+                );
+                log::warn!(
+                    "set_qmk_setting(bluetooth charge indicator qsid {}) failed: {e}",
+                    setting.qsid
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::bluetooth_timeout_variant_label;
+    use crate::app::app_state::{BluetoothBooleanSetting, BluetoothSettingsState};
     use crate::i18n::Language;
 
     #[test]
@@ -367,5 +439,17 @@ mod tests {
             bluetooth_timeout_variant_label(Language::Russian, "Firmware default"),
             "Firmware default"
         );
+    }
+
+    #[test]
+    fn charge_indicator_adds_one_firmware_gated_row() {
+        let mut settings = BluetoothSettingsState::default();
+        assert_eq!(settings.row_count(), 0);
+
+        settings.charge_indicator = Some(BluetoothBooleanSetting {
+            qsid: 331,
+            value: true,
+        });
+        assert_eq!(settings.row_count(), 1);
     }
 }

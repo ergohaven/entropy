@@ -1140,11 +1140,13 @@ layer_selected_automatically_while_the_touchpad_is_active = "Слой, выби�
 
 [bluetooth_settings]
 title = "Bluetooth-настройки"
-description = "Таймаут сна и цвета LED для Bluetooth-профилей"
+description = "Таймаут сна, индикатор зарядки и цвета LED для Bluetooth-профилей"
 unavailable = "Bluetooth-настройки недоступны в этой прошивке"
 connect = "Подключите Vial-устройство, чтобы менять Bluetooth-настройки"
 sleep_timeout = "Таймаут сна"
 sleep_timeout_tooltip = "Время простоя до перехода клавиатуры в Bluetooth-сон"
+charge_indicator = "Индикатор зарядки"
+charge_indicator_tooltip = "Показывать жёлтый при зарядке и зелёный от 95% на подключённой половинке"
 timeout_never = "Никогда"
 timeout_minutes_one = "{value} минута"
 timeout_minutes_few = "{value} минуты"

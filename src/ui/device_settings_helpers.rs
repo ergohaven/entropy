@@ -429,6 +429,23 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    fn read_bluetooth_boolean_setting(
+        dev_conn: &crate::hid::HidDevice,
+        field: &serde_json::Value,
+        qsid: u16,
+        label: &str,
+    ) -> Option<BluetoothBooleanSetting> {
+        if field.get("type").and_then(|value| value.as_str()) != Some("boolean") {
+            return None;
+        }
+        let value = dev_conn.get_qmk_setting_u8(qsid).unwrap_or_else(|e| {
+            log::warn!("get_qmk_setting({label} qsid {qsid}): {e}");
+            0
+        }) != 0;
+        Some(BluetoothBooleanSetting { qsid, value })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn read_bluetooth_settings(
         json: &serde_json::Value,
         supported_qmk_settings: &[u16],
@@ -436,6 +453,7 @@ impl EntropyApp {
     ) -> BluetoothSettingsState {
         let has_qmk_setting = |qsid: u16| supported_qmk_settings.contains(&qsid);
         let mut sleep_timeout = None;
+        let mut charge_indicator = None;
         let mut profile_colors = Vec::<(usize, BluetoothSelectSetting)>::new();
 
         if let Some(tabs) = json.get("settings").and_then(|value| value.as_array()) {
@@ -473,6 +491,13 @@ impl EntropyApp {
                         qsid,
                         "bluetooth sleep timeout",
                     );
+                } else if lower_title.contains("charge") && lower_title.contains("indicator") {
+                    charge_indicator = Self::read_bluetooth_boolean_setting(
+                        dev_conn,
+                        field,
+                        qsid,
+                        "bluetooth charge indicator",
+                    );
                 } else if lower_title.contains("bt profile") && lower_title.contains("color") {
                     if let Some(profile) =
                         Self::parse_trailing_setting_index(&lower_title, "bt profile", "color")
@@ -496,10 +521,12 @@ impl EntropyApp {
             .filter(|(profile, _)| *profile <= 4)
             .map(|(profile, setting)| BluetoothProfileColorSetting { profile, setting })
             .collect::<Vec<_>>();
-        let supported = sleep_timeout.is_some() || !profile_colors.is_empty();
+        let supported =
+            sleep_timeout.is_some() || charge_indicator.is_some() || !profile_colors.is_empty();
 
         BluetoothSettingsState {
             sleep_timeout,
+            charge_indicator,
             profile_colors,
             supported,
         }
