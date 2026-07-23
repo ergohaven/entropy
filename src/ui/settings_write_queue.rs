@@ -50,6 +50,10 @@ impl SettingsWriteTarget {
         matches!(self, Self::Touchpad { .. })
     }
 
+    fn verifies_readback(&self) -> bool {
+        self.is_touchpad()
+    }
+
     fn reconcile_readback(
         &self,
         module_settings: &mut ModuleSettingsState,
@@ -179,23 +183,21 @@ fn run_settings_write(
     request: &SettingsWriteRequest,
 ) -> (Result<u16, ModuleSettingWritebackError>, bool) {
     let disconnected = std::cell::Cell::new(false);
-    let mut readback_attempt = 0;
-    let mut state = ModuleSettingsState::default();
-    let result = state.write_verified_value(
-        request.qsid,
-        request.requested,
-        || {
-            let result = if request.width > 1 {
-                hid.set_qmk_setting_u16(request.qsid, request.requested)
-            } else {
-                hid.set_qmk_setting_u8(request.qsid, request.requested as u8)
-            };
-            result.map_err(|error| {
-                disconnected.set(crate::hid::is_disconnect_error(&error));
-                error.to_string()
-            })
-        },
-        || {
+    let write = || {
+        let result = if request.width > 1 {
+            hid.set_qmk_setting_u16(request.qsid, request.requested)
+        } else {
+            hid.set_qmk_setting_u8(request.qsid, request.requested as u8)
+        };
+        result.map_err(|error| {
+            disconnected.set(crate::hid::is_disconnect_error(&error));
+            error.to_string()
+        })
+    };
+    let result = if request.target.verifies_readback() {
+        let mut readback_attempt = 0;
+        let mut state = ModuleSettingsState::default();
+        state.write_verified_value(request.qsid, request.requested, write, || {
             let delay = SETTINGS_WRITEBACK_DELAYS
                 [readback_attempt.min(SETTINGS_WRITEBACK_DELAYS.len() - 1)];
             readback_attempt += 1;
@@ -210,8 +212,12 @@ fn run_settings_write(
                 disconnected.set(crate::hid::is_disconnect_error(&error));
                 error.to_string()
             })
-        },
-    );
+        })
+    } else {
+        write()
+            .map(|()| request.requested)
+            .map_err(ModuleSettingWritebackError::SetFailed)
+    };
     (result, disconnected.get())
 }
 

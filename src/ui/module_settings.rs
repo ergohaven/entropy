@@ -711,7 +711,7 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn module_setting_write_uses_immediate_worker_without_debounce() {
+    fn module_setting_write_matches_vial_set_without_readback_or_debounce() {
         let ctx = egui::Context::default();
         let mut app = test_app();
         let (hid_device, recorder) = crate::hid::HidDevice::test_device();
@@ -740,7 +740,7 @@ mod tests {
                     request[2] == field.qsid as u8 && request[3] == (field.qsid >> 8) as u8
                 })
                 .count(),
-            2
+            1
         );
     }
 
@@ -782,7 +782,7 @@ mod tests {
                     request[2] == field.qsid as u8 && request[3] == (field.qsid >> 8) as u8
                 })
                 .count(),
-            2
+            1
         );
     }
 }
