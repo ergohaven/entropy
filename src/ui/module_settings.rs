@@ -164,6 +164,32 @@ impl EntropyApp {
         }
     }
 
+    fn module_setting_select_variant_indices(
+        group: &ModuleSettingsGroup,
+        field: &ModuleSettingField,
+    ) -> Vec<usize> {
+        let all_indices = (0..field.variants.len()).collect::<Vec<_>>();
+        let is_module_selector = group
+            .module_selector_field()
+            .is_some_and(|selector| selector.qsid == field.qsid);
+        if !is_module_selector {
+            return all_indices;
+        }
+
+        let configurable_indices = all_indices
+            .iter()
+            .copied()
+            .filter(|idx| {
+                ModuleDeviceKind::from_variant(&field.variants[*idx]) != ModuleDeviceKind::None
+            })
+            .collect::<Vec<_>>();
+        if configurable_indices.is_empty() {
+            all_indices
+        } else {
+            configurable_indices
+        }
+    }
+
     fn write_module_setting_value(
         &mut self,
         group_idx: usize,
@@ -304,10 +330,14 @@ impl EntropyApp {
             }
             ModuleSettingKind::Select => {
                 let dropdown_width = metrics.value(120.0);
-                let selected_idx = (raw_value as usize).min(field.variants.len().saturating_sub(1));
-                let variants = field
-                    .variants
+                let variant_indices = Self::module_setting_select_variant_indices(group, &field);
+                let selected_idx = variant_indices
                     .iter()
+                    .position(|idx| *idx == raw_value as usize)
+                    .unwrap_or(0);
+                let variants = variant_indices
+                    .iter()
+                    .filter_map(|idx| field.variants.get(*idx))
                     .map(|variant| {
                         module_setting_variant_label(self.app_settings.language, variant)
                     })
@@ -334,8 +364,10 @@ impl EntropyApp {
                             &variants,
                             dropdown_width,
                         );
-                        if let Some(picked) = picked {
-                            self.write_module_setting_value(group_idx, &field, picked as u16);
+                        if let Some(raw_index) =
+                            picked.and_then(|idx| variant_indices.get(idx).copied())
+                        {
+                            self.write_module_setting_value(group_idx, &field, raw_index as u16);
                         }
                     },
                 );
@@ -825,11 +857,36 @@ mod tests {
     }
 
     #[test]
+    fn module_selector_hides_none_without_shifting_transport_values() {
+        let mut app = test_app();
+        add_filterable_module_groups(&mut app);
+        let group = &app.module_settings.groups[0];
+        let field = &group.fields[0];
+
+        assert_eq!(
+            EntropyApp::module_setting_select_variant_indices(group, field),
+            vec![1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn stored_none_falls_back_to_first_configurable_module() {
+        let mut app = test_app();
+        add_filterable_module_groups(&mut app);
+        let group = &app.module_settings.groups[0];
+
+        assert_eq!(
+            group.selected_module_kind(0),
+            Some(ModuleDeviceKind::Encoder)
+        );
+    }
+
+    #[test]
     fn selected_module_filters_rows_to_relevant_settings() {
         let mut app = test_app();
         add_filterable_module_groups(&mut app);
 
-        assert_eq!(visible_module_qsids(&app), vec![149]);
+        assert_eq!(visible_module_qsids(&app), vec![149, 325, 332]);
 
         app.module_settings.set_value(149, 1);
         assert_eq!(visible_module_qsids(&app), vec![149, 325, 332]);
