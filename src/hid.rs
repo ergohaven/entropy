@@ -799,7 +799,7 @@ fn response_matches_vial_command(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
         CMD_VIAL_UNLOCK_POLL => matches!(resp[0], 0 | 1) && matches!(resp[1], 0 | 1),
         CMD_VIAL_QMK_SETTINGS_QUERY => response_matches_qmk_settings_query(command, resp),
         CMD_VIAL_QMK_SETTINGS_GET => response_matches_qmk_settings_get(command, resp),
-        CMD_VIAL_QMK_SETTINGS_SET => response_echoes_vial_command(command, resp),
+        CMD_VIAL_QMK_SETTINGS_SET => response_matches_qmk_settings_set(command, resp),
         CMD_VIAL_DYNAMIC_ENTRY_OP
         | CMD_VIAL_GET_ENCODER
         | CMD_VIAL_SET_ENCODER
@@ -815,6 +815,14 @@ fn response_echoes_vial_command(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
         && command.len() <= MSG_LEN
         && resp[1..command.len()] == command[1..]
         && resp[command.len()..].iter().all(|byte| *byte == 0)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn response_matches_qmk_settings_set(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
+    // RMK echoes the SET payload, while Vial/QMK implementations may return
+    // only the success/error status byte.
+    response_echoes_vial_command(command, resp)
+        || (matches!(resp[0], 0 | u8::MAX) && resp[1..].iter().all(|byte| *byte == 0))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1063,6 +1071,18 @@ mod tests {
         response[0] = 0;
 
         assert!(response_matches_command(&command, &response));
+    }
+
+    #[test]
+    fn qmk_settings_set_accepts_status_only_response() {
+        let mut command = qmk_settings_command(CMD_VIAL_QMK_SETTINGS_SET, 300);
+        command[4..6].copy_from_slice(&2048u16.to_le_bytes());
+        let success = [0u8; MSG_LEN];
+        let mut error = [0u8; MSG_LEN];
+        error[0] = u8::MAX;
+
+        assert!(response_matches_command(&command, &success));
+        assert!(response_matches_command(&command, &error));
     }
 
     #[test]
