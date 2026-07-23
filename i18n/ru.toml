@@ -1217,6 +1217,8 @@ issue_empty_replacement = "Текст замены пустой"
 issue_duplicate_trigger = "Другое правило уже использует этот триггер"
 
 [encoder_settings]
+hide = "Скрыть"
+hide_tooltip = "Скрыть энкодер выбранной половинки на раскладке в главном меню"
 left_encoder = "Левый энкодер"
 left_encoder_tooltip = "Показывать левый энкодер на раскладке в главном меню"
 right_encoder = "Правый энкодер"

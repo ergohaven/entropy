@@ -389,7 +389,7 @@ pub(super) fn encoder_visibility_path(device_id: &str) -> std::path::PathBuf {
     dir.join(format!("encoder_visibility_{}.json", slug))
 }
 
-fn load_encoder_visibility_from_id(device_id: &str, count: usize) -> Option<Vec<bool>> {
+pub(super) fn load_saved_encoder_visibility(device_id: &str, count: usize) -> Option<Vec<bool>> {
     let path = encoder_visibility_path(device_id);
     let data = std::fs::read_to_string(&path).ok()?;
     let mut v = serde_json::from_str::<Vec<bool>>(&data).ok()?;
@@ -398,13 +398,6 @@ fn load_encoder_visibility_from_id(device_id: &str, count: usize) -> Option<Vec<
         v.push(true);
     }
     Some(v)
-}
-
-pub(super) fn load_encoder_visibility(device_id: &str, count: usize) -> Vec<bool> {
-    if count == 0 {
-        return vec![];
-    }
-    load_encoder_visibility_from_id(device_id, count).unwrap_or_else(|| vec![true; count])
 }
 
 pub(super) fn save_encoder_visibility(visibility: &[bool], device_id: &str) {

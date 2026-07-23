@@ -1217,6 +1217,8 @@ issue_empty_replacement = "Replacement is empty"
 issue_duplicate_trigger = "Another rule already uses this trigger"
 
 [encoder_settings]
+hide = "Hide"
+hide_tooltip = "Hide the selected half's encoder on the main layout"
 left_encoder = "Left encoder"
 left_encoder_tooltip = "Show the left encoder on the main layout"
 right_encoder = "Right encoder"

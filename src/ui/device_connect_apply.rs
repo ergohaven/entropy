@@ -465,12 +465,16 @@ impl EntropyApp {
                 );
 
                 let encoder_count = r.layout.encoder_count();
-                self.encoder_visibility =
-                    load_encoder_visibility(&self.current_encoder_visibility_id, encoder_count);
-                Self::apply_encoder_layout_options_to_visibility(
+                let hide_modular_encoders_by_default =
+                    self.module_settings_include_encoder_visibility(&r.layout);
+                self.encoder_visibility = Self::resolve_initial_encoder_visibility(
                     &r.layout,
                     self.layout_options_value,
-                    &mut self.encoder_visibility,
+                    load_saved_encoder_visibility(
+                        &self.current_encoder_visibility_id,
+                        encoder_count,
+                    ),
+                    hide_modular_encoders_by_default,
                 );
 
                 // Populate picker

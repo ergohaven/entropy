@@ -643,13 +643,13 @@ impl EntropyApp {
             ModuleSettingsRow::EncoderVisibility {
                 encoder_idx,
                 option_idx,
-            } => self.draw_encoder_visibility_setting_row(
+            } => self.draw_module_encoder_visibility_setting_row(
                 ui,
                 content_width,
                 row_height,
                 suppress_tooltips,
                 encoder_idx,
-                Some(option_idx),
+                option_idx,
             ),
         }
     }

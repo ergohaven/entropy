@@ -6,6 +6,12 @@ enum EncoderVisibilitySide {
     Right,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EncoderVisibilitySwitchSemantics {
+    Show,
+    Hide,
+}
+
 fn encoder_visibility_side(layout_option: &LayoutOption) -> Option<EncoderVisibilitySide> {
     let label = layout_option.label.to_ascii_lowercase();
     if label.split_whitespace().any(|word| word == "left") {
@@ -21,7 +27,15 @@ fn encoder_visibility_copy(
     language: crate::i18n::Language,
     encoder_idx: usize,
     layout_option: Option<&LayoutOption>,
+    semantics: EncoderVisibilitySwitchSemantics,
 ) -> (String, String) {
+    if semantics == EncoderVisibilitySwitchSemantics::Hide {
+        return (
+            crate::i18n::tr_catalog(language, "encoder_settings.hide").to_owned(),
+            crate::i18n::tr_catalog(language, "encoder_settings.hide_tooltip").to_owned(),
+        );
+    }
+
     let (label_key, tooltip_key) = match layout_option.and_then(encoder_visibility_side) {
         Some(EncoderVisibilitySide::Left) => (
             "encoder_settings.left_encoder",
@@ -90,6 +104,28 @@ impl EntropyApp {
         self.encoder_visibility.truncate(len);
     }
 
+    pub(super) fn resolve_initial_encoder_visibility(
+        layout: &KeyboardLayout,
+        packed: Option<u32>,
+        saved: Option<Vec<bool>>,
+        hidden_by_default: bool,
+    ) -> Vec<bool> {
+        let encoder_count = layout.encoder_count();
+        if encoder_count == 0 {
+            return Vec::new();
+        }
+
+        let has_saved_choice = saved.is_some();
+        let mut visibility = saved.unwrap_or_else(|| vec![!hidden_by_default; encoder_count]);
+        visibility.resize(encoder_count, !hidden_by_default);
+        visibility.truncate(encoder_count);
+
+        if has_saved_choice || !hidden_by_default {
+            Self::apply_encoder_layout_options_to_visibility(layout, packed, &mut visibility);
+        }
+        visibility
+    }
+
     fn encoder_visibility_device_id(&self) -> String {
         if !self.current_encoder_visibility_id.is_empty() {
             return self.current_encoder_visibility_id.clone();
@@ -150,7 +186,7 @@ impl EntropyApp {
         self.sync_qmk_hid_host_bridges();
     }
 
-    pub(super) fn draw_encoder_visibility_setting_row(
+    fn draw_encoder_visibility_setting_row(
         &mut self,
         ui: &mut egui::Ui,
         content_width: f32,
@@ -158,6 +194,7 @@ impl EntropyApp {
         suppress_tooltips: bool,
         encoder_idx: usize,
         option_idx: Option<usize>,
+        semantics: EncoderVisibilitySwitchSemantics,
     ) {
         if self.encoder_visibility.len() <= encoder_idx {
             self.encoder_visibility.resize(encoder_idx + 1, true);
@@ -170,8 +207,12 @@ impl EntropyApp {
             self.app_settings.language,
             encoder_idx,
             layout_option.as_ref(),
+            semantics,
         );
-        let mut visible = self.encoder_visibility[encoder_idx];
+        let mut switch_enabled = match semantics {
+            EncoderVisibilitySwitchSemantics::Show => self.encoder_visibility[encoder_idx],
+            EncoderVisibilitySwitchSemantics::Hide => !self.encoder_visibility[encoder_idx],
+        };
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
             content_width,
@@ -183,14 +224,42 @@ impl EntropyApp {
             |ui| {
                 let resp = crate::ui_style::settings_switch_sized_stable(
                     ui,
-                    ("encoder_visibility", encoder_idx),
-                    &mut visible,
+                    (
+                        "encoder_visibility",
+                        encoder_idx,
+                        semantics == EncoderVisibilitySwitchSemantics::Hide,
+                    ),
+                    &mut switch_enabled,
                     metrics.size(46.0, 24.0),
                 );
                 if resp.changed() {
+                    let visible = match semantics {
+                        EncoderVisibilitySwitchSemantics::Show => switch_enabled,
+                        EncoderVisibilitySwitchSemantics::Hide => !switch_enabled,
+                    };
                     self.set_encoder_visibility(encoder_idx, option_idx, visible);
                 }
             },
+        );
+    }
+
+    pub(super) fn draw_module_encoder_visibility_setting_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        content_width: f32,
+        row_height: f32,
+        suppress_tooltips: bool,
+        encoder_idx: usize,
+        option_idx: usize,
+    ) {
+        self.draw_encoder_visibility_setting_row(
+            ui,
+            content_width,
+            row_height,
+            suppress_tooltips,
+            encoder_idx,
+            Some(option_idx),
+            EncoderVisibilitySwitchSemantics::Hide,
         );
     }
 
@@ -256,11 +325,97 @@ impl EntropyApp {
                                 false,
                                 encoder_idx,
                                 option_idx,
+                                EncoderVisibilitySwitchSemantics::Show,
                             );
                         }
                     },
                 );
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layout_with_encoder_hide_option() -> KeyboardLayout {
+        KeyboardLayout {
+            name: "Modular keyboard".to_owned(),
+            rows: 1,
+            cols: 1,
+            keys: Vec::new(),
+            encoders: vec![PhysicalEncoder {
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+                label: String::new(),
+                encoder_idx: 0,
+                direction: 0,
+                rotation: 0.0,
+                rotation_x: 0.0,
+                rotation_y: 0.0,
+                layout_condition: None,
+            }],
+            layers: Vec::new(),
+            encoder_layers: Vec::new(),
+            layer_names: Vec::new(),
+            custom_keycodes: Vec::new(),
+            layout_options: vec![LayoutOption {
+                label: "Hide left encoder module".to_owned(),
+                choices: Vec::new(),
+            }],
+            live_features: Default::default(),
+            supports_rgb: false,
+            lighting_mode: None,
+            firmware: FirmwareProtocol::Vial,
+        }
+    }
+
+    #[test]
+    fn modular_encoder_defaults_to_hidden_until_user_choice_exists() {
+        let layout = layout_with_encoder_hide_option();
+        assert_eq!(
+            EntropyApp::resolve_initial_encoder_visibility(&layout, Some(0), None, true),
+            vec![false]
+        );
+    }
+
+    #[test]
+    fn separate_encoder_settings_keep_visible_default() {
+        let layout = layout_with_encoder_hide_option();
+        assert_eq!(
+            EntropyApp::resolve_initial_encoder_visibility(&layout, Some(0), None, false),
+            vec![true]
+        );
+    }
+
+    #[test]
+    fn saved_modular_encoder_choice_remains_authoritative() {
+        let layout = layout_with_encoder_hide_option();
+        assert_eq!(
+            EntropyApp::resolve_initial_encoder_visibility(
+                &layout,
+                Some(0),
+                Some(vec![true]),
+                true,
+            ),
+            vec![true]
+        );
+    }
+
+    #[test]
+    fn hide_switch_uses_action_copy() {
+        assert_eq!(
+            encoder_visibility_copy(
+                crate::i18n::Language::Russian,
+                0,
+                None,
+                EncoderVisibilitySwitchSemantics::Hide,
+            )
+            .0,
+            "Скрыть"
+        );
     }
 }
