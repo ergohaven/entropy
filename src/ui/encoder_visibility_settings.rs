@@ -1,5 +1,42 @@
 use super::*;
 
+fn encoder_visibility_copy(
+    language: crate::i18n::Language,
+    encoder_idx: usize,
+    layout_option: Option<&LayoutOption>,
+) -> (String, String) {
+    let side = layout_option
+        .map(|option| option.label.to_ascii_lowercase())
+        .and_then(|label| {
+            if label.split_whitespace().any(|word| word == "left") {
+                Some("left")
+            } else if label.split_whitespace().any(|word| word == "right") {
+                Some("right")
+            } else {
+                None
+            }
+        });
+    let (label_key, tooltip_key) = match side {
+        Some("left") => (
+            "encoder_settings.left_encoder",
+            "encoder_settings.left_encoder_tooltip",
+        ),
+        Some("right") => (
+            "encoder_settings.right_encoder",
+            "encoder_settings.right_encoder_tooltip",
+        ),
+        _ => (
+            "encoder_settings.encoder_number",
+            "encoder_settings.encoder_number_tooltip",
+        ),
+    };
+    let number = (encoder_idx + 1).to_string();
+    (
+        crate::i18n::tr_catalog_format(language, label_key, &[("number", &number)]),
+        crate::i18n::tr_catalog_format(language, tooltip_key, &[("number", &number)]),
+    )
+}
+
 impl EntropyApp {
     pub(super) fn draw_encoder_visibility_settings_page(
         &mut self,
@@ -87,20 +124,21 @@ impl EntropyApp {
                     |ui| {
                         for (encoder_position, encoder_idx) in encoder_indices.iter().enumerate() {
                             let mut visible = self.encoder_visibility[*encoder_idx];
-                            let label = if matches!(
+                            let layout_option = encoder_option_indices
+                                .get(encoder_position)
+                                .and_then(|option_idx| layout_options.get(*option_idx));
+                            let (label, tooltip) = encoder_visibility_copy(
                                 self.app_settings.language,
-                                crate::i18n::Language::Russian
-                            ) {
-                                format!("Энкодер {}", encoder_idx + 1)
-                            } else {
-                                format!("Encoder {}", encoder_idx + 1)
-                            };
-                            crate::ui_style::settings_list_row(
+                                *encoder_idx,
+                                layout_option,
+                            );
+                            crate::ui_style::settings_list_row_with_tooltip(
                                 ui,
                                 encoders_content_width,
                                 encoders_row_height,
                                 &label,
                                 true,
+                                Some(&tooltip),
                                 switch_width,
                                 |ui| {
                                     let resp = crate::ui_style::settings_switch_sized(

@@ -1216,6 +1216,14 @@ issue_invalid_trigger = "Trigger must start with : or ; and contain no spaces"
 issue_empty_replacement = "Replacement is empty"
 issue_duplicate_trigger = "Another rule already uses this trigger"
 
+[encoder_settings]
+left_encoder = "Left encoder"
+left_encoder_tooltip = "Show the left encoder on the main layout"
+right_encoder = "Right encoder"
+right_encoder_tooltip = "Show the right encoder on the main layout"
+encoder_number = "Encoder {number}"
+encoder_number_tooltip = "Show encoder {number} on the main layout"
+
 [modules_settings]
 title = "Modules settings"
 description = "Touchpad, trackball and mouse auto-layer settings exposed by the device firmware"

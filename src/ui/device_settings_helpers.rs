@@ -2,11 +2,15 @@ use super::*;
 
 impl EntropyApp {
     pub(super) fn is_encoder_layout_option(option: &LayoutOption) -> bool {
-        option
-            .label
-            .trim_start()
-            .to_ascii_lowercase()
-            .starts_with("hide encoder")
+        if !option.choices.is_empty() {
+            return false;
+        }
+
+        let label = option.label.trim().to_ascii_lowercase();
+        label.starts_with("hide ")
+            && label
+                .split_whitespace()
+                .any(|word| matches!(word, "encoder" | "encoders"))
     }
 
     pub(super) fn encoder_layout_option_indices(layout: &KeyboardLayout) -> Vec<usize> {
@@ -1806,6 +1810,62 @@ mod tests {
         assert!(EntropyApp::module_settings_encoder_visible(
             &settings, &layout, 0
         ));
+    }
+
+    #[test]
+    fn encoder_layout_options_include_left_and_right_module_labels() {
+        let mut layout = test_layout_with_encoders(&[0, 1]);
+        layout.layout_options = vec![
+            LayoutOption {
+                label: "Hide left encoder module".to_string(),
+                choices: Vec::new(),
+            },
+            LayoutOption {
+                label: "Hide right encoder module".to_string(),
+                choices: Vec::new(),
+            },
+            LayoutOption {
+                label: "OLED master".to_string(),
+                choices: vec!["Disabled".to_string(), "Clock".to_string()],
+            },
+        ];
+
+        assert_eq!(
+            EntropyApp::encoder_layout_option_indices(&layout),
+            vec![0, 1]
+        );
+
+        let packed = EntropyApp::pack_layout_option_values(&layout.layout_options, &[1, 0, 0]);
+        let mut visibility = vec![true, true];
+        EntropyApp::apply_encoder_layout_options_to_visibility(
+            &layout,
+            Some(packed),
+            &mut visibility,
+        );
+        assert_eq!(visibility, vec![false, true]);
+    }
+
+    #[test]
+    fn encoder_layout_option_requires_boolean_hide_label() {
+        for label in [
+            "Hide encoder",
+            "Hide left encoder module",
+            "Hide right encoder module",
+        ] {
+            assert!(EntropyApp::is_encoder_layout_option(&LayoutOption {
+                label: label.to_string(),
+                choices: Vec::new(),
+            }));
+        }
+
+        assert!(!EntropyApp::is_encoder_layout_option(&LayoutOption {
+            label: "Encoder display preset".to_string(),
+            choices: Vec::new(),
+        }));
+        assert!(!EntropyApp::is_encoder_layout_option(&LayoutOption {
+            label: "Hide encoder style".to_string(),
+            choices: vec!["Compact".to_string(), "Full".to_string()],
+        }));
     }
 
     #[test]

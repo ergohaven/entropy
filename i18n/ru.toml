@@ -1216,6 +1216,14 @@ issue_invalid_trigger = "Триггер должен начинаться с : �
 issue_empty_replacement = "Текст замены пустой"
 issue_duplicate_trigger = "Другое правило уже использует этот триггер"
 
+[encoder_settings]
+left_encoder = "Левый энкодер"
+left_encoder_tooltip = "Показывать левый энкодер на раскладке в главном меню"
+right_encoder = "Правый энкодер"
+right_encoder_tooltip = "Показывать правый энкодер на раскладке в главном меню"
+encoder_number = "Энкодер {number}"
+encoder_number_tooltip = "Показывать энкодер {number} на раскладке в главном меню"
+
 [modules_settings]
 title = "Настройки модулей"
 description = "Настройки тачпада, трекбола и мышиного автослоя, которые отдаёт прошивка устройства"
