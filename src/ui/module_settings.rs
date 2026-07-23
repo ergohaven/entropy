@@ -24,6 +24,10 @@ fn module_setting_catalog_keys(title: &str) -> Option<(&'static str, &'static st
             "modules_settings.encoder_interval",
             "modules_settings.encoder_interval_tooltip",
         )),
+        "encoder steps" => Some((
+            "modules_settings.encoder_steps",
+            "modules_settings.encoder_steps_tooltip",
+        )),
         "scroll sens" => Some((
             "modules_settings.scroll_sens",
             "modules_settings.scroll_sens_tooltip",
@@ -714,6 +718,7 @@ mod tests {
                 fields: vec![
                     selector,
                     module_filter_field("Encoder interval", 325),
+                    module_filter_field("Encoder steps", 332),
                     mode,
                     module_filter_field("Ball axis", 130),
                     module_filter_field("Touch axis", 132),
@@ -784,6 +789,7 @@ mod tests {
         for title in [
             "Module",
             "Encoder interval",
+            "Encoder steps",
             "Sticky mode",
             "Invert scroll vertical",
             "invert scroll horizontal",
@@ -826,7 +832,7 @@ mod tests {
         assert_eq!(visible_module_qsids(&app), vec![149]);
 
         app.module_settings.set_value(149, 1);
-        assert_eq!(visible_module_qsids(&app), vec![149, 325]);
+        assert_eq!(visible_module_qsids(&app), vec![149, 325, 332]);
 
         app.module_settings.set_value(149, 2);
         assert_eq!(
@@ -917,7 +923,7 @@ mod tests {
         app.hid_device = Some(hid_device);
         add_filterable_module_groups(&mut app);
         app.module_settings.set_value(149, 3);
-        let mode = app.module_settings.groups[0].fields[2].clone();
+        let mode = app.module_settings.groups[0].fields[3].clone();
 
         app.write_module_setting_value(0, &mode, 2);
 

@@ -985,7 +985,7 @@ impl ModuleSettingsGroup {
             .to_ascii_lowercase();
         match title.as_str() {
             "module" => true,
-            "encoder interval" => selected == ModuleDeviceKind::Encoder,
+            "encoder interval" | "encoder steps" => selected == ModuleDeviceKind::Encoder,
             "ball axis" | "ball dpi" => selected == ModuleDeviceKind::Trackball,
             "touch axis" | "touch dpi" | "touch gestures" => selected == ModuleDeviceKind::Touchpad,
             "mode"
