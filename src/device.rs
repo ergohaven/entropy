@@ -46,7 +46,7 @@ impl Device {
         } else {
             "USB"
         };
-        format!("({transport}) {}", display_name.trim())
+        format!("{} ({transport})", display_name.trim())
     }
 }
 
@@ -215,22 +215,22 @@ mod tests {
     }
 
     #[test]
-    fn prefixes_usb_display_name() {
+    fn suffixes_usb_display_name() {
         let device = test_device("Usb", "IOService:/AppleUserUSBHostHIDDevice");
 
         assert_eq!(
             device.display_name_with_transport("Ergohaven K:04"),
-            "(USB) Ergohaven K:04"
+            "Ergohaven K:04 (USB)"
         );
     }
 
     #[test]
-    fn prefixes_bluetooth_display_name() {
+    fn suffixes_bluetooth_display_name() {
         let device = test_device("Bluetooth", "/dev/hidraw7");
 
         assert_eq!(
             device.display_name_with_transport("Ergohaven K:04"),
-            "(Bluetooth) Ergohaven K:04"
+            "Ergohaven K:04 (Bluetooth)"
         );
     }
 
