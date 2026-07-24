@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 const ENTLAYOUT_FORMAT: &str = "entropy.layout";
-const ENTLAYOUT_VERSION: u16 = 3;
+const ENTLAYOUT_VERSION: u16 = 4;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct EntLayoutFile {
@@ -45,6 +45,284 @@ struct EntLayoutData {
     tap_dance: EntTapDanceData,
     key_overrides: EntKeyOverrideData,
     alt_repeat: EntAltRepeatData,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    portable_settings: Vec<EntPortableSetting>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum EntPortableSettingWidth {
+    U8,
+    U16,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct EntPortableSetting {
+    id: String,
+    qsid: u16,
+    width: EntPortableSettingWidth,
+    value: u16,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    variants: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct EntPortableSettingSpec {
+    id: &'static str,
+    qsid: u16,
+    width: EntPortableSettingWidth,
+    max: u16,
+}
+
+impl EntPortableSettingSpec {
+    const fn new(id: &'static str, qsid: u16, width: EntPortableSettingWidth, max: u16) -> Self {
+        Self {
+            id,
+            qsid,
+            width,
+            max,
+        }
+    }
+
+    fn matches(self, setting: &EntPortableSetting) -> bool {
+        setting.id == self.id
+            && setting.qsid == self.qsid
+            && setting.width == self.width
+            && setting.value <= self.max
+            && setting.variants.is_empty()
+    }
+}
+
+const ENT_PORTABLE_QSIDS: &[u16] = &[
+    1, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
+    121, 122, 123, 124, 142,
+];
+
+fn ent_portable_setting_spec(qsid: u16) -> Option<EntPortableSettingSpec> {
+    use EntPortableSettingWidth::*;
+    macro_rules! spec {
+        ($id:literal, $width:ident, $max:expr) => {
+            EntPortableSettingSpec::new($id, qsid, $width, $max)
+        };
+    }
+    Some(match qsid {
+        1 => spec!("grave_escape", U8, 0x0f),
+        3 => spec!("auto_shift_flags", U8, 0x7f),
+        4 => spec!("auto_shift_timeout", U16, u16::MAX),
+        5 => spec!("one_shot_tap_toggle", U8, u8::MAX as u16),
+        6 => spec!("one_shot_timeout", U16, u16::MAX),
+        7 => spec!("tapping_term", U16, u16::MAX),
+        9 => spec!("mouse_keys_delay", U8, u8::MAX as u16),
+        10 => spec!("mouse_keys_interval", U8, u8::MAX as u16),
+        11 => spec!("mouse_keys_move_delta", U8, u8::MAX as u16),
+        12 => spec!("mouse_keys_max_speed", U8, u8::MAX as u16),
+        13 => spec!("mouse_keys_time_to_max", U8, u8::MAX as u16),
+        14 => spec!("mouse_keys_wheel_delay", U8, u8::MAX as u16),
+        15 => spec!("mouse_keys_wheel_interval", U8, u8::MAX as u16),
+        16 => spec!("mouse_keys_wheel_max_speed", U8, u8::MAX as u16),
+        17 => spec!("mouse_keys_wheel_time_to_max", U8, u8::MAX as u16),
+        18 => spec!("tap_code_delay", U16, u16::MAX),
+        19 => spec!("tap_hold_caps_delay", U16, u16::MAX),
+        20 => spec!("tapping_toggle", U8, u8::MAX as u16),
+        21 => spec!("magic", U16, 0x03ff),
+        22 => spec!("permissive_hold", U8, 1),
+        23 => spec!("hold_on_other_key_press", U8, 1),
+        24 => spec!("retro_tapping", U8, 1),
+        25 => spec!("quick_tap_term", U16, 1000),
+        26 => spec!("chordal_hold", U8, 1),
+        27 => spec!("flow_tap", U16, u16::MAX),
+        121 => spec!("touchpad_sniper_sensitivity", U8, u8::MAX as u16),
+        122 => spec!("touchpad_scroll_sensitivity", U8, u8::MAX as u16),
+        123 => spec!("touchpad_text_sensitivity", U8, u8::MAX as u16),
+        124 => spec!("touchpad_flags", U8, 0x07),
+        142 => spec!("touchpad_auto_layer_enable", U8, 1),
+        _ => return None,
+    })
+}
+
+fn ent_portable_setting_is_known(qsid: u16) -> bool {
+    ent_portable_setting_spec(qsid).is_some() || matches!(qsid, 120 | 143)
+}
+
+fn ent_portable_setting_is_valid(setting: &EntPortableSetting) -> bool {
+    if let Some(spec) = ent_portable_setting_spec(setting.qsid) {
+        return spec.matches(setting);
+    }
+
+    match setting.qsid {
+        120 => {
+            setting.id == "touchpad_dpi"
+                && match setting.width {
+                    EntPortableSettingWidth::U8 => {
+                        !setting.variants.is_empty()
+                            && usize::from(setting.value) < setting.variants.len()
+                    }
+                    EntPortableSettingWidth::U16 => setting.variants.is_empty(),
+                }
+        }
+        143 => {
+            setting.id == "touchpad_auto_layer"
+                && setting.width == EntPortableSettingWidth::U8
+                && !setting.variants.is_empty()
+                && usize::from(setting.value) < setting.variants.len()
+        }
+        _ => false,
+    }
+}
+
+fn ent_portable_setting_contracts_match(
+    source: &EntPortableSetting,
+    target: &EntPortableSetting,
+) -> bool {
+    source.id == target.id
+        && source.qsid == target.qsid
+        && source.width == target.width
+        && source.variants == target.variants
+        && ent_portable_setting_is_valid(source)
+        && ent_portable_setting_is_valid(target)
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct EntPortableSettingsImportReport {
+    imported: usize,
+    unsupported: usize,
+    incompatible: usize,
+    failed: usize,
+}
+
+impl EntPortableSettingsImportReport {
+    fn total(self) -> usize {
+        self.imported + self.unsupported + self.incompatible + self.failed
+    }
+
+    fn record_imported(&mut self) {
+        self.imported += 1;
+    }
+
+    fn record_unsupported(&mut self) {
+        self.unsupported += 1;
+    }
+
+    fn record_incompatible(&mut self) {
+        self.incompatible += 1;
+    }
+
+    fn record_failed(&mut self) {
+        self.failed += 1;
+    }
+
+    fn summary(&self, language: crate::i18n::Language) -> String {
+        if self.total() == 0 {
+            return crate::i18n::tr_catalog(language, "entlayout.none").to_owned();
+        }
+
+        let imported = self.imported.to_string();
+        let total = self.total().to_string();
+        if self.imported == self.total() {
+            return crate::i18n::tr_catalog_format(
+                language,
+                "entlayout.portable_summary_full",
+                &[("imported", &imported), ("total", &total)],
+            );
+        }
+
+        let mut reasons = Vec::new();
+        for (count, key) in [
+            (self.unsupported, "entlayout.portable_unsupported"),
+            (self.incompatible, "entlayout.portable_incompatible"),
+            (self.failed, "entlayout.portable_failed"),
+        ] {
+            if count > 0 {
+                reasons.push(crate::i18n::tr_catalog_format(
+                    language,
+                    key,
+                    &[("count", &count.to_string())],
+                ));
+            }
+        }
+        crate::i18n::tr_catalog_format(
+            language,
+            "entlayout.portable_summary_skipped",
+            &[
+                ("imported", &imported),
+                ("total", &total),
+                ("reasons", &reasons.join(", ")),
+            ],
+        )
+    }
+}
+
+struct EntPortableSettingsImportPlan<'a> {
+    compatible: Vec<&'a EntPortableSetting>,
+    report: EntPortableSettingsImportReport,
+}
+
+fn plan_entlayout_portable_settings_import<'a>(
+    settings: &'a [EntPortableSetting],
+    target_settings: &[EntPortableSetting],
+) -> EntPortableSettingsImportPlan<'a> {
+    let mut compatible = Vec::new();
+    let mut report = EntPortableSettingsImportReport::default();
+    let mut seen = std::collections::BTreeSet::new();
+
+    for setting in settings {
+        if !ent_portable_setting_is_known(setting.qsid) {
+            report.record_incompatible();
+            continue;
+        }
+        if !seen.insert(setting.qsid) || !ent_portable_setting_is_valid(setting) {
+            report.record_incompatible();
+            continue;
+        }
+        let Some(target) = target_settings
+            .iter()
+            .find(|target| target.qsid == setting.qsid)
+        else {
+            report.record_unsupported();
+            continue;
+        };
+        if !ent_portable_setting_contracts_match(setting, target) {
+            report.record_incompatible();
+            continue;
+        }
+        compatible.push(setting);
+    }
+
+    EntPortableSettingsImportPlan { compatible, report }
+}
+
+fn verify_entlayout_portable_setting_readback(
+    setting: &EntPortableSetting,
+    readback: u16,
+) -> Result<()> {
+    if readback == setting.value {
+        return Ok(());
+    }
+
+    bail!(
+        "qmk setting writeback mismatch for qsid {}: wrote {}, read back {}",
+        setting.qsid,
+        setting.value,
+        readback
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_entlayout_portable_setting_verified(
+    hid: &crate::hid::HidDevice,
+    setting: &EntPortableSetting,
+) -> Result<()> {
+    let readback = match setting.width {
+        EntPortableSettingWidth::U8 => {
+            hid.set_qmk_setting_u8(setting.qsid, setting.value as u8)?;
+            hid.get_qmk_setting_u8(setting.qsid)? as u16
+        }
+        EntPortableSettingWidth::U16 => {
+            hid.set_qmk_setting_u16(setting.qsid, setting.value)?;
+            hid.get_qmk_setting_u16(setting.qsid)?
+        }
+    };
+    verify_entlayout_portable_setting_readback(setting, readback)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -404,8 +682,14 @@ impl EntropyApp {
         )?;
         self.validate_entlayout_file(&bundle)?;
         let backup_path = self.write_entlayout_auto_backup()?;
-        let (firmware_failures, mapping) = self.apply_entlayout(&bundle)?;
-        Ok(self.entlayout_import_report(&bundle, &backup_path, &firmware_failures, &mapping))
+        let (firmware_failures, mapping, portable_settings) = self.apply_entlayout(&bundle)?;
+        Ok(self.entlayout_import_report(
+            &bundle,
+            &backup_path,
+            &firmware_failures,
+            &mapping,
+            &portable_settings,
+        ))
     }
 
     fn entlayout_snapshot(&self) -> Option<EntLayoutFile> {
@@ -505,8 +789,224 @@ impl EntropyApp {
                         .collect(),
                     names: self.alt_repeat_names.clone(),
                 },
+                portable_settings: self.entlayout_portable_settings_snapshot(),
             },
         })
+    }
+
+    fn entlayout_portable_settings_snapshot(&self) -> Vec<EntPortableSetting> {
+        let mut settings = ENT_PORTABLE_QSIDS
+            .iter()
+            .filter(|qsid| self.supported_qmk_settings.contains(qsid))
+            .filter_map(|qsid| {
+                let spec = ent_portable_setting_spec(*qsid)?;
+                self.entlayout_portable_setting_value(spec.qsid)
+                    .filter(|value| *value <= spec.max)
+                    .map(|value| EntPortableSetting {
+                        id: spec.id.to_owned(),
+                        qsid: spec.qsid,
+                        width: spec.width,
+                        value,
+                        variants: Vec::new(),
+                    })
+            })
+            .collect::<Vec<_>>();
+
+        if self.touchpad_settings.supported && self.supported_qmk_settings.contains(&120) {
+            let variants = self.touchpad_settings.dpi_variants.clone();
+            let width = if variants.is_empty() {
+                EntPortableSettingWidth::U16
+            } else {
+                EntPortableSettingWidth::U8
+            };
+            let setting = EntPortableSetting {
+                id: "touchpad_dpi".to_owned(),
+                qsid: 120,
+                width,
+                value: self.touchpad_settings.dpi,
+                variants,
+            };
+            if ent_portable_setting_is_valid(&setting) {
+                settings.push(setting);
+            }
+        }
+
+        if self.touchpad_settings.auto_layer_supported()
+            && self.supported_qmk_settings.contains(&143)
+        {
+            let setting = EntPortableSetting {
+                id: "touchpad_auto_layer".to_owned(),
+                qsid: 143,
+                width: EntPortableSettingWidth::U8,
+                value: self.touchpad_settings.auto_layer as u16,
+                variants: self.touchpad_settings.auto_layer_variants.clone(),
+            };
+            if ent_portable_setting_is_valid(&setting) {
+                settings.push(setting);
+            }
+        }
+
+        settings.sort_by_key(|setting| setting.qsid);
+        settings
+    }
+
+    fn entlayout_portable_setting_value(&self, qsid: u16) -> Option<u16> {
+        match qsid {
+            1 if self.grave_escape_settings.supported => {
+                Some(self.grave_escape_settings.bits as u16)
+            }
+            3 if self.auto_shift_timeout.is_some() => Some(self.auto_shift_options.bits() as u16),
+            4 => self.auto_shift_timeout,
+            5 if self.one_shot_settings.supported => Some(self.one_shot_settings.tap_toggle as u16),
+            6 if self.one_shot_settings.supported => Some(self.one_shot_settings.timeout),
+            7 if self.tap_hold_settings.supports_qsid(7) => {
+                Some(self.tap_hold_settings.tapping_term)
+            }
+            9 if self.mouse_keys_settings.supported => Some(self.mouse_keys_settings.delay),
+            10 if self.mouse_keys_settings.supported => Some(self.mouse_keys_settings.interval),
+            11 if self.mouse_keys_settings.supported => Some(self.mouse_keys_settings.move_delta),
+            12 if self.mouse_keys_settings.supported => Some(self.mouse_keys_settings.max_speed),
+            13 if self.mouse_keys_settings.supported => Some(self.mouse_keys_settings.time_to_max),
+            14 if self.mouse_keys_settings.supported => Some(self.mouse_keys_settings.wheel_delay),
+            15 if self.mouse_keys_settings.supported => {
+                Some(self.mouse_keys_settings.wheel_interval)
+            }
+            16 if self.mouse_keys_settings.supported => {
+                Some(self.mouse_keys_settings.wheel_max_speed)
+            }
+            17 if self.mouse_keys_settings.supported => {
+                Some(self.mouse_keys_settings.wheel_time_to_max)
+            }
+            18 if self.tap_hold_settings.supports_qsid(18) => {
+                Some(self.tap_hold_settings.tap_code_delay)
+            }
+            19 if self.tap_hold_settings.supports_qsid(19) => {
+                Some(self.tap_hold_settings.tap_hold_caps_delay)
+            }
+            20 if self.tap_hold_settings.supports_qsid(20) => {
+                Some(self.tap_hold_settings.tapping_toggle)
+            }
+            21 if self.magic_settings.supported => Some(self.magic_settings.bits),
+            22 if self.tap_hold_settings.supports_qsid(22) => {
+                Some(self.tap_hold_settings.permissive_hold as u16)
+            }
+            23 if self.tap_hold_settings.supports_qsid(23) => {
+                Some(self.tap_hold_settings.hold_on_other_key_press as u16)
+            }
+            24 if self.tap_hold_settings.supports_qsid(24) => {
+                Some(self.tap_hold_settings.retro_tapping as u16)
+            }
+            25 if self.tap_hold_settings.supports_qsid(25) => {
+                Some(self.tap_hold_settings.quick_tap_term)
+            }
+            26 if self.tap_hold_settings.supports_qsid(26) => {
+                Some(self.tap_hold_settings.chordal_hold as u16)
+            }
+            27 if self.tap_hold_settings.supports_qsid(27) => Some(self.tap_hold_settings.flow_tap),
+            121 if self.touchpad_settings.supported => {
+                Some(self.touchpad_settings.sniper_sens as u16)
+            }
+            122 if self.touchpad_settings.supported => {
+                Some(self.touchpad_settings.scroll_sens as u16)
+            }
+            123 if self.touchpad_settings.supported => {
+                Some(self.touchpad_settings.text_sens as u16)
+            }
+            124 if self.touchpad_settings.supported => Some(self.touchpad_settings.bits as u16),
+            142 if self.touchpad_settings.auto_layer_enable_supported => {
+                Some(self.touchpad_settings.auto_layer_enable as u16)
+            }
+            _ => None,
+        }
+    }
+
+    fn apply_entlayout_portable_setting_local(&mut self, setting: &EntPortableSetting) {
+        let value = setting.value;
+        match setting.qsid {
+            1 => {
+                self.grave_escape_settings.bits = value as u8;
+                self.grave_escape_settings.supported = true;
+            }
+            3 => self.auto_shift_options = AutoShiftOptionsState::from_bits(value as u8),
+            4 => {
+                self.auto_shift_timeout = Some(value);
+                self.auto_shift_timeout_text = value.to_string();
+            }
+            5 => {
+                self.one_shot_settings.tap_toggle = value as u8;
+                self.one_shot_settings.supported = true;
+            }
+            6 => {
+                self.one_shot_settings.timeout = value;
+            }
+            7 => {
+                self.tap_hold_settings.tapping_term = value;
+                self.tap_hold_settings.supported = true;
+                self.tap_hold_settings.set_qsid_supported(7);
+            }
+            9 => {
+                self.mouse_keys_settings.delay = value;
+                self.mouse_keys_settings.supported = true;
+            }
+            10 => {
+                self.mouse_keys_settings.interval = value;
+            }
+            11 => {
+                self.mouse_keys_settings.move_delta = value;
+            }
+            12 => {
+                self.mouse_keys_settings.max_speed = value;
+            }
+            13 => {
+                self.mouse_keys_settings.time_to_max = value;
+            }
+            14 => {
+                self.mouse_keys_settings.wheel_delay = value;
+            }
+            15 => {
+                self.mouse_keys_settings.wheel_interval = value;
+            }
+            16 => {
+                self.mouse_keys_settings.wheel_max_speed = value;
+            }
+            17 => {
+                self.mouse_keys_settings.wheel_time_to_max = value;
+            }
+            18 => self.tap_hold_settings.tap_code_delay = value,
+            19 => self.tap_hold_settings.tap_hold_caps_delay = value,
+            20 => self.tap_hold_settings.tapping_toggle = value,
+            21 => {
+                self.magic_settings.bits = value;
+                self.magic_settings.supported = true;
+            }
+            22 => self.tap_hold_settings.permissive_hold = value != 0,
+            23 => self.tap_hold_settings.hold_on_other_key_press = value != 0,
+            24 => self.tap_hold_settings.retro_tapping = value != 0,
+            25 => self.tap_hold_settings.quick_tap_term = value,
+            26 => self.tap_hold_settings.chordal_hold = value != 0,
+            27 => self.tap_hold_settings.flow_tap = value,
+            120 => {
+                self.touchpad_settings.dpi = value;
+                self.touchpad_settings.dpi_variants = setting.variants.clone();
+                self.touchpad_settings.supported = true;
+            }
+            121 => self.touchpad_settings.sniper_sens = value as u8,
+            122 => self.touchpad_settings.scroll_sens = value as u8,
+            123 => self.touchpad_settings.text_sens = value as u8,
+            124 => self.touchpad_settings.bits = value as u8,
+            142 => {
+                self.touchpad_settings.auto_layer_enable = value != 0;
+                self.touchpad_settings.auto_layer_enable_supported = true;
+            }
+            143 => {
+                self.touchpad_settings.auto_layer = value as u8;
+                self.touchpad_settings.auto_layer_variants = setting.variants.clone();
+            }
+            _ => return,
+        }
+        if matches!(setting.qsid, 18..=20 | 22..=27) {
+            self.tap_hold_settings.set_qsid_supported(setting.qsid);
+        }
     }
 
     fn text_expander_entlayout_snapshot(&self) -> EntTextExpanderData {
@@ -662,9 +1162,14 @@ impl EntropyApp {
     fn apply_entlayout(
         &mut self,
         bundle: &EntLayoutFile,
-    ) -> Result<(Vec<String>, EntLayoutImportMapping)> {
+    ) -> Result<(
+        Vec<String>,
+        EntLayoutImportMapping,
+        EntPortableSettingsImportReport,
+    )> {
         let mapping = self.entlayout_import_mapping(bundle)?;
-        let mut firmware_failures = self.apply_entlayout_firmware_state(bundle, &mapping)?;
+        let (mut firmware_failures, portable_settings) =
+            self.apply_entlayout_firmware_state(bundle, &mapping)?;
         self.apply_entlayout_local_state(bundle, &mapping)?;
         self.refresh_layer_picker_content_flags();
 
@@ -697,7 +1202,7 @@ impl EntropyApp {
             }
         }
 
-        Ok((firmware_failures, mapping))
+        Ok((firmware_failures, mapping, portable_settings))
     }
 
     fn entlayout_keycode_import_limits(&self) -> EntLayoutKeycodeImportLimits {
@@ -805,6 +1310,7 @@ impl EntropyApp {
         backup_path: &Path,
         firmware_failures: &[String],
         mapping: &EntLayoutImportMapping,
+        portable_settings: &EntPortableSettingsImportReport,
     ) -> String {
         let lang = self.app_settings.language;
         let tr = |key| crate::i18n::tr_catalog(lang, key).to_owned();
@@ -951,6 +1457,15 @@ impl EntropyApp {
                 "
 ",
             );
+        let portable_settings = portable_settings
+            .summary(lang)
+            .split("; ")
+            .map(|section| format!("• {section}"))
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            );
         format!(
             "{complete}
 
@@ -965,6 +1480,9 @@ impl EntropyApp {
 
 {dynamic_sections}:
 {dynamic_report}
+
+{portable_settings_label}:
+{portable_settings}
 
 {skipped_label}:
 {skipped}
@@ -981,6 +1499,7 @@ impl EntropyApp {
             encoder_slots = crate::i18n::tr_catalog(lang, "entlayout.encoder_slots"),
             imported_sections = crate::i18n::tr_catalog(lang, "entlayout.imported_sections"),
             dynamic_sections = crate::i18n::tr_catalog(lang, "entlayout.dynamic_sections"),
+            portable_settings_label = crate::i18n::tr_catalog(lang, "entlayout.portable_settings"),
             skipped_label = crate::i18n::tr_catalog(lang, "entlayout.skipped"),
             firmware_issues = crate::i18n::tr_catalog(lang, "entlayout.firmware_issues"),
             auto_backup = crate::i18n::tr_catalog(lang, "entlayout.auto_backup"),
@@ -990,6 +1509,7 @@ impl EntropyApp {
             total_encoders = mapping.encoder_mapping.len(),
             imported = imported,
             dynamic_report = dynamic_report,
+            portable_settings = portable_settings,
             skipped = skipped,
             firmware_failures = firmware_failures,
             backup_path = backup_path.display()
@@ -1001,7 +1521,7 @@ impl EntropyApp {
         &mut self,
         bundle: &EntLayoutFile,
         mapping: &EntLayoutImportMapping,
-    ) -> Result<Vec<String>> {
+    ) -> Result<(Vec<String>, EntPortableSettingsImportReport)> {
         let lang = self.app_settings.language;
         let Some(hid) = &self.hid_device else {
             bail!(
@@ -1019,6 +1539,15 @@ impl EntropyApp {
             .clone();
         let limits = self.entlayout_keycode_import_limits();
         let mut failures = Vec::new();
+        let target_portable_settings = self.entlayout_portable_settings_snapshot();
+        let EntPortableSettingsImportPlan {
+            compatible: portable_settings,
+            report: mut portable_settings_report,
+        } = plan_entlayout_portable_settings_import(
+            &bundle.data.portable_settings,
+            &target_portable_settings,
+        );
+        let mut verified_portable_settings = Vec::new();
 
         if let Err(err) = (|| -> Result<()> {
             for (source_layer_idx, layer_codes) in bundle.data.keymap.iter().enumerate() {
@@ -1132,8 +1661,33 @@ impl EntropyApp {
             }
         }
 
+        for setting in portable_settings {
+            let result = write_entlayout_portable_setting_verified(hid, setting);
+            match result {
+                Ok(()) => {
+                    portable_settings_report.record_imported();
+                    verified_portable_settings.push(setting.clone());
+                }
+                Err(error) => {
+                    portable_settings_report.record_failed();
+                    failures.push(crate::i18n::tr_catalog_format(
+                        lang,
+                        "entlayout.portable_setting_failure",
+                        &[
+                            ("setting", &setting.id),
+                            ("qsid", &setting.qsid.to_string()),
+                            ("error", &error.to_string()),
+                        ],
+                    ));
+                }
+            }
+        }
+
         if self.current_device_is_likely_rmk() {
-            return Ok(failures);
+            for setting in &verified_portable_settings {
+                self.apply_entlayout_portable_setting_local(setting);
+            }
+            return Ok((failures, portable_settings_report));
         }
 
         if entmacro_count(&bundle.data.macros) > 0 && self.keycode_picker.macro_count > 0 {
@@ -1294,7 +1848,10 @@ impl EntropyApp {
         })() {
             failures.push(format!("alt repeat ({err})"));
         }
-        Ok(failures)
+        for setting in &verified_portable_settings {
+            self.apply_entlayout_portable_setting_local(setting);
+        }
+        Ok((failures, portable_settings_report))
     }
 
     fn apply_entlayout_local_state(
@@ -2271,6 +2828,160 @@ fn entlayout_hash(layout: &KeyboardLayout) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn portable_setting(
+        id: &str,
+        qsid: u16,
+        width: EntPortableSettingWidth,
+        value: u16,
+    ) -> EntPortableSetting {
+        EntPortableSetting {
+            id: id.to_owned(),
+            qsid,
+            width,
+            value,
+            variants: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn legacy_entlayout_data_defaults_portable_settings() {
+        let data: EntLayoutData = serde_json::from_value(serde_json::json!({
+            "keymap": [[0]],
+            "encoder_keymap": [[]],
+            "encoder_visibility": [],
+            "layout_options": null,
+            "layer_names": ["0"],
+            "text_expander": {
+                "enabled": false,
+                "app_blacklist": "",
+                "rule_files": [],
+                "primary_rules": [],
+                "extra_files": []
+            },
+            "macros": {
+                "texts": [],
+                "names": [],
+                "descriptions": []
+            },
+            "combos": {
+                "entries": [],
+                "names": [],
+                "term": null
+            },
+            "tap_dance": {
+                "entries": [],
+                "names": []
+            },
+            "key_overrides": {
+                "entries": [],
+                "names": []
+            },
+            "alt_repeat": {
+                "entries": [],
+                "names": []
+            }
+        }))
+        .expect("legacy layout data");
+
+        assert!(data.portable_settings.is_empty());
+    }
+
+    #[test]
+    fn portable_setting_registry_has_unique_qsids_and_excludes_existing_combo_term() {
+        let qsids = ENT_PORTABLE_QSIDS
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(qsids.len(), ENT_PORTABLE_QSIDS.len());
+        assert!(!qsids.contains(&2));
+        assert_eq!(
+            ent_portable_setting_spec(9).unwrap().width,
+            EntPortableSettingWidth::U8
+        );
+        assert_eq!(ent_portable_setting_spec(21).unwrap().max, 0x03ff);
+    }
+
+    #[test]
+    fn portable_setting_import_plan_skips_unsupported_incompatible_and_duplicate_values() {
+        let settings = vec![
+            portable_setting("tapping_term", 7, EntPortableSettingWidth::U16, 200),
+            portable_setting("auto_shift_flags", 3, EntPortableSettingWidth::U8, 1),
+            portable_setting("quick_tap_term", 25, EntPortableSettingWidth::U16, 1001),
+            portable_setting("unknown", 999, EntPortableSettingWidth::U16, 1),
+            portable_setting("tapping_term", 7, EntPortableSettingWidth::U16, 250),
+        ];
+
+        let target_settings = vec![
+            portable_setting("tapping_term", 7, EntPortableSettingWidth::U16, 180),
+            portable_setting("quick_tap_term", 25, EntPortableSettingWidth::U16, 200),
+        ];
+        let plan = plan_entlayout_portable_settings_import(&settings, &target_settings);
+
+        assert_eq!(plan.compatible.len(), 1);
+        assert_eq!(plan.compatible[0].qsid, 7);
+        assert_eq!(
+            plan.report,
+            EntPortableSettingsImportReport {
+                imported: 0,
+                unsupported: 1,
+                incompatible: 3,
+                failed: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn portable_setting_writeback_requires_the_requested_value() {
+        let setting = portable_setting("tapping_term", 7, EntPortableSettingWidth::U16, 200);
+
+        assert!(verify_entlayout_portable_setting_readback(&setting, 200).is_ok());
+        let error = verify_entlayout_portable_setting_readback(&setting, 180).unwrap_err();
+        assert!(error.to_string().contains("writeback mismatch"));
+        assert!(error.to_string().contains("qsid 7"));
+    }
+
+    #[test]
+    fn portable_touchpad_select_requires_the_same_ordered_variants() {
+        let source = EntPortableSetting {
+            id: "touchpad_auto_layer".to_owned(),
+            qsid: 143,
+            width: EntPortableSettingWidth::U8,
+            value: 1,
+            variants: vec!["Layer 1".to_owned(), "Layer 2".to_owned()],
+        };
+        let compatible_target = source.clone();
+        let mut incompatible_target = source.clone();
+        incompatible_target.variants.reverse();
+
+        let compatible = plan_entlayout_portable_settings_import(
+            std::slice::from_ref(&source),
+            &[compatible_target],
+        );
+        assert_eq!(compatible.compatible.len(), 1);
+
+        let incompatible = plan_entlayout_portable_settings_import(
+            std::slice::from_ref(&source),
+            &[incompatible_target],
+        );
+        assert!(incompatible.compatible.is_empty());
+        assert_eq!(incompatible.report.incompatible, 1);
+    }
+
+    #[test]
+    fn portable_setting_report_distinguishes_imported_and_skipped_results() {
+        let mut report = EntPortableSettingsImportReport::default();
+        report.record_imported();
+        report.record_unsupported();
+        report.record_failed();
+
+        let summary = report.summary(crate::i18n::Language::English);
+
+        assert!(summary.contains("1/3 imported"));
+        assert!(summary.contains("1 unsupported by target"));
+        assert!(summary.contains("1 failed"));
+    }
 
     #[test]
     fn entmacro_bytecode_prefers_base64() {
