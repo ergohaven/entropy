@@ -648,6 +648,14 @@ fn usb_send_local(
     let mut write_buf = [0u8; MSG_LEN + 1];
     write_buf[0] = 0x00; // hidapi report ID, exactly like vial-gui
     write_buf[1..1 + data.len()].copy_from_slice(data);
+    let write_frame = local_hid_write_frame(&write_buf, transport);
+    #[cfg(target_os = "linux")]
+    if transport.is_bluetooth() {
+        static LOG_FRAMING_ONCE: std::sync::Once = std::sync::Once::new();
+        LOG_FRAMING_ONCE.call_once(|| {
+            log::info!("Using 32-byte unnumbered HOGP output framing for Linux Bluetooth HID");
+        });
+    }
 
     let read_timeout_ms = if transport.is_bluetooth() {
         WINDOWS_BLE_READ_TIMEOUT_MS
@@ -678,13 +686,13 @@ fn usb_send_local(
             drain_pending_reports(device);
         }
 
-        match device.write(&write_buf) {
-            Ok(bytes_written) if bytes_written == write_buf.len() => {}
+        match device.write(write_frame) {
+            Ok(bytes_written) if bytes_written == write_frame.len() => {}
             Ok(bytes_written) => {
                 last_error = Some(anyhow::anyhow!(
                     "HID short write — wrote {} bytes, expected {} bytes",
                     bytes_written,
-                    write_buf.len()
+                    write_frame.len()
                 ));
                 continue;
             }
@@ -704,6 +712,21 @@ fn usb_send_local(
     }
 
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("failed to communicate with the device")))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn local_hid_write_frame(write_buf: &[u8; MSG_LEN + 1], transport: HidTransport) -> &[u8] {
+    #[cfg(target_os = "linux")]
+    if transport.is_bluetooth() {
+        // BlueZ forwards the leading zero report ID to an unnumbered HOGP
+        // output characteristic instead of stripping it. RMK's Vial report is
+        // exactly 32 bytes, so sending the hidraw payload without that synthetic
+        // byte keeps the GATT write at the descriptor-declared length.
+        return &write_buf[1..];
+    }
+
+    let _ = transport;
+    write_buf
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1094,6 +1117,32 @@ fn hex_nibble(byte: u8) -> Result<u8> {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usb_hid_write_keeps_zero_report_id() {
+        let mut buffer = [0u8; MSG_LEN + 1];
+        buffer[1] = CMD_VIA_GET_PROTOCOL_VERSION;
+
+        let frame = local_hid_write_frame(&buffer, HidTransport::Usb);
+
+        assert_eq!(frame.len(), MSG_LEN + 1);
+        assert_eq!(frame[0], 0);
+        assert_eq!(frame[1], CMD_VIA_GET_PROTOCOL_VERSION);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_bluetooth_hid_write_omits_unnumbered_report_id() {
+        let mut buffer = [0u8; MSG_LEN + 1];
+        buffer[1] = CMD_VIA_GET_PROTOCOL_VERSION;
+        buffer[2] = 0xA5;
+
+        let frame = local_hid_write_frame(&buffer, HidTransport::Bluetooth);
+
+        assert_eq!(frame.len(), MSG_LEN);
+        assert_eq!(frame[0], CMD_VIA_GET_PROTOCOL_VERSION);
+        assert_eq!(frame[1], 0xA5);
+    }
 
     fn qmk_settings_command(subcommand: u8, qsid: u16) -> [u8; MSG_LEN] {
         let mut command = [0u8; MSG_LEN];
