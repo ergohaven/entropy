@@ -355,6 +355,16 @@ impl EntropyApp {
                 self.firmware = r.layout.firmware;
                 self.current_device_name = r.device_name.clone();
                 self.current_keyboard_id = Some(r.keyboard_id);
+                match &r.vial_unlock_status {
+                    Some((unlocked, keys)) => {
+                        self.vial_unlocked = Some(*unlocked);
+                        self.vial_unlock_keys = keys.clone();
+                    }
+                    None => {
+                        self.vial_unlocked = None;
+                        self.vial_unlock_keys.clear();
+                    }
+                }
                 self.device_about_info = Some(r.about_info.clone());
                 self.matrix_tester_rmk_byte_order = self.current_device_is_likely_rmk();
                 self.current_encoder_visibility_id =

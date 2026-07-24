@@ -100,6 +100,7 @@ impl EntropyApp {
         main_window_hidden_to_tray: bool,
         selected_device_is_bluetooth: bool,
     ) {
+        self.poll_vial_hid_task(ctx);
         self.poll_settings_write(ctx);
         self.flush_due_qmk_setting_writes();
         if should_poll_device_scan(main_window_hidden_to_tray) {

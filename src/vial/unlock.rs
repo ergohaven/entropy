@@ -1,24 +1,12 @@
+#[cfg(not(target_arch = "wasm32"))]
+use super::vial_hid_task::VialHidTaskStart;
 use super::*;
 
 const VIAL_UNLOCK_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
 const VIAL_UNLOCK_PROGRESS_ANIMATION_TIME: f32 = 0.16;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum UnlockPollFailureAction {
-    Retry,
-    Stop,
-}
-
-fn unlock_poll_failure_action(disconnected: bool) -> UnlockPollFailureAction {
-    if disconnected {
-        UnlockPollFailureAction::Stop
-    } else {
-        UnlockPollFailureAction::Retry
-    }
-}
-
 impl EntropyApp {
-    fn stop_vial_unlock_with_status(&mut self, status: impl Into<String>) {
+    pub(super) fn stop_vial_unlock_with_status(&mut self, status: impl Into<String>) {
         self.status_msg = status.into();
         self.unlock_open = false;
         self.vial_unlock_polling = false;
@@ -28,46 +16,103 @@ impl EntropyApp {
         self.pending_layout_indicator_open_after_unlock = false;
     }
 
+    fn complete_vial_unlock(&mut self) {
+        self.vial_unlocked = Some(true);
+        self.status_msg = crate::i18n::tr_catalog(
+            self.app_settings.language,
+            "status_messages.device_unlocked",
+        )
+        .into();
+        self.unlock_open = false;
+        self.vial_unlock_polling = false;
+        self.vial_unlock_last_poll = None;
+        self.macro_auto_unlock_cancelled = false;
+        if self.pending_layout_indicator_open_after_unlock {
+            self.pending_layout_indicator_open_after_unlock = false;
+            self.app_settings.sticky_layout_window = true;
+            self.sticky_layout_last_size = None;
+            save_app_settings(&self.app_settings);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn finish_vial_unlock_start(&mut self, unlocked: bool, keys: Vec<(u8, u8)>) {
+        self.vial_unlock_keys = keys;
+        if unlocked {
+            self.complete_vial_unlock();
+            return;
+        }
+
+        self.vial_unlocked = Some(false);
+        self.vial_unlock_polling = true;
+        let total = u8::try_from(self.vial_unlock_keys.len())
+            .unwrap_or(u8::MAX)
+            .max(1);
+        self.vial_unlock_counter = total;
+        self.vial_unlock_best = total;
+        self.vial_unlock_total = total;
+        self.vial_unlock_last_poll = Some(std::time::Instant::now());
+        self.vial_unlock_animation_nonce = self.vial_unlock_animation_nonce.wrapping_add(1);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn finish_vial_unlock_poll(
+        &mut self,
+        unlocked: bool,
+        _in_progress: bool,
+        counter: u8,
+    ) {
+        self.vial_unlock_counter = counter;
+        if counter > self.vial_unlock_total {
+            self.vial_unlock_total = counter;
+        }
+        if unlocked {
+            self.complete_vial_unlock();
+        } else {
+            self.vial_unlocked = Some(false);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn fail_vial_unlock_start(&mut self, error: String) {
+        self.vial_unlocked = Some(false);
+        self.stop_vial_unlock_with_status(crate::i18n::tr_catalog_format(
+            self.app_settings.language,
+            "status_messages.unlock_start_failed",
+            &[("error", &error)],
+        ));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn fail_vial_unlock_poll(&mut self, error: String) {
+        log::warn!("Vial unlock poll failed; retrying: {error}");
+        self.status_msg = crate::i18n::tr_catalog_format(
+            self.app_settings.language,
+            "status_messages.unlock_poll_retry",
+            &[("error", &error)],
+        );
+    }
+
     pub(super) fn draw_vial_unlock_overlay(&mut self, ctx: &egui::Context) {
         // Vial unlock modal
         if self.unlock_open && self.firmware == FirmwareProtocol::Vial {
-            // Start unlock if not yet polling
+            // Start unlock through the serialized HID worker so Bluetooth
+            // round-trips never block the UI thread.
+            #[cfg(not(target_arch = "wasm32"))]
             if !self.vial_unlock_polling {
-                if let Some(hid) = &self.hid_device {
-                    // Get unlock keys from get_unlock_status
-                    if let Ok((_, keys)) = hid.get_unlock_status() {
-                        self.vial_unlock_keys = keys;
+                match self.start_vial_unlock(ctx) {
+                    VialHidTaskStart::Started | VialHidTaskStart::Busy => {}
+                    VialHidTaskStart::NoDevice => {
+                        self.stop_vial_unlock_with_status(crate::i18n::tr_catalog(
+                            self.app_settings.language,
+                            "status_messages.unlock_cancelled_disconnected",
+                        ));
+                        return;
                     }
-                    // Start the unlock process
-                    match hid.unlock_start() {
-                        Ok(()) => {
-                            self.vial_unlock_polling = true;
-                            self.vial_unlock_counter = 1;
-                            self.vial_unlock_best = 1;
-                            self.vial_unlock_total = 1;
-                            // Match Vial GUI: first poll happens after the timer interval,
-                            // so progress starts empty instead of jumping on the same frame.
-                            self.vial_unlock_last_poll = Some(std::time::Instant::now());
-                            self.vial_unlock_animation_nonce =
-                                self.vial_unlock_animation_nonce.wrapping_add(1);
-                        }
-                        Err(e) => {
-                            self.stop_vial_unlock_with_status(crate::i18n::tr_catalog_format(
-                                self.app_settings.language,
-                                "status_messages.unlock_start_failed",
-                                &[("error", &e.to_string())],
-                            ));
-                            return;
-                        }
-                    }
-                } else {
-                    self.stop_vial_unlock_with_status(crate::i18n::tr_catalog(
-                        self.app_settings.language,
-                        "status_messages.unlock_cancelled_disconnected",
-                    ));
-                    return;
                 }
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
             }
+
             // Match Vial's polling cadence. Vial QMK resets the unlock counter whenever
             // UNLOCK_POLL arrives before its internal ~100ms timer has elapsed, even if the
             // correct keys are held. Polling too fast makes progress stick near zero.
@@ -79,61 +124,18 @@ impl EntropyApp {
                     .map(|last_poll| now.duration_since(last_poll) >= VIAL_UNLOCK_POLL_INTERVAL)
                     .unwrap_or(true);
                 if should_poll {
-                    self.vial_unlock_last_poll = Some(now);
-                    if let Some(hid) = &self.hid_device {
-                        match hid.unlock_poll() {
-                            Ok((unlocked, _in_progress, counter)) => {
-                                self.vial_unlock_counter = counter;
-                                if counter > self.vial_unlock_total {
-                                    self.vial_unlock_total = counter;
-                                }
-                                if unlocked {
-                                    self.status_msg = crate::i18n::tr_catalog(
-                                        self.app_settings.language,
-                                        "status_messages.device_unlocked",
-                                    )
-                                    .into();
-                                    self.unlock_open = false;
-                                    self.vial_unlock_polling = false;
-                                    self.vial_unlock_last_poll = None;
-                                    self.macro_auto_unlock_cancelled = false;
-                                    if self.pending_layout_indicator_open_after_unlock {
-                                        self.pending_layout_indicator_open_after_unlock = false;
-                                        self.app_settings.sticky_layout_window = true;
-                                        self.sticky_layout_last_size = None;
-                                        save_app_settings(&self.app_settings);
-                                    }
-                                }
-                            }
-                            Err(e) => match unlock_poll_failure_action(
-                                crate::hid::is_disconnect_error(&e),
-                            ) {
-                                UnlockPollFailureAction::Stop => {
-                                    self.stop_vial_unlock_with_status(
-                                        crate::i18n::tr_catalog_format(
-                                            self.app_settings.language,
-                                            "status_messages.unlock_interrupted_disconnected",
-                                            &[("error", &e.to_string())],
-                                        ),
-                                    );
-                                    return;
-                                }
-                                UnlockPollFailureAction::Retry => {
-                                    log::warn!("Vial unlock poll failed; retrying: {e}");
-                                    self.status_msg = crate::i18n::tr_catalog_format(
-                                        self.app_settings.language,
-                                        "status_messages.unlock_poll_retry",
-                                        &[("error", &e.to_string())],
-                                    );
-                                }
-                            },
+                    match self.start_vial_unlock_poll(ctx) {
+                        VialHidTaskStart::Started => {
+                            self.vial_unlock_last_poll = Some(now);
                         }
-                    } else {
-                        self.stop_vial_unlock_with_status(crate::i18n::tr_catalog(
-                            self.app_settings.language,
-                            "status_messages.unlock_cancelled_disconnected",
-                        ));
-                        return;
+                        VialHidTaskStart::Busy => {}
+                        VialHidTaskStart::NoDevice => {
+                            self.stop_vial_unlock_with_status(crate::i18n::tr_catalog(
+                                self.app_settings.language,
+                                "status_messages.unlock_cancelled_disconnected",
+                            ));
+                            return;
+                        }
                     }
                 }
                 ctx.request_repaint_after(std::time::Duration::from_millis(16));
@@ -301,26 +303,5 @@ impl EntropyApp {
                     }
                 });
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn transient_unlock_poll_failure_keeps_session_active() {
-        assert_eq!(
-            unlock_poll_failure_action(false),
-            UnlockPollFailureAction::Retry
-        );
-    }
-
-    #[test]
-    fn disconnected_unlock_poll_failure_stops_session() {
-        assert_eq!(
-            unlock_poll_failure_action(true),
-            UnlockPollFailureAction::Stop
-        );
     }
 }

@@ -53,6 +53,7 @@ impl EntropyApp {
         self.layer_write_task = None;
         self.combo_write_task = None;
         self.settings_write_task = None;
+        self.vial_hid_task = None;
         self.reset_settings_write_context();
         self.cancel_pending_qmk_setting_writes();
         self.qmk_settings_write_queue.clear();
@@ -62,6 +63,8 @@ impl EntropyApp {
         self.undo_stack.clear();
         self.connect_state = ConnectState::Idle;
         self.unlock_open = false;
+        self.vial_unlocked = None;
+        self.vial_unlock_keys.clear();
         self.vial_unlock_polling = false;
         self.vial_unlock_last_poll = None;
         self.pending_layout_indicator_open_after_unlock = false;

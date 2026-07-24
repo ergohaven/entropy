@@ -169,6 +169,10 @@ mod typing_trainer_ui;
 mod ui_scale;
 #[path = "ui/universal_symbols_setup.rs"]
 mod universal_symbols_setup;
+#[path = "ui/vial_hid_task.rs"]
+mod vial_hid_task;
+#[cfg(not(target_arch = "wasm32"))]
+use vial_hid_task::VialHidTask;
 #[path = "vial/unlock.rs"]
 mod vial_unlock;
 #[path = "ui/window_lifecycle.rs"]

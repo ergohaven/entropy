@@ -77,6 +77,7 @@ impl EntropyApp {
         self.layer_write_task.is_some()
             || self.combo_write_task.is_some()
             || self.settings_write_task.is_some()
+            || self.vial_hid_task_active()
     }
 
     #[cfg(not(target_arch = "wasm32"))]

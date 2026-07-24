@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(not(target_arch = "wasm32"))]
+use super::vial_hid_task::VialHidTaskStart;
 
 fn about_entropy_label(lang: crate::i18n::Language) -> &'static str {
     match lang {
@@ -45,10 +47,15 @@ impl EntropyApp {
                 self.tap_hold_settings.supported || self.one_shot_settings.supported;
             let show_update_indicator = crate::app::update_available(&self.update_check);
             let show_matrix_item = self.firmware == FirmwareProtocol::Vial;
+            #[cfg(not(target_arch = "wasm32"))]
+            let vial_hid_idle = !self.vial_hid_task_active();
+            #[cfg(target_arch = "wasm32")]
+            let vial_hid_idle = true;
             let show_lock_item = self.firmware == FirmwareProtocol::Vial
                 && self.layout.is_some()
                 && !self.vial_unlock_polling
-                && !self.unlock_open;
+                && !self.unlock_open
+                && vial_hid_idle;
             let default_lock_label = crate::i18n::tr_catalog(lang, "ui.unlock_keyboard_action");
             let settings_item_count = 3
                 + show_matrix_item as usize
@@ -129,28 +136,12 @@ impl EntropyApp {
             if show_dropdown {
                 let dark = ui.visuals().dark_mode;
                 let rgb_available = rgb_available_for_menu;
-                let mut is_unlocked = false;
-                let mut lock_label = default_lock_label;
-                if show_lock_item {
-                    match self.hid_device.as_ref().map(|hid| hid.get_unlock_status()) {
-                        Some(Ok((unlocked, _keys))) => {
-                            is_unlocked = unlocked;
-                            lock_label = if is_unlocked {
-                                crate::i18n::tr_catalog(lang, "ui.lock_keyboard_action")
-                            } else {
-                                crate::i18n::tr_catalog(lang, "ui.unlock_keyboard_action")
-                            };
-                        }
-                        Some(Err(e)) if crate::hid::is_disconnect_error(&e) => {
-                            self.clear_connected_keyboard_state("Device disconnected");
-                            return;
-                        }
-                        Some(Err(e)) => {
-                            log::warn!("get_unlock_status for settings dropdown failed: {e}");
-                        }
-                        None => {}
-                    }
-                }
+                let is_unlocked = self.vial_unlocked == Some(true);
+                let lock_label = if is_unlocked {
+                    crate::i18n::tr_catalog(lang, "ui.lock_keyboard_action")
+                } else {
+                    default_lock_label
+                };
                 let item_width = dropdown_rect.width() - 16.0;
                 let (
                         app_hovered,
@@ -410,29 +401,22 @@ impl EntropyApp {
                                     if lock_resp.as_ref().map(|r| r.clicked()).unwrap_or(false) {
                                         self.close_top_dropdowns(ui.ctx());
                                         if is_unlocked {
-                                            if let Some(hid) = &self.hid_device {
-                                                let layout_indicator_was_open =
-                                                    self.app_settings.sticky_layout_window;
-                                                match hid.lock() {
-                                                    Ok(()) => {
-                                                        if layout_indicator_was_open {
-                                                            self.status_msg = crate::i18n::tr_catalog(
+                                            #[cfg(not(target_arch = "wasm32"))]
+                                            if self.start_vial_lock(ui.ctx())
+                                                == VialHidTaskStart::NoDevice
+                                            {
+                                                self.status_msg =
+                                                    crate::i18n::tr_catalog_format(
+                                                        self.app_settings.language,
+                                                        "dynamic_status.lock_failed",
+                                                        &[(
+                                                            "error",
+                                                            crate::i18n::tr_catalog(
                                                                 self.app_settings.language,
-                                                                "ui.sticky_layout_closed_due_to_lock",
-                                                            )
-                                                            .into();
-                                                            self.app_settings.sticky_layout_window = false;
-                                                            self.pending_layout_indicator_open_after_unlock = false;
-                                                            self.sticky_layout_last_size = None;
-                                                            save_app_settings(&self.app_settings);
-                                                        } else {
-                                                            self.status_msg = "Device locked".into();
-                                                        }
-                                                    }
-                                                    Err(e) => {
-                                                        self.status_msg = format!("Lock failed: {e}")
-                                                    }
-                                                }
+                                                                "status_messages.device_unavailable",
+                                                            ),
+                                                        )],
+                                                    );
                                             }
                                         } else {
                                             self.unlock_open = true;

@@ -7,6 +7,8 @@ pub(crate) static TRAY_RESTORE_REQUESTED: std::sync::atomic::AtomicBool =
 
 pub(crate) const MATRIX_TESTER_POLL_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(16);
+pub(crate) const MATRIX_TESTER_BLUETOOTH_POLL_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(80);
 pub(crate) const MATRIX_TESTER_LOCK_CHECK_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(750);
 pub(crate) const UI_SCALE_MIN: f32 = 0.5;
@@ -312,6 +314,8 @@ pub(crate) struct ConnectResult {
     pub(crate) device_name: String,
     /// Stable Vial keyboard definition id used for per-keyboard local settings.
     pub(crate) keyboard_id: u64,
+    /// Lock state and physical unlock keys reported by Vial during connect.
+    pub(crate) vial_unlock_status: Option<(bool, Vec<(u8, u8)>)>,
     /// Open HID connection used during loading; kept for live writes just like vial-gui.
     pub(crate) hid_device: Option<crate::hid::HidDevice>,
     pub(crate) layout: KeyboardLayout,
@@ -3063,6 +3067,9 @@ pub struct EntropyApp {
     /// Serialized background QMK settings write. Owns the HID handle while active.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) settings_write_task: Option<SettingsWriteTask>,
+    /// Serialized live Vial read/control operation. Owns the HID handle while active.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) vial_hid_task: Option<VialHidTask>,
     pub(super) settings_write_queue: SettingsWriteQueueState,
     pub(super) settings_write_generation: u64,
     pub(super) qmk_settings_write_queue: QmkSettingsWriteQueue,
@@ -3216,6 +3223,8 @@ pub struct EntropyApp {
     pub(crate) tour_target_rects: Vec<(TourTarget, egui::Rect)>,
     /// Vial unlock dialog open
     pub(crate) unlock_open: bool,
+    /// Cached Vial lock state. `None` means the device has not answered yet.
+    pub(crate) vial_unlocked: Option<bool>,
     pub(crate) vial_unlock_keys: Vec<(u8, u8)>,
     pub(crate) vial_unlock_polling: bool,
     pub(crate) vial_unlock_counter: u8,

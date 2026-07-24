@@ -513,6 +513,7 @@ impl EntropyApp {
         self.layer_write_task = None;
         self.combo_write_task = None;
         self.settings_write_task = None;
+        self.vial_hid_task = None;
         self.reset_settings_write_context();
         self.qmk_settings_write_queue.clear();
         self.hid_device = None;
@@ -560,6 +561,8 @@ impl EntropyApp {
         self.key_override_undo_stack.clear();
         self.selected_key_override = 0;
         self.key_override_pick_target = None;
+        self.vial_unlocked = None;
+        self.vial_unlock_keys.clear();
         self.reset_matrix_tester_state();
 
         let (tx, rx) = mpsc::channel();
@@ -608,6 +611,14 @@ impl EntropyApp {
                         "Unsupported Vial protocol version: {vial_protocol}"
                     ));
                 }
+
+                let vial_unlock_status = match dev_conn.get_unlock_status() {
+                    Ok(status) => Some(status),
+                    Err(error) => {
+                        log::warn!("Vial unlock status read failed during connect: {error:#}");
+                        None
+                    }
+                };
 
                 progress("Reading firmware version…");
                 let runtime_firmware_version = match dev_conn.get_firmware_version() {
@@ -1342,6 +1353,7 @@ impl EntropyApp {
                 Ok(ConnectResult {
                     device_name: dev.name.clone(),
                     keyboard_id,
+                    vial_unlock_status,
                     hid_device: Some(dev_conn),
                     about_info,
                     layer_names_from_firmware,
@@ -1378,7 +1390,7 @@ impl EntropyApp {
     }
 
     pub(super) fn resume_pending_device_connect(&mut self) {
-        if self.layer_write_task.is_some() || self.qmk_settings_write_busy() {
+        if self.hid_write_task_owner_active() || self.qmk_settings_write_busy() {
             return;
         }
         if let Some(device_idx) = self.pending_device_connect.take() {
