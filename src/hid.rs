@@ -107,10 +107,12 @@ const WINDOWS_HID_HELPER_BLE_COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
 const VIAL_GUI_RETRY_DELAY: Duration = Duration::from_millis(500);
 const HID_OPEN_RETRIES: usize = 5;
 const HID_OPEN_RETRY_DELAY: Duration = Duration::from_millis(250);
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 const HID_REPORT_DESCRIPTOR_MAX: usize = 4_096;
 #[cfg(target_os = "linux")]
 const BLUETOOTH_HID_PLATFORM: &str = "Linux";
+#[cfg(target_os = "macos")]
+const BLUETOOTH_HID_PLATFORM: &str = "macOS";
 #[cfg(target_os = "windows")]
 const BLUETOOTH_HID_PLATFORM: &str = "Windows";
 
@@ -133,11 +135,11 @@ impl std::fmt::Display for MacosHidInputMonitoringRequired {
 #[cfg(target_os = "macos")]
 impl std::error::Error for MacosHidInputMonitoringRequired {}
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 #[derive(Debug)]
 struct UnsafeBluetoothReportMap;
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 impl std::fmt::Display for UnsafeBluetoothReportMap {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(
@@ -147,10 +149,10 @@ impl std::fmt::Display for UnsafeBluetoothReportMap {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 impl std::error::Error for UnsafeBluetoothReportMap {}
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn is_unsafe_bluetooth_report_map(error: &anyhow::Error) -> bool {
     error
         .chain()
@@ -449,7 +451,7 @@ impl HidDevice {
             match Self::try_open_fresh_for(device) {
                 Ok(device) => return Ok(device),
                 Err(e) => {
-                    #[cfg(any(target_os = "linux", target_os = "windows"))]
+                    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
                     if is_unsafe_bluetooth_report_map(&e) {
                         return Err(e);
                     }
@@ -889,7 +891,7 @@ fn detect_hid_write_framing(
     device: &hidapi::HidDevice,
     transport: HidTransport,
 ) -> Result<HidWriteFraming> {
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     if transport.is_bluetooth() {
         let mut descriptor = [0u8; HID_REPORT_DESCRIPTOR_MAX];
         let length = device
@@ -898,7 +900,7 @@ fn detect_hid_write_framing(
 
         #[cfg(target_os = "linux")]
         let unnumbered_framing = HidWriteFraming::LinuxBluetoothUnnumbered;
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         let unnumbered_framing = HidWriteFraming::ReportIdPrefixed(0);
 
         let write_framing = bluetooth_hid_write_framing(&descriptor[..length], unnumbered_framing)?;
@@ -931,7 +933,7 @@ fn detect_hid_write_framing(
     Ok(HidWriteFraming::ReportIdPrefixed(0))
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn bluetooth_hid_write_framing(
     descriptor: &[u8],
     unnumbered_framing: HidWriteFraming,
@@ -1595,7 +1597,7 @@ mod tests {
         assert_eq!(frame[2], 0xA5);
     }
 
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     #[test]
     fn numbered_bluetooth_descriptor_selects_vial_report_id() {
         let descriptor = [
