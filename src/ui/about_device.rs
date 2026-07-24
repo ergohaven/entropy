@@ -153,7 +153,7 @@ fn macro_ext_keycodes_status(lang: crate::i18n::Language, info: &DeviceAboutInfo
     }
 }
 
-fn battery_percent_text(lang: crate::i18n::Language, value: Option<u8>) -> String {
+pub(super) fn battery_percent_text(lang: crate::i18n::Language, value: Option<u8>) -> String {
     value
         .map(|percent| format!("{percent}%"))
         .unwrap_or_else(|| not_reported(lang).to_owned())

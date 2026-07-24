@@ -96,6 +96,15 @@ pub(super) fn top_menu_text_width(ui: &egui::Ui, label: &str, font_size: f32) ->
     })
 }
 
+pub(super) fn top_menu_divider_stroke(dark: bool) -> egui::Stroke {
+    let color = if dark {
+        Color32::from_gray(105)
+    } else {
+        Color32::from_gray(170)
+    };
+    egui::Stroke::new(1.5_f32, color)
+}
+
 pub(super) fn adaptive_top_dropdown_width<'a>(
     ui: &egui::Ui,
     labels: impl IntoIterator<Item = &'a str>,

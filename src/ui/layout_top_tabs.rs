@@ -242,11 +242,7 @@ impl EntropyApp {
             undo_color,
         );
 
-        let divider_color = if ui.visuals().dark_mode {
-            Color32::from_gray(105)
-        } else {
-            Color32::from_gray(170)
-        };
+        let divider_stroke = top_menu_divider_stroke(ui.visuals().dark_mode);
         let divider_top = tabs_y + 4.0;
         let divider_bottom = tabs_y + tab_height - 4.0;
         let mut divider_x = start_x;
@@ -255,7 +251,7 @@ impl EntropyApp {
             let x = divider_x + tab_gap / 2.0;
             ui.painter().line_segment(
                 [egui::pos2(x, divider_top), egui::pos2(x, divider_bottom)],
-                egui::Stroke::new(1.5_f32, divider_color),
+                divider_stroke,
             );
             divider_x += tab_gap;
         }

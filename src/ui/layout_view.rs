@@ -9,12 +9,18 @@ impl EntropyApp {
     ) {
         let viewport = ui.max_rect();
         let avail = viewport.size();
+        let layout_top_reserved_h = LAYOUT_TOP_RESERVED_H
+            + if self.main_menu_has_battery_status() {
+                layout_layer_switcher::MAIN_MENU_BATTERY_RESERVED_H
+            } else {
+                0.0
+            };
         let geometry = layout_geometry_with_reserved_and_filter(
             ui.ctx(),
             layout,
             viewport,
             clamp_ui_scale(self.app_settings.ui_scale),
-            LAYOUT_TOP_RESERVED_H,
+            layout_top_reserved_h,
             LAYOUT_BOTTOM_RESERVED_H,
             LAYOUT_FIT_MARGIN,
             None,
