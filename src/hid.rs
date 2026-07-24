@@ -162,6 +162,7 @@ enum HidBackend {
         device: hidapi::HidDevice,
         transport: HidTransport,
         path: Option<PathBuf>,
+        input_report_polling: std::sync::atomic::AtomicBool,
     },
     #[cfg(target_os = "windows")]
     Proxy(HidProxy),
@@ -326,6 +327,7 @@ impl HidDevice {
                 device,
                 transport: HidTransport::Usb,
                 path: Some(PathBuf::from(path)),
+                input_report_polling: std::sync::atomic::AtomicBool::new(false),
             },
         })
     }
@@ -458,6 +460,7 @@ impl HidDevice {
                                 device: hid_device,
                                 transport: device_transport(device),
                                 path: local_hid_path(device),
+                                input_report_polling: std::sync::atomic::AtomicBool::new(false),
                             },
                         });
                     }
@@ -480,6 +483,7 @@ impl HidDevice {
                         device: hid_device,
                         transport: device_transport(device),
                         path: Some(path),
+                        input_report_polling: std::sync::atomic::AtomicBool::new(false),
                     },
                 })
                 .context("Failed to open HID device");
@@ -497,6 +501,7 @@ impl HidDevice {
                         device: hid_device,
                         transport: device_transport(device),
                         path: Some(path),
+                        input_report_polling: std::sync::atomic::AtomicBool::new(false),
                     },
                 })
                 .context("Failed to open HID device");
@@ -512,7 +517,14 @@ impl HidDevice {
                 device,
                 transport,
                 path,
-            } => usb_send_local(device, *transport, path.as_deref(), data),
+                input_report_polling,
+            } => usb_send_local(
+                device,
+                *transport,
+                path.as_deref(),
+                input_report_polling,
+                data,
+            ),
             #[cfg(target_os = "windows")]
             HidBackend::Proxy(proxy) => proxy.usb_send(data),
             #[cfg(target_os = "linux")]
@@ -633,6 +645,7 @@ fn usb_send_local(
     device: &hidapi::HidDevice,
     transport: HidTransport,
     path: Option<&Path>,
+    input_report_polling: &std::sync::atomic::AtomicBool,
     data: &[u8],
 ) -> Result<[u8; MSG_LEN]> {
     ensure_hid_path_present(path)?;
@@ -702,9 +715,47 @@ fn usb_send_local(
             }
         }
 
+        #[cfg(target_os = "linux")]
+        if transport.is_bluetooth()
+            && input_report_polling.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            match read_response_via_input_report(device, data, read_timeout_ms) {
+                Ok(resp) => return Ok(resp),
+                Err(e) => {
+                    last_error = Some(e);
+                    continue;
+                }
+            }
+        }
+
         match read_response(device, transport, data, read_timeout_ms) {
             Ok(resp) => return Ok(resp),
             Err(e) => {
+                #[cfg(target_os = "linux")]
+                if transport.is_bluetooth() {
+                    let notification_error = e;
+                    match read_response_via_input_report(device, data, read_timeout_ms) {
+                        Ok(resp) => {
+                            input_report_polling.store(true, std::sync::atomic::Ordering::Relaxed);
+                            static LOG_INPUT_REPORT_FALLBACK_ONCE: std::sync::Once =
+                                std::sync::Once::new();
+                            LOG_INPUT_REPORT_FALLBACK_ONCE.call_once(|| {
+                                log::info!(
+                                    "Linux Bluetooth HID notifications unavailable; \
+                                     using Get Input Report polling"
+                                );
+                            });
+                            return Ok(resp);
+                        }
+                        Err(input_report_error) => {
+                            last_error = Some(anyhow::anyhow!(
+                                "HID notification failed: {notification_error}; \
+                                 Get Input Report fallback failed: {input_report_error}"
+                            ));
+                            continue;
+                        }
+                    }
+                }
                 last_error = Some(e);
                 continue;
             }
@@ -764,25 +815,16 @@ fn read_response(
             last_error = Some(anyhow::anyhow!("HID timeout — device did not respond"));
             continue;
         }
-        if bytes_read != MSG_LEN && bytes_read != MSG_LEN + 1 {
-            last_error = Some(anyhow::anyhow!(
-                "HID invalid response length — read {} bytes, expected {} or {} bytes",
-                bytes_read,
-                MSG_LEN,
-                MSG_LEN + 1
-            ));
-            if transport.is_bluetooth() {
-                continue;
+        let resp = match decode_hid_response(&read_buf, bytes_read) {
+            Ok(resp) => resp,
+            Err(e) => {
+                last_error = Some(e);
+                if transport.is_bluetooth() {
+                    continue;
+                }
+                break;
             }
-            break;
-        }
-
-        let mut resp = [0u8; MSG_LEN];
-        if bytes_read == MSG_LEN + 1 {
-            resp.copy_from_slice(&read_buf[1..MSG_LEN + 1]);
-        } else {
-            resp.copy_from_slice(&read_buf[..MSG_LEN]);
-        }
+        };
 
         if response_matches_command(command, &resp) {
             return Ok(resp);
@@ -796,6 +838,62 @@ fn read_response(
     }
 
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("HID timeout — device did not respond")))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn decode_hid_response(read_buf: &[u8; MSG_LEN + 1], bytes_read: usize) -> Result<[u8; MSG_LEN]> {
+    if bytes_read != MSG_LEN && bytes_read != MSG_LEN + 1 {
+        bail!(
+            "HID invalid response length — read {} bytes, expected {} or {} bytes",
+            bytes_read,
+            MSG_LEN,
+            MSG_LEN + 1
+        );
+    }
+
+    let mut resp = [0u8; MSG_LEN];
+    if bytes_read == MSG_LEN + 1 {
+        resp.copy_from_slice(&read_buf[1..MSG_LEN + 1]);
+    } else {
+        resp.copy_from_slice(&read_buf[..MSG_LEN]);
+    }
+    Ok(resp)
+}
+
+#[cfg(target_os = "linux")]
+fn read_response_via_input_report(
+    device: &hidapi::HidDevice,
+    command: &[u8],
+    timeout_ms: i32,
+) -> Result<[u8; MSG_LEN]> {
+    let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms.max(1) as u64);
+
+    // Give RMK one BLE connection interval to process the output report before
+    // reading the input characteristic through BlueZ's UHID GET_REPORT path.
+    std::thread::sleep(WINDOWS_BLE_SETTLE_DELAY);
+
+    loop {
+        let mut read_buf = [0u8; MSG_LEN + 1];
+        read_buf[0] = 0;
+        let bytes_read = device
+            .get_input_report(&mut read_buf)
+            .map_err(|e| anyhow::anyhow!("HID Get Input Report failed: {e}"))?;
+        let resp = decode_hid_response(&read_buf, bytes_read)?;
+        if response_matches_command(command, &resp) {
+            return Ok(resp);
+        }
+
+        let stale_error = anyhow::anyhow!(
+            "HID stale Get Input Report for command {:02X}: {:02X?}",
+            command.first().copied().unwrap_or(0),
+            &resp[..command.len().clamp(3, 8)]
+        );
+
+        if std::time::Instant::now() >= deadline {
+            return Err(stale_error);
+        }
+        std::thread::sleep(WINDOWS_BLE_SETTLE_DELAY);
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1142,6 +1240,40 @@ mod tests {
         assert_eq!(frame.len(), MSG_LEN);
         assert_eq!(frame[0], CMD_VIA_GET_PROTOCOL_VERSION);
         assert_eq!(frame[1], 0xA5);
+    }
+
+    #[test]
+    fn hid_response_accepts_unnumbered_stream_report() {
+        let mut buffer = [0u8; MSG_LEN + 1];
+        buffer[0] = CMD_VIA_GET_PROTOCOL_VERSION;
+        buffer[1] = 0;
+        buffer[2] = 9;
+
+        let response = decode_hid_response(&buffer, MSG_LEN).unwrap();
+
+        assert_eq!(response[0], CMD_VIA_GET_PROTOCOL_VERSION);
+        assert_eq!(&response[1..3], &[0, 9]);
+    }
+
+    #[test]
+    fn hid_response_accepts_report_with_explicit_id() {
+        let mut buffer = [0u8; MSG_LEN + 1];
+        buffer[0] = 0;
+        buffer[1] = CMD_VIA_GET_PROTOCOL_VERSION;
+        buffer[2] = 0;
+        buffer[3] = 9;
+
+        let response = decode_hid_response(&buffer, MSG_LEN + 1).unwrap();
+
+        assert_eq!(response[0], CMD_VIA_GET_PROTOCOL_VERSION);
+        assert_eq!(&response[1..3], &[0, 9]);
+    }
+
+    #[test]
+    fn hid_response_rejects_invalid_length() {
+        let buffer = [0u8; MSG_LEN + 1];
+
+        assert!(decode_hid_response(&buffer, MSG_LEN - 1).is_err());
     }
 
     fn qmk_settings_command(subcommand: u8, qsid: u16) -> [u8; MSG_LEN] {
