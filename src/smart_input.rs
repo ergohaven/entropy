@@ -484,6 +484,11 @@ pub fn request_input_monitoring_access() -> bool {
 }
 
 #[cfg(target_os = "macos")]
+pub fn input_monitoring_access_granted() -> bool {
+    macos::input_monitoring_granted()
+}
+
+#[cfg(target_os = "macos")]
 pub fn restart_event_tap() {
     macos::restart_event_tap();
 }
@@ -626,7 +631,7 @@ mod macos {
         unsafe { AXIsProcessTrusted() }
     }
 
-    fn input_monitoring_granted() -> bool {
+    pub(super) fn input_monitoring_granted() -> bool {
         unsafe { CGPreflightListenEventAccess() }
     }
 

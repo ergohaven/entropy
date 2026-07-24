@@ -114,6 +114,25 @@ const BLUETOOTH_HID_PLATFORM: &str = "Linux";
 #[cfg(target_os = "windows")]
 const BLUETOOTH_HID_PLATFORM: &str = "Windows";
 
+pub(crate) const MACOS_HID_INPUT_MONITORING_REQUIRED: &str =
+    "macOS Input Monitoring permission is required for Bluetooth HID access. \
+     Allow Entropy in System Settings → Privacy & Security → Input Monitoring, \
+     then fully quit and reopen Entropy";
+
+#[cfg(target_os = "macos")]
+#[derive(Debug)]
+struct MacosHidInputMonitoringRequired;
+
+#[cfg(target_os = "macos")]
+impl std::fmt::Display for MacosHidInputMonitoringRequired {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(MACOS_HID_INPUT_MONITORING_REQUIRED)
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl std::error::Error for MacosHidInputMonitoringRequired {}
+
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 #[derive(Debug)]
 struct UnsafeBluetoothReportMap;
@@ -422,6 +441,9 @@ impl HidDevice {
     }
 
     fn open_fresh_for_local(device: &crate::device::Device) -> Result<Self> {
+        #[cfg(target_os = "macos")]
+        prepare_macos_bluetooth_hid_access(device)?;
+
         let mut last_error = None;
         for attempt in 0..HID_OPEN_RETRIES {
             match Self::try_open_fresh_for(device) {
@@ -524,6 +546,10 @@ impl HidDevice {
                         });
                     }
                     Err(e) => {
+                        #[cfg(target_os = "macos")]
+                        if macos_hid_open_not_permitted(&e) {
+                            return Err(MacosHidInputMonitoringRequired.into());
+                        }
                         log::debug!("direct HID path open failed, falling back to scan: {e}");
                     }
                 }
@@ -535,9 +561,16 @@ impl HidDevice {
                 continue;
             }
             let path = PathBuf::from(info.path().to_string_lossy().into_owned());
-            let hid_device = info
-                .open_device(&api)
-                .context("Failed to open HID device")?;
+            let hid_device = match info.open_device(&api) {
+                Ok(device) => device,
+                Err(error) => {
+                    #[cfg(target_os = "macos")]
+                    if macos_hid_open_not_permitted(&error) {
+                        return Err(MacosHidInputMonitoringRequired.into());
+                    }
+                    return Err(error).context("Failed to open HID device");
+                }
+            };
             let transport = device_transport(device);
             let write_framing = detect_hid_write_framing(&hid_device, transport)?;
             return Ok(Self {
@@ -556,9 +589,16 @@ impl HidDevice {
                 continue;
             }
             let path = PathBuf::from(info.path().to_string_lossy().into_owned());
-            let hid_device = info
-                .open_device(&api)
-                .context("Failed to open HID device")?;
+            let hid_device = match info.open_device(&api) {
+                Ok(device) => device,
+                Err(error) => {
+                    #[cfg(target_os = "macos")]
+                    if macos_hid_open_not_permitted(&error) {
+                        return Err(MacosHidInputMonitoringRequired.into());
+                    }
+                    return Err(error).context("Failed to open HID device");
+                }
+            };
             let transport = device_transport(device);
             let write_framing = detect_hid_write_framing(&hid_device, transport)?;
             return Ok(Self {
@@ -1465,6 +1505,25 @@ fn bytes_to_hex(data: &[u8]) -> String {
         out.push(HEX[(byte & 0x0F) as usize] as char);
     }
     out
+}
+
+#[cfg(target_os = "macos")]
+fn prepare_macos_bluetooth_hid_access(device: &crate::device::Device) -> Result<()> {
+    if !device.is_bluetooth_transport() || crate::smart_input::input_monitoring_access_granted() {
+        return Ok(());
+    }
+
+    if crate::smart_input::request_input_monitoring_access() {
+        return Ok(());
+    }
+
+    Err(MacosHidInputMonitoringRequired.into())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_hid_open_not_permitted(error: &hidapi::HidError) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("0xe00002e2") || message.contains("not permitted")
 }
 
 #[cfg(target_os = "windows")]

@@ -1260,6 +1260,18 @@ pub fn tr_text(language: Language, text: &str) -> String {
     match text {
         "Device not found" => tr_catalog_string(language, "dynamic_status.device_not_found"),
         "Connect thread died" => tr_catalog_string(language, "dynamic_status.connect_thread_died"),
+        other
+            if other
+                == format!(
+                    "Open failed: {}",
+                    crate::hid::MACOS_HID_INPUT_MONITORING_REQUIRED
+                ) =>
+        {
+            tr_catalog_string(
+                language,
+                "dynamic_status.macos_hid_input_monitoring_required",
+            )
+        }
         "✓ Saved" => tr_catalog_string(language, "dynamic_status.saved_check"),
         "Device locked" => tr_catalog_string(language, "dynamic_status.device_locked"),
         "Entropy refreshed from a repeated launch" => {

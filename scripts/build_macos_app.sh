@@ -172,6 +172,8 @@ cat >"$CONTENTS_DIR/Info.plist" <<PLIST
     <string>$MACOSX_DEPLOYMENT_TARGET</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSInputMonitoringUsageDescription</key>
+    <string>Entropy needs Input Monitoring access to configure Bluetooth keyboards through HID.</string>
 </dict>
 </plist>
 PLIST
