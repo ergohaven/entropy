@@ -207,11 +207,11 @@ fn select_vial_endpoints(
         let output_write_type = if output
             .flags
             .iter()
-            .any(|flag| flag.eq_ignore_ascii_case("write-without-response"))
+            .any(|flag| flag.eq_ignore_ascii_case("write"))
         {
-            "command"
-        } else {
             "request"
+        } else {
+            "command"
         };
         endpoints.push(VialGattEndpoints {
             service: service.clone(),
@@ -629,8 +629,32 @@ mod tests {
                 service: "/service/vial".to_owned(),
                 input: "/service/vial/input".to_owned(),
                 output: "/service/vial/output".to_owned(),
-                output_write_type: "command",
+                output_write_type: "request",
             }]
+        );
+    }
+
+    #[test]
+    fn uses_command_only_when_write_request_is_unavailable() {
+        let services = HashMap::from([("/service/vial".to_owned(), "/device".to_owned())]);
+        let characteristics = vec![
+            characteristic(
+                "/service/vial/input",
+                "/service/vial",
+                "2a4d",
+                &["read", "notify"],
+            ),
+            characteristic(
+                "/service/vial/output",
+                "/service/vial",
+                "2a4d",
+                &["read", "write-without-response"],
+            ),
+        ];
+
+        assert_eq!(
+            select_vial_endpoints(&services, &characteristics)[0].output_write_type,
+            "command"
         );
     }
 

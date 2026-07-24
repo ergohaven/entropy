@@ -585,19 +585,19 @@ impl EntropyApp {
                     dev.product_id
                 );
                 let dev_conn =
-                    HidDevice::open_fresh_for(&dev).map_err(|e| format!("Open failed: {e}"))?;
+                    HidDevice::open_fresh_for(&dev).map_err(|e| format!("Open failed: {e:#}"))?;
 
                 progress("Reading VIA protocol version…");
                 log::info!("Getting protocol version…");
                 let via_protocol = dev_conn
                     .get_protocol_version()
-                    .map_err(|e| format!("VIA protocol read failed: {e}"))?;
+                    .map_err(|e| format!("VIA protocol read failed: {e:#}"))?;
                 log::info!("VIA protocol version: {via_protocol}");
 
                 progress("Reading Vial keyboard id…");
                 let (vial_protocol, keyboard_id) = dev_conn
                     .get_keyboard_id()
-                    .map_err(|e| format!("Vial keyboard id read failed: {e}"))?;
+                    .map_err(|e| format!("Vial keyboard id read failed: {e:#}"))?;
                 log::info!("Vial protocol: {vial_protocol}, keyboard id: {keyboard_id:016X}");
                 let cache_key = device_cache_key(&dev, keyboard_id);
                 if ![-1i32, 9].contains(&(via_protocol as i32)) {
@@ -628,7 +628,7 @@ impl EntropyApp {
                 log::info!("Getting layout JSON…");
                 let definition_size = dev_conn
                     .get_definition_size()
-                    .map_err(|e| format!("Layout size read failed: {e}"))?;
+                    .map_err(|e| format!("Layout size read failed: {e:#}"))?;
                 let runtime_firmware_cache_token =
                     runtime_firmware_version_cache_token(runtime_firmware_version.as_deref());
                 let json = if let Some(cached) = load_cached_vial_definition(
@@ -643,7 +643,7 @@ impl EntropyApp {
                 } else {
                     let json = dev_conn
                         .get_layout_json_with_size(definition_size)
-                        .map_err(|e| format!("Layout read failed: {e}"))?;
+                        .map_err(|e| format!("Layout read failed: {e:#}"))?;
                     if let Some(runtime_firmware_version) = runtime_firmware_cache_token {
                         save_cached_vial_definition(
                             &cache_key,
@@ -732,7 +732,7 @@ impl EntropyApp {
                 let reported_layer_count = dev_conn
                     .get_layer_count()
                     .map(|c| c as usize)
-                    .map_err(|e| format!("Layer count read failed: {e}"))?;
+                    .map_err(|e| format!("Layer count read failed: {e:#}"))?;
                 let layer_count = normalize_reported_layer_count(reported_layer_count);
                 if layer_count != reported_layer_count {
                     log::warn!(
