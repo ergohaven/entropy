@@ -97,6 +97,7 @@ impl DeviceManager {
 
         #[cfg(target_os = "linux")]
         {
+            deduplicate_kernel_bluetooth_devices(&mut devices);
             let bluez_devices = crate::linux_ble::scan_devices();
             merge_bluez_fallback_devices(&mut devices, bluez_devices);
         }
@@ -130,6 +131,18 @@ fn normalized_bluetooth_identity(value: &str) -> String {
         .filter(|character| character.is_ascii_hexdigit())
         .flat_map(char::to_lowercase)
         .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn deduplicate_kernel_bluetooth_devices(devices: &mut Vec<Device>) {
+    let mut seen = std::collections::HashSet::new();
+    devices.retain(|device| {
+        if !device.is_bluetooth_transport() || device.uses_bluez_gatt_transport() {
+            return true;
+        }
+        let identity = normalized_bluetooth_identity(&device.serial_number);
+        identity.is_empty() || seen.insert((identity, device.vendor_id, device.product_id))
+    });
 }
 
 #[cfg(target_os = "linux")]
@@ -261,5 +274,35 @@ mod tests {
 
         assert_eq!(devices.len(), 2);
         assert!(devices[1].uses_bluez_gatt_transport());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn deduplicates_kernel_hid_collections_for_one_bluetooth_device() {
+        let mut first = test_device("Bluetooth", "/dev/hidraw4");
+        first.serial_number = "C6:9E:29:C4:F4:C7".to_owned();
+        let mut second = first.clone();
+        second.path = "/dev/hidraw6".to_owned();
+        let mut devices = vec![first.clone(), second];
+
+        deduplicate_kernel_bluetooth_devices(&mut devices);
+
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].path, first.path);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn keeps_distinct_bluetooth_identities() {
+        let mut first = test_device("Bluetooth", "/dev/hidraw4");
+        first.serial_number = "C6:9E:29:C4:F4:C7".to_owned();
+        let mut second = first.clone();
+        second.path = "/dev/hidraw6".to_owned();
+        second.serial_number = "D7:AF:3A:D5:05:D8".to_owned();
+        let mut devices = vec![first, second];
+
+        deduplicate_kernel_bluetooth_devices(&mut devices);
+
+        assert_eq!(devices.len(), 2);
     }
 }

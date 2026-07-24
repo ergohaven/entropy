@@ -715,7 +715,6 @@ fn draw_app_settings_value(
 
 #[cfg(target_os = "linux")]
 pub(super) fn linux_vial_udev_rules_installed() -> bool {
-    const RULE_MARKER: &str = r#"ATTRS{serial}=="*vial:f64c2b3c*""#;
     const RULE_PATHS: [&str; 4] = [
         "/etc/udev/rules.d/59-vial.rules",
         "/run/udev/rules.d/59-vial.rules",
@@ -725,11 +724,21 @@ pub(super) fn linux_vial_udev_rules_installed() -> bool {
 
     RULE_PATHS.iter().any(|path| {
         std::fs::read_to_string(path)
-            .map(|contents| {
-                contents.contains(RULE_MARKER) && contents.contains("SUBSYSTEM==\"hidraw\"")
-            })
+            .map(|contents| vial_udev_rule_is_current(&contents))
             .unwrap_or(false)
     })
+}
+
+#[cfg(target_os = "linux")]
+fn vial_udev_rule_is_current(contents: &str) -> bool {
+    const VERSION_MARKER: &str = "# Entropy Vial hidraw access v2";
+    const USB_RULE_MARKER: &str = r#"ATTRS{serial}=="*vial:f64c2b3c*""#;
+    const ERGOHAVEN_BLUETOOTH_RULE_MARKER: &str = r#"KERNELS=="0005:E126:*""#;
+
+    contents.contains(VERSION_MARKER)
+        && contents.contains(USB_RULE_MARKER)
+        && contents.contains(ERGOHAVEN_BLUETOOTH_RULE_MARKER)
+        && contents.contains("SUBSYSTEM==\"hidraw\"")
 }
 
 #[cfg(target_os = "linux")]
@@ -750,4 +759,32 @@ fn command_output_summary(primary: &[u8], fallback: &[u8]) -> String {
         .rev()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_udev_tests {
+    use super::vial_udev_rule_is_current;
+
+    const OLD_RULE: &str = r#"KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{serial}=="*vial:f64c2b3c*", MODE="0660", GROUP="1000", TAG+="uaccess""#;
+    const CURRENT_RULE: &str = r#"# Entropy Vial hidraw access v2
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{serial}=="*vial:f64c2b3c*", MODE="0660", GROUP="1000", TAG+="uaccess"
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", KERNELS=="0005:E126:*", MODE="0660", GROUP="1000", TAG+="uaccess""#;
+
+    #[test]
+    fn old_usb_only_rule_requires_upgrade() {
+        assert!(!vial_udev_rule_is_current(OLD_RULE));
+    }
+
+    #[test]
+    fn current_rule_covers_usb_and_ergohaven_bluetooth() {
+        assert!(vial_udev_rule_is_current(CURRENT_RULE));
+    }
+
+    #[test]
+    fn bundled_installer_writes_the_current_rule() {
+        let installer = include_str!("../../linux/udev/install-vial-rules.sh");
+
+        assert!(installer.contains("# Entropy Vial hidraw access v2"));
+        assert!(installer.contains(r#"KERNELS==\"0005:E126:*\""#));
+    }
 }
