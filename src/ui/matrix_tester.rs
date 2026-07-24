@@ -166,7 +166,7 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn poll_matrix_tester(&mut self, ctx: &egui::Context, layout: &KeyboardLayout) {
-        if self.main_menu_tab != MainMenuTab::Settings {
+        if self.main_menu_tab != MainMenuTab::Settings || self.top_dropdown_open(ctx) {
             return;
         }
         self.poll_switch_matrix_state(ctx, layout.rows, layout.cols, true);

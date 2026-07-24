@@ -9,6 +9,26 @@ fn about_entropy_label(lang: crate::i18n::Language) -> &'static str {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct VialLockMenuState {
+    visible: bool,
+    enabled: bool,
+}
+
+fn vial_lock_menu_state(
+    vial_firmware: bool,
+    layout_loaded: bool,
+    unlock_polling: bool,
+    unlock_open: bool,
+    vial_hid_idle: bool,
+) -> VialLockMenuState {
+    let visible = vial_firmware && layout_loaded && !unlock_polling && !unlock_open;
+    VialLockMenuState {
+        visible,
+        enabled: visible && vial_hid_idle,
+    }
+}
+
 impl EntropyApp {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_layout_settings_dropdown(
@@ -51,11 +71,14 @@ impl EntropyApp {
             let vial_hid_idle = !self.vial_hid_task_active();
             #[cfg(target_arch = "wasm32")]
             let vial_hid_idle = true;
-            let show_lock_item = self.firmware == FirmwareProtocol::Vial
-                && self.layout.is_some()
-                && !self.vial_unlock_polling
-                && !self.unlock_open
-                && vial_hid_idle;
+            let lock_menu_state = vial_lock_menu_state(
+                self.firmware == FirmwareProtocol::Vial,
+                self.layout.is_some(),
+                self.vial_unlock_polling,
+                self.unlock_open,
+                vial_hid_idle,
+            );
+            let show_lock_item = lock_menu_state.visible;
             let default_lock_label = crate::i18n::tr_catalog(lang, "ui.unlock_keyboard_action");
             let settings_item_count = 3
                 + show_matrix_item as usize
@@ -301,7 +324,13 @@ impl EntropyApp {
                                         )
                                     });
                                     let lock_resp = show_lock_item.then(|| {
-                                        top_dropdown_item(ui, item_width, lock_label, true, false)
+                                        top_dropdown_item(
+                                            ui,
+                                            item_width,
+                                            lock_label,
+                                            lock_menu_state.enabled,
+                                            false,
+                                        )
                                     });
                                     let about_entropy_resp = top_dropdown_item_with_indicator(
                                         ui,
@@ -546,5 +575,38 @@ impl EntropyApp {
                 ui.ctx().data_mut(|d| d.insert_temp(dropdown_id, false));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn busy_vial_worker_keeps_lock_item_visible() {
+        assert_eq!(
+            vial_lock_menu_state(true, true, false, false, false),
+            VialLockMenuState {
+                visible: true,
+                enabled: false,
+            }
+        );
+    }
+
+    #[test]
+    fn idle_vial_worker_enables_lock_item() {
+        assert_eq!(
+            vial_lock_menu_state(true, true, false, false, true),
+            VialLockMenuState {
+                visible: true,
+                enabled: true,
+            }
+        );
+    }
+
+    #[test]
+    fn active_unlock_flow_hides_lock_item() {
+        assert!(!vial_lock_menu_state(true, true, true, false, true).visible);
+        assert!(!vial_lock_menu_state(true, true, false, true, true).visible);
     }
 }
