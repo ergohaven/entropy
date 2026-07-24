@@ -66,10 +66,12 @@ impl EntropyApp {
                     .devices()
                     .iter()
                     .map(|dev| {
-                        self.device_display_names
+                        let display_name = self
+                            .device_display_names
                             .get(&dev.display_name_cache_key())
-                            .cloned()
-                            .unwrap_or_else(|| dev.name.clone())
+                            .map(String::as_str)
+                            .unwrap_or(dev.name.as_str());
+                        dev.display_name_with_transport(display_name)
                     })
                     .collect()
             };
@@ -157,12 +159,13 @@ impl EntropyApp {
                                             .device_display_names
                                             .get(&dev.display_name_cache_key())
                                             .map(String::as_str);
-                                        let display_name =
-                                            cached_display_name.unwrap_or(dev.name.as_str());
+                                        let display_name = dev.display_name_with_transport(
+                                            cached_display_name.unwrap_or(dev.name.as_str()),
+                                        );
                                         let resp = top_dropdown_item(
                                             ui,
                                             dropdown_size.x - 16.0,
-                                            display_name,
+                                            &display_name,
                                             switch_enabled,
                                             is_selected,
                                         );

@@ -323,7 +323,14 @@ impl EntropyApp {
         let selected_device_name = self
             .selected_device
             .and_then(|idx| self.device_manager.devices().get(idx))
-            .map(|device| device.name.clone());
+            .map(|device| {
+                let display_name = self
+                    .device_display_names
+                    .get(&device.display_name_cache_key())
+                    .map(String::as_str)
+                    .unwrap_or(device.name.as_str());
+                device.display_name_with_transport(display_name)
+            });
         let indicator_title =
             crate::i18n::tr_catalog(lang, "ui.sticky_layout_window_title").to_string();
         let device_title = selected_device_name

@@ -505,7 +505,10 @@ impl EntropyApp {
             }
         };
 
-        self.status_msg = format!("Connecting to {}…", dev.name);
+        self.status_msg = format!(
+            "Connecting to {}…",
+            dev.display_name_with_transport(&dev.name)
+        );
         self.layout = None;
         self.selected_key = None;
         self.selected_encoder = None;

@@ -462,7 +462,12 @@ impl EntropyApp {
                     .map(|bytes| crate::keycode_picker::decode_macro_actions(bytes))
                     .collect();
 
-                self.status_msg = format!("Connected: {}", r.device_name);
+                let connected_display_name = self
+                    .selected_device
+                    .and_then(|idx| self.device_manager.devices().get(idx))
+                    .map(|device| device.display_name_with_transport(&r.device_name))
+                    .unwrap_or_else(|| r.device_name.clone());
+                self.status_msg = format!("Connected: {connected_display_name}");
 
                 // Load per-device layer names.
                 let device_name = r.device_name.clone();
@@ -547,7 +552,7 @@ impl EntropyApp {
 
                 log::info!(
                     "Connected: {} ({} layers, {:?})",
-                    r.device_name,
+                    connected_display_name,
                     r.layer_count,
                     self.firmware
                 );

@@ -39,6 +39,15 @@ impl Device {
             self.name
         )
     }
+
+    pub fn display_name_with_transport(&self, display_name: &str) -> String {
+        let transport = if self.is_bluetooth_transport() {
+            "Bluetooth"
+        } else {
+            "USB"
+        };
+        format!("({transport}) {}", display_name.trim())
+    }
 }
 
 /// Scans for connected Vial HID keyboard devices.
@@ -203,6 +212,26 @@ mod tests {
         let device = test_device("Usb", "IOService:/AppleUserUSBHostHIDDevice");
 
         assert!(!device.is_bluetooth_transport());
+    }
+
+    #[test]
+    fn prefixes_usb_display_name() {
+        let device = test_device("Usb", "IOService:/AppleUserUSBHostHIDDevice");
+
+        assert_eq!(
+            device.display_name_with_transport("Ergohaven K:04"),
+            "(USB) Ergohaven K:04"
+        );
+    }
+
+    #[test]
+    fn prefixes_bluetooth_display_name() {
+        let device = test_device("Bluetooth", "/dev/hidraw7");
+
+        assert_eq!(
+            device.display_name_with_transport("Ergohaven K:04"),
+            "(Bluetooth) Ergohaven K:04"
+        );
     }
 
     #[cfg(target_os = "linux")]

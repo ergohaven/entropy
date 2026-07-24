@@ -4,6 +4,10 @@ fn should_wait_for_manual_device_selection(status_msg: &str) -> bool {
     status_msg.starts_with("Open failed:") || status_msg.starts_with("Connect timeout")
 }
 
+fn should_auto_connect_only_device(device_count: usize) -> bool {
+    device_count == 1
+}
+
 impl EntropyApp {
     pub(super) fn start_device_scan(&mut self) {
         if !matches!(self.device_scan_state, DeviceScanState::Idle) {
@@ -114,6 +118,17 @@ impl EntropyApp {
             }
         }
 
+        if !should_auto_connect_only_device(self.device_manager.devices().len()) {
+            if self.selected_device.is_some() || self.layout.is_some() || was_loading {
+                self.selected_device = None;
+                self.clear_connected_keyboard_state("");
+            } else {
+                self.status_msg.clear();
+                self.qmk_hid_hosts.clear();
+            }
+            return;
+        }
+
         self.selected_device = Some(0);
         self.start_connect(0);
     }
@@ -132,5 +147,13 @@ mod tests {
             "Connect timeout — RMK/Vial device did not finish loading"
         ));
         assert!(!should_wait_for_manual_device_selection(""));
+    }
+
+    #[test]
+    fn startup_auto_connects_only_when_exactly_one_device_exists() {
+        assert!(!should_auto_connect_only_device(0));
+        assert!(should_auto_connect_only_device(1));
+        assert!(!should_auto_connect_only_device(2));
+        assert!(!should_auto_connect_only_device(8));
     }
 }

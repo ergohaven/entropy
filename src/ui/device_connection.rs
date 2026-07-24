@@ -112,15 +112,12 @@ impl EntropyApp {
             .iter()
             .enumerate()
             .map(|(idx, dev)| {
-                let mut label = self
+                let display_name = self
                     .device_display_names
                     .get(&dev.display_name_cache_key())
-                    .cloned()
-                    .unwrap_or_else(|| dev.name.clone());
-                if dev.is_bluetooth_transport() {
-                    label.push_str(" (Bluetooth)");
-                }
-                (idx, label)
+                    .map(String::as_str)
+                    .unwrap_or(dev.name.as_str());
+                (idx, dev.display_name_with_transport(display_name))
             })
             .collect();
         let has_error = !self.status_msg.trim().is_empty();
