@@ -107,6 +107,8 @@ const WINDOWS_HID_HELPER_BLE_COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
 const VIAL_GUI_RETRY_DELAY: Duration = Duration::from_millis(500);
 const HID_OPEN_RETRIES: usize = 5;
 const HID_OPEN_RETRY_DELAY: Duration = Duration::from_millis(250);
+#[cfg(target_os = "linux")]
+const HID_REPORT_DESCRIPTOR_MAX: usize = 4_096;
 
 #[path = "hid_parse.rs"]
 mod hid_parse;
@@ -161,6 +163,7 @@ enum HidBackend {
     Local {
         device: hidapi::HidDevice,
         transport: HidTransport,
+        write_framing: HidWriteFraming,
         path: Option<PathBuf>,
         input_report_polling: std::sync::atomic::AtomicBool,
     },
@@ -182,6 +185,13 @@ enum HidBackend {
 enum HidTransport {
     Usb,
     Bluetooth,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HidWriteFraming {
+    ReportIdPrefixed,
+    LinuxBluetoothUnnumbered,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -326,6 +336,7 @@ impl HidDevice {
             backend: HidBackend::Local {
                 device,
                 transport: HidTransport::Usb,
+                write_framing: HidWriteFraming::ReportIdPrefixed,
                 path: Some(PathBuf::from(path)),
                 input_report_polling: std::sync::atomic::AtomicBool::new(false),
             },
@@ -455,10 +466,13 @@ impl HidDevice {
             if let Ok(path) = std::ffi::CString::new(device.path.as_str()) {
                 match api.open_path(&path) {
                     Ok(hid_device) => {
+                        let transport = device_transport(device);
+                        let write_framing = detect_hid_write_framing(&hid_device, transport);
                         return Ok(Self {
                             backend: HidBackend::Local {
                                 device: hid_device,
-                                transport: device_transport(device),
+                                transport,
+                                write_framing,
                                 path: local_hid_path(device),
                                 input_report_polling: std::sync::atomic::AtomicBool::new(false),
                             },
@@ -478,13 +492,18 @@ impl HidDevice {
             let path = PathBuf::from(info.path().to_string_lossy().into_owned());
             return info
                 .open_device(&api)
-                .map(|hid_device| Self {
-                    backend: HidBackend::Local {
-                        device: hid_device,
-                        transport: device_transport(device),
-                        path: Some(path),
-                        input_report_polling: std::sync::atomic::AtomicBool::new(false),
-                    },
+                .map(|hid_device| {
+                    let transport = device_transport(device);
+                    let write_framing = detect_hid_write_framing(&hid_device, transport);
+                    Self {
+                        backend: HidBackend::Local {
+                            device: hid_device,
+                            transport,
+                            write_framing,
+                            path: Some(path),
+                            input_report_polling: std::sync::atomic::AtomicBool::new(false),
+                        },
+                    }
                 })
                 .context("Failed to open HID device");
         }
@@ -496,13 +515,18 @@ impl HidDevice {
             let path = PathBuf::from(info.path().to_string_lossy().into_owned());
             return info
                 .open_device(&api)
-                .map(|hid_device| Self {
-                    backend: HidBackend::Local {
-                        device: hid_device,
-                        transport: device_transport(device),
-                        path: Some(path),
-                        input_report_polling: std::sync::atomic::AtomicBool::new(false),
-                    },
+                .map(|hid_device| {
+                    let transport = device_transport(device);
+                    let write_framing = detect_hid_write_framing(&hid_device, transport);
+                    Self {
+                        backend: HidBackend::Local {
+                            device: hid_device,
+                            transport,
+                            write_framing,
+                            path: Some(path),
+                            input_report_polling: std::sync::atomic::AtomicBool::new(false),
+                        },
+                    }
                 })
                 .context("Failed to open HID device");
         }
@@ -516,11 +540,13 @@ impl HidDevice {
             HidBackend::Local {
                 device,
                 transport,
+                write_framing,
                 path,
                 input_report_polling,
             } => usb_send_local(
                 device,
                 *transport,
+                *write_framing,
                 path.as_deref(),
                 input_report_polling,
                 data,
@@ -644,6 +670,7 @@ fn ensure_hid_path_present(path: Option<&Path>) -> Result<()> {
 fn usb_send_local(
     device: &hidapi::HidDevice,
     transport: HidTransport,
+    write_framing: HidWriteFraming,
     path: Option<&Path>,
     input_report_polling: &std::sync::atomic::AtomicBool,
     data: &[u8],
@@ -661,14 +688,7 @@ fn usb_send_local(
     let mut write_buf = [0u8; MSG_LEN + 1];
     write_buf[0] = 0x00; // hidapi report ID, exactly like vial-gui
     write_buf[1..1 + data.len()].copy_from_slice(data);
-    let write_frame = local_hid_write_frame(&write_buf, transport);
-    #[cfg(target_os = "linux")]
-    if transport.is_bluetooth() {
-        static LOG_FRAMING_ONCE: std::sync::Once = std::sync::Once::new();
-        LOG_FRAMING_ONCE.call_once(|| {
-            log::info!("Using 32-byte unnumbered HOGP output framing for Linux Bluetooth HID");
-        });
-    }
+    let write_frame = local_hid_write_frame(&write_buf, write_framing);
 
     let read_timeout_ms = if transport.is_bluetooth() {
         WINDOWS_BLE_READ_TIMEOUT_MS
@@ -766,18 +786,89 @@ fn usb_send_local(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn local_hid_write_frame(write_buf: &[u8; MSG_LEN + 1], transport: HidTransport) -> &[u8] {
-    #[cfg(target_os = "linux")]
-    if transport.is_bluetooth() {
-        // BlueZ forwards the leading zero report ID to an unnumbered HOGP
-        // output characteristic instead of stripping it. RMK's Vial report is
-        // exactly 32 bytes, so sending the hidraw payload without that synthetic
-        // byte keeps the GATT write at the descriptor-declared length.
+fn local_hid_write_frame(write_buf: &[u8; MSG_LEN + 1], write_framing: HidWriteFraming) -> &[u8] {
+    if write_framing == HidWriteFraming::LinuxBluetoothUnnumbered {
         return &write_buf[1..];
     }
 
-    let _ = transport;
     write_buf
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn detect_hid_write_framing(
+    device: &hidapi::HidDevice,
+    transport: HidTransport,
+) -> HidWriteFraming {
+    #[cfg(target_os = "linux")]
+    if transport.is_bluetooth() {
+        let mut descriptor = [0u8; HID_REPORT_DESCRIPTOR_MAX];
+        let has_report_ids = match device.get_report_descriptor(&mut descriptor) {
+            Ok(length) => hid_descriptor_uses_report_ids(&descriptor[..length]),
+            Err(error) => {
+                log::debug!(
+                    "Could not read Linux Bluetooth HID report descriptor; \
+                     using unnumbered framing: {error}"
+                );
+                false
+            }
+        };
+
+        if has_report_ids {
+            // Linux marks a HID report type as numbered when any report of that
+            // type has a non-zero id. RMK keeps Vial at id 0 inside its composite
+            // HOGP service, so hidraw still requires the leading zero byte.
+            log::info!("Using 33-byte report-ID HOGP framing for Linux Bluetooth HID");
+            return HidWriteFraming::ReportIdPrefixed;
+        }
+
+        log::info!("Using 32-byte unnumbered HOGP framing for Linux Bluetooth HID");
+        return HidWriteFraming::LinuxBluetoothUnnumbered;
+    }
+
+    let _ = (device, transport);
+    HidWriteFraming::ReportIdPrefixed
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn hid_descriptor_uses_report_ids(descriptor: &[u8]) -> bool {
+    let mut offset = 0usize;
+    while offset < descriptor.len() {
+        let prefix = descriptor[offset];
+        if prefix == 0xFE {
+            if offset + 2 >= descriptor.len() {
+                return false;
+            }
+            let data_len = usize::from(descriptor[offset + 1]);
+            let Some(next) = offset.checked_add(3 + data_len) else {
+                return false;
+            };
+            if next > descriptor.len() {
+                return false;
+            }
+            offset = next;
+            continue;
+        }
+
+        let data_len = match prefix & 0x03 {
+            0x03 => 4,
+            size => usize::from(size),
+        };
+        let Some(next) = offset.checked_add(1 + data_len) else {
+            return false;
+        };
+        if next > descriptor.len() {
+            return false;
+        }
+
+        let item_type = (prefix >> 2) & 0x03;
+        let item_tag = (prefix >> 4) & 0x0F;
+        if item_type == 0x01 && item_tag == 0x08 && data_len > 0 && descriptor[offset + 1] != 0 {
+            return true;
+        }
+
+        offset = next;
+    }
+    false
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1221,7 +1312,7 @@ mod tests {
         let mut buffer = [0u8; MSG_LEN + 1];
         buffer[1] = CMD_VIA_GET_PROTOCOL_VERSION;
 
-        let frame = local_hid_write_frame(&buffer, HidTransport::Usb);
+        let frame = local_hid_write_frame(&buffer, HidWriteFraming::ReportIdPrefixed);
 
         assert_eq!(frame.len(), MSG_LEN + 1);
         assert_eq!(frame[0], 0);
@@ -1235,11 +1326,62 @@ mod tests {
         buffer[1] = CMD_VIA_GET_PROTOCOL_VERSION;
         buffer[2] = 0xA5;
 
-        let frame = local_hid_write_frame(&buffer, HidTransport::Bluetooth);
+        let frame = local_hid_write_frame(&buffer, HidWriteFraming::LinuxBluetoothUnnumbered);
 
         assert_eq!(frame.len(), MSG_LEN);
         assert_eq!(frame[0], CMD_VIA_GET_PROTOCOL_VERSION);
         assert_eq!(frame[1], 0xA5);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_bluetooth_numbered_hid_write_keeps_zero_report_id() {
+        let mut buffer = [0u8; MSG_LEN + 1];
+        buffer[1] = CMD_VIA_GET_PROTOCOL_VERSION;
+        buffer[2] = 0xA5;
+
+        let frame = local_hid_write_frame(&buffer, HidWriteFraming::ReportIdPrefixed);
+
+        assert_eq!(frame.len(), MSG_LEN + 1);
+        assert_eq!(frame[0], 0);
+        assert_eq!(frame[1], CMD_VIA_GET_PROTOCOL_VERSION);
+        assert_eq!(frame[2], 0xA5);
+    }
+
+    #[test]
+    fn detects_report_id_items_in_hid_descriptor() {
+        let descriptor = [
+            0x06, 0x60, 0xFF, // Usage Page 0xFF60
+            0x09, 0x61, // Usage 0x61
+            0xA1, 0x01, // Application collection
+            0x85, 0x01, // Report ID 1
+            0xC0, // End collection
+        ];
+
+        assert!(hid_descriptor_uses_report_ids(&descriptor));
+    }
+
+    #[test]
+    fn leaves_unnumbered_hid_descriptor_unmarked() {
+        let descriptor = [
+            0x06, 0x60, 0xFF, // Usage Page 0xFF60
+            0x09, 0x61, // Usage 0x61
+            0xA1, 0x01, // Application collection
+            0x75, 0x08, // Report size 8
+            0xC0, // End collection
+        ];
+
+        assert!(!hid_descriptor_uses_report_ids(&descriptor));
+    }
+
+    #[test]
+    fn ignores_report_id_bytes_inside_long_hid_items() {
+        let descriptor = [
+            0xFE, 0x02, 0x01, 0x85, 0x05, // Long item containing 0x85
+            0x75, 0x08, // Report size 8
+        ];
+
+        assert!(!hid_descriptor_uses_report_ids(&descriptor));
     }
 
     #[test]
