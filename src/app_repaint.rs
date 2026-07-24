@@ -6,6 +6,9 @@ const HIDDEN_TO_TRAY_REPAINT_INTERVAL: std::time::Duration = std::time::Duration
 const BLUETOOTH_VISIBLE_REPAINT_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(16);
 #[cfg(not(target_arch = "wasm32"))]
+const BLUETOOTH_POINTER_FOLLOW_UP_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(16);
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) const CONNECT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) const UPDATE_CHECK_POLL_INTERVAL: std::time::Duration =
@@ -38,6 +41,7 @@ pub(super) fn should_use_high_frequency_bluetooth_repaint(
 pub(super) fn native_repaint_interval(
     hidden_to_tray: bool,
     high_frequency_bluetooth: bool,
+    bluetooth_pointer_moved: bool,
     connect_pending: bool,
     update_check_pending: bool,
 ) -> std::time::Duration {
@@ -49,14 +53,25 @@ pub(super) fn native_repaint_interval(
         VISIBLE_REPAINT_INTERVAL
     };
 
+    // A pointer event already wakes eframe, but egui hover state, tooltips, and
+    // hover-open menus may need one follow-up pass after hit-testing the new
+    // pointer position. Keep this as a single event-driven frame instead of
+    // restoring the continuous Linux Bluetooth repaint loop.
+    let pointer_follow_up_interval = (!hidden_to_tray && bluetooth_pointer_moved)
+        .then_some(BLUETOOTH_POINTER_FOLLOW_UP_INTERVAL);
     let connect_interval = connect_pending.then_some(CONNECT_POLL_INTERVAL);
     let update_check_interval = update_check_pending.then_some(UPDATE_CHECK_POLL_INTERVAL);
 
-    [Some(baseline), connect_interval, update_check_interval]
-        .into_iter()
-        .flatten()
-        .min()
-        .expect("baseline repaint interval is always present")
+    [
+        Some(baseline),
+        pointer_follow_up_interval,
+        connect_interval,
+        update_check_interval,
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+    .expect("baseline repaint interval is always present")
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -66,40 +81,52 @@ mod tests {
     #[test]
     fn native_repaint_cadence_uses_shortest_pending_interval() {
         assert_eq!(
-            native_repaint_interval(false, false, false, false),
+            native_repaint_interval(false, false, false, false, false),
             std::time::Duration::from_millis(250)
         );
         assert_eq!(
-            native_repaint_interval(false, true, false, false),
+            native_repaint_interval(false, true, false, false, false),
             BLUETOOTH_VISIBLE_REPAINT_INTERVAL
         );
         assert_eq!(
-            native_repaint_interval(true, true, false, false),
+            native_repaint_interval(true, true, false, false, false),
             std::time::Duration::from_secs(5)
         );
         assert_eq!(
-            native_repaint_interval(true, false, true, false),
+            native_repaint_interval(true, false, false, true, false),
             CONNECT_POLL_INTERVAL
         );
         assert_eq!(
-            native_repaint_interval(true, false, false, true),
+            native_repaint_interval(true, false, false, false, true),
             UPDATE_CHECK_POLL_INTERVAL
         );
         assert_eq!(
-            native_repaint_interval(true, false, true, true),
+            native_repaint_interval(true, false, false, true, true),
             UPDATE_CHECK_POLL_INTERVAL
         );
         assert_eq!(
-            native_repaint_interval(false, false, true, false),
+            native_repaint_interval(false, false, false, true, false),
             CONNECT_POLL_INTERVAL
         );
         assert_eq!(
-            native_repaint_interval(false, false, false, true),
+            native_repaint_interval(false, false, false, false, true),
             UPDATE_CHECK_POLL_INTERVAL
         );
         assert_eq!(
-            native_repaint_interval(false, false, true, true),
+            native_repaint_interval(false, false, false, true, true),
             UPDATE_CHECK_POLL_INTERVAL
+        );
+    }
+
+    #[test]
+    fn visible_bluetooth_pointer_motion_gets_one_fast_follow_up_frame() {
+        assert_eq!(
+            native_repaint_interval(false, false, true, false, false),
+            BLUETOOTH_POINTER_FOLLOW_UP_INTERVAL
+        );
+        assert_eq!(
+            native_repaint_interval(true, false, true, false, false),
+            HIDDEN_TO_TRAY_REPAINT_INTERVAL
         );
     }
 
@@ -109,6 +136,7 @@ mod tests {
             native_repaint_interval(
                 false,
                 should_use_high_frequency_bluetooth_repaint_for_target(true, false),
+                false,
                 false,
                 false,
             ),
@@ -122,6 +150,7 @@ mod tests {
             native_repaint_interval(
                 false,
                 should_use_high_frequency_bluetooth_repaint_for_target(true, true),
+                false,
                 false,
                 false,
             ),
