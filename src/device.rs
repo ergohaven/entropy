@@ -23,6 +23,11 @@ impl Device {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn uses_bluez_gatt_transport(&self) -> bool {
+        crate::linux_ble::is_bluez_gatt_path(&self.path)
+    }
+
     pub fn display_name_cache_key(&self) -> String {
         format!(
             "{}\x1f{:04x}\x1f{:04x}\x1f{}\x1f{}\x1f{}",
@@ -90,6 +95,24 @@ impl DeviceManager {
             }
         }
 
+        #[cfg(target_os = "linux")]
+        {
+            let bluez_devices = crate::linux_ble::scan_devices();
+            for bluez_device in bluez_devices {
+                let bluez_identity = normalized_bluetooth_identity(&bluez_device.serial_number);
+                devices.retain(|device| {
+                    if !device.is_bluetooth_transport()
+                        || device.uses_bluez_gatt_transport()
+                        || bluez_identity.is_empty()
+                    {
+                        return true;
+                    }
+                    normalized_bluetooth_identity(&device.serial_number) != bluez_identity
+                });
+                devices.push(bluez_device);
+            }
+        }
+
         devices
     }
 
@@ -110,6 +133,15 @@ impl DeviceManager {
     pub fn devices(&self) -> &[Device] {
         &self.devices
     }
+}
+
+#[cfg(target_os = "linux")]
+fn normalized_bluetooth_identity(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_hexdigit())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 #[cfg(test)]
@@ -148,5 +180,25 @@ mod tests {
         let device = test_device("Usb", "IOService:/AppleUserUSBHostHIDDevice");
 
         assert!(!device.is_bluetooth_transport());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn detects_bluez_gatt_transport_path() {
+        let device = test_device(
+            "Bluetooth",
+            "bluez-gatt:/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF/service0010",
+        );
+
+        assert!(device.uses_bluez_gatt_transport());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn normalizes_bluez_and_hidraw_bluetooth_addresses_equally() {
+        assert_eq!(
+            normalized_bluetooth_identity("AA:BB:CC:DD:EE:FF"),
+            normalized_bluetooth_identity("aa-bb-cc-dd-ee-ff")
+        );
     }
 }

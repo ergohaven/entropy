@@ -87,6 +87,11 @@ impl EntropyApp {
             && self.layout.is_none()
             && !was_loading
             && !super::app_settings_ui::linux_vial_udev_rules_installed()
+            && !self
+                .device_manager
+                .devices()
+                .iter()
+                .any(Device::uses_bluez_gatt_transport)
         {
             self.qmk_hid_hosts.clear();
             return;

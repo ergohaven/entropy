@@ -165,6 +165,8 @@ enum HidBackend {
     },
     #[cfg(target_os = "windows")]
     Proxy(HidProxy),
+    #[cfg(target_os = "linux")]
+    LinuxBle(crate::linux_ble::LinuxBleDevice),
     #[cfg(test)]
     Test {
         recorder: TestHidRecorder,
@@ -195,6 +197,8 @@ impl HidDevice {
             HidBackend::Local { transport, .. } => transport.is_bluetooth(),
             #[cfg(target_os = "windows")]
             HidBackend::Proxy(proxy) => proxy.is_bluetooth_transport(),
+            #[cfg(target_os = "linux")]
+            HidBackend::LinuxBle(_) => true,
             #[cfg(test)]
             HidBackend::Test { .. } => false,
         }
@@ -241,6 +245,7 @@ pub fn is_disconnect_error(error: &anyhow::Error) -> bool {
             || message.contains("broken pipe")
             || message.contains("pipe is being closed")
             || message.contains("the device is not connected")
+            || message.contains("org.bluez.error.notconnected")
     })
 }
 
@@ -322,6 +327,15 @@ impl HidDevice {
     }
 
     pub fn open_fresh_for(device: &crate::device::Device) -> Result<Self> {
+        #[cfg(target_os = "linux")]
+        if device.uses_bluez_gatt_transport() {
+            return crate::linux_ble::LinuxBleDevice::open(device)
+                .map(|device| Self {
+                    backend: HidBackend::LinuxBle(device),
+                })
+                .context("Failed to open the Linux Bluetooth Vial transport");
+        }
+
         #[cfg(target_os = "windows")]
         {
             return Self::open_proxy_for(device);
@@ -479,6 +493,10 @@ impl HidDevice {
             } => usb_send_local(device, *transport, path.as_deref(), data),
             #[cfg(target_os = "windows")]
             HidBackend::Proxy(proxy) => proxy.usb_send(data),
+            #[cfg(target_os = "linux")]
+            HidBackend::LinuxBle(device) => {
+                device.send(data, |response| response_matches_command(data, response))
+            }
             #[cfg(test)]
             HidBackend::Test {
                 recorder,

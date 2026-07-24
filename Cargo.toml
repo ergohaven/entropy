@@ -69,6 +69,7 @@ tray-icon = "0.22"
 [target.'cfg(target_os = "linux")'.dependencies]
 hidapi = { version = "2.6", default-features = false, features = ["linux-native-basic-udev"] }
 x11-dl = "2"
+zbus = "5.16"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"
