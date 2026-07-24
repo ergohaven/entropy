@@ -97,6 +97,45 @@ pub fn muted_text(dark: bool) -> Color32 {
     }
 }
 
+pub const BATTERY_ICON_WIDTH: f32 = 16.0;
+
+pub fn paint_battery_icon(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    percent: u8,
+    color: Color32,
+) {
+    let body = egui::Rect::from_min_size(
+        egui::pos2(center.x - BATTERY_ICON_WIDTH * 0.5, center.y - 4.5),
+        Vec2::new(14.0, 9.0),
+    );
+    painter.rect_stroke(
+        body,
+        2.0,
+        Stroke::new(1.0_f32, color),
+        egui::StrokeKind::Inside,
+    );
+
+    let terminal = egui::Rect::from_min_max(
+        egui::pos2(body.right(), center.y - 2.5),
+        egui::pos2(body.right() + 2.0, center.y + 2.5),
+    );
+    painter.rect_filled(terminal, 1.0, color);
+
+    let fill_bounds = body.shrink(2.0);
+    let fill_width = fill_bounds.width() * f32::from(percent.min(100)) / 100.0;
+    if fill_width > 0.0 {
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                fill_bounds.min,
+                egui::pos2(fill_bounds.left() + fill_width, fill_bounds.bottom()),
+            ),
+            0.8,
+            color,
+        );
+    }
+}
+
 pub fn modal_outline_stroke(dark: bool) -> Stroke {
     if dark {
         Stroke::new(1.0_f32, Color32::from_rgb(54, 54, 58))

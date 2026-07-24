@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) const MAIN_MENU_BATTERY_RESERVED_H: f32 = 28.0;
+pub(super) const MAIN_MENU_BATTERY_RESERVED_H: f32 = 34.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MainMenuBatteryStatus {
@@ -62,13 +62,29 @@ impl EntropyApp {
         let lang = self.app_settings.language;
         let text_color = app_muted_text(self.dark_mode);
         let font = FontId::proportional(13.0);
-        let center_y = layer_center_y + 36.0;
+        let center_y = layer_center_y + 42.0;
         let paint_value = |x: f32, value: u8| {
-            ui.painter().text(
-                egui::pos2(x, center_y),
-                egui::Align2::CENTER_CENTER,
-                about_device_ui::battery_percent_text(lang, Some(value)),
-                font.clone(),
+            let painter = ui.painter();
+            let value_text = about_device_ui::battery_percent_text(lang, Some(value));
+            let galley = painter.layout_no_wrap(value_text, font.clone(), text_color);
+            let icon_gap = 5.0;
+            let content_width = crate::ui_style::BATTERY_ICON_WIDTH + icon_gap + galley.size().x;
+            let content_left = x - content_width * 0.5;
+            crate::ui_style::paint_battery_icon(
+                painter,
+                egui::pos2(
+                    content_left + crate::ui_style::BATTERY_ICON_WIDTH * 0.5,
+                    center_y,
+                ),
+                value,
+                text_color,
+            );
+            painter.galley(
+                egui::pos2(
+                    content_left + crate::ui_style::BATTERY_ICON_WIDTH + icon_gap,
+                    center_y - galley.size().y * 0.5,
+                ),
+                galley,
                 text_color,
             );
         };
@@ -77,7 +93,7 @@ impl EntropyApp {
             MainMenuBatteryStatus::None => {}
             MainMenuBatteryStatus::Single(value) => paint_value(center_x, value),
             MainMenuBatteryStatus::Split { left, right } => {
-                let value_offset = 38.0;
+                let value_offset = 44.0;
                 paint_value(center_x - value_offset, left);
                 paint_value(center_x + value_offset, right);
                 ui.painter().line_segment(
