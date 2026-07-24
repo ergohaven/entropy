@@ -1043,18 +1043,20 @@ impl eframe::App for EntropyApp {
                 .and_then(|idx| self.device_manager.devices().get(idx))
                 .map(|device| device.is_bluetooth_transport())
                 .unwrap_or(false);
-            let high_frequency_bluetooth_repaint =
-                should_use_high_frequency_bluetooth_repaint(selected_device_is_bluetooth);
-            let bluetooth_pointer_moved = selected_device_is_bluetooth
-                && !high_frequency_bluetooth_repaint
-                && ctx.input(|input| input.pointer.delta() != egui::Vec2::ZERO);
+            let main_window_uses_wayland = matches!(
+                self.parent_display_handle,
+                Some(raw_window_handle::RawDisplayHandle::Wayland(_))
+            );
+            let bluetooth_visible_interval = bluetooth_visible_repaint_interval(
+                selected_device_is_bluetooth,
+                main_window_uses_wayland,
+            );
             let connect_pending = matches!(self.connect_state, ConnectState::Loading { .. });
             let update_check_pending =
                 matches!(self.update_check, UpdateCheckState::Checking { .. });
             ctx.request_repaint_after(native_repaint_interval(
                 main_window_hidden_to_tray,
-                high_frequency_bluetooth_repaint,
-                bluetooth_pointer_moved,
+                bluetooth_visible_interval,
                 connect_pending,
                 update_check_pending,
             ));
