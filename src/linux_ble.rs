@@ -20,6 +20,7 @@ const REPORT_CHARACTERISTIC_UUID: &str = "2a4d";
 const BLUEZ_METHOD_TIMEOUT: Duration = Duration::from_secs(5);
 const BLUEZ_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const BLUEZ_REPLY_TIMEOUT: Duration = Duration::from_millis(2_500);
+const BLUEZ_REPLY_POLL_INTERVAL: Duration = Duration::from_millis(40);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CharacteristicSummary {
@@ -372,6 +373,9 @@ fn spawn_notification_listener(
                 let mut changes = properties
                     .receive_properties_changed()
                     .context("Failed to listen for BlueZ Vial notifications")?;
+                characteristic_proxy(&connection, &input_path)?
+                    .call::<_, _, ()>("StartNotify", &())
+                    .context("Failed to subscribe to BlueZ Vial replies")?;
                 ready_tx
                     .send(Ok(connection.clone()))
                     .map_err(|_| anyhow::anyhow!("BlueZ listener startup receiver disappeared"))?;
@@ -443,14 +447,6 @@ impl LinuxBleDevice {
         let listener_control =
             spawn_notification_listener(endpoints.input.clone(), notification_tx)?;
 
-        {
-            let input = characteristic_proxy(&connection, &endpoints.input)?;
-            if let Err(error) = input.call::<_, _, ()>("StartNotify", &()) {
-                let _ = listener_control.close();
-                return Err(error).context("Failed to subscribe to BlueZ Vial replies");
-            }
-        }
-
         Ok(Self {
             connection,
             input_path: endpoints.input,
@@ -493,12 +489,13 @@ impl LinuxBleDevice {
 
         let deadline = Instant::now() + BLUEZ_REPLY_TIMEOUT;
         let mut last_unrelated = None;
+        let mut last_read_error = None;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 break;
             }
-            match notifications.recv_timeout(remaining) {
+            match notifications.recv_timeout(remaining.min(BLUEZ_REPLY_POLL_INTERVAL)) {
                 Ok(bytes) => {
                     let Some(response) = normalize_notification(&bytes) else {
                         last_unrelated = Some(format!(
@@ -511,33 +508,62 @@ impl LinuxBleDevice {
                         return Ok(response);
                     }
                     last_unrelated = Some(format!(
-                        "stale Bluetooth Vial reply {:02X?}",
+                        "stale Bluetooth Vial notification {:02X?}",
                         &response[..data.len().clamp(3, 8)]
                     ));
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     bail!("Bluetooth GATT disconnected while waiting for a Vial reply")
+                }
+            }
+
+            let read_options = HashMap::<&str, Value<'_>>::new();
+            match characteristic_proxy(&self.connection, &self.input_path)?
+                .call::<_, _, Vec<u8>>("ReadValue", &(read_options,))
+            {
+                Ok(bytes) => {
+                    let Some(response) = normalize_notification(&bytes) else {
+                        last_unrelated = Some(format!(
+                            "invalid Bluetooth Vial read length {}",
+                            bytes.len()
+                        ));
+                        continue;
+                    };
+                    if response_matches(&response) {
+                        return Ok(response);
+                    }
+                    last_unrelated = Some(format!(
+                        "stale Bluetooth Vial read {:02X?}",
+                        &response[..data.len().clamp(3, 8)]
+                    ));
+                }
+                Err(error) => {
+                    last_read_error = Some(format!("{error:#}"));
                 }
             }
         }
 
         bail!(
             "{}",
-            last_unrelated.unwrap_or_else(|| {
-                "Bluetooth Vial timeout — keyboard did not respond".to_owned()
-            })
+            last_unrelated
+                .or_else(|| last_read_error.map(|error| format!(
+                    "Bluetooth Vial timeout; direct reply read failed: {error}"
+                )))
+                .unwrap_or_else(|| {
+                    "Bluetooth Vial timeout — keyboard did not respond".to_owned()
+                })
         )
     }
 }
 
 impl Drop for LinuxBleDevice {
     fn drop(&mut self) {
-        if let Ok(input) = characteristic_proxy(&self.connection, &self.input_path) {
-            let _ = input.call::<_, _, ()>("StopNotify", &());
-        }
         if let Ok(mut control) = self.listener_control.lock() {
             if let Some(connection) = control.take() {
+                if let Ok(input) = characteristic_proxy(&connection, &self.input_path) {
+                    let _ = input.call::<_, _, ()>("StopNotify", &());
+                }
                 let _ = connection.close();
             }
         }
