@@ -107,14 +107,18 @@ const WINDOWS_HID_HELPER_BLE_COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
 const VIAL_GUI_RETRY_DELAY: Duration = Duration::from_millis(500);
 const HID_OPEN_RETRIES: usize = 5;
 const HID_OPEN_RETRY_DELAY: Duration = Duration::from_millis(250);
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 const HID_REPORT_DESCRIPTOR_MAX: usize = 4_096;
-
 #[cfg(target_os = "linux")]
+const BLUETOOTH_HID_PLATFORM: &str = "Linux";
+#[cfg(target_os = "windows")]
+const BLUETOOTH_HID_PLATFORM: &str = "Windows";
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[derive(Debug)]
 struct UnsafeBluetoothReportMap;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 impl std::fmt::Display for UnsafeBluetoothReportMap {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(
@@ -124,10 +128,10 @@ impl std::fmt::Display for UnsafeBluetoothReportMap {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 impl std::error::Error for UnsafeBluetoothReportMap {}
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn is_unsafe_bluetooth_report_map(error: &anyhow::Error) -> bool {
     error
         .chain()
@@ -423,7 +427,7 @@ impl HidDevice {
             match Self::try_open_fresh_for(device) {
                 Ok(device) => return Ok(device),
                 Err(e) => {
-                    #[cfg(target_os = "linux")]
+                    #[cfg(any(target_os = "linux", target_os = "windows"))]
                     if is_unsafe_bluetooth_report_map(&e) {
                         return Err(e);
                     }
@@ -845,43 +849,73 @@ fn detect_hid_write_framing(
     device: &hidapi::HidDevice,
     transport: HidTransport,
 ) -> Result<HidWriteFraming> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     if transport.is_bluetooth() {
         let mut descriptor = [0u8; HID_REPORT_DESCRIPTOR_MAX];
         let length = device
             .get_report_descriptor(&mut descriptor)
-            .context("Failed to read the Linux Bluetooth HID report descriptor")?;
-        let layout = analyze_hid_report_descriptor(&descriptor[..length]);
+            .context("Failed to read the Bluetooth HID report descriptor")?;
 
-        if !layout.vial_collection_found {
-            bail!("Linux Bluetooth HID report descriptor has no Vial application collection");
-        }
-        if layout.vial_report_id_conflict {
-            bail!("Linux Bluetooth HID report descriptor assigns conflicting Vial report ids");
-        }
+        #[cfg(target_os = "linux")]
+        let unnumbered_framing = HidWriteFraming::LinuxBluetoothUnnumbered;
+        #[cfg(target_os = "windows")]
+        let unnumbered_framing = HidWriteFraming::ReportIdPrefixed(0);
 
-        if let Some(report_id) = layout.vial_report_id {
-            log::info!(
-                "Using report-ID {} HOGP framing for Linux Bluetooth HID",
-                report_id
-            );
-            return Ok(HidWriteFraming::ReportIdPrefixed(report_id));
+        let write_framing = bluetooth_hid_write_framing(&descriptor[..length], unnumbered_framing)?;
+        match write_framing {
+            HidWriteFraming::ReportIdPrefixed(report_id) if report_id != 0 => {
+                log::info!(
+                    "Using report-ID {} HOGP framing for {} Bluetooth HID",
+                    report_id,
+                    BLUETOOTH_HID_PLATFORM
+                );
+            }
+            HidWriteFraming::ReportIdPrefixed(0) => {
+                log::info!(
+                    "Using unnumbered HOGP framing for {} Bluetooth HID",
+                    BLUETOOTH_HID_PLATFORM
+                );
+            }
+            HidWriteFraming::LinuxBluetoothUnnumbered => {
+                log::info!(
+                    "Using 32-byte unnumbered HOGP framing for {} Bluetooth HID",
+                    BLUETOOTH_HID_PLATFORM
+                );
+            }
+            HidWriteFraming::ReportIdPrefixed(_) => unreachable!(),
         }
-
-        if layout.vial_uses_unnumbered_reports && layout.has_numbered_reports {
-            return Err(UnsafeBluetoothReportMap.into());
-        }
-
-        if layout.vial_uses_unnumbered_reports {
-            log::info!("Using 32-byte unnumbered HOGP framing for Linux Bluetooth HID");
-            return Ok(HidWriteFraming::LinuxBluetoothUnnumbered);
-        }
-
-        bail!("Linux Bluetooth HID report descriptor has no Vial input/output reports");
+        return Ok(write_framing);
     }
 
     let _ = (device, transport);
     Ok(HidWriteFraming::ReportIdPrefixed(0))
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn bluetooth_hid_write_framing(
+    descriptor: &[u8],
+    unnumbered_framing: HidWriteFraming,
+) -> Result<HidWriteFraming> {
+    let layout = analyze_hid_report_descriptor(descriptor);
+
+    if !layout.vial_collection_found {
+        bail!("Bluetooth HID report descriptor has no Vial application collection");
+    }
+    if layout.vial_report_id_conflict {
+        bail!("Bluetooth HID report descriptor assigns conflicting Vial report ids");
+    }
+
+    if let Some(report_id) = layout.vial_report_id {
+        return Ok(HidWriteFraming::ReportIdPrefixed(report_id));
+    }
+    if layout.vial_uses_unnumbered_reports && layout.has_numbered_reports {
+        return Err(UnsafeBluetoothReportMap.into());
+    }
+    if layout.vial_uses_unnumbered_reports {
+        return Ok(unnumbered_framing);
+    }
+
+    bail!("Bluetooth HID report descriptor has no Vial input/output reports")
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1488,9 +1522,8 @@ mod tests {
         assert_eq!(frame[1], 0xA5);
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
-    fn linux_bluetooth_numbered_hid_write_uses_vial_report_id() {
+    fn numbered_hid_write_uses_vial_report_id() {
         let mut buffer = [0u8; MSG_LEN + 1];
         buffer[1] = CMD_VIA_GET_PROTOCOL_VERSION;
         buffer[2] = 0xA5;
@@ -1501,6 +1534,27 @@ mod tests {
         assert_eq!(frame[0], 5);
         assert_eq!(frame[1], CMD_VIA_GET_PROTOCOL_VERSION);
         assert_eq!(frame[2], 0xA5);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn numbered_bluetooth_descriptor_selects_vial_report_id() {
+        let descriptor = [
+            0x06, 0x60, 0xFF, // Usage Page 0xFF60
+            0x09, 0x61, // Usage 0x61
+            0xA1, 0x01, // Application collection
+            0x85, 0x05, // Report ID 5
+            0x09, 0x62, // Usage input
+            0x81, 0x02, // Input
+            0x09, 0x63, // Usage output
+            0x91, 0x02, // Output
+            0xC0, // End collection
+        ];
+
+        assert_eq!(
+            bluetooth_hid_write_framing(&descriptor, HidWriteFraming::ReportIdPrefixed(0)).unwrap(),
+            HidWriteFraming::ReportIdPrefixed(5)
+        );
     }
 
     #[test]
