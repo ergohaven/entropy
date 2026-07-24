@@ -204,14 +204,17 @@ fn select_vial_endpoints(
         let (Some(input), Some(output)) = (input, output) else {
             continue;
         };
+        // HID Output Reports normally travel as ATT Write Commands. RMK
+        // advertises both write modes, but BlueZ can reject a Write Request
+        // with NotAuthorized even though Write Without Response is available.
         let output_write_type = if output
             .flags
             .iter()
-            .any(|flag| flag.eq_ignore_ascii_case("write"))
+            .any(|flag| flag.eq_ignore_ascii_case("write-without-response"))
         {
-            "request"
-        } else {
             "command"
+        } else {
+            "request"
         };
         endpoints.push(VialGattEndpoints {
             service: service.clone(),
@@ -443,6 +446,12 @@ impl LinuxBleDevice {
         let objects = managed_objects(&connection)?;
         let endpoints = endpoints_for_service(&objects, &service)
             .context("BlueZ Vial GATT characteristics are unavailable")?;
+        log::info!(
+            "BlueZ Vial endpoints: input={}, output={}, write_type={}",
+            endpoints.input,
+            endpoints.output,
+            endpoints.output_write_type
+        );
         let (notification_tx, notification_rx) = mpsc::channel();
         let listener_control =
             spawn_notification_listener(endpoints.input.clone(), notification_tx)?;
@@ -629,13 +638,13 @@ mod tests {
                 service: "/service/vial".to_owned(),
                 input: "/service/vial/input".to_owned(),
                 output: "/service/vial/output".to_owned(),
-                output_write_type: "request",
+                output_write_type: "command",
             }]
         );
     }
 
     #[test]
-    fn uses_command_only_when_write_request_is_unavailable() {
+    fn uses_write_request_only_when_command_is_unavailable() {
         let services = HashMap::from([("/service/vial".to_owned(), "/device".to_owned())]);
         let characteristics = vec![
             characteristic(
@@ -648,13 +657,13 @@ mod tests {
                 "/service/vial/output",
                 "/service/vial",
                 "2a4d",
-                &["read", "write-without-response"],
+                &["read", "write"],
             ),
         ];
 
         assert_eq!(
             select_vial_endpoints(&services, &characteristics)[0].output_write_type,
-            "command"
+            "request"
         );
     }
 
