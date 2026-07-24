@@ -98,19 +98,7 @@ impl DeviceManager {
         #[cfg(target_os = "linux")]
         {
             let bluez_devices = crate::linux_ble::scan_devices();
-            for bluez_device in bluez_devices {
-                let bluez_identity = normalized_bluetooth_identity(&bluez_device.serial_number);
-                devices.retain(|device| {
-                    if !device.is_bluetooth_transport()
-                        || device.uses_bluez_gatt_transport()
-                        || bluez_identity.is_empty()
-                    {
-                        return true;
-                    }
-                    normalized_bluetooth_identity(&device.serial_number) != bluez_identity
-                });
-                devices.push(bluez_device);
-            }
+            merge_bluez_fallback_devices(&mut devices, bluez_devices);
         }
 
         devices
@@ -142,6 +130,28 @@ fn normalized_bluetooth_identity(value: &str) -> String {
         .filter(|character| character.is_ascii_hexdigit())
         .flat_map(char::to_lowercase)
         .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn merge_bluez_fallback_devices(devices: &mut Vec<Device>, bluez_devices: Vec<Device>) {
+    for bluez_device in bluez_devices {
+        let bluez_identity = normalized_bluetooth_identity(&bluez_device.serial_number);
+        let kernel_hid_available = !bluez_identity.is_empty()
+            && devices.iter().any(|device| {
+                device.is_bluetooth_transport()
+                    && !device.uses_bluez_gatt_transport()
+                    && normalized_bluetooth_identity(&device.serial_number) == bluez_identity
+            });
+
+        if kernel_hid_available {
+            log::info!(
+                "Using the Linux kernel HID transport for paired Bluetooth device {}",
+                bluez_device.name
+            );
+        } else {
+            devices.push(bluez_device);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -200,5 +210,56 @@ mod tests {
             normalized_bluetooth_identity("AA:BB:CC:DD:EE:FF"),
             normalized_bluetooth_identity("aa-bb-cc-dd-ee-ff")
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn prefers_kernel_hid_over_matching_bluez_gatt_device() {
+        let mut kernel_hid = test_device("Bluetooth", "/dev/hidraw7");
+        kernel_hid.serial_number = "c6:9e:29:c4:f4:c7".to_owned();
+        let mut bluez = test_device(
+            "Bluetooth",
+            "bluez-gatt:/org/bluez/hci0/dev_C6_9E_29_C4_F4_C7/service002a",
+        );
+        bluez.serial_number = "C6:9E:29:C4:F4:C7".to_owned();
+        let mut devices = vec![kernel_hid.clone()];
+
+        merge_bluez_fallback_devices(&mut devices, vec![bluez]);
+
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].path, kernel_hid.path);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn keeps_bluez_gatt_when_kernel_hid_is_unavailable() {
+        let bluez = test_device(
+            "Bluetooth",
+            "bluez-gatt:/org/bluez/hci0/dev_C6_9E_29_C4_F4_C7/service002a",
+        );
+        let mut devices = Vec::new();
+
+        merge_bluez_fallback_devices(&mut devices, vec![bluez.clone()]);
+
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].path, bluez.path);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn usb_device_does_not_hide_bluez_gatt_fallback() {
+        let mut usb = test_device("Usb", "/dev/hidraw2");
+        usb.serial_number = "C6:9E:29:C4:F4:C7".to_owned();
+        let mut bluez = test_device(
+            "Bluetooth",
+            "bluez-gatt:/org/bluez/hci0/dev_C6_9E_29_C4_F4_C7/service002a",
+        );
+        bluez.serial_number = usb.serial_number.clone();
+        let mut devices = vec![usb];
+
+        merge_bluez_fallback_devices(&mut devices, vec![bluez]);
+
+        assert_eq!(devices.len(), 2);
+        assert!(devices[1].uses_bluez_gatt_transport());
     }
 }

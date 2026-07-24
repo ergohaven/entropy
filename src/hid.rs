@@ -263,6 +263,10 @@ fn device_info_matches(
         return false;
     }
 
+    if device.is_bluetooth_transport() && !matches!(info.bus_type(), hidapi::BusType::Bluetooth) {
+        return false;
+    }
+
     if !strict_identity {
         return true;
     }
@@ -329,6 +333,22 @@ impl HidDevice {
     pub fn open_fresh_for(device: &crate::device::Device) -> Result<Self> {
         #[cfg(target_os = "linux")]
         if device.uses_bluez_gatt_transport() {
+            match Self::open_fresh_for_local(device) {
+                Ok(hid) => {
+                    log::info!(
+                        "Using the Linux kernel HID transport for Bluetooth device {}",
+                        device.name
+                    );
+                    return Ok(hid);
+                }
+                Err(error) => {
+                    log::warn!(
+                        "Linux kernel HID transport unavailable for {}: {error:#}; \
+                         falling back to direct BlueZ GATT",
+                        device.name
+                    );
+                }
+            }
             return crate::linux_ble::LinuxBleDevice::open(device)
                 .map(|device| Self {
                     backend: HidBackend::LinuxBle(device),
@@ -452,13 +472,14 @@ impl HidDevice {
             if !device_info_matches(info, device, true) {
                 continue;
             }
+            let path = PathBuf::from(info.path().to_string_lossy().into_owned());
             return info
                 .open_device(&api)
                 .map(|hid_device| Self {
                     backend: HidBackend::Local {
                         device: hid_device,
                         transport: device_transport(device),
-                        path: local_hid_path(device),
+                        path: Some(path),
                     },
                 })
                 .context("Failed to open HID device");
@@ -468,13 +489,14 @@ impl HidDevice {
             if !device_info_matches(info, device, false) {
                 continue;
             }
+            let path = PathBuf::from(info.path().to_string_lossy().into_owned());
             return info
                 .open_device(&api)
                 .map(|hid_device| Self {
                     backend: HidBackend::Local {
                         device: hid_device,
                         transport: device_transport(device),
-                        path: local_hid_path(device),
+                        path: Some(path),
                     },
                 })
                 .context("Failed to open HID device");
