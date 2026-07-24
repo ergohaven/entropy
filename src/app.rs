@@ -1,4 +1,4 @@
-use crate::device::{Device, DeviceManager};
+use crate::device::{Device, DeviceIdentity, DeviceManager};
 use crate::firmware::FirmwareProtocol;
 
 use crate::keyboard::{KeyboardLayout, LayoutOption, PhysicalEncoder, PhysicalKey};

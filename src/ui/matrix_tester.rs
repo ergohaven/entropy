@@ -121,7 +121,9 @@ impl EntropyApp {
                 Err(e) => {
                     log::warn!("Matrix poll error: {e}");
                     if crate::hid::is_disconnect_error(&e) {
-                        self.clear_connected_keyboard_state("Device disconnected");
+                        if !self.begin_bluetooth_reconnect(e.to_string()) {
+                            self.clear_connected_keyboard_state("Device disconnected");
+                        }
                         return;
                     }
                     self.matrix_tester_lock_checked = false;

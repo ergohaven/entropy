@@ -1,6 +1,52 @@
 use super::*;
 
 impl EntropyApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn draw_bluetooth_reconnect_status(&mut self, ctx: &egui::Context) {
+        let Some(device_name) = self.bluetooth_reconnect_display_name().map(str::to_owned) else {
+            return;
+        };
+        let lang = self.app_settings.language;
+        let text = crate::i18n::tr_catalog_format(
+            lang,
+            "connection.reconnecting",
+            &[("device", &device_name)],
+        );
+
+        egui::Area::new(egui::Id::new("bluetooth_reconnect_status"))
+            .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -22.0])
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                top_dropdown_frame(self.dark_mode).show(ui, |ui| {
+                    ui.horizontal_centered(|ui| {
+                        ui.add(
+                            egui::Spinner::new()
+                                .size(16.0)
+                                .color(app_muted_text(self.dark_mode)),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(text)
+                                .size(13.0)
+                                .color(app_muted_text(self.dark_mode)),
+                        );
+                        ui.add_space(8.0);
+                        if crate::ui_style::modern_button(
+                            ui,
+                            crate::i18n::tr_catalog(lang, "connection.choose_another_device"),
+                            egui::vec2(132.0, 30.0),
+                            true,
+                        )
+                        .clicked()
+                        {
+                            self.cancel_bluetooth_reconnect_for_device_selection();
+                            ctx.request_repaint();
+                        }
+                    });
+                });
+            });
+    }
+
     pub(super) fn draw_layout(
         &mut self,
         ui: &mut egui::Ui,

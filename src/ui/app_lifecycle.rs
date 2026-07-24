@@ -73,7 +73,13 @@ fn hid_lifecycle_writes_available(hid_write_task_active: bool) -> bool {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn connection_replaces_layout_canvas(connect_state: &ConnectState) -> bool {
-    matches!(connect_state, ConnectState::Loading { .. })
+    matches!(
+        connect_state,
+        ConnectState::Loading {
+            reconnect: None,
+            ..
+        }
+    )
 }
 
 impl EntropyApp {
@@ -110,6 +116,7 @@ impl EntropyApp {
             if !self.hid_write_lifecycle_busy() {
                 self.poll_device_scan(ctx);
             }
+            self.maybe_start_bluetooth_reconnect_scan(ctx);
 
             let is_connecting = matches!(self.connect_state, ConnectState::Loading { .. });
             let hid_write_active = self.hid_write_lifecycle_busy();
@@ -138,6 +145,8 @@ impl EntropyApp {
         self.auto_reload_text_expander_rules_file(now);
         self.poll_single_instance_signal(ctx);
         self.poll_connect(ctx);
+        self.maybe_begin_bluetooth_reconnect();
+        self.maybe_start_periodic_battery_refresh(ctx, main_window_hidden_to_tray);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -441,8 +450,30 @@ mod tests {
             rx: receiver,
             started_at: now,
             last_progress_at: now,
+            reconnect: None,
         };
         assert!(connection_replaces_layout_canvas(&loading));
+
+        let reconnecting_loading = ConnectState::Loading {
+            rx: std::sync::mpsc::channel().1,
+            started_at: now,
+            last_progress_at: now,
+            reconnect: Some(BluetoothReconnectState::new(
+                Device {
+                    name: "K:04".to_owned(),
+                    vendor_id: 0xE126,
+                    product_id: 0x0074,
+                    manufacturer: "Ergohaven".to_owned(),
+                    serial_number: "AA:BB:CC:DD:EE:FF".to_owned(),
+                    bus_type: "Bluetooth".to_owned(),
+                    path: "/dev/hidraw4".to_owned(),
+                    firmware: FirmwareProtocol::Vial,
+                }
+                .stable_identity(),
+                "K:04 (Bluetooth)".to_owned(),
+            )),
+        };
+        assert!(!connection_replaces_layout_canvas(&reconnecting_loading));
     }
 
     #[test]
@@ -1043,7 +1074,8 @@ impl eframe::App for EntropyApp {
                 .selected_device
                 .and_then(|idx| self.device_manager.devices().get(idx))
                 .map(|device| device.is_bluetooth_transport())
-                .unwrap_or(false);
+                .unwrap_or(false)
+                || self.bluetooth_reconnect_active();
             let main_window_uses_wayland = matches!(
                 self.parent_display_handle,
                 Some(raw_window_handle::RawDisplayHandle::Wayland(_))
@@ -1188,7 +1220,13 @@ impl eframe::App for EntropyApp {
 
         // Main canvas
         egui::CentralPanel::default().show_inside(root_ui, |ui| {
-            if self.selected_device.is_none() {
+            #[cfg(not(target_arch = "wasm32"))]
+            let reconnecting_with_layout =
+                self.bluetooth_reconnect_active() && self.layout.is_some();
+            #[cfg(target_arch = "wasm32")]
+            let reconnecting_with_layout = false;
+
+            if self.selected_device.is_none() && !reconnecting_with_layout {
                 let rect = ui.max_rect();
                 #[cfg(target_os = "linux")]
                 if !super::app_settings_ui::linux_vial_udev_rules_installed()
@@ -1335,6 +1373,15 @@ impl eframe::App for EntropyApp {
             }
 
             if let Some(layout) = self.layout.clone() {
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.bluetooth_reconnect_active() {
+                    ui.scope(|ui| {
+                        ui.disable();
+                        self.draw_layout(ui, &layout, ctx);
+                    });
+                    self.draw_bluetooth_reconnect_status(ctx);
+                    return;
+                }
                 self.draw_layout(ui, &layout, ctx);
             } else if !self.status_msg.is_empty() {
                 let rect = ui.max_rect();

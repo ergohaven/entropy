@@ -292,21 +292,38 @@ impl EntropyApp {
         const CONNECT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
         const CONNECT_TOTAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(240);
 
-        let result = match &mut self.connect_state {
+        enum ConnectPollEvent {
+            Done {
+                result: Result<ConnectResult, String>,
+                reconnect: Option<BluetoothReconnectState>,
+            },
+            Failed {
+                error: String,
+                reconnect: Option<BluetoothReconnectState>,
+            },
+        }
+
+        let event = match &mut self.connect_state {
             ConnectState::Loading {
                 rx,
                 started_at,
                 last_progress_at,
+                reconnect,
             } => match rx.try_recv() {
                 Ok(ConnectTaskMessage::Progress(message)) => {
-                    self.status_msg = message;
+                    if reconnect.is_none() {
+                        self.status_msg = message;
+                    }
                     *last_progress_at = std::time::Instant::now();
                     ctx.request_repaint();
                     return;
                 }
                 Ok(ConnectTaskMessage::Done(result)) => {
                     ctx.request_repaint();
-                    *result
+                    ConnectPollEvent::Done {
+                        result: *result,
+                        reconnect: reconnect.clone(),
+                    }
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     let idle_timeout = last_progress_at.elapsed() > CONNECT_IDLE_TIMEOUT;
@@ -317,28 +334,36 @@ impl EntropyApp {
                         } else {
                             self.status_msg.clone()
                         };
-                        self.status_msg = format!(
+                        let error = format!(
                             "Connect timeout — RMK/Vial device did not finish loading while: {stage}"
                         );
                         log::warn!("Connect timeout while waiting for stage: {stage}");
-                        self.connect_state = ConnectState::Idle;
+                        ConnectPollEvent::Failed {
+                            error,
+                            reconnect: reconnect.clone(),
+                        }
+                    } else {
+                        #[cfg(not(target_os = "windows"))]
+                        ctx.request_repaint_after(CONNECT_POLL_INTERVAL);
                         return;
                     }
-                    #[cfg(not(target_os = "windows"))]
-                    ctx.request_repaint_after(CONNECT_POLL_INTERVAL);
-                    return;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.status_msg = "Connect thread died".into();
                     log::error!("Connect thread died before returning a result");
-                    self.connect_state = ConnectState::Idle;
-                    return;
+                    ConnectPollEvent::Failed {
+                        error: "Connect thread died".to_owned(),
+                        reconnect: reconnect.clone(),
+                    }
                 }
             },
-            ConnectState::Idle => return,
+            ConnectState::Idle | ConnectState::Reconnecting(_) => return,
         };
 
         self.connect_state = ConnectState::Idle;
+        let (result, reconnect) = match event {
+            ConnectPollEvent::Done { result, reconnect } => (result, reconnect),
+            ConnectPollEvent::Failed { error, reconnect } => (Err(error), reconnect),
+        };
 
         match result {
             Ok(r) => {
@@ -366,6 +391,7 @@ impl EntropyApp {
                     }
                 }
                 self.device_about_info = Some(r.about_info.clone());
+                self.schedule_next_battery_refresh();
                 self.matrix_tester_rmk_byte_order = self.current_device_is_likely_rmk();
                 self.current_encoder_visibility_id =
                     encoder_visibility_id(&r.device_name, r.keyboard_id);
@@ -558,6 +584,11 @@ impl EntropyApp {
                 );
             }
             Err(e) => {
+                if let Some(reconnect) = reconnect {
+                    self.schedule_bluetooth_reconnect_retry(reconnect, &e);
+                    return;
+                }
+
                 if is_hid_open_failure(&e) {
                     self.selected_device = None;
                     self.clear_connected_keyboard_state(e);

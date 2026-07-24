@@ -253,6 +253,8 @@ connect_vial_device = "Connect a Vial device"
 linux_vial_udev_required_title = "Vial device access is not configured"
 linux_vial_udev_required_body = "Install Linux udev rules so Entropy can detect Vial keyboards without root"
 loading_keyboard = "Loading device…"
+reconnecting = "{device} — reconnecting…"
+choose_another_device = "Choose device"
 
 [navigation]
 return_to_layout_hint = "Right-click or Esc to return to layout"

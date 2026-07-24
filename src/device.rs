@@ -1,5 +1,35 @@
 use crate::firmware::FirmwareProtocol;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DeviceIdentity {
+    vendor_id: u16,
+    product_id: u16,
+    serial_number: String,
+    manufacturer: String,
+    product_name: String,
+    bluetooth: bool,
+}
+
+impl DeviceIdentity {
+    pub(crate) fn matches(&self, device: &Device) -> bool {
+        if self.bluetooth != device.is_bluetooth_transport()
+            || self.vendor_id != device.vendor_id
+            || self.product_id != device.product_id
+        {
+            return false;
+        }
+
+        let serial_number = normalized_device_identity(&device.serial_number);
+        if !self.serial_number.is_empty() {
+            return self.serial_number == serial_number;
+        }
+
+        serial_number.is_empty()
+            && self.manufacturer == normalized_device_identity(&device.manufacturer)
+            && self.product_name == normalized_device_identity(&device.name)
+    }
+}
+
 /// Represents a connected Vial/HID keyboard device.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Device {
@@ -16,6 +46,17 @@ pub struct Device {
 }
 
 impl Device {
+    pub(crate) fn stable_identity(&self) -> DeviceIdentity {
+        DeviceIdentity {
+            vendor_id: self.vendor_id,
+            product_id: self.product_id,
+            serial_number: normalized_device_identity(&self.serial_number),
+            manufacturer: normalized_device_identity(&self.manufacturer),
+            product_name: normalized_device_identity(&self.name),
+            bluetooth: self.is_bluetooth_transport(),
+        }
+    }
+
     pub fn is_bluetooth_transport(&self) -> bool {
         self.bus_type.eq_ignore_ascii_case("bluetooth") || {
             let path = self.path.to_ascii_lowercase();
@@ -48,6 +89,14 @@ impl Device {
         };
         format!("{} ({transport})", display_name.trim())
     }
+}
+
+fn normalized_device_identity(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 /// Scans for connected Vial HID keyboard devices.
@@ -135,11 +184,7 @@ impl DeviceManager {
 
 #[cfg(target_os = "linux")]
 fn normalized_bluetooth_identity(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| character.is_ascii_hexdigit())
-        .flat_map(char::to_lowercase)
-        .collect()
+    normalized_device_identity(value)
 }
 
 #[cfg(target_os = "linux")]
@@ -232,6 +277,40 @@ mod tests {
             device.display_name_with_transport("Ergohaven K:04"),
             "Ergohaven K:04 (Bluetooth)"
         );
+    }
+
+    #[test]
+    fn bluetooth_identity_survives_hid_path_changes() {
+        let mut before = test_device("Bluetooth", "/dev/hidraw4");
+        before.serial_number = "C6:9E:29:C4:F4:C7".to_owned();
+        let mut after = before.clone();
+        after.path = "/dev/hidraw9".to_owned();
+        after.serial_number = "c6-9e-29-c4-f4-c7".to_owned();
+
+        assert!(before.stable_identity().matches(&after));
+    }
+
+    #[test]
+    fn bluetooth_identity_rejects_a_different_serial_number() {
+        let mut expected = test_device("Bluetooth", "/dev/hidraw4");
+        expected.serial_number = "C6:9E:29:C4:F4:C7".to_owned();
+        let mut other = expected.clone();
+        other.serial_number = "D7:AF:3A:D5:05:D8".to_owned();
+
+        assert!(!expected.stable_identity().matches(&other));
+    }
+
+    #[test]
+    fn serial_less_identity_requires_matching_product_metadata() {
+        let mut expected = test_device("Bluetooth", "/dev/hidraw4");
+        expected.serial_number.clear();
+        let mut same_model = expected.clone();
+        same_model.path = "/dev/hidraw9".to_owned();
+        let mut other_model = same_model.clone();
+        other_model.name = "Other Keyboard".to_owned();
+
+        assert!(expected.stable_identity().matches(&same_model));
+        assert!(!expected.stable_identity().matches(&other_model));
     }
 
     #[cfg(target_os = "linux")]

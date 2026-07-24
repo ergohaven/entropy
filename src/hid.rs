@@ -714,6 +714,14 @@ impl HidDevice {
                             .unwrap_or_default();
                         response[1..3].copy_from_slice(&value.to_le_bytes());
                     }
+                    (
+                        CMD_VIA_CUSTOM_GET_VALUE,
+                        ERGOHAVEN_CUSTOM_NAMESPACE,
+                        ERGOHAVEN_CUSTOM_BATTERY_HALVES,
+                    ) => {
+                        response[..3].copy_from_slice(&request[..3]);
+                        response[3] = ERGOHAVEN_BATTERY_HALVES_VERSION;
+                    }
                     _ => {}
                 }
                 Ok(response)

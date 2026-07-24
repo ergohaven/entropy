@@ -39,6 +39,151 @@ fn device_selection_needs_scroll(device_count: usize) -> bool {
 }
 
 impl EntropyApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn bluetooth_reconnect_active(&self) -> bool {
+        matches!(
+            self.connect_state,
+            ConnectState::Reconnecting(_)
+                | ConnectState::Loading {
+                    reconnect: Some(_),
+                    ..
+                }
+        )
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn bluetooth_reconnect_display_name(&self) -> Option<&str> {
+        match &self.connect_state {
+            ConnectState::Reconnecting(state)
+            | ConnectState::Loading {
+                reconnect: Some(state),
+                ..
+            } => Some(&state.display_name),
+            ConnectState::Idle
+            | ConnectState::Loading {
+                reconnect: None, ..
+            } => None,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn begin_bluetooth_reconnect(&mut self, transport_error: impl Into<String>) -> bool {
+        if self.bluetooth_reconnect_active() || self.layout.is_none() {
+            return false;
+        }
+        let Some(device) = self
+            .selected_device
+            .and_then(|index| self.device_manager.devices().get(index))
+            .filter(|device| device.is_bluetooth_transport())
+            .cloned()
+        else {
+            return false;
+        };
+        if self.hid_write_task_owner_active() {
+            return false;
+        }
+
+        let transport_error = transport_error.into();
+        log::warn!(
+            "Bluetooth HID connection lost for {}: {}",
+            device.name,
+            transport_error
+        );
+        let base_name = if self.current_device_name.trim().is_empty() {
+            device.name.as_str()
+        } else {
+            self.current_device_name.as_str()
+        };
+        let display_name = device.display_name_with_transport(base_name);
+
+        self.connection_generation = self.connection_generation.wrapping_add(1);
+        self.hid_device = None;
+        self.qmk_hid_hosts.clear();
+        self.pending_device_connect = None;
+        self.pending_entlayout_import_path = None;
+        self.pending_entsettings_import_path = None;
+        self.import_progress_started_at = None;
+        self.reset_settings_write_context();
+        self.cancel_pending_qmk_setting_writes();
+        self.qmk_settings_write_queue.clear();
+        self.pending_tap_hold_numeric_writes.clear();
+        self.tap_hold_numeric_write_due = None;
+        self.combo_dirty = false;
+        self.combo_attempted_revision = None;
+        self.combo_names_dirty = false;
+        self.combo_colors_dirty = false;
+        self.combo_term_dirty = false;
+        self.undo_stack.clear();
+        self.keycode_picker.open = false;
+        self.selected_key = None;
+        self.selected_encoder = None;
+        self.unlock_open = false;
+        self.vial_unlock_polling = false;
+        self.vial_unlock_last_poll = None;
+        self.pending_layout_indicator_open_after_unlock = false;
+        self.reset_matrix_tester_state();
+        self.next_battery_refresh_at = None;
+
+        self.status_msg = crate::i18n::tr_catalog_format(
+            self.app_settings.language,
+            "connection.reconnecting",
+            &[("device", &display_name)],
+        );
+        self.connect_state = ConnectState::Reconnecting(BluetoothReconnectState::new(
+            device.stable_identity(),
+            display_name,
+        ));
+        true
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn maybe_begin_bluetooth_reconnect(&mut self) {
+        if !matches!(self.connect_state, ConnectState::Idle)
+            || self.layout.is_none()
+            || self.hid_device.is_some()
+            || self.hid_write_task_owner_active()
+        {
+            return;
+        }
+
+        let error = if self.status_msg.trim().is_empty() {
+            "Bluetooth HID transport became unavailable".to_owned()
+        } else {
+            self.status_msg.clone()
+        };
+        self.begin_bluetooth_reconnect(error);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn schedule_bluetooth_reconnect_retry(
+        &mut self,
+        state: BluetoothReconnectState,
+        error: &str,
+    ) {
+        log::debug!(
+            "Bluetooth reconnect attempt failed for {}: {}",
+            state.display_name,
+            error
+        );
+        self.status_msg = crate::i18n::tr_catalog_format(
+            self.app_settings.language,
+            "connection.reconnecting",
+            &[("device", &state.display_name)],
+        );
+        self.connect_state =
+            ConnectState::Reconnecting(state.schedule_retry(std::time::Instant::now()));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn cancel_bluetooth_reconnect_for_device_selection(&mut self) {
+        if !self.bluetooth_reconnect_active() {
+            return;
+        }
+        self.selected_device = None;
+        self.clear_connected_keyboard_state("");
+        self.start_device_scan();
+    }
+
     pub(super) fn clear_connected_keyboard_state(&mut self, status_msg: impl Into<String>) {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -59,6 +204,10 @@ impl EntropyApp {
         self.qmk_settings_write_queue.clear();
         self.pending_device_connect = None;
         self.hid_device = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.next_battery_refresh_at = None;
+        }
         self.supported_qmk_settings.clear();
         self.undo_stack.clear();
         self.connect_state = ConnectState::Idle;
@@ -208,6 +357,38 @@ impl EntropyApp {
 mod tests {
     use super::*;
 
+    fn test_layout() -> KeyboardLayout {
+        KeyboardLayout {
+            name: "K:04".to_owned(),
+            rows: 0,
+            cols: 0,
+            keys: Vec::new(),
+            encoders: Vec::new(),
+            layers: vec![Vec::new(), Vec::new(), Vec::new()],
+            encoder_layers: vec![Vec::new(), Vec::new(), Vec::new()],
+            layer_names: vec!["Base".to_owned(), "Lower".to_owned(), "Raise".to_owned()],
+            custom_keycodes: Vec::new(),
+            layout_options: Vec::new(),
+            live_features: Default::default(),
+            supports_rgb: false,
+            lighting_mode: None,
+            firmware: FirmwareProtocol::Vial,
+        }
+    }
+
+    fn bluetooth_device(path: &str) -> Device {
+        Device {
+            name: "K:04".to_owned(),
+            vendor_id: 0xE126,
+            product_id: 0x0074,
+            manufacturer: "Ergohaven".to_owned(),
+            serial_number: "AA:BB:CC:DD:EE:FF".to_owned(),
+            bus_type: "Bluetooth".to_owned(),
+            path: path.to_owned(),
+            firmware: FirmwareProtocol::Vial,
+        }
+    }
+
     #[test]
     fn device_selection_list_stays_compact_and_caps_visible_rows() {
         assert_eq!(
@@ -221,5 +402,59 @@ mod tests {
         assert!(!device_selection_needs_scroll(1));
         assert!(!device_selection_needs_scroll(6));
         assert!(device_selection_needs_scroll(7));
+    }
+
+    #[test]
+    fn bluetooth_disconnect_preserves_layout_layer_and_battery_while_reconnecting() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        app.device_manager
+            .replace_devices(vec![bluetooth_device("/dev/hidraw4")]);
+        app.selected_device = Some(0);
+        app.layout = Some(test_layout());
+        app.selected_layer = 2;
+        app.current_device_name = "K:04".to_owned();
+        app.device_about_info = Some(DeviceAboutInfo {
+            supports_battery_halves: true,
+            battery_halves: Some(crate::hid::BatteryHalves {
+                left: Some(91),
+                right: Some(87),
+            }),
+            ..Default::default()
+        });
+
+        assert!(app.begin_bluetooth_reconnect("HID device disconnected"));
+
+        assert!(app.layout.is_some());
+        assert_eq!(app.selected_layer, 2);
+        assert_eq!(
+            app.device_about_info
+                .as_ref()
+                .and_then(|info| info.battery_halves)
+                .and_then(|battery| battery.left),
+            Some(91)
+        );
+        assert!(matches!(app.connect_state, ConnectState::Reconnecting(_)));
+    }
+
+    #[test]
+    fn reconnect_backoff_caps_at_two_seconds() {
+        assert_eq!(
+            bluetooth_reconnect_retry_delay(0),
+            std::time::Duration::from_millis(500)
+        );
+        assert_eq!(
+            bluetooth_reconnect_retry_delay(1),
+            std::time::Duration::from_secs(1)
+        );
+        assert_eq!(
+            bluetooth_reconnect_retry_delay(2),
+            std::time::Duration::from_secs(2)
+        );
+        assert_eq!(
+            bluetooth_reconnect_retry_delay(u8::MAX),
+            std::time::Duration::from_secs(2)
+        );
     }
 }

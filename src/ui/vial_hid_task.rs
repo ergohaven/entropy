@@ -1,6 +1,11 @@
 use super::*;
 
 #[cfg(not(target_arch = "wasm32"))]
+const BATTERY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+#[cfg(not(target_arch = "wasm32"))]
+const BATTERY_REFRESH_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum VialHidOperation {
     UnlockStart,
@@ -12,6 +17,7 @@ pub(super) enum VialHidOperation {
         rmk_byte_order: bool,
         remember_ever_pressed: bool,
     },
+    BatteryRefresh,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -28,6 +34,7 @@ enum VialHidOutcome {
     },
     Locked,
     Matrix(Vec<bool>),
+    Battery(Option<crate::hid::BatteryHalves>),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -87,10 +94,58 @@ fn run_vial_hid_operation(
         } => hid
             .get_switch_matrix_with_rmk_byte_order(rows, cols, rmk_byte_order)
             .map(VialHidOutcome::Matrix),
+        VialHidOperation::BatteryRefresh => hid.get_battery_halves().map(VialHidOutcome::Battery),
     }
 }
 
 impl EntropyApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn schedule_next_battery_refresh(&mut self) {
+        self.next_battery_refresh_at = self
+            .device_about_info
+            .as_ref()
+            .filter(|info| info.supports_battery_halves)
+            .map(|_| std::time::Instant::now() + BATTERY_REFRESH_INTERVAL);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn maybe_start_periodic_battery_refresh(
+        &mut self,
+        ctx: &egui::Context,
+        main_window_hidden_to_tray: bool,
+    ) {
+        if main_window_hidden_to_tray
+            || self.bluetooth_reconnect_active()
+            || !self
+                .device_about_info
+                .as_ref()
+                .map(|info| info.supports_battery_halves)
+                .unwrap_or(false)
+        {
+            return;
+        }
+        let Some(next_refresh_at) = self.next_battery_refresh_at else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        if now < next_refresh_at {
+            ctx.request_repaint_after(next_refresh_at.saturating_duration_since(now));
+            return;
+        }
+
+        match self.start_vial_hid_operation(ctx, VialHidOperation::BatteryRefresh) {
+            VialHidTaskStart::Started => {
+                self.next_battery_refresh_at = None;
+            }
+            VialHidTaskStart::Busy => {
+                ctx.request_repaint_after(std::time::Duration::from_secs(1));
+            }
+            VialHidTaskStart::NoDevice => {
+                self.next_battery_refresh_at = Some(now + BATTERY_REFRESH_RETRY_INTERVAL);
+            }
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn vial_hid_task_active(&self) -> bool {
         self.vial_hid_task.is_some()
@@ -242,6 +297,12 @@ impl EntropyApp {
                 };
                 self.finish_matrix_tester_poll(pressed, remember_ever_pressed);
             }
+            Ok(VialHidOutcome::Battery(battery)) => {
+                if let Some(info) = self.device_about_info.as_mut() {
+                    info.battery_halves = battery;
+                }
+                self.schedule_next_battery_refresh();
+            }
             Err(error) => {
                 self.finish_vial_hid_error(result.operation, error, result.disconnected);
             }
@@ -282,7 +343,9 @@ impl EntropyApp {
         disconnected: bool,
     ) {
         if disconnected {
-            self.clear_connected_keyboard_state(error);
+            if !self.begin_bluetooth_reconnect(error.clone()) {
+                self.clear_connected_keyboard_state(error);
+            }
             return;
         }
 
@@ -297,6 +360,11 @@ impl EntropyApp {
                 );
             }
             VialHidOperation::Matrix { .. } => self.fail_matrix_tester_poll(error),
+            VialHidOperation::BatteryRefresh => {
+                log::warn!("Battery refresh failed: {error}");
+                self.next_battery_refresh_at =
+                    Some(std::time::Instant::now() + BATTERY_REFRESH_RETRY_INTERVAL);
+            }
         }
     }
 }
@@ -353,5 +421,18 @@ mod tests {
         let requests = recorder.requests();
         assert_eq!(&requests[0][..2], &[0xFE, 0x07]);
         assert_eq!(&requests[1][..2], &[0xFE, 0x08]);
+    }
+
+    #[test]
+    fn battery_refresh_uses_the_existing_vial_transport() {
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+
+        let outcome = run_vial_hid_operation(&hid, VialHidOperation::BatteryRefresh).unwrap();
+
+        assert!(matches!(outcome, VialHidOutcome::Battery(_)));
+        let requests = recorder.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(&requests[0][..3], &[0x08, 0xE8, 0x01]);
+        assert_eq!(&requests[1][..3], &[0x08, 0xE8, 0x01]);
     }
 }

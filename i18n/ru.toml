@@ -253,6 +253,8 @@ connect_vial_device = "Подключите Vial-устройство"
 linux_vial_udev_required_title = "Доступ к Vial не настроен"
 linux_vial_udev_required_body = "Установите Linux udev rules, чтобы Entropy могла находить Vial-клавиатуры без root"
 loading_keyboard = "Загрузка устройства…"
+reconnecting = "{device} — переподключение…"
+choose_another_device = "Выбрать устройство"
 
 [navigation]
 return_to_layout_hint = "ПКМ или Esc — вернуться к раскладке"

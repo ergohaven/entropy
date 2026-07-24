@@ -290,6 +290,7 @@ pub(crate) struct DeviceAboutInfo {
     pub(crate) product_id: u16,
     pub(crate) path: String,
     pub(crate) firmware_version: Option<String>,
+    pub(crate) supports_battery_halves: bool,
     pub(crate) battery_halves: Option<crate::hid::BatteryHalves>,
     pub(crate) via_protocol: u16,
     pub(crate) vial_protocol: u32,
@@ -380,12 +381,51 @@ pub(crate) enum ConnectTaskMessage {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Clone)]
+pub(crate) struct BluetoothReconnectState {
+    pub(crate) identity: DeviceIdentity,
+    pub(crate) display_name: String,
+    pub(crate) retry_attempt: u8,
+    pub(crate) next_attempt_at: std::time::Instant,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl BluetoothReconnectState {
+    pub(crate) fn new(identity: DeviceIdentity, display_name: String) -> Self {
+        Self {
+            identity,
+            display_name,
+            retry_attempt: 0,
+            next_attempt_at: std::time::Instant::now(),
+        }
+    }
+
+    pub(crate) fn schedule_retry(mut self, now: std::time::Instant) -> Self {
+        let delay = bluetooth_reconnect_retry_delay(self.retry_attempt);
+        self.retry_attempt = self.retry_attempt.saturating_add(1);
+        self.next_attempt_at = now + delay;
+        self
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn bluetooth_reconnect_retry_delay(retry_attempt: u8) -> std::time::Duration {
+    match retry_attempt {
+        0 => std::time::Duration::from_millis(500),
+        1 => std::time::Duration::from_secs(1),
+        _ => std::time::Duration::from_secs(2),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) enum ConnectState {
     Idle,
+    Reconnecting(BluetoothReconnectState),
     Loading {
         rx: mpsc::Receiver<ConnectTaskMessage>,
         started_at: std::time::Instant,
         last_progress_at: std::time::Instant,
+        reconnect: Option<BluetoothReconnectState>,
     },
 }
 
@@ -3094,6 +3134,9 @@ pub struct EntropyApp {
     pub(crate) scan_frame: u32,
     /// Last device scan timestamp in egui seconds
     pub(crate) last_device_scan_at: f64,
+    /// Next low-frequency battery refresh for supported devices.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) next_battery_refresh_at: Option<std::time::Instant>,
     /// Layer to preview on hover (None = show selected_layer)
     pub(crate) hover_layer: Option<usize>,
     /// Last main keyboard layout geometry: offset_x, offset_y, unit, padding
