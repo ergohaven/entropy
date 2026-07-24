@@ -14,10 +14,14 @@ pub(super) const UPDATE_CHECK_POLL_INTERVAL: std::time::Duration =
 #[cfg(not(target_arch = "wasm32"))]
 fn should_use_high_frequency_bluetooth_repaint_for_target(
     selected_device_is_bluetooth: bool,
-    target_is_windows: bool,
+    target_is_macos: bool,
 ) -> bool {
-    // A 16 ms timer keeps visible eframe windows rendering continuously on Windows.
-    selected_device_is_bluetooth && !target_is_windows
+    // Linux and Windows receive immediate input-driven repaints from eframe.
+    // Rendering a heavy keyboard layout every 16 ms while a Bluetooth device
+    // is selected only consumes the UI thread and makes pointer input lag.
+    // Keep the existing macOS cadence unchanged; this fix only removes the
+    // unnecessary Linux timer.
+    selected_device_is_bluetooth && target_is_macos
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -26,7 +30,7 @@ pub(super) fn should_use_high_frequency_bluetooth_repaint(
 ) -> bool {
     should_use_high_frequency_bluetooth_repaint_for_target(
         selected_device_is_bluetooth,
-        cfg!(target_os = "windows"),
+        cfg!(target_os = "macos"),
     )
 }
 
@@ -100,20 +104,24 @@ mod tests {
     }
 
     #[test]
-    fn windows_bluetooth_uses_normal_visible_idle_cadence() {
+    fn non_macos_bluetooth_uses_normal_visible_idle_cadence() {
         assert_eq!(
             native_repaint_interval(
                 false,
-                should_use_high_frequency_bluetooth_repaint_for_target(true, true),
+                should_use_high_frequency_bluetooth_repaint_for_target(true, false),
                 false,
                 false,
             ),
             VISIBLE_REPAINT_INTERVAL
         );
+    }
+
+    #[test]
+    fn macos_bluetooth_keeps_continuous_visible_cadence() {
         assert_eq!(
             native_repaint_interval(
                 false,
-                should_use_high_frequency_bluetooth_repaint_for_target(true, false),
+                should_use_high_frequency_bluetooth_repaint_for_target(true, true),
                 false,
                 false,
             ),
