@@ -65,6 +65,14 @@ pub(crate) fn app_muted_text(dark: bool) -> Color32 {
     crate::ui_style::muted_text(dark)
 }
 
+pub(crate) fn app_top_bar_quiet_text(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_gray(58)
+    } else {
+        Color32::from_gray(178)
+    }
+}
+
 pub(crate) fn app_inactive_entry_text(dark: bool) -> Color32 {
     if dark {
         Color32::from_gray(105)

@@ -223,11 +223,7 @@ impl EntropyApp {
             ctx.request_repaint();
         }
         let undo_color = if !undo_enabled {
-            if ui.visuals().dark_mode {
-                Color32::from_gray(58)
-            } else {
-                Color32::from_gray(178)
-            }
+            app_top_bar_quiet_text(ui.visuals().dark_mode)
         } else if undo_resp.hovered() {
             app_accent()
         } else {
