@@ -1,5 +1,23 @@
 use super::*;
 
+fn take_ctrl_wheel_delta(events: &mut [egui::Event]) -> f32 {
+    let mut wheel_delta = 0.0;
+    for event in events {
+        if let egui::Event::MouseWheel {
+            delta, modifiers, ..
+        } = event
+        {
+            if modifiers.ctrl {
+                wheel_delta += delta.y;
+                // Ctrl+wheel belongs to global UI scaling, not page-local
+                // wheel handlers such as the layer switcher.
+                delta.y = 0.0;
+            }
+        }
+    }
+    wheel_delta
+}
+
 impl EntropyApp {
     pub(super) fn ui_scale_percent(&self) -> i32 {
         (clamp_ui_scale(self.app_settings.ui_scale) * 100.0).round() as i32
@@ -38,13 +56,15 @@ impl EntropyApp {
 
     pub(super) fn handle_ui_scale_shortcuts(&mut self, ctx: &egui::Context) {
         let action = ctx.input_mut(|i| {
+            // egui 0.34 turns Ctrl+wheel into zoom_delta and leaves
+            // smooth_scroll_delta empty. Read the raw wheel event once so the
+            // app's persisted, clamped scale remains the single zoom owner.
+            let wheel_delta = take_ctrl_wheel_delta(&mut i.raw.events);
+            if wheel_delta.abs() > 0.0 {
+                return Some(if wheel_delta > 0.0 { 1 } else { -1 });
+            }
             if !i.modifiers.ctrl {
                 return None;
-            }
-            let wheel_delta = i.smooth_scroll_delta.y;
-            if wheel_delta.abs() > 0.0 {
-                i.smooth_scroll_delta = Vec2::ZERO;
-                return Some(if wheel_delta > 0.0 { 1 } else { -1 });
             }
             if i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals) {
                 Some(1)
@@ -135,5 +155,42 @@ impl EntropyApp {
         }
 
         total_w
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::take_ctrl_wheel_delta;
+    use egui::{Event, Modifiers, MouseWheelUnit, TouchPhase, Vec2};
+
+    fn wheel_event(delta_y: f32, modifiers: Modifiers) -> Event {
+        Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, delta_y),
+            phase: TouchPhase::Move,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn ctrl_wheel_is_consumed_for_ui_scaling() {
+        let mut events = [wheel_event(120.0, Modifiers::CTRL)];
+
+        assert_eq!(take_ctrl_wheel_delta(&mut events), 120.0);
+        assert!(matches!(
+            events[0],
+            Event::MouseWheel { delta, .. } if delta.y == 0.0
+        ));
+    }
+
+    #[test]
+    fn plain_wheel_remains_available_to_page_controls() {
+        let mut events = [wheel_event(-120.0, Modifiers::NONE)];
+
+        assert_eq!(take_ctrl_wheel_delta(&mut events), 0.0);
+        assert!(matches!(
+            events[0],
+            Event::MouseWheel { delta, .. } if delta.y == -120.0
+        ));
     }
 }
