@@ -84,6 +84,31 @@ enum DeferredOverlayTarget {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn event_defers_automatic_background_load(event: &egui::Event) -> bool {
+    match event {
+        egui::Event::Copy
+        | egui::Event::Cut
+        | egui::Event::Paste(_)
+        | egui::Event::Text(_)
+        | egui::Event::Zoom(_)
+        | egui::Event::Rotate(_)
+        | egui::Event::MouseWheel { .. }
+        | egui::Event::AccessKitActionRequest(_) => true,
+        egui::Event::Key { pressed, .. } | egui::Event::PointerButton { pressed, .. } => *pressed,
+        egui::Event::Ime(egui::ImeEvent::Preedit(_) | egui::ImeEvent::Commit(_)) => true,
+        egui::Event::Touch { phase, .. } => {
+            matches!(phase, egui::TouchPhase::Start | egui::TouchPhase::Move)
+        }
+        egui::Event::PointerMoved(_)
+        | egui::Event::MouseMoved(_)
+        | egui::Event::PointerGone
+        | egui::Event::Ime(egui::ImeEvent::Enabled | egui::ImeEvent::Disabled)
+        | egui::Event::WindowFocused(_)
+        | egui::Event::Screenshot { .. } => false,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn run_deferred_load(
     hid: &crate::hid::HidDevice,
     request: &DeferredLoadRequest,
@@ -534,7 +559,13 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn automatic_background_layer_load_allowed(&mut self, ctx: &egui::Context) -> bool {
-        if ctx.input(|input| !input.events.is_empty()) {
+        if ctx.input(|input| {
+            input.pointer.any_down()
+                || input
+                    .events
+                    .iter()
+                    .any(event_defers_automatic_background_load)
+        }) {
             self.deferred_device_load.defer_background_for_user_input();
         }
         !(self.main_menu_tab == MainMenuTab::Settings
@@ -1673,6 +1704,36 @@ mod tests {
         state.defer_background_for_user_input();
 
         assert!(state.background_layer_resume_delay().is_some());
+    }
+
+    #[test]
+    fn passive_pointer_motion_does_not_defer_automatic_background_load() {
+        assert!(!event_defers_automatic_background_load(
+            &egui::Event::PointerMoved(egui::pos2(100.0, 100.0))
+        ));
+        assert!(!event_defers_automatic_background_load(
+            &egui::Event::WindowFocused(true)
+        ));
+    }
+
+    #[test]
+    fn deliberate_input_defers_automatic_background_load() {
+        assert!(event_defers_automatic_background_load(
+            &egui::Event::PointerButton {
+                pos: egui::pos2(100.0, 100.0),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }
+        ));
+        assert!(event_defers_automatic_background_load(
+            &egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, 10.0),
+                modifiers: egui::Modifiers::NONE,
+                phase: egui::TouchPhase::Move,
+            }
+        ));
     }
 
     #[test]

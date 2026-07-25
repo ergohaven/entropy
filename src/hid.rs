@@ -407,29 +407,25 @@ impl HidDevice {
     pub fn open_fresh_for(device: &crate::device::Device) -> Result<Self> {
         #[cfg(target_os = "linux")]
         if device.uses_bluez_gatt_transport() {
-            match Self::open_fresh_for_local(device) {
-                Ok(hid) => {
+            match crate::linux_ble::LinuxBleDevice::open(device) {
+                Ok(bluez_device) => {
                     log::info!(
-                        "Using the Linux kernel HID transport for Bluetooth device {}",
+                        "Using direct BlueZ GATT for Bluetooth device {}",
                         device.name
                     );
-                    return Ok(hid);
+                    return Ok(Self {
+                        backend: HidBackend::LinuxBle(bluez_device),
+                    });
                 }
                 Err(error) => {
-                    if is_unsafe_bluetooth_report_map(&error) {
-                        return Err(error);
-                    }
                     log::warn!(
-                        "Linux kernel HID transport unavailable for {}: {error:#}; \
-                         falling back to direct BlueZ GATT",
+                        "Direct BlueZ GATT unavailable for {}: {error:#}; \
+                         falling back to the Linux kernel HID transport",
                         device.name
                     );
                 }
             }
-            return crate::linux_ble::LinuxBleDevice::open(device)
-                .map(|device| Self {
-                    backend: HidBackend::LinuxBle(device),
-                })
+            return Self::open_fresh_for_local(device)
                 .context("Failed to open the Linux Bluetooth Vial transport");
         }
 

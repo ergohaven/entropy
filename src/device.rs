@@ -157,7 +157,7 @@ impl DeviceManager {
         {
             deduplicate_kernel_bluetooth_devices(&mut devices);
             let bluez_devices = crate::linux_ble::scan_devices();
-            merge_bluez_fallback_devices(&mut devices, bluez_devices);
+            merge_bluez_vial_devices(&mut devices, bluez_devices);
         }
 
         devices
@@ -200,24 +200,28 @@ fn deduplicate_kernel_bluetooth_devices(devices: &mut Vec<Device>) {
 }
 
 #[cfg(target_os = "linux")]
-fn merge_bluez_fallback_devices(devices: &mut Vec<Device>, bluez_devices: Vec<Device>) {
+fn merge_bluez_vial_devices(devices: &mut Vec<Device>, bluez_devices: Vec<Device>) {
     for bluez_device in bluez_devices {
         let bluez_identity = normalized_bluetooth_identity(&bluez_device.serial_number);
-        let kernel_hid_available = !bluez_identity.is_empty()
+        let matching_kernel_hid = !bluez_identity.is_empty()
             && devices.iter().any(|device| {
                 device.is_bluetooth_transport()
                     && !device.uses_bluez_gatt_transport()
                     && normalized_bluetooth_identity(&device.serial_number) == bluez_identity
             });
 
-        if kernel_hid_available {
+        if matching_kernel_hid {
+            devices.retain(|device| {
+                !device.is_bluetooth_transport()
+                    || device.uses_bluez_gatt_transport()
+                    || normalized_bluetooth_identity(&device.serial_number) != bluez_identity
+            });
             log::info!(
-                "Using the Linux kernel HID transport for paired Bluetooth device {}",
+                "Using direct BlueZ GATT for paired Bluetooth device {}",
                 bluez_device.name
             );
-        } else {
-            devices.push(bluez_device);
         }
+        devices.push(bluez_device);
     }
 }
 
@@ -335,7 +339,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn prefers_kernel_hid_over_matching_bluez_gatt_device() {
+    fn prefers_bluez_gatt_over_matching_kernel_hid_device() {
         let mut kernel_hid = test_device("Bluetooth", "/dev/hidraw7");
         kernel_hid.serial_number = "c6:9e:29:c4:f4:c7".to_owned();
         let mut bluez = test_device(
@@ -345,10 +349,10 @@ mod tests {
         bluez.serial_number = "C6:9E:29:C4:F4:C7".to_owned();
         let mut devices = vec![kernel_hid.clone()];
 
-        merge_bluez_fallback_devices(&mut devices, vec![bluez]);
+        merge_bluez_vial_devices(&mut devices, vec![bluez]);
 
         assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].path, kernel_hid.path);
+        assert!(devices[0].uses_bluez_gatt_transport());
     }
 
     #[cfg(target_os = "linux")]
@@ -360,7 +364,7 @@ mod tests {
         );
         let mut devices = Vec::new();
 
-        merge_bluez_fallback_devices(&mut devices, vec![bluez.clone()]);
+        merge_bluez_vial_devices(&mut devices, vec![bluez.clone()]);
 
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].path, bluez.path);
@@ -378,7 +382,7 @@ mod tests {
         bluez.serial_number = usb.serial_number.clone();
         let mut devices = vec![usb];
 
-        merge_bluez_fallback_devices(&mut devices, vec![bluez]);
+        merge_bluez_vial_devices(&mut devices, vec![bluez]);
 
         assert_eq!(devices.len(), 2);
         assert!(devices[1].uses_bluez_gatt_transport());
