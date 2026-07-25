@@ -221,7 +221,7 @@ impl EntropyApp {
                                     .clicked()
                                     {
                                         self.close_top_dropdowns(ctx);
-                                        self.import_entlayout_dialog();
+                                        self.request_entlayout_import_after_full_load();
                                         ctx.request_repaint();
                                     }
                                     if top_dropdown_item(
@@ -234,7 +234,7 @@ impl EntropyApp {
                                     .clicked()
                                     {
                                         self.close_top_dropdowns(ctx);
-                                        self.export_entlayout_dialog();
+                                        self.request_entlayout_export_after_full_load();
                                         ctx.request_repaint();
                                     }
                                     if top_dropdown_item(
@@ -247,7 +247,7 @@ impl EntropyApp {
                                     .clicked()
                                     {
                                         self.close_top_dropdowns(ctx);
-                                        self.open_layout_image_export_page();
+                                        self.request_image_export_after_full_load();
                                         ctx.request_repaint();
                                     }
                                 }

@@ -361,6 +361,72 @@ impl EntropyApp {
             .all(|qsid| Self::touchpad_setting_exists(json, *qsid))
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn read_touchpad_settings(
+        json: &serde_json::Value,
+        supported_qmk_settings: &[u16],
+        dev_conn: &crate::hid::HidDevice,
+    ) -> TouchpadSettingsState {
+        let mut settings = TouchpadSettingsState::default();
+        if !Self::layout_json_has_touchpad_settings(json)
+            || ![120u16, 121, 122, 123, 124]
+                .iter()
+                .all(|qsid| supported_qmk_settings.contains(qsid))
+        {
+            return settings;
+        }
+
+        settings.dpi_variants = Self::touchpad_setting_variants(json, 120);
+        let dpi_read = if settings.dpi_variants.is_empty() {
+            dev_conn.get_qmk_setting_u16(120)
+        } else {
+            dev_conn.get_qmk_setting_u8(120).map(|value| value as u16)
+        };
+        let Ok(dpi) = dpi_read else {
+            log::warn!("get_qmk_setting(touchpad dpi) failed");
+            return settings;
+        };
+
+        settings.dpi = dpi;
+        settings.supported = true;
+        settings.sniper_sens = dev_conn.get_qmk_setting_u8(121).unwrap_or_else(|error| {
+            log::warn!("get_qmk_setting_u8(touchpad sniper sens): {error}");
+            0
+        });
+        settings.scroll_sens = dev_conn.get_qmk_setting_u8(122).unwrap_or_else(|error| {
+            log::warn!("get_qmk_setting_u8(touchpad scroll sens): {error}");
+            0
+        });
+        settings.text_sens = dev_conn.get_qmk_setting_u8(123).unwrap_or_else(|error| {
+            log::warn!("get_qmk_setting_u8(touchpad text sens): {error}");
+            0
+        });
+        settings.bits = dev_conn.get_qmk_setting_u8(124).unwrap_or_else(|error| {
+            log::warn!("get_qmk_setting_u8(touchpad bits): {error}");
+            0
+        });
+
+        if supported_qmk_settings.contains(&142) && Self::touchpad_setting_exists(json, 142) {
+            settings.auto_layer_enable_supported = true;
+            settings.auto_layer_enable = dev_conn
+                .get_qmk_setting_u8(142)
+                .map(|value| value != 0)
+                .unwrap_or_else(|error| {
+                    log::warn!("get_qmk_setting_u8(touchpad auto layer enable): {error}");
+                    false
+                });
+        }
+        if supported_qmk_settings.contains(&143) && Self::touchpad_setting_exists(json, 143) {
+            settings.auto_layer_variants = Self::touchpad_setting_variants(json, 143);
+            settings.auto_layer = dev_conn.get_qmk_setting_u8(143).unwrap_or_else(|error| {
+                log::warn!("get_qmk_setting_u8(touchpad auto layer): {error}");
+                0
+            });
+        }
+
+        settings
+    }
+
     fn bluetooth_setting_variants(field: &serde_json::Value) -> Vec<String> {
         field
             .get("variants")
@@ -510,6 +576,50 @@ impl EntropyApp {
         }
     }
 
+    pub(super) fn bluetooth_settings_supported(
+        json: &serde_json::Value,
+        supported_qmk_settings: &[u16],
+    ) -> bool {
+        json.get("settings")
+            .and_then(|value| value.as_array())
+            .into_iter()
+            .flatten()
+            .filter(|tab| {
+                tab.get("name")
+                    .and_then(|value| value.as_str())
+                    .map(|name| name.to_ascii_lowercase().contains("bluetooth"))
+                    .unwrap_or(false)
+            })
+            .filter_map(|tab| tab.get("fields").and_then(|value| value.as_array()))
+            .flatten()
+            .any(|field| {
+                let Some(qsid) = field
+                    .get("qsid")
+                    .and_then(|value| value.as_u64())
+                    .and_then(|value| u16::try_from(value).ok())
+                else {
+                    return false;
+                };
+                if !supported_qmk_settings.contains(&qsid) {
+                    return false;
+                }
+                let title = field
+                    .get("title")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                (title.contains("sleep")
+                    && title.contains("timeout")
+                    && !Self::bluetooth_setting_variants(field).is_empty())
+                    || (title.contains("charge")
+                        && title.contains("indicator")
+                        && field.get("type").and_then(|value| value.as_str()) == Some("boolean"))
+                    || (title.contains("bt profile")
+                        && title.contains("color")
+                        && !Self::bluetooth_setting_variants(field).is_empty())
+            })
+    }
+
     fn parse_trailing_setting_index(
         lower_title: &str,
         prefix: &str,
@@ -604,6 +714,48 @@ impl EntropyApp {
             value,
             max,
         }
+    }
+
+    pub(super) fn layer_led_settings_supported(
+        json: &serde_json::Value,
+        supported_qmk_settings: &[u16],
+    ) -> bool {
+        if supported_qmk_settings.contains(&300) {
+            return true;
+        }
+        json.get("settings")
+            .and_then(|value| value.as_array())
+            .into_iter()
+            .flatten()
+            .filter(|tab| {
+                tab.get("name")
+                    .and_then(|value| value.as_str())
+                    .map(|name| name.to_ascii_lowercase().contains("led"))
+                    .unwrap_or(false)
+            })
+            .filter_map(|tab| tab.get("fields").and_then(|value| value.as_array()))
+            .flatten()
+            .any(|field| {
+                let Some(qsid) = field
+                    .get("qsid")
+                    .and_then(|value| value.as_u64())
+                    .and_then(|value| u16::try_from(value).ok())
+                else {
+                    return false;
+                };
+                if !supported_qmk_settings.contains(&qsid) {
+                    return false;
+                }
+                let title = field
+                    .get("title")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                title.contains("led brightness")
+                    || title.contains("led timeout")
+                    || (title.contains("bt profile") && title.contains("color"))
+                    || (title.contains("layer") && title.contains("color"))
+            })
     }
 
     #[cfg(not(target_arch = "wasm32"))]

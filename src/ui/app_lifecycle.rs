@@ -154,7 +154,9 @@ impl EntropyApp {
         self.poll_single_instance_signal(ctx);
         self.poll_connect(ctx);
         self.maybe_begin_bluetooth_reconnect();
+        self.finish_deferred_full_layout_action(ctx);
         self.maybe_start_periodic_battery_refresh(ctx, main_window_hidden_to_tray);
+        self.maybe_start_deferred_device_load(ctx, main_window_hidden_to_tray);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1399,7 +1401,15 @@ impl eframe::App for EntropyApp {
                     self.unlock_open,
                     self.vial_unlock_polling,
                 );
-                if disable_layout_background {
+                #[cfg(not(target_arch = "wasm32"))]
+                let deferred_keyboard_blocked = self.main_menu_tab == MainMenuTab::Keyboard
+                    && (!self.selected_layer_data_ready()
+                        || !self.sticky_layout_deferred_data_ready()
+                        || self.deferred_vial_hid_task_active()
+                        || self.deferred_full_layout_action_pending());
+                #[cfg(target_arch = "wasm32")]
+                let deferred_keyboard_blocked = false;
+                if disable_layout_background || deferred_keyboard_blocked {
                     ui.scope(|ui| {
                         ui.disable();
                         self.draw_layout(ui, &layout, ctx);
@@ -1407,6 +1417,10 @@ impl eframe::App for EntropyApp {
                     #[cfg(not(target_arch = "wasm32"))]
                     if reconnecting_with_layout {
                         self.draw_bluetooth_reconnect_status(ctx);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if deferred_keyboard_blocked && !reconnecting_with_layout {
+                        self.draw_deferred_keyboard_overlay(ui);
                     }
                     return;
                 }
@@ -1589,7 +1603,14 @@ impl eframe::App for EntropyApp {
             self.keycode_picker.key_legend_layout = self.app_settings.key_legend_layout;
             self.keycode_picker.show_shifted_number_symbols =
                 self.app_settings.show_shifted_number_symbols;
-            self.keycode_picker.show(ctx);
+            let macro_data_state = self.picker_macro_data_state();
+            let tap_dance_data_state = self.picker_tap_dance_data_state();
+            self.keycode_picker
+                .show(ctx, macro_data_state, tap_dance_data_state);
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(tab) = self.keycode_picker.deferred_retry_tab.take() {
+                self.retry_picker_deferred_data(tab);
+            }
             self.apply_picker_results();
         }
 

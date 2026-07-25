@@ -106,6 +106,63 @@ impl HidDevice {
         Ok(parse_keymap_u16_be(&keymap))
     }
 
+    /// Read one layer from the VIA keymap buffer using absolute buffer offsets.
+    /// This keeps staged Bluetooth loading proportional to one layer instead of
+    /// re-reading every layer before the first usable screen can be shown.
+    pub fn get_keymap_layer(
+        &self,
+        layer: usize,
+        layers: usize,
+        rows: usize,
+        cols: usize,
+    ) -> Result<Vec<u16>> {
+        if layers == 0
+            || layers > 32
+            || layer >= layers
+            || rows == 0
+            || rows > 32
+            || cols == 0
+            || cols > 32
+        {
+            bail!(
+                "invalid keymap layer request: layer={layer}, layers={layers}, rows={rows}, cols={cols}"
+            );
+        }
+        let layer_keys = rows.checked_mul(cols).context("keymap layer overflow")?;
+        let layer_bytes = layer_keys
+            .checked_mul(2)
+            .context("keymap layer size overflow")?;
+        let offset = layer
+            .checked_mul(layer_bytes)
+            .context("keymap layer offset overflow")?;
+        let total_bytes = layers
+            .checked_mul(layer_bytes)
+            .context("keymap size overflow")?;
+        if total_bytes > u16::MAX as usize {
+            bail!("keymap buffer is too large for VIA offset: {total_bytes} bytes");
+        }
+
+        let mut keymap = vec![0u8; layer_bytes];
+        let mut local_offset = 0usize;
+        while local_offset < layer_bytes {
+            let absolute_offset = offset + local_offset;
+            let sz = (layer_bytes - local_offset).min(BUFFER_FETCH_CHUNK);
+            let cmd = [
+                CMD_VIA_KEYMAP_GET_BUFFER,
+                ((absolute_offset >> 8) & 0xFF) as u8,
+                (absolute_offset & 0xFF) as u8,
+                sz as u8,
+            ];
+            let resp = self.usb_send(&cmd).with_context(|| {
+                format!("failed to read keymap layer {layer} at buffer offset {absolute_offset}")
+            })?;
+            keymap[local_offset..local_offset + sz].copy_from_slice(&resp[4..4 + sz]);
+            local_offset += sz;
+        }
+
+        Ok(parse_keymap_u16_be(&keymap))
+    }
+
     pub fn get_keycode(&self, layer: u8, row: u8, col: u8) -> Result<u16> {
         let resp = self
             .usb_send(&[CMD_VIA_GET_KEYCODE, layer, row, col])
@@ -176,5 +233,33 @@ mod tests {
             "unexpected error: {err}"
         );
         assert_eq!(keycode_writeback_readback(&err), Some(0x0001));
+    }
+
+    #[test]
+    fn staged_layer_read_uses_absolute_offset_and_only_one_layer() {
+        let (hid, recorder) = HidDevice::test_device();
+
+        let layer = hid.get_keymap_layer(3, 16, 10, 6).unwrap();
+
+        assert_eq!(layer.len(), 60);
+        let requests = recorder.requests();
+        assert_eq!(requests.len(), 5);
+        assert_eq!(
+            &requests[0][..4],
+            &[CMD_VIA_KEYMAP_GET_BUFFER, 0x01, 0x68, 28]
+        );
+        assert_eq!(
+            &requests[4][..4],
+            &[CMD_VIA_KEYMAP_GET_BUFFER, 0x01, 0xD8, 8]
+        );
+    }
+
+    #[test]
+    fn staged_layer_read_rejects_layer_outside_reported_count() {
+        let (hid, _) = HidDevice::test_device();
+
+        let error = hid.get_keymap_layer(16, 16, 10, 6).unwrap_err();
+
+        assert!(error.to_string().contains("layer=16"));
     }
 }

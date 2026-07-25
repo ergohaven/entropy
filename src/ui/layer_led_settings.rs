@@ -548,7 +548,10 @@ impl EntropyApp {
                                         cell_rect,
                                         7.0,
                                         app_surface_fill(dark),
-                                        Stroke::new(if selected { 1.6_f32 } else { 1.0_f32 }, outline),
+                                        Stroke::new(
+                                            if selected { 1.6_f32 } else { 1.0_f32 },
+                                            outline,
+                                        ),
                                         egui::StrokeKind::Inside,
                                     );
                                     ui.painter().rect(

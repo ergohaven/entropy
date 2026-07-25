@@ -366,7 +366,11 @@ impl EntropyApp {
         };
 
         match result {
-            Ok(r) => {
+            Ok(mut r) => {
+                if reconnect.is_some() {
+                    self.preserve_deferred_snapshot_on_reconnect(&mut r);
+                }
+                let staged_bluetooth_load = r.deferred_load.is_staged();
                 self.pending_tap_hold_numeric_writes.clear();
                 self.tap_hold_numeric_write_due = None;
                 log::info!(
@@ -391,7 +395,11 @@ impl EntropyApp {
                     }
                 }
                 self.device_about_info = Some(r.about_info.clone());
-                self.schedule_next_battery_refresh();
+                if staged_bluetooth_load {
+                    self.schedule_initial_battery_refresh();
+                } else {
+                    self.schedule_next_battery_refresh();
+                }
                 self.matrix_tester_rmk_byte_order = self.current_device_is_likely_rmk();
                 self.current_encoder_visibility_id =
                     encoder_visibility_id(&r.device_name, r.keyboard_id);
@@ -560,6 +568,7 @@ impl EntropyApp {
                 self.sticky_layout_active_combos = vec![false; r.combo_entries.len()];
                 self.sticky_layout_tap_dance_states.clear();
                 self.sticky_layout_base_layer = 0;
+                self.sticky_layout_active_layer = 0;
 
                 self.layout = Some(r.layout);
                 self.refresh_layer_picker_content_flags();
@@ -569,6 +578,7 @@ impl EntropyApp {
                 // between qmk-vial and RMK devices.
                 self.hid_device = r.hid_device;
                 self.supported_qmk_settings = r.supported_qmk_settings;
+                self.deferred_device_load = r.deferred_load;
 
                 #[cfg(not(target_arch = "wasm32"))]
                 {

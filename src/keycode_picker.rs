@@ -91,6 +91,13 @@ pub struct TapDanceEntry {
     pub tapping_term: u16,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeferredPickerDataState {
+    Ready,
+    Loading,
+    Failed,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MacroAction {
     Text(String),
@@ -174,6 +181,7 @@ pub struct KeycodePicker {
     pub language: crate::i18n::Language,
     pub key_legend_layout: KeyLegendLayout,
     pub show_shifted_number_symbols: bool,
+    pub deferred_retry_tab: Option<KeycodeTab>,
 }
 
 fn tr_picker(language: crate::i18n::Language, key: &'static str) -> &'static str {
@@ -369,6 +377,7 @@ impl Default for KeycodePicker {
             language: crate::i18n::default_language(),
             key_legend_layout: KeyLegendLayout::default(),
             show_shifted_number_symbols: true,
+            deferred_retry_tab: None,
         }
     }
 }
@@ -570,7 +579,12 @@ impl KeycodePicker {
         };
     }
 
-    pub fn show(&mut self, ctx: &egui::Context) {
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        macro_data_state: DeferredPickerDataState,
+        tap_dance_data_state: DeferredPickerDataState,
+    ) {
         let macro_key_pick_open = self.macro_key_pick.is_some();
         let regular_key_pick_open = self.regular_key_pick || self.regular_mod_key_pick.is_some();
         let layer_pick_open = self.vial_layer_pending.is_some();
@@ -745,12 +759,17 @@ impl KeycodePicker {
             return;
         }
 
-        self.show_vial(ctx);
+        self.show_vial(ctx, macro_data_state, tap_dance_data_state);
     }
 
     // ─────────────────────────── VIAL PICKER ────────────────────────────────
 
-    fn show_vial(&mut self, ctx: &egui::Context) {
+    fn show_vial(
+        &mut self,
+        ctx: &egui::Context,
+        macro_data_state: DeferredPickerDataState,
+        tap_dance_data_state: DeferredPickerDataState,
+    ) {
         if self.selected_tab == KeycodeTab::Layers {
             self.selected_tab = KeycodeTab::Modifiers;
         }
@@ -880,7 +899,11 @@ impl KeycodePicker {
 
                                 if self.selected_tab == KeycodeTab::Basic {
                                     ui.add_space(28.0);
-                                    self.show_vial_tab_content(ui);
+                                    self.show_vial_tab_content(
+                                        ui,
+                                        macro_data_state,
+                                        tap_dance_data_state,
+                                    );
                                 } else {
                                     let centered_width = self.tab_content_width(ui);
                                     let x_offset =
@@ -893,7 +916,13 @@ impl KeycodePicker {
                                         ui.allocate_ui_with_layout(
                                             Vec2::new(centered_width, 0.0),
                                             egui::Layout::top_down(egui::Align::Min),
-                                            |ui| self.show_vial_tab_content(ui),
+                                            |ui| {
+                                                self.show_vial_tab_content(
+                                                    ui,
+                                                    macro_data_state,
+                                                    tap_dance_data_state,
+                                                )
+                                            },
                                         );
                                     });
                                 }
@@ -1379,7 +1408,59 @@ impl KeycodePicker {
         }
     }
 
-    fn show_vial_tab_content(&mut self, ui: &mut egui::Ui) {
+    fn show_vial_tab_content(
+        &mut self,
+        ui: &mut egui::Ui,
+        macro_data_state: DeferredPickerDataState,
+        tap_dance_data_state: DeferredPickerDataState,
+    ) {
+        let deferred_data_state = match self.selected_tab {
+            KeycodeTab::Macro => macro_data_state,
+            KeycodeTab::TapDance => tap_dance_data_state,
+            _ => DeferredPickerDataState::Ready,
+        };
+        if deferred_data_state != DeferredPickerDataState::Ready {
+            ui.vertical_centered(|ui| {
+                ui.add_space(52.0);
+                match deferred_data_state {
+                    DeferredPickerDataState::Loading => {
+                        ui.add(egui::Spinner::new().size(18.0));
+                        ui.add_space(8.0);
+                        ui.label(
+                            RichText::new(tr_picker(
+                                self.language,
+                                "connection.loading_device_data",
+                            ))
+                            .size(13.0)
+                            .color(ui.visuals().weak_text_color()),
+                        );
+                    }
+                    DeferredPickerDataState::Failed => {
+                        ui.label(
+                            RichText::new(tr_picker(
+                                self.language,
+                                "connection.device_data_load_failed",
+                            ))
+                            .size(13.0)
+                            .color(ui.visuals().weak_text_color()),
+                        );
+                        ui.add_space(10.0);
+                        if crate::ui_style::modern_button(
+                            ui,
+                            tr_picker(self.language, "connection.retry_device_data"),
+                            egui::vec2(120.0, 32.0),
+                            true,
+                        )
+                        .clicked()
+                        {
+                            self.deferred_retry_tab = Some(self.selected_tab);
+                        }
+                    }
+                    DeferredPickerDataState::Ready => {}
+                }
+            });
+            return;
+        }
         match self.selected_tab {
             KeycodeTab::Basic => self.show_vial_basic(ui),
             KeycodeTab::Symbols => self.show_vial_symbols(ui),

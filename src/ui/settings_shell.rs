@@ -29,6 +29,12 @@ impl EntropyApp {
             egui::pos2(stable_rect.right() - 20.0, stable_hint_bottom - 76.0),
         );
 
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.draw_deferred_settings_gate(ui, content_rect) {
+            self.draw_settings_navigation_hint(ui, stable_hint_center_x, stable_hint_bottom, false);
+            return;
+        }
+
         let combo_keycap_hovered = match self.settings_tab {
             SettingsTab::AppSettings => {
                 self.draw_app_settings_page(ui, content_rect);

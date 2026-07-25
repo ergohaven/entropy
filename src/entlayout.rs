@@ -1352,7 +1352,16 @@ impl EntropyApp {
             }
             layout.encoder_layers = target_encoder_layers;
         }
-
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.deferred_device_load.is_staged() {
+            for source_layer_idx in 0..bundle.data.keymap.len() {
+                if let Some(target_layer_idx) = map_layer_index(source_layer_idx, self.layer_count)
+                {
+                    self.deferred_device_load
+                        .set_layer_status(target_layer_idx, DeferredLoadStatus::NotLoaded);
+                }
+            }
+        }
         let mut encoder_visibility = self.encoder_visibility.clone();
         encoder_visibility.resize(
             self.layout
@@ -1577,6 +1586,22 @@ impl EntropyApp {
         self.alt_repeat_names =
             normalized_strings(&bundle.data.alt_repeat.names, self.alt_repeat_entries.len());
         save_alt_repeat_names(&self.alt_repeat_names, &self.current_device_name);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.deferred_device_load.is_staged() {
+            for section in [
+                DeferredLoadSection::Macros,
+                DeferredLoadSection::Combos,
+                DeferredLoadSection::TapDance,
+                DeferredLoadSection::KeyOverrides,
+                DeferredLoadSection::AltRepeat,
+            ] {
+                if self.deferred_device_load.section_supported(section) {
+                    self.deferred_device_load
+                        .set_section_status(section, DeferredLoadStatus::NotLoaded);
+                }
+            }
+        }
 
         Ok(())
     }

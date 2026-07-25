@@ -4,9 +4,11 @@ use super::*;
 const BATTERY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 #[cfg(not(target_arch = "wasm32"))]
 const BATTERY_REFRESH_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+#[cfg(not(target_arch = "wasm32"))]
+const INITIAL_BATTERY_REFRESH_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[cfg(not(target_arch = "wasm32"))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone)]
 pub(super) enum VialHidOperation {
     UnlockStart,
     UnlockPoll,
@@ -18,10 +20,10 @@ pub(super) enum VialHidOperation {
         remember_ever_pressed: bool,
     },
     BatteryRefresh,
+    Deferred(super::device_deferred_load::DeferredLoadRequest),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[derive(Debug, PartialEq, Eq)]
 enum VialHidOutcome {
     UnlockStarted {
         unlocked: bool,
@@ -35,6 +37,7 @@ enum VialHidOutcome {
     Locked,
     Matrix(Vec<bool>),
     Battery(Option<crate::hid::BatteryHalves>),
+    Deferred(super::device_deferred_load::DeferredLoadPayload),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -95,10 +98,23 @@ fn run_vial_hid_operation(
             .get_switch_matrix_with_rmk_byte_order(rows, cols, rmk_byte_order)
             .map(VialHidOutcome::Matrix),
         VialHidOperation::BatteryRefresh => hid.get_battery_halves().map(VialHidOutcome::Battery),
+        VialHidOperation::Deferred(request) => {
+            super::device_deferred_load::run_deferred_load(hid, &request)
+                .map(VialHidOutcome::Deferred)
+        }
     }
 }
 
 impl EntropyApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn schedule_initial_battery_refresh(&mut self) {
+        self.next_battery_refresh_at = self
+            .device_about_info
+            .as_ref()
+            .filter(|info| info.supports_battery_halves)
+            .map(|_| std::time::Instant::now() + INITIAL_BATTERY_REFRESH_DELAY);
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn schedule_next_battery_refresh(&mut self) {
         self.next_battery_refresh_at = self
@@ -161,7 +177,7 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn start_vial_hid_operation(
+    pub(super) fn start_vial_hid_operation(
         &mut self,
         ctx: &egui::Context,
         operation: VialHidOperation,
@@ -176,11 +192,12 @@ impl EntropyApp {
         let generation = self.connection_generation;
         let (sender, receiver) = std::sync::mpsc::channel();
         let repaint_ctx = ctx.clone();
+        let task_operation = operation.clone();
         std::thread::spawn(move || {
             #[cfg(target_os = "macos")]
             let _hid_lock = crate::hid::macos_hid_operation_lock();
 
-            let outcome = run_vial_hid_operation(&hid_device, operation);
+            let outcome = run_vial_hid_operation(&hid_device, operation.clone());
             let disconnected = outcome
                 .as_ref()
                 .err()
@@ -199,7 +216,7 @@ impl EntropyApp {
         });
         self.vial_hid_task = Some(VialHidTask {
             receiver,
-            operation,
+            operation: task_operation,
             generation,
         });
         VialHidTaskStart::Started
@@ -288,11 +305,11 @@ impl EntropyApp {
                 self.finish_vial_lock();
             }
             Ok(VialHidOutcome::Matrix(pressed)) => {
-                let remember_ever_pressed = match result.operation {
+                let remember_ever_pressed = match &result.operation {
                     VialHidOperation::Matrix {
                         remember_ever_pressed,
                         ..
-                    } => remember_ever_pressed,
+                    } => *remember_ever_pressed,
                     _ => false,
                 };
                 self.finish_matrix_tester_poll(pressed, remember_ever_pressed);
@@ -302,6 +319,9 @@ impl EntropyApp {
                     info.battery_halves = battery;
                 }
                 self.schedule_next_battery_refresh();
+            }
+            Ok(VialHidOutcome::Deferred(payload)) => {
+                self.finish_deferred_device_load(payload);
             }
             Err(error) => {
                 self.finish_vial_hid_error(result.operation, error, result.disconnected);
@@ -365,7 +385,19 @@ impl EntropyApp {
                 self.next_battery_refresh_at =
                     Some(std::time::Instant::now() + BATTERY_REFRESH_RETRY_INTERVAL);
             }
+            VialHidOperation::Deferred(request) => {
+                log::warn!("Deferred Bluetooth device load failed: {error}");
+                self.fail_deferred_device_load(&request, error);
+            }
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn deferred_vial_hid_task_active(&self) -> bool {
+        self.vial_hid_task
+            .as_ref()
+            .map(|task| matches!(&task.operation, VialHidOperation::Deferred(_)))
+            .unwrap_or(false)
     }
 }
 
@@ -406,7 +438,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(outcome, VialHidOutcome::Matrix(vec![false; 6]));
+        assert!(matches!(
+            outcome,
+            VialHidOutcome::Matrix(pressed) if pressed == vec![false; 6]
+        ));
         let requests = recorder.requests();
         assert_eq!(&requests[0][..2], &[0x02, 0x03]);
     }

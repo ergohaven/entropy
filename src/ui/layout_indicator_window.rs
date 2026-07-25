@@ -353,6 +353,7 @@ impl EntropyApp {
             .as_ref()
             .map(|layout| self.sync_sticky_layout_layer_state(layout))
             .unwrap_or(0);
+        self.sticky_layout_active_layer = sticky_layer;
         let layer_names = self.layer_names.clone();
         let macro_names = self.keycode_picker.macro_names.clone();
         let tap_dance_names = self.keycode_picker.tap_dance_names.clone();

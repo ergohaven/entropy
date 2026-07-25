@@ -199,6 +199,8 @@ impl EntropyApp {
         self.combo_write_task = None;
         self.settings_write_task = None;
         self.vial_hid_task = None;
+        self.deferred_device_load = DeferredDeviceLoadState::default();
+        self.deferred_full_layout_action = None;
         self.reset_settings_write_context();
         self.cancel_pending_qmk_setting_writes();
         self.qmk_settings_write_queue.clear();
@@ -245,6 +247,7 @@ impl EntropyApp {
         self.sticky_layout_active_combos.clear();
         self.sticky_layout_tap_dance_states.clear();
         self.sticky_layout_base_layer = 0;
+        self.sticky_layout_active_layer = 0;
         self.status_msg = status_msg.into();
     }
 

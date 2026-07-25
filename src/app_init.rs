@@ -38,6 +38,10 @@ impl EntropyApp {
             settings_write_task: None,
             #[cfg(not(target_arch = "wasm32"))]
             vial_hid_task: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            deferred_device_load: DeferredDeviceLoadState::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            deferred_full_layout_action: None,
             settings_write_queue: SettingsWriteQueueState::default(),
             settings_write_generation: 0,
             #[cfg(not(target_arch = "wasm32"))]
@@ -167,6 +171,7 @@ impl EntropyApp {
             sticky_layout_active_combos: Vec::new(),
             sticky_layout_tap_dance_states: Vec::new(),
             sticky_layout_base_layer: 0,
+            sticky_layout_active_layer: 0,
             sticky_layout_last_size: None,
             sticky_layout_resize_opacity_hold_frames: 0,
             pending_layout_indicator_open_after_unlock: false,

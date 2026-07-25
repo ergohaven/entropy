@@ -646,7 +646,8 @@ impl EntropyApp {
                     };
                     ui.visuals_mut().widgets.active.bg_fill = rgb_slider_fill;
                     ui.visuals_mut().widgets.active.weak_bg_fill = rgb_slider_fill;
-                    ui.visuals_mut().widgets.hovered.bg_stroke = Stroke::new(1.0_f32, rgb_slider_fill);
+                    ui.visuals_mut().widgets.hovered.bg_stroke =
+                        Stroke::new(1.0_f32, rgb_slider_fill);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_sized(
                             [rgb_value_width, layout.row_height],
@@ -702,7 +703,8 @@ impl EntropyApp {
                     };
                     ui.visuals_mut().widgets.active.bg_fill = rgb_slider_fill;
                     ui.visuals_mut().widgets.active.weak_bg_fill = rgb_slider_fill;
-                    ui.visuals_mut().widgets.hovered.bg_stroke = Stroke::new(1.0_f32, rgb_slider_fill);
+                    ui.visuals_mut().widgets.hovered.bg_stroke =
+                        Stroke::new(1.0_f32, rgb_slider_fill);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_sized(
                             [rgb_value_width, layout.row_height],

@@ -309,6 +309,253 @@ pub(crate) struct DeviceAboutInfo {
     pub(crate) qmk_settings: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum DeferredLoadSection {
+    Macros,
+    Combos,
+    TapDance,
+    KeyOverrides,
+    AltRepeat,
+    Modules,
+    Touchpad,
+    Bluetooth,
+    LayerLeds,
+    Rgb,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeferredFullLayoutAction {
+    ImportEntlayout,
+    ExportEntlayout,
+    OpenImageExport,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl DeferredLoadSection {
+    pub(crate) const ALL: [Self; 10] = [
+        Self::Macros,
+        Self::Combos,
+        Self::TapDance,
+        Self::KeyOverrides,
+        Self::AltRepeat,
+        Self::Modules,
+        Self::Touchpad,
+        Self::Bluetooth,
+        Self::LayerLeds,
+        Self::Rgb,
+    ];
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum DeferredLoadStatus {
+    #[default]
+    NotLoaded,
+    Loading,
+    Loaded,
+    NotNeeded,
+    Failed(String),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl DeferredLoadStatus {
+    pub(crate) fn ready(&self) -> bool {
+        matches!(self, Self::Loaded | Self::NotNeeded)
+    }
+}
+
+/// Immutable metadata needed to finish a staged Bluetooth load through the
+/// existing serialized HID owner. Mutable device values deliberately live in
+/// EntropyApp, not in this context.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+pub(crate) struct DeferredDeviceLoadContext {
+    pub(crate) json: std::sync::Arc<serde_json::Value>,
+    pub(crate) supported_qmk_settings: std::sync::Arc<Vec<u16>>,
+    pub(crate) definition_fingerprint: u64,
+    pub(crate) layer_count: usize,
+    pub(crate) rows: usize,
+    pub(crate) cols: usize,
+    pub(crate) encoder_count: usize,
+    pub(crate) macro_count: u8,
+    pub(crate) macro_memory_bytes: Option<u16>,
+    pub(crate) tap_dance_count: u8,
+    pub(crate) combo_count: u8,
+    pub(crate) key_override_count: u8,
+    pub(crate) alt_repeat_count: u8,
+    pub(crate) modules_supported: bool,
+    pub(crate) touchpad_supported: bool,
+    pub(crate) bluetooth_supported: bool,
+    pub(crate) layer_leds_supported: bool,
+    pub(crate) lighting_mode: Option<String>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl DeferredDeviceLoadContext {
+    pub(crate) fn supports_section(&self, section: DeferredLoadSection) -> bool {
+        match section {
+            DeferredLoadSection::Macros => self.macro_count > 0,
+            DeferredLoadSection::Combos => self.combo_count > 0,
+            DeferredLoadSection::TapDance => self.tap_dance_count > 0,
+            DeferredLoadSection::KeyOverrides => self.key_override_count > 0,
+            DeferredLoadSection::AltRepeat => self.alt_repeat_count > 0,
+            DeferredLoadSection::Modules => self.modules_supported,
+            DeferredLoadSection::Touchpad => self.touchpad_supported,
+            DeferredLoadSection::Bluetooth => self.bluetooth_supported,
+            DeferredLoadSection::LayerLeds => self.layer_leds_supported,
+            DeferredLoadSection::Rgb => self.lighting_mode.is_some(),
+        }
+    }
+
+    fn compatible_with(&self, other: &Self) -> bool {
+        self.definition_fingerprint == other.definition_fingerprint
+            && self.layer_count == other.layer_count
+            && self.rows == other.rows
+            && self.cols == other.cols
+            && self.encoder_count == other.encoder_count
+            && self.macro_count == other.macro_count
+            && self.macro_memory_bytes == other.macro_memory_bytes
+            && self.tap_dance_count == other.tap_dance_count
+            && self.combo_count == other.combo_count
+            && self.key_override_count == other.key_override_count
+            && self.alt_repeat_count == other.alt_repeat_count
+            && self.supported_qmk_settings == other.supported_qmk_settings
+            && self.modules_supported == other.modules_supported
+            && self.touchpad_supported == other.touchpad_supported
+            && self.bluetooth_supported == other.bluetooth_supported
+            && self.layer_leds_supported == other.layer_leds_supported
+            && self.lighting_mode == other.lighting_mode
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Default)]
+pub(crate) struct DeferredDeviceLoadState {
+    pub(crate) context: Option<std::sync::Arc<DeferredDeviceLoadContext>>,
+    section_statuses: std::collections::BTreeMap<DeferredLoadSection, DeferredLoadStatus>,
+    layer_statuses: Vec<DeferredLoadStatus>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl DeferredDeviceLoadState {
+    pub(crate) fn staged(context: DeferredDeviceLoadContext) -> Self {
+        let context = std::sync::Arc::new(context);
+        let section_statuses = DeferredLoadSection::ALL
+            .into_iter()
+            .map(|section| {
+                let status = if context.supports_section(section) {
+                    DeferredLoadStatus::NotLoaded
+                } else {
+                    DeferredLoadStatus::NotNeeded
+                };
+                (section, status)
+            })
+            .collect();
+        let mut layer_statuses = vec![DeferredLoadStatus::NotLoaded; context.layer_count.max(1)];
+        layer_statuses[0] = DeferredLoadStatus::Loaded;
+        Self {
+            context: Some(context),
+            section_statuses,
+            layer_statuses,
+        }
+    }
+
+    pub(crate) fn complete(layer_count: usize) -> Self {
+        Self {
+            context: None,
+            section_statuses: DeferredLoadSection::ALL
+                .into_iter()
+                .map(|section| (section, DeferredLoadStatus::Loaded))
+                .collect(),
+            layer_statuses: vec![DeferredLoadStatus::Loaded; layer_count.max(1)],
+        }
+    }
+
+    pub(crate) fn is_staged(&self) -> bool {
+        self.context.is_some()
+    }
+
+    pub(crate) fn section_status(&self, section: DeferredLoadSection) -> DeferredLoadStatus {
+        self.section_statuses
+            .get(&section)
+            .cloned()
+            .unwrap_or(DeferredLoadStatus::Loaded)
+    }
+
+    pub(crate) fn set_section_status(
+        &mut self,
+        section: DeferredLoadSection,
+        status: DeferredLoadStatus,
+    ) {
+        self.section_statuses.insert(section, status);
+    }
+
+    pub(crate) fn section_supported(&self, section: DeferredLoadSection) -> bool {
+        self.context
+            .as_ref()
+            .map(|context| context.supports_section(section))
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn layer_status(&self, layer: usize) -> DeferredLoadStatus {
+        self.layer_statuses
+            .get(layer)
+            .cloned()
+            .unwrap_or(DeferredLoadStatus::Loaded)
+    }
+
+    pub(crate) fn set_layer_status(&mut self, layer: usize, status: DeferredLoadStatus) {
+        if let Some(current) = self.layer_statuses.get_mut(layer) {
+            *current = status;
+        }
+    }
+
+    pub(crate) fn next_unloaded_layer(&self) -> Option<usize> {
+        self.layer_statuses
+            .iter()
+            .position(|status| matches!(status, DeferredLoadStatus::NotLoaded))
+    }
+
+    pub(crate) fn first_incomplete_layer(&self) -> Option<(usize, DeferredLoadStatus)> {
+        self.layer_statuses
+            .iter()
+            .enumerate()
+            .find(|(_, status)| !status.ready())
+            .map(|(layer, status)| (layer, status.clone()))
+    }
+
+    pub(crate) fn all_layers_ready(&self) -> bool {
+        self.layer_statuses.iter().all(DeferredLoadStatus::ready)
+    }
+
+    pub(crate) fn merge_loaded_from(&mut self, previous: &Self) {
+        let compatible = self
+            .context
+            .as_ref()
+            .zip(previous.context.as_ref())
+            .map(|(current, previous)| current.compatible_with(previous))
+            .unwrap_or(false);
+        if !compatible {
+            return;
+        }
+
+        for section in DeferredLoadSection::ALL {
+            if matches!(previous.section_status(section), DeferredLoadStatus::Loaded)
+                && self.section_supported(section)
+            {
+                self.set_section_status(section, DeferredLoadStatus::Loaded);
+            }
+        }
+        for layer in 0..self.layer_statuses.len() {
+            if matches!(previous.layer_status(layer), DeferredLoadStatus::Loaded) {
+                self.set_layer_status(layer, DeferredLoadStatus::Loaded);
+            }
+        }
+    }
+}
+
 /// Result sent back from the background connect thread.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct ConnectResult {
@@ -372,6 +619,9 @@ pub(crate) struct ConnectResult {
     /// QMK setting ids the firmware exposes, so later layer-name writes can tell
     /// unsupported storage apart from a transport error.
     pub(crate) supported_qmk_settings: Vec<u16>,
+    /// Readiness and immutable metadata for Bluetooth data loaded after the
+    /// first usable layer is shown.
+    pub(crate) deferred_load: DeferredDeviceLoadState,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1673,8 +1923,15 @@ pub(crate) fn load_rgb_settings(
     dev_conn: &crate::hid::HidDevice,
     layout: &KeyboardLayout,
 ) -> RgbSettingsState {
+    load_rgb_settings_for_mode(dev_conn, layout.lighting_mode.as_deref())
+}
+
+pub(crate) fn load_rgb_settings_for_mode(
+    dev_conn: &crate::hid::HidDevice,
+    lighting_mode: Option<&str>,
+) -> RgbSettingsState {
     let mut candidates = Vec::new();
-    match layout.lighting_mode.as_deref() {
+    match lighting_mode {
         Some("vialrgb") => {
             candidates.extend([RgbSupportKind::VialRgb, RgbSupportKind::QmkRgblight])
         }
@@ -3110,6 +3367,12 @@ pub struct EntropyApp {
     /// Serialized live Vial read/control operation. Owns the HID handle while active.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) vial_hid_task: Option<VialHidTask>,
+    /// Sole readiness owner for staged Bluetooth layers and settings pages.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) deferred_device_load: DeferredDeviceLoadState,
+    /// User action waiting for every staged Bluetooth layer to become complete.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) deferred_full_layout_action: Option<DeferredFullLayoutAction>,
     pub(super) settings_write_queue: SettingsWriteQueueState,
     pub(super) settings_write_generation: u64,
     pub(super) qmk_settings_write_queue: QmkSettingsWriteQueue,
@@ -3238,6 +3501,7 @@ pub struct EntropyApp {
     pub(crate) sticky_layout_active_combos: Vec<bool>,
     pub(crate) sticky_layout_tap_dance_states: Vec<StickyLayoutTapDanceState>,
     pub(crate) sticky_layout_base_layer: usize,
+    pub(crate) sticky_layout_active_layer: usize,
     pub(crate) sticky_layout_last_size: Option<Vec2>,
     pub(crate) sticky_layout_resize_opacity_hold_frames: u8,
     pub(crate) pending_layout_indicator_open_after_unlock: bool,
