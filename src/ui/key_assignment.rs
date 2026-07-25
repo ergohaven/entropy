@@ -1,4 +1,66 @@
+use crate::keyboard::KeyBinding;
+
 use super::*;
+
+fn combo_tap_hold_keycode(binding: &KeyBinding) -> Option<u16> {
+    let value = binding.vial_keycode();
+    let is_layer_tap = value & 0xF000 == 0x4000;
+    let is_mod_tap = value & 0xE000 == 0x2000;
+    (is_layer_tap || is_mod_tap).then_some(value & 0x00FF)
+}
+
+fn unique_combo_tap_hold_match<'a>(
+    picked: u16,
+    keycodes: impl IntoIterator<Item = &'a KeyBinding>,
+) -> Option<KeyBinding> {
+    let mut matched = None;
+
+    for keycode in keycodes {
+        if combo_tap_hold_keycode(keycode) != Some(picked) {
+            continue;
+        }
+
+        match &matched {
+            Some(previous) if previous != keycode => return None,
+            Some(_) => {}
+            None => matched = Some(*keycode),
+        }
+    }
+
+    matched
+}
+
+fn resolve_combo_trigger_keycode(
+    picked: &KeyBinding,
+    selected_layer: usize,
+    layers: &[Vec<KeyBinding>],
+) -> KeyBinding {
+    // QMK compares complete keycodes for combo triggers. If a basic key was
+    // picked but the current layer contains only one matching MT/LT keycode,
+    // use that assigned keycode so the combo can match it.
+    let KeyBinding::Vial(picked_value) = picked else {
+        return *picked;
+    };
+
+    if *picked_value <= 0x0001 || *picked_value > 0x00FF {
+        return *picked;
+    }
+
+    if let Some(layer) = layers.get(selected_layer) {
+        if layer.contains(picked) {
+            return *picked;
+        }
+        if let Some(keycode) = unique_combo_tap_hold_match(*picked_value, layer) {
+            return keycode;
+        }
+    }
+
+    if layers.iter().flatten().any(|keycode| keycode == picked) {
+        return *picked;
+    }
+
+    unique_combo_tap_hold_match(*picked_value, layers.iter().flatten()).unwrap_or(*picked)
+}
 
 impl EntropyApp {
     pub(super) fn apply_picker_results(&mut self, ctx: &egui::Context) {
@@ -15,10 +77,27 @@ impl EntropyApp {
                 return;
             }
             if let Some((combo_idx, field)) = self.combo_pick_target.take() {
+                let combo_trigger_keycode = if matches!(&field, ComboPickField::Trigger(_)) {
+                    self.layout
+                        .as_ref()
+                        .map(|layout| {
+                            resolve_combo_trigger_keycode(
+                                &binding,
+                                self.selected_layer,
+                                &layout.layers,
+                            )
+                            .vial_keycode()
+                        })
+                        .unwrap_or(kc_value)
+                } else {
+                    kc_value
+                };
                 self.push_combo_undo();
                 if let Some(combo) = self.combo_entries.get_mut(combo_idx) {
                     match field {
-                        ComboPickField::Trigger(key_idx) => combo.keys[key_idx] = kc_value,
+                        ComboPickField::Trigger(key_idx) => {
+                            combo.keys[key_idx] = combo_trigger_keycode
+                        }
                         ComboPickField::Output => {
                             combo.output =
                                 crate::keycode::normalize_output_symbol_keycode(kc_value);
@@ -496,6 +575,7 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keyboard::KeyBinding;
     use rmk_types::action::{Action, KeyAction};
     use rmk_types::keycode::HidKeyCode;
     use rmk_types::modifier::ModifierCombination;
@@ -526,5 +606,89 @@ mod tests {
             Some(0x2000 | ((ModifierCombination::RCTRL.into_packed_bits() as u16) << 8))
         );
         assert!(app.keycode_picker.rmk_native_key_actions_allowed_for_target);
+    }
+
+    #[test]
+    fn combo_trigger_uses_unique_mod_tap_keycode_from_selected_layer() {
+        let layers = vec![vec![KeyBinding::Vial(0x2416), KeyBinding::Vial(0x000A)]];
+
+        assert_eq!(
+            resolve_combo_trigger_keycode(&KeyBinding::Vial(0x0016), 0, &layers),
+            KeyBinding::Vial(0x2416)
+        );
+    }
+
+    #[test]
+    fn combo_trigger_keeps_plain_keycode_when_it_exists_on_selected_layer() {
+        let layers = vec![vec![
+            KeyBinding::Vial(0x0016),
+            KeyBinding::Vial(0x2416),
+            KeyBinding::Vial(0x000A),
+        ]];
+
+        assert_eq!(
+            resolve_combo_trigger_keycode(&KeyBinding::Vial(0x0016), 0, &layers),
+            KeyBinding::Vial(0x0016)
+        );
+    }
+
+    #[test]
+    fn combo_trigger_prefers_selected_layer_tap_hold_over_plain_key_on_another_layer() {
+        let layers = vec![
+            vec![KeyBinding::Vial(0x2416), KeyBinding::Vial(0x000A)],
+            vec![KeyBinding::Vial(0x0016)],
+        ];
+
+        assert_eq!(
+            resolve_combo_trigger_keycode(&KeyBinding::Vial(0x0016), 0, &layers),
+            KeyBinding::Vial(0x2416)
+        );
+    }
+
+    #[test]
+    fn combo_trigger_does_not_guess_between_distinct_tap_hold_assignments() {
+        let layers = vec![vec![
+            KeyBinding::Vial(0x2416),
+            KeyBinding::Vial(0x2116),
+            KeyBinding::Vial(0x000A),
+        ]];
+
+        assert_eq!(
+            resolve_combo_trigger_keycode(&KeyBinding::Vial(0x0016), 0, &layers),
+            KeyBinding::Vial(0x0016)
+        );
+    }
+
+    #[test]
+    fn combo_trigger_uses_unique_tap_hold_keycode_from_another_layer_as_fallback() {
+        let layers = vec![
+            vec![KeyBinding::Vial(0x000A)],
+            vec![KeyBinding::Vial(0x4116)],
+        ];
+
+        assert_eq!(
+            resolve_combo_trigger_keycode(&KeyBinding::Vial(0x0016), 0, &layers),
+            KeyBinding::Vial(0x4116)
+        );
+    }
+
+    #[test]
+    fn combo_trigger_keeps_an_explicit_advanced_keycode() {
+        let layers = vec![vec![KeyBinding::Vial(0x2416), KeyBinding::Vial(0x000A)]];
+
+        assert_eq!(
+            resolve_combo_trigger_keycode(&KeyBinding::Vial(0x2416), 0, &layers),
+            KeyBinding::Vial(0x2416)
+        );
+    }
+
+    #[test]
+    fn combo_trigger_keeps_clear_keycode() {
+        let layers = vec![vec![KeyBinding::Vial(0x2400), KeyBinding::Vial(0x000A)]];
+
+        assert_eq!(
+            resolve_combo_trigger_keycode(&KeyBinding::Vial(0x0000), 0, &layers),
+            KeyBinding::Vial(0x0000)
+        );
     }
 }
