@@ -55,6 +55,35 @@ fn is_hid_open_failure(error: &str) -> bool {
     error.starts_with("Open failed:")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+enum ConnectTaskChannelState {
+    Empty,
+    Progress(String),
+    Done(Box<Result<ConnectResult, String>>),
+    Disconnected,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn drain_connect_task_messages(rx: &mpsc::Receiver<ConnectTaskMessage>) -> ConnectTaskChannelState {
+    let mut latest_progress = None;
+    loop {
+        match rx.try_recv() {
+            Ok(ConnectTaskMessage::Progress(message)) => latest_progress = Some(message),
+            Ok(ConnectTaskMessage::Done(result)) => {
+                return ConnectTaskChannelState::Done(result);
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                return latest_progress
+                    .map(ConnectTaskChannelState::Progress)
+                    .unwrap_or(ConnectTaskChannelState::Empty);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                return ConnectTaskChannelState::Disconnected;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,6 +115,39 @@ mod tests {
     #[test]
     fn empty_connect_poll_is_throttled() {
         assert_eq!(CONNECT_POLL_INTERVAL, std::time::Duration::from_millis(250));
+    }
+
+    #[test]
+    fn connect_progress_queue_keeps_only_the_latest_message() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(ConnectTaskMessage::Progress("first".to_owned()))
+            .unwrap();
+        tx.send(ConnectTaskMessage::Progress("latest".to_owned()))
+            .unwrap();
+
+        assert!(matches!(
+            drain_connect_task_messages(&rx),
+            ConnectTaskChannelState::Progress(message) if message == "latest"
+        ));
+    }
+
+    #[test]
+    fn connect_done_bypasses_queued_progress_messages() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(ConnectTaskMessage::Progress("first".to_owned()))
+            .unwrap();
+        tx.send(ConnectTaskMessage::Progress("latest".to_owned()))
+            .unwrap();
+        tx.send(ConnectTaskMessage::Done(Box::new(Err(
+            "finished".to_owned()
+        ))))
+        .unwrap();
+
+        assert!(matches!(
+            drain_connect_task_messages(&rx),
+            ConnectTaskChannelState::Done(result)
+                if matches!(*result, Err(ref error) if error == "finished")
+        ));
     }
 
     fn s(list: &[&str]) -> Vec<String> {
@@ -309,8 +371,8 @@ impl EntropyApp {
                 started_at,
                 last_progress_at,
                 reconnect,
-            } => match rx.try_recv() {
-                Ok(ConnectTaskMessage::Progress(message)) => {
+            } => match drain_connect_task_messages(rx) {
+                ConnectTaskChannelState::Progress(message) => {
                     if reconnect.is_none() {
                         self.status_msg = message;
                     }
@@ -318,14 +380,14 @@ impl EntropyApp {
                     ctx.request_repaint();
                     return;
                 }
-                Ok(ConnectTaskMessage::Done(result)) => {
+                ConnectTaskChannelState::Done(result) => {
                     ctx.request_repaint();
                     ConnectPollEvent::Done {
                         result: *result,
                         reconnect: reconnect.clone(),
                     }
                 }
-                Err(mpsc::TryRecvError::Empty) => {
+                ConnectTaskChannelState::Empty => {
                     let idle_timeout = last_progress_at.elapsed() > CONNECT_IDLE_TIMEOUT;
                     let total_timeout = started_at.elapsed() > CONNECT_TOTAL_TIMEOUT;
                     if idle_timeout || total_timeout {
@@ -348,7 +410,7 @@ impl EntropyApp {
                         return;
                     }
                 }
-                Err(mpsc::TryRecvError::Disconnected) => {
+                ConnectTaskChannelState::Disconnected => {
                     log::error!("Connect thread died before returning a result");
                     ConnectPollEvent::Failed {
                         error: "Connect thread died".to_owned(),
@@ -535,7 +597,7 @@ impl EntropyApp {
                 // firmware does not expose Vial/QMK mouse-key settings.
                 self.keycode_picker.supports_mouse_keys = true;
                 self.keycode_picker.supports_combo = !self.combo_entries.is_empty();
-                self.keycode_picker.supports_auto_shift = self.auto_shift_timeout.is_some();
+                self.keycode_picker.supports_auto_shift = r.supported_qmk_settings.contains(&4);
                 self.keycode_picker.supports_caps_word = r.vial_features.caps_word;
                 self.keycode_picker.supports_repeat_key = r.vial_features.repeat_key;
                 self.keycode_picker.supports_layer_lock = r.vial_features.layer_lock;

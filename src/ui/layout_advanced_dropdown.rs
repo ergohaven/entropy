@@ -21,7 +21,8 @@ impl EntropyApp {
                 .unwrap_or(false);
             let combo_supported = !self.combo_entries.is_empty();
             let key_override_supported = !self.key_override_entries.is_empty();
-            let auto_shift_supported = self.auto_shift_timeout.is_some();
+            let auto_shift_supported =
+                self.auto_shift_timeout.is_some() || self.supported_qmk_settings.contains(&4);
             let advanced_item_count = 2
                 + combo_supported as usize
                 + auto_shift_supported as usize

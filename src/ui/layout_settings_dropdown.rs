@@ -84,9 +84,13 @@ impl EntropyApp {
             let show_bluetooth_item = self.bluetooth_settings.supported || deferred_bluetooth;
             let show_layer_leds_item = layer_leds_available_for_menu || deferred_layer_leds;
             let show_live_features_item = self.live_features_available_for_selected_device();
-            let show_magic_item = self.magic_settings.supported;
-            let show_tap_hold_item =
-                self.tap_hold_settings.supported || self.one_shot_settings.supported;
+            let show_magic_item =
+                self.magic_settings.supported || self.supported_qmk_settings.contains(&21);
+            let show_tap_hold_item = self.tap_hold_settings.supported
+                || self.one_shot_settings.supported
+                || [5u16, 6, 7, 18, 19, 20, 22, 23, 24, 25, 26, 27]
+                    .iter()
+                    .any(|qsid| self.supported_qmk_settings.contains(qsid));
             let show_update_indicator = crate::app::update_available(&self.update_check);
             let show_matrix_item = self.firmware == FirmwareProtocol::Vial;
             #[cfg(not(target_arch = "wasm32"))]

@@ -317,6 +317,7 @@ pub(crate) enum DeferredLoadSection {
     TapDance,
     KeyOverrides,
     AltRepeat,
+    BehaviorSettings,
     Modules,
     Touchpad,
     Bluetooth,
@@ -334,12 +335,13 @@ pub(crate) enum DeferredFullLayoutAction {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl DeferredLoadSection {
-    pub(crate) const ALL: [Self; 10] = [
+    pub(crate) const ALL: [Self; 11] = [
         Self::Macros,
         Self::Combos,
         Self::TapDance,
         Self::KeyOverrides,
         Self::AltRepeat,
+        Self::BehaviorSettings,
         Self::Modules,
         Self::Touchpad,
         Self::Bluetooth,
@@ -401,6 +403,10 @@ impl DeferredDeviceLoadContext {
             DeferredLoadSection::TapDance => self.tap_dance_count > 0,
             DeferredLoadSection::KeyOverrides => self.key_override_count > 0,
             DeferredLoadSection::AltRepeat => self.alt_repeat_count > 0,
+            DeferredLoadSection::BehaviorSettings => self
+                .supported_qmk_settings
+                .iter()
+                .any(|qsid| matches!(*qsid, 1..=7 | 9..=27)),
             DeferredLoadSection::Modules => self.modules_supported,
             DeferredLoadSection::Touchpad => self.touchpad_supported,
             DeferredLoadSection::Bluetooth => self.bluetooth_supported,
@@ -1586,6 +1592,22 @@ impl GraveEscapeSettingsState {
             self.bits &= !(1 << bit);
         }
     }
+}
+
+/// QMK behavior values that are not needed to draw the first keyboard layer.
+///
+/// Bluetooth reads these through the serialized deferred-load owner when the
+/// user opens a page that needs them. USB keeps loading them during connect.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct BehaviorSettingsState {
+    pub(crate) combo_term: Option<u16>,
+    pub(crate) auto_shift_options: AutoShiftOptionsState,
+    pub(crate) auto_shift_timeout: Option<u16>,
+    pub(crate) mouse_keys: MouseKeysSettingsState,
+    pub(crate) tap_hold: TapHoldSettingsState,
+    pub(crate) magic: MagicSettingsState,
+    pub(crate) one_shot: OneShotSettingsState,
+    pub(crate) grave_escape: GraveEscapeSettingsState,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

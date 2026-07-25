@@ -58,6 +58,7 @@ pub(super) enum DeferredLoadPayload {
     TapDance(Vec<crate::keycode_picker::TapDanceEntry>),
     KeyOverrides(Vec<KeyOverrideEntry>),
     AltRepeat(Vec<AltRepeatKeyEntry>),
+    BehaviorSettings(BehaviorSettingsState),
     Modules(ModuleSettingsState),
     Touchpad(TouchpadSettingsState),
     Bluetooth(BluetoothSettingsState),
@@ -220,6 +221,9 @@ pub(super) fn run_deferred_load(
                         .collect::<anyhow::Result<Vec<_>>>()?;
                     Ok(DeferredLoadPayload::AltRepeat(entries))
                 }
+                DeferredLoadSection::BehaviorSettings => Ok(DeferredLoadPayload::BehaviorSettings(
+                    EntropyApp::read_behavior_settings(&context.supported_qmk_settings, hid),
+                )),
                 DeferredLoadSection::Modules => Ok(DeferredLoadPayload::Modules(
                     EntropyApp::read_module_settings(
                         &context.json,
@@ -263,17 +267,25 @@ pub(super) fn run_deferred_load(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn settings_tab_deferred_section(tab: SettingsTab) -> Option<DeferredLoadSection> {
+fn settings_tab_deferred_sections(tab: SettingsTab) -> &'static [DeferredLoadSection] {
     match tab {
-        SettingsTab::Combo => Some(DeferredLoadSection::Combos),
-        SettingsTab::KeyOverrides => Some(DeferredLoadSection::KeyOverrides),
-        SettingsTab::AltRepeat => Some(DeferredLoadSection::AltRepeat),
-        SettingsTab::Modules => Some(DeferredLoadSection::Modules),
-        SettingsTab::Touchpad => Some(DeferredLoadSection::Touchpad),
-        SettingsTab::Bluetooth => Some(DeferredLoadSection::Bluetooth),
-        SettingsTab::LayerLeds => Some(DeferredLoadSection::LayerLeds),
-        SettingsTab::Rgb => Some(DeferredLoadSection::Rgb),
-        _ => None,
+        SettingsTab::Combo => &[
+            DeferredLoadSection::Combos,
+            DeferredLoadSection::BehaviorSettings,
+        ],
+        SettingsTab::AutoShift
+        | SettingsTab::Magic
+        | SettingsTab::TapHold
+        | SettingsTab::GraveEscape
+        | SettingsTab::MouseKeys => &[DeferredLoadSection::BehaviorSettings],
+        SettingsTab::KeyOverrides => &[DeferredLoadSection::KeyOverrides],
+        SettingsTab::AltRepeat => &[DeferredLoadSection::AltRepeat],
+        SettingsTab::Modules => &[DeferredLoadSection::Modules],
+        SettingsTab::Touchpad => &[DeferredLoadSection::Touchpad],
+        SettingsTab::Bluetooth => &[DeferredLoadSection::Bluetooth],
+        SettingsTab::LayerLeds => &[DeferredLoadSection::LayerLeds],
+        SettingsTab::Rgb => &[DeferredLoadSection::Rgb],
+        _ => &[],
     }
 }
 
@@ -451,7 +463,7 @@ impl EntropyApp {
         }
 
         if self.main_menu_tab != MainMenuTab::Keyboard {
-            if let Some(section) = settings_tab_deferred_section(self.settings_tab) {
+            for &section in settings_tab_deferred_sections(self.settings_tab) {
                 if matches!(
                     self.deferred_device_load.section_status(section),
                     DeferredLoadStatus::NotLoaded
@@ -722,6 +734,26 @@ impl EntropyApp {
                 self.deferred_device_load
                     .set_section_status(DeferredLoadSection::AltRepeat, DeferredLoadStatus::Loaded);
             }
+            DeferredLoadPayload::BehaviorSettings(settings) => {
+                self.combo_term = settings.combo_term.or(Some(50));
+                self.combo_term_dirty = false;
+                self.auto_shift_options = settings.auto_shift_options;
+                self.auto_shift_timeout = settings.auto_shift_timeout;
+                self.auto_shift_timeout_text = settings
+                    .auto_shift_timeout
+                    .map(|timeout| timeout.to_string())
+                    .unwrap_or_default();
+                self.mouse_keys_settings = settings.mouse_keys;
+                self.tap_hold_settings = settings.tap_hold;
+                self.magic_settings = settings.magic;
+                self.one_shot_settings = settings.one_shot;
+                self.grave_escape_settings = settings.grave_escape;
+                self.keycode_picker.supports_auto_shift = self.supported_qmk_settings.contains(&4);
+                self.deferred_device_load.set_section_status(
+                    DeferredLoadSection::BehaviorSettings,
+                    DeferredLoadStatus::Loaded,
+                );
+            }
             DeferredLoadPayload::Modules(settings) => {
                 self.module_settings = settings;
                 if let Some(layout) = self.layout.as_ref() {
@@ -864,6 +896,21 @@ impl EntropyApp {
         if matches!(
             result
                 .deferred_load
+                .section_status(DeferredLoadSection::BehaviorSettings),
+            DeferredLoadStatus::Loaded
+        ) {
+            result.combo_term = self.combo_term;
+            result.auto_shift_options = self.auto_shift_options;
+            result.auto_shift_timeout = self.auto_shift_timeout;
+            result.mouse_keys_settings = self.mouse_keys_settings;
+            result.tap_hold_settings = self.tap_hold_settings;
+            result.magic_settings = self.magic_settings;
+            result.one_shot_settings = self.one_shot_settings;
+            result.grave_escape_settings = self.grave_escape_settings;
+        }
+        if matches!(
+            result
+                .deferred_load
                 .section_status(DeferredLoadSection::Modules),
             DeferredLoadStatus::Loaded
         ) {
@@ -930,7 +977,11 @@ impl EntropyApp {
             return true;
         }
 
-        let Some(section) = settings_tab_deferred_section(self.settings_tab) else {
+        let Some(section) = settings_tab_deferred_sections(self.settings_tab)
+            .iter()
+            .copied()
+            .find(|section| !self.deferred_device_load.section_status(*section).ready())
+        else {
             return false;
         };
         let status = self.deferred_device_load.section_status(section);
@@ -1174,6 +1225,12 @@ mod tests {
         }
     }
 
+    fn context_with_behavior_settings() -> DeferredDeviceLoadContext {
+        let mut context = context();
+        context.supported_qmk_settings = std::sync::Arc::new(vec![2, 4, 21]);
+        context
+    }
+
     #[test]
     fn staged_state_marks_only_first_layer_ready() {
         let state = DeferredDeviceLoadState::staged(context());
@@ -1187,6 +1244,16 @@ mod tests {
         assert_eq!(
             state.section_status(DeferredLoadSection::Modules),
             DeferredLoadStatus::NotNeeded
+        );
+    }
+
+    #[test]
+    fn staged_state_defers_behavior_values_when_the_schema_supports_them() {
+        let state = DeferredDeviceLoadState::staged(context_with_behavior_settings());
+
+        assert_eq!(
+            state.section_status(DeferredLoadSection::BehaviorSettings),
+            DeferredLoadStatus::NotLoaded
         );
     }
 
@@ -1313,6 +1380,37 @@ mod tests {
         assert_eq!(recorder.requests().len(), 1);
     }
 
+    #[test]
+    fn deferred_behavior_reader_fetches_only_supported_values() {
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        let request = DeferredLoadRequest::Section {
+            section: DeferredLoadSection::BehaviorSettings,
+            context: std::sync::Arc::new(context_with_behavior_settings()),
+        };
+
+        let payload = run_deferred_load(&hid, &request).unwrap();
+
+        assert!(matches!(
+            payload,
+            DeferredLoadPayload::BehaviorSettings(BehaviorSettingsState {
+                combo_term: Some(0),
+                auto_shift_timeout: Some(0),
+                magic: MagicSettingsState {
+                    supported: true,
+                    ..
+                },
+                ..
+            })
+        ));
+        let qsids = recorder
+            .requests()
+            .iter()
+            .filter(|request| request[..2] == [0xFE, 0x0A])
+            .map(|request| u16::from_le_bytes([request[2], request[3]]))
+            .collect::<Vec<_>>();
+        assert_eq!(qsids, vec![2, 4, 21]);
+    }
+
     fn staged_app() -> EntropyApp {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx);
@@ -1347,6 +1445,43 @@ mod tests {
         assert_eq!(request.layer(), Some(3));
         assert!(!request.is_background_layer());
         assert!(request.blocks_keyboard());
+    }
+
+    #[test]
+    fn settings_page_behavior_values_preempt_background_layers() {
+        let mut app = staged_app();
+        app.deferred_device_load =
+            DeferredDeviceLoadState::staged(context_with_behavior_settings());
+        app.main_menu_tab = MainMenuTab::Advanced;
+        app.settings_tab = SettingsTab::AutoShift;
+
+        let request = app.deferred_request_for_current_view(true).unwrap();
+
+        assert_eq!(
+            request.section(),
+            Some(DeferredLoadSection::BehaviorSettings)
+        );
+        assert!(request.blocks_keyboard());
+    }
+
+    #[test]
+    fn combo_page_loads_entries_before_shared_behavior_values() {
+        let mut app = staged_app();
+        app.deferred_device_load =
+            DeferredDeviceLoadState::staged(context_with_behavior_settings());
+        app.main_menu_tab = MainMenuTab::Settings;
+        app.settings_tab = SettingsTab::Combo;
+
+        let entries_request = app.deferred_request_for_current_view(true).unwrap();
+        assert_eq!(entries_request.section(), Some(DeferredLoadSection::Combos));
+
+        app.deferred_device_load
+            .set_section_status(DeferredLoadSection::Combos, DeferredLoadStatus::Loaded);
+        let behavior_request = app.deferred_request_for_current_view(true).unwrap();
+        assert_eq!(
+            behavior_request.section(),
+            Some(DeferredLoadSection::BehaviorSettings)
+        );
     }
 
     #[test]
