@@ -5,7 +5,11 @@ use super::*;
 pub(super) enum DeferredLoadRequest {
     Layer {
         layer: usize,
-        background: bool,
+        context: std::sync::Arc<DeferredDeviceLoadContext>,
+    },
+    BackgroundLayerStep {
+        layer: usize,
+        step: BackgroundLayerStep,
         context: std::sync::Arc<DeferredDeviceLoadContext>,
     },
     Section {
@@ -18,26 +22,20 @@ pub(super) enum DeferredLoadRequest {
 impl DeferredLoadRequest {
     pub(super) fn layer(&self) -> Option<usize> {
         match self {
-            Self::Layer { layer, .. } => Some(*layer),
+            Self::Layer { layer, .. } | Self::BackgroundLayerStep { layer, .. } => Some(*layer),
             Self::Section { .. } => None,
         }
     }
 
     pub(super) fn section(&self) -> Option<DeferredLoadSection> {
         match self {
-            Self::Layer { .. } => None,
+            Self::Layer { .. } | Self::BackgroundLayerStep { .. } => None,
             Self::Section { section, .. } => Some(*section),
         }
     }
 
     pub(super) fn is_background_layer(&self) -> bool {
-        matches!(
-            self,
-            Self::Layer {
-                background: true,
-                ..
-            }
-        )
+        matches!(self, Self::BackgroundLayerStep { .. })
     }
 
     pub(super) fn blocks_keyboard(&self) -> bool {
@@ -52,6 +50,10 @@ pub(super) enum DeferredLoadPayload {
         keymap: Vec<u16>,
         encoders: Vec<(u16, u16)>,
         firmware_name: Option<String>,
+    },
+    BackgroundLayerStep {
+        layer: usize,
+        result: BackgroundLayerStepResult,
     },
     Macros(Vec<Vec<u8>>),
     Combos(Vec<ComboEntry>),
@@ -87,7 +89,7 @@ pub(super) fn run_deferred_load(
     request: &DeferredLoadRequest,
 ) -> anyhow::Result<DeferredLoadPayload> {
     match request {
-        DeferredLoadRequest::Layer { layer, context, .. } => {
+        DeferredLoadRequest::Layer { layer, context } => {
             let keymap =
                 hid.get_keymap_layer(*layer, context.layer_count, context.rows, context.cols)?;
             let mut encoders = Vec::with_capacity(context.encoder_count);
@@ -122,6 +124,56 @@ pub(super) fn run_deferred_load(
                 keymap,
                 encoders,
                 firmware_name,
+            })
+        }
+        DeferredLoadRequest::BackgroundLayerStep {
+            layer,
+            step,
+            context,
+        } => {
+            let result = match *step {
+                BackgroundLayerStep::Keymap { local_offset } => BackgroundLayerStepResult::Keymap {
+                    local_offset,
+                    keycodes: hid.get_keymap_layer_chunk(
+                        *layer,
+                        context.layer_count,
+                        context.rows,
+                        context.cols,
+                        local_offset,
+                    )?,
+                },
+                BackgroundLayerStep::Encoder { encoder_index } => {
+                    let keycodes = hid
+                        .get_encoder(*layer as u8, encoder_index as u8)
+                        .unwrap_or_else(|error| {
+                            log::warn!(
+                                "get_encoder(layer={layer}, idx={encoder_index}) during background load: {error}"
+                            );
+                            (0, 0)
+                        });
+                    BackgroundLayerStepResult::Encoder {
+                        encoder_index,
+                        keycodes,
+                    }
+                }
+                BackgroundLayerStep::FirmwareName => {
+                    let qsid = 200 + *layer as u16;
+                    let firmware_name = match hid.get_qmk_setting_string(qsid) {
+                        Ok(name) if !name.trim().is_empty() => Some(name),
+                        Ok(_) => None,
+                        Err(error) => {
+                            log::warn!(
+                                "get_qmk_setting_string(layer name qsid {qsid}) during background load: {error}"
+                            );
+                            None
+                        }
+                    };
+                    BackgroundLayerStepResult::FirmwareName(firmware_name)
+                }
+            };
+            Ok(DeferredLoadPayload::BackgroundLayerStep {
+                layer: *layer,
+                result,
             })
         }
         DeferredLoadRequest::Section { section, context } => {
@@ -393,18 +445,13 @@ impl EntropyApp {
         ) {
             return Some(DeferredLoadRequest::Layer {
                 layer: self.selected_layer,
-                background: false,
                 context,
             });
         }
 
         if self.deferred_full_layout_action.is_some() {
             if let Some(layer) = self.deferred_device_load.next_unloaded_layer() {
-                return Some(DeferredLoadRequest::Layer {
-                    layer,
-                    background: false,
-                    context,
-                });
+                return Some(DeferredLoadRequest::Layer { layer, context });
             }
             if matches!(
                 self.deferred_full_layout_action,
@@ -456,7 +503,6 @@ impl EntropyApp {
             ) {
                 return Some(DeferredLoadRequest::Layer {
                     layer: self.sticky_layout_active_layer,
-                    background: false,
                     context,
                 });
             }
@@ -474,10 +520,10 @@ impl EntropyApp {
         }
 
         if allow_automatic_background_layer {
-            if let Some(layer) = self.deferred_device_load.next_unloaded_layer() {
-                return Some(DeferredLoadRequest::Layer {
+            if let Some((layer, step)) = self.deferred_device_load.next_background_layer_step() {
+                return Some(DeferredLoadRequest::BackgroundLayerStep {
                     layer,
-                    background: true,
+                    step,
                     context,
                 });
             }
@@ -487,13 +533,17 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn automatic_background_layer_load_allowed(&self, ctx: &egui::Context) -> bool {
+    fn automatic_background_layer_load_allowed(&mut self, ctx: &egui::Context) -> bool {
+        if ctx.input(|input| !input.events.is_empty()) {
+            self.deferred_device_load.defer_background_for_user_input();
+        }
         !(self.main_menu_tab == MainMenuTab::Settings
             && self.settings_tab == SettingsTab::MatrixTester)
             && !self.keycode_picker.open
             && self.keycode_picker.result.is_none()
             && self.editing_layer.is_none()
             && self.pending_handed_swap.is_none()
+            && !self.pending_layout_undo
             && !self.import_pending()
             && !self.top_dropdown_open(ctx)
             && !egui::Popup::is_any_open(ctx)
@@ -600,9 +650,11 @@ impl EntropyApp {
             super::vial_hid_task::VialHidOperation::Deferred(request.clone()),
         ) {
             super::vial_hid_task::VialHidTaskStart::Started => {
-                if let Some(layer) = request.layer() {
-                    self.deferred_device_load
-                        .set_layer_status(layer, DeferredLoadStatus::Loading);
+                if !request.is_background_layer() {
+                    if let Some(layer) = request.layer() {
+                        self.deferred_device_load
+                            .set_layer_status(layer, DeferredLoadStatus::Loading);
+                    }
                 }
                 if let Some(section) = request.section() {
                     self.deferred_device_load
@@ -625,36 +677,32 @@ impl EntropyApp {
                 encoders,
                 firmware_name,
             } => {
-                if let Some(layout) = self.layout.as_mut() {
-                    if let Some(layer_keycodes) = layout.layers.get_mut(layer) {
-                        for (key_index, key) in layout.keys.iter().enumerate() {
-                            let matrix_index = key.row as usize * layout.cols + key.col as usize;
-                            if let Some(keycode) = keymap.get(matrix_index) {
-                                layer_keycodes[key_index] = *keycode;
-                            }
-                        }
+                self.deferred_device_load
+                    .clear_background_layer_progress(layer);
+                self.apply_deferred_layer(layer, keymap, encoders, firmware_name);
+            }
+            DeferredLoadPayload::BackgroundLayerStep { layer, result } => {
+                match self
+                    .deferred_device_load
+                    .record_background_layer_step(layer, result)
+                {
+                    Ok(Some(data)) => {
+                        self.apply_deferred_layer(
+                            data.layer,
+                            data.keymap,
+                            data.encoders,
+                            data.firmware_name,
+                        );
                     }
-                    if let Some(encoder_layer) = layout.encoder_layers.get_mut(layer) {
-                        for (visual_index, encoder) in layout.encoders.iter().enumerate() {
-                            if let Some((ccw, cw)) = encoders.get(encoder.encoder_idx as usize) {
-                                encoder_layer[visual_index] =
-                                    if encoder.direction == 0 { *ccw } else { *cw };
-                            }
-                        }
-                    }
-                    if let Some(name) = firmware_name.filter(|name| !name.trim().is_empty()) {
-                        if let Some(layer_name) = layout.layer_names.get_mut(layer) {
-                            *layer_name = name.clone();
-                        }
-                        if let Some(layer_name) = self.layer_names.get_mut(layer) {
-                            *layer_name = name;
-                        }
-                        self.keycode_picker.layer_names = self.layer_names.clone();
+                    Ok(None) => {}
+                    Err(error) => {
+                        log::warn!("Background Bluetooth layer assembly failed: {error}");
+                        self.deferred_device_load
+                            .clear_background_layer_progress(layer);
+                        self.deferred_device_load
+                            .set_layer_status(layer, DeferredLoadStatus::Failed(error));
                     }
                 }
-                self.deferred_device_load
-                    .set_layer_status(layer, DeferredLoadStatus::Loaded);
-                self.refresh_layer_picker_content_flags();
             }
             DeferredLoadPayload::Macros(texts) => {
                 self.keycode_picker.macro_count = texts.len();
@@ -802,12 +850,54 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    fn apply_deferred_layer(
+        &mut self,
+        layer: usize,
+        keymap: Vec<u16>,
+        encoders: Vec<(u16, u16)>,
+        firmware_name: Option<String>,
+    ) {
+        if let Some(layout) = self.layout.as_mut() {
+            if let Some(layer_keycodes) = layout.layers.get_mut(layer) {
+                for (key_index, key) in layout.keys.iter().enumerate() {
+                    let matrix_index = key.row as usize * layout.cols + key.col as usize;
+                    if let Some(keycode) = keymap.get(matrix_index) {
+                        layer_keycodes[key_index] = *keycode;
+                    }
+                }
+            }
+            if let Some(encoder_layer) = layout.encoder_layers.get_mut(layer) {
+                for (visual_index, encoder) in layout.encoders.iter().enumerate() {
+                    if let Some((ccw, cw)) = encoders.get(encoder.encoder_idx as usize) {
+                        encoder_layer[visual_index] =
+                            if encoder.direction == 0 { *ccw } else { *cw };
+                    }
+                }
+            }
+            if let Some(name) = firmware_name.filter(|name| !name.trim().is_empty()) {
+                if let Some(layer_name) = layout.layer_names.get_mut(layer) {
+                    *layer_name = name.clone();
+                }
+                if let Some(layer_name) = self.layer_names.get_mut(layer) {
+                    *layer_name = name;
+                }
+                self.keycode_picker.layer_names = self.layer_names.clone();
+            }
+        }
+        self.deferred_device_load
+            .set_layer_status(layer, DeferredLoadStatus::Loaded);
+        self.refresh_layer_picker_content_flags();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn fail_deferred_device_load(
         &mut self,
         request: &DeferredLoadRequest,
         error: String,
     ) {
         if let Some(layer) = request.layer() {
+            self.deferred_device_load
+                .clear_background_layer_progress(layer);
             self.deferred_device_load
                 .set_layer_status(layer, DeferredLoadStatus::Failed(error));
         } else if let Some(section) = request.section() {
@@ -1344,11 +1434,7 @@ mod tests {
     fn deferred_layer_reader_fetches_only_requested_layer() {
         let (hid, recorder) = crate::hid::HidDevice::test_device();
         let context = std::sync::Arc::new(context());
-        let request = DeferredLoadRequest::Layer {
-            layer: 2,
-            background: false,
-            context,
-        };
+        let request = DeferredLoadRequest::Layer { layer: 2, context };
 
         let payload = run_deferred_load(&hid, &request).unwrap();
 
@@ -1449,6 +1535,85 @@ mod tests {
     }
 
     #[test]
+    fn automatic_background_layer_is_split_at_every_hid_request_boundary() {
+        let mut context = context();
+        context.rows = 10;
+        context.cols = 6;
+        context.encoder_count = 2;
+        context.supported_qmk_settings = std::sync::Arc::new(vec![201]);
+        let mut state = DeferredDeviceLoadState::staged(context);
+        let expected_steps = [
+            BackgroundLayerStep::Keymap { local_offset: 0 },
+            BackgroundLayerStep::Keymap { local_offset: 28 },
+            BackgroundLayerStep::Keymap { local_offset: 56 },
+            BackgroundLayerStep::Keymap { local_offset: 84 },
+            BackgroundLayerStep::Keymap { local_offset: 112 },
+            BackgroundLayerStep::Encoder { encoder_index: 0 },
+            BackgroundLayerStep::Encoder { encoder_index: 1 },
+            BackgroundLayerStep::FirmwareName,
+        ];
+
+        for (index, expected_step) in expected_steps.into_iter().enumerate() {
+            let (layer, step) = state.next_background_layer_step().unwrap();
+            assert_eq!(layer, 1);
+            assert_eq!(step, expected_step);
+            let result = match step {
+                BackgroundLayerStep::Keymap { local_offset } => {
+                    let remaining = 120 - local_offset;
+                    BackgroundLayerStepResult::Keymap {
+                        local_offset,
+                        keycodes: vec![0; remaining.min(28) / 2],
+                    }
+                }
+                BackgroundLayerStep::Encoder { encoder_index } => {
+                    BackgroundLayerStepResult::Encoder {
+                        encoder_index,
+                        keycodes: (0, 0),
+                    }
+                }
+                BackgroundLayerStep::FirmwareName => {
+                    BackgroundLayerStepResult::FirmwareName(Some("Layer 1".to_owned()))
+                }
+            };
+            let completed = state.record_background_layer_step(layer, result).unwrap();
+            if index + 1 == expected_steps.len() {
+                let completed = completed.expect("last request completes the layer");
+                assert_eq!(completed.layer, 1);
+                assert_eq!(completed.keymap.len(), 60);
+                assert_eq!(completed.encoders.len(), 2);
+                assert_eq!(completed.firmware_name.as_deref(), Some("Layer 1"));
+            } else {
+                assert!(completed.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn foreground_layer_request_discards_partial_background_data() {
+        let mut context = context();
+        context.rows = 10;
+        context.cols = 6;
+        let mut state = DeferredDeviceLoadState::staged(context);
+
+        state
+            .record_background_layer_step(
+                1,
+                BackgroundLayerStepResult::Keymap {
+                    local_offset: 0,
+                    keycodes: vec![0; 14],
+                },
+            )
+            .unwrap();
+        state.set_layer_status(1, DeferredLoadStatus::Loading);
+        state.set_layer_status(1, DeferredLoadStatus::NotLoaded);
+
+        assert_eq!(
+            state.next_background_layer_step(),
+            Some((1, BackgroundLayerStep::Keymap { local_offset: 0 }))
+        );
+    }
+
+    #[test]
     fn settings_page_behavior_values_preempt_background_layers() {
         let mut app = staged_app();
         app.deferred_device_load =
@@ -1490,9 +1655,23 @@ mod tests {
         let mut state = DeferredDeviceLoadState::staged(context());
 
         assert!(state.background_layer_resume_delay().is_some());
+        state.mark_background_layer_finished();
         std::thread::sleep(std::time::Duration::from_millis(90));
         assert!(state.background_layer_resume_delay().is_none());
         state.mark_background_layer_finished();
+        assert!(state.background_layer_resume_delay().is_some());
+    }
+
+    #[test]
+    fn user_input_postpones_the_next_automatic_background_layer() {
+        let mut state = DeferredDeviceLoadState::staged(context());
+
+        state.mark_background_layer_finished();
+        std::thread::sleep(std::time::Duration::from_millis(90));
+        assert!(state.background_layer_resume_delay().is_none());
+
+        state.defer_background_for_user_input();
+
         assert!(state.background_layer_resume_delay().is_some());
     }
 
@@ -1502,6 +1681,10 @@ mod tests {
         let mut app = staged_app();
         let (hid, recorder) = crate::hid::HidDevice::test_device();
         app.hid_device = Some(hid);
+        // This test covers queue order rather than the separate initial-idle
+        // policy, so advance to the short between-layer cadence.
+        app.deferred_device_load.mark_background_layer_finished();
+        std::thread::sleep(std::time::Duration::from_millis(90));
 
         for _ in 0..500 {
             app.poll_vial_hid_task(&ctx);

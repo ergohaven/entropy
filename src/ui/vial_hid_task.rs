@@ -206,6 +206,21 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn vial_hid_background_layer_active(&self) -> bool {
+        self.vial_hid_task.as_ref().is_some_and(|task| {
+            matches!(
+                &task.operation,
+                VialHidOperation::Deferred(request) if request.is_background_layer()
+            )
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn vial_hid_task_blocks_user_action(&self) -> bool {
+        self.vial_hid_task.is_some() && !self.vial_hid_background_layer_active()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn another_hid_owner_or_write_is_pending(&self) -> bool {
         self.layer_write_task.is_some()
             || self.combo_write_task.is_some()
@@ -642,6 +657,29 @@ mod tests {
         }
     }
 
+    fn background_layer_context() -> std::sync::Arc<DeferredDeviceLoadContext> {
+        std::sync::Arc::new(DeferredDeviceLoadContext {
+            json: std::sync::Arc::new(serde_json::json!({})),
+            supported_qmk_settings: std::sync::Arc::new(Vec::new()),
+            definition_fingerprint: 1,
+            layer_count: 2,
+            rows: 1,
+            cols: 15,
+            encoder_count: 0,
+            macro_count: 0,
+            macro_memory_bytes: None,
+            tap_dance_count: 0,
+            combo_count: 0,
+            key_override_count: 0,
+            alt_repeat_count: 0,
+            modules_supported: false,
+            touchpad_supported: false,
+            bluetooth_supported: false,
+            layer_leds_supported: false,
+            lighting_mode: None,
+        })
+    }
+
     fn poll_until_vial_hid_idle(app: &mut EntropyApp, ctx: &egui::Context) {
         for _ in 0..100 {
             app.poll_vial_hid_task(ctx);
@@ -784,6 +822,71 @@ mod tests {
             })
         ));
         assert_eq!(recorder.requests().len(), 2);
+    }
+
+    #[test]
+    fn background_layer_does_not_disable_user_actions_and_queued_undo_runs_next() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        let context = background_layer_context();
+        let mut layout = single_key_layout(0x0004);
+        layout.layers.push(vec![0]);
+        layout.layer_names.push("Layer 1".into());
+        layout.encoder_layers.push(Vec::new());
+        app.layout = Some(layout);
+        app.deferred_device_load = DeferredDeviceLoadState::staged((*context).clone());
+        app.undo_stack.push(UndoAction::Key {
+            layer: 0,
+            key_idx: 0,
+            old_kc: 0,
+        });
+        app.hid_device = Some(hid);
+
+        assert_eq!(
+            app.start_vial_hid_operation(
+                &ctx,
+                VialHidOperation::Deferred(
+                    super::device_deferred_load::DeferredLoadRequest::BackgroundLayerStep {
+                        layer: 1,
+                        step: BackgroundLayerStep::Keymap { local_offset: 0 },
+                        context,
+                    },
+                ),
+            ),
+            VialHidTaskStart::Started
+        );
+        assert!(app.vial_hid_background_layer_active());
+        assert!(!app.hid_user_action_busy());
+
+        app.undo(&ctx);
+
+        assert!(app.pending_layout_undo);
+        assert_eq!(app.undo_stack.len(), 1);
+
+        for _ in 0..100 {
+            app.poll_vial_hid_task(&ctx);
+            app.maybe_start_pending_layout_undo(&ctx);
+            if !app.vial_hid_task_active() && !app.pending_layout_undo {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        assert!(!app.pending_layout_undo);
+        assert!(!app.vial_hid_task_active());
+        assert!(app.undo_stack.is_empty());
+        assert_eq!(app.layout.as_ref().unwrap().get_keycode(0, 0), 0);
+        assert_eq!(
+            app.deferred_device_load.layer_status(1),
+            DeferredLoadStatus::NotLoaded
+        );
+        let requests = recorder.requests();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0][0], 0x12);
+        assert_eq!(requests[1][0], 0x05);
+        assert_eq!(requests[2][0], 0x04);
     }
 
     #[test]

@@ -91,6 +91,16 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn hid_user_action_busy(&self) -> bool {
+        self.layer_write_task.is_some()
+            || self.combo_write_task.is_some()
+            || self.settings_write_task.is_some()
+            || self.vial_hid_task_blocks_user_action()
+            || !self.settings_write_queue.is_empty()
+            || self.qmk_settings_write_pending()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn maybe_start_combo_write(&mut self, ctx: &egui::Context) {
         if self.hid_write_task_active()
             || self.combo_attempted_revision == Some(self.combo_edit_revision)

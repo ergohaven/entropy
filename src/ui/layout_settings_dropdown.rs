@@ -29,6 +29,14 @@ fn vial_lock_menu_state(
     }
 }
 
+fn vial_lock_control_idle(
+    user_action_busy: bool,
+    background_layer_active: bool,
+    is_unlocked: bool,
+) -> bool {
+    !user_action_busy && (!is_unlocked || !background_layer_active)
+}
+
 impl EntropyApp {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_layout_settings_dropdown(
@@ -93,8 +101,13 @@ impl EntropyApp {
                     .any(|qsid| self.supported_qmk_settings.contains(qsid));
             let show_update_indicator = crate::app::update_available(&self.update_check);
             let show_matrix_item = self.firmware == FirmwareProtocol::Vial;
+            let is_unlocked = self.vial_unlocked == Some(true);
             #[cfg(not(target_arch = "wasm32"))]
-            let vial_hid_idle = !self.vial_hid_task_active();
+            let vial_hid_idle = vial_lock_control_idle(
+                self.hid_user_action_busy(),
+                self.vial_hid_background_layer_active(),
+                is_unlocked,
+            );
             #[cfg(target_arch = "wasm32")]
             let vial_hid_idle = true;
             let lock_menu_state = vial_lock_menu_state(
@@ -185,7 +198,6 @@ impl EntropyApp {
             if show_dropdown {
                 let dark = ui.visuals().dark_mode;
                 let rgb_available = rgb_available_for_menu || deferred_rgb;
-                let is_unlocked = self.vial_unlocked == Some(true);
                 let lock_label = if is_unlocked {
                     crate::i18n::tr_catalog(lang, "ui.lock_keyboard_action")
                 } else {
@@ -618,5 +630,11 @@ mod tests {
     fn active_unlock_flow_hides_lock_item() {
         assert!(!vial_lock_menu_state(true, true, true, false, true).visible);
         assert!(!vial_lock_menu_state(true, true, false, true, true).visible);
+    }
+
+    #[test]
+    fn background_layer_keeps_unlock_available_but_not_unqueued_lock() {
+        assert!(vial_lock_control_idle(false, true, false));
+        assert!(!vial_lock_control_idle(false, true, true));
     }
 }

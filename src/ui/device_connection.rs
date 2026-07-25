@@ -114,6 +114,7 @@ impl EntropyApp {
         self.combo_colors_dirty = false;
         self.combo_term_dirty = false;
         self.undo_stack.clear();
+        self.pending_layout_undo = false;
         self.keycode_picker.open = false;
         self.selected_key = None;
         self.selected_encoder = None;
@@ -199,6 +200,7 @@ impl EntropyApp {
         self.combo_write_task = None;
         self.settings_write_task = None;
         self.vial_hid_task = None;
+        self.pending_layout_undo = false;
         self.deferred_device_load = DeferredDeviceLoadState::default();
         self.deferred_full_layout_action = None;
         self.reset_settings_write_context();

@@ -571,6 +571,7 @@ impl EntropyApp {
             }
         }
         self.pending_device_connect = None;
+        self.pending_layout_undo = false;
         let dev = match self.device_manager.devices().get(device_idx) {
             Some(d) => d.clone(),
             None => {

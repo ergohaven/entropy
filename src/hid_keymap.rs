@@ -52,6 +52,41 @@ fn verify_keycode_writeback(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn keymap_layer_bounds(
+    layer: usize,
+    layers: usize,
+    rows: usize,
+    cols: usize,
+) -> Result<(usize, usize)> {
+    if layers == 0
+        || layers > 32
+        || layer >= layers
+        || rows == 0
+        || rows > 32
+        || cols == 0
+        || cols > 32
+    {
+        bail!(
+            "invalid keymap layer request: layer={layer}, layers={layers}, rows={rows}, cols={cols}"
+        );
+    }
+    let layer_keys = rows.checked_mul(cols).context("keymap layer overflow")?;
+    let layer_bytes = layer_keys
+        .checked_mul(2)
+        .context("keymap layer size overflow")?;
+    let layer_offset = layer
+        .checked_mul(layer_bytes)
+        .context("keymap layer offset overflow")?;
+    let total_bytes = layers
+        .checked_mul(layer_bytes)
+        .context("keymap size overflow")?;
+    if total_bytes > u16::MAX as usize {
+        bail!("keymap buffer is too large for VIA offset: {total_bytes} bytes");
+    }
+    Ok((layer_offset, layer_bytes))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 impl HidDevice {
     pub fn get_layer_count(&self) -> Result<u8> {
         let resp = self.usb_send(&[CMD_VIA_GET_LAYER_COUNT])?;
@@ -112,51 +147,51 @@ impl HidDevice {
         rows: usize,
         cols: usize,
     ) -> Result<Vec<u16>> {
-        if layers == 0
-            || layers > 32
-            || layer >= layers
-            || rows == 0
-            || rows > 32
-            || cols == 0
-            || cols > 32
-        {
-            bail!(
-                "invalid keymap layer request: layer={layer}, layers={layers}, rows={rows}, cols={cols}"
-            );
-        }
-        let layer_keys = rows.checked_mul(cols).context("keymap layer overflow")?;
-        let layer_bytes = layer_keys
-            .checked_mul(2)
-            .context("keymap layer size overflow")?;
-        let offset = layer
-            .checked_mul(layer_bytes)
-            .context("keymap layer offset overflow")?;
-        let total_bytes = layers
-            .checked_mul(layer_bytes)
-            .context("keymap size overflow")?;
-        if total_bytes > u16::MAX as usize {
-            bail!("keymap buffer is too large for VIA offset: {total_bytes} bytes");
-        }
-
-        let mut keymap = vec![0u8; layer_bytes];
+        let (_, layer_bytes) = keymap_layer_bounds(layer, layers, rows, cols)?;
+        let mut keymap = Vec::with_capacity(layer_bytes / 2);
         let mut local_offset = 0usize;
         while local_offset < layer_bytes {
-            let absolute_offset = offset + local_offset;
-            let sz = (layer_bytes - local_offset).min(BUFFER_FETCH_CHUNK);
-            let cmd = [
-                CMD_VIA_KEYMAP_GET_BUFFER,
-                ((absolute_offset >> 8) & 0xFF) as u8,
-                (absolute_offset & 0xFF) as u8,
-                sz as u8,
-            ];
-            let resp = self.usb_send(&cmd).with_context(|| {
-                format!("failed to read keymap layer {layer} at buffer offset {absolute_offset}")
-            })?;
-            keymap[local_offset..local_offset + sz].copy_from_slice(&resp[4..4 + sz]);
-            local_offset += sz;
+            let chunk = self.get_keymap_layer_chunk(layer, layers, rows, cols, local_offset)?;
+            if chunk.is_empty() {
+                bail!("empty keymap layer chunk at local offset {local_offset}");
+            }
+            local_offset += chunk.len() * 2;
+            keymap.extend(chunk);
         }
 
-        Ok(parse_keymap_u16_be(&keymap))
+        Ok(keymap)
+    }
+
+    /// Read at most one VIA buffer chunk from a layer. Automatic Bluetooth
+    /// preloading uses this boundary so an interactive HID operation waits for
+    /// no more than the current BLE round trip.
+    pub fn get_keymap_layer_chunk(
+        &self,
+        layer: usize,
+        layers: usize,
+        rows: usize,
+        cols: usize,
+        local_offset: usize,
+    ) -> Result<Vec<u16>> {
+        let (layer_offset, layer_bytes) = keymap_layer_bounds(layer, layers, rows, cols)?;
+        if local_offset >= layer_bytes || local_offset % 2 != 0 {
+            bail!(
+                "invalid keymap layer chunk offset: layer={layer}, local_offset={local_offset}, layer_bytes={layer_bytes}"
+            );
+        }
+
+        let absolute_offset = layer_offset + local_offset;
+        let size = (layer_bytes - local_offset).min(BUFFER_FETCH_CHUNK);
+        let cmd = [
+            CMD_VIA_KEYMAP_GET_BUFFER,
+            ((absolute_offset >> 8) & 0xFF) as u8,
+            (absolute_offset & 0xFF) as u8,
+            size as u8,
+        ];
+        let response = self.usb_send(&cmd).with_context(|| {
+            format!("failed to read keymap layer {layer} at buffer offset {absolute_offset}")
+        })?;
+        Ok(parse_keymap_u16_be(&response[4..4 + size]))
     }
 
     pub fn get_keycode(&self, layer: u8, row: u8, col: u8) -> Result<u16> {
@@ -257,5 +292,22 @@ mod tests {
         let error = hid.get_keymap_layer(16, 16, 10, 6).unwrap_err();
 
         assert!(error.to_string().contains("layer=16"));
+    }
+
+    #[test]
+    fn staged_layer_chunk_reads_exactly_one_ble_sized_request() {
+        let (hid, recorder) = HidDevice::test_device();
+
+        let chunk = hid
+            .get_keymap_layer_chunk(3, 16, 10, 6, BUFFER_FETCH_CHUNK)
+            .unwrap();
+
+        assert_eq!(chunk.len(), BUFFER_FETCH_CHUNK / 2);
+        let requests = recorder.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            &requests[0][..4],
+            &[CMD_VIA_KEYMAP_GET_BUFFER, 0x01, 0x84, 28]
+        );
     }
 }
