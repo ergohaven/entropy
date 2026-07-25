@@ -68,10 +68,16 @@ fn cache_component(value: &str) -> String {
     }
 }
 
-fn device_cache_key(device: &crate::device::Device, keyboard_id: u64) -> String {
+fn device_cache_key_with_serial(
+    device: &crate::device::Device,
+    keyboard_id: u64,
+    include_serial: bool,
+) -> String {
     // RMK boards can report the same Vial keyboard id across different layouts.
     // Keep the cache tied to the concrete HID identity so one board's layout
-    // definition cannot be reused for another board.
+    // definition cannot be reused for another board. Bluetooth addresses are
+    // deliberately excluded from the canonical key: BlueZ can expose a new
+    // address after clearing a bond even though the keyboard schema is unchanged.
     let mut parts = vec![
         format!("{keyboard_id:016x}"),
         format!("{:04x}", device.vendor_id),
@@ -81,10 +87,21 @@ fn device_cache_key(device: &crate::device::Device, keyboard_id: u64) -> String 
     if !device.manufacturer.trim().is_empty() {
         parts.push(cache_component(&device.manufacturer));
     }
-    if !device.serial_number.trim().is_empty() {
+    if include_serial && !device.serial_number.trim().is_empty() {
         parts.push(cache_component(&device.serial_number));
     }
     parts.join("_")
+}
+
+fn device_cache_keys(device: &crate::device::Device, keyboard_id: u64) -> Vec<String> {
+    let canonical =
+        device_cache_key_with_serial(device, keyboard_id, !device.is_bluetooth_transport());
+    let legacy = device_cache_key_with_serial(device, keyboard_id, true);
+    if legacy == canonical {
+        vec![canonical]
+    } else {
+        vec![canonical, legacy]
+    }
 }
 
 fn cached_vial_definition_file_name(cache_key: &str, definition_size: u32) -> String {
@@ -167,16 +184,20 @@ fn load_cached_vial_definition_from_dir(
 }
 
 fn load_cached_vial_definition(
-    cache_key: &str,
+    cache_keys: &[String],
     definition_size: u32,
     runtime_firmware_version: Option<&str>,
-) -> Option<serde_json::Value> {
-    load_cached_vial_definition_from_dir(
-        &vial_cache_dir()?,
-        cache_key,
-        definition_size,
-        runtime_firmware_version,
-    )
+) -> Option<(serde_json::Value, String)> {
+    let cache_dir = vial_cache_dir()?;
+    cache_keys.iter().find_map(|cache_key| {
+        load_cached_vial_definition_from_dir(
+            &cache_dir,
+            cache_key,
+            definition_size,
+            runtime_firmware_version,
+        )
+        .map(|json| (json, cache_key.clone()))
+    })
 }
 
 fn save_cached_vial_definition(
@@ -209,12 +230,14 @@ fn parse_cached_qmk_settings(text: &str, context: &QmkSettingsCacheContext) -> O
 }
 
 fn load_cached_qmk_settings(
-    cache_key: &str,
+    cache_keys: &[String],
     context: &QmkSettingsCacheContext,
-) -> Option<Vec<u16>> {
-    let path = cached_qmk_settings_path(cache_key)?;
-    let text = std::fs::read_to_string(path).ok()?;
-    parse_cached_qmk_settings(&text, context)
+) -> Option<(Vec<u16>, String)> {
+    cache_keys.iter().find_map(|cache_key| {
+        let path = cached_qmk_settings_path(cache_key)?;
+        let text = std::fs::read_to_string(path).ok()?;
+        parse_cached_qmk_settings(&text, context).map(|settings| (settings, cache_key.clone()))
+    })
 }
 
 fn save_cached_qmk_settings(cache_key: &str, context: &QmkSettingsCacheContext, settings: &[u16]) {
@@ -471,16 +494,23 @@ impl EntropyApp {
             return;
         };
 
-        let cache_key = device_cache_key(&device, info.keyboard_id);
-        if let Err(error) = clear_cached_device_data(&cache_key) {
-            self.status_msg =
-                crate::i18n::tr_catalog(lang, "status_messages.refresh_device_data_delete_failed")
-                    .to_owned();
-            log::warn!("device cache refresh failed for key {cache_key}: {error}");
-            return;
+        let cache_keys = device_cache_keys(&device, info.keyboard_id);
+        for cache_key in &cache_keys {
+            if let Err(error) = clear_cached_device_data(cache_key) {
+                self.status_msg = crate::i18n::tr_catalog(
+                    lang,
+                    "status_messages.refresh_device_data_delete_failed",
+                )
+                .to_owned();
+                log::warn!("device cache refresh failed for key {cache_key}: {error}");
+                return;
+            }
         }
 
-        log::info!("Cleared Vial definition and QMK settings cache for key {cache_key}");
+        log::info!(
+            "Cleared Vial definition and QMK settings cache for keys {}",
+            cache_keys.join(", ")
+        );
         self.start_connect(device_idx);
     }
 
@@ -655,7 +685,8 @@ impl EntropyApp {
                     .get_keyboard_id()
                     .map_err(|e| format!("Vial keyboard id read failed: {e:#}"))?;
                 log::info!("Vial protocol: {vial_protocol}, keyboard id: {keyboard_id:016X}");
-                let cache_key = device_cache_key(&dev, keyboard_id);
+                let cache_keys = device_cache_keys(&dev, keyboard_id);
+                let cache_key = &cache_keys[0];
                 if ![-1i32, 9].contains(&(via_protocol as i32)) {
                     return Err(format!("Unsupported VIA protocol version: {via_protocol}"));
                 }
@@ -695,14 +726,24 @@ impl EntropyApp {
                     .map_err(|e| format!("Layout size read failed: {e:#}"))?;
                 let runtime_firmware_cache_token =
                     runtime_firmware_version_cache_token(runtime_firmware_version.as_deref());
-                let json = if let Some(cached) = load_cached_vial_definition(
-                    &cache_key,
+                let json = if let Some((cached, source_cache_key)) = load_cached_vial_definition(
+                    &cache_keys,
                     definition_size,
                     runtime_firmware_cache_token,
                 ) {
                     log::info!(
-                        "Loaded Vial definition from cache for keyboard id {keyboard_id:016X}, key {cache_key}, size {definition_size}"
+                        "Loaded Vial definition from cache for keyboard id {keyboard_id:016X}, key {source_cache_key}, size {definition_size}"
                     );
+                    if source_cache_key != *cache_key {
+                        if let Some(runtime_firmware_version) = runtime_firmware_cache_token {
+                            save_cached_vial_definition(
+                                cache_key,
+                                definition_size,
+                                runtime_firmware_version,
+                                &cached,
+                            );
+                        }
+                    }
                     cached
                 } else {
                     let json = dev_conn
@@ -710,7 +751,7 @@ impl EntropyApp {
                         .map_err(|e| format!("Layout read failed: {e:#}"))?;
                     if let Some(runtime_firmware_version) = runtime_firmware_cache_token {
                         save_cached_vial_definition(
-                            &cache_key,
+                            cache_key,
                             definition_size,
                             runtime_firmware_version,
                             &json,
@@ -761,19 +802,25 @@ impl EntropyApp {
                 let supported_qmk_settings = if vial_protocol >= 4 {
                     if let Some(cached) = qmk_cache_context
                         .as_ref()
-                        .and_then(|context| load_cached_qmk_settings(&cache_key, context))
+                        .and_then(|context| load_cached_qmk_settings(&cache_keys, context))
                     {
+                        let (cached, source_cache_key) = cached;
                         log::info!(
-                            "Loaded {} QMK settings from definition-aware cache for keyboard id {keyboard_id:016X}, key {cache_key}",
+                            "Loaded {} QMK settings from definition-aware cache for keyboard id {keyboard_id:016X}, key {source_cache_key}",
                             cached.len(),
                         );
+                        if source_cache_key != *cache_key {
+                            if let Some(context) = qmk_cache_context.as_ref() {
+                                save_cached_qmk_settings(cache_key, context, &cached);
+                            }
+                        }
                         cached
                     } else {
                         progress("Querying QMK settings…");
                         match dev_conn.query_qmk_settings() {
                             Ok(settings) => {
                                 if let Some(context) = qmk_cache_context.as_ref() {
-                                    save_cached_qmk_settings(&cache_key, context, &settings);
+                                    save_cached_qmk_settings(cache_key, context, &settings);
                                 }
                                 settings
                             }
@@ -1553,6 +1600,42 @@ mod tests {
         });
 
         assert!(supports_battery_halves_from_vial_json(&json));
+    }
+
+    fn cache_device(bus_type: &str, serial_number: &str) -> crate::device::Device {
+        crate::device::Device {
+            name: "K:04".to_owned(),
+            vendor_id: 0xE126,
+            product_id: 0x0074,
+            manufacturer: "Ergohaven".to_owned(),
+            serial_number: serial_number.to_owned(),
+            bus_type: bus_type.to_owned(),
+            path: if bus_type.eq_ignore_ascii_case("bluetooth") {
+                format!("/org/bluez/hci0/dev_{}", serial_number.replace(':', "_"))
+            } else {
+                "/dev/hidraw4".to_owned()
+            },
+            firmware: FirmwareProtocol::Vial,
+        }
+    }
+
+    #[test]
+    fn bluetooth_schema_cache_key_survives_peer_address_changes() {
+        let first = device_cache_keys(&cache_device("Bluetooth", "AA:BB:CC:DD:EE:01"), 0x1234);
+        let second = device_cache_keys(&cache_device("Bluetooth", "AA:BB:CC:DD:EE:02"), 0x1234);
+
+        assert_eq!(first[0], second[0]);
+        assert_ne!(first[1], second[1]);
+    }
+
+    #[test]
+    fn usb_schema_cache_stays_bound_to_the_device_serial() {
+        let first = device_cache_keys(&cache_device("Usb", "keyboard-1"), 0x1234);
+        let second = device_cache_keys(&cache_device("Usb", "keyboard-2"), 0x1234);
+
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        assert_ne!(first[0], second[0]);
     }
 
     #[test]
