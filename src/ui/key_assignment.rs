@@ -191,6 +191,15 @@ impl EntropyApp {
                 self.secondary_click_handled = true;
             } else if let Some(swapped) = toggle_handed_modifier(kc) {
                 if let Some(visual_idx) = encoder_target {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if self.hid_write_task_active() {
+                        self.selected_key = None;
+                        self.selected_encoder = Some((self.selected_layer, visual_idx));
+                        self.keycode_picker.result = Some(swapped);
+                    } else {
+                        self.assign_encoder_keycode(self.selected_layer, visual_idx, swapped);
+                    }
+                    #[cfg(target_arch = "wasm32")]
                     self.assign_encoder_keycode(self.selected_layer, visual_idx, swapped);
                 } else if let Some(ki) = key_target {
                     self.pending_handed_swap = Some((self.selected_layer, ki, swapped));

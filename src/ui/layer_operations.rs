@@ -631,6 +631,10 @@ impl EntropyApp {
             .as_ref()
             .ok_or(LayerOperationError::MissingLayer)
             .and_then(|layout| mirror_key_mapping(&layout.keys));
+        #[cfg(not(target_arch = "wasm32"))]
+        let layer_mutation_available = !self.hid_write_task_active();
+        #[cfg(target_arch = "wasm32")]
+        let layer_mutation_available = true;
         let mut requested_action = None;
 
         ui.style_mut().visuals.window_stroke =
@@ -656,7 +660,7 @@ impl EntropyApp {
                     requested_action = Some(LayerUiAction::Copy);
                 }
 
-                let paste_enabled = paste_snapshot.is_ok();
+                let paste_enabled = layer_mutation_available && paste_snapshot.is_ok();
                 let paste_response =
                     top_dropdown_item(ui, menu_width, &paste_label, paste_enabled, false);
                 let paste_clicked = paste_response.clicked();
@@ -678,7 +682,7 @@ impl EntropyApp {
 
                 ui.separator();
 
-                let mirror_enabled = mirror_mapping.is_ok();
+                let mirror_enabled = layer_mutation_available && mirror_mapping.is_ok();
                 let mirror_response =
                     top_dropdown_item(ui, menu_width, &mirror_label, mirror_enabled, false);
                 let mirror_clicked = mirror_response.clicked();
@@ -697,8 +701,13 @@ impl EntropyApp {
 
                 ui.separator();
 
-                let none_response =
-                    top_dropdown_item(ui, menu_width, &fill_none_label, true, false);
+                let none_response = top_dropdown_item(
+                    ui,
+                    menu_width,
+                    &fill_none_label,
+                    layer_mutation_available,
+                    false,
+                );
                 let none_clicked = none_response.clicked();
                 none_response.on_hover_text(crate::i18n::tr_catalog(
                     language,
@@ -708,8 +717,13 @@ impl EntropyApp {
                     requested_action = Some(LayerUiAction::FillNone);
                 }
 
-                let inherit_response =
-                    top_dropdown_item(ui, menu_width, &fill_inherit_label, true, false);
+                let inherit_response = top_dropdown_item(
+                    ui,
+                    menu_width,
+                    &fill_inherit_label,
+                    layer_mutation_available,
+                    false,
+                );
                 let inherit_clicked = inherit_response.clicked();
                 inherit_response.on_hover_text(crate::i18n::tr_catalog(
                     language,

@@ -321,6 +321,12 @@ impl EntropyApp {
                 self.schedule_next_battery_refresh();
             }
             Ok(VialHidOutcome::Deferred(payload)) => {
+                if matches!(
+                    &result.operation,
+                    VialHidOperation::Deferred(request) if request.is_background_layer()
+                ) {
+                    self.deferred_device_load.mark_background_layer_finished();
+                }
                 self.finish_deferred_device_load(payload);
             }
             Err(error) => {
@@ -387,16 +393,22 @@ impl EntropyApp {
             }
             VialHidOperation::Deferred(request) => {
                 log::warn!("Deferred Bluetooth device load failed: {error}");
+                if request.is_background_layer() {
+                    self.deferred_device_load.mark_background_layer_finished();
+                }
                 self.fail_deferred_device_load(&request, error);
             }
         }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn deferred_vial_hid_task_active(&self) -> bool {
+    pub(super) fn deferred_vial_hid_task_blocks_keyboard(&self) -> bool {
         self.vial_hid_task
             .as_ref()
-            .map(|task| matches!(&task.operation, VialHidOperation::Deferred(_)))
+            .map(|task| match &task.operation {
+                VialHidOperation::Deferred(request) => request.blocks_keyboard(),
+                _ => false,
+            })
             .unwrap_or(false)
     }
 }

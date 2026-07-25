@@ -160,7 +160,7 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn import_pending(&self) -> bool {
+    pub(super) fn import_pending(&self) -> bool {
         self.pending_entlayout_import_path.is_some()
             || self.pending_entsettings_import_path.is_some()
     }
@@ -1405,7 +1405,7 @@ impl eframe::App for EntropyApp {
                 let deferred_keyboard_blocked = self.main_menu_tab == MainMenuTab::Keyboard
                     && (!self.selected_layer_data_ready()
                         || !self.sticky_layout_deferred_data_ready()
-                        || self.deferred_vial_hid_task_active()
+                        || self.deferred_vial_hid_task_blocks_keyboard()
                         || self.deferred_full_layout_action_pending());
                 #[cfg(target_arch = "wasm32")]
                 let deferred_keyboard_blocked = false;

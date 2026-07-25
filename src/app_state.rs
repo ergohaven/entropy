@@ -436,6 +436,7 @@ pub(crate) struct DeferredDeviceLoadState {
     pub(crate) context: Option<std::sync::Arc<DeferredDeviceLoadContext>>,
     section_statuses: std::collections::BTreeMap<DeferredLoadSection, DeferredLoadStatus>,
     layer_statuses: Vec<DeferredLoadStatus>,
+    background_layer_yield_pending: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -459,6 +460,7 @@ impl DeferredDeviceLoadState {
             context: Some(context),
             section_statuses,
             layer_statuses,
+            background_layer_yield_pending: true,
         }
     }
 
@@ -470,6 +472,7 @@ impl DeferredDeviceLoadState {
                 .map(|section| (section, DeferredLoadStatus::Loaded))
                 .collect(),
             layer_statuses: vec![DeferredLoadStatus::Loaded; layer_count.max(1)],
+            background_layer_yield_pending: false,
         }
     }
 
@@ -528,6 +531,14 @@ impl DeferredDeviceLoadState {
 
     pub(crate) fn all_layers_ready(&self) -> bool {
         self.layer_statuses.iter().all(DeferredLoadStatus::ready)
+    }
+
+    pub(crate) fn take_background_layer_yield(&mut self) -> bool {
+        std::mem::take(&mut self.background_layer_yield_pending)
+    }
+
+    pub(crate) fn mark_background_layer_finished(&mut self) {
+        self.background_layer_yield_pending = true;
     }
 
     pub(crate) fn merge_loaded_from(&mut self, previous: &Self) {

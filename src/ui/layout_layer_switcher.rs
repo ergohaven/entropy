@@ -297,10 +297,14 @@ impl EntropyApp {
                     self.selected_layer = selected + 1;
                     self.jump_back_stack.clear();
                 }
-                if name_r.hovered() {
+                #[cfg(not(target_arch = "wasm32"))]
+                let layer_name_edit_available = !self.hid_write_task_active();
+                #[cfg(target_arch = "wasm32")]
+                let layer_name_edit_available = true;
+                if name_r.hovered() && layer_name_edit_available {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
-                if name_r.clicked() {
+                if name_r.clicked() && layer_name_edit_available {
                     self.editing_layer = Some(selected);
                     self.editing_layer_text = raw_name.clone();
                 }
