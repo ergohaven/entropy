@@ -160,7 +160,7 @@ impl EntropyApp {
             if response.secondary_clicked() {
                 let ctrl_held = ui.input(|i| i.modifiers.ctrl);
                 let kc = layout.get_keycode(self.selected_layer, *ki);
-                self.handle_secondary_target(ctrl_held, kc, Some(*ki), None);
+                self.handle_secondary_target(ui.ctx(), ctrl_held, kc, Some(*ki), None);
                 if self.secondary_click_handled {
                     continue;
                 }
@@ -544,7 +544,7 @@ impl EntropyApp {
             }
             if top_resp.secondary_clicked() {
                 if let Some((visual_idx, kc)) = cw {
-                    self.handle_secondary_target(ctrl_held, *kc, None, Some(*visual_idx));
+                    self.handle_secondary_target(ui.ctx(), ctrl_held, *kc, None, Some(*visual_idx));
                 }
             }
             if top_resp.clicked() {
@@ -571,7 +571,7 @@ impl EntropyApp {
                 }
                 if middle_resp.secondary_clicked() {
                     let kc = layout.get_keycode(self.selected_layer, press_ki);
-                    self.handle_secondary_target(ctrl_held, kc, Some(press_ki), None);
+                    self.handle_secondary_target(ui.ctx(), ctrl_held, kc, Some(press_ki), None);
                 }
                 if middle_resp.clicked() {
                     self.open_picker_for_target(Some(press_ki), None);
@@ -596,7 +596,7 @@ impl EntropyApp {
             }
             if bottom_resp.secondary_clicked() {
                 if let Some((visual_idx, kc)) = ccw {
-                    self.handle_secondary_target(ctrl_held, *kc, None, Some(*visual_idx));
+                    self.handle_secondary_target(ui.ctx(), ctrl_held, *kc, None, Some(*visual_idx));
                 }
             }
             if bottom_resp.clicked() {

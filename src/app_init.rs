@@ -210,7 +210,7 @@ impl EntropyApp {
         }
     }
 
-    /// Assign keycode and immediately write to device (blocking, but single HID op — fast).
+    /// Recompute which layers contain assignable keycodes.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn refresh_layer_picker_content_flags(&mut self) {
         if let Some(layout) = &self.layout {

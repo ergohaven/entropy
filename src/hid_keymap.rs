@@ -24,10 +24,6 @@ impl std::fmt::Display for KeycodeWritebackMismatch {
 
 impl std::error::Error for KeycodeWritebackMismatch {}
 
-pub(crate) fn is_keycode_writeback_mismatch(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<KeycodeWritebackMismatch>().is_some()
-}
-
 pub(crate) fn keycode_writeback_readback(error: &anyhow::Error) -> Option<u16> {
     error
         .downcast_ref::<KeycodeWritebackMismatch>()

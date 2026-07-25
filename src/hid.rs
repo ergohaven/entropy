@@ -170,7 +170,7 @@ mod hid_macros;
 
 #[path = "hid_keymap.rs"]
 mod hid_keymap;
-pub(crate) use hid_keymap::{is_keycode_writeback_mismatch, keycode_writeback_readback};
+pub(crate) use hid_keymap::keycode_writeback_readback;
 
 #[path = "hid_settings.rs"]
 mod hid_settings;

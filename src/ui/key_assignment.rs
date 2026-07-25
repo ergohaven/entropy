@@ -1,7 +1,7 @@
 use super::*;
 
 impl EntropyApp {
-    pub(super) fn apply_picker_results(&mut self) {
+    pub(super) fn apply_picker_results(&mut self, ctx: &egui::Context) {
         #[cfg(not(target_arch = "wasm32"))]
         if self.hid_write_task_active() {
             return;
@@ -46,7 +46,10 @@ impl EntropyApp {
                 self.write_alt_repeat_entry(idx);
             } else if let Some((layer, encoder_visual_idx)) = self.selected_encoder {
                 #[cfg(not(target_arch = "wasm32"))]
-                self.assign_encoder_keycode(layer, encoder_visual_idx, kc_value);
+                if !self.assign_encoder_keycode(ctx, layer, encoder_visual_idx, kc_value) {
+                    self.keycode_picker.result = Some(kc_value);
+                    return;
+                }
                 #[cfg(target_arch = "wasm32")]
                 if let Some(layout) = &mut self.layout {
                     layout.set_encoder_keycode(layer, encoder_visual_idx, kc_value);
@@ -56,7 +59,10 @@ impl EntropyApp {
                 }
             } else if let Some((layer, ki)) = self.selected_key {
                 #[cfg(not(target_arch = "wasm32"))]
-                self.assign_keycode(layer, ki, kc_value);
+                if !self.assign_keycode(ctx, layer, ki, kc_value) {
+                    self.keycode_picker.result = Some(kc_value);
+                    return;
+                }
                 #[cfg(target_arch = "wasm32")]
                 if let Some(layout) = &mut self.layout {
                     layout.set_keycode(layer, ki, kc_value);
@@ -70,17 +76,31 @@ impl EntropyApp {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn assign_encoder_keycode(
         &mut self,
+        ctx: &egui::Context,
         layer: usize,
         encoder_visual_idx: usize,
         kc_value: u16,
-    ) {
+    ) -> bool {
+        self.assign_encoder_keycode_with_mode(ctx, layer, encoder_visual_idx, kc_value, false)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn assign_encoder_keycode_with_mode(
+        &mut self,
+        ctx: &egui::Context,
+        layer: usize,
+        encoder_visual_idx: usize,
+        kc_value: u16,
+        is_undo: bool,
+    ) -> bool {
         if self.qmk_settings_write_busy() {
             self.status_msg =
                 crate::i18n::tr_catalog(self.app_settings.language, "settings_write.busy")
                     .to_owned();
-            return;
+            return false;
         }
         let encoder = match self
             .layout
@@ -88,47 +108,47 @@ impl EntropyApp {
             .and_then(|l| l.encoders.get(encoder_visual_idx))
         {
             Some(e) => e.clone(),
-            None => return,
+            None => return true,
         };
         let old_kc = self
             .layout
             .as_ref()
             .map(|l| l.get_encoder_keycode(layer, encoder_visual_idx))
             .unwrap_or(0);
-        self.undo_stack.push(UndoAction::Encoder {
+
+        let operation = super::vial_hid_task::VialHidOperation::EncoderWrite {
             layer,
-            encoder_visual_idx,
-            old_kc,
-        });
-
-        if let Some(layout) = &mut self.layout {
-            layout.set_encoder_keycode(layer, encoder_visual_idx, kc_value);
-        }
-
-        let Some(conn) = &self.hid_device else {
-            self.status_msg =
-                "Read-only: encoder changed locally, firmware write disabled for this device"
-                    .into();
-            return;
+            encoder_visual_index: encoder_visual_idx,
+            encoder_index: encoder.encoder_idx,
+            direction: encoder.direction,
+            old_keycode: old_kc,
+            keycode: kc_value,
+            is_undo,
         };
-        let result = conn.set_encoder(
-            layer as u8,
-            encoder.encoder_idx,
-            encoder.direction,
-            kc_value,
-        );
-
-        match result {
-            Ok(()) => {
-                self.status_msg = format!(
-                    "Assigned encoder {} direction {} on layer {}",
-                    encoder.encoder_idx,
-                    encoder.direction,
-                    layer + 1
-                );
+        match self.start_vial_hid_operation(ctx, operation) {
+            super::vial_hid_task::VialHidTaskStart::Started => {
+                if let Some(layout) = &mut self.layout {
+                    layout.set_encoder_keycode(layer, encoder_visual_idx, kc_value);
+                }
+                self.status_msg = "Saving…".into();
+                true
             }
-            Err(e) => {
-                self.status_msg = format!("Set encoder failed: {e}");
+            super::vial_hid_task::VialHidTaskStart::Busy => false,
+            super::vial_hid_task::VialHidTaskStart::NoDevice => {
+                if !is_undo {
+                    self.undo_stack.push(UndoAction::Encoder {
+                        layer,
+                        encoder_visual_idx,
+                        old_kc,
+                    });
+                }
+                if let Some(layout) = &mut self.layout {
+                    layout.set_encoder_keycode(layer, encoder_visual_idx, kc_value);
+                }
+                self.status_msg =
+                    "Read-only: encoder changed locally, firmware write disabled for this device"
+                        .into();
+                true
             }
         }
     }
@@ -167,6 +187,7 @@ impl EntropyApp {
 
     pub(super) fn handle_secondary_target(
         &mut self,
+        ctx: &egui::Context,
         ctrl_held: bool,
         kc: u16,
         key_target: Option<usize>,
@@ -197,10 +218,12 @@ impl EntropyApp {
                         self.selected_encoder = Some((self.selected_layer, visual_idx));
                         self.keycode_picker.result = Some(swapped);
                     } else {
-                        self.assign_encoder_keycode(self.selected_layer, visual_idx, swapped);
+                        self.assign_encoder_keycode(ctx, self.selected_layer, visual_idx, swapped);
                     }
                     #[cfg(target_arch = "wasm32")]
-                    self.assign_encoder_keycode(self.selected_layer, visual_idx, swapped);
+                    if let Some(layout) = &mut self.layout {
+                        layout.set_encoder_keycode(self.selected_layer, visual_idx, swapped);
+                    }
                 } else if let Some(ki) = key_target {
                     self.pending_handed_swap = Some((self.selected_layer, ki, swapped));
                 }
@@ -265,12 +288,31 @@ impl EntropyApp {
         }
     }
 
-    pub(super) fn assign_keycode(&mut self, layer: usize, ki: usize, kc_value: u16) {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn assign_keycode(
+        &mut self,
+        ctx: &egui::Context,
+        layer: usize,
+        ki: usize,
+        kc_value: u16,
+    ) -> bool {
+        self.assign_keycode_with_mode(ctx, layer, ki, kc_value, false)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn assign_keycode_with_mode(
+        &mut self,
+        ctx: &egui::Context,
+        layer: usize,
+        ki: usize,
+        kc_value: u16,
+        is_undo: bool,
+    ) -> bool {
         if self.qmk_settings_write_busy() {
             self.status_msg =
                 crate::i18n::tr_catalog(self.app_settings.language, "settings_write.busy")
                     .to_owned();
-            return;
+            return false;
         }
         let old_kc = self
             .layout
@@ -280,43 +322,47 @@ impl EntropyApp {
 
         let key = match self.layout.as_ref().and_then(|l| l.keys.get(ki)) {
             Some(k) => k.clone(),
-            None => return,
+            None => return true,
         };
 
-        let commit_local_assignment = |this: &mut Self| {
-            this.undo_stack.push(UndoAction::Key {
-                layer,
-                key_idx: ki,
-                old_kc,
-            });
+        let commit_local_assignment = |this: &mut Self, record_undo: bool| {
+            if record_undo {
+                this.undo_stack.push(UndoAction::Key {
+                    layer,
+                    key_idx: ki,
+                    old_kc,
+                });
+            }
             if let Some(layout) = &mut this.layout {
                 layout.set_keycode(layer, ki, kc_value);
             }
             this.refresh_layer_picker_content_flags();
         };
 
-        // Never open a fresh HID handle synchronously from the UI thread.
-        // Connect keeps the active Vial handle alive; if it is unavailable,
-        // keep the edit local/read-only instead of freezing the whole app.
-        let Some(conn) = &self.hid_device else {
-            commit_local_assignment(self);
-            self.status_msg =
-                "Read-only: key changed locally, firmware write disabled for this device".into();
-            return;
+        let operation = super::vial_hid_task::VialHidOperation::KeyWrite {
+            layer,
+            key_index: ki,
+            row: key.row,
+            col: key.col,
+            old_keycode: old_kc,
+            keycode: kc_value,
+            is_undo,
         };
-        let result = conn.set_keycode(layer as u8, key.row, key.col, kc_value);
-
-        match result {
-            Ok(()) => {
-                commit_local_assignment(self);
-                self.status_msg = "✓ Saved".into();
+        match self.start_vial_hid_operation(ctx, operation) {
+            super::vial_hid_task::VialHidTaskStart::Started => {
+                // Apply the edit immediately in memory. The worker owns the HID
+                // round trip; failures reconcile this optimistic value.
+                commit_local_assignment(self, false);
+                self.status_msg = "Saving…".into();
+                true
             }
-            Err(e) => {
-                self.status_msg = format!("Write error: {e}");
-                if !crate::hid::is_keycode_writeback_mismatch(&e) {
-                    // Connection lost — reopen
-                    self.hid_device = None;
-                }
+            super::vial_hid_task::VialHidTaskStart::Busy => false,
+            super::vial_hid_task::VialHidTaskStart::NoDevice => {
+                commit_local_assignment(self, !is_undo);
+                self.status_msg =
+                    "Read-only: key changed locally, firmware write disabled for this device"
+                        .into();
+                true
             }
         }
     }
@@ -330,7 +376,7 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn undo(&mut self) {
+    pub(super) fn undo(&mut self, ctx: &egui::Context) {
         let Some(action) = self.undo_stack.pop() else {
             return;
         };
@@ -340,16 +386,32 @@ impl EntropyApp {
                 key_idx,
                 old_kc,
             } => {
-                self.assign_keycode(layer, key_idx, old_kc);
-                self.undo_stack.pop();
+                if !self.assign_keycode_with_mode(ctx, layer, key_idx, old_kc, true) {
+                    self.undo_stack.push(UndoAction::Key {
+                        layer,
+                        key_idx,
+                        old_kc,
+                    });
+                }
             }
             UndoAction::Encoder {
                 layer,
                 encoder_visual_idx,
                 old_kc,
             } => {
-                self.assign_encoder_keycode(layer, encoder_visual_idx, old_kc);
-                self.undo_stack.pop();
+                if !self.assign_encoder_keycode_with_mode(
+                    ctx,
+                    layer,
+                    encoder_visual_idx,
+                    old_kc,
+                    true,
+                ) {
+                    self.undo_stack.push(UndoAction::Encoder {
+                        layer,
+                        encoder_visual_idx,
+                        old_kc,
+                    });
+                }
             }
             UndoAction::Layer {
                 layer,

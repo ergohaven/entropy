@@ -588,10 +588,11 @@ impl EntropyApp {
         else {
             return;
         };
-        if request.is_background_layer() && self.deferred_device_load.take_background_layer_yield()
-        {
-            ctx.request_repaint();
-            return;
+        if request.is_background_layer() {
+            if let Some(delay) = self.deferred_device_load.background_layer_resume_delay() {
+                ctx.request_repaint_after(delay);
+                return;
+            }
         }
 
         match self.start_vial_hid_operation(
@@ -1485,13 +1486,14 @@ mod tests {
     }
 
     #[test]
-    fn automatic_background_layers_yield_one_frame_between_requests() {
+    fn automatic_background_layers_leave_a_real_idle_gap_between_requests() {
         let mut state = DeferredDeviceLoadState::staged(context());
 
-        assert!(state.take_background_layer_yield());
-        assert!(!state.take_background_layer_yield());
+        assert!(state.background_layer_resume_delay().is_some());
+        std::thread::sleep(std::time::Duration::from_millis(90));
+        assert!(state.background_layer_resume_delay().is_none());
         state.mark_background_layer_finished();
-        assert!(state.take_background_layer_yield());
+        assert!(state.background_layer_resume_delay().is_some());
     }
 
     #[test]
@@ -1501,7 +1503,7 @@ mod tests {
         let (hid, recorder) = crate::hid::HidDevice::test_device();
         app.hid_device = Some(hid);
 
-        for _ in 0..200 {
+        for _ in 0..500 {
             app.poll_vial_hid_task(&ctx);
             app.maybe_start_deferred_device_load(&ctx, false);
             if app.deferred_device_load.all_layers_ready() && !app.vial_hid_task_active() {

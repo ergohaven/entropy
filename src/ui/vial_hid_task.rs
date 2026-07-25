@@ -20,6 +20,24 @@ pub(super) enum VialHidOperation {
         remember_ever_pressed: bool,
     },
     BatteryRefresh,
+    KeyWrite {
+        layer: usize,
+        key_index: usize,
+        row: u8,
+        col: u8,
+        old_keycode: u16,
+        keycode: u16,
+        is_undo: bool,
+    },
+    EncoderWrite {
+        layer: usize,
+        encoder_visual_index: usize,
+        encoder_index: u8,
+        direction: u8,
+        old_keycode: u16,
+        keycode: u16,
+        is_undo: bool,
+    },
     Deferred(super::device_deferred_load::DeferredLoadRequest),
 }
 
@@ -37,6 +55,8 @@ enum VialHidOutcome {
     Locked,
     Matrix(Vec<bool>),
     Battery(Option<crate::hid::BatteryHalves>),
+    KeyWritten,
+    EncoderWritten,
     Deferred(super::device_deferred_load::DeferredLoadPayload),
 }
 
@@ -98,6 +118,24 @@ fn run_vial_hid_operation(
             .get_switch_matrix_with_rmk_byte_order(rows, cols, rmk_byte_order)
             .map(VialHidOutcome::Matrix),
         VialHidOperation::BatteryRefresh => hid.get_battery_halves().map(VialHidOutcome::Battery),
+        VialHidOperation::KeyWrite {
+            layer,
+            row,
+            col,
+            keycode,
+            ..
+        } => hid
+            .set_keycode(layer as u8, row, col, keycode)
+            .map(|()| VialHidOutcome::KeyWritten),
+        VialHidOperation::EncoderWrite {
+            layer,
+            encoder_index,
+            direction,
+            keycode,
+            ..
+        } => hid
+            .set_encoder(layer as u8, encoder_index, direction, keycode)
+            .map(|()| VialHidOutcome::EncoderWritten),
         VialHidOperation::Deferred(request) => {
             super::device_deferred_load::run_deferred_load(hid, &request)
                 .map(VialHidOutcome::Deferred)
@@ -320,6 +358,41 @@ impl EntropyApp {
                 }
                 self.schedule_next_battery_refresh();
             }
+            Ok(VialHidOutcome::KeyWritten) => {
+                if let VialHidOperation::KeyWrite {
+                    layer,
+                    key_index,
+                    old_keycode,
+                    keycode,
+                    is_undo,
+                    ..
+                } = result.operation
+                {
+                    self.finish_keycode_write(layer, key_index, old_keycode, keycode, is_undo);
+                }
+            }
+            Ok(VialHidOutcome::EncoderWritten) => {
+                if let VialHidOperation::EncoderWrite {
+                    layer,
+                    encoder_visual_index,
+                    encoder_index,
+                    direction,
+                    old_keycode,
+                    keycode,
+                    is_undo,
+                } = result.operation
+                {
+                    self.finish_encoder_write(
+                        layer,
+                        encoder_visual_index,
+                        encoder_index,
+                        direction,
+                        old_keycode,
+                        keycode,
+                        is_undo,
+                    );
+                }
+            }
             Ok(VialHidOutcome::Deferred(payload)) => {
                 if matches!(
                     &result.operation,
@@ -336,6 +409,107 @@ impl EntropyApp {
 
         self.continue_pending_settings_writes(ctx);
         self.resume_pending_device_connect();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn finish_keycode_write(
+        &mut self,
+        layer: usize,
+        key_index: usize,
+        old_keycode: u16,
+        keycode: u16,
+        is_undo: bool,
+    ) {
+        if let Some(layout) = self.layout.as_mut() {
+            layout.set_keycode(layer, key_index, keycode);
+        }
+        if !is_undo {
+            self.undo_stack.push(UndoAction::Key {
+                layer,
+                key_idx: key_index,
+                old_kc: old_keycode,
+            });
+        }
+        self.refresh_layer_picker_content_flags();
+        self.status_msg = "✓ Saved".into();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::too_many_arguments)]
+    fn finish_encoder_write(
+        &mut self,
+        layer: usize,
+        encoder_visual_index: usize,
+        encoder_index: u8,
+        direction: u8,
+        old_keycode: u16,
+        keycode: u16,
+        is_undo: bool,
+    ) {
+        if let Some(layout) = self.layout.as_mut() {
+            layout.set_encoder_keycode(layer, encoder_visual_index, keycode);
+        }
+        if !is_undo {
+            self.undo_stack.push(UndoAction::Encoder {
+                layer,
+                encoder_visual_idx: encoder_visual_index,
+                old_kc: old_keycode,
+            });
+        }
+        self.status_msg = format!(
+            "Assigned encoder {encoder_index} direction {direction} on layer {}",
+            layer + 1
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn rollback_single_write(&mut self, operation: &VialHidOperation) {
+        match operation {
+            VialHidOperation::KeyWrite {
+                layer,
+                key_index,
+                old_keycode,
+                keycode,
+                is_undo,
+                ..
+            } => {
+                if let Some(layout) = self.layout.as_mut() {
+                    if layout.get_keycode(*layer, *key_index) == *keycode {
+                        layout.set_keycode(*layer, *key_index, *old_keycode);
+                    }
+                }
+                if *is_undo {
+                    self.undo_stack.push(UndoAction::Key {
+                        layer: *layer,
+                        key_idx: *key_index,
+                        old_kc: *keycode,
+                    });
+                }
+                self.refresh_layer_picker_content_flags();
+            }
+            VialHidOperation::EncoderWrite {
+                layer,
+                encoder_visual_index,
+                old_keycode,
+                keycode,
+                is_undo,
+                ..
+            } => {
+                if let Some(layout) = self.layout.as_mut() {
+                    if layout.get_encoder_keycode(*layer, *encoder_visual_index) == *keycode {
+                        layout.set_encoder_keycode(*layer, *encoder_visual_index, *old_keycode);
+                    }
+                }
+                if *is_undo {
+                    self.undo_stack.push(UndoAction::Encoder {
+                        layer: *layer,
+                        encoder_visual_idx: *encoder_visual_index,
+                        old_kc: *keycode,
+                    });
+                }
+            }
+            _ => {}
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -368,6 +542,23 @@ impl EntropyApp {
         error: String,
         disconnected: bool,
     ) {
+        if matches!(
+            &operation,
+            VialHidOperation::KeyWrite { .. } | VialHidOperation::EncoderWrite { .. }
+        ) {
+            self.rollback_single_write(&operation);
+            self.status_msg = match operation {
+                VialHidOperation::EncoderWrite { .. } => {
+                    format!("Set encoder failed: {error}")
+                }
+                _ => format!("Write error: {error}"),
+            };
+            if disconnected && !self.begin_bluetooth_reconnect(error.clone()) {
+                self.clear_connected_keyboard_state(error);
+            }
+            return;
+        }
+
         if disconnected {
             if !self.begin_bluetooth_reconnect(error.clone()) {
                 self.clear_connected_keyboard_state(error);
@@ -390,6 +581,9 @@ impl EntropyApp {
                 log::warn!("Battery refresh failed: {error}");
                 self.next_battery_refresh_at =
                     Some(std::time::Instant::now() + BATTERY_REFRESH_RETRY_INTERVAL);
+            }
+            VialHidOperation::KeyWrite { .. } | VialHidOperation::EncoderWrite { .. } => {
+                unreachable!("single writes are handled before disconnect processing")
             }
             VialHidOperation::Deferred(request) => {
                 log::warn!("Deferred Bluetooth device load failed: {error}");
@@ -416,6 +610,48 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn single_key_layout(keycode: u16) -> KeyboardLayout {
+        KeyboardLayout {
+            name: "Async key write".into(),
+            rows: 1,
+            cols: 1,
+            keys: vec![PhysicalKey {
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+                row: 0,
+                col: 0,
+                label: String::new(),
+                rotation: 0.0,
+                rotation_x: 0.0,
+                rotation_y: 0.0,
+                layout_condition: None,
+            }],
+            encoders: vec![],
+            layers: vec![vec![keycode]],
+            encoder_layers: vec![vec![]],
+            layer_names: vec!["Layer 0".into()],
+            custom_keycodes: vec![],
+            layout_options: vec![],
+            live_features: Default::default(),
+            supports_rgb: false,
+            lighting_mode: None,
+            firmware: FirmwareProtocol::Vial,
+        }
+    }
+
+    fn poll_until_vial_hid_idle(app: &mut EntropyApp, ctx: &egui::Context) {
+        for _ in 0..100 {
+            app.poll_vial_hid_task(ctx);
+            if !app.vial_hid_task_active() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("Vial HID task did not finish");
+    }
 
     #[test]
     fn unlock_start_uses_status_then_start_commands() {
@@ -481,5 +717,92 @@ mod tests {
         assert_eq!(requests.len(), 2);
         assert_eq!(&requests[0][..3], &[0x08, 0xE8, 0x01]);
         assert_eq!(&requests[1][..3], &[0x08, 0xE8, 0x01]);
+    }
+
+    #[test]
+    fn key_and_encoder_writes_use_the_serialized_vial_transport() {
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+
+        let key_outcome = run_vial_hid_operation(
+            &hid,
+            VialHidOperation::KeyWrite {
+                layer: 0,
+                key_index: 0,
+                row: 2,
+                col: 3,
+                old_keycode: 0x0004,
+                keycode: 0,
+                is_undo: false,
+            },
+        )
+        .unwrap();
+        let encoder_outcome = run_vial_hid_operation(
+            &hid,
+            VialHidOperation::EncoderWrite {
+                layer: 1,
+                encoder_visual_index: 0,
+                encoder_index: 2,
+                direction: 1,
+                old_keycode: 0,
+                keycode: 0x0005,
+                is_undo: false,
+            },
+        )
+        .unwrap();
+
+        assert!(matches!(key_outcome, VialHidOutcome::KeyWritten));
+        assert!(matches!(encoder_outcome, VialHidOutcome::EncoderWritten));
+        let requests = recorder.requests();
+        assert_eq!(&requests[0][..6], &[0x05, 0, 2, 3, 0, 0]);
+        assert_eq!(&requests[1][..4], &[0x04, 0, 2, 3]);
+        assert_eq!(&requests[2][..7], &[0xFE, 0x04, 1, 2, 1, 0, 5]);
+    }
+
+    #[test]
+    fn assigning_a_key_updates_ui_before_the_hid_round_trip_finishes() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid);
+        app.layout = Some(single_key_layout(0x0004));
+
+        assert!(app.assign_keycode(&ctx, 0, 0, 0));
+        assert!(app.vial_hid_task_active());
+        assert_eq!(app.layout.as_ref().unwrap().get_keycode(0, 0), 0);
+        assert!(app.undo_stack.is_empty());
+
+        poll_until_vial_hid_idle(&mut app, &ctx);
+
+        assert_eq!(app.layout.as_ref().unwrap().get_keycode(0, 0), 0);
+        assert!(matches!(
+            app.undo_stack.last(),
+            Some(UndoAction::Key {
+                layer: 0,
+                key_idx: 0,
+                old_kc: 0x0004,
+            })
+        ));
+        assert_eq!(recorder.requests().len(), 2);
+    }
+
+    #[test]
+    fn failed_background_key_write_rolls_back_the_optimistic_value() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid, _recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid);
+        app.layout = Some(single_key_layout(0x0004));
+
+        assert!(app.assign_keycode(&ctx, 0, 0, 0x0005));
+        assert_eq!(app.layout.as_ref().unwrap().get_keycode(0, 0), 0x0005);
+
+        poll_until_vial_hid_idle(&mut app, &ctx);
+
+        assert_eq!(app.layout.as_ref().unwrap().get_keycode(0, 0), 0x0004);
+        assert!(app.undo_stack.is_empty());
+        assert!(app.status_msg.starts_with("Write error:"));
+        assert!(app.hid_device.is_some());
     }
 }

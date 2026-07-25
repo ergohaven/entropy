@@ -20,7 +20,13 @@ const REPORT_CHARACTERISTIC_UUID: &str = "2a4d";
 const BLUEZ_METHOD_TIMEOUT: Duration = Duration::from_secs(5);
 const BLUEZ_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const BLUEZ_REPLY_TIMEOUT: Duration = Duration::from_millis(2_500);
-const BLUEZ_REPLY_POLL_INTERVAL: Duration = Duration::from_millis(40);
+// RMK requests a 7.5 ms connection interval after pairing. BlueZ does not
+// reliably forward the input notification to every desktop stack, so the
+// direct-GATT fallback also reads the characteristic. Waiting 40 ms before
+// every fallback read multiplied a single BLE round trip across every startup
+// and keymap request. One connection interval is enough; a response that is
+// not ready yet is rejected by `response_matches` and retried safely.
+const BLUEZ_REPLY_POLL_INTERVAL: Duration = Duration::from_millis(8);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CharacteristicSummary {

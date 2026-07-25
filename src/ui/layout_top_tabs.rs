@@ -215,7 +215,7 @@ impl EntropyApp {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
         if undo_resp.clicked() && undo_enabled {
-            self.undo();
+            self.undo(ctx);
             ctx.request_repaint();
         }
         let undo_color = if !undo_enabled {
