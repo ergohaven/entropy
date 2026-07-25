@@ -71,6 +71,14 @@ fn hid_lifecycle_writes_available(hid_write_task_active: bool) -> bool {
     !hid_write_task_active
 }
 
+fn should_disable_layout_background(
+    bluetooth_reconnecting: bool,
+    unlock_open: bool,
+    unlock_polling: bool,
+) -> bool {
+    bluetooth_reconnecting || unlock_open || unlock_polling
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn connection_replaces_layout_canvas(connect_state: &ConnectState) -> bool {
     matches!(
@@ -474,6 +482,19 @@ mod tests {
             )),
         };
         assert!(!connection_replaces_layout_canvas(&reconnecting_loading));
+    }
+
+    #[test]
+    fn vial_unlock_disables_layout_background_interactions() {
+        assert!(should_disable_layout_background(false, true, false));
+        assert!(should_disable_layout_background(false, false, true));
+        assert!(should_disable_layout_background(false, true, true));
+        assert!(!should_disable_layout_background(false, false, false));
+    }
+
+    #[test]
+    fn bluetooth_reconnect_keeps_layout_background_disabled() {
+        assert!(should_disable_layout_background(true, false, false));
     }
 
     #[test]
@@ -1373,13 +1394,20 @@ impl eframe::App for EntropyApp {
             }
 
             if let Some(layout) = self.layout.clone() {
-                #[cfg(not(target_arch = "wasm32"))]
-                if self.bluetooth_reconnect_active() {
+                let disable_layout_background = should_disable_layout_background(
+                    reconnecting_with_layout,
+                    self.unlock_open,
+                    self.vial_unlock_polling,
+                );
+                if disable_layout_background {
                     ui.scope(|ui| {
                         ui.disable();
                         self.draw_layout(ui, &layout, ctx);
                     });
-                    self.draw_bluetooth_reconnect_status(ctx);
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if reconnecting_with_layout {
+                        self.draw_bluetooth_reconnect_status(ctx);
+                    }
                     return;
                 }
                 self.draw_layout(ui, &layout, ctx);
