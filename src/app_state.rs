@@ -3664,6 +3664,10 @@ pub struct EntropyApp {
     /// Background whole-layer HID write. Owns the device handle while active.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) layer_write_task: Option<LayerWriteTask>,
+    /// Layer mutation waiting for a low-priority Bluetooth layer read to release
+    /// the shared HID handle.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) pending_layer_write: Option<PendingLayerWrite>,
     /// Background combo HID write. Owns the device handle while active.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) combo_write_task: Option<ComboWriteTask>,

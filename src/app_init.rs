@@ -32,6 +32,8 @@ impl EntropyApp {
             hid_device: None,
             #[cfg(not(target_arch = "wasm32"))]
             layer_write_task: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            pending_layer_write: None,
             qmk_settings_write_queue: QmkSettingsWriteQueue::default(),
             #[cfg(not(target_arch = "wasm32"))]
             combo_write_task: None,

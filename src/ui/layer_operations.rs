@@ -401,6 +401,14 @@ pub(super) struct LayerWriteTask {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+pub(super) struct PendingLayerWrite {
+    layer: usize,
+    desired: LayerSnapshot,
+    action_key: &'static str,
+    undo_behavior: LayerUndoBehavior,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 struct LayerWriteFallback {
     layer: usize,
     desired: LayerSnapshot,
@@ -600,7 +608,9 @@ impl EntropyApp {
             .ok_or(LayerOperationError::MissingLayer)
             .and_then(|layout| mirror_key_mapping(&layout.keys));
         #[cfg(not(target_arch = "wasm32"))]
-        let layer_mutation_available = !self.hid_write_task_active();
+        let layer_mutation_available = self.pending_layer_write.is_none()
+            && !self.pending_layout_undo
+            && !self.hid_user_action_busy();
         #[cfg(target_arch = "wasm32")]
         let layer_mutation_available = true;
         let mut requested_action = None;
@@ -779,6 +789,17 @@ impl EntropyApp {
         action_key: &'static str,
         undo_behavior: LayerUndoBehavior,
     ) {
+        if self.vial_hid_background_layer_active() {
+            self.pending_layer_write = Some(PendingLayerWrite {
+                layer,
+                desired,
+                action_key,
+                undo_behavior,
+            });
+            self.deferred_device_load.defer_background_for_user_input();
+            return;
+        }
+
         if self.hid_write_task_active() {
             if let LayerUndoBehavior::RetryDesired { requires_firmware } = undo_behavior {
                 self.undo_stack.push(UndoAction::Layer {
@@ -957,6 +978,27 @@ impl EntropyApp {
         });
         self.layer_write_task = Some(LayerWriteTask { receiver, fallback });
         self.status_msg = saving_status;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn maybe_start_pending_layer_write(&mut self) {
+        if self.pending_layer_write.is_none()
+            || self.vial_hid_background_layer_active()
+            || self.hid_user_action_busy()
+        {
+            return;
+        }
+
+        let pending = self
+            .pending_layer_write
+            .take()
+            .expect("pending layer write checked above");
+        self.apply_layer_snapshot_with_behavior(
+            pending.layer,
+            pending.desired,
+            pending.action_key,
+            pending.undo_behavior,
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]

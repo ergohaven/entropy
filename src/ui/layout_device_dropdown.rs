@@ -89,7 +89,7 @@ impl EntropyApp {
         use crate::i18n::Key as TrKey;
 
         if let Some(device_rect) = device_tab_rect {
-            let dropdown_id = ui.make_persistent_id("device_dropdown_open");
+            let dropdown_id = device_dropdown_open_id();
             let was_open = ui
                 .ctx()
                 .data(|d| d.get_temp::<bool>(dropdown_id))
@@ -168,8 +168,7 @@ impl EntropyApp {
                 layer_operations_submenu_width,
                 LAYER_OPERATIONS_SUBMENU_HEIGHT,
             );
-            let layer_operations_submenu_id =
-                ui.make_persistent_id("device_layer_operations_submenu_open");
+            let layer_operations_submenu_id = device_layer_operations_submenu_open_id();
             let layer_operations_row_rect_id =
                 ui.make_persistent_id("device_layer_operations_row_rect");
             let layer_operations_submenu_rect_id =
@@ -238,7 +237,7 @@ impl EntropyApp {
                                     {
                                         let is_selected = self.selected_device == Some(i);
                                         #[cfg(not(target_arch = "wasm32"))]
-                                        let switch_enabled = !self.hid_write_lifecycle_busy();
+                                        let switch_enabled = !self.hid_user_action_busy();
                                         #[cfg(target_arch = "wasm32")]
                                         let switch_enabled = true;
                                         let cached_display_name = self

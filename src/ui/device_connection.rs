@@ -115,6 +115,7 @@ impl EntropyApp {
         self.combo_term_dirty = false;
         self.undo_stack.clear();
         self.pending_layout_undo = false;
+        self.pending_layer_write = None;
         self.keycode_picker.open = false;
         self.selected_key = None;
         self.selected_encoder = None;
@@ -197,6 +198,7 @@ impl EntropyApp {
         self.layer_count = 0;
         self.qmk_hid_hosts.clear();
         self.layer_write_task = None;
+        self.pending_layer_write = None;
         self.combo_write_task = None;
         self.settings_write_task = None;
         self.vial_hid_task = None;

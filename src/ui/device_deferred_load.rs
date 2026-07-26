@@ -1583,6 +1583,15 @@ mod tests {
     }
 
     #[test]
+    fn open_top_dropdown_pauses_automatic_background_layers() {
+        let ctx = egui::Context::default();
+        let mut app = staged_app();
+        ctx.data_mut(|d| d.insert_temp(device_dropdown_open_id(), true));
+
+        assert!(!app.automatic_background_layer_load_allowed(&ctx));
+    }
+
+    #[test]
     fn selected_unloaded_layer_preempts_the_automatic_background_order() {
         let mut app = staged_app();
         app.selected_layer = 3;

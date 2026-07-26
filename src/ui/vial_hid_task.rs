@@ -891,6 +891,80 @@ mod tests {
     }
 
     #[test]
+    fn background_layer_queues_layer_operation_and_runs_it_before_more_loading() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        let context = background_layer_context();
+        let mut layout = single_key_layout(0x0004);
+        layout.layers.push(vec![0]);
+        layout.layer_names.push("Layer 1".into());
+        layout.encoder_layers.push(Vec::new());
+        app.layout = Some(layout);
+        app.deferred_device_load = DeferredDeviceLoadState::staged((*context).clone());
+        app.hid_device = Some(hid);
+
+        assert_eq!(
+            app.start_vial_hid_operation(
+                &ctx,
+                VialHidOperation::Deferred(
+                    super::device_deferred_load::DeferredLoadRequest::BackgroundLayerStep {
+                        layer: 1,
+                        step: BackgroundLayerStep::Keymap { local_offset: 0 },
+                        context,
+                    },
+                ),
+            ),
+            VialHidTaskStart::Started
+        );
+        assert!(app.vial_hid_background_layer_active());
+        assert!(!app.hid_user_action_busy());
+
+        app.apply_layer_snapshot(
+            0,
+            LayerSnapshot {
+                keycodes: vec![0],
+                encoder_keycodes: Vec::new(),
+            },
+            "layer_actions.fill_none",
+        );
+
+        assert!(app.pending_layer_write.is_some());
+        assert_eq!(app.layout.as_ref().unwrap().get_keycode(0, 0), 0x0004);
+
+        for _ in 0..100 {
+            app.poll_vial_hid_task(&ctx);
+            app.maybe_start_pending_layer_write();
+            app.poll_layer_write(&ctx);
+            if !app.vial_hid_task_active()
+                && app.pending_layer_write.is_none()
+                && app.layer_write_task.is_none()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        assert!(app.pending_layer_write.is_none());
+        assert!(app.layer_write_task.is_none());
+        assert_eq!(app.layout.as_ref().unwrap().get_keycode(0, 0), 0);
+        assert!(matches!(
+            app.undo_stack.last(),
+            Some(UndoAction::Layer {
+                layer: 0,
+                old: LayerSnapshot { keycodes, .. },
+                requires_firmware: true,
+            }) if keycodes == &[0x0004]
+        ));
+        let requests = recorder.requests();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0][0], 0x12);
+        assert_eq!(requests[1][0], 0x05);
+        assert_eq!(requests[2][0], 0x04);
+    }
+
+    #[test]
     fn config_writes_wait_for_background_layer_and_keep_transport_available() {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());

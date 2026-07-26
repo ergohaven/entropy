@@ -52,7 +52,7 @@ impl EntropyApp {
         use crate::i18n::Key as TrKey;
 
         if let Some(settings_rect) = settings_tab_rect {
-            let dropdown_id = ui.make_persistent_id("settings_dropdown_open");
+            let dropdown_id = settings_dropdown_open_id();
             let was_open = ui
                 .ctx()
                 .data(|d| d.get_temp::<bool>(dropdown_id))

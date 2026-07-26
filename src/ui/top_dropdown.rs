@@ -1,5 +1,21 @@
 use super::*;
 
+pub(super) fn device_dropdown_open_id() -> egui::Id {
+    egui::Id::new("device_dropdown_open")
+}
+
+pub(super) fn device_layer_operations_submenu_open_id() -> egui::Id {
+    egui::Id::new("device_layer_operations_submenu_open")
+}
+
+pub(super) fn advanced_dropdown_open_id() -> egui::Id {
+    egui::Id::new("advanced_dropdown_open")
+}
+
+pub(super) fn settings_dropdown_open_id() -> egui::Id {
+    egui::Id::new("settings_dropdown_open")
+}
+
 pub(super) fn top_dropdown_frame(dark: bool) -> egui::Frame {
     egui::Frame::new()
         .fill(app_surface_fill(dark))
@@ -191,21 +207,39 @@ pub(super) fn adaptive_top_dropdown_width<'a>(
 impl EntropyApp {
     pub(super) fn close_top_dropdowns(&self, ctx: &egui::Context) {
         ctx.data_mut(|d| {
-            d.insert_temp(egui::Id::new("device_dropdown_open"), false);
-            d.insert_temp(egui::Id::new("device_layer_operations_submenu_open"), false);
-            d.insert_temp(egui::Id::new("advanced_dropdown_open"), false);
-            d.insert_temp(egui::Id::new("settings_dropdown_open"), false);
+            d.insert_temp(device_dropdown_open_id(), false);
+            d.insert_temp(device_layer_operations_submenu_open_id(), false);
+            d.insert_temp(advanced_dropdown_open_id(), false);
+            d.insert_temp(settings_dropdown_open_id(), false);
         });
     }
 
     pub(super) fn top_dropdown_open(&self, ctx: &egui::Context) -> bool {
         ctx.data(|d| {
-            d.get_temp::<bool>(egui::Id::new("device_dropdown_open"))
+            d.get_temp::<bool>(device_dropdown_open_id())
                 .unwrap_or(false)
-                || d.get_temp::<bool>(egui::Id::new("advanced_dropdown_open"))
+                || d.get_temp::<bool>(advanced_dropdown_open_id())
                     .unwrap_or(false)
-                || d.get_temp::<bool>(egui::Id::new("settings_dropdown_open"))
+                || d.get_temp::<bool>(settings_dropdown_open_id())
                     .unwrap_or(false)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_dropdown_state_is_visible_to_background_lifecycle() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let app = EntropyApp::new(&creation_context);
+
+        ctx.data_mut(|d| d.insert_temp(device_dropdown_open_id(), true));
+        assert!(app.top_dropdown_open(&ctx));
+
+        app.close_top_dropdowns(&ctx);
+        assert!(!app.top_dropdown_open(&ctx));
     }
 }
