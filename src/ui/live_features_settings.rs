@@ -25,56 +25,8 @@ impl EntropyApp {
         (!mode.is_empty()).then_some((selected.path.clone(), mode))
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    fn selected_live_features_path_and_active_mode(
-        &self,
-    ) -> Option<(String, crate::qmk_hid_host::HostDataMode)> {
-        let selected = self
-            .selected_device
-            .and_then(|idx| self.device_manager.devices().get(idx))?;
-        if selected.firmware != FirmwareProtocol::Vial {
-            return None;
-        }
-
-        let mut mode = crate::qmk_hid_host::HostDataMode::default();
-        if let Some(layout) = self.layout.as_ref() {
-            mode = Self::qmk_hid_host_mode_for(layout, self.layout_options_value);
-        }
-        if Self::device_uses_automatic_display_host_data(selected) {
-            mode.time = true;
-            mode.volume = true;
-            mode.media = true;
-        }
-        (!mode.is_empty()).then_some((selected.path.clone(), mode))
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn selected_live_features_path_and_mode(
-        &self,
-    ) -> Option<(String, crate::qmk_hid_host::HostDataMode)> {
-        let (path, mut mode) = self.selected_live_features_path_and_active_mode()?;
-        if !self.app_settings.layout_sync_enabled {
-            mode.layout = false;
-        }
-        (!mode.is_empty()).then_some((path, mode))
-    }
-
     #[cfg(target_arch = "wasm32")]
     fn selected_live_features_path_and_supported_mode(
-        &self,
-    ) -> Option<(String, crate::qmk_hid_host::HostDataMode)> {
-        None
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn selected_live_features_path_and_mode(
-        &self,
-    ) -> Option<(String, crate::qmk_hid_host::HostDataMode)> {
-        None
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn selected_live_features_path_and_active_mode(
         &self,
     ) -> Option<(String, crate::qmk_hid_host::HostDataMode)> {
         None
@@ -191,20 +143,6 @@ impl EntropyApp {
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
         let content_width = metrics.settings_content_width();
         let supported_path_and_mode = self.selected_live_features_path_and_supported_mode();
-        let path_and_mode = self.selected_live_features_path_and_mode();
-        let bridge_active = {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                path_and_mode
-                    .as_ref()
-                    .map(|(path, _)| self.qmk_hid_hosts.contains_key(path))
-                    .unwrap_or(false)
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                false
-            }
-        };
 
         crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
@@ -241,14 +179,6 @@ impl EntropyApp {
                 };
 
                 ui.set_width(content_width);
-                let bridge_requested = path_and_mode.is_some();
-                let (status_key, status_ok) = if !bridge_requested {
-                    ("live_features.inactive", true)
-                } else if bridge_active {
-                    ("live_features.active", true)
-                } else {
-                    ("live_features.starting", false)
-                };
                 Self::draw_live_feature_row(
                     ui,
                     metrics,
@@ -256,8 +186,11 @@ impl EntropyApp {
                         self.app_settings.language,
                         "live_features.entropy_background",
                     ),
-                    crate::i18n::tr_catalog(self.app_settings.language, status_key),
-                    status_ok,
+                    crate::i18n::tr_catalog(
+                        self.app_settings.language,
+                        "live_features.required",
+                    ),
+                    true,
                     Some(crate::i18n::tr_catalog(
                         self.app_settings.language,
                         "live_features.keep_entropy_running_in_the_background_for_live_firmware_data",
@@ -442,7 +375,7 @@ mod tests {
         assert!(text.iter().any(|value| value == "Media info"));
         assert!(text.iter().any(|value| value == "Layout sync"));
         assert!(text.iter().any(|value| value == "Entropy background"));
-        assert!(text.iter().any(|value| value == "inactive"));
+        assert!(text.iter().any(|value| value == "required"));
         assert!(!text
             .iter()
             .any(|value| value == "Live Features are not active for this device"));

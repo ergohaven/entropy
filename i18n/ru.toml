@@ -1381,7 +1381,7 @@ ready = "готово"
 needs_setup = "нужна настройка"
 active = "активно"
 starting = "запуск"
-inactive = "неактивно"
+required = "требуется"
 
 [dynamic_tooltips]
 left = "левый "
