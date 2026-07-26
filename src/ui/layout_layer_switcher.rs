@@ -309,8 +309,6 @@ impl EntropyApp {
                     self.editing_layer_text = raw_name.clone();
                 }
 
-                self.draw_layer_actions_menu(ui, egui::pos2(right_center.x + 42.0, arrow_y));
-
                 // Paint
                 let dis = if self.dark_mode {
                     Color32::from_gray(60)

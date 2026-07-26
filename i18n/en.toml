@@ -24,6 +24,7 @@ change_tap_key = "Ctrl+right-click to change tap key"
 rename_layer = "Click to rename layer"
 
 [layer_actions]
+menu = "Layer operations"
 menu_tooltip = "Layer actions"
 copy = "Copy layer"
 copy_tooltip = "Copy all keys and compatible encoder assignments"

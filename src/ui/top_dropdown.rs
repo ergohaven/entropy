@@ -15,7 +15,14 @@ pub(super) fn top_dropdown_item(
     enabled: bool,
     selected: bool,
 ) -> egui::Response {
-    top_dropdown_item_with_indicator(ui, width, label, enabled, selected, false)
+    top_dropdown_item_with_accessory(
+        ui,
+        width,
+        label,
+        enabled,
+        selected,
+        TopDropdownItemAccessory::None,
+    )
 }
 
 pub(super) fn top_dropdown_item_with_indicator(
@@ -25,6 +32,52 @@ pub(super) fn top_dropdown_item_with_indicator(
     enabled: bool,
     selected: bool,
     show_indicator: bool,
+) -> egui::Response {
+    top_dropdown_item_with_accessory(
+        ui,
+        width,
+        label,
+        enabled,
+        selected,
+        if show_indicator {
+            TopDropdownItemAccessory::Indicator
+        } else {
+            TopDropdownItemAccessory::None
+        },
+    )
+}
+
+pub(super) fn top_dropdown_submenu_item(
+    ui: &mut egui::Ui,
+    width: f32,
+    label: &str,
+    enabled: bool,
+    submenu_open: bool,
+) -> egui::Response {
+    top_dropdown_item_with_accessory(
+        ui,
+        width,
+        label,
+        enabled,
+        submenu_open,
+        TopDropdownItemAccessory::Submenu,
+    )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TopDropdownItemAccessory {
+    None,
+    Indicator,
+    Submenu,
+}
+
+fn top_dropdown_item_with_accessory(
+    ui: &mut egui::Ui,
+    width: f32,
+    label: &str,
+    enabled: bool,
+    selected: bool,
+    accessory: TopDropdownItemAccessory,
 ) -> egui::Response {
     let dark = ui.visuals().dark_mode;
     let sense = if enabled {
@@ -51,7 +104,8 @@ pub(super) fn top_dropdown_item_with_indicator(
         } else {
             ui.visuals().text_color()
         };
-        let text_clip = if selected {
+        let reserve_right = selected || accessory == TopDropdownItemAccessory::Submenu;
+        let text_clip = if reserve_right {
             egui::Rect::from_min_max(rect.min, egui::pos2(rect.right() - 24.0, rect.bottom()))
         } else {
             rect
@@ -64,7 +118,7 @@ pub(super) fn top_dropdown_item_with_indicator(
             text_color,
         );
 
-        if show_indicator {
+        if accessory == TopDropdownItemAccessory::Indicator {
             let label_width = top_menu_text_width(ui, label, 13.0);
             let max_dot_x = rect.right() - if selected { 28.0 } else { 10.0 };
             let dot_x = (rect.left() + 10.0 + label_width + 8.0).min(max_dot_x);
@@ -72,7 +126,21 @@ pub(super) fn top_dropdown_item_with_indicator(
                 .circle_filled(egui::pos2(dot_x, rect.center().y), 2.5, app_accent());
         }
 
-        if selected {
+        if accessory == TopDropdownItemAccessory::Submenu {
+            ui.painter().text(
+                egui::pos2(rect.right() - 10.0, rect.center().y - 1.0),
+                egui::Align2::RIGHT_CENTER,
+                "›",
+                egui::FontId::proportional(18.0),
+                if !enabled {
+                    app_muted_text(dark)
+                } else if selected || hovered {
+                    app_accent()
+                } else {
+                    ui.visuals().text_color()
+                },
+            );
+        } else if selected {
             ui.painter().circle_filled(
                 egui::pos2(rect.right() - 12.0, rect.center().y),
                 2.5,
@@ -124,6 +192,7 @@ impl EntropyApp {
     pub(super) fn close_top_dropdowns(&self, ctx: &egui::Context) {
         ctx.data_mut(|d| {
             d.insert_temp(egui::Id::new("device_dropdown_open"), false);
+            d.insert_temp(egui::Id::new("device_layer_operations_submenu_open"), false);
             d.insert_temp(egui::Id::new("advanced_dropdown_open"), false);
             d.insert_temp(egui::Id::new("settings_dropdown_open"), false);
         });

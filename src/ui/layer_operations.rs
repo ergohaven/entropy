@@ -359,6 +359,18 @@ enum LayerUiAction {
     FillInherit,
 }
 
+pub(super) const LAYER_OPERATIONS_SUBMENU_HEIGHT: f32 = 174.0;
+
+fn layer_operation_menu_labels(language: crate::i18n::Language) -> [String; 5] {
+    [
+        crate::i18n::tr_catalog(language, "layer_actions.copy").to_owned(),
+        crate::i18n::tr_catalog(language, "layer_actions.paste").to_owned(),
+        crate::i18n::tr_catalog(language, "layer_actions.mirror").to_owned(),
+        crate::i18n::tr_catalog(language, "layer_actions.fill_none").to_owned(),
+        crate::i18n::tr_catalog(language, "layer_actions.fill_inherit").to_owned(),
+    ]
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 type KeyChange = (usize, u8, u8, u16);
 
@@ -567,64 +579,20 @@ impl EntropyApp {
         layer_snapshot_for_paste(copied, layout, self.selected_layer)
     }
 
-    pub(super) fn draw_layer_actions_menu(&mut self, ui: &mut egui::Ui, center: egui::Pos2) {
+    pub(super) fn layer_operations_submenu_width(&self, ui: &egui::Ui) -> f32 {
         let language = self.app_settings.language;
-        let popup_id = ui.make_persistent_id("layout_layer_actions_popup");
-        let button_rect = egui::Rect::from_center_size(center, egui::vec2(34.0, 36.0));
-        let button_response = ui.interact(
-            button_rect,
-            ui.make_persistent_id("layout_layer_actions_button"),
-            Sense::click(),
-        );
-        if button_response.clicked() {
-            egui::Popup::toggle_id(ui.ctx(), popup_id);
-        }
-        if button_response.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-        let popup_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
-        if button_response.hovered() || popup_open {
-            ui.painter()
-                .rect_filled(button_rect, 8.0, app_hover_fill(self.dark_mode));
-        }
-        ui.painter().text(
-            button_rect.center() + egui::vec2(0.0, -3.0),
-            egui::Align2::CENTER_CENTER,
-            "⋯",
-            FontId::proportional(24.0),
-            if button_response.hovered() || popup_open {
-                app_accent()
-            } else {
-                app_muted_text(self.dark_mode)
-            },
-        );
-        let button_response = button_response.on_hover_text(crate::i18n::tr_catalog(
-            language,
-            "layer_actions.menu_tooltip",
-        ));
+        let labels = layer_operation_menu_labels(language);
+        adaptive_top_dropdown_width(ui, labels.iter().map(String::as_str), 210.0)
+    }
 
-        if !popup_open {
-            return;
-        }
-
-        let copy_label = crate::i18n::tr_catalog(language, "layer_actions.copy").to_owned();
-        let paste_label = crate::i18n::tr_catalog(language, "layer_actions.paste").to_owned();
-        let mirror_label = crate::i18n::tr_catalog(language, "layer_actions.mirror").to_owned();
-        let fill_none_label =
-            crate::i18n::tr_catalog(language, "layer_actions.fill_none").to_owned();
-        let fill_inherit_label =
-            crate::i18n::tr_catalog(language, "layer_actions.fill_inherit").to_owned();
-        let menu_width = adaptive_top_dropdown_width(
-            ui,
-            [
-                copy_label.as_str(),
-                paste_label.as_str(),
-                mirror_label.as_str(),
-                fill_none_label.as_str(),
-                fill_inherit_label.as_str(),
-            ],
-            210.0,
-        );
+    pub(super) fn draw_layer_operations_submenu(
+        &mut self,
+        ui: &mut egui::Ui,
+        menu_width: f32,
+    ) -> bool {
+        let language = self.app_settings.language;
+        let [copy_label, paste_label, mirror_label, fill_none_label, fill_inherit_label] =
+            layer_operation_menu_labels(language);
         let paste_snapshot = self.layer_paste_snapshot();
         let mirror_mapping = self
             .layout
@@ -637,108 +605,93 @@ impl EntropyApp {
         let layer_mutation_available = true;
         let mut requested_action = None;
 
-        ui.style_mut().visuals.window_stroke =
-            crate::ui_style::modal_outline_stroke(self.dark_mode);
-        ui.style_mut().visuals.window_fill = app_surface_fill(self.dark_mode);
-        crate::ui_style::popup_below_widget(
+        ui.set_min_width(menu_width);
+        ui.set_max_width(menu_width);
+        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+
+        let copy_response = top_dropdown_item(ui, menu_width, &copy_label, true, false);
+        let copy_clicked = copy_response.clicked();
+        copy_response.on_hover_text(crate::i18n::tr_catalog(
+            language,
+            "layer_actions.copy_tooltip",
+        ));
+        if copy_clicked {
+            requested_action = Some(LayerUiAction::Copy);
+        }
+
+        let paste_enabled = layer_mutation_available && paste_snapshot.is_ok();
+        let paste_response = top_dropdown_item(ui, menu_width, &paste_label, paste_enabled, false);
+        let paste_clicked = paste_response.clicked();
+        let paste_tooltip = if self.layer_clipboard.is_none() {
+            crate::i18n::tr_catalog(language, "layer_actions.clipboard_empty").to_owned()
+        } else if let Err(error) = paste_snapshot.as_ref() {
+            self.layer_operation_error_message(error.clone())
+        } else {
+            crate::i18n::tr_catalog(language, "layer_actions.paste_tooltip").to_owned()
+        };
+        paste_response.on_hover_text(paste_tooltip);
+        if paste_clicked {
+            requested_action = paste_snapshot
+                .as_ref()
+                .ok()
+                .cloned()
+                .map(LayerUiAction::Paste);
+        }
+
+        ui.add_space(6.0);
+
+        let mirror_enabled = layer_mutation_available && mirror_mapping.is_ok();
+        let mirror_response =
+            top_dropdown_item(ui, menu_width, &mirror_label, mirror_enabled, false);
+        let mirror_clicked = mirror_response.clicked();
+        let mirror_tooltip = if let Err(error) = mirror_mapping.as_ref() {
+            self.layer_operation_error_message(error.clone())
+        } else {
+            crate::i18n::tr_catalog(language, "layer_actions.mirror_tooltip").to_owned()
+        };
+        mirror_response.on_hover_text(mirror_tooltip);
+        if mirror_clicked {
+            requested_action = mirror_mapping
+                .as_ref()
+                .ok()
+                .map(|mapping| LayerUiAction::Mirror(mapping.clone()));
+        }
+
+        ui.add_space(6.0);
+
+        let none_response = top_dropdown_item(
             ui,
-            popup_id,
-            &button_response,
-            egui::PopupCloseBehavior::CloseOnClickOutside,
-            |ui| {
-                ui.set_min_width(menu_width);
-                ui.set_max_width(menu_width);
-                ui.spacing_mut().item_spacing = egui::vec2(0.0, 2.0);
-
-                let copy_response = top_dropdown_item(ui, menu_width, &copy_label, true, false);
-                let copy_clicked = copy_response.clicked();
-                copy_response.on_hover_text(crate::i18n::tr_catalog(
-                    language,
-                    "layer_actions.copy_tooltip",
-                ));
-                if copy_clicked {
-                    requested_action = Some(LayerUiAction::Copy);
-                }
-
-                let paste_enabled = layer_mutation_available && paste_snapshot.is_ok();
-                let paste_response =
-                    top_dropdown_item(ui, menu_width, &paste_label, paste_enabled, false);
-                let paste_clicked = paste_response.clicked();
-                let paste_tooltip = if self.layer_clipboard.is_none() {
-                    crate::i18n::tr_catalog(language, "layer_actions.clipboard_empty").to_owned()
-                } else if let Err(error) = paste_snapshot.as_ref() {
-                    self.layer_operation_error_message(error.clone())
-                } else {
-                    crate::i18n::tr_catalog(language, "layer_actions.paste_tooltip").to_owned()
-                };
-                paste_response.on_hover_text(paste_tooltip);
-                if paste_clicked {
-                    requested_action = paste_snapshot
-                        .as_ref()
-                        .ok()
-                        .cloned()
-                        .map(LayerUiAction::Paste);
-                }
-
-                ui.separator();
-
-                let mirror_enabled = layer_mutation_available && mirror_mapping.is_ok();
-                let mirror_response =
-                    top_dropdown_item(ui, menu_width, &mirror_label, mirror_enabled, false);
-                let mirror_clicked = mirror_response.clicked();
-                let mirror_tooltip = if let Err(error) = mirror_mapping.as_ref() {
-                    self.layer_operation_error_message(error.clone())
-                } else {
-                    crate::i18n::tr_catalog(language, "layer_actions.mirror_tooltip").to_owned()
-                };
-                mirror_response.on_hover_text(mirror_tooltip);
-                if mirror_clicked {
-                    requested_action = mirror_mapping
-                        .as_ref()
-                        .ok()
-                        .map(|mapping| LayerUiAction::Mirror(mapping.clone()));
-                }
-
-                ui.separator();
-
-                let none_response = top_dropdown_item(
-                    ui,
-                    menu_width,
-                    &fill_none_label,
-                    layer_mutation_available,
-                    false,
-                );
-                let none_clicked = none_response.clicked();
-                none_response.on_hover_text(crate::i18n::tr_catalog(
-                    language,
-                    "layer_actions.fill_none_tooltip",
-                ));
-                if none_clicked {
-                    requested_action = Some(LayerUiAction::FillNone);
-                }
-
-                let inherit_response = top_dropdown_item(
-                    ui,
-                    menu_width,
-                    &fill_inherit_label,
-                    layer_mutation_available,
-                    false,
-                );
-                let inherit_clicked = inherit_response.clicked();
-                inherit_response.on_hover_text(crate::i18n::tr_catalog(
-                    language,
-                    "layer_actions.fill_inherit_tooltip",
-                ));
-                if inherit_clicked {
-                    requested_action = Some(LayerUiAction::FillInherit);
-                }
-
-                if requested_action.is_some() {
-                    egui::Popup::close_all(ui.ctx());
-                }
-            },
+            menu_width,
+            &fill_none_label,
+            layer_mutation_available,
+            false,
         );
+        let none_clicked = none_response.clicked();
+        none_response.on_hover_text(crate::i18n::tr_catalog(
+            language,
+            "layer_actions.fill_none_tooltip",
+        ));
+        if none_clicked {
+            requested_action = Some(LayerUiAction::FillNone);
+        }
 
+        let inherit_response = top_dropdown_item(
+            ui,
+            menu_width,
+            &fill_inherit_label,
+            layer_mutation_available,
+            false,
+        );
+        let inherit_clicked = inherit_response.clicked();
+        inherit_response.on_hover_text(crate::i18n::tr_catalog(
+            language,
+            "layer_actions.fill_inherit_tooltip",
+        ));
+        if inherit_clicked {
+            requested_action = Some(LayerUiAction::FillInherit);
+        }
+
+        let action_requested = requested_action.is_some();
         match requested_action {
             Some(LayerUiAction::Copy) => self.copy_selected_layer(),
             Some(LayerUiAction::Paste(desired)) => self.paste_selected_layer(desired),
@@ -747,6 +700,7 @@ impl EntropyApp {
             Some(LayerUiAction::FillInherit) => self.fill_selected_layer(0x0001),
             None => {}
         }
+        action_requested
     }
 
     fn report_layer_operation_error(&mut self, error: LayerOperationError) {
