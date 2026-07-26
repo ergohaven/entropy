@@ -973,15 +973,20 @@ mod tests {
                 && request[1] == 0x0B
                 && u16::from_le_bytes([request[2], request[3]]) == 316
         });
-        let layer_led_get = requests.iter().position(|request| {
-            request[0] == 0xFE
-                && request[1] == 0x0A
-                && u16::from_le_bytes([request[2], request[3]]) == 316
-        });
         assert_eq!(requests.first().map(|request| request[0]), Some(0x12));
         assert!(module_set.is_some_and(|index| index > 0));
         assert!(layer_led_set.is_some_and(|index| Some(index) > module_set));
-        assert!(layer_led_get.is_some_and(|index| Some(index) > layer_led_set));
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| {
+                    request[0] == 0xFE
+                        && matches!(request[1], 0x0A | 0x0B)
+                        && u16::from_le_bytes([request[2], request[3]]) == 316
+                })
+                .count(),
+            1
+        );
     }
 
     #[test]

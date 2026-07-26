@@ -73,7 +73,10 @@ impl SettingsWriteTarget {
     }
 
     fn verifies_readback(&self) -> bool {
-        matches!(self, Self::Touchpad { .. } | Self::LayerLed { .. })
+        // RMK persists device settings asynchronously after SET. Match Vial's
+        // single-request path for Module and Layer LED settings so an immediate
+        // GET cannot collide with that flash work over Bluetooth.
+        self.is_touchpad()
     }
 
     fn reconcile_readback(
