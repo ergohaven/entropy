@@ -191,7 +191,6 @@ impl EntropyApp {
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
         let content_width = metrics.settings_content_width();
         let supported_path_and_mode = self.selected_live_features_path_and_supported_mode();
-        let active_path_and_mode = self.selected_live_features_path_and_active_mode();
         let path_and_mode = self.selected_live_features_path_and_mode();
         let bridge_active = {
             #[cfg(not(target_arch = "wasm32"))]
@@ -241,18 +240,6 @@ impl EntropyApp {
                     return;
                 };
 
-                let Some((_, active_mode)) = active_path_and_mode else {
-                    crate::ui_style::modal_empty_state(
-                        ui,
-                        crate::i18n::tr(lang, crate::i18n::Key::LiveFeaturesInactive),
-                        Some(crate::i18n::tr(
-                            lang,
-                            crate::i18n::Key::LiveFeaturesSelectHint,
-                        )),
-                    );
-                    return;
-                };
-
                 ui.set_width(content_width);
                 if path_and_mode.is_some() {
                     let status = if bridge_active {
@@ -275,7 +262,7 @@ impl EntropyApp {
                         )),
                     );
                 }
-                if supported_mode.layout && active_mode.layout {
+                if supported_mode.layout {
                     let layout = crate::qmk_hid_host::layout_check();
                     let mut layout_sync_enabled = self.app_settings.layout_sync_enabled;
                     if Self::draw_layout_sync_row(
@@ -290,7 +277,7 @@ impl EntropyApp {
                         self.sync_qmk_hid_host_bridges();
                     }
                 }
-                if active_mode.time {
+                if supported_mode.time {
                     Self::draw_live_feature_row(
                         ui,
                         metrics,
@@ -306,7 +293,7 @@ impl EntropyApp {
                         )),
                     );
                 }
-                if active_mode.volume {
+                if supported_mode.volume {
                     let volume = crate::qmk_hid_host::volume_check();
                     Self::draw_live_feature_row(
                         ui,
@@ -330,7 +317,7 @@ impl EntropyApp {
                         )),
                     );
                 }
-                if active_mode.media {
+                if supported_mode.media {
                     let media = crate::qmk_hid_host::media_check();
                     Self::draw_live_feature_row(
                         ui,
@@ -366,5 +353,89 @@ impl EntropyApp {
                 );
             });
         });
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    fn collect_text(shape: &egui::Shape, text: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(text_shape) => {
+                text.push(text_shape.galley.job.text.clone());
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect_text(shape, text);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn supported_qmk_live_features_are_described_with_a_static_preset() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        app.app_settings.language = crate::i18n::Language::English;
+        app.device_manager
+            .replace_devices(vec![crate::device::Device {
+                name: "Test QMK Keyboard".to_owned(),
+                vendor_id: 0x1209,
+                product_id: 0x2327,
+                manufacturer: "Entropy".to_owned(),
+                serial_number: "test".to_owned(),
+                bus_type: "Usb".to_owned(),
+                path: "test-live-features".to_owned(),
+                firmware: FirmwareProtocol::Vial,
+            }]);
+        app.selected_device = Some(0);
+        app.layout = Some(KeyboardLayout {
+            name: "Test".to_owned(),
+            rows: 0,
+            cols: 0,
+            keys: Vec::new(),
+            encoders: Vec::new(),
+            layers: Vec::new(),
+            encoder_layers: Vec::new(),
+            layer_names: Vec::new(),
+            custom_keycodes: Vec::new(),
+            layout_options: vec![LayoutOption {
+                label: "OLED Master".to_owned(),
+                choices: vec![
+                    "Status (classic)".to_owned(),
+                    "Clock & Volume (qmk-hid-host)".to_owned(),
+                    "Media (qmk-hid-host)".to_owned(),
+                    "Disabled".to_owned(),
+                ],
+            }],
+            live_features: Default::default(),
+            supports_rgb: false,
+            lighting_mode: None,
+            firmware: FirmwareProtocol::Vial,
+        });
+        app.layout_options_value = Some(0);
+
+        let mut input = egui::RawInput::default();
+        input.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(900.0, 700.0),
+        ));
+        let output = ctx.run_ui(input, |ui| {
+            app.draw_live_features_settings_page(ui, ui.max_rect());
+        });
+        let mut text = Vec::new();
+        for clipped_shape in &output.shapes {
+            collect_text(&clipped_shape.shape, &mut text);
+        }
+
+        assert!(text.iter().any(|value| value == "Time sync"));
+        assert!(text.iter().any(|value| value == "Volume sync"));
+        assert!(text.iter().any(|value| value == "Media info"));
+        assert!(!text
+            .iter()
+            .any(|value| value == "Live Features are not active for this device"));
     }
 }
