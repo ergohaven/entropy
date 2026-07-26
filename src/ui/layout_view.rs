@@ -56,7 +56,7 @@ impl EntropyApp {
         let viewport = ui.max_rect();
         let avail = viewport.size();
         let layout_top_reserved_h = LAYOUT_TOP_RESERVED_H
-            + if self.main_menu_has_battery_status() {
+            + if self.main_menu_reserves_battery_status_space() {
                 layout_layer_switcher::MAIN_MENU_BATTERY_RESERVED_H
             } else {
                 0.0

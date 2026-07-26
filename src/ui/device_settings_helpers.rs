@@ -1473,17 +1473,50 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    fn qmk_hid_host_metadata_mode(layout: &KeyboardLayout) -> crate::qmk_hid_host::HostDataMode {
+        crate::qmk_hid_host::HostDataMode {
+            time: layout.live_features.time,
+            volume: layout.live_features.volume,
+            layout: layout.live_features.layout,
+            media: layout.live_features.media,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn add_qmk_hid_host_display_preset(mode: &mut crate::qmk_hid_host::HostDataMode, preset: &str) {
+        if !Self::display_preset_needs_entropy(preset) {
+            return;
+        }
+        let preset = preset.to_ascii_lowercase();
+        mode.time |= preset.contains("clock");
+        mode.volume |= preset.contains("volume");
+        mode.layout |= preset.contains("layout");
+        mode.media |= preset.contains("media");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn qmk_hid_host_supported_mode_for(
+        layout: &KeyboardLayout,
+    ) -> crate::qmk_hid_host::HostDataMode {
+        let mut mode = Self::qmk_hid_host_metadata_mode(layout);
+        for option in &layout.layout_options {
+            if Self::is_encoder_layout_option(option) || option.choices.is_empty() {
+                continue;
+            }
+            for choice in &option.choices {
+                Self::add_qmk_hid_host_display_preset(&mut mode, choice);
+            }
+        }
+        mode
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn qmk_hid_host_mode_for(
         layout: &KeyboardLayout,
         packed: Option<u32>,
     ) -> crate::qmk_hid_host::HostDataMode {
         let values = Self::unpack_layout_option_values(&layout.layout_options, packed.unwrap_or(0));
-        let mut mode = crate::qmk_hid_host::HostDataMode {
-            time: layout.live_features.time,
-            volume: layout.live_features.volume,
-            layout: layout.live_features.layout,
-            media: layout.live_features.media,
-        };
+        let mut mode = Self::qmk_hid_host_metadata_mode(layout);
         for (idx, option) in layout.layout_options.iter().enumerate() {
             if Self::is_encoder_layout_option(option) || option.choices.is_empty() {
                 continue;
@@ -1499,19 +1532,7 @@ impl EntropyApp {
                 .get(selected_idx)
                 .map(|s| s.as_str())
                 .unwrap_or("");
-            let selected_lower = selected.to_ascii_lowercase();
-            if Self::display_preset_needs_entropy(selected) && selected_lower.contains("clock") {
-                mode.time = true;
-            }
-            if Self::display_preset_needs_entropy(selected) && selected_lower.contains("volume") {
-                mode.volume = true;
-            }
-            if Self::display_preset_needs_entropy(selected) && selected_lower.contains("layout") {
-                mode.layout = true;
-            }
-            if Self::display_preset_needs_entropy(selected) && selected_lower.contains("media") {
-                mode.media = true;
-            }
+            Self::add_qmk_hid_host_display_preset(&mut mode, selected);
         }
         mode
     }
@@ -2231,6 +2252,29 @@ mod tests {
             label: "Hide encoder style".to_string(),
             choices: vec!["Compact".to_string(), "Full".to_string()],
         }));
+    }
+
+    #[test]
+    fn qmk_live_features_remain_available_with_a_static_display_preset() {
+        let mut layout = test_layout_with_encoders(&[]);
+        layout.layout_options = vec![LayoutOption {
+            label: "OLED Master".to_string(),
+            choices: vec![
+                "Status (classic)".to_string(),
+                "Clock & Volume (qmk-hid-host)".to_string(),
+                "Media (qmk-hid-host)".to_string(),
+                "Disabled".to_string(),
+            ],
+        }];
+
+        let active = EntropyApp::qmk_hid_host_mode_for(&layout, Some(0));
+        let supported = EntropyApp::qmk_hid_host_supported_mode_for(&layout);
+
+        assert!(active.is_empty());
+        assert!(supported.time);
+        assert!(supported.volume);
+        assert!(supported.media);
+        assert!(!supported.layout);
     }
 
     #[test]

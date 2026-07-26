@@ -14,7 +14,7 @@ impl EntropyApp {
 
         let mut mode = crate::qmk_hid_host::HostDataMode::default();
         if let Some(layout) = self.layout.as_ref() {
-            mode = Self::qmk_hid_host_mode_for(layout, self.layout_options_value);
+            mode = Self::qmk_hid_host_supported_mode_for(layout);
         }
         if Self::device_uses_automatic_display_host_data(selected) {
             mode.time = true;
@@ -26,10 +26,33 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    fn selected_live_features_path_and_active_mode(
+        &self,
+    ) -> Option<(String, crate::qmk_hid_host::HostDataMode)> {
+        let selected = self
+            .selected_device
+            .and_then(|idx| self.device_manager.devices().get(idx))?;
+        if selected.firmware != FirmwareProtocol::Vial {
+            return None;
+        }
+
+        let mut mode = crate::qmk_hid_host::HostDataMode::default();
+        if let Some(layout) = self.layout.as_ref() {
+            mode = Self::qmk_hid_host_mode_for(layout, self.layout_options_value);
+        }
+        if Self::device_uses_automatic_display_host_data(selected) {
+            mode.time = true;
+            mode.volume = true;
+            mode.media = true;
+        }
+        (!mode.is_empty()).then_some((selected.path.clone(), mode))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn selected_live_features_path_and_mode(
         &self,
     ) -> Option<(String, crate::qmk_hid_host::HostDataMode)> {
-        let (path, mut mode) = self.selected_live_features_path_and_supported_mode()?;
+        let (path, mut mode) = self.selected_live_features_path_and_active_mode()?;
         if !self.app_settings.layout_sync_enabled {
             mode.layout = false;
         }
@@ -45,6 +68,13 @@ impl EntropyApp {
 
     #[cfg(target_arch = "wasm32")]
     fn selected_live_features_path_and_mode(
+        &self,
+    ) -> Option<(String, crate::qmk_hid_host::HostDataMode)> {
+        None
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn selected_live_features_path_and_active_mode(
         &self,
     ) -> Option<(String, crate::qmk_hid_host::HostDataMode)> {
         None
@@ -161,6 +191,7 @@ impl EntropyApp {
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
         let content_width = metrics.settings_content_width();
         let supported_path_and_mode = self.selected_live_features_path_and_supported_mode();
+        let active_path_and_mode = self.selected_live_features_path_and_active_mode();
         let path_and_mode = self.selected_live_features_path_and_mode();
         let bridge_active = {
             #[cfg(not(target_arch = "wasm32"))]
@@ -210,9 +241,20 @@ impl EntropyApp {
                     return;
                 };
 
+                let Some((_, active_mode)) = active_path_and_mode else {
+                    crate::ui_style::modal_empty_state(
+                        ui,
+                        crate::i18n::tr(lang, crate::i18n::Key::LiveFeaturesInactive),
+                        Some(crate::i18n::tr(
+                            lang,
+                            crate::i18n::Key::LiveFeaturesSelectHint,
+                        )),
+                    );
+                    return;
+                };
+
                 ui.set_width(content_width);
-                let active_mode = path_and_mode.as_ref().map(|(_, mode)| *mode);
-                if active_mode.is_some() {
+                if path_and_mode.is_some() {
                     let status = if bridge_active {
                         crate::i18n::tr_catalog(self.app_settings.language, "live_features.active")
                     } else {
@@ -233,7 +275,7 @@ impl EntropyApp {
                         )),
                     );
                 }
-                if supported_mode.layout {
+                if supported_mode.layout && active_mode.layout {
                     let layout = crate::qmk_hid_host::layout_check();
                     let mut layout_sync_enabled = self.app_settings.layout_sync_enabled;
                     if Self::draw_layout_sync_row(
@@ -248,8 +290,7 @@ impl EntropyApp {
                         self.sync_qmk_hid_host_bridges();
                     }
                 }
-                let mode = active_mode.unwrap_or_default();
-                if mode.time {
+                if active_mode.time {
                     Self::draw_live_feature_row(
                         ui,
                         metrics,
@@ -265,7 +306,7 @@ impl EntropyApp {
                         )),
                     );
                 }
-                if mode.volume {
+                if active_mode.volume {
                     let volume = crate::qmk_hid_host::volume_check();
                     Self::draw_live_feature_row(
                         ui,
@@ -289,7 +330,7 @@ impl EntropyApp {
                         )),
                     );
                 }
-                if mode.media {
+                if active_mode.media {
                     let media = crate::qmk_hid_host::media_check();
                     Self::draw_live_feature_row(
                         ui,
