@@ -431,6 +431,7 @@ pub(crate) struct DeferredDeviceLoadContext {
     pub(crate) touchpad_supported: bool,
     pub(crate) bluetooth_supported: bool,
     pub(crate) layer_leds_supported: bool,
+    pub(crate) rgb_supported: bool,
     pub(crate) lighting_mode: Option<String>,
 }
 
@@ -451,7 +452,7 @@ impl DeferredDeviceLoadContext {
             DeferredLoadSection::Touchpad => self.touchpad_supported,
             DeferredLoadSection::Bluetooth => self.bluetooth_supported,
             DeferredLoadSection::LayerLeds => self.layer_leds_supported,
-            DeferredLoadSection::Rgb => self.lighting_mode.is_some(),
+            DeferredLoadSection::Rgb => self.rgb_supported,
         }
     }
 
@@ -472,6 +473,7 @@ impl DeferredDeviceLoadContext {
             && self.touchpad_supported == other.touchpad_supported
             && self.bluetooth_supported == other.bluetooth_supported
             && self.layer_leds_supported == other.layer_leds_supported
+            && self.rgb_supported == other.rgb_supported
             && self.lighting_mode == other.lighting_mode
     }
 }

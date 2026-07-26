@@ -1343,6 +1343,7 @@ mod tests {
             touchpad_supported: false,
             bluetooth_supported: true,
             layer_leds_supported: false,
+            rgb_supported: false,
             lighting_mode: None,
         }
     }
@@ -1375,6 +1376,34 @@ mod tests {
 
         assert_eq!(
             state.section_status(DeferredLoadSection::BehaviorSettings),
+            DeferredLoadStatus::NotLoaded
+        );
+    }
+
+    #[test]
+    fn staged_state_does_not_treat_none_lighting_as_rgb_support() {
+        let mut context = context();
+        context.lighting_mode = Some("none".to_owned());
+        context.rgb_supported = false;
+
+        let state = DeferredDeviceLoadState::staged(context);
+
+        assert_eq!(
+            state.section_status(DeferredLoadSection::Rgb),
+            DeferredLoadStatus::NotNeeded
+        );
+    }
+
+    #[test]
+    fn staged_state_defers_rgb_values_for_supported_lighting() {
+        let mut context = context();
+        context.lighting_mode = Some("qmk_rgblight".to_owned());
+        context.rgb_supported = true;
+
+        let state = DeferredDeviceLoadState::staged(context);
+
+        assert_eq!(
+            state.section_status(DeferredLoadSection::Rgb),
             DeferredLoadStatus::NotLoaded
         );
     }

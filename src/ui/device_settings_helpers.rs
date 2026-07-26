@@ -1427,28 +1427,36 @@ impl EntropyApp {
         coalesced_side_groups
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn read_module_settings(
+    pub(super) fn module_settings_from_definition(
         json: &serde_json::Value,
         supported_qmk_settings: &[u16],
-        dev_conn: &crate::hid::HidDevice,
     ) -> ModuleSettingsState {
         let groups = Self::module_settings_groups(json, supported_qmk_settings);
         let fields = groups
             .iter()
             .flat_map(|group| group.fields.iter().cloned())
             .collect::<Vec<_>>();
-        if fields.is_empty() {
-            return ModuleSettingsState::default();
-        }
-
-        let mut settings = ModuleSettingsState {
+        let supported = !fields.is_empty();
+        ModuleSettingsState {
             fields,
             groups,
             selected_module_group: 0,
             values: std::collections::BTreeMap::new(),
-            supported: true,
-        };
+            supported,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn read_module_settings(
+        json: &serde_json::Value,
+        supported_qmk_settings: &[u16],
+        dev_conn: &crate::hid::HidDevice,
+    ) -> ModuleSettingsState {
+        let mut settings = Self::module_settings_from_definition(json, supported_qmk_settings);
+        if !settings.supported {
+            return settings;
+        }
+
         for (qsid, width) in Self::module_setting_widths(&settings.fields) {
             let value = if width > 1 {
                 dev_conn.get_qmk_setting_u16(qsid)

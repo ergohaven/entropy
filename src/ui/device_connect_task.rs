@@ -1105,7 +1105,7 @@ impl EntropyApp {
 
                 progress("Reading module settings…");
                 let module_settings = if staged_bluetooth_load {
-                    ModuleSettingsState::default()
+                    Self::module_settings_from_definition(&json, &supported_qmk_settings)
                 } else {
                     Self::read_module_settings(&json, &supported_qmk_settings, &dev_conn)
                 };
@@ -1229,8 +1229,7 @@ impl EntropyApp {
                 let deferred_load = if staged_bluetooth_load {
                     let definition_fingerprint = vial_definition_fingerprint(&json)
                         .map_err(|error| format!("Layout fingerprint failed: {error}"))?;
-                    let modules_supported =
-                        !Self::module_settings_groups(&json, &supported_qmk_settings).is_empty();
+                    let modules_supported = module_settings.supported;
                     let touchpad_supported = touchpad_settings_in_definition
                         && [120u16, 121, 122, 123, 124]
                             .iter()
@@ -1257,6 +1256,7 @@ impl EntropyApp {
                         touchpad_supported,
                         bluetooth_supported,
                         layer_leds_supported,
+                        rgb_supported: layout.supports_rgb,
                         lighting_mode: layout.lighting_mode.clone(),
                     })
                 } else {

@@ -972,6 +972,47 @@ mod tests {
     }
 
     #[test]
+    fn deferred_module_definition_owns_encoder_visibility_before_values_load() {
+        let json = serde_json::json!({
+            "settings": [
+                {
+                    "name": "Left modules",
+                    "fields": [{
+                        "type": "select",
+                        "title": "Module",
+                        "qsid": 149,
+                        "variants": ["None", "Encoder", "Trackball", "Touchpad"]
+                    }]
+                },
+                {
+                    "name": "Right modules",
+                    "fields": [{
+                        "type": "select",
+                        "title": "Module",
+                        "qsid": 150,
+                        "variants": ["None", "Encoder", "Trackball", "Touchpad"]
+                    }]
+                }
+            ]
+        });
+        let mut app = test_app();
+        app.module_settings = EntropyApp::module_settings_from_definition(&json, &[149, 150]);
+        app.layout = Some(encoder_visibility_layout(
+            "Hide left encoder module",
+            "Hide right encoder module",
+        ));
+
+        assert!(app.module_settings.supported);
+        assert!(app.module_settings.values.is_empty());
+        assert!(
+            app.module_settings_include_encoder_visibility(app.layout.as_ref().expect("layout"))
+        );
+        assert!(
+            !app.show_separate_encoder_visibility_settings(app.layout.as_ref().expect("layout"))
+        );
+    }
+
+    #[test]
     fn phenom_encoder_labels_are_owned_by_module_settings() {
         let mut app = test_app();
         add_encoder_module_groups(&mut app);

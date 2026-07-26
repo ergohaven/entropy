@@ -676,6 +676,7 @@ mod tests {
             touchpad_supported: false,
             bluetooth_supported: false,
             layer_leds_supported: false,
+            rgb_supported: false,
             lighting_mode: None,
         })
     }
