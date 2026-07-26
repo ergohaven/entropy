@@ -926,6 +926,7 @@ fn static_catalog_key(text: &str) -> Option<&'static str> {
         "needs setup" => Some("live_features.needs_setup"),
         "active" => Some("live_features.active"),
         "starting" => Some("live_features.starting"),
+        "inactive" => Some("live_features.inactive"),
         _ => None,
     }
 }

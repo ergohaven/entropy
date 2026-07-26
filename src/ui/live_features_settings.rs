@@ -241,27 +241,28 @@ impl EntropyApp {
                 };
 
                 ui.set_width(content_width);
-                if path_and_mode.is_some() {
-                    let status = if bridge_active {
-                        crate::i18n::tr_catalog(self.app_settings.language, "live_features.active")
-                    } else {
-                        crate::i18n::tr_catalog(self.app_settings.language, "live_features.starting")
-                    };
-                    Self::draw_live_feature_row(
-                        ui,
-                        metrics,
-                        crate::i18n::tr_catalog(
-                            self.app_settings.language,
-                            "live_features.entropy_background",
-                        ),
-                        status,
-                        bridge_active,
-                        Some(crate::i18n::tr_catalog(
-                            self.app_settings.language,
-                            "live_features.keep_entropy_running_in_the_background_for_live_firmware_data",
-                        )),
-                    );
-                }
+                let bridge_requested = path_and_mode.is_some();
+                let (status_key, status_ok) = if !bridge_requested {
+                    ("live_features.inactive", true)
+                } else if bridge_active {
+                    ("live_features.active", true)
+                } else {
+                    ("live_features.starting", false)
+                };
+                Self::draw_live_feature_row(
+                    ui,
+                    metrics,
+                    crate::i18n::tr_catalog(
+                        self.app_settings.language,
+                        "live_features.entropy_background",
+                    ),
+                    crate::i18n::tr_catalog(self.app_settings.language, status_key),
+                    status_ok,
+                    Some(crate::i18n::tr_catalog(
+                        self.app_settings.language,
+                        "live_features.keep_entropy_running_in_the_background_for_live_firmware_data",
+                    )),
+                );
                 if supported_mode.layout {
                     let layout = crate::qmk_hid_host::layout_check();
                     let mut layout_sync_enabled = self.app_settings.layout_sync_enabled;
@@ -421,6 +422,7 @@ mod tests {
             firmware: FirmwareProtocol::Vial,
         });
         app.layout_options_value = Some(0);
+        app.app_settings.layout_sync_enabled = false;
 
         let mut input = egui::RawInput::default();
         input.screen_rect = Some(egui::Rect::from_min_size(
@@ -439,6 +441,8 @@ mod tests {
         assert!(text.iter().any(|value| value == "Volume sync"));
         assert!(text.iter().any(|value| value == "Media info"));
         assert!(text.iter().any(|value| value == "Layout sync"));
+        assert!(text.iter().any(|value| value == "Entropy background"));
+        assert!(text.iter().any(|value| value == "inactive"));
         assert!(!text
             .iter()
             .any(|value| value == "Live Features are not active for this device"));

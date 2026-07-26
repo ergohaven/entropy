@@ -1381,6 +1381,7 @@ ready = "ready"
 needs_setup = "needs setup"
 active = "active"
 starting = "starting"
+inactive = "inactive"
 
 [dynamic_tooltips]
 left = "Left "
