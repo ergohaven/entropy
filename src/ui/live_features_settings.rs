@@ -401,7 +401,11 @@ mod tests {
             layers: Vec::new(),
             encoder_layers: Vec::new(),
             layer_names: Vec::new(),
-            custom_keycodes: Vec::new(),
+            custom_keycodes: vec![crate::keyboard::CustomKeycode {
+                name: "LG_SYNC".to_owned(),
+                label: "RuEn\nSync".to_owned(),
+                title: "Sync language".to_owned(),
+            }],
             layout_options: vec![LayoutOption {
                 label: "OLED Master".to_owned(),
                 choices: vec![
@@ -434,6 +438,7 @@ mod tests {
         assert!(text.iter().any(|value| value == "Time sync"));
         assert!(text.iter().any(|value| value == "Volume sync"));
         assert!(text.iter().any(|value| value == "Media info"));
+        assert!(text.iter().any(|value| value == "Layout sync"));
         assert!(!text
             .iter()
             .any(|value| value == "Live Features are not active for this device"));

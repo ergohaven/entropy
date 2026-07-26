@@ -1477,7 +1477,11 @@ impl EntropyApp {
         crate::qmk_hid_host::HostDataMode {
             time: layout.live_features.time,
             volume: layout.live_features.volume,
-            layout: layout.live_features.layout,
+            layout: layout.live_features.layout
+                || layout
+                    .custom_keycodes
+                    .iter()
+                    .any(|keycode| keycode.name.eq_ignore_ascii_case("LG_SYNC")),
             media: layout.live_features.media,
         }
     }
@@ -2275,6 +2279,25 @@ mod tests {
         assert!(supported.volume);
         assert!(supported.media);
         assert!(!supported.layout);
+    }
+
+    #[test]
+    fn qmk_ruen_keycodes_advertise_layout_sync_without_live_feature_metadata() {
+        let mut layout = test_layout_with_encoders(&[]);
+        layout.custom_keycodes = vec![crate::keyboard::CustomKeycode {
+            name: "LG_SYNC".to_string(),
+            label: "RuEn\nSync".to_string(),
+            title: "Sync language".to_string(),
+        }];
+
+        let active = EntropyApp::qmk_hid_host_mode_for(&layout, Some(0));
+        let supported = EntropyApp::qmk_hid_host_supported_mode_for(&layout);
+
+        assert!(active.layout);
+        assert!(supported.layout);
+        assert!(!active.time);
+        assert!(!active.volume);
+        assert!(!active.media);
     }
 
     #[test]
