@@ -268,6 +268,10 @@ return_to_layout_hint = "ПКМ или Esc — вернуться к раскл�
 
 [unlock]
 highlighted_keys_hint = "Нажмите и удерживайте подсвеченные клавиши"
+start_hint = "Для этого действия требуется разблокировка"
+safety_warning = "После запуска ввод с клавиатуры приостановится. Не закрывайте Entropy.\nПри сбое переподключите клавиатуру."
+start = "Начать"
+cancel = "Отмена"
 
 [universal_symbols_setup]
 open_privacy_settings = "Открыть настройки приватности"

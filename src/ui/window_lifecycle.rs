@@ -5,8 +5,8 @@ use super::*;
 #[cfg(target_os = "macos")]
 use objc::{msg_send, sel, sel_impl};
 
-fn should_keep_vial_unlock_visible(unlock_open: bool, unlock_polling: bool) -> bool {
-    unlock_open || unlock_polling
+fn should_keep_vial_unlock_visible(unlock_polling: bool) -> bool {
+    unlock_polling
 }
 
 impl EntropyApp {
@@ -184,7 +184,11 @@ impl EntropyApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.flush_pending_qmk_setting_writes();
 
-        if should_keep_vial_unlock_visible(self.unlock_open, self.vial_unlock_polling) {
+        if self.unlock_open && !self.vial_unlock_polling {
+            self.cancel_vial_unlock(true);
+        }
+
+        if should_keep_vial_unlock_visible(self.vial_unlock_polling) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.keep_vial_unlock_visible(ctx);
             return;
@@ -236,7 +240,11 @@ impl EntropyApp {
     }
 
     pub(super) fn minimize_window_to_tray(&mut self, ctx: &egui::Context) {
-        if should_keep_vial_unlock_visible(self.unlock_open, self.vial_unlock_polling) {
+        if self.unlock_open && !self.vial_unlock_polling {
+            self.cancel_vial_unlock(true);
+        }
+
+        if should_keep_vial_unlock_visible(self.vial_unlock_polling) {
             self.keep_vial_unlock_visible(ctx);
             return;
         }
@@ -759,7 +767,7 @@ impl EntropyApp {
 
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub(super) fn handle_tray_quit_request(&mut self, ctx: &egui::Context) {
-        if should_keep_vial_unlock_visible(self.unlock_open, self.vial_unlock_polling)
+        if should_keep_vial_unlock_visible(self.vial_unlock_polling)
             && TRAY_QUIT_REQUESTED.swap(false, std::sync::atomic::Ordering::Relaxed)
         {
             self.keep_vial_unlock_visible(ctx);
@@ -1028,11 +1036,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn active_vial_unlock_blocks_close_and_tray_actions() {
-        assert!(should_keep_vial_unlock_visible(true, false));
-        assert!(should_keep_vial_unlock_visible(false, true));
-        assert!(should_keep_vial_unlock_visible(true, true));
-        assert!(!should_keep_vial_unlock_visible(false, false));
+    fn only_started_vial_unlock_blocks_close_and_tray_actions() {
+        assert!(should_keep_vial_unlock_visible(true));
+        assert!(!should_keep_vial_unlock_visible(false));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
