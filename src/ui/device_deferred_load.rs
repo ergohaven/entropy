@@ -1712,10 +1712,11 @@ mod tests {
 
     #[test]
     fn automatic_background_layers_leave_a_real_idle_gap_between_requests() {
-        let mut state = DeferredDeviceLoadState::staged(context());
+        let mut state = DeferredDeviceLoadState::default();
 
-        assert!(state.background_layer_resume_delay().is_some());
+        assert!(state.background_layer_resume_delay().is_none());
         state.mark_background_layer_finished();
+        assert!(state.background_layer_resume_delay().is_some());
         std::thread::sleep(std::time::Duration::from_millis(90));
         assert!(state.background_layer_resume_delay().is_none());
         state.mark_background_layer_finished();
@@ -1724,15 +1725,25 @@ mod tests {
 
     #[test]
     fn user_input_postpones_the_next_automatic_background_layer() {
-        let mut state = DeferredDeviceLoadState::staged(context());
-
-        state.mark_background_layer_finished();
-        std::thread::sleep(std::time::Duration::from_millis(90));
-        assert!(state.background_layer_resume_delay().is_none());
+        let mut state = DeferredDeviceLoadState::default();
 
         state.defer_background_for_user_input();
 
-        assert!(state.background_layer_resume_delay().is_some());
+        assert!(state
+            .background_layer_resume_delay()
+            .is_some_and(|delay| delay > std::time::Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn background_completion_does_not_shorten_user_input_pause() {
+        let mut state = DeferredDeviceLoadState::default();
+
+        state.defer_background_for_user_input();
+        state.mark_background_layer_finished();
+
+        assert!(state
+            .background_layer_resume_delay()
+            .is_some_and(|delay| delay > std::time::Duration::from_millis(500)));
     }
 
     #[test]
@@ -1771,10 +1782,9 @@ mod tests {
         let mut app = staged_app();
         let (hid, recorder) = crate::hid::HidDevice::test_device();
         app.hid_device = Some(hid);
-        // This test covers queue order rather than the separate initial-idle
-        // policy, so advance to the short between-layer cadence.
-        app.deferred_device_load.mark_background_layer_finished();
-        std::thread::sleep(std::time::Duration::from_millis(90));
+        // This test covers queue order rather than the separate initial-idle policy.
+        app.deferred_device_load
+            .allow_background_layer_now_for_test();
 
         for _ in 0..500 {
             app.poll_vial_hid_task(&ctx);

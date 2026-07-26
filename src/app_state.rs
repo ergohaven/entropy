@@ -607,14 +607,26 @@ impl DeferredDeviceLoadState {
             .and_then(|resume_at| resume_at.checked_duration_since(std::time::Instant::now()))
     }
 
+    #[cfg(test)]
+    pub(crate) fn allow_background_layer_now_for_test(&mut self) {
+        self.background_layer_resume_at = None;
+    }
+
     pub(crate) fn mark_background_layer_finished(&mut self) {
-        self.background_layer_resume_at =
-            Some(std::time::Instant::now() + BACKGROUND_LAYER_BETWEEN_REQUESTS);
+        self.defer_background_for(BACKGROUND_LAYER_BETWEEN_REQUESTS);
     }
 
     pub(crate) fn defer_background_for_user_input(&mut self) {
-        self.background_layer_resume_at =
-            Some(std::time::Instant::now() + BACKGROUND_LAYER_AFTER_USER_INPUT);
+        self.defer_background_for(BACKGROUND_LAYER_AFTER_USER_INPUT);
+    }
+
+    fn defer_background_for(&mut self, duration: std::time::Duration) {
+        let resume_at = std::time::Instant::now() + duration;
+        self.background_layer_resume_at = Some(
+            self.background_layer_resume_at
+                .map(|current| current.max(resume_at))
+                .unwrap_or(resume_at),
+        );
     }
 
     pub(crate) fn next_background_layer_step(&self) -> Option<(usize, BackgroundLayerStep)> {
@@ -1897,6 +1909,36 @@ pub(crate) struct LayerLedSettingsState {
     pub(crate) timeout_unit: LayerLedTimeoutUnit,
     /// Whether any Ergohaven LED QMK setting was readable (firmware support flag)
     pub(crate) supported: bool,
+}
+
+impl LayerLedSettingsState {
+    pub(crate) fn set_value(&mut self, qsid: u16, value: u16) -> bool {
+        if let Some(setting) = self
+            .brightness
+            .as_mut()
+            .filter(|setting| setting.qsid == qsid)
+        {
+            setting.value = value.min(setting.max);
+            return true;
+        }
+        if let Some(setting) = self.timeout.as_mut().filter(|setting| setting.qsid == qsid) {
+            setting.value = value.min(setting.max);
+            return true;
+        }
+
+        let color = value.min((LAYER_LED_PALETTE.len() - 1) as u16) as u8;
+        for setting in self
+            .bt_profile_colors
+            .iter_mut()
+            .chain(self.layer_colors.iter_mut())
+        {
+            if setting.qsid == qsid || setting.linked_qsids.contains(&qsid) {
+                setting.value = color;
+                return true;
+            }
+        }
+        false
+    }
 }
 
 impl Default for LayerLedSettingsState {

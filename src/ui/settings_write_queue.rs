@@ -30,6 +30,9 @@ enum SettingsWriteTarget {
     OneShot {
         display_label: String,
     },
+    LayerLed {
+        display_label: String,
+    },
 }
 
 impl SettingsWriteTarget {
@@ -38,7 +41,8 @@ impl SettingsWriteTarget {
             Self::Module { display_label, .. }
             | Self::Touchpad { display_label }
             | Self::TapHold { display_label }
-            | Self::OneShot { display_label } => display_label,
+            | Self::OneShot { display_label }
+            | Self::LayerLed { display_label } => display_label,
         }
     }
 
@@ -58,6 +62,9 @@ impl SettingsWriteTarget {
             Self::OneShot { display_label } => {
                 format!("one-shot field={display_label:?}")
             }
+            Self::LayerLed { display_label } => {
+                format!("layer-led field={display_label:?}")
+            }
         }
     }
 
@@ -66,7 +73,7 @@ impl SettingsWriteTarget {
     }
 
     fn verifies_readback(&self) -> bool {
-        self.is_touchpad()
+        matches!(self, Self::Touchpad { .. } | Self::LayerLed { .. })
     }
 
     fn reconcile_readback(
@@ -75,6 +82,7 @@ impl SettingsWriteTarget {
         touchpad_settings: &mut TouchpadSettingsState,
         tap_hold_settings: &mut TapHoldSettingsState,
         one_shot_settings: &mut OneShotSettingsState,
+        layer_led_settings: &mut LayerLedSettingsState,
         qsid: u16,
         readback: u16,
     ) {
@@ -108,6 +116,9 @@ impl SettingsWriteTarget {
                 6 => one_shot_settings.timeout = readback,
                 _ => {}
             },
+            Self::LayerLed { .. } => {
+                layer_led_settings.set_value(qsid, readback);
+            }
         }
     }
 }
@@ -440,6 +451,25 @@ impl EntropyApp {
         });
     }
 
+    pub(super) fn queue_layer_led_setting_write(
+        &mut self,
+        display_label: String,
+        qsid: u16,
+        width: u8,
+        old_value: u16,
+        requested: u16,
+    ) {
+        self.queue_settings_write(SettingsWriteRequest {
+            id: 0,
+            generation: self.settings_write_generation,
+            qsid,
+            width,
+            old_value,
+            requested,
+            target: SettingsWriteTarget::LayerLed { display_label },
+        });
+    }
+
     fn queue_settings_write(&mut self, request: SettingsWriteRequest) {
         let label = request.target.display_label().to_owned();
         let context = request.target.log_context();
@@ -447,8 +477,9 @@ impl EntropyApp {
         let old_value = request.old_value;
         let requested = request.requested;
         let reports_progress = request.target.is_touchpad();
+        let transport_available = self.qmk_setting_transport_available();
         self.settings_write_queue.enqueue(request);
-        if !self.qmk_setting_transport_available() {
+        if !transport_available {
             let error = crate::i18n::tr_catalog(
                 self.app_settings.language,
                 "settings_write.device_not_connected",
@@ -466,6 +497,8 @@ impl EntropyApp {
             return;
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
+        self.deferred_device_load.defer_background_for_user_input();
         if reports_progress {
             self.status_msg = crate::i18n::tr_catalog_format(
                 self.app_settings.language,
@@ -624,6 +657,7 @@ impl EntropyApp {
                         &mut self.touchpad_settings,
                         &mut self.tap_hold_settings,
                         &mut self.one_shot_settings,
+                        &mut self.layer_led_settings,
                         request.qsid,
                         readback,
                     );
@@ -663,6 +697,7 @@ impl EntropyApp {
                             &mut self.touchpad_settings,
                             &mut self.tap_hold_settings,
                             &mut self.one_shot_settings,
+                            &mut self.layer_led_settings,
                             request.qsid,
                             *actual,
                         );
@@ -793,6 +828,15 @@ mod tests {
         let mut touchpad_settings = TouchpadSettingsState::default();
         let mut tap_hold_settings = TapHoldSettingsState::default();
         let mut one_shot_settings = OneShotSettingsState::default();
+        let mut layer_led_settings = LayerLedSettingsState {
+            brightness: Some(LayerLedNumericSetting {
+                qsid: 316,
+                width: 2,
+                value: 32,
+                max: 255,
+            }),
+            ..LayerLedSettingsState::default()
+        };
 
         SettingsWriteTarget::Module {
             group_title: "Modules".to_owned(),
@@ -804,6 +848,7 @@ mod tests {
             &mut touchpad_settings,
             &mut tap_hold_settings,
             &mut one_shot_settings,
+            &mut layer_led_settings,
             7,
             3,
         );
@@ -815,6 +860,7 @@ mod tests {
             &mut touchpad_settings,
             &mut tap_hold_settings,
             &mut one_shot_settings,
+            &mut layer_led_settings,
             122,
             9,
         );
@@ -826,6 +872,7 @@ mod tests {
             &mut touchpad_settings,
             &mut tap_hold_settings,
             &mut one_shot_settings,
+            &mut layer_led_settings,
             7,
             175,
         );
@@ -837,14 +884,34 @@ mod tests {
             &mut touchpad_settings,
             &mut tap_hold_settings,
             &mut one_shot_settings,
+            &mut layer_led_settings,
             6,
             800,
+        );
+        SettingsWriteTarget::LayerLed {
+            display_label: "Layer LED brightness".to_owned(),
+        }
+        .reconcile_readback(
+            &mut module_settings,
+            &mut touchpad_settings,
+            &mut tap_hold_settings,
+            &mut one_shot_settings,
+            &mut layer_led_settings,
+            316,
+            128,
         );
 
         assert_eq!(module_settings.value(7), 3);
         assert_eq!(touchpad_settings.scroll_sens, 9);
         assert_eq!(tap_hold_settings.tapping_term, 175);
         assert_eq!(one_shot_settings.timeout, 800);
+        assert_eq!(
+            layer_led_settings
+                .brightness
+                .as_ref()
+                .map(|setting| setting.value),
+            Some(128)
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]

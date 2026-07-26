@@ -22,16 +22,7 @@ impl EntropyApp {
     ) {
         let lang = self.app_settings.language;
         let dark = ui.visuals().dark_mode;
-        let hid_ready = {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                self.hid_device.is_some()
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                false
-            }
-        };
+        let hid_ready = self.qmk_setting_transport_available();
 
         crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
@@ -148,7 +139,10 @@ impl EntropyApp {
                         continue;
                     };
                     let brightness_max = setting.max.max(1) as f32;
-                    let mut value = (setting.value as f32 / brightness_max * 100.0)
+                    let displayed_value = self
+                        .pending_settings_write_value(setting.qsid)
+                        .unwrap_or(setting.value);
+                    let mut value = (displayed_value as f32 / brightness_max * 100.0)
                         .round()
                         .clamp(0.0, 100.0);
                     crate::ui_style::settings_list_row_with_tooltip(
@@ -189,13 +183,11 @@ impl EntropyApp {
                                     .round()
                                     .clamp(0.0, brightness_max)
                                     as u16;
-                                if new_value != setting.value {
-                                    if let Some(current) = &mut self.layer_led_settings.brightness {
-                                        current.value = new_value;
-                                    }
+                                if new_value != displayed_value {
                                     self.write_layer_led_numeric(
                                         setting.qsid,
                                         setting.width,
+                                        setting.value,
                                         new_value,
                                         "Layer LED brightness",
                                     );
@@ -208,7 +200,10 @@ impl EntropyApp {
                     let Some(setting) = self.layer_led_settings.timeout.clone() else {
                         continue;
                     };
-                    let mut value = setting.value as f32;
+                    let displayed_value = self
+                        .pending_settings_write_value(setting.qsid)
+                        .unwrap_or(setting.value);
+                    let mut value = displayed_value as f32;
                     let timeout_unit = self.layer_led_settings.timeout_unit;
                     let tooltip_key = match timeout_unit {
                         LayerLedTimeoutUnit::Seconds => "advanced_settings.seconds_before_leds_turn_off_automatically_0_disables_timeout",
@@ -269,13 +264,11 @@ impl EntropyApp {
                                 suppress_tooltips,
                             ) {
                                 let new_value = value.round().clamp(0.0, setting.max as f32) as u16;
-                                if new_value != setting.value {
-                                    if let Some(current) = &mut self.layer_led_settings.timeout {
-                                        current.value = new_value;
-                                    }
+                                if new_value != displayed_value {
                                     self.write_layer_led_numeric(
                                         setting.qsid,
                                         setting.width,
+                                        setting.value,
                                         new_value,
                                         "Layer LED timeout",
                                     );
@@ -440,7 +433,10 @@ impl EntropyApp {
         setting: LayerLedColorSetting,
     ) {
         let qsids = setting.all_qsids().collect::<Vec<_>>();
-        let current = setting.value;
+        let current = self
+            .pending_settings_write_value(setting.qsid)
+            .unwrap_or(setting.value as u16)
+            .min((LAYER_LED_PALETTE.len() - 1) as u16) as u8;
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
             content_width,
@@ -577,27 +573,11 @@ impl EntropyApp {
                                         option_label,
                                     ));
                                     if cell_resp.clicked() {
-                                        match target {
-                                            LayerLedColorTarget::BtProfile(profile) => {
-                                                if let Some(current) = self
-                                                    .layer_led_settings
-                                                    .bt_profile_colors
-                                                    .get_mut(profile)
-                                                {
-                                                    current.value = color_idx_u8;
-                                                }
-                                            }
-                                            LayerLedColorTarget::Layer(layer) => {
-                                                if let Some(current) = self
-                                                    .layer_led_settings
-                                                    .layer_colors
-                                                    .get_mut(layer)
-                                                {
-                                                    current.value = color_idx_u8;
-                                                }
-                                            }
-                                        }
-                                        self.write_layer_led_color(&qsids, color_idx_u8);
+                                        self.write_layer_led_color(
+                                            &qsids,
+                                            setting.value,
+                                            color_idx_u8,
+                                        );
                                         egui::Popup::close_all(ui.ctx());
                                     }
                                 }
@@ -609,30 +589,26 @@ impl EntropyApp {
         );
     }
 
-    fn write_layer_led_color(&mut self, qsids: &[u16], value: u8) {
-        let Some(hid) = &self.hid_device else {
-            return;
-        };
+    fn write_layer_led_color(&mut self, qsids: &[u16], old_value: u8, value: u8) {
         for qsid in qsids {
-            if let Err(e) = hid.set_qmk_setting_u8(*qsid, value) {
-                self.status_msg = format!("Failed to save Layer LED color: {}", e);
-                log::warn!("set_qmk_setting_u8(layer_led qsid {qsid}) failed: {e}");
-            }
+            self.queue_layer_led_setting_write(
+                "Layer LED color".to_owned(),
+                *qsid,
+                1,
+                old_value as u16,
+                value as u16,
+            );
         }
     }
 
-    fn write_layer_led_numeric(&mut self, qsid: u16, width: u8, value: u16, label: &str) {
-        let Some(hid) = &self.hid_device else {
-            return;
-        };
-        let result = if width > 1 {
-            hid.set_qmk_setting_u16(qsid, value)
-        } else {
-            hid.set_qmk_setting_u8(qsid, value.min(u8::MAX as u16) as u8)
-        };
-        if let Err(e) = result {
-            self.status_msg = format!("Failed to save {label}: {}", e);
-            log::warn!("set_qmk_setting(layer_led qsid {qsid}) failed: {e}");
-        }
+    fn write_layer_led_numeric(
+        &mut self,
+        qsid: u16,
+        width: u8,
+        old_value: u16,
+        value: u16,
+        label: &str,
+    ) {
+        self.queue_layer_led_setting_write(label.to_owned(), qsid, width, old_value, value);
     }
 }

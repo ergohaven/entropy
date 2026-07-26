@@ -891,6 +891,100 @@ mod tests {
     }
 
     #[test]
+    fn config_writes_wait_for_background_layer_and_keep_transport_available() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        let context = background_layer_context();
+        app.deferred_device_load = DeferredDeviceLoadState::staged((*context).clone());
+        app.module_settings.set_value(134, 0);
+        app.layer_led_settings = LayerLedSettingsState {
+            brightness: Some(LayerLedNumericSetting {
+                qsid: 316,
+                width: 2,
+                value: 32,
+                max: 255,
+            }),
+            supported: true,
+            ..LayerLedSettingsState::default()
+        };
+        app.hid_device = Some(hid);
+
+        assert_eq!(
+            app.start_vial_hid_operation(
+                &ctx,
+                VialHidOperation::Deferred(
+                    super::device_deferred_load::DeferredLoadRequest::BackgroundLayerStep {
+                        layer: 1,
+                        step: BackgroundLayerStep::Keymap { local_offset: 0 },
+                        context,
+                    },
+                ),
+            ),
+            VialHidTaskStart::Started
+        );
+        assert!(app.hid_device.is_none());
+        assert!(app.qmk_setting_transport_available());
+
+        app.queue_module_setting_write(
+            "Left Modules".to_owned(),
+            "Mode".to_owned(),
+            "Mode".to_owned(),
+            134,
+            1,
+            0,
+            3,
+        );
+        app.queue_layer_led_setting_write("Layer LED brightness".to_owned(), 316, 2, 32, 128);
+
+        assert!(app.settings_write_task.is_none());
+        assert_eq!(app.pending_settings_write_value(134), Some(3));
+        assert_eq!(app.pending_settings_write_value(316), Some(128));
+
+        for _ in 0..500 {
+            app.poll_vial_hid_task(&ctx);
+            app.poll_settings_write(&ctx);
+            if !app.vial_hid_task_active() && !app.qmk_settings_write_busy() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        assert!(!app.vial_hid_task_active());
+        assert!(!app.qmk_settings_write_busy());
+        assert_eq!(app.module_settings.value(134), 3);
+        assert_eq!(
+            app.layer_led_settings
+                .brightness
+                .as_ref()
+                .map(|setting| setting.value),
+            Some(128)
+        );
+
+        let requests = recorder.requests();
+        let module_set = requests.iter().position(|request| {
+            request[0] == 0xFE
+                && request[1] == 0x0B
+                && u16::from_le_bytes([request[2], request[3]]) == 134
+        });
+        let layer_led_set = requests.iter().position(|request| {
+            request[0] == 0xFE
+                && request[1] == 0x0B
+                && u16::from_le_bytes([request[2], request[3]]) == 316
+        });
+        let layer_led_get = requests.iter().position(|request| {
+            request[0] == 0xFE
+                && request[1] == 0x0A
+                && u16::from_le_bytes([request[2], request[3]]) == 316
+        });
+        assert_eq!(requests.first().map(|request| request[0]), Some(0x12));
+        assert!(module_set.is_some_and(|index| index > 0));
+        assert!(layer_led_set.is_some_and(|index| Some(index) > module_set));
+        assert!(layer_led_get.is_some_and(|index| Some(index) > layer_led_set));
+    }
+
+    #[test]
     fn failed_background_key_write_rolls_back_the_optimistic_value() {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
