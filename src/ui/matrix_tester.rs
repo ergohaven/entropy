@@ -81,17 +81,12 @@ impl EntropyApp {
         if self.is_vial_locked() {
             return;
         }
-        #[cfg(target_os = "windows")]
-        if self.matrix_tester_uses_bluetooth_transport() {
-            self.matrix_tester_pressed.clear();
-            return;
-        }
-
         let now = std::time::Instant::now();
         let poll_interval = self.matrix_tester_poll_interval();
 
-        #[cfg(not(target_os = "windows"))]
-        if self.matrix_tester_uses_bluetooth_transport() {
+        if matrix_tester_poll_mode_for_transport(self.matrix_tester_uses_bluetooth_transport())
+            == MatrixTesterPollMode::Background
+        {
             if now.duration_since(self.matrix_tester_last_poll) >= poll_interval {
                 match self.start_vial_matrix_poll(ctx, rows, cols, remember_ever_pressed) {
                     VialHidTaskStart::Started => {
@@ -410,6 +405,22 @@ fn matrix_tester_poll_interval_for_transport(bluetooth: bool) -> std::time::Dura
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MatrixTesterPollMode {
+    Inline,
+    Background,
+}
+
+fn matrix_tester_poll_mode_for_transport(bluetooth: bool) -> MatrixTesterPollMode {
+    // BLE Vial round-trips can block on every desktop OS. Keep them on the
+    // serialized background HID worker so live tools remain responsive.
+    if bluetooth {
+        MatrixTesterPollMode::Background
+    } else {
+        MatrixTesterPollMode::Inline
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,6 +438,22 @@ mod tests {
         assert_eq!(
             matrix_tester_poll_interval_for_transport(false),
             std::time::Duration::from_millis(16)
+        );
+    }
+
+    #[test]
+    fn bluetooth_matrix_polling_uses_the_background_hid_worker_on_every_desktop() {
+        assert_eq!(
+            matrix_tester_poll_mode_for_transport(true),
+            MatrixTesterPollMode::Background
+        );
+    }
+
+    #[test]
+    fn usb_matrix_polling_stays_inline() {
+        assert_eq!(
+            matrix_tester_poll_mode_for_transport(false),
+            MatrixTesterPollMode::Inline
         );
     }
 }
