@@ -9,7 +9,6 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 const RAW_HID_PACKET_LEN: usize = 32;
-const REPORT_PACKET_LEN: usize = RAW_HID_PACKET_LEN + 1;
 const DATA_TIME: u8 = 0xAA;
 const DATA_VOLUME: u8 = 0xAB;
 const DATA_LAYOUT: u8 = 0xAC;
@@ -208,20 +207,20 @@ fn command_exists(program: &str) -> bool {
 }
 
 pub struct QmkHidHostBridge {
-    path: String,
+    device: crate::device::Device,
     mode: HostDataMode,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl QmkHidHostBridge {
-    pub fn start(path: String, mode: HostDataMode) -> Self {
+    pub fn start(device: crate::device::Device, mode: HostDataMode) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
-        let worker_path = path.clone();
-        let thread = thread::spawn(move || run_bridge(worker_path, mode, worker_stop));
+        let worker_device = device.clone();
+        let thread = thread::spawn(move || run_bridge(worker_device, mode, worker_stop));
         Self {
-            path,
+            device,
             mode,
             stop,
             thread: Some(thread),
@@ -236,7 +235,7 @@ impl QmkHidHostBridge {
         let was_running = self.thread.is_some();
         self.stop.store(true, Ordering::Relaxed);
         if was_running {
-            send_shutdown_payloads(&self.path, self.mode);
+            send_shutdown_payloads(&self.device, self.mode);
         }
         if let Some(thread) = self.thread.take() {
             let _ = thread::Builder::new()
@@ -254,8 +253,8 @@ impl Drop for QmkHidHostBridge {
     }
 }
 
-fn run_bridge(path: String, mode: HostDataMode, stop: Arc<AtomicBool>) {
-    let mut device: Option<hidapi::HidDevice> = None;
+fn run_bridge(target: crate::device::Device, mode: HostDataMode, stop: Arc<AtomicBool>) {
+    let mut device: Option<crate::hid::HidDevice> = None;
     let mut last_open_attempt = Instant::now() - Duration::from_secs(5);
     let mut last_time = None;
     let mut last_volume = None;
@@ -273,7 +272,7 @@ fn run_bridge(path: String, mode: HostDataMode, stop: Arc<AtomicBool>) {
     while !stop.load(Ordering::Relaxed) {
         if device.is_none() && last_open_attempt.elapsed() >= Duration::from_secs(2) {
             last_open_attempt = Instant::now();
-            device = open_raw_hid(&path)
+            device = open_host_data_hid(&target)
                 .map_err(|e| log::warn!("qmk-hid-host open failed: {e}"))
                 .ok();
             if device.is_some() {
@@ -290,7 +289,7 @@ fn run_bridge(path: String, mode: HostDataMode, stop: Arc<AtomicBool>) {
         }
 
         #[cfg(target_os = "linux")]
-        if !std::path::Path::new(&path).exists() {
+        if !target.uses_bluez_gatt_transport() && !std::path::Path::new(&target.path).exists() {
             log::warn!("qmk-hid-host device path disappeared; reconnecting");
             device = None;
             thread::sleep(Duration::from_millis(250));
@@ -373,13 +372,13 @@ fn run_bridge(path: String, mode: HostDataMode, stop: Arc<AtomicBool>) {
     log::info!("qmk-hid-host bridge stopped");
 }
 
-fn send_shutdown_payloads(path: &str, mode: HostDataMode) {
+fn send_shutdown_payloads(target: &crate::device::Device, mode: HostDataMode) {
     let payloads = shutdown_payloads(mode);
     if payloads.is_empty() {
         return;
     }
 
-    let Ok(device) = open_raw_hid(path).map_err(|e| {
+    let Ok(device) = open_host_data_hid(target).map_err(|e| {
         log::warn!("qmk-hid-host shutdown open failed: {e}");
     }) else {
         return;
@@ -406,29 +405,23 @@ fn shutdown_payloads(mode: HostDataMode) -> Vec<Vec<u8>> {
     payloads
 }
 
-fn open_raw_hid(path: &str) -> anyhow::Result<hidapi::HidDevice> {
-    #[cfg(target_os = "macos")]
-    let _hid_lock = crate::hid::macos_hid_operation_lock();
-    let api = hidapi::HidApi::new()?;
-    Ok(api.open_path(&std::ffi::CString::new(path)?)?)
+fn open_host_data_hid(device: &crate::device::Device) -> anyhow::Result<crate::hid::HidDevice> {
+    crate::hid::HidDevice::open_fresh_for(device)
 }
 
 fn pause_between_packets() {
     thread::sleep(Duration::from_millis(35));
 }
 
-fn write_payload(device: &hidapi::HidDevice, payload: &[u8]) -> hidapi::HidResult<usize> {
-    let mut packet = [0u8; REPORT_PACKET_LEN];
-    let len = payload.len().min(RAW_HID_PACKET_LEN);
-    packet[1..1 + len].copy_from_slice(&payload[..len]);
-    device.write(&packet)
+fn write_payload(device: &crate::hid::HidDevice, payload: &[u8]) -> anyhow::Result<()> {
+    device.write_output_report(payload)
 }
 
 fn write_text_payload(
-    device: &hidapi::HidDevice,
+    device: &crate::hid::HidDevice,
     data_type: u8,
     value: &str,
-) -> hidapi::HidResult<usize> {
+) -> anyhow::Result<()> {
     let mut payload = Vec::with_capacity(RAW_HID_PACKET_LEN);
     let mut bytes = value.as_bytes().to_vec();
     bytes.truncate(30);
@@ -688,6 +681,17 @@ fn split_media_line(line: &str) -> Option<(String, String)> {
 #[cfg(all(test, not(target_os = "windows")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layout_live_data_uses_the_shared_hid_output_path() {
+        let (device, recorder) = crate::hid::HidDevice::test_device();
+
+        write_payload(&device, &[DATA_LAYOUT, 1]).unwrap();
+
+        let requests = recorder.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(&requests[0][..4], &[DATA_LAYOUT, 1, 0, 0]);
+    }
 
     #[test]
     fn layout_code_index_maps_ru_en_aliases() {

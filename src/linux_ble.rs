@@ -473,17 +473,36 @@ impl LinuxBleDevice {
         })
     }
 
-    pub(crate) fn send(
-        &self,
-        data: &[u8],
-        response_matches: impl Fn(&[u8; 32]) -> bool,
-    ) -> Result<[u8; 32]> {
+    fn write_value(&self, data: &[u8]) -> Result<()> {
         if data.len() > 32 {
             bail!(
                 "Bluetooth GATT command too long — {} bytes, max 32 bytes",
                 data.len()
             );
         }
+
+        let mut payload = [0u8; 32];
+        payload[..data.len()].copy_from_slice(data);
+        let mut options = HashMap::<&str, Value<'_>>::new();
+        options.insert("type", Value::from(self.output_write_type));
+        characteristic_proxy(&self.connection, &self.output_path)?
+            .call::<_, _, ()>("WriteValue", &(payload.as_slice(), options))
+            .context("Failed to write the BlueZ Vial request")
+    }
+
+    pub(crate) fn write_output_report(&self, data: &[u8]) -> Result<()> {
+        let _command_guard = self
+            .command_lock
+            .lock()
+            .map_err(|_| anyhow::anyhow!("BlueZ Vial command lock poisoned"))?;
+        self.write_value(data)
+    }
+
+    pub(crate) fn send(
+        &self,
+        data: &[u8],
+        response_matches: impl Fn(&[u8; 32]) -> bool,
+    ) -> Result<[u8; 32]> {
         let _command_guard = self
             .command_lock
             .lock()
@@ -494,13 +513,7 @@ impl LinuxBleDevice {
             .map_err(|_| anyhow::anyhow!("BlueZ Vial notification lock poisoned"))?;
         while notifications.try_recv().is_ok() {}
 
-        let mut payload = [0u8; 32];
-        payload[..data.len()].copy_from_slice(data);
-        let mut options = HashMap::<&str, Value<'_>>::new();
-        options.insert("type", Value::from(self.output_write_type));
-        characteristic_proxy(&self.connection, &self.output_path)?
-            .call::<_, _, ()>("WriteValue", &(payload.as_slice(), options))
-            .context("Failed to write the BlueZ Vial request")?;
+        self.write_value(data)?;
 
         let deadline = Instant::now() + BLUEZ_REPLY_TIMEOUT;
         let mut last_unrelated = None;

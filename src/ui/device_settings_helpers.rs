@@ -1605,8 +1605,10 @@ impl EntropyApp {
             .and_then(|idx| self.device_manager.devices().get(idx))
             .map(|device| device.path.as_str());
 
-        let mut desired =
-            std::collections::HashMap::<String, crate::qmk_hid_host::HostDataMode>::new();
+        let mut desired = std::collections::HashMap::<
+            String,
+            (crate::device::Device, crate::qmk_hid_host::HostDataMode),
+        >::new();
 
         for device in self.device_manager.devices() {
             if device.firmware != FirmwareProtocol::Vial {
@@ -1630,17 +1632,21 @@ impl EntropyApp {
             }
 
             if !mode.is_empty() {
-                desired.insert(device.path.clone(), mode);
+                desired.insert(device.path.clone(), (device.clone(), mode));
             }
         }
 
-        self.qmk_hid_hosts
-            .retain(|path, bridge| desired.get(path).copied() == Some(bridge.mode()));
+        self.qmk_hid_hosts.retain(|path, bridge| {
+            desired
+                .get(path)
+                .map(|(_, mode)| *mode)
+                .is_some_and(|mode| mode == bridge.mode())
+        });
 
-        for (path, mode) in desired {
+        for (path, (device, mode)) in desired {
             self.qmk_hid_hosts
-                .entry(path.clone())
-                .or_insert_with(|| crate::qmk_hid_host::QmkHidHostBridge::start(path, mode));
+                .entry(path)
+                .or_insert_with(|| crate::qmk_hid_host::QmkHidHostBridge::start(device, mode));
         }
     }
 
