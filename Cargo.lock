@@ -1290,6 +1290,7 @@ dependencies = [
  "base64 0.21.7",
  "chrono",
  "dirs 5.0.1",
+ "dispatch2",
  "eframe",
  "egui",
  "env_logger",

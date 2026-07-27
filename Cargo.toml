@@ -66,6 +66,7 @@ windows = { version = "0.56", features = ["Foundation", "Media_Control", "Win32_
 # Vial shares a Bluetooth HID service with the keyboard reports. Shared mode
 # prevents hidapi from trying to seize the whole keyboard, which macOS rejects.
 hidapi = { version = "2.6", features = ["macos-shared-device"] }
+dispatch2 = "0.3.1"
 objc = "0.2"
 tray-icon = "0.22"
 

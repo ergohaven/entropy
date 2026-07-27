@@ -604,6 +604,14 @@ return mediaArtist & tab & mediaTitle
 
 #[cfg(target_os = "macos")]
 fn macos_layout_code() -> Option<String> {
+    // Carbon's Text Input Source APIs assert that they run on the main queue
+    // on current macOS releases. The host bridge itself stays on its worker;
+    // only the short system query crosses to the UI-owned queue.
+    dispatch2::run_on_main(|_| macos_layout_code_on_main_thread())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_layout_code_on_main_thread() -> Option<String> {
     use std::ffi::c_void;
 
     type CFArrayRef = *const c_void;
