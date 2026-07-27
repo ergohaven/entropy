@@ -396,6 +396,18 @@ fn firmware_version_from_vial_json(json: &serde_json::Value) -> Option<String> {
     .find_map(|path| json_path_string(json, path))
 }
 
+fn manufacturer_for_about(device_manufacturer: &str, json: &serde_json::Value) -> String {
+    let device_manufacturer = device_manufacturer.trim();
+    if !device_manufacturer.is_empty() {
+        return device_manufacturer.to_owned();
+    }
+
+    [&["manufacturer"][..], &["firmware", "manufacturer"][..]]
+        .into_iter()
+        .find_map(|path| json_path_string(json, path))
+        .unwrap_or_default()
+}
+
 fn supports_battery_halves_from_vial_json(json: &serde_json::Value) -> bool {
     let candidates = [
         json.get("entropy").and_then(|v| v.get("batteryHalves")),
@@ -786,6 +798,7 @@ impl EntropyApp {
                 let firmware_version = runtime_firmware_version
                     .clone()
                     .or_else(|| firmware_version_from_vial_json(&json));
+                let manufacturer = manufacturer_for_about(&dev.manufacturer, &json);
                 let supports_battery_halves = supports_battery_halves_from_vial_json(&json);
                 let battery_halves = if supports_battery_halves && !staged_bluetooth_load {
                     progress("Reading split battery levels…");
@@ -1267,7 +1280,7 @@ impl EntropyApp {
                 };
 
                 let about_info = DeviceAboutInfo {
-                    manufacturer: dev.manufacturer.clone(),
+                    manufacturer,
                     product: dev.name.clone(),
                     vendor_id: dev.vendor_id,
                     product_id: dev.product_id,
@@ -1423,6 +1436,24 @@ mod tests {
             firmware_version_from_vial_json(&json).as_deref(),
             Some("4.0.5")
         );
+    }
+
+    #[test]
+    fn about_manufacturer_falls_back_to_vial_metadata() {
+        let json = serde_json::json!({
+            "manufacturer": "Ergohaven"
+        });
+
+        assert_eq!(manufacturer_for_about("", &json), "Ergohaven");
+    }
+
+    #[test]
+    fn about_manufacturer_prefers_the_hid_identity() {
+        let json = serde_json::json!({
+            "manufacturer": "Firmware fallback"
+        });
+
+        assert_eq!(manufacturer_for_about("  Ergohaven  ", &json), "Ergohaven");
     }
 
     #[test]

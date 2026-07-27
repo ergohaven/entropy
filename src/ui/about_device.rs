@@ -175,8 +175,8 @@ fn device_about_rows(lang: crate::i18n::Language, info: &DeviceAboutInfo) -> Vec
             lang,
             "Производитель",
             "Manufacturer",
-            "USB manufacturer string",
-            "USB manufacturer string",
+            "Производитель из HID или метаданных прошивки",
+            "Manufacturer from HID or firmware metadata",
             text_or_unknown(&info.manufacturer),
         ),
         localized_row(
