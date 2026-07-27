@@ -5,6 +5,31 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.0 - Public Beta
+
+### Main Features
+
+- Added full Vial-RMK configuration over Bluetooth on Linux, Windows, and macOS, including dedicated device discovery, safe HID transport selection, clear USB/Bluetooth device labels, and automatic reconnect
+- Extended Bluetooth support to Matrix Tester, Layout Indicator, Vial lock/unlock, firmware settings, and QMK Live Features through one shared, serialized HID session
+- Added staged Bluetooth loading with schema caching, immediate first-layer availability, background loading for remaining layers and settings, and priority for interactive actions
+- Added separate left/right battery levels below the active layer name and a firmware-gated Charge Indicator setting
+- Reworked modular-device settings to follow the selected module and pointer mode, colocated encoder visibility with the relevant module, and added configurable encoder steps
+- Moved layer operations into the Layout menu and made QMK Live Features availability depend on firmware capabilities instead of the currently selected OLED preset
+
+### Fixes
+
+- Fixed Linux Bluetooth report framing, reply routing, composite HID discovery, BlueZ/kernel transport fallback, and RMK hidraw access
+- Fixed Windows and macOS Bluetooth Vial framing and HID sharing, including Windows Layout Indicator and Live Features transport
+- Prevented a macOS input-source crash by keeping TIS calls on the main queue, and reduced Bluetooth Matrix Tester/Layout Indicator polling latency
+- Kept Bluetooth startup, menus, hover feedback, Vial lock state, and configuration writes responsive while background HID work is active
+- Fixed RMK Tap-Hold, module-setting, and Layer LED write responses, and serialized staged Config writes to prevent competing HID operations
+- Fixed active-layer indication for Combo and Tap Dance actions and restored reliable Ctrl-wheel UI scaling
+
+### Contributors
+
+- Special thanks to @IgorArkhipov for continued testing and detailed engineering proposals around HID/settings lifecycle, module workflows, inherited-key presentation, and Vial unlock safety
+- Special thanks to @ImmortalDragonm for the layer import/export, PDF export, and asynchronous native-dialog foundation that this release continues to build on
+
 ## v0.2.8 - Public Beta
 
 ### Main Features
