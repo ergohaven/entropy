@@ -592,6 +592,7 @@ impl EntropyApp {
                 &[("device", &reconnect.display_name)],
             );
             self.hid_device = None;
+            self.shared_hid_output = None;
             self.selected_key = None;
             self.selected_encoder = None;
             self.keycode_picker.open = false;
@@ -614,6 +615,7 @@ impl EntropyApp {
             self.reset_settings_write_context();
             self.qmk_settings_write_queue.clear();
             self.hid_device = None;
+            self.shared_hid_output = None;
             self.undo_stack.clear();
             self.device_about_info = None;
             self.next_battery_refresh_at = None;

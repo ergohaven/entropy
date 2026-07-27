@@ -221,7 +221,7 @@ enum HidBackend {
         input_report_polling: std::sync::atomic::AtomicBool,
     },
     #[cfg(target_os = "windows")]
-    Proxy(HidProxy),
+    Proxy(std::sync::Arc<HidProxy>),
     #[cfg(target_os = "linux")]
     LinuxBle(crate::linux_ble::LinuxBleDevice),
     #[cfg(test)]
@@ -281,10 +281,63 @@ impl HidDevice {
 
 #[cfg(target_os = "windows")]
 struct HidProxy {
+    request_lock: Mutex<()>,
     child: Mutex<Child>,
     stdin: Mutex<ChildStdin>,
     rx: Mutex<mpsc::Receiver<String>>,
     transport: HidTransport,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+pub(crate) struct SharedHidOutput {
+    backend: SharedHidOutputBackend,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+enum SharedHidOutputBackend {
+    #[cfg(target_os = "windows")]
+    Proxy(std::sync::Weak<HidProxy>),
+    #[cfg(test)]
+    Test(TestHidRecorder),
+    #[cfg(not(any(target_os = "windows", test)))]
+    #[allow(dead_code)]
+    Unavailable,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl SharedHidOutput {
+    pub(crate) fn is_available(&self) -> bool {
+        match &self.backend {
+            #[cfg(target_os = "windows")]
+            SharedHidOutputBackend::Proxy(proxy) => proxy.strong_count() > 0,
+            #[cfg(test)]
+            SharedHidOutputBackend::Test(_) => true,
+            #[cfg(not(any(target_os = "windows", test)))]
+            SharedHidOutputBackend::Unavailable => false,
+        }
+    }
+
+    pub(crate) fn write_output_report(&self, data: &[u8]) -> Result<()> {
+        ensure_output_report_len(data)?;
+        match &self.backend {
+            #[cfg(target_os = "windows")]
+            SharedHidOutputBackend::Proxy(proxy) => proxy
+                .upgrade()
+                .context("Shared HID output owner is no longer available")?
+                .write_output_report(data),
+            #[cfg(test)]
+            SharedHidOutputBackend::Test(recorder) => {
+                record_test_output_report(recorder, data);
+                Ok(())
+            }
+            #[cfg(not(any(target_os = "windows", test)))]
+            SharedHidOutputBackend::Unavailable => {
+                bail!("Shared HID output is unavailable on this platform")
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -442,6 +495,20 @@ impl HidDevice {
         }
     }
 
+    pub(crate) fn shared_output(&self) -> Option<SharedHidOutput> {
+        match &self.backend {
+            #[cfg(target_os = "windows")]
+            HidBackend::Proxy(proxy) => Some(SharedHidOutput {
+                backend: SharedHidOutputBackend::Proxy(std::sync::Arc::downgrade(proxy)),
+            }),
+            #[cfg(test)]
+            HidBackend::Test { recorder, .. } => Some(SharedHidOutput {
+                backend: SharedHidOutputBackend::Test(recorder.clone()),
+            }),
+            _ => None,
+        }
+    }
+
     fn open_fresh_for_local(device: &crate::device::Device) -> Result<Self> {
         #[cfg(target_os = "macos")]
         prepare_macos_bluetooth_hid_access(device)?;
@@ -517,12 +584,13 @@ impl HidDevice {
         }
 
         Ok(Self {
-            backend: HidBackend::Proxy(HidProxy {
+            backend: HidBackend::Proxy(std::sync::Arc::new(HidProxy {
+                request_lock: Mutex::new(()),
                 child: Mutex::new(child),
                 stdin: Mutex::new(stdin),
                 rx: Mutex::new(rx),
                 transport: device_transport(device),
-            }),
+            })),
         })
     }
 
@@ -622,13 +690,7 @@ impl HidDevice {
     /// Live host data is write-only, but it must use the same transport-specific
     /// report framing as normal Vial commands (notably report ID 5 over RMK BLE).
     pub(crate) fn write_output_report(&self, data: &[u8]) -> Result<()> {
-        if data.len() > MSG_LEN {
-            bail!(
-                "HID output report too long — {} bytes, max {} bytes",
-                data.len(),
-                MSG_LEN
-            );
-        }
+        ensure_output_report_len(data)?;
 
         match &self.backend {
             HidBackend::Local {
@@ -643,13 +705,7 @@ impl HidDevice {
             HidBackend::LinuxBle(device) => device.write_output_report(data),
             #[cfg(test)]
             HidBackend::Test { recorder, .. } => {
-                let mut report = [0; MSG_LEN];
-                report[..data.len()].copy_from_slice(data);
-                recorder
-                    .requests
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .push(report);
+                record_test_output_report(recorder, data);
                 Ok(())
             }
         }
@@ -793,6 +849,29 @@ fn ensure_hid_path_present(path: Option<&Path>) -> Result<()> {
     #[cfg(not(target_os = "linux"))]
     let _ = path;
     Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn ensure_output_report_len(data: &[u8]) -> Result<()> {
+    if data.len() > MSG_LEN {
+        bail!(
+            "HID output report too long — {} bytes, max {} bytes",
+            data.len(),
+            MSG_LEN
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn record_test_output_report(recorder: &TestHidRecorder, data: &[u8]) {
+    let mut report = [0; MSG_LEN];
+    report[..data.len()].copy_from_slice(data);
+    recorder
+        .requests
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .push(report);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1450,6 +1529,10 @@ impl HidProxy {
     }
 
     fn request(&self, request: &str) -> Result<String> {
+        let _request_guard = self
+            .request_lock
+            .lock()
+            .map_err(|_| anyhow::anyhow!("HID helper request lock poisoned"))?;
         {
             let mut stdin = self
                 .stdin

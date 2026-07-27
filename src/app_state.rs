@@ -3661,6 +3661,10 @@ pub struct EntropyApp {
     /// Persistent open HID device for real-time writes (Vial)
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) hid_device: Option<crate::hid::HidDevice>,
+    /// Non-owning output path into the persistent HID owner. Live host data
+    /// uses it without opening a competing Windows Bluetooth handle.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) shared_hid_output: Option<crate::hid::SharedHidOutput>,
     /// Background whole-layer HID write. Owns the device handle while active.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) layer_write_task: Option<LayerWriteTask>,

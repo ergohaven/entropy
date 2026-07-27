@@ -638,6 +638,10 @@ impl EntropyApp {
                 // Keep the same HID owner that loaded the keyboard, matching vial-gui's
                 // open-once/reload/use model. Avoid Entropy-only reopen churn when switching
                 // between qmk-vial and RMK devices.
+                self.shared_hid_output = r
+                    .hid_device
+                    .as_ref()
+                    .and_then(crate::hid::HidDevice::shared_output);
                 self.hid_device = r.hid_device;
                 self.supported_qmk_settings = r.supported_qmk_settings;
                 self.deferred_device_load = r.deferred_load;

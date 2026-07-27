@@ -209,19 +209,27 @@ fn command_exists(program: &str) -> bool {
 pub struct QmkHidHostBridge {
     device: crate::device::Device,
     mode: HostDataMode,
+    shared_output: Option<crate::hid::SharedHidOutput>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl QmkHidHostBridge {
-    pub fn start(device: crate::device::Device, mode: HostDataMode) -> Self {
+    pub fn start(
+        device: crate::device::Device,
+        mode: HostDataMode,
+        shared_output: Option<crate::hid::SharedHidOutput>,
+    ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
         let worker_device = device.clone();
-        let thread = thread::spawn(move || run_bridge(worker_device, mode, worker_stop));
+        let worker_output = shared_output.clone();
+        let thread =
+            thread::spawn(move || run_bridge(worker_device, mode, worker_output, worker_stop));
         Self {
             device,
             mode,
+            shared_output,
             stop,
             thread: Some(thread),
         }
@@ -231,11 +239,15 @@ impl QmkHidHostBridge {
         self.mode
     }
 
+    pub fn uses_shared_output(&self) -> bool {
+        self.shared_output.is_some()
+    }
+
     pub fn stop(&mut self) {
         let was_running = self.thread.is_some();
         self.stop.store(true, Ordering::Relaxed);
         if was_running {
-            send_shutdown_payloads(&self.device, self.mode);
+            send_shutdown_payloads(&self.device, self.mode, self.shared_output.as_ref());
         }
         if let Some(thread) = self.thread.take() {
             let _ = thread::Builder::new()
@@ -253,8 +265,13 @@ impl Drop for QmkHidHostBridge {
     }
 }
 
-fn run_bridge(target: crate::device::Device, mode: HostDataMode, stop: Arc<AtomicBool>) {
-    let mut device: Option<crate::hid::HidDevice> = None;
+fn run_bridge(
+    target: crate::device::Device,
+    mode: HostDataMode,
+    shared_output: Option<crate::hid::SharedHidOutput>,
+    stop: Arc<AtomicBool>,
+) {
+    let mut device: Option<HostDataHid> = None;
     let mut last_open_attempt = Instant::now() - Duration::from_secs(5);
     let mut last_time = None;
     let mut last_volume = None;
@@ -272,11 +289,18 @@ fn run_bridge(target: crate::device::Device, mode: HostDataMode, stop: Arc<Atomi
     while !stop.load(Ordering::Relaxed) {
         if device.is_none() && last_open_attempt.elapsed() >= Duration::from_secs(2) {
             last_open_attempt = Instant::now();
-            device = open_host_data_hid(&target)
+            device = open_host_data_hid(&target, shared_output.as_ref())
                 .map_err(|e| log::warn!("qmk-hid-host open failed: {e}"))
                 .ok();
             if device.is_some() {
-                log::info!("qmk-hid-host bridge started");
+                log::info!(
+                    "qmk-hid-host bridge started ({})",
+                    if device.as_ref().is_some_and(HostDataHid::uses_shared_output) {
+                        "shared HID owner"
+                    } else {
+                        "dedicated HID owner"
+                    }
+                );
             }
         }
 
@@ -364,6 +388,12 @@ fn run_bridge(target: crate::device::Device, mode: HostDataMode, stop: Arc<Atomi
         if write_failed {
             log::warn!("qmk-hid-host bridge write failed; reconnecting");
             device = None;
+            last_time = None;
+            last_volume = None;
+            last_layout = None;
+            last_artist.clear();
+            last_title.clear();
+            last_media_full_send = Instant::now() - Duration::from_secs(60);
         }
 
         thread::sleep(Duration::from_millis(200));
@@ -372,13 +402,17 @@ fn run_bridge(target: crate::device::Device, mode: HostDataMode, stop: Arc<Atomi
     log::info!("qmk-hid-host bridge stopped");
 }
 
-fn send_shutdown_payloads(target: &crate::device::Device, mode: HostDataMode) {
+fn send_shutdown_payloads(
+    target: &crate::device::Device,
+    mode: HostDataMode,
+    shared_output: Option<&crate::hid::SharedHidOutput>,
+) {
     let payloads = shutdown_payloads(mode);
     if payloads.is_empty() {
         return;
     }
 
-    let Ok(device) = open_host_data_hid(target).map_err(|e| {
+    let Ok(device) = open_host_data_hid(target, shared_output).map_err(|e| {
         log::warn!("qmk-hid-host shutdown open failed: {e}");
     }) else {
         return;
@@ -405,23 +439,43 @@ fn shutdown_payloads(mode: HostDataMode) -> Vec<Vec<u8>> {
     payloads
 }
 
-fn open_host_data_hid(device: &crate::device::Device) -> anyhow::Result<crate::hid::HidDevice> {
-    crate::hid::HidDevice::open_fresh_for(device)
+enum HostDataHid {
+    Shared(crate::hid::SharedHidOutput),
+    Dedicated(crate::hid::HidDevice),
+}
+
+impl HostDataHid {
+    fn uses_shared_output(&self) -> bool {
+        matches!(self, Self::Shared(_))
+    }
+
+    fn write_output_report(&self, payload: &[u8]) -> anyhow::Result<()> {
+        match self {
+            Self::Shared(output) => output.write_output_report(payload),
+            Self::Dedicated(device) => device.write_output_report(payload),
+        }
+    }
+}
+
+fn open_host_data_hid(
+    device: &crate::device::Device,
+    shared_output: Option<&crate::hid::SharedHidOutput>,
+) -> anyhow::Result<HostDataHid> {
+    if let Some(output) = shared_output.filter(|output| output.is_available()) {
+        return Ok(HostDataHid::Shared(output.clone()));
+    }
+    crate::hid::HidDevice::open_fresh_for(device).map(HostDataHid::Dedicated)
 }
 
 fn pause_between_packets() {
     thread::sleep(Duration::from_millis(35));
 }
 
-fn write_payload(device: &crate::hid::HidDevice, payload: &[u8]) -> anyhow::Result<()> {
+fn write_payload(device: &HostDataHid, payload: &[u8]) -> anyhow::Result<()> {
     device.write_output_report(payload)
 }
 
-fn write_text_payload(
-    device: &crate::hid::HidDevice,
-    data_type: u8,
-    value: &str,
-) -> anyhow::Result<()> {
+fn write_text_payload(device: &HostDataHid, data_type: u8, value: &str) -> anyhow::Result<()> {
     let mut payload = Vec::with_capacity(RAW_HID_PACKET_LEN);
     let mut bytes = value.as_bytes().to_vec();
     bytes.truncate(30);
@@ -683,10 +737,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn layout_live_data_uses_the_shared_hid_output_path() {
+    fn layout_live_data_uses_the_connected_hid_owner() {
         let (device, recorder) = crate::hid::HidDevice::test_device();
+        let output = device.shared_output().unwrap();
+        let target = crate::device::Device {
+            name: "K:04".to_owned(),
+            vendor_id: 0xE126,
+            product_id: 0x0074,
+            manufacturer: "Ergohaven".to_owned(),
+            serial_number: "test".to_owned(),
+            bus_type: "Bluetooth".to_owned(),
+            path: "test".to_owned(),
+            firmware: crate::firmware::FirmwareProtocol::Vial,
+        };
+        let host_data_hid = open_host_data_hid(&target, Some(&output)).unwrap();
 
-        write_payload(&device, &[DATA_LAYOUT, 1]).unwrap();
+        assert!(host_data_hid.uses_shared_output());
+        write_payload(&host_data_hid, &[DATA_LAYOUT, 1]).unwrap();
 
         let requests = recorder.requests();
         assert_eq!(requests.len(), 1);

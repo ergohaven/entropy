@@ -98,6 +98,7 @@ impl EntropyApp {
 
         self.connection_generation = self.connection_generation.wrapping_add(1);
         self.hid_device = None;
+        self.shared_hid_output = None;
         self.qmk_hid_hosts.clear();
         self.pending_device_connect = None;
         self.pending_entlayout_import_path = None;
@@ -210,6 +211,7 @@ impl EntropyApp {
         self.qmk_settings_write_queue.clear();
         self.pending_device_connect = None;
         self.hid_device = None;
+        self.shared_hid_output = None;
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.next_battery_refresh_at = None;

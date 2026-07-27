@@ -31,6 +31,8 @@ impl EntropyApp {
             #[cfg(not(target_arch = "wasm32"))]
             hid_device: None,
             #[cfg(not(target_arch = "wasm32"))]
+            shared_hid_output: None,
+            #[cfg(not(target_arch = "wasm32"))]
             layer_write_task: None,
             #[cfg(not(target_arch = "wasm32"))]
             pending_layer_write: None,
@@ -246,12 +248,17 @@ impl EntropyApp {
             .and_then(|idx| self.device_manager.devices().get(idx))
         else {
             self.hid_device = None;
+            self.shared_hid_output = None;
             return;
         };
         match crate::hid::HidDevice::open_fresh_for(dev) {
-            Ok(hid) => self.hid_device = Some(hid),
+            Ok(hid) => {
+                self.shared_hid_output = hid.shared_output();
+                self.hid_device = Some(hid);
+            }
             Err(e) => {
                 self.hid_device = None;
+                self.shared_hid_output = None;
                 self.status_msg = crate::i18n::tr_catalog_format(
                     self.app_settings.language,
                     "status_messages.hid_reopen_failed",
