@@ -11,7 +11,10 @@ impl EntropyApp {
     }
 
     fn matrix_tester_poll_interval(&self) -> std::time::Duration {
-        matrix_tester_poll_interval_for_transport(self.matrix_tester_uses_bluetooth_transport())
+        matrix_tester_poll_interval_for_target(
+            self.matrix_tester_uses_bluetooth_transport(),
+            cfg!(target_os = "macos"),
+        )
     }
 
     pub(super) fn reset_matrix_tester_state(&mut self) {
@@ -397,10 +400,16 @@ impl EntropyApp {
     }
 }
 
-fn matrix_tester_poll_interval_for_transport(bluetooth: bool) -> std::time::Duration {
-    if bluetooth {
+fn matrix_tester_poll_interval_for_target(
+    bluetooth: bool,
+    target_is_macos: bool,
+) -> std::time::Duration {
+    if bluetooth && !target_is_macos {
         MATRIX_TESTER_BLUETOOTH_POLL_INTERVAL
     } else {
+        // macOS already keeps a 16 ms visible Bluetooth repaint cadence and
+        // serializes Vial HID operations. Avoid holding fast BLE matrix
+        // round-trips to an 80 ms request cadence.
         MATRIX_TESTER_POLL_INTERVAL
     }
 }
@@ -426,9 +435,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bluetooth_matrix_polling_is_paced_for_ble() {
+    fn macos_bluetooth_matrix_polling_keeps_realtime_cadence() {
         assert_eq!(
-            matrix_tester_poll_interval_for_transport(true),
+            matrix_tester_poll_interval_for_target(true, true),
+            std::time::Duration::from_millis(16)
+        );
+    }
+
+    #[test]
+    fn other_bluetooth_matrix_polling_keeps_paced_cadence() {
+        assert_eq!(
+            matrix_tester_poll_interval_for_target(true, false),
             std::time::Duration::from_millis(80)
         );
     }
@@ -436,7 +453,11 @@ mod tests {
     #[test]
     fn usb_matrix_polling_keeps_realtime_cadence() {
         assert_eq!(
-            matrix_tester_poll_interval_for_transport(false),
+            matrix_tester_poll_interval_for_target(false, false),
+            std::time::Duration::from_millis(16)
+        );
+        assert_eq!(
+            matrix_tester_poll_interval_for_target(false, true),
             std::time::Duration::from_millis(16)
         );
     }
