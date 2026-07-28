@@ -1430,6 +1430,7 @@ dependencies = [
  "serde_json",
  "tray-icon",
  "ureq",
+ "url",
  "wasm-bindgen-futures",
  "web-sys",
  "windows 0.56.0",

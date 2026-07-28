@@ -1,6 +1,5 @@
 const GITHUB_LATEST_RELEASE_API: &str =
     "https://api.github.com/repos/ergohaven/entropy/releases/latest";
-const GITHUB_RELEASE_ROOT: &str = "https://github.com/ergohaven/entropy/releases/";
 
 #[derive(Clone, Debug)]
 pub(crate) struct UpdateAsset {
@@ -124,11 +123,19 @@ pub(crate) fn update_available(state: &UpdateCheckState) -> bool {
 }
 
 pub(crate) fn open_url_in_browser(url: &str) -> bool {
+    open_trusted_release_url(url, launch_url_in_browser)
+}
+
+fn open_trusted_release_url(url: &str, launch: impl FnOnce(&str) -> bool) -> bool {
     if !is_trusted_release_url(url) {
         log::warn!("Refusing to open an untrusted update URL");
         return false;
     }
 
+    launch(url)
+}
+
+fn launch_url_in_browser(url: &str) -> bool {
     #[cfg(target_os = "windows")]
     {
         use windows_sys::Win32::UI::Shell::ShellExecuteW;
@@ -174,12 +181,30 @@ pub(crate) fn open_url_in_browser(url: &str) -> bool {
 }
 
 fn is_trusted_release_url(url: &str) -> bool {
-    let Some(path) = url.strip_prefix(GITHUB_RELEASE_ROOT) else {
+    let Ok(url) = url::Url::parse(url) else {
         return false;
     };
-    path.strip_prefix("tag/")
-        .or_else(|| path.strip_prefix("download/"))
-        .is_some_and(|remainder| !remainder.is_empty())
+    if url.scheme() != "https"
+        || url.host_str() != Some("github.com")
+        || url.port().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return false;
+    }
+
+    let Some(segments) = url.path_segments() else {
+        return false;
+    };
+    match segments.collect::<Vec<_>>().as_slice() {
+        ["ergohaven", "entropy", "releases", "tag", tag] => !tag.is_empty(),
+        ["ergohaven", "entropy", "releases", "download", tag, asset] => {
+            !tag.is_empty() && !asset.is_empty()
+        }
+        _ => false,
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -280,6 +305,9 @@ mod tests {
         assert!(is_trusted_release_url(
             "https://github.com/ergohaven/entropy/releases/download/v0.3.0/Entropy-Windows-x86_64.exe"
         ));
+        assert!(is_trusted_release_url(
+            "https://github.com/ergohaven/entropy/releases/tag/release%2Fv0.3.0"
+        ));
     }
 
     #[test]
@@ -292,14 +320,40 @@ mod tests {
             "file:///C:/Windows/System32/calc.exe",
             "https://github.com/ergohaven/entropy/releases/tag/",
             "https://github.com/ergohaven/entropy/releases/download/",
+            "https://github.com/ergohaven/entropy/releases/tag/v0.3.0/extra",
+            "https://github.com/ergohaven/entropy/releases/download/v0.3.0/nested/Entropy.exe",
+            "https://github.com/ergohaven/entropy/releases/tag/v0.3.0?source=update",
+            "https://github.com/ergohaven/entropy/releases/download/../../../../attacker/repo/releases/download/v1/payload.exe",
+            "https://github.com/ergohaven/entropy/releases/download/%2e%2e/%2e%2e/%2e%2e/%2e%2e/attacker/repo/releases/download/v1/payload.exe",
+            "https://github.com/ergohaven/entropy/releases/download/..\\..\\..\\../attacker/repo/releases/download/v1/payload.exe",
         ] {
             assert!(!is_trusted_release_url(url), "{url}");
         }
     }
 
     #[test]
-    fn refuses_untrusted_url_before_launch() {
-        assert!(!open_url_in_browser("file:///C:/Windows/System32/calc.exe"));
+    fn refuses_untrusted_url_without_launching() {
+        let mut launched = false;
+        assert!(!open_trusted_release_url(
+            "file:///C:/Windows/System32/calc.exe",
+            |_| {
+                launched = true;
+                true
+            }
+        ));
+        assert!(!launched);
+    }
+
+    #[test]
+    fn forwards_trusted_url_to_launcher() {
+        let trusted_url = "https://github.com/ergohaven/entropy/releases/tag/v0.3.0";
+        let mut launched_url = None;
+
+        assert!(open_trusted_release_url(trusted_url, |url| {
+            launched_url = Some(url.to_owned());
+            true
+        }));
+        assert_eq!(launched_url.as_deref(), Some(trusted_url));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
