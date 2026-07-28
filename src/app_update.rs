@@ -1,5 +1,6 @@
 const GITHUB_LATEST_RELEASE_API: &str =
     "https://api.github.com/repos/ergohaven/entropy/releases/latest";
+const GITHUB_RELEASE_ROOT: &str = "https://github.com/ergohaven/entropy/releases/";
 
 #[derive(Clone, Debug)]
 pub(crate) struct UpdateAsset {
@@ -123,13 +124,31 @@ pub(crate) fn update_available(state: &UpdateCheckState) -> bool {
 }
 
 pub(crate) fn open_url_in_browser(url: &str) -> bool {
+    if !is_trusted_release_url(url) {
+        log::warn!("Refusing to open an untrusted update URL");
+        return false;
+    }
+
     #[cfg(target_os = "windows")]
     {
-        return std::process::Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false);
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+        let url = url
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let result = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                url.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        return result as usize > 32;
     }
     #[cfg(target_os = "macos")]
     {
@@ -152,6 +171,15 @@ pub(crate) fn open_url_in_browser(url: &str) -> bool {
         let _ = url;
         false
     }
+}
+
+fn is_trusted_release_url(url: &str) -> bool {
+    let Some(path) = url.strip_prefix(GITHUB_RELEASE_ROOT) else {
+        return false;
+    };
+    path.strip_prefix("tag/")
+        .or_else(|| path.strip_prefix("download/"))
+        .is_some_and(|remainder| !remainder.is_empty())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -243,6 +271,36 @@ fn normalized_arch_label() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trusts_entropy_release_urls() {
+        assert!(is_trusted_release_url(
+            "https://github.com/ergohaven/entropy/releases/tag/v0.3.0"
+        ));
+        assert!(is_trusted_release_url(
+            "https://github.com/ergohaven/entropy/releases/download/v0.3.0/Entropy-Windows-x86_64.exe"
+        ));
+    }
+
+    #[test]
+    fn rejects_untrusted_update_urls() {
+        for url in [
+            "http://github.com/ergohaven/entropy/releases/tag/v0.3.0",
+            "https://github.com.evil.invalid/ergohaven/entropy/releases/tag/v0.3.0",
+            "https://github.com/ergohaven/another-repo/releases/tag/v0.3.0",
+            "https://github.com/ergohaven/entropy/issues",
+            "file:///C:/Windows/System32/calc.exe",
+            "https://github.com/ergohaven/entropy/releases/tag/",
+            "https://github.com/ergohaven/entropy/releases/download/",
+        ] {
+            assert!(!is_trusted_release_url(url), "{url}");
+        }
+    }
+
+    #[test]
+    fn refuses_untrusted_url_before_launch() {
+        assert!(!open_url_in_browser("file:///C:/Windows/System32/calc.exe"));
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
