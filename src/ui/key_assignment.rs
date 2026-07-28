@@ -377,9 +377,9 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn undo(&mut self, ctx: &egui::Context) {
-        if self.vial_hid_background_layer_active() {
+        if self.vial_hid_nonblocking_read_active() {
             self.pending_layout_undo = true;
-            self.deferred_device_load.defer_background_for_user_input();
+            self.defer_background_layer_for_user_input_if_active();
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
             return;
         }
@@ -389,7 +389,7 @@ impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn maybe_start_pending_layout_undo(&mut self, ctx: &egui::Context) {
         if !self.pending_layout_undo
-            || self.vial_hid_background_layer_active()
+            || self.vial_hid_nonblocking_read_active()
             || self.hid_user_action_busy()
         {
             return;

@@ -84,51 +84,20 @@ impl EntropyApp {
         if self.is_vial_locked() {
             return;
         }
+        if self.vial_hid_task_active() {
+            return;
+        }
         let now = std::time::Instant::now();
         let poll_interval = self.matrix_tester_poll_interval();
 
-        if matrix_tester_poll_mode_for_transport(self.matrix_tester_uses_bluetooth_transport())
-            == MatrixTesterPollMode::Background
-        {
-            if now.duration_since(self.matrix_tester_last_poll) >= poll_interval {
-                match self.start_vial_matrix_poll(ctx, rows, cols, remember_ever_pressed) {
-                    VialHidTaskStart::Started => {
-                        self.matrix_tester_last_poll = now;
-                    }
-                    VialHidTaskStart::Busy | VialHidTaskStart::NoDevice => {}
-                }
-            }
-            ctx.request_repaint_after(poll_interval);
-            return;
-        }
-
-        let Some(hid) = &self.hid_device else {
-            return;
-        };
-
         if now.duration_since(self.matrix_tester_last_poll) >= poll_interval {
-            self.matrix_tester_last_poll = now;
-            let poll_result = hid.get_switch_matrix_with_rmk_byte_order(
-                rows,
-                cols,
-                self.matrix_tester_rmk_byte_order,
-            );
-            match poll_result {
-                Ok(pressed) => {
-                    self.finish_matrix_tester_poll(pressed, remember_ever_pressed);
+            match self.start_vial_matrix_poll(ctx, rows, cols, remember_ever_pressed) {
+                VialHidTaskStart::Started => {
+                    self.matrix_tester_last_poll = now;
+                    return;
                 }
-                Err(e) => {
-                    log::warn!("Matrix poll error: {e}");
-                    if crate::hid::is_disconnect_error(&e) {
-                        if !self.begin_bluetooth_reconnect(e.to_string()) {
-                            self.clear_connected_keyboard_state("Device disconnected");
-                        }
-                        return;
-                    }
-                    self.matrix_tester_lock_checked = false;
-                    self.matrix_tester_last_lock_check =
-                        std::time::Instant::now() - MATRIX_TESTER_LOCK_CHECK_INTERVAL;
-                }
+                VialHidTaskStart::Busy => {}
+                VialHidTaskStart::NoDevice => return,
             }
         }
         ctx.request_repaint_after(poll_interval);
@@ -407,26 +376,9 @@ fn matrix_tester_poll_interval_for_target(
     if bluetooth && !target_is_macos {
         MATRIX_TESTER_BLUETOOTH_POLL_INTERVAL
     } else {
-        // macOS already keeps a 16 ms visible Bluetooth repaint cadence and
-        // serializes Vial HID operations. Avoid holding fast BLE matrix
-        // round-trips to an 80 ms request cadence.
+        // Keep USB and macOS Bluetooth reads at the visible 16 ms cadence.
+        // Other desktop Bluetooth transports use a paced request interval.
         MATRIX_TESTER_POLL_INTERVAL
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum MatrixTesterPollMode {
-    Inline,
-    Background,
-}
-
-fn matrix_tester_poll_mode_for_transport(bluetooth: bool) -> MatrixTesterPollMode {
-    // BLE Vial round-trips can block on every desktop OS. Keep them on the
-    // serialized background HID worker so live tools remain responsive.
-    if bluetooth {
-        MatrixTesterPollMode::Background
-    } else {
-        MatrixTesterPollMode::Inline
     }
 }
 
@@ -463,18 +415,47 @@ mod tests {
     }
 
     #[test]
-    fn bluetooth_matrix_polling_uses_the_background_hid_worker_on_every_desktop() {
-        assert_eq!(
-            matrix_tester_poll_mode_for_transport(true),
-            MatrixTesterPollMode::Background
-        );
-    }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn usb_matrix_polling_starts_a_background_hid_task() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        app.device_manager
+            .replace_devices(vec![crate::device::Device {
+                name: "Test USB keyboard".to_owned(),
+                vendor_id: 0xE126,
+                product_id: 0x0074,
+                manufacturer: "Ergohaven".to_owned(),
+                serial_number: "TEST-USB".to_owned(),
+                bus_type: "USB".to_owned(),
+                path: "test-usb".to_owned(),
+                firmware: FirmwareProtocol::Vial,
+            }]);
+        app.selected_device = Some(0);
+        app.firmware = FirmwareProtocol::Vial;
+        app.hid_device = Some(hid);
+        app.matrix_tester_last_poll = std::time::Instant::now() - MATRIX_TESTER_POLL_INTERVAL;
 
-    #[test]
-    fn usb_matrix_polling_stays_inline() {
-        assert_eq!(
-            matrix_tester_poll_mode_for_transport(false),
-            MatrixTesterPollMode::Inline
-        );
+        app.poll_switch_matrix_state(&ctx, 1, 1, false);
+
+        assert!(app.vial_hid_task_active());
+        assert!(app.hid_device.is_none());
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            app.poll_vial_hid_task(&ctx);
+            if !app.vial_hid_task_active() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        assert!(!app.vial_hid_task_active());
+        assert!(app.hid_device.is_some());
+        assert_eq!(app.matrix_tester_pressed, vec![false]);
+        let requests = recorder.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(&requests[0][..2], &[0x02, 0x03]);
     }
 }

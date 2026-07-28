@@ -789,14 +789,14 @@ impl EntropyApp {
         action_key: &'static str,
         undo_behavior: LayerUndoBehavior,
     ) {
-        if self.vial_hid_background_layer_active() {
+        if self.vial_hid_nonblocking_read_active() {
             self.pending_layer_write = Some(PendingLayerWrite {
                 layer,
                 desired,
                 action_key,
                 undo_behavior,
             });
-            self.deferred_device_load.defer_background_for_user_input();
+            self.defer_background_layer_for_user_input_if_active();
             return;
         }
 
@@ -983,7 +983,7 @@ impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn maybe_start_pending_layer_write(&mut self) {
         if self.pending_layer_write.is_none()
-            || self.vial_hid_background_layer_active()
+            || self.vial_hid_nonblocking_read_active()
             || self.hid_user_action_busy()
         {
             return;

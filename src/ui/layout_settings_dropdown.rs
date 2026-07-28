@@ -31,10 +31,10 @@ fn vial_lock_menu_state(
 
 fn vial_lock_control_idle(
     user_action_busy: bool,
-    background_layer_active: bool,
+    nonblocking_read_active: bool,
     is_unlocked: bool,
 ) -> bool {
-    !user_action_busy && (!is_unlocked || !background_layer_active)
+    !user_action_busy && (!is_unlocked || !nonblocking_read_active)
 }
 
 impl EntropyApp {
@@ -105,7 +105,7 @@ impl EntropyApp {
             #[cfg(not(target_arch = "wasm32"))]
             let vial_hid_idle = vial_lock_control_idle(
                 self.hid_user_action_busy(),
-                self.vial_hid_background_layer_active(),
+                self.vial_hid_nonblocking_read_active(),
                 is_unlocked,
             );
             #[cfg(target_arch = "wasm32")]
@@ -633,7 +633,7 @@ mod tests {
     }
 
     #[test]
-    fn background_layer_keeps_unlock_available_but_not_unqueued_lock() {
+    fn nonblocking_read_keeps_unlock_available_but_not_unqueued_lock() {
         assert!(vial_lock_control_idle(false, true, false));
         assert!(!vial_lock_control_idle(false, true, true));
     }

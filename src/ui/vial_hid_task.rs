@@ -42,6 +42,17 @@ pub(super) enum VialHidOperation {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+impl VialHidOperation {
+    fn is_background_layer(&self) -> bool {
+        matches!(self, Self::Deferred(request) if request.is_background_layer())
+    }
+
+    fn is_nonblocking_read(&self) -> bool {
+        matches!(self, Self::Matrix { .. }) || self.is_background_layer()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 enum VialHidOutcome {
     UnlockStarted {
         unlocked: bool,
@@ -207,17 +218,28 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn vial_hid_background_layer_active(&self) -> bool {
-        self.vial_hid_task.as_ref().is_some_and(|task| {
-            matches!(
-                &task.operation,
-                VialHidOperation::Deferred(request) if request.is_background_layer()
-            )
-        })
+        self.vial_hid_task
+            .as_ref()
+            .is_some_and(|task| task.operation.is_background_layer())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn vial_hid_nonblocking_read_active(&self) -> bool {
+        self.vial_hid_task
+            .as_ref()
+            .is_some_and(|task| task.operation.is_nonblocking_read())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn defer_background_layer_for_user_input_if_active(&mut self) {
+        if self.vial_hid_background_layer_active() {
+            self.deferred_device_load.defer_background_for_user_input();
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn vial_hid_task_blocks_user_action(&self) -> bool {
-        self.vial_hid_task.is_some() && !self.vial_hid_background_layer_active()
+        self.vial_hid_task.is_some() && !self.vial_hid_nonblocking_read_active()
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -682,7 +704,8 @@ mod tests {
     }
 
     fn poll_until_vial_hid_idle(app: &mut EntropyApp, ctx: &egui::Context) {
-        for _ in 0..100 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
             app.poll_vial_hid_task(ctx);
             if !app.vial_hid_task_active() {
                 return;
@@ -866,7 +889,8 @@ mod tests {
         assert!(app.pending_layout_undo);
         assert_eq!(app.undo_stack.len(), 1);
 
-        for _ in 0..100 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
             app.poll_vial_hid_task(&ctx);
             app.maybe_start_pending_layout_undo(&ctx);
             if !app.vial_hid_task_active() && !app.pending_layout_undo {
@@ -933,7 +957,8 @@ mod tests {
         assert!(app.pending_layer_write.is_some());
         assert_eq!(app.layout.as_ref().unwrap().get_keycode(0, 0), 0x0004);
 
-        for _ in 0..100 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
             app.poll_vial_hid_task(&ctx);
             app.maybe_start_pending_layer_write();
             app.poll_layer_write(&ctx);
@@ -960,6 +985,111 @@ mod tests {
         let requests = recorder.requests();
         assert_eq!(requests.len(), 3);
         assert_eq!(requests[0][0], 0x12);
+        assert_eq!(requests[1][0], 0x05);
+        assert_eq!(requests[2][0], 0x04);
+    }
+
+    #[test]
+    fn matrix_read_does_not_disable_user_actions_and_queued_undo_runs_next() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        app.layout = Some(single_key_layout(0x0004));
+        app.undo_stack.push(UndoAction::Key {
+            layer: 0,
+            key_idx: 0,
+            old_kc: 0,
+        });
+        app.hid_device = Some(hid);
+
+        assert_eq!(
+            app.start_vial_matrix_poll(&ctx, 1, 1, false),
+            VialHidTaskStart::Started
+        );
+        assert!(!app.hid_user_action_busy());
+
+        app.undo(&ctx);
+
+        assert!(app.pending_layout_undo);
+        assert_eq!(app.undo_stack.len(), 1);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            app.poll_vial_hid_task(&ctx);
+            app.maybe_start_pending_layout_undo(&ctx);
+            if !app.vial_hid_task_active() && !app.pending_layout_undo {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        assert!(!app.pending_layout_undo);
+        assert!(!app.vial_hid_task_active());
+        assert!(app.undo_stack.is_empty());
+        assert_eq!(app.layout.as_ref().unwrap().get_keycode(0, 0), 0);
+        let requests = recorder.requests();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(&requests[0][..2], &[0x02, 0x03]);
+        assert_eq!(requests[1][0], 0x05);
+        assert_eq!(requests[2][0], 0x04);
+    }
+
+    #[test]
+    fn matrix_read_queues_layer_operation_and_runs_it_next() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        app.layout = Some(single_key_layout(0x0004));
+        app.hid_device = Some(hid);
+
+        assert_eq!(
+            app.start_vial_matrix_poll(&ctx, 1, 1, false),
+            VialHidTaskStart::Started
+        );
+        assert!(!app.hid_user_action_busy());
+
+        app.apply_layer_snapshot(
+            0,
+            LayerSnapshot {
+                keycodes: vec![0],
+                encoder_keycodes: Vec::new(),
+            },
+            "layer_actions.fill_none",
+        );
+
+        assert!(app.pending_layer_write.is_some());
+        assert_eq!(app.layout.as_ref().unwrap().get_keycode(0, 0), 0x0004);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            app.poll_vial_hid_task(&ctx);
+            app.maybe_start_pending_layer_write();
+            app.poll_layer_write(&ctx);
+            if !app.vial_hid_task_active()
+                && app.pending_layer_write.is_none()
+                && app.layer_write_task.is_none()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        assert!(app.pending_layer_write.is_none());
+        assert!(app.layer_write_task.is_none());
+        assert_eq!(app.layout.as_ref().unwrap().get_keycode(0, 0), 0);
+        assert!(matches!(
+            app.undo_stack.last(),
+            Some(UndoAction::Layer {
+                layer: 0,
+                old: LayerSnapshot { keycodes, .. },
+                requires_firmware: true,
+            }) if keycodes == &[0x0004]
+        ));
+        let requests = recorder.requests();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(&requests[0][..2], &[0x02, 0x03]);
         assert_eq!(requests[1][0], 0x05);
         assert_eq!(requests[2][0], 0x04);
     }
