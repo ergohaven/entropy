@@ -110,6 +110,21 @@ fn event_defers_automatic_background_load(event: &egui::Event) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn optional_hid_read_or_default<T: Default>(
+    result: anyhow::Result<T>,
+    context: impl std::fmt::Display,
+) -> anyhow::Result<T> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) if crate::hid::is_disconnect_error(&error) => Err(error),
+        Err(error) => {
+            log::warn!("{context}: {error}");
+            Ok(T::default())
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn run_deferred_load(
     hid: &crate::hid::HidDevice,
     request: &DeferredLoadRequest,
@@ -129,28 +144,20 @@ pub(super) fn run_deferred_load(
             };
             let mut encoders = Vec::with_capacity(context.encoder_count);
             for encoder in 0..context.encoder_count {
-                encoders.push(
-                    hid.get_encoder(*layer as u8, encoder as u8)
-                        .unwrap_or_else(|error| {
-                            log::warn!(
-                                "get_encoder(layer={layer}, idx={encoder}) during staged load: {error}"
-                            );
-                            (0, 0)
-                        }),
-                );
+                encoders.push(optional_hid_read_or_default(
+                    hid.get_encoder(*layer as u8, encoder as u8),
+                    format_args!("get_encoder(layer={layer}, idx={encoder}) during staged load"),
+                )?);
             }
             let qsid = 200 + *layer as u16;
             let firmware_name = if context.supported_qmk_settings.contains(&qsid) {
-                match hid.get_qmk_setting_string(qsid) {
-                    Ok(name) if !name.trim().is_empty() => Some(name),
-                    Ok(_) => None,
-                    Err(error) => {
-                        log::warn!(
-                            "get_qmk_setting_string(layer name qsid {qsid}) during staged load: {error}"
-                        );
-                        None
-                    }
-                }
+                let name = optional_hid_read_or_default(
+                    hid.get_qmk_setting_string(qsid),
+                    format_args!(
+                        "get_qmk_setting_string(layer name qsid {qsid}) during staged load"
+                    ),
+                )?;
+                (!name.trim().is_empty()).then_some(name)
             } else {
                 None
             };
@@ -188,14 +195,12 @@ pub(super) fn run_deferred_load(
                     )
                 }
                 BackgroundLayerStep::Encoder { encoder_index } => {
-                    let keycodes = hid
-                        .get_encoder(*layer as u8, encoder_index as u8)
-                        .unwrap_or_else(|error| {
-                            log::warn!(
-                                "get_encoder(layer={layer}, idx={encoder_index}) during background load: {error}"
-                            );
-                            (0, 0)
-                        });
+                    let keycodes = optional_hid_read_or_default(
+                        hid.get_encoder(*layer as u8, encoder_index as u8),
+                        format_args!(
+                            "get_encoder(layer={layer}, idx={encoder_index}) during background load"
+                        ),
+                    )?;
                     BackgroundLayerStepResult::Encoder {
                         encoder_index,
                         keycodes,
@@ -203,16 +208,13 @@ pub(super) fn run_deferred_load(
                 }
                 BackgroundLayerStep::FirmwareName => {
                     let qsid = 200 + *layer as u16;
-                    let firmware_name = match hid.get_qmk_setting_string(qsid) {
-                        Ok(name) if !name.trim().is_empty() => Some(name),
-                        Ok(_) => None,
-                        Err(error) => {
-                            log::warn!(
-                                "get_qmk_setting_string(layer name qsid {qsid}) during background load: {error}"
-                            );
-                            None
-                        }
-                    };
+                    let name = optional_hid_read_or_default(
+                        hid.get_qmk_setting_string(qsid),
+                        format_args!(
+                            "get_qmk_setting_string(layer name qsid {qsid}) during background load"
+                        ),
+                    )?;
+                    let firmware_name = (!name.trim().is_empty()).then_some(name);
                     BackgroundLayerStepResult::FirmwareName(firmware_name)
                 }
             };
@@ -1532,16 +1534,16 @@ mod tests {
         assert_eq!(&requests[0][1..3], &[0x00, 0x18]);
     }
 
-    #[test]
-    fn deferred_dynamic_reader_propagates_disconnect_without_filling_default_entries() {
+    fn assert_deferred_disconnect(
+        request: DeferredLoadRequest,
+        successful_requests_before_fault: usize,
+        expected_requests: usize,
+        expected_failed_request_prefix: &[u8],
+    ) {
         let (hid, recorder) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
-            0,
+            successful_requests_before_fault,
             crate::hid::TestHidFault::Disconnect,
         )));
-        let request = DeferredLoadRequest::Section {
-            section: DeferredLoadSection::Combos,
-            context: std::sync::Arc::new(context()),
-        };
 
         let error = match run_deferred_load(&hid, &request) {
             Ok(_) => panic!("disconnect must fail the deferred load"),
@@ -1549,7 +1551,93 @@ mod tests {
         };
 
         assert!(crate::hid::is_disconnect_error(&error));
-        assert_eq!(recorder.requests().len(), 1);
+        let requests = recorder.requests();
+        assert_eq!(requests.len(), expected_requests);
+        assert!(requests
+            .last()
+            .is_some_and(|request| request.starts_with(expected_failed_request_prefix)));
+    }
+
+    #[test]
+    fn deferred_dynamic_reader_propagates_disconnect_without_filling_default_entries() {
+        assert_deferred_disconnect(
+            DeferredLoadRequest::Section {
+                section: DeferredLoadSection::Combos,
+                context: std::sync::Arc::new(context()),
+            },
+            0,
+            1,
+            &[0xFE, 0x0D, 0x03, 0],
+        );
+    }
+
+    #[test]
+    fn optional_hid_read_preserves_non_disconnect_fallbacks() {
+        let value: (u16, u16) = optional_hid_read_or_default(
+            Err(anyhow::anyhow!("optional feature response was unavailable")),
+            "test optional read",
+        )
+        .unwrap();
+
+        assert_eq!(value, (0, 0));
+    }
+
+    #[test]
+    fn deferred_layer_encoder_disconnect_fails_the_layer_load() {
+        let mut context = context();
+        context.encoder_count = 1;
+        assert_deferred_disconnect(
+            DeferredLoadRequest::Layer {
+                layer: 2,
+                context: std::sync::Arc::new(context),
+            },
+            1,
+            2,
+            &[0xFE, 0x03, 2, 0],
+        );
+    }
+
+    #[test]
+    fn deferred_layer_name_disconnect_fails_the_layer_load() {
+        let mut context = context();
+        context.supported_qmk_settings = std::sync::Arc::new(vec![202]);
+        assert_deferred_disconnect(
+            DeferredLoadRequest::Layer {
+                layer: 2,
+                context: std::sync::Arc::new(context),
+            },
+            1,
+            2,
+            &[0xFE, 0x0A, 202, 0],
+        );
+    }
+
+    #[test]
+    fn background_encoder_disconnect_fails_the_layer_step() {
+        assert_deferred_disconnect(
+            DeferredLoadRequest::BackgroundLayerStep {
+                layer: 2,
+                step: BackgroundLayerStep::Encoder { encoder_index: 0 },
+                context: std::sync::Arc::new(context()),
+            },
+            0,
+            1,
+            &[0xFE, 0x03, 2, 0],
+        );
+    }
+
+    #[test]
+    fn background_layer_name_disconnect_fails_the_layer_step() {
+        assert_deferred_disconnect(
+            DeferredLoadRequest::BackgroundLayerStep {
+                layer: 2,
+                step: BackgroundLayerStep::FirmwareName,
+                context: std::sync::Arc::new(context()),
+            },
+            0,
+            1,
+            &[0xFE, 0x0A, 202, 0],
+        );
     }
 
     #[test]

@@ -323,6 +323,24 @@ fn normalize_reported_layer_count(reported_layer_count: usize) -> usize {
     reported_layer_count.max(1)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn read_initial_keymap_buffer(
+    hid: &crate::hid::HidDevice,
+    layer_count: usize,
+    rows: usize,
+    cols: usize,
+    staged_bluetooth_load: bool,
+) -> Result<Vec<u16>, String> {
+    hid.get_keymap_buffer(layer_count, rows, cols)
+        .map_err(|error| {
+            if staged_bluetooth_load {
+                format!("Initial Bluetooth layer read failed: {error:#}")
+            } else {
+                format!("Initial keymap read failed: {error:#}")
+            }
+        })
+}
+
 fn is_default_layer_name(index: usize, name: &str) -> bool {
     let trimmed = name.trim();
     trimmed.is_empty()
@@ -896,27 +914,24 @@ impl EntropyApp {
                 } else {
                     layer_count
                 };
-                match dev_conn.get_keymap_buffer(initial_layer_count, layout.rows, layout.cols) {
-                    Ok(buf) => {
-                        for layer in 0..initial_layer_count {
-                            for (ki, key) in layout.keys.iter().enumerate() {
-                                let idx = layer * layout.rows * layout.cols
-                                    + key.row as usize * layout.cols
-                                    + key.col as usize;
-                                if let Some(&kc) = buf.get(idx) {
-                                    layout.layers[layer][ki] = kc.into();
-                                }
-                            }
+                let buf = read_initial_keymap_buffer(
+                    &dev_conn,
+                    initial_layer_count,
+                    layout.rows,
+                    layout.cols,
+                    staged_bluetooth_load,
+                )?;
+                for layer in 0..initial_layer_count {
+                    for (ki, key) in layout.keys.iter().enumerate() {
+                        let idx = layer * layout.rows * layout.cols
+                            + key.row as usize * layout.cols
+                            + key.col as usize;
+                        if let Some(&kc) = buf.get(idx) {
+                            layout.layers[layer][ki] = kc.into();
                         }
-                        log::info!("Keymap loaded from buffer");
-                    }
-                    Err(e) => {
-                        if staged_bluetooth_load {
-                            return Err(format!("Initial Bluetooth layer read failed: {e:#}"));
-                        }
-                        log::warn!("get_keymap_buffer failed: {e}");
                     }
                 }
+                log::info!("Keymap loaded from buffer");
 
                 let supports_rmk_native_key_actions = dev_conn
                     .get_rmk_native_capabilities()
@@ -1390,6 +1405,37 @@ mod tests {
     fn reported_layer_count_is_never_zero() {
         assert_eq!(normalize_reported_layer_count(0), 1);
         assert_eq!(normalize_reported_layer_count(4), 4);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn initial_usb_keymap_disconnect_fails_the_connection_read() {
+        let (hid, recorder) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+            0,
+            crate::hid::TestHidFault::Disconnect,
+        )));
+
+        let error = read_initial_keymap_buffer(&hid, 1, 2, 3, false)
+            .expect_err("a mandatory USB keymap read must not fall back to zero-filled layers");
+
+        assert!(error.contains("Initial keymap read failed"));
+        assert_eq!(recorder.requests().len(), 1);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn initial_bluetooth_keymap_disconnect_fails_the_connection_read() {
+        let (hid, recorder) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+            0,
+            crate::hid::TestHidFault::Disconnect,
+        )));
+
+        let error = read_initial_keymap_buffer(&hid, 1, 2, 3, true).expect_err(
+            "a mandatory Bluetooth keymap read must not fall back to zero-filled layers",
+        );
+
+        assert!(error.contains("Initial Bluetooth layer read failed"));
+        assert_eq!(recorder.requests().len(), 1);
     }
 
     #[test]
