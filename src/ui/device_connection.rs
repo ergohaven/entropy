@@ -68,7 +68,7 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn begin_bluetooth_reconnect(&mut self, transport_error: impl Into<String>) -> bool {
-        if self.bluetooth_reconnect_active() || self.layout.is_none() {
+        if self.bluetooth_reconnect_active() {
             return false;
         }
         let Some(device) = self
@@ -85,7 +85,7 @@ impl EntropyApp {
 
         let transport_error = transport_error.into();
         log::warn!(
-            "Bluetooth HID connection lost for {}: {}",
+            "Bluetooth HID connection unavailable for {}: {}",
             device.name,
             transport_error
         );
@@ -445,6 +445,24 @@ mod tests {
             Some(91)
         );
         assert!(matches!(app.connect_state, ConnectState::Reconnecting(_)));
+    }
+
+    #[test]
+    fn initial_bluetooth_failure_enters_reconnect_before_layout_loads() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        app.device_manager
+            .replace_devices(vec![bluetooth_device("/dev/hidraw4")]);
+        app.selected_device = Some(0);
+
+        assert!(app.layout.is_none());
+        assert!(app.begin_bluetooth_reconnect(
+            "VIA protocol read failed: HID timeout — device did not respond"
+        ));
+        assert!(app.layout.is_none());
+        assert!(matches!(app.connect_state, ConnectState::Reconnecting(_)));
+        assert!(!app.status_msg.contains("device did not respond"));
     }
 
     #[test]

@@ -359,21 +359,26 @@ impl Drop for HidProxy {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+pub fn is_disconnect_error_message(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("disconnected")
+        || message.contains("device did not respond")
+        || message.contains("hid helper timed out")
+        || message.contains("failed to write hid helper request")
+        || message.contains("failed to flush hid helper request")
+        || message.contains("hid write failed")
+        || message.contains("hid read failed")
+        || message.contains("broken pipe")
+        || message.contains("pipe is being closed")
+        || message.contains("the device is not connected")
+        || message.contains("org.bluez.error.notconnected")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn is_disconnect_error(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        let message = cause.to_string().to_ascii_lowercase();
-        message.contains("disconnected")
-            || message.contains("device did not respond")
-            || message.contains("hid helper timed out")
-            || message.contains("failed to write hid helper request")
-            || message.contains("failed to flush hid helper request")
-            || message.contains("hid write failed")
-            || message.contains("hid read failed")
-            || message.contains("broken pipe")
-            || message.contains("pipe is being closed")
-            || message.contains("the device is not connected")
-            || message.contains("org.bluez.error.notconnected")
-    })
+    error
+        .chain()
+        .any(|cause| is_disconnect_error_message(&cause.to_string()))
 }
 
 #[cfg(not(target_arch = "wasm32"))]

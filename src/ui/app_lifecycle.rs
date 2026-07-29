@@ -80,14 +80,17 @@ fn should_disable_layout_background(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn connection_replaces_layout_canvas(connect_state: &ConnectState) -> bool {
-    matches!(
-        connect_state,
+fn connection_replaces_layout_canvas(connect_state: &ConnectState, layout_loaded: bool) -> bool {
+    match connect_state {
         ConnectState::Loading {
-            reconnect: None,
-            ..
-        }
-    )
+            reconnect: None, ..
+        } => true,
+        ConnectState::Reconnecting(_)
+        | ConnectState::Loading {
+            reconnect: Some(_), ..
+        } => !layout_loaded,
+        ConnectState::Idle => false,
+    }
 }
 
 impl EntropyApp {
@@ -454,7 +457,7 @@ mod tests {
     #[test]
     fn only_device_connection_replaces_the_layout_canvas() {
         let idle = ConnectState::Idle;
-        assert!(!connection_replaces_layout_canvas(&idle));
+        assert!(!connection_replaces_layout_canvas(&idle, false));
 
         let (_sender, receiver) = std::sync::mpsc::channel();
         let now = std::time::Instant::now();
@@ -464,7 +467,8 @@ mod tests {
             last_progress_at: now,
             reconnect: None,
         };
-        assert!(connection_replaces_layout_canvas(&loading));
+        assert!(connection_replaces_layout_canvas(&loading, false));
+        assert!(connection_replaces_layout_canvas(&loading, true));
 
         let reconnecting_loading = ConnectState::Loading {
             rx: std::sync::mpsc::channel().1,
@@ -485,7 +489,14 @@ mod tests {
                 "K:04 (Bluetooth)".to_owned(),
             )),
         };
-        assert!(!connection_replaces_layout_canvas(&reconnecting_loading));
+        assert!(connection_replaces_layout_canvas(
+            &reconnecting_loading,
+            false
+        ));
+        assert!(!connection_replaces_layout_canvas(
+            &reconnecting_loading,
+            true
+        ));
     }
 
     #[test]
@@ -1238,7 +1249,8 @@ impl eframe::App for EntropyApp {
         // Only a device connection replaces the canvas. Background HID writes keep the
         // current layer visible until their result is applied.
         #[cfg(not(target_arch = "wasm32"))]
-        let is_loading = connection_replaces_layout_canvas(&self.connect_state);
+        let is_loading =
+            connection_replaces_layout_canvas(&self.connect_state, self.layout.is_some());
         #[cfg(target_arch = "wasm32")]
         let is_loading = false;
 
@@ -1359,7 +1371,9 @@ impl eframe::App for EntropyApp {
 
             if is_loading {
                 let rect = ui.max_rect();
-                let text = if self.status_msg.is_empty() {
+                let text = if self.status_msg.is_empty()
+                    || (self.bluetooth_reconnect_active() && self.layout.is_none())
+                {
                     crate::i18n::tr_catalog(
                         self.app_settings.language,
                         "connection.loading_keyboard",
@@ -1441,6 +1455,11 @@ impl eframe::App for EntropyApp {
                 self.draw_placeholder(ui);
             }
         });
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.bluetooth_reconnect_active() && self.layout.is_none() {
+            self.draw_bluetooth_reconnect_status(ctx);
+        }
 
         self.draw_sticky_layout_window(ctx);
 

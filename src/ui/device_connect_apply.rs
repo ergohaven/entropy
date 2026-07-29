@@ -113,6 +113,15 @@ mod tests {
     }
 
     #[test]
+    fn fresh_pairing_timeout_is_classified_as_a_disconnect() {
+        let error = "VIA protocol read failed: HID notification probe failed: \
+            HID timeout — device did not respond; Get Input Report fallback failed: \
+            hidapi error: ioctl (GINPUT): EIO: I/O error";
+
+        assert!(crate::hid::is_disconnect_error_message(error));
+    }
+
+    #[test]
     fn empty_connect_poll_is_throttled() {
         assert_eq!(CONNECT_POLL_INTERVAL, std::time::Duration::from_millis(250));
     }
@@ -429,7 +438,7 @@ impl EntropyApp {
 
         match result {
             Ok(mut r) => {
-                if reconnect.is_some() {
+                if reconnect.is_some() && self.layout.is_some() {
                     self.preserve_deferred_snapshot_on_reconnect(&mut r);
                 }
                 let staged_bluetooth_load = r.deferred_load.is_staged();
@@ -662,6 +671,12 @@ impl EntropyApp {
             Err(e) => {
                 if let Some(reconnect) = reconnect {
                     self.schedule_bluetooth_reconnect_retry(reconnect, &e);
+                    return;
+                }
+
+                if crate::hid::is_disconnect_error_message(&e)
+                    && self.begin_bluetooth_reconnect(e.clone())
+                {
                     return;
                 }
 
