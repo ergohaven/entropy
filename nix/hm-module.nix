@@ -60,9 +60,13 @@ in
       (lib.mkIf cfg.ibus.enable {
         home.packages = [ cfg.ibus.package ];
 
-        # IBus reads components from this list only; keep the distro default so
-        # the other engines do not disappear.
-        home.sessionVariables.IBUS_COMPONENT_PATH = "${cfg.ibus.package}/share/ibus/component:${pkgs.ibus}/share/ibus/component";
+        # IBus reads components from this list only; prepend our paths and
+        # keep whatever IBUS_COMPONENT_PATH already had, so other engines
+        # relying on it do not disappear.
+        home.sessionSearchVariables.IBUS_COMPONENT_PATH = [
+          "${cfg.ibus.package}/share/ibus/component"
+          "${pkgs.ibus}/share/ibus/component"
+        ];
 
         # IBus caches the registry — after switching generations run
         # `ibus write-cache && ibus restart`, or just log out and back in.
