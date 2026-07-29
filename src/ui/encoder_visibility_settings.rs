@@ -12,6 +12,13 @@ enum EncoderVisibilitySwitchSemantics {
     Hide,
 }
 
+#[derive(Clone, Copy)]
+struct EncoderVisibilityRowContext {
+    content_width: f32,
+    height: f32,
+    suppress_tooltips: bool,
+}
+
 fn encoder_visibility_side(layout_option: &LayoutOption) -> Option<EncoderVisibilitySide> {
     let label = layout_option.label.to_ascii_lowercase();
     if label.split_whitespace().any(|word| word == "left") {
@@ -189,9 +196,7 @@ impl EntropyApp {
     fn draw_encoder_visibility_setting_row(
         &mut self,
         ui: &mut egui::Ui,
-        content_width: f32,
-        row_height: f32,
-        suppress_tooltips: bool,
+        row: EncoderVisibilityRowContext,
         encoder_idx: usize,
         option_idx: Option<usize>,
         semantics: EncoderVisibilitySwitchSemantics,
@@ -215,11 +220,11 @@ impl EntropyApp {
         };
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
-            content_width,
-            row_height,
+            row.content_width,
+            row.height,
             &label,
             true,
-            (!suppress_tooltips).then_some(tooltip.as_str()),
+            (!row.suppress_tooltips).then_some(tooltip.as_str()),
             metrics.value(46.0),
             |ui| {
                 let resp = crate::ui_style::settings_switch_sized_stable(
@@ -252,11 +257,14 @@ impl EntropyApp {
         encoder_idx: usize,
         option_idx: usize,
     ) {
+        let row = EncoderVisibilityRowContext {
+            content_width,
+            height: row_height,
+            suppress_tooltips,
+        };
         self.draw_encoder_visibility_setting_row(
             ui,
-            content_width,
-            row_height,
-            suppress_tooltips,
+            row,
             encoder_idx,
             Some(option_idx),
             EncoderVisibilitySwitchSemantics::Hide,
@@ -317,12 +325,15 @@ impl EntropyApp {
                     crate::ui_style::ModalLayout::new(encoders_content_width)
                         .with_top_padding(encoders_top_padding),
                     |ui| {
+                        let row = EncoderVisibilityRowContext {
+                            content_width: encoders_content_width,
+                            height: encoders_row_height,
+                            suppress_tooltips: false,
+                        };
                         for (encoder_idx, option_idx) in entries.iter().copied() {
                             self.draw_encoder_visibility_setting_row(
                                 ui,
-                                encoders_content_width,
-                                encoders_row_height,
-                                false,
+                                row,
                                 encoder_idx,
                                 option_idx,
                                 EncoderVisibilitySwitchSemantics::Show,
