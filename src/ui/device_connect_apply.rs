@@ -586,7 +586,7 @@ impl EntropyApp {
 
                 let encoder_count = r.layout.encoder_count();
                 let hide_modular_encoders_by_default =
-                    self.module_settings_include_encoder_visibility(&r.layout);
+                    self.hide_modular_encoders_by_default(&r.layout);
                 self.encoder_visibility = Self::resolve_initial_encoder_visibility(
                     &r.layout,
                     self.layout_options_value,

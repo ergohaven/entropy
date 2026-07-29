@@ -510,6 +510,23 @@ impl EntropyApp {
                 })
     }
 
+    pub(super) fn module_encoder_selectors_loaded(&self, layout: &KeyboardLayout) -> bool {
+        self.module_settings
+            .groups
+            .iter()
+            .filter(|group| {
+                group.supports_module_kind(ModuleDeviceKind::Encoder)
+                    && Self::encoder_visibility_entry_for_module_group(layout, group.kind).is_some()
+            })
+            .filter_map(ModuleSettingsGroup::module_selector_field)
+            .all(|field| self.module_settings.values.contains_key(&field.qsid))
+    }
+
+    pub(super) fn hide_modular_encoders_by_default(&self, layout: &KeyboardLayout) -> bool {
+        self.module_settings_include_encoder_visibility(layout)
+            && !self.module_encoder_selectors_loaded(layout)
+    }
+
     fn module_settings_group_label(&self, group: &ModuleSettingsGroup) -> String {
         let lang = self.app_settings.language;
         match group.kind {
@@ -905,6 +922,31 @@ mod tests {
         app.module_settings.supported = true;
     }
 
+    fn encoder_module_settings_json() -> serde_json::Value {
+        serde_json::json!({
+            "settings": [
+                {
+                    "name": "Left modules",
+                    "fields": [{
+                        "type": "select",
+                        "title": "Module",
+                        "qsid": 149,
+                        "variants": ["None", "Encoder", "Trackball", "Touchpad"]
+                    }]
+                },
+                {
+                    "name": "Right modules",
+                    "fields": [{
+                        "type": "select",
+                        "title": "Module",
+                        "qsid": 150,
+                        "variants": ["None", "Encoder", "Trackball", "Touchpad"]
+                    }]
+                }
+            ]
+        })
+    }
+
     fn visible_module_qsids(app: &EntropyApp) -> Vec<u16> {
         app.module_settings_rows()
             .into_iter()
@@ -973,28 +1015,7 @@ mod tests {
 
     #[test]
     fn deferred_module_definition_owns_encoder_visibility_before_values_load() {
-        let json = serde_json::json!({
-            "settings": [
-                {
-                    "name": "Left modules",
-                    "fields": [{
-                        "type": "select",
-                        "title": "Module",
-                        "qsid": 149,
-                        "variants": ["None", "Encoder", "Trackball", "Touchpad"]
-                    }]
-                },
-                {
-                    "name": "Right modules",
-                    "fields": [{
-                        "type": "select",
-                        "title": "Module",
-                        "qsid": 150,
-                        "variants": ["None", "Encoder", "Trackball", "Touchpad"]
-                    }]
-                }
-            ]
-        });
+        let json = encoder_module_settings_json();
         let mut app = test_app();
         app.module_settings = EntropyApp::module_settings_from_definition(&json, &[149, 150]);
         app.layout = Some(encoder_visibility_layout(
@@ -1010,6 +1031,45 @@ mod tests {
         assert!(
             !app.show_separate_encoder_visibility_settings(app.layout.as_ref().expect("layout"))
         );
+        assert!(
+            app.hide_modular_encoders_by_default(app.layout.as_ref().expect("layout")),
+            "unknown module selectors must not guess that an encoder is installed"
+        );
+    }
+
+    #[test]
+    fn loaded_module_selectors_show_installed_encoders_by_default() {
+        let mut app = test_app();
+        add_encoder_module_groups(&mut app);
+        let layout =
+            encoder_visibility_layout("Hide left encoder module", "Hide right encoder module");
+
+        assert!(app.module_encoder_selectors_loaded(&layout));
+        assert!(!app.hide_modular_encoders_by_default(&layout));
+        assert_eq!(
+            EntropyApp::resolve_initial_encoder_visibility(
+                &layout,
+                Some(0),
+                None,
+                app.hide_modular_encoders_by_default(&layout),
+            ),
+            vec![true, true]
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn staged_module_selector_reader_preloads_layout_critical_values() {
+        let json = encoder_module_settings_json();
+        let (hid, _) = crate::hid::HidDevice::test_device();
+        hid.set_qmk_setting_u8(149, 1).unwrap();
+        hid.set_qmk_setting_u8(150, 2).unwrap();
+        let mut settings = EntropyApp::module_settings_from_definition(&json, &[149, 150]);
+
+        EntropyApp::read_module_selector_values(&mut settings, &hid);
+
+        assert_eq!(settings.values.get(&149), Some(&1));
+        assert_eq!(settings.values.get(&150), Some(&2));
     }
 
     #[test]

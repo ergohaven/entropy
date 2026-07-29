@@ -1447,6 +1447,37 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn read_module_selector_values(
+        settings: &mut ModuleSettingsState,
+        dev_conn: &crate::hid::HidDevice,
+    ) {
+        let selectors = settings
+            .groups
+            .iter()
+            .filter_map(ModuleSettingsGroup::module_selector_field)
+            .map(|field| (field.qsid, field.width))
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        for (qsid, width) in selectors {
+            let value = if width > 1 {
+                dev_conn.get_qmk_setting_u16(qsid)
+            } else {
+                dev_conn.get_qmk_setting_u8(qsid).map(u16::from)
+            };
+            match value {
+                Ok(value) => {
+                    settings.values.insert(qsid, value);
+                }
+                Err(error) => {
+                    log::warn!(
+                        "get_qmk_setting(module selector qsid {qsid}) during staged load: {error}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn read_module_settings(
         json: &serde_json::Value,
         supported_qmk_settings: &[u16],

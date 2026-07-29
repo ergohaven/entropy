@@ -845,7 +845,7 @@ impl EntropyApp {
                             &self.current_encoder_visibility_id,
                             encoder_count,
                         ),
-                        self.module_settings_include_encoder_visibility(layout),
+                        self.hide_modular_encoders_by_default(layout),
                     );
                 }
                 self.deferred_device_load
