@@ -10,10 +10,13 @@ fi
 OUT="${2:-$ROOT/dist/release/entropy-${VERSION}-x86_64.AppImage}"
 APPDIR="${APPDIR:-$ROOT/target/appimage/Entropy.AppDir}"
 APPIMAGETOOL="${APPIMAGETOOL:-$ROOT/target/tools/appimagetool-x86_64.AppImage}"
-APPIMAGETOOL_URL="${APPIMAGETOOL_URL:-https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage}"
-APPIMAGETOOL_SHA256="${APPIMAGETOOL_SHA256:-b90f4a8b18967545fda78a445b27680a1642f1ef9488ced28b65398f2be7add2}"
 
 cd "$ROOT"
+# shellcheck disable=SC1091
+source scripts/appimagetool_pin.sh
+APPIMAGETOOL_URL="${APPIMAGETOOL_URL:-$APPIMAGETOOL_PINNED_URL}"
+APPIMAGETOOL_SHA256="${APPIMAGETOOL_SHA256:-$APPIMAGETOOL_PINNED_SHA256}"
+
 cargo build --release --locked
 
 rm -rf "$APPDIR" "$OUT"

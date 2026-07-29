@@ -63,7 +63,9 @@ jobs:
 
       - name: Test AppImage tool integrity verification
         if: matrix.kind == 'linux'
-        run: bash scripts/test_verify_sha256.sh
+        run: |
+          bash scripts/test_verify_sha256.sh
+          bash scripts/test_build_linux_appimage.sh
 
       - name: Build
         if: matrix.kind != 'macos'
