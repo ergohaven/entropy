@@ -5,6 +5,12 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.2
+
+### Fixes
+
+- Removed the redundant USB suffix from K:04 Qube device names while keeping Standalone USB and Bluetooth connections labeled
+
 ## v0.3.1
 
 ### Fixes
