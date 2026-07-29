@@ -1165,10 +1165,8 @@ impl eframe::App for EntropyApp {
         if let Some((layer, ki, kc)) = self.pending_handed_swap {
             if !ctx.input(|i| i.modifiers.ctrl) {
                 #[cfg(not(target_arch = "wasm32"))]
-                if !self.hid_write_task_active() {
-                    if self.assign_keycode(ctx, layer, ki, kc) {
-                        self.pending_handed_swap = None;
-                    }
+                if !self.hid_write_task_active() && self.assign_keycode(ctx, layer, ki, kc) {
+                    self.pending_handed_swap = None;
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -1825,14 +1823,12 @@ impl eframe::App for EntropyApp {
             // Consume this attempt. Failed device entries remain different from the
             // synced snapshot and retry after the next edit or picker close.
             self.keycode_picker.tap_dance_dirty = false;
-            if td_save_ok {
-                if self.status_msg.is_empty() || self.status_msg.starts_with("✓") {
-                    self.status_msg = crate::i18n::tr_catalog(
-                        self.app_settings.language,
-                        "status_messages.tap_dance_saved",
-                    )
-                    .into();
-                }
+            if td_save_ok && (self.status_msg.is_empty() || self.status_msg.starts_with("✓")) {
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "status_messages.tap_dance_saved",
+                )
+                .into();
             }
         }
 
