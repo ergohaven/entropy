@@ -5,6 +5,12 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.5
+
+### Fixes
+
+- Kept Bluetooth Settings stable while the shared Bluetooth HID session finishes background device loading
+
 ## v0.3.4
 
 ### Features

@@ -75,7 +75,7 @@ impl EntropyApp {
         let hid_ready = {
             #[cfg(not(target_arch = "wasm32"))]
             {
-                self.hid_device.is_some()
+                self.qmk_setting_transport_available()
             }
             #[cfg(target_arch = "wasm32")]
             {
@@ -412,9 +412,25 @@ impl EntropyApp {
 
 #[cfg(test)]
 mod tests {
-    use super::bluetooth_timeout_variant_label;
+    use super::*;
     use crate::app::app_state::{BluetoothBooleanSetting, BluetoothSettingsState};
+    #[cfg(not(target_arch = "wasm32"))]
+    use crate::app::vial_hid_task::{VialHidOperation, VialHidTaskStart};
     use crate::i18n::Language;
+
+    fn collect_text(shape: &egui::Shape, text: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(text_shape) => {
+                text.push(text_shape.galley.job.text.clone());
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect_text(shape, text);
+                }
+            }
+            _ => {}
+        }
+    }
 
     #[test]
     fn bluetooth_sleep_timeout_options_are_localized_in_russian() {
@@ -451,5 +467,49 @@ mod tests {
             value: true,
         });
         assert_eq!(settings.row_count(), 1);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn background_hid_work_keeps_bluetooth_settings_visible() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid, _) = crate::hid::HidDevice::test_device();
+        app.app_settings.language = Language::English;
+        app.bluetooth_settings = BluetoothSettingsState {
+            charge_indicator: Some(BluetoothBooleanSetting {
+                qsid: 331,
+                value: true,
+            }),
+            supported: true,
+            ..BluetoothSettingsState::default()
+        };
+        app.hid_device = Some(hid);
+
+        assert_eq!(
+            app.start_vial_hid_operation(&ctx, VialHidOperation::BatteryRefresh),
+            VialHidTaskStart::Started
+        );
+        assert!(app.hid_device.is_none());
+        assert!(app.vial_hid_task_active());
+
+        let mut input = egui::RawInput::default();
+        input.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(900.0, 700.0),
+        ));
+        let output = ctx.run_ui(input, |ui| {
+            app.draw_bluetooth_settings_page(ui, ui.max_rect());
+        });
+        let mut text = Vec::new();
+        for clipped_shape in &output.shapes {
+            collect_text(&clipped_shape.shape, &mut text);
+        }
+
+        assert!(text.iter().any(|value| value == "Charging indicator"));
+        assert!(!text.iter().any(|value| {
+            value == crate::i18n::tr_catalog(Language::English, "bluetooth_settings.connect")
+        }));
     }
 }
