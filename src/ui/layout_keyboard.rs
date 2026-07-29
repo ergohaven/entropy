@@ -857,6 +857,10 @@ impl EntropyApp {
     }
 }
 
+fn combo_paints_highlights(combo: &ComboEntry) -> bool {
+    combo.output != 0 && combo.keys.iter().any(|&key| key != 0)
+}
+
 fn combo_key_colors_for_layer(
     layout: &KeyboardLayout,
     layer: usize,
@@ -864,16 +868,23 @@ fn combo_key_colors_for_layer(
     colors: &[u32],
 ) -> Vec<Vec<(usize, Option<Color32>)>> {
     let mut key_colors = vec![Vec::new(); layout.keys.len()];
-    for (combo_idx, combo) in combos.iter().enumerate() {
-        let triggers: Vec<u16> = combo.keys.iter().copied().filter(|&key| key != 0).collect();
-        if triggers.is_empty() || combo.output == 0 {
+    if !combos.iter().any(combo_paints_highlights) {
+        return key_colors;
+    }
+
+    for (key_idx, slot) in key_colors.iter_mut().enumerate() {
+        let keycode = layout_combo_match_keycode(layout, layer, key_idx);
+        if keycode == 0 {
             continue;
         }
-        let color_value = colors.get(combo_idx).copied().unwrap_or(COMBO_NO_COLOR);
-        let color = (color_value != COMBO_NO_COLOR).then(|| combo_color32(color_value));
-        for (key_idx, slot) in key_colors.iter_mut().enumerate() {
-            let keycode = layout_combo_match_keycode(layout, layer, key_idx);
-            if keycode != 0 && triggers.contains(&keycode) {
+
+        for (combo_idx, combo) in combos.iter().enumerate() {
+            if !combo_paints_highlights(combo) {
+                continue;
+            }
+            if combo.keys.contains(&keycode) {
+                let color_value = colors.get(combo_idx).copied().unwrap_or(COMBO_NO_COLOR);
+                let color = (color_value != COMBO_NO_COLOR).then(|| combo_color32(color_value));
                 slot.push((combo_idx, color));
             }
         }
@@ -949,4 +960,168 @@ fn combo_conflict_marker_colors(colors: &[(usize, Option<Color32>)]) -> Vec<Colo
         }
     }
     marker_colors
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layout_with_layers(layers: Vec<Vec<u16>>) -> KeyboardLayout {
+        let key_count = layers.first().map_or(0, Vec::len);
+        KeyboardLayout {
+            name: "Test layout".into(),
+            rows: 1,
+            cols: key_count,
+            keys: (0..key_count)
+                .map(|index| PhysicalKey {
+                    x: index as f32,
+                    y: 0.0,
+                    w: 1.0,
+                    h: 1.0,
+                    row: 0,
+                    col: index as u8,
+                    label: format!("Key {index}"),
+                    rotation: 0.0,
+                    rotation_x: 0.0,
+                    rotation_y: 0.0,
+                    layout_condition: None,
+                })
+                .collect(),
+            encoders: vec![],
+            layers,
+            encoder_layers: vec![],
+            layer_names: vec![],
+            custom_keycodes: vec![],
+            layout_options: vec![],
+            live_features: Default::default(),
+            supports_rgb: false,
+            lighting_mode: None,
+            firmware: FirmwareProtocol::Vial,
+        }
+    }
+
+    fn combo(keys: [u16; 4], output: u16) -> ComboEntry {
+        ComboEntry { keys, output }
+    }
+
+    #[test]
+    fn combo_highlights_resolve_transparent_keys_from_lower_layers() {
+        let layout = layout_with_layers(vec![
+            vec![0x0004, 0x0005, 0x0006],
+            vec![0x0001, 0x0001, 0x0001],
+            vec![0x0001, 0x0001, 0x0001],
+        ]);
+
+        let colors = combo_key_colors_for_layer(
+            &layout,
+            2,
+            &[combo([0x0004, 0x0006, 0, 0], 0x0007)],
+            &[0x5b68df],
+        );
+
+        assert_eq!(colors[0], vec![(0, Some(combo_color32(0x5b68df)))]);
+        assert!(colors[1].is_empty());
+        assert_eq!(colors[2], vec![(0, Some(combo_color32(0x5b68df)))]);
+    }
+
+    #[test]
+    fn combo_highlights_preserve_conflict_order_and_colors() {
+        let layout = layout_with_layers(vec![vec![0x0004]]);
+        let entries = [
+            combo([0x0004, 0x0005, 0, 0], 0x0006),
+            combo([0x0004, 0x0007, 0, 0], 0x0008),
+        ];
+
+        let colors = combo_key_colors_for_layer(&layout, 0, &entries, &[0x112233, 0x445566]);
+
+        assert_eq!(
+            colors[0],
+            vec![
+                (0, Some(combo_color32(0x112233))),
+                (1, Some(combo_color32(0x445566))),
+            ]
+        );
+        assert_eq!(combo_key_outline_color(&colors[0]), None);
+        assert_eq!(
+            combo_conflict_marker_colors(&colors[0]),
+            vec![combo_color32(0x112233), combo_color32(0x445566)]
+        );
+    }
+
+    #[test]
+    fn combo_highlights_keep_uncolored_membership() {
+        let layout = layout_with_layers(vec![vec![0x0004]]);
+
+        let colors = combo_key_colors_for_layer(
+            &layout,
+            0,
+            &[combo([0x0004, 0x0005, 0, 0], 0x0006)],
+            &[COMBO_NO_COLOR],
+        );
+
+        assert_eq!(colors[0], vec![(0, None)]);
+    }
+
+    #[test]
+    fn combo_highlights_skip_incomplete_entries() {
+        let layout = layout_with_layers(vec![vec![0x0004]]);
+        let entries = [
+            combo([0x0004, 0, 0, 0], 0),
+            combo([0x0004, 0x0005, 0, 0], 0x0006),
+            combo([0, 0, 0, 0], 0x0007),
+        ];
+
+        let colors =
+            combo_key_colors_for_layer(&layout, 0, &entries, &[0x112233, 0x445566, 0x778899]);
+
+        assert_eq!(colors[0], vec![(1, Some(combo_color32(0x445566)))]);
+    }
+
+    #[test]
+    fn combo_highlights_return_empty_slots_when_all_entries_are_incomplete() {
+        let layout = layout_with_layers(vec![vec![0x0004]]);
+        let entries = [combo([0x0004, 0, 0, 0], 0), combo([0, 0, 0, 0], 0x0005)];
+
+        let colors = combo_key_colors_for_layer(&layout, 0, &entries, &[]);
+
+        assert_eq!(colors, vec![vec![]]);
+    }
+
+    #[test]
+    fn combo_highlights_do_not_match_zero_keycodes_to_unused_trigger_slots() {
+        let layout = layout_with_layers(vec![vec![0x0000, 0x0004]]);
+
+        let colors = combo_key_colors_for_layer(
+            &layout,
+            0,
+            &[combo([0x0004, 0, 0, 0], 0x0006)],
+            &[0x5b68df],
+        );
+
+        assert!(colors[0].is_empty());
+        assert_eq!(colors[1], vec![(0, Some(combo_color32(0x5b68df)))]);
+    }
+
+    #[test]
+    fn combo_highlights_do_not_match_transparent_keys_without_a_fallback() {
+        let layout = layout_with_layers(vec![vec![0x0001], vec![0x0001]]);
+
+        let colors = combo_key_colors_for_layer(
+            &layout,
+            1,
+            &[combo([0x0004, 0, 0, 0], 0x0006)],
+            &[0x5b68df],
+        );
+
+        assert!(colors[0].is_empty());
+    }
+
+    #[test]
+    fn combo_highlights_return_empty_slots_without_combos() {
+        let layout = layout_with_layers(vec![vec![0x0004, 0x0005, 0x0006]]);
+
+        let colors = combo_key_colors_for_layer(&layout, 0, &[], &[]);
+
+        assert_eq!(colors, vec![vec![], vec![], vec![]]);
+    }
 }
