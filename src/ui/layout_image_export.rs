@@ -14,6 +14,10 @@ const EXPORT_LAYER_HEADER_H: f32 = 44.0;
 const EXPORT_LAYER_HEADER_H_HIDDEN: f32 = 16.0;
 const EXPORT_LAYER_GAP: f32 = 42.0;
 const EXPORT_MAX_SIDE: f32 = 12_000.0;
+const EXPORT_KEY_RADIUS: f32 = 7.0;
+const EXPORT_KEY_STROKE_WIDTH: f32 = 1.4;
+const EXPORT_ENCODER_STROKE_WIDTH: f32 = 1.4;
+const EXPORT_ENCODER_DIVIDER_STROKE_WIDTH: f32 = 1.2;
 
 fn export_text(lang: crate::i18n::Language, key: &str) -> &'static str {
     match (lang, key) {
@@ -463,15 +467,7 @@ impl EntropyApp {
                     ui.set_clip_rect(list.viewport);
                     ui.set_min_size(list.content_rect.size());
                     ui.spacing_mut().item_spacing.y = 0.0;
-                    self.draw_layout_image_export_rows(
-                        ui,
-                        list.first_visible_row..list.last_visible_row,
-                        list.row_content_width,
-                        list.row_height,
-                        metrics,
-                        dark,
-                        list.suppress_tooltips,
-                    );
+                    self.draw_layout_image_export_rows(ui, &list, metrics, dark);
                 });
 
                 if list.has_scrollbar {
@@ -543,27 +539,24 @@ impl EntropyApp {
     fn draw_layout_image_export_rows(
         &mut self,
         ui: &mut egui::Ui,
-        row_range: std::ops::Range<usize>,
-        content_width: f32,
-        row_height: f32,
+        list: &AdaptiveSettingsListViewport,
         metrics: crate::ui_style::ResponsiveMetrics,
         dark: bool,
-        suppress_tooltips: bool,
     ) {
         let lang = self.app_settings.language;
-        let tooltip = |text: &'static str| (!suppress_tooltips).then_some(text);
+        let tooltip = |text: &'static str| (!list.suppress_tooltips).then_some(text);
         let switch_width = metrics.value(46.0);
         let switch_size = metrics.size(46.0, 24.0);
 
-        for row_idx in row_range {
+        for row_idx in list.first_visible_row..list.last_visible_row {
             match row_idx {
                 0 => {
                     let before = self.app_settings.layout_image_export.format;
                     let mut format = before;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        list.row_content_width,
+                        list.row_height,
                         export_text(lang, "format"),
                         true,
                         tooltip(export_text(lang, "format_tooltip")),
@@ -580,8 +573,8 @@ impl EntropyApp {
                     let mut theme = before;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        list.row_content_width,
+                        list.row_height,
                         export_text(lang, "theme"),
                         true,
                         tooltip(export_text(lang, "theme_tooltip")),
@@ -598,8 +591,8 @@ impl EntropyApp {
                     let mut key_legend_layout = before;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        list.row_content_width,
+                        list.row_height,
                         export_text(lang, "legends"),
                         true,
                         tooltip(export_text(lang, "legends_tooltip")),
@@ -624,8 +617,8 @@ impl EntropyApp {
                     let mut show_layer_names = before;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        list.row_content_width,
+                        list.row_height,
                         export_text(lang, "layer_names"),
                         true,
                         tooltip(export_text(lang, "layer_names_tooltip")),
@@ -659,8 +652,8 @@ impl EntropyApp {
                     let label = layer_export_label(lang, &self.layer_names, layer_idx);
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        list.row_content_width,
+                        list.row_height,
                         label.as_str(),
                         true,
                         tooltip(export_text(lang, "layer_tooltip")),
@@ -875,11 +868,13 @@ impl EntropyApp {
             self.write_export_layer_svg(
                 &mut svg,
                 &font,
-                layout,
-                geometry.bounds,
-                layer_idx,
-                layout_y,
-                palette,
+                ExportLayerContext {
+                    layout,
+                    bounds: geometry.bounds,
+                    layer_idx,
+                    layout_y,
+                    palette,
+                },
             )?;
         }
 
@@ -892,12 +887,15 @@ impl EntropyApp {
         &self,
         svg: &mut String,
         font: &FontArc,
-        layout: &KeyboardLayout,
-        bounds: egui::Rect,
-        layer_idx: usize,
-        layout_y: f32,
-        palette: ExportPalette,
+        context: ExportLayerContext<'_>,
     ) -> anyhow::Result<()> {
+        let ExportLayerContext {
+            layout,
+            bounds,
+            layer_idx,
+            layout_y,
+            palette,
+        } = context;
         let encoder_groups = export_encoder_groups(
             layout,
             bounds,
@@ -916,13 +914,12 @@ impl EntropyApp {
                 continue;
             }
             let rect = export_item_rect(
-                key.x,
-                key.y,
-                key.w,
-                key.h,
-                key.rotation,
-                key.rotation_x,
-                key.rotation_y,
+                ExportItemGeometry::new(
+                    egui::pos2(key.x, key.y),
+                    egui::vec2(key.w, key.h),
+                    key.rotation,
+                    egui::pos2(key.rotation_x, key.rotation_y),
+                ),
                 bounds,
                 layout_y,
             );
@@ -1014,8 +1011,7 @@ impl EntropyApp {
                     &mut image,
                     &font,
                     &title,
-                    geometry.width * 0.5,
-                    section_y + 18.0,
+                    egui::pos2(geometry.width * 0.5, section_y + 18.0),
                     18.0,
                     palette.title_text,
                     0.0,
@@ -1025,11 +1021,13 @@ impl EntropyApp {
             self.draw_export_layer(
                 &mut image,
                 &font,
-                layout,
-                geometry.bounds,
-                layer_idx,
-                layout_y,
-                palette,
+                ExportLayerContext {
+                    layout,
+                    bounds: geometry.bounds,
+                    layer_idx,
+                    layout_y,
+                    palette,
+                },
             );
         }
 
@@ -1063,12 +1061,15 @@ impl EntropyApp {
         &self,
         image: &mut RgbaImage,
         font: &FontArc,
-        layout: &KeyboardLayout,
-        bounds: egui::Rect,
-        layer_idx: usize,
-        layout_y: f32,
-        palette: ExportPalette,
+        context: ExportLayerContext<'_>,
     ) {
+        let ExportLayerContext {
+            layout,
+            bounds,
+            layer_idx,
+            layout_y,
+            palette,
+        } = context;
         let encoder_groups = export_encoder_groups(
             layout,
             bounds,
@@ -1087,13 +1088,12 @@ impl EntropyApp {
                 continue;
             }
             let rect = export_item_rect(
-                key.x,
-                key.y,
-                key.w,
-                key.h,
-                key.rotation,
-                key.rotation_x,
-                key.rotation_y,
+                ExportItemGeometry::new(
+                    egui::pos2(key.x, key.y),
+                    egui::vec2(key.w, key.h),
+                    key.rotation,
+                    egui::pos2(key.rotation_x, key.rotation_y),
+                ),
                 bounds,
                 layout_y,
             );
@@ -1102,10 +1102,12 @@ impl EntropyApp {
                 rect.center(),
                 rect.size(),
                 key.rotation.to_radians(),
-                7.0,
-                palette.key_fill,
-                palette.key_stroke,
-                1.4,
+                ExportRoundedRectStyle {
+                    radius: EXPORT_KEY_RADIUS,
+                    fill: palette.key_fill,
+                    stroke: palette.key_stroke,
+                    stroke_width: EXPORT_KEY_STROKE_WIDTH,
+                },
             );
 
             let kc = layout.get_keycode(layer_idx, key_idx);
@@ -1218,6 +1220,51 @@ struct ExportGeometry {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy)]
+struct ExportLayerContext<'a> {
+    layout: &'a KeyboardLayout,
+    bounds: egui::Rect,
+    layer_idx: usize,
+    layout_y: f32,
+    palette: ExportPalette,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy)]
+struct ExportItemGeometry {
+    position: egui::Pos2,
+    size: egui::Vec2,
+    rotation: f32,
+    rotation_origin: egui::Pos2,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ExportItemGeometry {
+    fn new(
+        position: egui::Pos2,
+        size: egui::Vec2,
+        rotation: f32,
+        rotation_origin: egui::Pos2,
+    ) -> Self {
+        Self {
+            position,
+            size,
+            rotation,
+            rotation_origin,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy)]
+struct ExportRoundedRectStyle {
+    radius: f32,
+    fill: Rgba<u8>,
+    stroke: Rgba<u8>,
+    stroke_width: f32,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 struct ExportEncoderGroup {
     rect: egui::Rect,
@@ -1243,15 +1290,12 @@ fn export_layout_bounds(
         {
             continue;
         }
-        let item_rect = layout_aabb_rect(
-            key.x,
-            key.y,
-            key.w,
-            key.h,
+        let item_rect = layout_aabb_rect(ExportItemGeometry::new(
+            egui::pos2(key.x, key.y),
+            egui::vec2(key.w, key.h),
             key.rotation,
-            key.rotation_x,
-            key.rotation_y,
-        );
+            egui::pos2(key.rotation_x, key.rotation_y),
+        ));
         rect = Some(rect.map(|rect| rect.union(item_rect)).unwrap_or(item_rect));
     }
     for encoder in &layout.encoders {
@@ -1270,51 +1314,43 @@ fn export_layout_bounds(
         {
             continue;
         }
-        let item_rect = layout_aabb_rect(
-            encoder.x,
-            encoder.y,
-            encoder.w,
-            encoder.h,
+        let item_rect = layout_aabb_rect(ExportItemGeometry::new(
+            egui::pos2(encoder.x, encoder.y),
+            egui::vec2(encoder.w, encoder.h),
             encoder.rotation,
-            encoder.rotation_x,
-            encoder.rotation_y,
-        );
+            egui::pos2(encoder.rotation_x, encoder.rotation_y),
+        ));
         rect = Some(rect.map(|rect| rect.union(item_rect)).unwrap_or(item_rect));
     }
     rect
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn layout_aabb_rect(
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    rotation: f32,
-    rotation_x: f32,
-    rotation_y: f32,
-) -> egui::Rect {
-    let (x1, y1, x2, y2) = rotated_item_aabb(x, y, w, h, rotation, rotation_x, rotation_y);
+fn layout_aabb_rect(item: ExportItemGeometry) -> egui::Rect {
+    let (x1, y1, x2, y2) = rotated_item_aabb(
+        item.position.x,
+        item.position.y,
+        item.size.x,
+        item.size.y,
+        item.rotation,
+        item.rotation_origin.x,
+        item.rotation_origin.y,
+    );
     egui::Rect::from_min_max(egui::pos2(x1, y1), egui::pos2(x2, y2))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn export_item_rect(
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    rotation: f32,
-    rotation_x: f32,
-    rotation_y: f32,
-    bounds: egui::Rect,
-    layout_y: f32,
-) -> egui::Rect {
-    let (center_x, center_y) =
-        rotate_layout_point(x + w * 0.5, y + h * 0.5, rotation_x, rotation_y, rotation);
+fn export_item_rect(item: ExportItemGeometry, bounds: egui::Rect, layout_y: f32) -> egui::Rect {
+    let (center_x, center_y) = rotate_layout_point(
+        item.position.x + item.size.x * 0.5,
+        item.position.y + item.size.y * 0.5,
+        item.rotation_origin.x,
+        item.rotation_origin.y,
+        item.rotation,
+    );
     let size = egui::vec2(
-        (w * EXPORT_LAYOUT_UNIT - EXPORT_KEY_PADDING * 2.0).max(1.0),
-        (h * EXPORT_LAYOUT_UNIT - EXPORT_KEY_PADDING * 2.0).max(1.0),
+        (item.size.x * EXPORT_LAYOUT_UNIT - EXPORT_KEY_PADDING * 2.0).max(1.0),
+        (item.size.y * EXPORT_LAYOUT_UNIT - EXPORT_KEY_PADDING * 2.0).max(1.0),
     );
     egui::Rect::from_center_size(
         egui::pos2(
@@ -1351,15 +1387,12 @@ fn export_encoder_groups(
         {
             continue;
         }
-        let layout_rect = layout_aabb_rect(
-            encoder.x,
-            encoder.y,
-            encoder.w,
-            encoder.h,
+        let layout_rect = layout_aabb_rect(ExportItemGeometry::new(
+            egui::pos2(encoder.x, encoder.y),
+            egui::vec2(encoder.w, encoder.h),
             encoder.rotation,
-            encoder.rotation_x,
-            encoder.rotation_y,
-        );
+            egui::pos2(encoder.rotation_x, encoder.rotation_y),
+        ));
         let rect = egui::Rect::from_min_max(
             egui::pos2(
                 EXPORT_MARGIN + (layout_rect.left() - bounds.left()) * EXPORT_LAYOUT_UNIT,
@@ -1421,7 +1454,7 @@ fn draw_encoder_export(
         radius,
         palette.key_fill,
         palette.key_stroke,
-        1.4,
+        EXPORT_ENCODER_STROKE_WIDTH,
     );
     draw_line_segment(
         image,
@@ -1429,7 +1462,7 @@ fn draw_encoder_export(
         center.y,
         center.x + radius * 0.58,
         center.y,
-        1.2,
+        EXPORT_ENCODER_DIVIDER_STROKE_WIDTH,
         palette.key_stroke,
     );
 
@@ -1470,8 +1503,7 @@ fn draw_encoder_export(
             image,
             font,
             &label,
-            center.x,
-            center.y - radius * 0.34,
+            egui::pos2(center.x, center.y - radius * 0.34),
             fit_text_size(font, &label, 10.5, radius * 1.35, 6.5),
             if dimmed {
                 palette.dim_text
@@ -1490,8 +1522,7 @@ fn draw_encoder_export(
             image,
             font,
             &label,
-            center.x,
-            center.y + radius * 0.38,
+            egui::pos2(center.x, center.y + radius * 0.38),
             fit_text_size(font, &label, 10.5, radius * 1.35, 6.5),
             if dimmed {
                 palette.dim_text
@@ -1521,13 +1552,16 @@ fn write_rotated_rect_svg(
     };
     writeln!(
         svg,
-        r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="7" ry="7" fill="{}" stroke="{}" stroke-width="1.4"{} />"#,
+        r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="{}" ry="{}" fill="{}" stroke="{}" stroke-width="{}"{} />"#,
         rect.left(),
         rect.top(),
         rect.width(),
         rect.height(),
+        EXPORT_KEY_RADIUS,
+        EXPORT_KEY_RADIUS,
         svg_color(palette.key_fill),
         svg_color(palette.key_stroke),
+        EXPORT_KEY_STROKE_WIDTH,
         transform
     )?;
     Ok(())
@@ -1547,21 +1581,23 @@ fn write_encoder_svg(
     let radius = group.rect.width().min(group.rect.height()) * LAYOUT_ENCODER_RADIUS_FACTOR;
     writeln!(
         svg,
-        r#"<circle cx="{:.2}" cy="{:.2}" r="{:.2}" fill="{}" stroke="{}" stroke-width="1.4"/>"#,
+        r#"<circle cx="{:.2}" cy="{:.2}" r="{:.2}" fill="{}" stroke="{}" stroke-width="{}"/>"#,
         center.x,
         center.y,
         radius,
         svg_color(palette.key_fill),
-        svg_color(palette.key_stroke)
+        svg_color(palette.key_stroke),
+        EXPORT_ENCODER_STROKE_WIDTH
     )?;
     writeln!(
         svg,
-        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.2" stroke-linecap="round"/>"#,
+        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="{}" stroke-linecap="round"/>"#,
         center.x - radius * 0.58,
         center.y,
         center.x + radius * 0.58,
         center.y,
-        svg_color(palette.key_stroke)
+        svg_color(palette.key_stroke),
+        EXPORT_ENCODER_DIVIDER_STROKE_WIDTH
     )?;
 
     let encoder_value_label = |kc: u16| -> String {
@@ -1803,7 +1839,7 @@ fn draw_key_label_export(
         [only] => {
             let base = if *only == "↵" { 20.0 } else { 12.4 } * scale;
             let size = fit_text_size(font, only, base, available_width, 7.0 * scale);
-            draw_text_centered_rotated(image, font, only, center.x, center.y, size, main, rotation);
+            draw_text_centered_rotated(image, font, only, center, size, main, rotation);
         }
         [upper, lower] => {
             let upper_size = fit_text_size(font, upper, 9.0 * scale, available_width, 5.8 * scale);
@@ -1814,8 +1850,7 @@ fn draw_key_label_export(
                 image,
                 font,
                 upper,
-                center.x + upper_offset.x,
-                center.y + upper_offset.y,
+                egui::pos2(center.x + upper_offset.x, center.y + upper_offset.y),
                 upper_size,
                 top,
                 rotation,
@@ -1824,8 +1859,7 @@ fn draw_key_label_export(
                 image,
                 font,
                 lower,
-                center.x + lower_offset.x,
-                center.y + lower_offset.y,
+                egui::pos2(center.x + lower_offset.x, center.y + lower_offset.y),
                 lower_size,
                 main,
                 rotation,
@@ -1842,8 +1876,7 @@ fn draw_key_label_export(
                     image,
                     font,
                     line,
-                    center.x + offset.x,
-                    center.y + offset.y,
+                    egui::pos2(center.x + offset.x, center.y + offset.y),
                     size,
                     if idx == 0 { top } else { main },
                     rotation,
@@ -1882,8 +1915,7 @@ fn draw_text_centered_rotated(
     image: &mut RgbaImage,
     font: &FontArc,
     text: &str,
-    center_x: f32,
-    center_y: f32,
+    center: egui::Pos2,
     size: f32,
     color: Rgba<u8>,
     rotation: f32,
@@ -1893,8 +1925,8 @@ fn draw_text_centered_rotated(
     }
     let scaled = font.as_scaled(size);
     let width = measure_text(font, text, size);
-    let mut cursor_x = center_x - width * 0.5;
-    let baseline_y = center_y + size * 0.36;
+    let mut cursor_x = center.x - width * 0.5;
+    let baseline_y = center.y + size * 0.36;
     let cos = rotation.cos();
     let sin = rotation.sin();
     for ch in text.chars() {
@@ -1906,10 +1938,10 @@ fn draw_text_centered_rotated(
             outlined.draw(|x, y, coverage| {
                 let src_x = bounds.min.x + x as f32;
                 let src_y = bounds.min.y + y as f32;
-                let dx = src_x - center_x;
-                let dy = src_y - center_y;
-                let dst_x = center_x + dx * cos - dy * sin;
-                let dst_y = center_y + dx * sin + dy * cos;
+                let dx = src_x - center.x;
+                let dy = src_y - center.y;
+                let dst_x = center.x + dx * cos - dy * sin;
+                let dst_y = center.y + dx * sin + dy * cos;
                 blend_pixel(
                     image,
                     dst_x.round() as i32,
@@ -1929,11 +1961,14 @@ fn draw_rotated_rounded_rect(
     center: egui::Pos2,
     size: egui::Vec2,
     rotation: f32,
-    radius: f32,
-    fill: Rgba<u8>,
-    stroke: Rgba<u8>,
-    stroke_width: f32,
+    style: ExportRoundedRectStyle,
 ) {
+    let ExportRoundedRectStyle {
+        radius,
+        fill,
+        stroke,
+        stroke_width,
+    } = style;
     let half_w = size.x * 0.5;
     let half_h = size.y * 0.5;
     let extent = (half_w * half_w + half_h * half_h).sqrt() + stroke_width + 2.0;
