@@ -217,10 +217,13 @@ mod tests {
 
     #[test]
     fn rmk_macro_ext_guard_hides_layer_macro_choices_and_explains_why() {
-        let mut picker = KeycodePicker::default();
-        picker.supports_macro_ext_keycodes = false;
-        picker.macro_ext_keycodes_disabled_reason =
-            Some(MacroExtKeycodesDisabledReason::RmkVialMacroExtUnsupported);
+        let picker = KeycodePicker {
+            supports_macro_ext_keycodes: false,
+            macro_ext_keycodes_disabled_reason: Some(
+                MacroExtKeycodesDisabledReason::RmkVialMacroExtUnsupported,
+            ),
+            ..Default::default()
+        };
 
         assert!(picker
             .macro_layer_key_choices(MacroKeyPickKind::Tap)
