@@ -133,6 +133,50 @@ sudo apt-get install ibus python3-gi gir1.2-ibus-1.0
 After installation, restart IBus if Entropy did not do it automatically, then add
 an **Entropy Text Expander** layout as an input source in your desktop input settings.
 
+## NixOS
+
+A flake is included. Run without installing:
+
+```sh
+nix run github:ergohaven/entropy
+```
+
+The **Install Vial udev rules** and **Install IBus** actions do not work on
+NixOS — they write to `/etc/udev/rules.d` and `~/.local/share`, and IBus only
+loads engines from its own store path. Use the NixOS module instead, which
+covers both:
+
+```nix
+{
+  inputs.entropy.url = "github:ergohaven/entropy";
+
+  outputs = { nixpkgs, entropy, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      modules = [
+        entropy.nixosModules.default
+        { programs.entropy.enable = true; }
+      ];
+    };
+  };
+}
+```
+
+This installs the app, the Vial hidraw udev rule, and the Entropy Universal
+Symbols IBus engine (`programs.entropy.ibus.enable`, on by default). Add
+**Entropy Universal Symbols** as an input source after rebuilding. Entropy's
+settings screen will still report the engine as not installed — it only looks in
+`$XDG_DATA_HOME`; leave the install button alone.
+
+A `homeManagerModules.default` is also available, but the udev rule needs root,
+so it only covers the app and the IBus engine, and its IBus registration works
+only under standalone home-manager.
+
+Development shell with the toolchain and native dependencies:
+
+```sh
+nix develop
+```
+
 ## Universal Symbols
 
 Universal Symbols are native RMK firmware actions for punctuation that should
