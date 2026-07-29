@@ -202,6 +202,20 @@ const UNIVERSAL_EXTRA_SYMBOL_ORDER: &[char] = &[
 mod tests {
     use super::*;
 
+    fn collect_text(shape: &egui::Shape, text: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(text_shape) => {
+                text.push(text_shape.galley.job.text.clone());
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect_text(shape, text);
+                }
+            }
+            _ => {}
+        }
+    }
+
     #[test]
     fn universal_extra_symbols_include_common_arrows() {
         for symbol in ['←', '↑', '→', '↓', '↔'] {
@@ -232,6 +246,38 @@ mod tests {
             .macro_ext_keycodes_notice(crate::i18n::Language::English)
             .expect("RMK notice should be present")
             .contains("RMK"));
+    }
+
+    #[test]
+    fn pending_modifier_picker_renders_layout_and_list_tabs() {
+        let ctx = egui::Context::default();
+        let mut picker = KeycodePicker::default();
+        picker.open = true;
+        picker.vial_quantum_pending_mod = Some(0x0100);
+
+        let mut render = || {
+            let mut input = egui::RawInput::default();
+            input.screen_rect = Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1_100.0, 800.0),
+            ));
+            ctx.run_ui(input, |_ui| {
+                picker.show(
+                    &ctx,
+                    DeferredPickerDataState::Ready,
+                    DeferredPickerDataState::Ready,
+                );
+            })
+        };
+        let _ = render();
+        let output = render();
+        let mut text = Vec::new();
+        for clipped_shape in &output.shapes {
+            collect_text(&clipped_shape.shape, &mut text);
+        }
+
+        assert!(text.iter().any(|value| value == "List"), "{text:?}");
+        assert!(text.iter().any(|value| value == "Layout"), "{text:?}");
     }
 }
 
@@ -1300,6 +1346,7 @@ impl KeycodePicker {
             )
             .show(ctx, |ui| {
                 apply_picker_button_visuals(ui);
+                self.show_popup_view_mode_header(ui);
                 crate::ui_style::modal_intro(
                     ui,
                     tr_picker(self.language, "key_picker.press_key_or_click_cancel"),
@@ -1317,65 +1364,55 @@ impl KeycodePicker {
                     .max_height(key_picker_popup_scroll_height(popup_size))
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.label(
-                            RichText::new(tr_picker(
-                                self.language,
-                                "key_picker.section_plain_modifiers",
-                            ))
-                            .size(11.0)
-                            .color(Color32::from_gray(150)),
-                        );
-                        ui.add_space(4.0);
-                        ui.horizontal_wrapped(|ui| {
-                            let plain_modifiers = [
-                                ("Ctrl".to_owned(), 0x00E0u16, 0x00E4u16, "Ctrl".to_owned()),
-                                ("Shift".to_owned(), 0x00E1u16, 0x00E5u16, "Shift".to_owned()),
-                                ("Alt".to_owned(), 0x00E2u16, 0x00E6u16, "Alt".to_owned()),
-                                (
-                                    gui_label(false).to_string(),
-                                    0x00E3u16,
-                                    0x00E7u16,
-                                    gui_mod_name().to_string(),
-                                ),
-                            ];
-                            for (label, left_value, right_value, mod_name) in plain_modifiers {
-                                let resp = picker_keycap_button(
-                                    ui,
-                                    &label,
-                                    Self::picker_key_size(ui.ctx()),
-                                    true,
-                                    false,
-                                )
-                                .on_hover_text(
-                                    crate::i18n::tr_text(
-                                        self.language,
-                                        &plain_modifier_tooltip(&mod_name),
+                        if self.popup_view_mode == PickerViewMode::List {
+                            ui.label(
+                                RichText::new(tr_picker(
+                                    self.language,
+                                    "key_picker.section_plain_modifiers",
+                                ))
+                                .size(11.0)
+                                .color(Color32::from_gray(150)),
+                            );
+                            ui.add_space(4.0);
+                            ui.horizontal_wrapped(|ui| {
+                                let plain_modifiers = [
+                                    ("Ctrl".to_owned(), 0x00E0u16, 0x00E4u16, "Ctrl".to_owned()),
+                                    ("Shift".to_owned(), 0x00E1u16, 0x00E5u16, "Shift".to_owned()),
+                                    ("Alt".to_owned(), 0x00E2u16, 0x00E6u16, "Alt".to_owned()),
+                                    (
+                                        gui_label(false).to_string(),
+                                        0x00E3u16,
+                                        0x00E7u16,
+                                        gui_mod_name().to_string(),
                                     ),
-                                );
-                                if resp.clicked_by(egui::PointerButton::Primary) {
-                                    self.finish_quantum_pending_key(base, left_value, is_mt);
+                                ];
+                                for (label, left_value, right_value, mod_name) in plain_modifiers {
+                                    let resp = picker_keycap_button(
+                                        ui,
+                                        &label,
+                                        Self::picker_key_size(ui.ctx()),
+                                        true,
+                                        false,
+                                    )
+                                    .on_hover_text(
+                                        crate::i18n::tr_text(
+                                            self.language,
+                                            &plain_modifier_tooltip(&mod_name),
+                                        ),
+                                    );
+                                    if resp.clicked_by(egui::PointerButton::Primary) {
+                                        self.finish_quantum_pending_key(base, left_value, is_mt);
+                                    }
+                                    if resp.clicked_by(egui::PointerButton::Secondary) {
+                                        self.finish_quantum_pending_key(base, right_value, is_mt);
+                                    }
                                 }
-                                if resp.clicked_by(egui::PointerButton::Secondary) {
-                                    self.finish_quantum_pending_key(base, right_value, is_mt);
-                                }
-                            }
-                        });
-                        ui.add_space(crate::ui_style::modal_space_sm());
-
-                        if let Some(value) = self.show_qwerty_popup_key_grid(ui, |value| {
-                            key_choices.iter().any(|kc| kc.value == value)
-                        }) {
-                            self.finish_quantum_pending_key(base, value, is_mt);
+                            });
+                            ui.add_space(crate::ui_style::modal_space_sm());
                         }
 
-                        if let Some(value) = show_grouped_popup_key_buttons(
-                            ui,
-                            key_choices,
-                            &self.layer_names,
-                            false,
-                            self.language,
-                            self.key_legend_layout,
-                        ) {
+                        if let Some(value) = self.show_popup_key_choice_view(ui, key_choices, false)
+                        {
                             self.finish_quantum_pending_key(base, value, is_mt);
                         }
                     });
