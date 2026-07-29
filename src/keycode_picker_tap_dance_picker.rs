@@ -364,32 +364,24 @@ impl KeycodePicker {
                 .strong(),
         );
         ui.add_space(4.0);
-        let shortcuts: Vec<(String, u16, u16, String)> = vec![
-            (picker_mod_key_label(0x0100), 0x0100, 0x1100, "Ctrl".into()),
-            (picker_mod_key_label(0x0200), 0x0200, 0x1200, "Shift".into()),
-            (picker_mod_key_label(0x0400), 0x0400, 0x1400, "Alt".into()),
-            (
-                picker_mod_key_label(0x0800),
-                0x0800,
-                0x1800,
-                gui_mod_name().to_string(),
-            ),
-        ];
+        let shortcuts = mod_key_choices(true);
         ui.horizontal_wrapped(|ui| {
-            for (label, left_base, right_base, mod_name) in &shortcuts {
+            for choice in &shortcuts {
                 let resp = ui
                     .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
-                Self::paint_compact_picker_label(ui, &resp, label);
+                Self::paint_compact_picker_label(ui, &resp, &choice.label);
                 if resp.clicked_by(egui::PointerButton::Primary) {
-                    self.td_mod_key_pick = Some((td_idx, field, *left_base));
+                    self.td_mod_key_pick = Some((td_idx, field, choice.left_value));
                 }
-                if resp.clicked_by(egui::PointerButton::Secondary) {
-                    self.td_mod_key_pick = Some((td_idx, field, *right_base));
+                if let Some(right_value) = choice.right_value {
+                    if resp.clicked_by(egui::PointerButton::Secondary) {
+                        self.td_mod_key_pick = Some((td_idx, field, right_value));
+                    }
                 }
                 resp.on_hover_text(crate::i18n::tr_text(
                     self.language,
-                    &mod_combo_tooltip(mod_name, true),
+                    &mod_combo_tooltip(&choice.mod_name, choice.right_value.is_some()),
                 ));
             }
         });

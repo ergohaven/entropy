@@ -821,6 +821,7 @@ pub fn modifier_label_from_bits(mods: u16) -> String {
         0x05 | 0x15 => "Ctrl+Alt".to_string(),
         0x06 | 0x16 => "Shift+Alt".to_string(),
         0x07 | 0x17 => "Meh".to_string(),
+        0x09 | 0x19 => format!("Ctrl+{}", gui_sym()),
         0x0F | 0x1F => "Hyper".to_string(),
         0x0A | 0x1A => format!("Shift+{}", gui_sym()),
         _ => "Mod".to_string(),

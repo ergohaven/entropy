@@ -5,6 +5,12 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.4
+
+### Features
+
+- Added Ctrl+GUI to Mod+Key choices for both Vial-RMK and Vial-QMK keyboards, including compact secondary and Tap Dance pickers
+
 ## v0.3.3
 
 ### Fixes

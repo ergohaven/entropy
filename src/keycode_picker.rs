@@ -279,6 +279,20 @@ mod tests {
         assert!(text.iter().any(|value| value == "List"), "{text:?}");
         assert!(text.iter().any(|value| value == "Layout"), "{text:?}");
     }
+
+    #[test]
+    fn mod_key_choices_include_ctrl_gui_for_full_and_compact_pickers() {
+        let expected_label = format!("Ctrl+{}/key", crate::keycode::gui_sym());
+        for compact_only in [false, true] {
+            let choice = mod_key_choices(compact_only)
+                .into_iter()
+                .find(|choice| choice.left_value == 0x0900)
+                .expect("Ctrl+GUI Mod+Key choice should be available");
+
+            assert_eq!(choice.right_value, None);
+            assert_eq!(choice.label, expected_label);
+        }
+    }
 }
 
 fn show_universal_symbol_section(
@@ -340,6 +354,103 @@ fn picker_tab_label(language: crate::i18n::Language, tab: KeycodeTab) -> &'stati
 
 fn picker_mod_key_label(base: u16) -> String {
     format!("{}/key", picker_modifier_label_from_bits(base >> 8))
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ModKeyChoice {
+    label: String,
+    left_value: u16,
+    right_value: Option<u16>,
+    mod_name: String,
+    compact: bool,
+}
+
+fn mod_key_choices(compact_only: bool) -> Vec<ModKeyChoice> {
+    let gui = gui_label(false);
+    let choices = vec![
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0100),
+            left_value: 0x0100,
+            right_value: Some(0x1100),
+            mod_name: "Ctrl".into(),
+            compact: true,
+        },
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0200),
+            left_value: 0x0200,
+            right_value: Some(0x1200),
+            mod_name: "Shift".into(),
+            compact: true,
+        },
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0400),
+            left_value: 0x0400,
+            right_value: Some(0x1400),
+            mod_name: "Alt".into(),
+            compact: true,
+        },
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0800),
+            left_value: 0x0800,
+            right_value: Some(0x1800),
+            mod_name: gui.to_string(),
+            compact: true,
+        },
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0300),
+            left_value: 0x0300,
+            right_value: None,
+            mod_name: "Ctrl+Shift".into(),
+            compact: false,
+        },
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0500),
+            left_value: 0x0500,
+            right_value: None,
+            mod_name: "Ctrl+Alt".into(),
+            compact: false,
+        },
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0900),
+            left_value: 0x0900,
+            right_value: None,
+            mod_name: format!("Ctrl+{gui}"),
+            compact: true,
+        },
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0600),
+            left_value: 0x0600,
+            right_value: None,
+            mod_name: "Shift+Alt (LSA)".into(),
+            compact: false,
+        },
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0700),
+            left_value: 0x0700,
+            right_value: None,
+            mod_name: "Ctrl+Shift+Alt".into(),
+            compact: false,
+        },
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0A00),
+            left_value: 0x0A00,
+            right_value: None,
+            mod_name: format!("{gui}+Shift"),
+            compact: false,
+        },
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0F00),
+            left_value: 0x0F00,
+            right_value: None,
+            mod_name: format!("Ctrl+Shift+Alt+{}", gui_mod_name()),
+            compact: false,
+        },
+    ];
+
+    choices
+        .into_iter()
+        .filter(|choice| !compact_only || choice.compact)
+        .collect()
 }
 
 fn picker_mod_tap_label(base: u16) -> String {
@@ -1184,32 +1295,24 @@ impl KeycodePicker {
                 .color(Color32::from_gray(150)),
         );
         ui.add_space(4.0);
-        let shortcuts: Vec<(String, u16, u16, String)> = vec![
-            (picker_mod_key_label(0x0100), 0x0100, 0x1100, "Ctrl".into()),
-            (picker_mod_key_label(0x0200), 0x0200, 0x1200, "Shift".into()),
-            (picker_mod_key_label(0x0400), 0x0400, 0x1400, "Alt".into()),
-            (
-                picker_mod_key_label(0x0800),
-                0x0800,
-                0x1800,
-                gui_mod_name().to_string(),
-            ),
-        ];
+        let shortcuts = mod_key_choices(true);
         ui.horizontal_wrapped(|ui| {
-            for (label, left_base, right_base, mod_name) in &shortcuts {
+            for choice in &shortcuts {
                 let resp = ui
                     .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
-                Self::paint_compact_picker_label(ui, &resp, label);
+                Self::paint_compact_picker_label(ui, &resp, &choice.label);
                 if resp.clicked_by(egui::PointerButton::Primary) {
-                    self.regular_mod_key_pick = Some(*left_base);
+                    self.regular_mod_key_pick = Some(choice.left_value);
                 }
-                if resp.clicked_by(egui::PointerButton::Secondary) {
-                    self.regular_mod_key_pick = Some(*right_base);
+                if let Some(right_value) = choice.right_value {
+                    if resp.clicked_by(egui::PointerButton::Secondary) {
+                        self.regular_mod_key_pick = Some(right_value);
+                    }
                 }
                 resp.on_hover_text(crate::i18n::tr_text(
                     self.language,
-                    &mod_combo_tooltip(mod_name, true),
+                    &mod_combo_tooltip(&choice.mod_name, choice.right_value.is_some()),
                 ));
             }
         });
