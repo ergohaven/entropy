@@ -513,13 +513,6 @@ pub(super) fn save_combo_colors(colors: &[u32], device_name: &str) {
     }
 }
 
-pub(super) fn combo_display_name(combo_names: &[String], idx: usize) -> String {
-    match combo_names.get(idx) {
-        Some(name) if !name.trim().is_empty() => name.clone(),
-        _ => format!("C{}", idx),
-    }
-}
-
 pub(super) fn key_override_names_path(device_name: &str) -> std::path::PathBuf {
     let dir = dirs::config_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -547,13 +540,6 @@ pub(super) fn save_key_override_names(names: &[String], device_name: &str) {
         } else {
             log::info!("save_key_override_names ok → {:?}", path);
         }
-    }
-}
-
-pub(super) fn key_override_display_name(key_override_names: &[String], idx: usize) -> String {
-    match key_override_names.get(idx) {
-        Some(name) if !name.trim().is_empty() => name.clone(),
-        _ => format!("KO{}", idx),
     }
 }
 
