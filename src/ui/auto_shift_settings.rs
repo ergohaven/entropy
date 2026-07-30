@@ -97,15 +97,7 @@ impl EntropyApp {
             ui.set_min_size(list.content_rect.size());
             ui.spacing_mut().item_spacing.y = 0.0;
             for row_idx in list.first_visible_row..list.last_visible_row {
-                self.draw_auto_shift_row(
-                    ui,
-                    row_idx,
-                    list.row_content_width,
-                    list.row_height,
-                    field_width,
-                    dark,
-                    list.suppress_tooltips,
-                );
+                self.draw_auto_shift_row(ui, row_idx, &list, field_width, dark);
             }
         });
 
@@ -124,12 +116,13 @@ impl EntropyApp {
         &mut self,
         ui: &mut egui::Ui,
         row_idx: usize,
-        content_width: f32,
-        row_height: f32,
+        list: &AdaptiveSettingsListViewport,
         field_width: f32,
         _dark: bool,
-        suppress_tooltips: bool,
     ) {
+        let content_width = list.row_content_width;
+        let row_height = list.row_height;
+        let suppress_tooltips = list.suppress_tooltips;
         let row = match row_idx {
             0 => (
                 crate::i18n::tr_catalog(self.app_settings.language, "common.enable"),

@@ -35,15 +35,7 @@ impl EntropyApp {
                     ui.set_clip_rect(list.viewport);
                     ui.set_min_size(list.content_rect.size());
                     ui.spacing_mut().item_spacing.y = 0.0;
-                    self.draw_app_settings_editor_content(
-                        ui,
-                        list.first_visible_row..list.last_visible_row,
-                        list.row_content_width,
-                        list.row_height,
-                        metrics,
-                        dark,
-                        list.suppress_tooltips,
-                    );
+                    self.draw_app_settings_editor_content(ui, &list, metrics, dark);
                 });
 
                 if list.has_scrollbar {
@@ -102,15 +94,16 @@ impl EntropyApp {
     fn draw_app_settings_editor_content(
         &mut self,
         ui: &mut egui::Ui,
-        row_range: std::ops::Range<usize>,
-        content_width: f32,
-        row_height: f32,
+        list: &AdaptiveSettingsListViewport,
         metrics: crate::ui_style::ResponsiveMetrics,
         dark: bool,
-        suppress_tooltips: bool,
     ) {
         use crate::i18n::Key as TrKey;
 
+        let row_range = list.first_visible_row..list.last_visible_row;
+        let content_width = list.row_content_width;
+        let row_height = list.row_height;
+        let suppress_tooltips = list.suppress_tooltips;
         let lang = self.app_settings.language;
         let switch_width = metrics.value(46.0);
         let switch_size = metrics.size(46.0, 24.0);
