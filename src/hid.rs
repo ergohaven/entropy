@@ -233,6 +233,44 @@ enum HidBackend {
     },
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) struct LinuxBluetoothHidWriter {
+    device: hidapi::HidDevice,
+    write_framing: HidWriteFraming,
+    path: Option<PathBuf>,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxBluetoothHidWriter {
+    pub(crate) fn open(device: &crate::device::Device) -> Result<Self> {
+        let local = HidDevice::open_fresh_for_local(device)?;
+        let HidBackend::Local {
+            device,
+            transport,
+            write_framing,
+            path,
+            ..
+        } = local.backend
+        else {
+            bail!("Linux Bluetooth HID writer did not open a local HID backend");
+        };
+        if !transport.is_bluetooth() {
+            bail!("Linux Bluetooth HID writer opened a non-Bluetooth endpoint");
+        }
+
+        Ok(Self {
+            device,
+            write_framing,
+            path,
+        })
+    }
+
+    pub(crate) fn write_output_report(&self, data: &[u8]) -> Result<()> {
+        ensure_output_report_len(data)?;
+        write_output_report_local(&self.device, self.write_framing, self.path.as_deref(), data)
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HidTransport {

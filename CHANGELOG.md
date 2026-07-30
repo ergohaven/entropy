@@ -5,6 +5,12 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.10
+
+### Fixes
+
+- Routed Linux Bluetooth Vial requests through the kernel HID output path while receiving replies through BlueZ GATT, because BlueZ intentionally blocks D-Bus writes to its claimed HID service
+
 ## v0.3.9
 
 ### Fixes

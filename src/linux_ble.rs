@@ -593,6 +593,10 @@ pub(crate) struct LinuxBleDevice {
     input_path: String,
     output_path: String,
     output_write_types: Vec<GattWriteType>,
+    // BlueZ's HOGP plugin claims HID services and exports them read-only by
+    // default. Requests therefore use the kernel HID output path, while BlueZ
+    // remains the reliable owner of Vial notifications and direct reads.
+    hid_writer: Option<crate::hid::LinuxBluetoothHidWriter>,
     preferred_write_type: AtomicUsize,
     notifications: Mutex<mpsc::Receiver<Vec<u8>>>,
     listener_control: Mutex<Option<Connection>>,
@@ -622,12 +626,30 @@ impl LinuxBleDevice {
         let (notification_tx, notification_rx) = mpsc::channel();
         let listener_control =
             spawn_notification_listener(endpoints.input.clone(), notification_tx)?;
+        let hid_writer = match crate::hid::LinuxBluetoothHidWriter::open(device) {
+            Ok(writer) => {
+                log::info!(
+                    "Using Linux hidraw writes with direct BlueZ GATT replies for {}",
+                    device.name
+                );
+                Some(writer)
+            }
+            Err(error) => {
+                log::debug!(
+                    "Linux Bluetooth HID output unavailable for {}: {error:#}; \
+                     falling back to direct BlueZ GATT writes",
+                    device.name
+                );
+                None
+            }
+        };
 
         Ok(Self {
             connection,
             input_path: endpoints.input,
             output_path: endpoints.output,
             output_write_types: endpoints.output_write_types,
+            hid_writer,
             preferred_write_type: AtomicUsize::new(0),
             notifications: Mutex::new(notification_rx),
             listener_control: Mutex::new(Some(listener_control)),
@@ -657,6 +679,11 @@ impl LinuxBleDevice {
             .command_lock
             .lock()
             .map_err(|_| anyhow::anyhow!("BlueZ Vial command lock poisoned"))?;
+        if let Some(writer) = &self.hid_writer {
+            return writer
+                .write_output_report(data)
+                .context("Failed to write the Bluetooth Vial request through Linux HID");
+        }
         let preferred = self
             .preferred_write_type
             .load(Ordering::Relaxed)
@@ -675,6 +702,15 @@ impl LinuxBleDevice {
 
         self.write_value_with_type(data, write_type)?;
 
+        self.wait_for_reply(data, notifications, response_matches)
+    }
+
+    fn wait_for_reply(
+        &self,
+        data: &[u8],
+        notifications: &mpsc::Receiver<Vec<u8>>,
+        response_matches: &impl Fn(&[u8; 32]) -> bool,
+    ) -> Result<[u8; 32]> {
         let deadline = Instant::now() + BLUEZ_REPLY_TIMEOUT;
         let mut last_unrelated = None;
         let mut last_read_error = None;
@@ -757,6 +793,14 @@ impl LinuxBleDevice {
             .notifications
             .lock()
             .map_err(|_| anyhow::anyhow!("BlueZ Vial notification lock poisoned"))?;
+        if let Some(writer) = &self.hid_writer {
+            while notifications.try_recv().is_ok() {}
+            writer
+                .write_output_report(data)
+                .context("Failed to write the Bluetooth Vial request through Linux HID")?;
+            return self.wait_for_reply(data, &notifications, &response_matches);
+        }
+
         let preferred = self
             .preferred_write_type
             .load(Ordering::Relaxed)
