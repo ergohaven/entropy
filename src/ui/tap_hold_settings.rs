@@ -799,8 +799,10 @@ mod tests {
 
     #[test]
     fn tap_hold_rows_hide_unadvertised_qsids() {
-        let mut tap_hold = TapHoldSettingsState::default();
-        tap_hold.supported = true;
+        let mut tap_hold = TapHoldSettingsState {
+            supported: true,
+            ..Default::default()
+        };
         tap_hold.set_qsid_supported(7);
 
         let rows = tap_hold_one_shot_rows(
@@ -822,8 +824,10 @@ mod tests {
 
     #[test]
     fn rmk_rows_use_rmk_behavior_names() {
-        let mut tap_hold = TapHoldSettingsState::default();
-        tap_hold.supported = true;
+        let mut tap_hold = TapHoldSettingsState {
+            supported: true,
+            ..Default::default()
+        };
         for qsid in [18, 19, 26, 27] {
             tap_hold.set_qsid_supported(qsid);
         }
@@ -850,8 +854,10 @@ mod tests {
 
     #[test]
     fn one_shot_rows_follow_advertised_qsids_independently() {
-        let mut one_shot = OneShotSettingsState::default();
-        one_shot.supported = true;
+        let mut one_shot = OneShotSettingsState {
+            supported: true,
+            ..Default::default()
+        };
         one_shot.set_qsid_supported(6);
 
         let rows = tap_hold_one_shot_rows(
