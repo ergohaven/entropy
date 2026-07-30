@@ -1,12 +1,13 @@
 use crate::device::Device;
 use crate::firmware::FirmwareProtocol;
 use anyhow::{bail, Context, Result};
+use futures_lite::{future, StreamExt};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use zbus::blocking::connection::Builder as ConnectionBuilder;
-use zbus::blocking::fdo::{ObjectManagerProxy, PropertiesProxy};
+use zbus::blocking::fdo::ObjectManagerProxy;
 use zbus::blocking::{Connection, Proxy};
 use zbus::fdo::ManagedObjects;
 use zbus::zvariant::{ObjectPath, OwnedValue, Value};
@@ -625,33 +626,83 @@ fn value_bytes(value: &Value<'_>) -> Option<Vec<u8>> {
     array.iter().map(|item| u8::try_from(item).ok()).collect()
 }
 
+struct NotificationListener {
+    connection: Connection,
+    input_path: String,
+    stop_tx: async_channel::Sender<()>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl NotificationListener {
+    fn shutdown(&mut self) {
+        let _ = self.stop_tx.try_send(());
+        if let Ok(input) = characteristic_proxy(&self.connection, &self.input_path) {
+            let _ = input.call::<_, _, ()>("StopNotify", &());
+        }
+        if let Some(thread) = self.thread.take() {
+            if thread.join().is_err() {
+                log::debug!("BlueZ Vial notification listener panicked during shutdown");
+            }
+        }
+    }
+}
+
+impl Drop for NotificationListener {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
 fn spawn_notification_listener(
     input_path: String,
     notification_tx: mpsc::Sender<Vec<u8>>,
-) -> Result<Connection> {
+) -> Result<NotificationListener> {
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
-    std::thread::Builder::new()
+    let (stop_tx, stop_rx) = async_channel::bounded(1);
+    let listener_input_path = input_path.clone();
+    let thread = std::thread::Builder::new()
         .name("entropy-bluez-vial-notify".to_owned())
         .spawn(move || {
-            let result = (|| -> Result<()> {
+            let result: Result<()> = future::block_on(async {
                 let connection = bluez_connection()?;
-                let properties = PropertiesProxy::builder(&connection)
+                let properties = zbus::fdo::PropertiesProxy::builder(connection.inner())
                     .destination(BLUEZ_DESTINATION)
                     .context("Invalid BlueZ D-Bus destination")?
-                    .path(input_path.as_str())
+                    .path(listener_input_path.as_str())
                     .context("Invalid BlueZ Vial input path")?
                     .build()
+                    .await
                     .context("Failed to create the BlueZ properties proxy")?;
                 let mut changes = properties
                     .receive_properties_changed()
+                    .await
                     .context("Failed to listen for BlueZ Vial notifications")?;
-                characteristic_proxy(&connection, &input_path)?
-                    .call::<_, _, ()>("StartNotify", &())
-                    .context("Failed to subscribe to BlueZ Vial replies")?;
+                zbus::Proxy::new(
+                    connection.inner(),
+                    BLUEZ_DESTINATION,
+                    listener_input_path.as_str(),
+                    CHARACTERISTIC_INTERFACE,
+                )
+                .await
+                .context("Failed to create a BlueZ GATT characteristic proxy")?
+                .call::<_, _, ()>("StartNotify", &())
+                .await
+                .context("Failed to subscribe to BlueZ Vial replies")?;
                 ready_tx
                     .send(Ok(connection.clone()))
                     .map_err(|_| anyhow::anyhow!("BlueZ listener startup receiver disappeared"))?;
-                for change in &mut changes {
+                loop {
+                    let change = future::race(
+                        async {
+                            let _ = stop_rx.recv().await;
+                            None
+                        },
+                        changes.next(),
+                    )
+                    .await;
+                    let Some(change) = change else {
+                        break;
+                    };
                     let arguments = change
                         .args()
                         .context("Malformed BlueZ PropertiesChanged signal")?;
@@ -665,8 +716,9 @@ fn spawn_notification_listener(
                         break;
                     }
                 }
+                zbus::AsyncDrop::async_drop(changes).await;
                 Ok(())
-            })();
+            });
             if let Err(error) = result {
                 let _ = ready_tx.send(Err(format!("{error:#}")));
                 log::debug!("BlueZ Vial notification listener stopped: {error:#}");
@@ -674,10 +726,16 @@ fn spawn_notification_listener(
         })
         .context("Failed to start the BlueZ notification listener")?;
 
-    ready_rx
+    let connection = ready_rx
         .recv_timeout(BLUEZ_METHOD_TIMEOUT)
         .context("BlueZ notification listener startup timed out")?
-        .map_err(anyhow::Error::msg)
+        .map_err(anyhow::Error::msg)?;
+    Ok(NotificationListener {
+        connection,
+        input_path,
+        stop_tx,
+        thread: Some(thread),
+    })
 }
 
 fn normalize_notification(bytes: &[u8]) -> Option<[u8; 32]> {
@@ -702,7 +760,7 @@ pub(crate) struct LinuxBleDevice {
     hid_writer: Option<crate::hid::LinuxBluetoothHidWriter>,
     preferred_write_type: AtomicUsize,
     notifications: Mutex<mpsc::Receiver<Vec<u8>>>,
-    listener_control: Mutex<Option<Connection>>,
+    listener_control: Mutex<Option<NotificationListener>>,
     command_lock: Mutex<()>,
 }
 
@@ -948,12 +1006,7 @@ impl LinuxBleDevice {
 impl Drop for LinuxBleDevice {
     fn drop(&mut self) {
         if let Ok(mut control) = self.listener_control.lock() {
-            if let Some(connection) = control.take() {
-                if let Ok(input) = characteristic_proxy(&connection, &self.input_path) {
-                    let _ = input.call::<_, _, ()>("StopNotify", &());
-                }
-                let _ = connection.close();
-            }
+            control.take();
         }
     }
 }

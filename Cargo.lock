@@ -1283,10 +1283,11 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "ergohaven-entropy"
-version = "0.3.11"
+version = "0.3.12"
 dependencies = [
  "ab_glyph",
  "anyhow",
+ "async-channel",
  "base64 0.21.7",
  "chrono",
  "dirs 5.0.1",
@@ -1295,6 +1296,7 @@ dependencies = [
  "egui",
  "env_logger",
  "flate2",
+ "futures-lite",
  "getrandom 0.2.17",
  "hidapi",
  "image",
