@@ -9,9 +9,10 @@ pub enum BasicPickerLayout {
     Norman,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum PickerViewMode {
     Layout,
+    #[default]
     List,
 }
 
@@ -34,12 +35,6 @@ impl PickerViewMode {
             PickerViewMode::Layout => "key_picker.view_layout",
             PickerViewMode::List => "key_picker.view_list",
         }
-    }
-}
-
-impl Default for PickerViewMode {
-    fn default() -> Self {
-        Self::List
     }
 }
 

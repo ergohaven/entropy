@@ -1,6 +1,7 @@
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum TypingTrainerLanguage {
+    #[default]
     English,
     Russian,
 }
@@ -16,12 +17,6 @@ impl TypingTrainerLanguage {
             Self::English => "en",
             Self::Russian => "ru",
         }
-    }
-}
-
-impl Default for TypingTrainerLanguage {
-    fn default() -> Self {
-        Self::English
     }
 }
 
@@ -55,6 +50,10 @@ mod tests {
 
     #[test]
     fn typing_trainer_language_packs_are_large_enough() {
+        assert_eq!(
+            TypingTrainerLanguage::default(),
+            TypingTrainerLanguage::English
+        );
         for language in TYPING_TRAINER_LANGUAGES {
             assert!(word_count(language) >= 300);
         }
