@@ -21,7 +21,7 @@ impl EntropyApp {
             ui.vertical_centered(|ui| {
                 ui.add_space(KEY_OVERRIDE_TITLE_Y_OFFSET * scale);
                 ui.label(
-                    RichText::new(crate::i18n::tr(lang, crate::i18n::Key::KeyOverridesTitle))
+                    RichText::new(crate::i18n::tr(lang, crate::i18n::Key::OverridesTitle))
                         .size(18.0 * scale)
                         .strong(),
                 );
@@ -29,7 +29,7 @@ impl EntropyApp {
                 ui.label(
                     RichText::new(crate::i18n::tr(
                         lang,
-                        crate::i18n::Key::KeyOverridesDescription,
+                        crate::i18n::Key::OverridesDescription,
                     ))
                     .size(13.0 * scale)
                     .color(app_muted_text(dark)),
