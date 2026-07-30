@@ -388,14 +388,6 @@ impl EntropyApp {
         }
     }
 
-    /// Reload all keycodes from device in background.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn load_from_device(&mut self) {
-        if let Some(idx) = self.selected_device {
-            self.start_connect(idx);
-        }
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn undo(&mut self, ctx: &egui::Context) {
         if self.vial_hid_background_layer_active() {

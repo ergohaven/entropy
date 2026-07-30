@@ -174,15 +174,6 @@ impl DeviceManager {
         devices
     }
 
-    pub fn scan(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.devices = Self::scan_devices();
-        }
-
-        log::info!("Found {} Vial device(s)", self.devices.len());
-    }
-
     pub fn replace_devices(&mut self, devices: Vec<Device>) {
         self.devices = devices;
         log::info!("Found {} Vial device(s)", self.devices.len());

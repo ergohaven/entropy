@@ -445,10 +445,6 @@ impl KeyboardLayout {
             .unwrap_or(0)
     }
 
-    pub fn set_keycode(&mut self, layer: usize, key_idx: usize, keycode: u16) {
-        self.set_key_binding(layer, key_idx, KeyBinding::Vial(keycode));
-    }
-
     pub fn set_key_binding(&mut self, layer: usize, key_idx: usize, binding: KeyBinding) {
         while self.layers.len() <= layer {
             self.layers

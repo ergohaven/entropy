@@ -696,11 +696,6 @@ impl EntropyApp {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    fn sync_layer_names_to_firmware(&self) {
-        let _ = self.write_layer_names_to_firmware(&self.layer_names);
-    }
-
     /// Write `names` to firmware (qsid 200 + layer), one layer at a time so a
     /// single failing SET does not abort the rest. Skips names that already
     /// match. Returns the indices of layers whose write did not land, so callers
