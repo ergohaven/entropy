@@ -696,6 +696,12 @@ fn macos_automation_stdout(args: &[&str]) -> Option<String> {
 }
 
 #[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
+    command_stdout_timeout(program, args, Duration::from_secs(10))
+}
+
+#[cfg(not(target_os = "windows"))]
 fn command_stdout_timeout(program: &str, args: &[&str], timeout: Duration) -> Option<String> {
     use std::io::Read;
 
