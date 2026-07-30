@@ -380,6 +380,7 @@ impl EntropyApp {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
     fn draw_universal_symbols_setup_rows(
         &mut self,
         ui: &mut egui::Ui,
@@ -532,6 +533,7 @@ impl EntropyApp {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
     fn draw_universal_symbols_setup_actions(
         &mut self,
         ui: &mut egui::Ui,
@@ -540,37 +542,6 @@ impl EntropyApp {
         #[cfg(target_os = "windows")]
         {
             let _ = (ui, metrics);
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            let lang = self.app_settings.language;
-            let row = UniversalSymbolsRowContext {
-                content_width: metrics.settings_row_content_width(),
-                height: metrics.settings_row_height(),
-                metrics,
-                lang,
-                dark: ui.visuals().dark_mode,
-                suppress_tooltips: false,
-            };
-
-            let accessibility_clicked =
-                draw_universal_symbols_action_row(ui, row, OPEN_MACOS_ACCESSIBILITY_ACTION);
-            if accessibility_clicked {
-                self.open_macos_accessibility_settings(lang);
-            }
-
-            let monitoring_clicked =
-                draw_universal_symbols_action_row(ui, row, OPEN_MACOS_INPUT_MONITORING_ACTION);
-            if monitoring_clicked {
-                self.open_macos_input_monitoring_settings(lang);
-            }
-
-            let restart_clicked =
-                draw_universal_symbols_action_row(ui, row, RESTART_MACOS_EVENT_TAP_ACTION);
-            if restart_clicked {
-                self.restart_macos_event_tap(lang);
-            }
         }
 
         #[cfg(target_os = "linux")]
@@ -871,6 +842,7 @@ fn draw_universal_symbols_two_line_value(
     );
 }
 
+#[cfg(not(target_os = "macos"))]
 fn draw_universal_symbols_section_label(
     ui: &mut egui::Ui,
     metrics: crate::ui_style::ResponsiveMetrics,
@@ -923,7 +895,7 @@ fn draw_universal_symbols_finish_step_row(
     );
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn draw_universal_symbols_action_row(
     ui: &mut egui::Ui,
     row: UniversalSymbolsRowContext,
