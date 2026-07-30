@@ -21,6 +21,10 @@ const HID_SERVICE_UUID: &str = "1812";
 const REPORT_MAP_CHARACTERISTIC_UUID: &str = "2a4b";
 const REPORT_CHARACTERISTIC_UUID: &str = "2a4d";
 const REPORT_REFERENCE_DESCRIPTOR_UUID: &str = "2908";
+// UUIDv5(DNS) values shared with RMK's vendor Vial transport.
+const VIAL_GATT_SERVICE_UUID: &str = "8cfa65ff-3b6d-55f3-8b67-49693930420d";
+const VIAL_GATT_INPUT_UUID: &str = "7a115e75-ae8e-51b4-9f46-dbd15af07dc3";
+const VIAL_GATT_OUTPUT_UUID: &str = "70ca58d5-fdbf-5497-a33f-d1e8e1698678";
 const BLUEZ_METHOD_TIMEOUT: Duration = Duration::from_secs(5);
 const BLUEZ_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const BLUEZ_REPLY_TIMEOUT: Duration = Duration::from_millis(2_500);
@@ -55,6 +59,13 @@ struct VialGattEndpoints {
     input: String,
     output: String,
     output_write_types: Vec<GattWriteType>,
+    transport: VialGattTransport,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VialGattTransport {
+    Vendor,
+    Hid,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -166,11 +177,13 @@ fn collect_bluez_summaries(
 ) -> (
     HashMap<String, BluezDeviceSummary>,
     HashMap<String, String>,
+    HashMap<String, String>,
     Vec<CharacteristicSummary>,
     Vec<DescriptorSummary>,
 ) {
     let mut devices = HashMap::new();
     let mut hid_services = HashMap::new();
+    let mut vendor_services = HashMap::new();
     let mut characteristics = Vec::new();
     let mut descriptors = Vec::new();
 
@@ -193,9 +206,11 @@ fn collect_bluez_summaries(
 
         if let Some(properties) = interface_properties(interfaces, SERVICE_INTERFACE) {
             let uuid = property_string(properties, "UUID").unwrap_or_default();
-            if uuid_matches(&uuid, HID_SERVICE_UUID) {
-                if let Some(device) = property_path(properties, "Device") {
+            if let Some(device) = property_path(properties, "Device") {
+                if uuid_matches(&uuid, HID_SERVICE_UUID) {
                     hid_services.insert(path.clone(), device);
+                } else if uuid_matches(&uuid, VIAL_GATT_SERVICE_UUID) {
+                    vendor_services.insert(path.clone(), device);
                 }
             }
         }
@@ -220,7 +235,13 @@ fn collect_bluez_summaries(
         }
     }
 
-    (devices, hid_services, characteristics, descriptors)
+    (
+        devices,
+        hid_services,
+        vendor_services,
+        characteristics,
+        descriptors,
+    )
 }
 
 fn resolved_bluez_summaries(
@@ -229,10 +250,11 @@ fn resolved_bluez_summaries(
 ) -> (
     HashMap<String, BluezDeviceSummary>,
     HashMap<String, String>,
+    HashMap<String, String>,
     Vec<CharacteristicSummary>,
     Vec<DescriptorSummary>,
 ) {
-    let (devices, hid_services, mut characteristics, mut descriptors) =
+    let (devices, hid_services, vendor_services, mut characteristics, mut descriptors) =
         collect_bluez_summaries(objects);
 
     for characteristic in characteristics.iter_mut().filter(|characteristic| {
@@ -271,10 +293,70 @@ fn resolved_bluez_summaries(
         }
     }
 
-    (devices, hid_services, characteristics, descriptors)
+    (
+        devices,
+        hid_services,
+        vendor_services,
+        characteristics,
+        descriptors,
+    )
 }
 
-fn select_vial_endpoints(
+fn advertised_write_types(output: &CharacteristicSummary) -> Vec<GattWriteType> {
+    let mut output_write_types = Vec::with_capacity(2);
+    if output
+        .flags
+        .iter()
+        .any(|flag| flag.eq_ignore_ascii_case("write"))
+    {
+        output_write_types.push(GattWriteType::Request);
+    }
+    if output
+        .flags
+        .iter()
+        .any(|flag| flag.eq_ignore_ascii_case("write-without-response"))
+    {
+        output_write_types.push(GattWriteType::Command);
+    }
+    output_write_types
+}
+
+fn select_vendor_vial_endpoints(
+    vendor_services: &HashMap<String, String>,
+    characteristics: &[CharacteristicSummary],
+) -> Vec<VialGattEndpoints> {
+    vendor_services
+        .keys()
+        .filter_map(|service| {
+            let input = characteristics.iter().find(|characteristic| {
+                characteristic.service == *service
+                    && uuid_matches(&characteristic.uuid, VIAL_GATT_INPUT_UUID)
+                    && characteristic
+                        .flags
+                        .iter()
+                        .any(|flag| flag.eq_ignore_ascii_case("notify"))
+            })?;
+            let output = characteristics.iter().find(|characteristic| {
+                characteristic.service == *service
+                    && uuid_matches(&characteristic.uuid, VIAL_GATT_OUTPUT_UUID)
+                    && characteristic.flags.iter().any(|flag| {
+                        flag.eq_ignore_ascii_case("write")
+                            || flag.eq_ignore_ascii_case("write-without-response")
+                    })
+            })?;
+            let output_write_types = advertised_write_types(output);
+            (!output_write_types.is_empty()).then(|| VialGattEndpoints {
+                service: service.clone(),
+                input: input.path.clone(),
+                output: output.path.clone(),
+                output_write_types,
+                transport: VialGattTransport::Vendor,
+            })
+        })
+        .collect()
+}
+
+fn select_hid_vial_endpoints(
     hid_services: &HashMap<String, String>,
     characteristics: &[CharacteristicSummary],
     descriptors: &[DescriptorSummary],
@@ -356,28 +438,39 @@ fn select_vial_endpoints(
         // and RMK combinations only authorize Write Without Response, so keep
         // every advertised mode and let the live transport remember the first
         // one that completes a Vial round trip.
-        let mut output_write_types = Vec::with_capacity(2);
-        if output
-            .flags
-            .iter()
-            .any(|flag| flag.eq_ignore_ascii_case("write"))
-        {
-            output_write_types.push(GattWriteType::Request);
-        }
-        if output
-            .flags
-            .iter()
-            .any(|flag| flag.eq_ignore_ascii_case("write-without-response"))
-        {
-            output_write_types.push(GattWriteType::Command);
-        }
+        let output_write_types = advertised_write_types(output);
         endpoints.push(VialGattEndpoints {
             service: service.clone(),
             input: input.path.clone(),
             output: output.path.clone(),
             output_write_types,
+            transport: VialGattTransport::Hid,
         });
     }
+    endpoints
+}
+
+fn select_vial_endpoints(
+    vendor_services: &HashMap<String, String>,
+    hid_services: &HashMap<String, String>,
+    characteristics: &[CharacteristicSummary],
+    descriptors: &[DescriptorSummary],
+) -> Vec<VialGattEndpoints> {
+    let mut endpoints = select_vendor_vial_endpoints(vendor_services, characteristics);
+    let vendor_devices: Vec<&String> = endpoints
+        .iter()
+        .filter_map(|endpoint| vendor_services.get(&endpoint.service))
+        .collect();
+
+    endpoints.extend(
+        select_hid_vial_endpoints(hid_services, characteristics, descriptors)
+            .into_iter()
+            .filter(|endpoint| {
+                hid_services
+                    .get(&endpoint.service)
+                    .is_none_or(|device| !vendor_devices.contains(&device))
+            }),
+    );
     endpoints
 }
 
@@ -402,29 +495,34 @@ fn parse_bluez_modalias(modalias: &str) -> (u16, u16) {
 }
 
 fn devices_from_objects(connection: &Connection, objects: &ManagedObjects) -> Vec<Device> {
-    let (devices, hid_services, characteristics, descriptors) =
+    let (devices, hid_services, vendor_services, characteristics, descriptors) =
         resolved_bluez_summaries(connection, objects);
-    select_vial_endpoints(&hid_services, &characteristics, &descriptors)
-        .into_iter()
-        .filter_map(|endpoints| {
-            let device_path = hid_services.get(&endpoints.service)?;
-            let summary = devices.get(device_path)?;
-            if !summary.paired {
-                return None;
-            }
-            let (vendor_id, product_id) = parse_bluez_modalias(&summary.modalias);
-            Some(Device {
-                name: summary.name.clone(),
-                vendor_id,
-                product_id,
-                manufacturer: String::new(),
-                serial_number: summary.address.clone(),
-                bus_type: "Bluetooth".to_owned(),
-                path: format!("{BLUEZ_GATT_PREFIX}{}", endpoints.service),
-                firmware: FirmwareProtocol::Vial,
-            })
+    select_vial_endpoints(
+        &vendor_services,
+        &hid_services,
+        &characteristics,
+        &descriptors,
+    )
+    .into_iter()
+    .filter_map(|endpoints| {
+        let device_path = service_device_path(objects, &endpoints.service)?;
+        let summary = devices.get(&device_path)?;
+        if !summary.paired {
+            return None;
+        }
+        let (vendor_id, product_id) = parse_bluez_modalias(&summary.modalias);
+        Some(Device {
+            name: summary.name.clone(),
+            vendor_id,
+            product_id,
+            manufacturer: String::new(),
+            serial_number: summary.address.clone(),
+            bus_type: "Bluetooth".to_owned(),
+            path: format!("{BLUEZ_GATT_PREFIX}{}", endpoints.service),
+            firmware: FirmwareProtocol::Vial,
         })
-        .collect()
+    })
+    .collect()
 }
 
 pub(crate) fn scan_devices() -> Vec<Device> {
@@ -495,10 +593,15 @@ fn endpoints_for_service(
     objects: &ManagedObjects,
     service: &str,
 ) -> Option<VialGattEndpoints> {
-    let (_, hid_services, characteristics, descriptors) =
+    let (_, hid_services, vendor_services, characteristics, descriptors) =
         resolved_bluez_summaries(connection, objects);
-    select_vial_endpoints(&hid_services, &characteristics, &descriptors)
+    select_vendor_vial_endpoints(&vendor_services, &characteristics)
         .into_iter()
+        .chain(select_hid_vial_endpoints(
+            &hid_services,
+            &characteristics,
+            &descriptors,
+        ))
         .find(|endpoints| endpoints.service == service)
 }
 
@@ -593,9 +696,9 @@ pub(crate) struct LinuxBleDevice {
     input_path: String,
     output_path: String,
     output_write_types: Vec<GattWriteType>,
-    // BlueZ's HOGP plugin claims HID services and exports them read-only by
-    // default. Requests therefore use the kernel HID output path, while BlueZ
-    // remains the reliable owner of Vial notifications and direct reads.
+    // Legacy RMK firmware exposes Vial through HOGP, which BlueZ owns. Keep
+    // kernel writes only for that compatibility path; the vendor service uses
+    // D-Bus for both directions.
     hid_writer: Option<crate::hid::LinuxBluetoothHidWriter>,
     preferred_write_type: AtomicUsize,
     notifications: Mutex<mpsc::Receiver<Vec<u8>>>,
@@ -618,7 +721,8 @@ impl LinuxBleDevice {
         let endpoints = endpoints_for_service(&connection, &objects, &service)
             .context("BlueZ Vial GATT characteristics are unavailable")?;
         log::info!(
-            "BlueZ Vial endpoints: input={}, output={}, write_types={:?}",
+            "BlueZ {:?} Vial endpoints: input={}, output={}, write_types={:?}",
+            endpoints.transport,
             endpoints.input,
             endpoints.output,
             endpoints.output_write_types
@@ -626,22 +730,27 @@ impl LinuxBleDevice {
         let (notification_tx, notification_rx) = mpsc::channel();
         let listener_control =
             spawn_notification_listener(endpoints.input.clone(), notification_tx)?;
-        let hid_writer = match crate::hid::LinuxBluetoothHidWriter::open(device) {
-            Ok(writer) => {
-                log::info!(
-                    "Using Linux hidraw writes with direct BlueZ GATT replies for {}",
-                    device.name
-                );
-                Some(writer)
+        let hid_writer = if endpoints.transport == VialGattTransport::Hid {
+            match crate::hid::LinuxBluetoothHidWriter::open(device) {
+                Ok(writer) => {
+                    log::info!(
+                        "Using legacy Linux HID writes with BlueZ GATT replies for {}",
+                        device.name
+                    );
+                    Some(writer)
+                }
+                Err(error) => {
+                    log::debug!(
+                        "Legacy Linux Bluetooth HID output unavailable for {}: {error:#}; \
+                         falling back to direct BlueZ GATT writes",
+                        device.name
+                    );
+                    None
+                }
             }
-            Err(error) => {
-                log::debug!(
-                    "Linux Bluetooth HID output unavailable for {}: {error:#}; \
-                     falling back to direct BlueZ GATT writes",
-                    device.name
-                );
-                None
-            }
+        } else {
+            log::info!("Using vendor BlueZ GATT transport for {}", device.name);
+            None
         };
 
         Ok(Self {
@@ -915,7 +1024,7 @@ mod tests {
             ));
         }
 
-        let endpoints = select_vial_endpoints(&services, &characteristics, &[]);
+        let endpoints = select_hid_vial_endpoints(&services, &characteristics, &[]);
 
         assert_eq!(
             endpoints,
@@ -924,6 +1033,53 @@ mod tests {
                 input: "/service/vial/input".to_owned(),
                 output: "/service/vial/output".to_owned(),
                 output_write_types: vec![GattWriteType::Request, GattWriteType::Command],
+                transport: VialGattTransport::Hid,
+            }]
+        );
+    }
+
+    #[test]
+    fn prefers_vendor_vial_service_over_hogp_for_the_same_device() {
+        let vendor_services = HashMap::from([("/service/vendor".to_owned(), "/device".to_owned())]);
+        let hid_services = HashMap::from([("/service/combined".to_owned(), "/device".to_owned())]);
+        let characteristics = vec![
+            characteristic(
+                "/service/vendor/input",
+                "/service/vendor",
+                VIAL_GATT_INPUT_UUID,
+                &["read", "notify", "encrypt-read"],
+            ),
+            characteristic(
+                "/service/vendor/output",
+                "/service/vendor",
+                VIAL_GATT_OUTPUT_UUID,
+                &["write", "write-without-response", "encrypt-write"],
+            ),
+            characteristic(
+                "/service/combined/input",
+                "/service/combined",
+                REPORT_CHARACTERISTIC_UUID,
+                &["read", "notify"],
+            ),
+            characteristic(
+                "/service/combined/output",
+                "/service/combined",
+                REPORT_CHARACTERISTIC_UUID,
+                &["read", "write", "write-without-response"],
+            ),
+        ];
+
+        let endpoints =
+            select_vial_endpoints(&vendor_services, &hid_services, &characteristics, &[]);
+
+        assert_eq!(
+            endpoints,
+            vec![VialGattEndpoints {
+                service: "/service/vendor".to_owned(),
+                input: "/service/vendor/input".to_owned(),
+                output: "/service/vendor/output".to_owned(),
+                output_write_types: vec![GattWriteType::Request, GattWriteType::Command],
+                transport: VialGattTransport::Vendor,
             }]
         );
     }
@@ -961,11 +1117,13 @@ mod tests {
         ];
 
         assert_eq!(
-            select_vial_endpoints(&services, &request_characteristics, &[])[0].output_write_types,
+            select_hid_vial_endpoints(&services, &request_characteristics, &[])[0]
+                .output_write_types,
             vec![GattWriteType::Request]
         );
         assert_eq!(
-            select_vial_endpoints(&services, &command_characteristics, &[])[0].output_write_types,
+            select_hid_vial_endpoints(&services, &command_characteristics, &[])[0]
+                .output_write_types,
             vec![GattWriteType::Command]
         );
     }
@@ -1046,12 +1204,13 @@ mod tests {
         ];
 
         assert_eq!(
-            select_vial_endpoints(&services, &characteristics, &descriptors),
+            select_hid_vial_endpoints(&services, &characteristics, &descriptors),
             vec![VialGattEndpoints {
                 service: "/service/combined".to_owned(),
                 input: "/service/combined/vial_input".to_owned(),
                 output: "/service/combined/vial_output".to_owned(),
                 output_write_types: vec![GattWriteType::Request, GattWriteType::Command],
+                transport: VialGattTransport::Hid,
             }]
         );
     }
@@ -1066,7 +1225,7 @@ mod tests {
             &["read", "notify"],
         )];
 
-        assert!(select_vial_endpoints(&services, &characteristics, &[]).is_empty());
+        assert!(select_hid_vial_endpoints(&services, &characteristics, &[]).is_empty());
     }
 
     #[test]
