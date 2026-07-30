@@ -1253,6 +1253,21 @@ fn analyze_hid_report_descriptor(descriptor: &[u8]) -> HidReportDescriptorLayout
     layout
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn vial_report_id_from_hid_descriptor(descriptor: &[u8]) -> Option<u8> {
+    let layout = analyze_hid_report_descriptor(descriptor);
+    if !layout.vial_collection_found
+        || layout.vial_report_id_conflict
+        || (layout.vial_uses_unnumbered_reports && layout.has_numbered_reports)
+    {
+        return None;
+    }
+
+    layout
+        .vial_report_id
+        .or_else(|| layout.vial_uses_unnumbered_reports.then_some(0))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn read_response(
     device: &hidapi::HidDevice,
@@ -1860,6 +1875,8 @@ mod tests {
         assert_eq!(layout.vial_report_id, Some(5));
         assert!(!layout.vial_uses_unnumbered_reports);
         assert!(!layout.vial_report_id_conflict);
+        #[cfg(target_os = "linux")]
+        assert_eq!(vial_report_id_from_hid_descriptor(&descriptor), Some(5));
     }
 
     #[test]
@@ -1880,6 +1897,8 @@ mod tests {
         assert!(layout.vial_collection_found);
         assert_eq!(layout.vial_report_id, None);
         assert!(layout.vial_uses_unnumbered_reports);
+        #[cfg(target_os = "linux")]
+        assert_eq!(vial_report_id_from_hid_descriptor(&descriptor), Some(0));
     }
 
     #[test]
@@ -1906,6 +1925,8 @@ mod tests {
         assert!(layout.vial_collection_found);
         assert_eq!(layout.vial_report_id, None);
         assert!(layout.vial_uses_unnumbered_reports);
+        #[cfg(target_os = "linux")]
+        assert_eq!(vial_report_id_from_hid_descriptor(&descriptor), None);
     }
 
     #[test]

@@ -5,6 +5,12 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.9
+
+### Fixes
+
+- Discovered Vial inside RMK's current single Bluetooth HID service through its HID Report Map and Report Reference metadata instead of falling back to the non-responsive Linux hidraw endpoint
+
 ## v0.3.8
 
 ### Fixes

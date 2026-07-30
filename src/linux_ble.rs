@@ -16,8 +16,11 @@ const BLUEZ_GATT_PREFIX: &str = "bluez-gatt:";
 const DEVICE_INTERFACE: &str = "org.bluez.Device1";
 const SERVICE_INTERFACE: &str = "org.bluez.GattService1";
 const CHARACTERISTIC_INTERFACE: &str = "org.bluez.GattCharacteristic1";
+const DESCRIPTOR_INTERFACE: &str = "org.bluez.GattDescriptor1";
 const HID_SERVICE_UUID: &str = "1812";
+const REPORT_MAP_CHARACTERISTIC_UUID: &str = "2a4b";
 const REPORT_CHARACTERISTIC_UUID: &str = "2a4d";
+const REPORT_REFERENCE_DESCRIPTOR_UUID: &str = "2908";
 const BLUEZ_METHOD_TIMEOUT: Duration = Duration::from_secs(5);
 const BLUEZ_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const BLUEZ_REPLY_TIMEOUT: Duration = Duration::from_millis(2_500);
@@ -35,6 +38,15 @@ struct CharacteristicSummary {
     service: String,
     uuid: String,
     flags: Vec<String>,
+    value: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DescriptorSummary {
+    path: String,
+    characteristic: String,
+    uuid: String,
+    value: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -126,6 +138,14 @@ fn property_strings(properties: &HashMap<String, OwnedValue>, name: &str) -> Vec
         .unwrap_or_default()
 }
 
+fn property_bytes(properties: &HashMap<String, OwnedValue>, name: &str) -> Vec<u8> {
+    properties
+        .get(name)
+        .and_then(|value| value.try_clone().ok())
+        .and_then(|value| Vec::<u8>::try_from(value).ok())
+        .unwrap_or_default()
+}
+
 fn interface_properties<'a>(
     interfaces: &'a HashMap<zbus::names::OwnedInterfaceName, HashMap<String, OwnedValue>>,
     interface: &str,
@@ -147,10 +167,12 @@ fn collect_bluez_summaries(
     HashMap<String, BluezDeviceSummary>,
     HashMap<String, String>,
     Vec<CharacteristicSummary>,
+    Vec<DescriptorSummary>,
 ) {
     let mut devices = HashMap::new();
     let mut hid_services = HashMap::new();
     let mut characteristics = Vec::new();
+    let mut descriptors = Vec::new();
 
     for (path, interfaces) in objects {
         let path = path.to_string();
@@ -180,20 +202,82 @@ fn collect_bluez_summaries(
 
         if let Some(properties) = interface_properties(interfaces, CHARACTERISTIC_INTERFACE) {
             characteristics.push(CharacteristicSummary {
-                path,
+                path: path.clone(),
                 service: property_path(properties, "Service").unwrap_or_default(),
                 uuid: property_string(properties, "UUID").unwrap_or_default(),
                 flags: property_strings(properties, "Flags"),
+                value: property_bytes(properties, "Value"),
+            });
+        }
+
+        if let Some(properties) = interface_properties(interfaces, DESCRIPTOR_INTERFACE) {
+            descriptors.push(DescriptorSummary {
+                path,
+                characteristic: property_path(properties, "Characteristic").unwrap_or_default(),
+                uuid: property_string(properties, "UUID").unwrap_or_default(),
+                value: property_bytes(properties, "Value"),
             });
         }
     }
 
-    (devices, hid_services, characteristics)
+    (devices, hid_services, characteristics, descriptors)
+}
+
+fn resolved_bluez_summaries(
+    connection: &Connection,
+    objects: &ManagedObjects,
+) -> (
+    HashMap<String, BluezDeviceSummary>,
+    HashMap<String, String>,
+    Vec<CharacteristicSummary>,
+    Vec<DescriptorSummary>,
+) {
+    let (devices, hid_services, mut characteristics, mut descriptors) =
+        collect_bluez_summaries(objects);
+
+    for characteristic in characteristics.iter_mut().filter(|characteristic| {
+        characteristic.value.is_empty()
+            && uuid_matches(&characteristic.uuid, REPORT_MAP_CHARACTERISTIC_UUID)
+    }) {
+        let read_options = HashMap::<&str, Value<'_>>::new();
+        match characteristic_proxy(connection, &characteristic.path).and_then(|proxy| {
+            proxy
+                .call::<_, _, Vec<u8>>("ReadValue", &(read_options,))
+                .context("Failed to read the BlueZ HID Report Map")
+        }) {
+            Ok(value) => characteristic.value = value,
+            Err(error) => log::debug!(
+                "BlueZ HID Report Map unavailable at {}: {error:#}",
+                characteristic.path
+            ),
+        }
+    }
+
+    for descriptor in descriptors.iter_mut().filter(|descriptor| {
+        descriptor.value.len() < 2
+            && uuid_matches(&descriptor.uuid, REPORT_REFERENCE_DESCRIPTOR_UUID)
+    }) {
+        let read_options = HashMap::<&str, Value<'_>>::new();
+        match descriptor_proxy(connection, &descriptor.path).and_then(|proxy| {
+            proxy
+                .call::<_, _, Vec<u8>>("ReadValue", &(read_options,))
+                .context("Failed to read the BlueZ HID Report Reference")
+        }) {
+            Ok(value) => descriptor.value = value,
+            Err(error) => log::debug!(
+                "BlueZ HID Report Reference unavailable at {}: {error:#}",
+                descriptor.path
+            ),
+        }
+    }
+
+    (devices, hid_services, characteristics, descriptors)
 }
 
 fn select_vial_endpoints(
     hid_services: &HashMap<String, String>,
     characteristics: &[CharacteristicSummary],
+    descriptors: &[DescriptorSummary],
 ) -> Vec<VialGattEndpoints> {
     let mut endpoints = Vec::new();
     for service in hid_services.keys() {
@@ -205,24 +289,66 @@ fn select_vial_endpoints(
             })
             .collect();
 
-        // RMK exposes a dedicated Vial HID service with exactly one input and
-        // one output report. Its normal keyboard HID service has five reports.
-        if reports.len() != 2 {
-            continue;
-        }
-
-        let input = reports.iter().find(|characteristic| {
-            characteristic
-                .flags
-                .iter()
-                .any(|flag| flag.eq_ignore_ascii_case("notify"))
-        });
-        let output = reports.iter().find(|characteristic| {
-            characteristic.flags.iter().any(|flag| {
-                flag.eq_ignore_ascii_case("write")
-                    || flag.eq_ignore_ascii_case("write-without-response")
+        let vial_report_id = characteristics
+            .iter()
+            .find(|characteristic| {
+                characteristic.service == *service
+                    && uuid_matches(&characteristic.uuid, REPORT_MAP_CHARACTERISTIC_UUID)
             })
-        });
+            .and_then(|characteristic| {
+                crate::hid::vial_report_id_from_hid_descriptor(&characteristic.value)
+            });
+        let report_reference = |characteristic: &CharacteristicSummary| {
+            descriptors
+                .iter()
+                .find(|descriptor| {
+                    descriptor.characteristic == characteristic.path
+                        && uuid_matches(&descriptor.uuid, REPORT_REFERENCE_DESCRIPTOR_UUID)
+                })
+                .and_then(|descriptor| {
+                    (descriptor.value.len() >= 2)
+                        .then_some((descriptor.value[0], descriptor.value[1]))
+                })
+        };
+
+        let (input, output) = if let Some(vial_report_id) = vial_report_id {
+            (
+                reports.iter().find(|characteristic| {
+                    report_reference(characteristic) == Some((vial_report_id, 1))
+                        && characteristic
+                            .flags
+                            .iter()
+                            .any(|flag| flag.eq_ignore_ascii_case("notify"))
+                }),
+                reports.iter().find(|characteristic| {
+                    report_reference(characteristic) == Some((vial_report_id, 2))
+                        && characteristic.flags.iter().any(|flag| {
+                            flag.eq_ignore_ascii_case("write")
+                                || flag.eq_ignore_ascii_case("write-without-response")
+                        })
+                }),
+            )
+        } else if reports.len() == 2 {
+            // Backward-compatible fallback for older BlueZ/RMK combinations
+            // that expose a dedicated Vial HID service but do not cache its
+            // Report Map or Report Reference values.
+            (
+                reports.iter().find(|characteristic| {
+                    characteristic
+                        .flags
+                        .iter()
+                        .any(|flag| flag.eq_ignore_ascii_case("notify"))
+                }),
+                reports.iter().find(|characteristic| {
+                    characteristic.flags.iter().any(|flag| {
+                        flag.eq_ignore_ascii_case("write")
+                            || flag.eq_ignore_ascii_case("write-without-response")
+                    })
+                }),
+            )
+        } else {
+            continue;
+        };
         let (Some(input), Some(output)) = (input, output) else {
             continue;
         };
@@ -275,9 +401,10 @@ fn parse_bluez_modalias(modalias: &str) -> (u16, u16) {
     (vendor, product)
 }
 
-fn devices_from_objects(objects: &ManagedObjects) -> Vec<Device> {
-    let (devices, hid_services, characteristics) = collect_bluez_summaries(objects);
-    select_vial_endpoints(&hid_services, &characteristics)
+fn devices_from_objects(connection: &Connection, objects: &ManagedObjects) -> Vec<Device> {
+    let (devices, hid_services, characteristics, descriptors) =
+        resolved_bluez_summaries(connection, objects);
+    select_vial_endpoints(&hid_services, &characteristics, &descriptors)
         .into_iter()
         .filter_map(|endpoints| {
             let device_path = hid_services.get(&endpoints.service)?;
@@ -320,7 +447,7 @@ pub(crate) fn scan_devices() -> Vec<Device> {
                 return Err(error);
             }
         };
-        Ok(devices_from_objects(&objects))
+        Ok(devices_from_objects(active_connection, &objects))
     })();
     match result {
         Ok(devices) => devices,
@@ -363,9 +490,14 @@ fn ensure_device_connected(connection: &Connection, device_path: &str) -> Result
     }
 }
 
-fn endpoints_for_service(objects: &ManagedObjects, service: &str) -> Option<VialGattEndpoints> {
-    let (_, hid_services, characteristics) = collect_bluez_summaries(objects);
-    select_vial_endpoints(&hid_services, &characteristics)
+fn endpoints_for_service(
+    connection: &Connection,
+    objects: &ManagedObjects,
+    service: &str,
+) -> Option<VialGattEndpoints> {
+    let (_, hid_services, characteristics, descriptors) =
+        resolved_bluez_summaries(connection, objects);
+    select_vial_endpoints(&hid_services, &characteristics, &descriptors)
         .into_iter()
         .find(|endpoints| endpoints.service == service)
 }
@@ -378,6 +510,11 @@ fn characteristic_proxy<'a>(connection: &'a Connection, path: &'a str) -> Result
         CHARACTERISTIC_INTERFACE,
     )
     .context("Failed to create a BlueZ GATT characteristic proxy")
+}
+
+fn descriptor_proxy<'a>(connection: &'a Connection, path: &'a str) -> Result<Proxy<'a>> {
+    Proxy::new(connection, BLUEZ_DESTINATION, path, DESCRIPTOR_INTERFACE)
+        .context("Failed to create a BlueZ GATT descriptor proxy")
 }
 
 fn value_bytes(value: &Value<'_>) -> Option<Vec<u8>> {
@@ -474,7 +611,7 @@ impl LinuxBleDevice {
         ensure_device_connected(&connection, &device_path)?;
 
         let objects = managed_objects(&connection)?;
-        let endpoints = endpoints_for_service(&objects, &service)
+        let endpoints = endpoints_for_service(&connection, &objects, &service)
             .context("BlueZ Vial GATT characteristics are unavailable")?;
         log::info!(
             "BlueZ Vial endpoints: input={}, output={}, write_types={:?}",
@@ -683,6 +820,21 @@ mod tests {
             service: service.to_owned(),
             uuid: uuid.to_owned(),
             flags: flags.iter().map(|flag| (*flag).to_owned()).collect(),
+            value: Vec::new(),
+        }
+    }
+
+    fn descriptor(
+        path: &str,
+        characteristic: &str,
+        report_id: u8,
+        report_type: u8,
+    ) -> DescriptorSummary {
+        DescriptorSummary {
+            path: path.to_owned(),
+            characteristic: characteristic.to_owned(),
+            uuid: REPORT_REFERENCE_DESCRIPTOR_UUID.to_owned(),
+            value: vec![report_id, report_type],
         }
     }
 
@@ -719,7 +871,7 @@ mod tests {
             ));
         }
 
-        let endpoints = select_vial_endpoints(&services, &characteristics);
+        let endpoints = select_vial_endpoints(&services, &characteristics, &[]);
 
         assert_eq!(
             endpoints,
@@ -765,12 +917,98 @@ mod tests {
         ];
 
         assert_eq!(
-            select_vial_endpoints(&services, &request_characteristics)[0].output_write_types,
+            select_vial_endpoints(&services, &request_characteristics, &[])[0].output_write_types,
             vec![GattWriteType::Request]
         );
         assert_eq!(
-            select_vial_endpoints(&services, &command_characteristics)[0].output_write_types,
+            select_vial_endpoints(&services, &command_characteristics, &[])[0].output_write_types,
             vec![GattWriteType::Command]
+        );
+    }
+
+    #[test]
+    fn selects_vial_report_from_current_single_hid_service() {
+        let services = HashMap::from([("/service/combined".to_owned(), "/device".to_owned())]);
+        let vial_report_map = vec![
+            0x06, 0x60, 0xFF, // Usage Page 0xFF60
+            0x09, 0x61, // Usage 0x61
+            0xA1, 0x01, // Application collection
+            0x85, 0x05, // Report ID 5
+            0x09, 0x62, // Usage input
+            0x81, 0x02, // Input
+            0x09, 0x63, // Usage output
+            0x91, 0x02, // Output
+            0xC0, // End collection
+        ];
+        let mut report_map = characteristic(
+            "/service/combined/report_map",
+            "/service/combined",
+            REPORT_MAP_CHARACTERISTIC_UUID,
+            &["read"],
+        );
+        report_map.value = vial_report_map;
+        let characteristics = vec![
+            report_map,
+            characteristic(
+                "/service/combined/keyboard_input",
+                "/service/combined",
+                REPORT_CHARACTERISTIC_UUID,
+                &["read", "notify"],
+            ),
+            characteristic(
+                "/service/combined/keyboard_output",
+                "/service/combined",
+                REPORT_CHARACTERISTIC_UUID,
+                &["read", "write"],
+            ),
+            characteristic(
+                "/service/combined/vial_input",
+                "/service/combined",
+                REPORT_CHARACTERISTIC_UUID,
+                &["read", "notify"],
+            ),
+            characteristic(
+                "/service/combined/vial_output",
+                "/service/combined",
+                REPORT_CHARACTERISTIC_UUID,
+                &["read", "write", "write-without-response"],
+            ),
+        ];
+        let descriptors = vec![
+            descriptor(
+                "/service/combined/keyboard_input/reference",
+                "/service/combined/keyboard_input",
+                1,
+                1,
+            ),
+            descriptor(
+                "/service/combined/keyboard_output/reference",
+                "/service/combined/keyboard_output",
+                1,
+                2,
+            ),
+            descriptor(
+                "/service/combined/vial_input/reference",
+                "/service/combined/vial_input",
+                5,
+                1,
+            ),
+            descriptor(
+                "/service/combined/vial_output/reference",
+                "/service/combined/vial_output",
+                5,
+                2,
+            ),
+        ];
+
+        assert_eq!(
+            select_vial_endpoints(&services, &characteristics, &descriptors),
+            vec![VialGattEndpoints {
+                service: "/service/combined".to_owned(),
+                input: "/service/combined/vial_input".to_owned(),
+                output: "/service/combined/vial_output".to_owned(),
+                output_write_types: vec![GattWriteType::Request, GattWriteType::Command],
+            }]
         );
     }
 
@@ -784,7 +1022,7 @@ mod tests {
             &["read", "notify"],
         )];
 
-        assert!(select_vial_endpoints(&services, &characteristics).is_empty());
+        assert!(select_vial_endpoints(&services, &characteristics, &[]).is_empty());
     }
 
     #[test]
