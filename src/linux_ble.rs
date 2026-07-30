@@ -2,6 +2,7 @@ use crate::device::Device;
 use crate::firmware::FirmwareProtocol;
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use zbus::blocking::connection::Builder as ConnectionBuilder;
@@ -41,7 +42,22 @@ struct VialGattEndpoints {
     service: String,
     input: String,
     output: String,
-    output_write_type: &'static str,
+    output_write_types: Vec<GattWriteType>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GattWriteType {
+    Request,
+    Command,
+}
+
+impl GattWriteType {
+    fn bluez_name(self) -> &'static str {
+        match self {
+            Self::Request => "request",
+            Self::Command => "command",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -210,23 +226,30 @@ fn select_vial_endpoints(
         let (Some(input), Some(output)) = (input, output) else {
             continue;
         };
-        // HID Output Reports normally travel as ATT Write Commands. RMK
-        // advertises both write modes, but BlueZ can reject a Write Request
-        // with NotAuthorized even though Write Without Response is available.
-        let output_write_type = if output
+        // Prefer an acknowledged ATT Write Request when available. Some BlueZ
+        // and RMK combinations only authorize Write Without Response, so keep
+        // every advertised mode and let the live transport remember the first
+        // one that completes a Vial round trip.
+        let mut output_write_types = Vec::with_capacity(2);
+        if output
+            .flags
+            .iter()
+            .any(|flag| flag.eq_ignore_ascii_case("write"))
+        {
+            output_write_types.push(GattWriteType::Request);
+        }
+        if output
             .flags
             .iter()
             .any(|flag| flag.eq_ignore_ascii_case("write-without-response"))
         {
-            "command"
-        } else {
-            "request"
-        };
+            output_write_types.push(GattWriteType::Command);
+        }
         endpoints.push(VialGattEndpoints {
             service: service.clone(),
             input: input.path.clone(),
             output: output.path.clone(),
-            output_write_type,
+            output_write_types,
         });
     }
     endpoints
@@ -432,7 +455,8 @@ pub(crate) struct LinuxBleDevice {
     connection: Connection,
     input_path: String,
     output_path: String,
-    output_write_type: &'static str,
+    output_write_types: Vec<GattWriteType>,
+    preferred_write_type: AtomicUsize,
     notifications: Mutex<mpsc::Receiver<Vec<u8>>>,
     listener_control: Mutex<Option<Connection>>,
     command_lock: Mutex<()>,
@@ -453,10 +477,10 @@ impl LinuxBleDevice {
         let endpoints = endpoints_for_service(&objects, &service)
             .context("BlueZ Vial GATT characteristics are unavailable")?;
         log::info!(
-            "BlueZ Vial endpoints: input={}, output={}, write_type={}",
+            "BlueZ Vial endpoints: input={}, output={}, write_types={:?}",
             endpoints.input,
             endpoints.output,
-            endpoints.output_write_type
+            endpoints.output_write_types
         );
         let (notification_tx, notification_rx) = mpsc::channel();
         let listener_control =
@@ -466,14 +490,15 @@ impl LinuxBleDevice {
             connection,
             input_path: endpoints.input,
             output_path: endpoints.output,
-            output_write_type: endpoints.output_write_type,
+            output_write_types: endpoints.output_write_types,
+            preferred_write_type: AtomicUsize::new(0),
             notifications: Mutex::new(notification_rx),
             listener_control: Mutex::new(Some(listener_control)),
             command_lock: Mutex::new(()),
         })
     }
 
-    fn write_value(&self, data: &[u8]) -> Result<()> {
+    fn write_value_with_type(&self, data: &[u8], write_type: GattWriteType) -> Result<()> {
         if data.len() > 32 {
             bail!(
                 "Bluetooth GATT command too long — {} bytes, max 32 bytes",
@@ -484,7 +509,7 @@ impl LinuxBleDevice {
         let mut payload = [0u8; 32];
         payload[..data.len()].copy_from_slice(data);
         let mut options = HashMap::<&str, Value<'_>>::new();
-        options.insert("type", Value::from(self.output_write_type));
+        options.insert("type", Value::from(write_type.bluez_name()));
         characteristic_proxy(&self.connection, &self.output_path)?
             .call::<_, _, ()>("WriteValue", &(payload.as_slice(), options))
             .context("Failed to write the BlueZ Vial request")
@@ -495,25 +520,23 @@ impl LinuxBleDevice {
             .command_lock
             .lock()
             .map_err(|_| anyhow::anyhow!("BlueZ Vial command lock poisoned"))?;
-        self.write_value(data)
+        let preferred = self
+            .preferred_write_type
+            .load(Ordering::Relaxed)
+            .min(self.output_write_types.len().saturating_sub(1));
+        self.write_value_with_type(data, self.output_write_types[preferred])
     }
 
-    pub(crate) fn send(
+    fn send_with_write_type(
         &self,
         data: &[u8],
-        response_matches: impl Fn(&[u8; 32]) -> bool,
+        notifications: &mpsc::Receiver<Vec<u8>>,
+        write_type: GattWriteType,
+        response_matches: &impl Fn(&[u8; 32]) -> bool,
     ) -> Result<[u8; 32]> {
-        let _command_guard = self
-            .command_lock
-            .lock()
-            .map_err(|_| anyhow::anyhow!("BlueZ Vial command lock poisoned"))?;
-        let notifications = self
-            .notifications
-            .lock()
-            .map_err(|_| anyhow::anyhow!("BlueZ Vial notification lock poisoned"))?;
         while notifications.try_recv().is_ok() {}
 
-        self.write_value(data)?;
+        self.write_value_with_type(data, write_type)?;
 
         let deadline = Instant::now() + BLUEZ_REPLY_TIMEOUT;
         let mut last_unrelated = None;
@@ -581,6 +604,53 @@ impl LinuxBleDevice {
                 .unwrap_or_else(|| {
                     "Bluetooth Vial timeout — keyboard did not respond".to_owned()
                 })
+        )
+    }
+
+    pub(crate) fn send(
+        &self,
+        data: &[u8],
+        response_matches: impl Fn(&[u8; 32]) -> bool,
+    ) -> Result<[u8; 32]> {
+        let _command_guard = self
+            .command_lock
+            .lock()
+            .map_err(|_| anyhow::anyhow!("BlueZ Vial command lock poisoned"))?;
+        let notifications = self
+            .notifications
+            .lock()
+            .map_err(|_| anyhow::anyhow!("BlueZ Vial notification lock poisoned"))?;
+        let preferred = self
+            .preferred_write_type
+            .load(Ordering::Relaxed)
+            .min(self.output_write_types.len().saturating_sub(1));
+        let mut errors = Vec::with_capacity(self.output_write_types.len());
+
+        for index in std::iter::once(preferred)
+            .chain((0..self.output_write_types.len()).filter(|index| *index != preferred))
+        {
+            let write_type = self.output_write_types[index];
+            match self.send_with_write_type(data, &notifications, write_type, &response_matches) {
+                Ok(response) => {
+                    if index != preferred {
+                        log::info!(
+                            "BlueZ Vial switched to {} writes after {} did not complete",
+                            write_type.bluez_name(),
+                            self.output_write_types[preferred].bluez_name()
+                        );
+                    }
+                    self.preferred_write_type.store(index, Ordering::Relaxed);
+                    return Ok(response);
+                }
+                Err(error) => {
+                    errors.push(format!("{}: {error:#}", write_type.bluez_name()));
+                }
+            }
+        }
+
+        bail!(
+            "Bluetooth Vial request failed over all advertised write modes: {}",
+            errors.join("; ")
         )
     }
 }
@@ -657,15 +727,15 @@ mod tests {
                 service: "/service/vial".to_owned(),
                 input: "/service/vial/input".to_owned(),
                 output: "/service/vial/output".to_owned(),
-                output_write_type: "command",
+                output_write_types: vec![GattWriteType::Request, GattWriteType::Command],
             }]
         );
     }
 
     #[test]
-    fn uses_write_request_only_when_command_is_unavailable() {
+    fn uses_only_the_write_modes_advertised_by_bluez() {
         let services = HashMap::from([("/service/vial".to_owned(), "/device".to_owned())]);
-        let characteristics = vec![
+        let request_characteristics = vec![
             characteristic(
                 "/service/vial/input",
                 "/service/vial",
@@ -679,10 +749,28 @@ mod tests {
                 &["read", "write"],
             ),
         ];
+        let command_characteristics = vec![
+            characteristic(
+                "/service/vial/input",
+                "/service/vial",
+                "2a4d",
+                &["read", "notify"],
+            ),
+            characteristic(
+                "/service/vial/output",
+                "/service/vial",
+                "2a4d",
+                &["read", "write-without-response"],
+            ),
+        ];
 
         assert_eq!(
-            select_vial_endpoints(&services, &characteristics)[0].output_write_type,
-            "request"
+            select_vial_endpoints(&services, &request_characteristics)[0].output_write_types,
+            vec![GattWriteType::Request]
+        );
+        assert_eq!(
+            select_vial_endpoints(&services, &command_characteristics)[0].output_write_types,
+            vec![GattWriteType::Command]
         );
     }
 
