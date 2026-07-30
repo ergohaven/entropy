@@ -96,17 +96,12 @@ pub(crate) enum CloseToTrayBehavior {
     Tray,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum StickyLayoutVisibilityMode {
+    #[default]
     LayoutAndPresses,
     PressedOnly,
-}
-
-impl Default for StickyLayoutVisibilityMode {
-    fn default() -> Self {
-        Self::LayoutAndPresses
-    }
 }
 
 pub(crate) fn default_show_shifted_number_symbols() -> bool {
@@ -1567,7 +1562,7 @@ pub(crate) enum ModuleSettingsGroupKind {
 }
 
 impl ModuleSettingsGroupKind {
-    pub(crate) fn field_base_title<'a>(self, title: &'a str) -> &'a str {
+    pub(crate) fn field_base_title(self, title: &str) -> &str {
         if matches!(self, Self::Left | Self::Right) {
             title
                 .get(..5)
@@ -2519,17 +2514,12 @@ pub(crate) const TYPING_TRAINER_HISTORY_LIMIT: usize = 20;
 const TYPING_TRAINER_DEFAULT_TEXT_WORDS: usize = 72;
 pub(crate) use super::typing_trainer_words::{TypingTrainerLanguage, TYPING_TRAINER_LANGUAGES};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum TypingTrainerMode {
+    #[default]
     Time,
     Words,
-}
-
-impl Default for TypingTrainerMode {
-    fn default() -> Self {
-        Self::Time
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
