@@ -427,7 +427,9 @@ impl EntropyApp {
                     }
                 }
             },
-            ConnectState::Idle | ConnectState::Reconnecting(_) => return,
+            ConnectState::Idle | ConnectState::SelectingDevice | ConnectState::Reconnecting(_) => {
+                return
+            }
         };
 
         self.connect_state = ConnectState::Idle;

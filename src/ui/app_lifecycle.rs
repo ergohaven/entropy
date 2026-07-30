@@ -89,7 +89,7 @@ fn connection_replaces_layout_canvas(connect_state: &ConnectState, layout_loaded
         | ConnectState::Loading {
             reconnect: Some(_), ..
         } => !layout_loaded,
-        ConnectState::Idle => false,
+        ConnectState::Idle | ConnectState::SelectingDevice => false,
     }
 }
 
@@ -458,6 +458,8 @@ mod tests {
     fn only_device_connection_replaces_the_layout_canvas() {
         let idle = ConnectState::Idle;
         assert!(!connection_replaces_layout_canvas(&idle, false));
+        let selecting = ConnectState::SelectingDevice;
+        assert!(!connection_replaces_layout_canvas(&selecting, false));
 
         let (_sender, receiver) = std::sync::mpsc::channel();
         let now = std::time::Instant::now();

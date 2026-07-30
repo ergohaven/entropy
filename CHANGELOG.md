@@ -5,6 +5,13 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.7
+
+### Fixes
+
+- Preserved K:04 identity when a fresh Linux Bluetooth connection switches from kernel HID to a BlueZ GATT endpoint with a different transport product id
+- Made Choose device leave Bluetooth reconnect and wait for an explicit device choice instead of immediately reconnecting the only detected keyboard
+
 ## v0.3.6
 
 ### Fixes

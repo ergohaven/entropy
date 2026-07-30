@@ -930,6 +930,7 @@ pub(crate) fn bluetooth_reconnect_retry_delay(retry_attempt: u8) -> std::time::D
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) enum ConnectState {
     Idle,
+    SelectingDevice,
     Reconnecting(BluetoothReconnectState),
     Loading {
         rx: mpsc::Receiver<ConnectTaskMessage>,

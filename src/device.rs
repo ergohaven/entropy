@@ -229,14 +229,13 @@ fn merge_bluez_vial_devices(devices: &mut Vec<Device>, bluez_devices: Vec<Device
 
         if let Some(kernel_hid) = matching_kernel_hid {
             // BlueZ can expose the resolved GATT service one scan before its
-            // Modalias metadata. Keep the kernel identity so an in-flight
-            // reconnect follows the same keyboard when transport switches.
-            if bluez_device.vendor_id == 0 {
-                bluez_device.vendor_id = kernel_hid.vendor_id;
-            }
-            if bluez_device.product_id == 0 {
-                bluez_device.product_id = kernel_hid.product_id;
-            }
+            // Modalias metadata, and that metadata can use a different product
+            // id from the kernel HID endpoint. The matching Bluetooth address
+            // proves both endpoints belong to the same keyboard, so keep the
+            // kernel HID identity unconditionally. Otherwise an in-flight
+            // reconnect stops recognizing the keyboard when transport switches.
+            bluez_device.vendor_id = kernel_hid.vendor_id;
+            bluez_device.product_id = kernel_hid.product_id;
             if bluez_device.manufacturer.trim().is_empty() {
                 bluez_device.manufacturer = kernel_hid.manufacturer;
             }
@@ -411,8 +410,8 @@ mod tests {
             "bluez-gatt:/org/bluez/hci0/dev_C6_9E_29_C4_F4_C7/service002a",
         );
         bluez.serial_number = "C6:9E:29:C4:F4:C7".to_owned();
-        bluez.vendor_id = 0;
-        bluez.product_id = 0;
+        bluez.vendor_id = 0xE126;
+        bluez.product_id = 0x0041;
         bluez.manufacturer.clear();
         let mut devices = vec![kernel_hid];
 

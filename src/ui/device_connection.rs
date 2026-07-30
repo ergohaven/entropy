@@ -60,6 +60,7 @@ impl EntropyApp {
                 ..
             } => Some(&state.display_name),
             ConnectState::Idle
+            | ConnectState::SelectingDevice
             | ConnectState::Loading {
                 reconnect: None, ..
             } => None,
@@ -184,6 +185,7 @@ impl EntropyApp {
         }
         self.selected_device = None;
         self.clear_connected_keyboard_state("");
+        self.connect_state = ConnectState::SelectingDevice;
         self.start_device_scan();
     }
 
@@ -463,6 +465,22 @@ mod tests {
         assert!(app.layout.is_none());
         assert!(matches!(app.connect_state, ConnectState::Reconnecting(_)));
         assert!(!app.status_msg.contains("device did not respond"));
+    }
+
+    #[test]
+    fn choosing_another_device_leaves_reconnect_in_manual_selection() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        app.device_manager
+            .replace_devices(vec![bluetooth_device("/dev/hidraw4")]);
+        app.selected_device = Some(0);
+
+        assert!(app.begin_bluetooth_reconnect("HID device disconnected"));
+        app.cancel_bluetooth_reconnect_for_device_selection();
+
+        assert!(app.selected_device.is_none());
+        assert!(matches!(app.connect_state, ConnectState::SelectingDevice));
     }
 
     #[test]
