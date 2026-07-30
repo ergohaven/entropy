@@ -1402,7 +1402,7 @@ dependencies = [
 
 [[package]]
 name = "ergohaven-entropy"
-version = "0.3.13"
+version = "0.3.14"
 dependencies = [
  "ab_glyph",
  "anyhow",

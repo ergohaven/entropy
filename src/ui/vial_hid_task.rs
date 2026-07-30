@@ -5,7 +5,18 @@ const BATTERY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_
 #[cfg(not(target_arch = "wasm32"))]
 const BATTERY_REFRESH_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 #[cfg(not(target_arch = "wasm32"))]
+const BATTERY_INCOMPLETE_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+#[cfg(not(target_arch = "wasm32"))]
 const INITIAL_BATTERY_REFRESH_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
+#[cfg(not(target_arch = "wasm32"))]
+fn battery_refresh_delay(battery: Option<crate::hid::BatteryHalves>) -> std::time::Duration {
+    if battery.is_some_and(crate::hid::BatteryHalves::is_complete) {
+        BATTERY_REFRESH_INTERVAL
+    } else {
+        BATTERY_INCOMPLETE_REFRESH_INTERVAL
+    }
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
@@ -159,12 +170,15 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn schedule_next_battery_refresh(&mut self) {
+    pub(super) fn schedule_battery_refresh_for_result(
+        &mut self,
+        battery: Option<crate::hid::BatteryHalves>,
+    ) {
         self.next_battery_refresh_at = self
             .device_about_info
             .as_ref()
             .filter(|info| info.supports_battery_halves)
-            .map(|_| std::time::Instant::now() + BATTERY_REFRESH_INTERVAL);
+            .map(|_| std::time::Instant::now() + battery_refresh_delay(battery));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -376,7 +390,7 @@ impl EntropyApp {
                 if let Some(info) = self.device_about_info.as_mut() {
                     info.battery_halves = battery;
                 }
-                self.schedule_next_battery_refresh();
+                self.schedule_battery_refresh_for_result(battery);
             }
             Ok(VialHidOutcome::KeyWritten) => {
                 if let VialHidOperation::KeyWrite {
@@ -760,9 +774,32 @@ mod tests {
 
         assert!(matches!(outcome, VialHidOutcome::Battery(_)));
         let requests = recorder.requests();
-        assert_eq!(requests.len(), 2);
-        assert_eq!(&requests[0][..3], &[0x08, 0xE8, 0x01]);
-        assert_eq!(&requests[1][..3], &[0x08, 0xE8, 0x01]);
+        assert_eq!(requests.len(), 5);
+        assert!(requests
+            .iter()
+            .all(|request| &request[..3] == [0x08, 0xE8, 0x01]));
+    }
+
+    #[test]
+    fn incomplete_split_battery_results_retry_soon() {
+        assert_eq!(
+            battery_refresh_delay(Some(crate::hid::BatteryHalves {
+                left: Some(80),
+                right: Some(75),
+            })),
+            BATTERY_REFRESH_INTERVAL
+        );
+        assert_eq!(
+            battery_refresh_delay(Some(crate::hid::BatteryHalves {
+                left: Some(80),
+                right: None,
+            })),
+            BATTERY_INCOMPLETE_REFRESH_INTERVAL
+        );
+        assert_eq!(
+            battery_refresh_delay(None),
+            BATTERY_INCOMPLETE_REFRESH_INTERVAL
+        );
     }
 
     #[test]

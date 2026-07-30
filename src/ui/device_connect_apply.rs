@@ -471,7 +471,7 @@ impl EntropyApp {
                 if staged_bluetooth_load {
                     self.schedule_initial_battery_refresh();
                 } else {
-                    self.schedule_next_battery_refresh();
+                    self.schedule_battery_refresh_for_result(r.about_info.battery_halves);
                 }
                 self.matrix_tester_rmk_byte_order = self.current_device_is_likely_rmk();
                 self.current_encoder_visibility_id =

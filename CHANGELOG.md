@@ -5,6 +5,12 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.14
+
+### Fixes
+
+- Retried incomplete split-battery reads promptly until both halves are available instead of keeping a single level for five minutes
+
 ## v0.3.13
 
 ### Features
