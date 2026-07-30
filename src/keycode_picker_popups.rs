@@ -108,6 +108,23 @@ pub(super) fn is_8bit_tap_key_choice(kc: &crate::keycode::Keycode) -> bool {
         )
 }
 
+pub(super) fn is_shifted_hid_key_choice(kc: &crate::keycode::Keycode) -> bool {
+    (0x0100..0x2000).contains(&kc.value)
+        && (kc.value & 0x00FF) != 0
+        && matches!(
+            kc.category,
+            KeycodeCategory::Basic
+                | KeycodeCategory::Function
+                | KeycodeCategory::Navigation
+                | KeycodeCategory::Numpad
+        )
+}
+
+pub(super) fn is_mod_key_tap_key_choice(kc: &crate::keycode::Keycode) -> bool {
+    (is_8bit_tap_key_choice(kc) && !matches!(kc.category, KeycodeCategory::Modifier))
+        || is_shifted_hid_key_choice(kc)
+}
+
 pub(super) fn popup_key_button_label(
     kc: &crate::keycode::Keycode,
     layer_names: &[String],

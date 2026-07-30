@@ -25,8 +25,8 @@ pub(super) enum VialHidOperation {
         key_index: usize,
         row: u8,
         col: u8,
-        old_keycode: u16,
-        keycode: u16,
+        old_binding: crate::keyboard::KeyBinding,
+        binding: crate::keyboard::KeyBinding,
         is_undo: bool,
     },
     EncoderWrite {
@@ -122,11 +122,16 @@ fn run_vial_hid_operation(
             layer,
             row,
             col,
-            keycode,
+            binding,
             ..
-        } => hid
-            .set_keycode(layer as u8, row, col, keycode)
-            .map(|()| VialHidOutcome::KeyWritten),
+        } => match binding {
+            crate::keyboard::KeyBinding::Vial(keycode) => hid
+                .set_keycode(layer as u8, row, col, keycode)
+                .map(|()| VialHidOutcome::KeyWritten),
+            crate::keyboard::KeyBinding::Rmk(action) => hid
+                .set_rmk_key_action(layer as u8, row, col, action)
+                .map(|()| VialHidOutcome::KeyWritten),
+        },
         VialHidOperation::EncoderWrite {
             layer,
             encoder_index,
@@ -377,13 +382,13 @@ impl EntropyApp {
                 if let VialHidOperation::KeyWrite {
                     layer,
                     key_index,
-                    old_keycode,
-                    keycode,
+                    old_binding,
+                    binding,
                     is_undo,
                     ..
                 } = result.operation
                 {
-                    self.finish_keycode_write(layer, key_index, old_keycode, keycode, is_undo);
+                    self.finish_keycode_write(layer, key_index, old_binding, binding, is_undo);
                 }
             }
             Ok(VialHidOutcome::EncoderWritten) => {
@@ -431,18 +436,18 @@ impl EntropyApp {
         &mut self,
         layer: usize,
         key_index: usize,
-        old_keycode: u16,
-        keycode: u16,
+        old_binding: crate::keyboard::KeyBinding,
+        binding: crate::keyboard::KeyBinding,
         is_undo: bool,
     ) {
         if let Some(layout) = self.layout.as_mut() {
-            layout.set_keycode(layer, key_index, keycode);
+            layout.set_key_binding(layer, key_index, binding);
         }
         if !is_undo {
             self.undo_stack.push(UndoAction::Key {
                 layer,
                 key_idx: key_index,
-                old_kc: old_keycode,
+                old_binding,
             });
         }
         self.refresh_layer_picker_content_flags();
@@ -483,21 +488,21 @@ impl EntropyApp {
             VialHidOperation::KeyWrite {
                 layer,
                 key_index,
-                old_keycode,
-                keycode,
+                old_binding,
+                binding,
                 is_undo,
                 ..
             } => {
                 if let Some(layout) = self.layout.as_mut() {
-                    if layout.get_keycode(*layer, *key_index) == *keycode {
-                        layout.set_keycode(*layer, *key_index, *old_keycode);
+                    if layout.get_key_binding(*layer, *key_index) == *binding {
+                        layout.set_key_binding(*layer, *key_index, *old_binding);
                     }
                 }
                 if *is_undo {
                     self.undo_stack.push(UndoAction::Key {
                         layer: *layer,
                         key_idx: *key_index,
-                        old_kc: *keycode,
+                        old_binding: *binding,
                     });
                 }
                 self.refresh_layer_picker_content_flags();
@@ -625,6 +630,7 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keyboard::KeyBinding;
 
     fn single_key_layout(keycode: u16) -> KeyboardLayout {
         KeyboardLayout {
@@ -645,7 +651,7 @@ mod tests {
                 layout_condition: None,
             }],
             encoders: vec![],
-            layers: vec![vec![keycode]],
+            layers: vec![vec![keycode.into()]],
             encoder_layers: vec![vec![]],
             layer_names: vec!["Layer 0".into()],
             custom_keycodes: vec![],
@@ -678,6 +684,7 @@ mod tests {
             layer_leds_supported: false,
             rgb_supported: false,
             lighting_mode: None,
+            supports_rmk_native_key_actions: false,
         })
     }
 
@@ -769,8 +776,8 @@ mod tests {
                 key_index: 0,
                 row: 2,
                 col: 3,
-                old_keycode: 0x0004,
-                keycode: 0,
+                old_binding: 0x0004.into(),
+                binding: 0.into(),
                 is_undo: false,
             },
         )
@@ -819,7 +826,7 @@ mod tests {
             Some(UndoAction::Key {
                 layer: 0,
                 key_idx: 0,
-                old_kc: 0x0004,
+                old_binding: KeyBinding::Vial(0x0004),
             })
         ));
         assert_eq!(recorder.requests().len(), 2);
@@ -833,7 +840,7 @@ mod tests {
         let (hid, recorder) = crate::hid::HidDevice::test_device();
         let context = background_layer_context();
         let mut layout = single_key_layout(0x0004);
-        layout.layers.push(vec![0]);
+        layout.layers.push(vec![0.into()]);
         layout.layer_names.push("Layer 1".into());
         layout.encoder_layers.push(Vec::new());
         app.layout = Some(layout);
@@ -841,7 +848,7 @@ mod tests {
         app.undo_stack.push(UndoAction::Key {
             layer: 0,
             key_idx: 0,
-            old_kc: 0,
+            old_binding: 0.into(),
         });
         app.hid_device = Some(hid);
 
@@ -898,7 +905,7 @@ mod tests {
         let (hid, recorder) = crate::hid::HidDevice::test_device();
         let context = background_layer_context();
         let mut layout = single_key_layout(0x0004);
-        layout.layers.push(vec![0]);
+        layout.layers.push(vec![0.into()]);
         layout.layer_names.push("Layer 1".into());
         layout.encoder_layers.push(Vec::new());
         app.layout = Some(layout);
@@ -924,7 +931,7 @@ mod tests {
         app.apply_layer_snapshot(
             0,
             LayerSnapshot {
-                keycodes: vec![0],
+                keycodes: vec![0.into()],
                 encoder_keycodes: Vec::new(),
             },
             "layer_actions.fill_none",
@@ -955,7 +962,7 @@ mod tests {
                 layer: 0,
                 old: LayerSnapshot { keycodes, .. },
                 requires_firmware: true,
-            }) if keycodes == &[0x0004]
+            }) if keycodes == &[0x0004.into()]
         ));
         let requests = recorder.requests();
         assert_eq!(requests.len(), 3);

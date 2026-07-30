@@ -779,7 +779,7 @@ impl KeycodePicker {
                 .clicked()
                 {
                     self.encode_macro(n);
-                    self.result = Some(0x7700 + n as u16);
+                    self.result = Some((0x7700 + n as u16).into());
                     self.macros_dirty = true;
                     self.open = false;
                 }

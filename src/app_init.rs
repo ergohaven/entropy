@@ -223,7 +223,12 @@ impl EntropyApp {
             self.keycode_picker.layer_has_content = layout
                 .layers
                 .iter()
-                .map(|keys| keys.iter().any(|&kc| kc != 0x0000 && kc != 0x0001))
+                .map(|keys| {
+                    keys.iter().any(|binding| {
+                        let kc = binding.vial_keycode();
+                        binding.rmk_action().is_some() || (kc != 0x0000 && kc != 0x0001)
+                    })
+                })
                 .collect();
         }
     }

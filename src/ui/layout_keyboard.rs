@@ -167,7 +167,8 @@ impl EntropyApp {
             }
 
             // Tooltip — for layer keys show mini layout preview
-            let kc = layout.get_keycode(self.selected_layer, *ki);
+            let binding = layout.get_key_binding(self.selected_layer, *ki);
+            let kc = binding.vial_keycode();
             // MO/TG/TO/OSL/TT/DF range and LT; OSM also lives in 0x52xx
             // but is deliberately excluded by vial_layer_target().
             let preview_layer: Option<usize> = vial_layer_target(kc);
@@ -178,8 +179,8 @@ impl EntropyApp {
                     if self.app_settings.layer_hover_preview {
                         self.hover_layer = Some(preview_layer_idx);
                     } else {
-                        let tip = keycode_tooltip_with_macro_names(
-                            kc,
+                        let tip = key_binding_tooltip_with_macro_names(
+                            binding,
                             &layout.custom_keycodes,
                             &self.layer_names,
                             &self.keycode_picker.macro_names,
@@ -199,8 +200,8 @@ impl EntropyApp {
                     self.secondary_click_handled = true;
                 }
             } else if response.hovered() {
-                let tip = keycode_tooltip_with_macro_names(
-                    kc,
+                let tip = key_binding_tooltip_with_macro_names(
+                    binding,
                     &layout.custom_keycodes,
                     &self.layer_names,
                     &self.keycode_picker.macro_names,
@@ -291,7 +292,8 @@ impl EntropyApp {
                 continue;
             }
 
-            let kc = layout.get_keycode(layer, *ki);
+            let binding = layout.get_key_binding(layer, *ki);
+            let kc = binding.vial_keycode();
             let combo_colors = combo_key_colors.get(*ki);
             let combo_outline = combo_colors
                 .and_then(|colors| combo_key_outline_color(colors))
@@ -313,16 +315,16 @@ impl EntropyApp {
             if kc == 0x0001 {
                 paint_layout_keycap(painter, draw_rect, key.rotation, bg, key_border_stroke);
                 if !is_hovering {
-                    let fallback_kc = (0..layer)
+                    let fallback_binding = (0..layer)
                         .rev()
-                        .map(|l| layout.get_keycode(l, *ki))
-                        .find(|&k| k != 0x0001)
-                        .unwrap_or(0x0000);
-                    let label = if fallback_kc == 0x0000 || fallback_kc == 0x0001 {
+                        .map(|l| layout.get_key_binding(l, *ki))
+                        .find(|binding| !binding.is_transparent())
+                        .unwrap_or_default();
+                    let label = if fallback_binding.is_no() || fallback_binding.is_transparent() {
                         String::new()
                     } else {
-                        keycode_label_with_macro_names(
-                            fallback_kc,
+                        key_binding_label_with_macro_names(
+                            fallback_binding,
                             &layout.custom_keycodes,
                             &self.layer_names,
                             &self.keycode_picker.macro_names,
@@ -344,13 +346,13 @@ impl EntropyApp {
                         key.rotation.to_radians(),
                     );
                 }
-            } else if kc == 0x0000 {
+            } else if binding.is_no() {
                 paint_layout_keycap(painter, draw_rect, key.rotation, bg, key_border_stroke);
             } else {
                 paint_layout_keycap(painter, draw_rect, key.rotation, bg, key_border_stroke);
                 let label = number_row_shifted_label(
-                    keycode_label_with_macro_names(
-                        kc,
+                    key_binding_label_with_macro_names(
+                        binding,
                         &layout.custom_keycodes,
                         &self.layer_names,
                         &self.keycode_picker.macro_names,

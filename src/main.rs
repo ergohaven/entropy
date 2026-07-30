@@ -22,6 +22,7 @@ mod pdf;
 mod popup_state;
 #[cfg(not(target_arch = "wasm32"))]
 mod qmk_hid_host;
+mod rmk_native;
 mod smart_input;
 mod text_expander;
 mod ui_style;

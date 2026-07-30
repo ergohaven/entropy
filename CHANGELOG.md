@@ -5,6 +5,13 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.13
+
+### Features
+
+- Added lossless RMK key-action loading and writing so nested shifted Mod-Tap actions remain visible, editable, undoable, mirrorable, and portable through `.entlayout` files
+- Exposed shifted HID symbols in the Mod+Key, Mod-Tap, and Tap Dance key pickers whenever the target firmware can represent them
+
 ## v0.3.10
 
 ### Fixes

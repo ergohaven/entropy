@@ -7,7 +7,13 @@ impl EntropyApp {
             return;
         }
 
-        if let Some(kc_value) = self.keycode_picker.result.take() {
+        if let Some(binding) = self.keycode_picker.result.take() {
+            let kc_value = binding.vial_keycode();
+            if binding.rmk_action().is_some() && self.selected_key.is_none() {
+                self.status_msg =
+                    "This lossless RMK action can only be assigned to a keyboard key".into();
+                return;
+            }
             if let Some((combo_idx, field)) = self.combo_pick_target.take() {
                 self.push_combo_undo();
                 if let Some(combo) = self.combo_entries.get_mut(combo_idx) {
@@ -47,7 +53,7 @@ impl EntropyApp {
             } else if let Some((layer, encoder_visual_idx)) = self.selected_encoder {
                 #[cfg(not(target_arch = "wasm32"))]
                 if !self.assign_encoder_keycode(ctx, layer, encoder_visual_idx, kc_value) {
-                    self.keycode_picker.result = Some(kc_value);
+                    self.keycode_picker.result = Some(binding);
                     return;
                 }
                 #[cfg(target_arch = "wasm32")]
@@ -59,13 +65,13 @@ impl EntropyApp {
                 }
             } else if let Some((layer, ki)) = self.selected_key {
                 #[cfg(not(target_arch = "wasm32"))]
-                if !self.assign_keycode(ctx, layer, ki, kc_value) {
-                    self.keycode_picker.result = Some(kc_value);
+                if !self.assign_key_binding(ctx, layer, ki, binding) {
+                    self.keycode_picker.result = Some(binding);
                     return;
                 }
                 #[cfg(target_arch = "wasm32")]
                 if let Some(layout) = &mut self.layout {
-                    layout.set_keycode(layer, ki, kc_value);
+                    layout.set_key_binding(layer, ki, binding);
                 }
                 if is_alt_repeat_keycode(kc_value) {
                     self.open_alt_repeat_window_compact();
@@ -158,17 +164,19 @@ impl EntropyApp {
         key_target: Option<usize>,
         encoder_target: Option<usize>,
     ) {
-        let current_keycode = self.layout.as_ref().and_then(|layout| {
-            key_target
-                .map(|ki| layout.get_keycode(self.selected_layer, ki))
-                .or_else(|| {
-                    encoder_target.map(|ei| layout.get_encoder_keycode(self.selected_layer, ei))
-                })
+        let current_binding = self.layout.as_ref().and_then(|layout| {
+            key_target.map(|key_index| layout.get_key_binding(self.selected_layer, key_index))
+        });
+        let current_encoder_keycode = self.layout.as_ref().and_then(|layout| {
+            encoder_target
+                .map(|encoder_index| layout.get_encoder_keycode(self.selected_layer, encoder_index))
         });
         self.selected_key = key_target.map(|ki| (self.selected_layer, ki));
         self.selected_encoder = encoder_target.map(|ei| (self.selected_layer, ei));
         self.keycode_picker.open = true;
         self.keycode_picker.result = None;
+        self.keycode_picker
+            .rmk_native_key_actions_allowed_for_target = key_target.is_some();
         self.keycode_picker.search_query.clear();
         self.keycode_picker.layer_names = self.layer_names.clone();
         self.keycode_picker.vial_quantum_pending_mod = None;
@@ -178,7 +186,9 @@ impl EntropyApp {
         self.keycode_picker.macro_inline_selected = None;
         self.keycode_picker.td_key_pick = None;
         self.keycode_picker.td_mod_key_pick = None;
-        if let Some(current_keycode) = current_keycode {
+        if let Some(current_binding) = current_binding {
+            self.keycode_picker.select_tab_for_binding(current_binding);
+        } else if let Some(current_keycode) = current_encoder_keycode {
             self.keycode_picker.select_tab_for_keycode(current_keycode);
         } else {
             self.keycode_picker.selected_tab = crate::keycode_picker::KeycodeTab::Basic;
@@ -216,7 +226,7 @@ impl EntropyApp {
                     if self.hid_write_task_active() {
                         self.selected_key = None;
                         self.selected_encoder = Some((self.selected_layer, visual_idx));
-                        self.keycode_picker.result = Some(swapped);
+                        self.keycode_picker.result = Some(swapped.into());
                     } else {
                         self.assign_encoder_keycode(ctx, self.selected_layer, visual_idx, swapped);
                     }
@@ -296,16 +306,27 @@ impl EntropyApp {
         ki: usize,
         kc_value: u16,
     ) -> bool {
-        self.assign_keycode_with_mode(ctx, layer, ki, kc_value, false)
+        self.assign_key_binding(ctx, layer, ki, kc_value.into())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn assign_keycode_with_mode(
+    pub(super) fn assign_key_binding(
         &mut self,
         ctx: &egui::Context,
         layer: usize,
         ki: usize,
-        kc_value: u16,
+        binding: crate::keyboard::KeyBinding,
+    ) -> bool {
+        self.assign_key_binding_with_mode(ctx, layer, ki, binding, false)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn assign_key_binding_with_mode(
+        &mut self,
+        ctx: &egui::Context,
+        layer: usize,
+        ki: usize,
+        binding: crate::keyboard::KeyBinding,
         is_undo: bool,
     ) -> bool {
         if self.qmk_settings_write_busy() {
@@ -314,11 +335,11 @@ impl EntropyApp {
                     .to_owned();
             return false;
         }
-        let old_kc = self
+        let old_binding = self
             .layout
             .as_ref()
-            .map(|l| l.get_keycode(layer, ki))
-            .unwrap_or(0);
+            .map(|l| l.get_key_binding(layer, ki))
+            .unwrap_or_default();
 
         let key = match self.layout.as_ref().and_then(|l| l.keys.get(ki)) {
             Some(k) => k.clone(),
@@ -330,11 +351,11 @@ impl EntropyApp {
                 this.undo_stack.push(UndoAction::Key {
                     layer,
                     key_idx: ki,
-                    old_kc,
+                    old_binding,
                 });
             }
             if let Some(layout) = &mut this.layout {
-                layout.set_keycode(layer, ki, kc_value);
+                layout.set_key_binding(layer, ki, binding);
             }
             this.refresh_layer_picker_content_flags();
         };
@@ -344,8 +365,8 @@ impl EntropyApp {
             key_index: ki,
             row: key.row,
             col: key.col,
-            old_keycode: old_kc,
-            keycode: kc_value,
+            old_binding,
+            binding,
             is_undo,
         };
         match self.start_vial_hid_operation(ctx, operation) {
@@ -407,13 +428,13 @@ impl EntropyApp {
             UndoAction::Key {
                 layer,
                 key_idx,
-                old_kc,
+                old_binding,
             } => {
-                if !self.assign_keycode_with_mode(ctx, layer, key_idx, old_kc, true) {
+                if !self.assign_key_binding_with_mode(ctx, layer, key_idx, old_binding, true) {
                     self.undo_stack.push(UndoAction::Key {
                         layer,
                         key_idx,
-                        old_kc,
+                        old_binding,
                     });
                 }
             }

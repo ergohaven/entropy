@@ -266,6 +266,89 @@ pub(crate) fn keycode_tooltip_with_macro_names(
     keycode_tooltip(value, custom, layer_names)
 }
 
+pub(crate) fn key_binding_label_with_macro_names(
+    binding: crate::keyboard::KeyBinding,
+    custom: &[crate::keyboard::CustomKeycode],
+    layer_names: &[String],
+    macro_names: &[String],
+    tap_dance_names: &[String],
+    key_legend_layout: KeyLegendLayout,
+) -> String {
+    match binding {
+        crate::keyboard::KeyBinding::Vial(value) => keycode_label_with_macro_names(
+            value,
+            custom,
+            layer_names,
+            macro_names,
+            tap_dance_names,
+            key_legend_layout,
+        ),
+        crate::keyboard::KeyBinding::Rmk(action) => {
+            use rmk_types::action::{Action, KeyAction};
+            if let KeyAction::TapHold(
+                Action::KeyWithModifier(key, tap_mods),
+                Action::Modifier(hold_mods),
+                _,
+            ) = action
+            {
+                let tap_value = ((tap_mods.into_packed_bits() as u16) << 8) | key as u16;
+                let hold =
+                    crate::keycode::modifier_label_from_bits(hold_mods.into_packed_bits() as u16);
+                let tap = keycode_label_with_names_and_layout(
+                    tap_value,
+                    custom,
+                    layer_names,
+                    key_legend_layout,
+                );
+                return format!("{hold}\n{tap}");
+            }
+            "RMK\nAction".to_owned()
+        }
+    }
+}
+
+pub(crate) fn key_binding_tooltip_with_macro_names(
+    binding: crate::keyboard::KeyBinding,
+    custom: &[crate::keyboard::CustomKeycode],
+    layer_names: &[String],
+    macro_names: &[String],
+    macro_descriptions: &[String],
+    tap_dance_names: &[String],
+) -> String {
+    match binding {
+        crate::keyboard::KeyBinding::Vial(value) => keycode_tooltip_with_macro_names(
+            value,
+            custom,
+            layer_names,
+            macro_names,
+            macro_descriptions,
+            tap_dance_names,
+        ),
+        crate::keyboard::KeyBinding::Rmk(action) => {
+            use rmk_types::action::{Action, KeyAction};
+            if let KeyAction::TapHold(
+                Action::KeyWithModifier(key, tap_mods),
+                Action::Modifier(hold_mods),
+                _,
+            ) = action
+            {
+                let tap_value = ((tap_mods.into_packed_bits() as u16) << 8) | key as u16;
+                let hold =
+                    crate::keycode::modifier_label_from_bits(hold_mods.into_packed_bits() as u16);
+                let tap = keycode_label_with_names_and_layout(
+                    tap_value,
+                    custom,
+                    layer_names,
+                    KeyLegendLayout::English,
+                )
+                .replace('\n', " ");
+                return format!("RMK Mod Tap — tap for {tap}, hold for {hold}");
+            }
+            format!("Native RMK key action: {action:?}")
+        }
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc;
 
@@ -372,6 +455,7 @@ impl DeferredLoadStatus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BackgroundLayerStep {
     Keymap { local_offset: usize },
+    NativeActions,
     Encoder { encoder_index: usize },
     FirmwareName,
 }
@@ -383,6 +467,7 @@ pub(crate) enum BackgroundLayerStepResult {
         local_offset: usize,
         keycodes: Vec<u16>,
     },
+    NativeActions(Vec<crate::rmk_native::RmkNativeActionAt>),
     Encoder {
         encoder_index: usize,
         keycodes: (u16, u16),
@@ -394,6 +479,7 @@ pub(crate) enum BackgroundLayerStepResult {
 pub(crate) struct BackgroundLayerData {
     pub(crate) layer: usize,
     pub(crate) keymap: Vec<u16>,
+    pub(crate) native_actions: Vec<crate::rmk_native::RmkNativeActionAt>,
     pub(crate) encoders: Vec<(u16, u16)>,
     pub(crate) firmware_name: Option<String>,
 }
@@ -403,6 +489,8 @@ pub(crate) struct BackgroundLayerData {
 struct BackgroundLayerProgress {
     layer: usize,
     keymap: Vec<u16>,
+    native_actions: Vec<crate::rmk_native::RmkNativeActionAt>,
+    native_actions_attempted: bool,
     encoders: Vec<(u16, u16)>,
     firmware_name: Option<String>,
     firmware_name_attempted: bool,
@@ -433,6 +521,7 @@ pub(crate) struct DeferredDeviceLoadContext {
     pub(crate) layer_leds_supported: bool,
     pub(crate) rgb_supported: bool,
     pub(crate) lighting_mode: Option<String>,
+    pub(crate) supports_rmk_native_key_actions: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -475,6 +564,7 @@ impl DeferredDeviceLoadContext {
             && self.layer_leds_supported == other.layer_leds_supported
             && self.rgb_supported == other.rgb_supported
             && self.lighting_mode == other.lighting_mode
+            && self.supports_rmk_native_key_actions == other.supports_rmk_native_key_actions
     }
 }
 
@@ -651,6 +741,14 @@ impl DeferredDeviceLoadState {
             ));
         }
 
+        if context.supports_rmk_native_key_actions
+            && !progress
+                .map(|progress| progress.native_actions_attempted)
+                .unwrap_or(false)
+        {
+            return Some((layer, BackgroundLayerStep::NativeActions));
+        }
+
         let loaded_encoders = progress
             .map(|progress| progress.encoders.len())
             .unwrap_or(0);
@@ -724,6 +822,18 @@ impl DeferredDeviceLoadState {
                 }
                 progress.keymap.extend(keycodes);
             }
+            BackgroundLayerStepResult::NativeActions(actions) => {
+                if progress.keymap.len() != layer_keycodes
+                    || progress.native_actions_attempted
+                    || !context.supports_rmk_native_key_actions
+                {
+                    return Err(format!(
+                        "unexpected native key-action step for layer {layer}"
+                    ));
+                }
+                progress.native_actions = actions;
+                progress.native_actions_attempted = true;
+            }
             BackgroundLayerStepResult::Encoder {
                 encoder_index,
                 keycodes,
@@ -761,7 +871,10 @@ impl DeferredDeviceLoadState {
         let firmware_name_ready = !qsid
             .is_some_and(|qsid| context.supported_qmk_settings.contains(&qsid))
             || progress.firmware_name_attempted;
+        let native_actions_ready =
+            !context.supports_rmk_native_key_actions || progress.native_actions_attempted;
         let complete = progress.keymap.len() == layer_keycodes
+            && native_actions_ready
             && progress.encoders.len() == context.encoder_count
             && firmware_name_ready;
         if !complete {
@@ -775,6 +888,7 @@ impl DeferredDeviceLoadState {
         Ok(Some(BackgroundLayerData {
             layer,
             keymap: progress.keymap,
+            native_actions: progress.native_actions,
             encoders: progress.encoders,
             firmware_name: progress.firmware_name,
         }))
@@ -834,6 +948,8 @@ pub(crate) struct ConnectResult {
     pub(crate) macro_texts: Vec<Vec<u8>>,
     /// Vial protocol >= 5 supports 2-byte keycodes in macros.
     pub(crate) supports_macro_ext_keycodes: bool,
+    /// Firmware exposes the lossless RMK KeyAction Get/Set extension.
+    pub(crate) supports_rmk_native_key_actions: bool,
     pub(crate) macro_ext_keycodes_disabled_reason: Option<MacroExtKeycodesDisabledReason>,
     /// Tap dance entries
     pub(crate) tap_dance_entries: Vec<crate::keycode_picker::TapDanceEntry>,
@@ -2330,7 +2446,7 @@ pub(super) enum UndoAction {
     Key {
         layer: usize,
         key_idx: usize,
-        old_kc: u16,
+        old_binding: crate::keyboard::KeyBinding,
     },
     Encoder {
         layer: usize,

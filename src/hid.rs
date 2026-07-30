@@ -755,7 +755,7 @@ impl HidDevice {
     }
 
     /// Send exactly MSG_LEN bytes (with 0x00 report ID prepended), receive MSG_LEN bytes back.
-    fn usb_send(&self, data: &[u8]) -> Result<[u8; MSG_LEN]> {
+    pub(crate) fn usb_send(&self, data: &[u8]) -> Result<[u8; MSG_LEN]> {
         match &self.backend {
             HidBackend::Local {
                 device,

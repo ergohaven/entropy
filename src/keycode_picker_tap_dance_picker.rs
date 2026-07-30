@@ -22,17 +22,11 @@ impl KeycodePicker {
                         ..
                     } = event
                     {
-                        if !modifiers.any() {
-                            if let Some(qmk) = egui_key_to_qmk(*key, *modifiers) {
-                                if self.is_tap_dance_regular_key(qmk) {
-                                    self.set_tap_dance_field(
-                                        pending_td_idx,
-                                        pending_field,
-                                        base | qmk,
-                                    );
-                                    self.td_mod_key_pick = None;
-                                    self.td_key_pick = None;
-                                }
+                        if let Some(qmk) = egui_key_to_qmk(*key, *modifiers) {
+                            if self.is_tap_dance_regular_key(qmk) {
+                                self.set_tap_dance_field(pending_td_idx, pending_field, base | qmk);
+                                self.td_mod_key_pick = None;
+                                self.td_key_pick = None;
                             }
                         }
                     }
@@ -157,10 +151,7 @@ impl KeycodePicker {
                     } else if matches!(field, 1 | 3) {
                         self.show_tap_dance_hold_picker_content(ui, td_idx, field);
                     } else {
-                        let key_choices: Vec<&'static crate::keycode::Keycode> = KEYCODES
-                            .iter()
-                            .filter(|kc| is_8bit_tap_key_choice(kc) && !kc.name.starts_with("RGB_"))
-                            .collect();
+                        let key_choices = self.tap_dance_regular_key_choices();
                         match self.popup_view_mode {
                             PickerViewMode::Layout => {
                                 if let Some(value) =
@@ -391,11 +382,7 @@ impl KeycodePicker {
     fn tap_dance_regular_key_choices(&self) -> Vec<&'static crate::keycode::Keycode> {
         KEYCODES
             .iter()
-            .filter(|kc| {
-                is_8bit_tap_key_choice(kc)
-                    && !matches!(kc.category, KeycodeCategory::Modifier)
-                    && !kc.name.starts_with("RGB_")
-            })
+            .filter(|kc| is_mod_key_tap_key_choice(kc) && !kc.name.starts_with("RGB_"))
             .collect()
     }
 

@@ -48,6 +48,7 @@ pub(super) enum DeferredLoadPayload {
     Layer {
         layer: usize,
         keymap: Vec<u16>,
+        native_actions: Vec<crate::rmk_native::RmkNativeActionAt>,
         encoders: Vec<(u16, u16)>,
         firmware_name: Option<String>,
     },
@@ -117,6 +118,15 @@ pub(super) fn run_deferred_load(
         DeferredLoadRequest::Layer { layer, context } => {
             let keymap =
                 hid.get_keymap_layer(*layer, context.layer_count, context.rows, context.cols)?;
+            let matrix_size = context.rows.saturating_mul(context.cols);
+            let native_actions = if context.supports_rmk_native_key_actions {
+                hid.get_rmk_native_key_actions_in_range(
+                    layer.saturating_mul(matrix_size),
+                    layer.saturating_add(1).saturating_mul(matrix_size),
+                )?
+            } else {
+                Vec::new()
+            };
             let mut encoders = Vec::with_capacity(context.encoder_count);
             for encoder in 0..context.encoder_count {
                 encoders.push(
@@ -147,6 +157,7 @@ pub(super) fn run_deferred_load(
             Ok(DeferredLoadPayload::Layer {
                 layer: *layer,
                 keymap,
+                native_actions,
                 encoders,
                 firmware_name,
             })
@@ -167,6 +178,15 @@ pub(super) fn run_deferred_load(
                         local_offset,
                     )?,
                 },
+                BackgroundLayerStep::NativeActions => {
+                    let matrix_size = context.rows.saturating_mul(context.cols);
+                    BackgroundLayerStepResult::NativeActions(
+                        hid.get_rmk_native_key_actions_in_range(
+                            layer.saturating_mul(matrix_size),
+                            layer.saturating_add(1).saturating_mul(matrix_size),
+                        )?,
+                    )
+                }
                 BackgroundLayerStep::Encoder { encoder_index } => {
                     let keycodes = hid
                         .get_encoder(*layer as u8, encoder_index as u8)
@@ -705,12 +725,13 @@ impl EntropyApp {
             DeferredLoadPayload::Layer {
                 layer,
                 keymap,
+                native_actions,
                 encoders,
                 firmware_name,
             } => {
                 self.deferred_device_load
                     .clear_background_layer_progress(layer);
-                self.apply_deferred_layer(layer, keymap, encoders, firmware_name);
+                self.apply_deferred_layer(layer, keymap, native_actions, encoders, firmware_name);
             }
             DeferredLoadPayload::BackgroundLayerStep { layer, result } => {
                 match self
@@ -721,6 +742,7 @@ impl EntropyApp {
                         self.apply_deferred_layer(
                             data.layer,
                             data.keymap,
+                            data.native_actions,
                             data.encoders,
                             data.firmware_name,
                         );
@@ -885,6 +907,7 @@ impl EntropyApp {
         &mut self,
         layer: usize,
         keymap: Vec<u16>,
+        native_actions: Vec<crate::rmk_native::RmkNativeActionAt>,
         encoders: Vec<(u16, u16)>,
         firmware_name: Option<String>,
     ) {
@@ -893,10 +916,11 @@ impl EntropyApp {
                 for (key_index, key) in layout.keys.iter().enumerate() {
                     let matrix_index = key.row as usize * layout.cols + key.col as usize;
                     if let Some(keycode) = keymap.get(matrix_index) {
-                        layer_keycodes[key_index] = *keycode;
+                        layer_keycodes[key_index] = (*keycode).into();
                     }
                 }
             }
+            crate::rmk_native::apply_rmk_native_actions(layout, &native_actions);
             if let Some(encoder_layer) = layout.encoder_layers.get_mut(layer) {
                 for (visual_index, encoder) in layout.encoders.iter().enumerate() {
                     if let Some((ccw, cw)) = encoders.get(encoder.encoder_idx as usize) {
@@ -1345,6 +1369,7 @@ mod tests {
             layer_leds_supported: false,
             rgb_supported: false,
             lighting_mode: None,
+            supports_rmk_native_key_actions: false,
         }
     }
 
@@ -1634,6 +1659,9 @@ mod tests {
                         keycodes: vec![0; remaining.min(28) / 2],
                     }
                 }
+                BackgroundLayerStep::NativeActions => {
+                    BackgroundLayerStepResult::NativeActions(Vec::new())
+                }
                 BackgroundLayerStep::Encoder { encoder_index } => {
                     BackgroundLayerStepResult::Encoder {
                         encoder_index,
@@ -1655,6 +1683,44 @@ mod tests {
                 assert!(completed.is_none());
             }
         }
+    }
+
+    #[test]
+    fn native_actions_load_after_keymap_and_before_encoders() {
+        let mut context = context();
+        context.rows = 1;
+        context.cols = 1;
+        context.encoder_count = 1;
+        context.supports_rmk_native_key_actions = true;
+        let mut state = DeferredDeviceLoadState::staged(context);
+
+        let (layer, step) = state.next_background_layer_step().unwrap();
+        assert_eq!(step, BackgroundLayerStep::Keymap { local_offset: 0 });
+        assert!(state
+            .record_background_layer_step(
+                layer,
+                BackgroundLayerStepResult::Keymap {
+                    local_offset: 0,
+                    keycodes: vec![0],
+                },
+            )
+            .unwrap()
+            .is_none());
+
+        let (_, step) = state.next_background_layer_step().unwrap();
+        assert_eq!(step, BackgroundLayerStep::NativeActions);
+        assert!(state
+            .record_background_layer_step(
+                layer,
+                BackgroundLayerStepResult::NativeActions(Vec::new()),
+            )
+            .unwrap()
+            .is_none());
+
+        assert_eq!(
+            state.next_background_layer_step(),
+            Some((layer, BackgroundLayerStep::Encoder { encoder_index: 0 }))
+        );
     }
 
     #[test]

@@ -522,7 +522,10 @@ mod tests {
                 })
                 .collect(),
             encoders: vec![],
-            layers,
+            layers: layers
+                .into_iter()
+                .map(|layer| layer.into_iter().map(Into::into).collect())
+                .collect(),
             encoder_layers: vec![],
             layer_names: vec![],
             custom_keycodes: vec![],

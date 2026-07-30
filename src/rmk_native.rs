@@ -1,0 +1,347 @@
+use anyhow::{bail, Context, Result};
+use rmk_types::action::KeyAction;
+
+const MSG_LEN: usize = 32;
+const CMD_VIA_CUSTOM_SET_VALUE: u8 = 0x07;
+const CMD_VIA_CUSTOM_GET_VALUE: u8 = 0x08;
+const ERGOHAVEN_CUSTOM_NAMESPACE: u8 = 0xE8;
+const ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS: u8 = 0x02;
+const ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION: u8 = 0x03;
+const ERGOHAVEN_CUSTOM_NEXT_NATIVE_KEY_ACTION: u8 = 0x04;
+const ERGOHAVEN_NATIVE_KEY_ACTION_VERSION: u8 = 0x01;
+const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_GET_SET: u16 = 0x0001;
+const NATIVE_KEY_ACTION_STATUS_OK: u8 = 0x00;
+const NATIVE_KEY_ACTION_STATUS_END: u8 = 0x01;
+const NATIVE_KEY_ACTION_STATUS_UNSUPPORTED_VERSION: u8 = 0x02;
+const NATIVE_KEY_ACTION_STATUS_INVALID_POSITION: u8 = 0x03;
+const NATIVE_KEY_ACTION_STATUS_INVALID_PAYLOAD: u8 = 0x04;
+const NATIVE_KEY_ACTION_GET_PAYLOAD_OFFSET: usize = 6;
+const NATIVE_KEY_ACTION_SET_PAYLOAD_OFFSET: usize = 8;
+const NATIVE_KEY_ACTION_NEXT_PAYLOAD_OFFSET: usize = 8;
+const NATIVE_KEY_ACTION_MAX_PAYLOAD: usize = MSG_LEN - NATIVE_KEY_ACTION_SET_PAYLOAD_OFFSET;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RmkNativeCapabilities {
+    pub(crate) key_actions: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RmkNativeActionAt {
+    pub(crate) flat_index: usize,
+    pub(crate) action: KeyAction,
+}
+
+pub(crate) fn apply_rmk_native_actions(
+    layout: &mut crate::keyboard::KeyboardLayout,
+    actions: &[RmkNativeActionAt],
+) -> usize {
+    let matrix_size = layout.rows.saturating_mul(layout.cols);
+    if matrix_size == 0 {
+        return 0;
+    }
+
+    let mut applied = 0;
+    for native in actions {
+        let layer = native.flat_index / matrix_size;
+        let matrix_index = native.flat_index % matrix_size;
+        let row = matrix_index / layout.cols;
+        let col = matrix_index % layout.cols;
+        let Some(key_index) = layout
+            .keys
+            .iter()
+            .position(|key| key.row as usize == row && key.col as usize == col)
+        else {
+            continue;
+        };
+        layout.set_rmk_key_action(layer, key_index, native.action);
+        applied += 1;
+    }
+    applied
+}
+
+pub(crate) fn toggle_handed_key_action(action: KeyAction) -> KeyAction {
+    use rmk_types::action::Action;
+    use rmk_types::modifier::ModifierCombination;
+
+    fn swap_modifiers(modifiers: ModifierCombination) -> ModifierCombination {
+        let bits = modifiers.into_bits();
+        ModifierCombination::from_bits(bits.rotate_right(4))
+    }
+
+    fn swap_action(action: Action) -> Action {
+        match action {
+            Action::Modifier(modifiers) => Action::Modifier(swap_modifiers(modifiers)),
+            Action::KeyWithModifier(key, modifiers) => {
+                Action::KeyWithModifier(key, swap_modifiers(modifiers))
+            }
+            other => other,
+        }
+    }
+
+    match action {
+        KeyAction::Single(action) => KeyAction::Single(swap_action(action)),
+        KeyAction::Tap(action) => KeyAction::Tap(swap_action(action)),
+        KeyAction::TapHold(tap, hold, profile) => {
+            KeyAction::TapHold(swap_action(tap), swap_action(hold), profile)
+        }
+        other => other,
+    }
+}
+
+fn native_status_error(status: u8) -> &'static str {
+    match status {
+        NATIVE_KEY_ACTION_STATUS_UNSUPPORTED_VERSION => "unsupported protocol version",
+        NATIVE_KEY_ACTION_STATUS_INVALID_POSITION => "invalid key position",
+        NATIVE_KEY_ACTION_STATUS_INVALID_PAYLOAD => "invalid key action payload",
+        _ => "unknown firmware error",
+    }
+}
+
+fn native_response_header_matches(response: &[u8; MSG_LEN], subcommand: u8) -> bool {
+    (response[0] == CMD_VIA_CUSTOM_GET_VALUE || response[0] == CMD_VIA_CUSTOM_SET_VALUE)
+        && response[1] == ERGOHAVEN_CUSTOM_NAMESPACE
+        && response[2] == subcommand
+}
+
+fn decode_native_action(
+    response: &[u8; MSG_LEN],
+    status_offset: usize,
+    len_offset: usize,
+    payload_offset: usize,
+) -> Result<KeyAction> {
+    let status = response[status_offset];
+    if status != NATIVE_KEY_ACTION_STATUS_OK {
+        bail!(
+            "RMK native key action failed: {}",
+            native_status_error(status)
+        );
+    }
+    let payload_len = response[len_offset] as usize;
+    if payload_len == 0 || payload_offset + payload_len > response.len() {
+        bail!("invalid RMK native key action payload length: {payload_len}");
+    }
+    postcard::from_bytes(&response[payload_offset..payload_offset + payload_len])
+        .context("failed to decode RMK native key action")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl crate::hid::HidDevice {
+    pub(crate) fn get_rmk_native_capabilities(&self) -> Result<RmkNativeCapabilities> {
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_CUSTOM_GET_VALUE;
+        command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
+        command[2] = ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS;
+        let response = self.usb_send(&command)?;
+        if !native_response_header_matches(&response, ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS)
+            || response[3] != ERGOHAVEN_NATIVE_KEY_ACTION_VERSION
+        {
+            return Ok(RmkNativeCapabilities::default());
+        }
+        let flags = u16::from_le_bytes([response[4], response[5]]);
+        Ok(RmkNativeCapabilities {
+            key_actions: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_GET_SET != 0,
+        })
+    }
+
+    pub(crate) fn get_rmk_key_action(&self, layer: u8, row: u8, col: u8) -> Result<KeyAction> {
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_CUSTOM_GET_VALUE;
+        command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
+        command[2] = ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION;
+        command[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
+        command[4] = layer;
+        command[5] = row;
+        command[6] = col;
+        let response = self.usb_send(&command)?;
+        if !native_response_header_matches(&response, ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION)
+            || response[3] != ERGOHAVEN_NATIVE_KEY_ACTION_VERSION
+        {
+            bail!("unexpected RMK native key action response");
+        }
+        decode_native_action(
+            &response,
+            4,
+            NATIVE_KEY_ACTION_GET_PAYLOAD_OFFSET - 1,
+            NATIVE_KEY_ACTION_GET_PAYLOAD_OFFSET,
+        )
+    }
+
+    pub(crate) fn set_rmk_key_action(
+        &self,
+        layer: u8,
+        row: u8,
+        col: u8,
+        action: KeyAction,
+    ) -> Result<()> {
+        let mut encoded = [0u8; NATIVE_KEY_ACTION_MAX_PAYLOAD];
+        let payload =
+            postcard::to_slice(&action, &mut encoded).context("failed to encode RMK key action")?;
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_CUSTOM_SET_VALUE;
+        command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
+        command[2] = ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION;
+        command[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
+        command[4] = layer;
+        command[5] = row;
+        command[6] = col;
+        command[7] = payload.len() as u8;
+        command[NATIVE_KEY_ACTION_SET_PAYLOAD_OFFSET
+            ..NATIVE_KEY_ACTION_SET_PAYLOAD_OFFSET + payload.len()]
+            .copy_from_slice(payload);
+        let response = self.usb_send(&command)?;
+        if !native_response_header_matches(&response, ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION)
+            || response[3] != ERGOHAVEN_NATIVE_KEY_ACTION_VERSION
+        {
+            bail!("unexpected RMK native key action write response");
+        }
+        if response[4] != NATIVE_KEY_ACTION_STATUS_OK {
+            bail!(
+                "RMK native key action write failed: {}",
+                native_status_error(response[4])
+            );
+        }
+        let readback = self.get_rmk_key_action(layer, row, col)?;
+        if readback != action {
+            bail!("RMK native key action readback mismatch at layer {layer}, row {row}, col {col}");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn get_next_rmk_native_key_action(
+        &self,
+        start_flat_index: usize,
+    ) -> Result<Option<RmkNativeActionAt>> {
+        let start = u16::try_from(start_flat_index)
+            .context("RMK native key action cursor exceeds protocol range")?;
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_CUSTOM_GET_VALUE;
+        command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
+        command[2] = ERGOHAVEN_CUSTOM_NEXT_NATIVE_KEY_ACTION;
+        command[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
+        command[4..6].copy_from_slice(&start.to_le_bytes());
+        let response = self.usb_send(&command)?;
+        if !native_response_header_matches(&response, ERGOHAVEN_CUSTOM_NEXT_NATIVE_KEY_ACTION)
+            || response[3] != ERGOHAVEN_NATIVE_KEY_ACTION_VERSION
+        {
+            bail!("unexpected RMK native key action scan response");
+        }
+        if response[4] == NATIVE_KEY_ACTION_STATUS_END {
+            return Ok(None);
+        }
+        let action = decode_native_action(
+            &response,
+            4,
+            NATIVE_KEY_ACTION_NEXT_PAYLOAD_OFFSET - 1,
+            NATIVE_KEY_ACTION_NEXT_PAYLOAD_OFFSET,
+        )?;
+        Ok(Some(RmkNativeActionAt {
+            flat_index: u16::from_le_bytes([response[5], response[6]]) as usize,
+            action,
+        }))
+    }
+
+    pub(crate) fn get_rmk_native_key_actions_in_range(
+        &self,
+        start_flat_index: usize,
+        end_flat_index: usize,
+    ) -> Result<Vec<RmkNativeActionAt>> {
+        let mut actions = Vec::new();
+        let mut cursor = start_flat_index;
+        while cursor < end_flat_index {
+            let Some(next) = self.get_next_rmk_native_key_action(cursor)? else {
+                break;
+            };
+            if next.flat_index < cursor {
+                bail!(
+                    "RMK native key action scan did not advance: {} < {}",
+                    next.flat_index,
+                    cursor
+                );
+            }
+            if next.flat_index >= end_flat_index {
+                break;
+            }
+            actions.push(next);
+            cursor = next.flat_index + 1;
+        }
+        Ok(actions)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmk_types::action::Action;
+    use rmk_types::keycode::HidKeyCode;
+    use rmk_types::modifier::ModifierCombination;
+
+    #[test]
+    fn decodes_native_mod_tap_payload() {
+        let action = KeyAction::TapHold(
+            Action::KeyWithModifier(HidKeyCode::Kc0, ModifierCombination::LSHIFT),
+            Action::Modifier(ModifierCombination::LCTRL),
+            Default::default(),
+        );
+        let mut response = [0u8; MSG_LEN];
+        let mut encoded = [0u8; NATIVE_KEY_ACTION_MAX_PAYLOAD];
+        let payload = postcard::to_slice(&action, &mut encoded).unwrap();
+        response[4] = NATIVE_KEY_ACTION_STATUS_OK;
+        response[5] = payload.len() as u8;
+        response[NATIVE_KEY_ACTION_GET_PAYLOAD_OFFSET
+            ..NATIVE_KEY_ACTION_GET_PAYLOAD_OFFSET + payload.len()]
+            .copy_from_slice(payload);
+        assert_eq!(
+            decode_native_action(
+                &response,
+                4,
+                NATIVE_KEY_ACTION_GET_PAYLOAD_OFFSET - 1,
+                NATIVE_KEY_ACTION_GET_PAYLOAD_OFFSET,
+            )
+            .unwrap(),
+            action
+        );
+    }
+
+    #[test]
+    fn native_mod_tap_has_readable_layout_label_and_tooltip() {
+        let action = KeyAction::TapHold(
+            Action::KeyWithModifier(HidKeyCode::LeftBracket, ModifierCombination::LSHIFT),
+            Action::Modifier(ModifierCombination::RCTRL),
+            Default::default(),
+        );
+        let binding = crate::keyboard::KeyBinding::Rmk(action);
+        let label = crate::app::key_binding_label_with_macro_names(
+            binding,
+            &[],
+            &[],
+            &[],
+            &[],
+            crate::keycode::KeyLegendLayout::English,
+        );
+        let tooltip =
+            crate::app::key_binding_tooltip_with_macro_names(binding, &[], &[], &[], &[], &[]);
+
+        assert!(label.contains("Ctrl"), "{label}");
+        assert!(label.contains('{'), "{label}");
+        assert!(tooltip.contains("RMK Mod Tap"), "{tooltip}");
+        assert!(tooltip.contains("Ctrl"), "{tooltip}");
+    }
+
+    #[test]
+    fn native_mod_tap_mirroring_swaps_tap_and_hold_modifier_hands() {
+        let action = KeyAction::TapHold(
+            Action::KeyWithModifier(HidKeyCode::LeftBracket, ModifierCombination::LSHIFT),
+            Action::Modifier(ModifierCombination::RCTRL),
+            Default::default(),
+        );
+
+        assert_eq!(
+            toggle_handed_key_action(action),
+            KeyAction::TapHold(
+                Action::KeyWithModifier(HidKeyCode::LeftBracket, ModifierCombination::RSHIFT),
+                Action::Modifier(ModifierCombination::LCTRL),
+                Default::default(),
+            )
+        );
+    }
+}
