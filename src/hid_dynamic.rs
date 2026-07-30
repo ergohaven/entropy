@@ -54,12 +54,6 @@ impl HidDevice {
         Ok((resp[0], resp[1], resp[2], resp[3], resp[31]))
     }
 
-    /// Get number of combo entries available
-    pub fn get_combo_count(&self) -> Result<u8> {
-        let (_, combo, _, _, _) = self.get_dynamic_entry_counts()?;
-        Ok(combo)
-    }
-
     /// Get combo entry: ([trigger_keys; 4], output_keycode)
     pub fn get_combo(&self, idx: u8) -> Result<([u16; 4], u16)> {
         let resp = self.usb_send(&[
@@ -94,18 +88,6 @@ impl HidDevice {
         }
         let readback = self.get_combo(idx)?;
         verify_combo_writeback(idx, requested, readback)
-    }
-
-    /// Get number of key override entries available
-    pub fn get_key_override_count(&self) -> Result<u8> {
-        let (_, _, key_override, _, _) = self.get_dynamic_entry_counts()?;
-        Ok(key_override)
-    }
-
-    /// Get number of alt repeat key entries available
-    pub fn get_alt_repeat_key_count(&self) -> Result<u8> {
-        let (_, _, _, alt_repeat, _) = self.get_dynamic_entry_counts()?;
-        Ok(alt_repeat)
     }
 
     /// Get key override entry:
@@ -185,12 +167,6 @@ impl HidDevice {
             anyhow::bail!("alt repeat key set error: {}", resp[0]);
         }
         Ok(())
-    }
-
-    /// Get number of tap dance entries available
-    pub fn get_tap_dance_count(&self) -> Result<u8> {
-        let (tap_dance, _, _, _, _) = self.get_dynamic_entry_counts()?;
-        Ok(tap_dance)
     }
 
     /// Get a tap dance entry: (on_tap, on_hold, on_double_tap, on_tap_hold, tapping_term)
