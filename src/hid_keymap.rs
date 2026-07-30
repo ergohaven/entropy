@@ -174,7 +174,7 @@ impl HidDevice {
         local_offset: usize,
     ) -> Result<Vec<u16>> {
         let (layer_offset, layer_bytes) = keymap_layer_bounds(layer, layers, rows, cols)?;
-        if local_offset >= layer_bytes || local_offset % 2 != 0 {
+        if local_offset >= layer_bytes || !local_offset.is_multiple_of(2) {
             bail!(
                 "invalid keymap layer chunk offset: layer={layer}, local_offset={local_offset}, layer_bytes={layer_bytes}"
             );
