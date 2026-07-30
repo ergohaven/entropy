@@ -10,6 +10,15 @@ pub(crate) struct LayoutGeometry {
     pub(crate) layout_h: f32,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct LayoutChromeGeometry {
+    pub(crate) top_base_y: f32,
+    pub(crate) main_tabs_h: f32,
+    pub(crate) layer_bar_h: f32,
+    pub(crate) top_reserved_h: f32,
+    pub(crate) viewport: egui::Rect,
+}
+
 pub(crate) fn responsive_layout_max_scale(ctx: &egui::Context, viewport: egui::Rect) -> f32 {
     let native_scale = ctx
         .native_pixels_per_point()
@@ -143,22 +152,6 @@ pub(crate) fn layout_geometry_with_reserved_and_filter(
         padding: LAYOUT_KEY_PADDING,
         layout_h,
     }
-}
-
-pub(crate) fn layout_keycap_rect(
-    offset_x: f32,
-    offset_y: f32,
-    unit: f32,
-    padding: f32,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-) -> egui::Rect {
-    egui::Rect::from_min_size(
-        egui::pos2(offset_x + x * unit + padding, offset_y + y * unit + padding),
-        Vec2::new(w * unit - padding * 2.0, h * unit - padding * 2.0),
-    )
 }
 
 pub(crate) fn rotate_layout_point(

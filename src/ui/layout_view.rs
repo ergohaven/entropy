@@ -94,11 +94,13 @@ impl EntropyApp {
             ui,
             layout,
             ctx,
-            top_base_y,
-            main_tabs_h,
-            layer_bar_h,
-            top_reserved_h,
-            viewport,
+            LayoutChromeGeometry {
+                top_base_y,
+                main_tabs_h,
+                layer_bar_h,
+                top_reserved_h,
+                viewport,
+            },
         ) {
             return;
         }

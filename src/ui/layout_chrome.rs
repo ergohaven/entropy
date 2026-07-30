@@ -6,12 +6,15 @@ impl EntropyApp {
         ui: &mut egui::Ui,
         layout: &KeyboardLayout,
         ctx: &egui::Context,
-        top_base_y: f32,
-        main_tabs_h: f32,
-        layer_bar_h: f32,
-        top_reserved_h: f32,
-        viewport: egui::Rect,
+        geometry: LayoutChromeGeometry,
     ) -> bool {
+        let LayoutChromeGeometry {
+            top_base_y,
+            main_tabs_h,
+            layer_bar_h,
+            top_reserved_h,
+            viewport,
+        } = geometry;
         let typing_trainer_page = self.main_menu_tab == MainMenuTab::Advanced
             && self.settings_tab == SettingsTab::TypingTrainer;
         if typing_trainer_page {
