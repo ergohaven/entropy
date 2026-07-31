@@ -646,6 +646,7 @@ impl EntropyApp {
                 self.sticky_layout_active_layer = 0;
 
                 self.layout = Some(r.layout);
+                self.sync_firmware_managed_layout_options();
                 self.refresh_layer_picker_content_flags();
 
                 // Keep the same HID owner that loaded the keyboard, matching vial-gui's

@@ -244,6 +244,7 @@ impl EntropyApp {
             old_value,
             requested,
         );
+        self.sync_firmware_managed_layout_options();
     }
 
     fn draw_module_settings_field_row(
@@ -788,6 +789,7 @@ mod tests {
             qsid: 134,
             kind: ModuleSettingKind::Select,
             bit: 0,
+            layout_option: None,
             width: 1,
             min: 0,
             max: 3,
@@ -814,6 +816,7 @@ mod tests {
             qsid,
             kind: ModuleSettingKind::Select,
             bit: 0,
+            layout_option: None,
             width: 1,
             min: 0,
             max: 3,
@@ -1089,7 +1092,7 @@ mod tests {
         hid.set_qmk_setting_u8(150, 2).unwrap();
         let mut settings = EntropyApp::module_settings_from_definition(&json, &[149, 150]);
 
-        EntropyApp::read_module_selector_values(&mut settings, &hid);
+        EntropyApp::read_initial_module_values(&mut settings, &hid);
 
         assert_eq!(settings.values.get(&149), Some(&1));
         assert_eq!(settings.values.get(&150), Some(&2));

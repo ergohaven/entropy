@@ -1552,6 +1552,10 @@ pub(crate) struct ModuleSettingField {
     pub(crate) qsid: u16,
     pub(crate) kind: ModuleSettingKind,
     pub(crate) bit: u8,
+    /// Boolean firmware setting that owns a Vial layout-display option.
+    /// When present, Entropy derives that option from this setting instead of
+    /// exposing a second manual control under Display Presets.
+    pub(crate) layout_option: Option<usize>,
     pub(crate) width: u8,
     pub(crate) min: u16,
     pub(crate) max: u16,

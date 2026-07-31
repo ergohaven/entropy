@@ -22,6 +22,77 @@ impl EntropyApp {
             .collect()
     }
 
+    pub(super) fn firmware_managed_layout_option_indices(
+        &self,
+    ) -> std::collections::BTreeSet<usize> {
+        self.module_settings
+            .fields
+            .iter()
+            .filter_map(|field| field.layout_option)
+            .collect()
+    }
+
+    pub(super) fn user_layout_option_indices(&self, layout: &KeyboardLayout) -> Vec<usize> {
+        let firmware_managed = self.firmware_managed_layout_option_indices();
+        layout
+            .layout_options
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, option)| {
+                (!Self::is_encoder_layout_option(option) && !firmware_managed.contains(&idx))
+                    .then_some(idx)
+            })
+            .collect()
+    }
+
+    fn apply_firmware_managed_layout_options(
+        options: &[LayoutOption],
+        settings: &ModuleSettingsState,
+        packed: u32,
+    ) -> u32 {
+        let mut values = Self::unpack_layout_option_values(options, packed);
+        for field in &settings.fields {
+            let Some(option_idx) = field.layout_option else {
+                continue;
+            };
+            let Some(value) = values.get_mut(option_idx) else {
+                continue;
+            };
+            let enabled = settings.value(field.qsid) & (1u16 << field.bit) != 0;
+            *value = u32::from(enabled);
+        }
+        Self::pack_layout_option_values(options, &values)
+    }
+
+    pub(super) fn sync_firmware_managed_layout_options(&mut self) {
+        let Some(options) = self
+            .layout
+            .as_ref()
+            .map(|layout| layout.layout_options.clone())
+        else {
+            return;
+        };
+        if options.is_empty() {
+            return;
+        }
+
+        let mut settings = self.module_settings.clone();
+        for field in &self.module_settings.fields {
+            if field.layout_option.is_none() {
+                continue;
+            }
+            if let Some(pending) = self.pending_settings_write_value(field.qsid) {
+                settings.set_value(field.qsid, pending);
+            }
+        }
+        let packed = Self::apply_firmware_managed_layout_options(
+            &options,
+            &settings,
+            self.layout_options_value.unwrap_or(0),
+        );
+        self.layout_options_value = Some(packed);
+    }
+
     pub(super) fn layout_condition_visible(
         layout: &KeyboardLayout,
         condition: Option<crate::keyboard::LayoutCondition>,
@@ -1202,6 +1273,15 @@ impl EntropyApp {
                 .and_then(|value| value.as_u64())
                 .unwrap_or(0)
                 .min(15) as u8,
+            layout_option: matches!(kind, ModuleSettingKind::Boolean)
+                .then(|| {
+                    field
+                        .get("layoutOption")
+                        .and_then(serde_json::Value::as_u64)
+                        .and_then(|value| usize::try_from(value).ok())
+                        .filter(|value| *value < 32)
+                })
+                .flatten(),
             width,
             min: field
                 .get("min")
@@ -1447,14 +1527,22 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn read_module_selector_values(
+    pub(super) fn read_initial_module_values(
         settings: &mut ModuleSettingsState,
         dev_conn: &crate::hid::HidDevice,
     ) {
         let selectors = settings
             .groups
             .iter()
-            .filter_map(ModuleSettingsGroup::module_selector_field)
+            .flat_map(|group| group.fields.iter())
+            .filter(|field| {
+                field.layout_option.is_some()
+                    || settings.groups.iter().any(|group| {
+                        group
+                            .module_selector_field()
+                            .is_some_and(|selector| selector.qsid == field.qsid)
+                    })
+            })
             .map(|field| (field.qsid, field.width))
             .collect::<std::collections::BTreeMap<_, _>>();
 
@@ -1755,6 +1843,12 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_app() -> EntropyApp {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        EntropyApp::new(&creation_context)
+    }
 
     #[test]
     fn layer_led_color_qsid_groups_collapse_duplicate_layer_entries() {
@@ -2141,6 +2235,7 @@ mod tests {
             qsid,
             kind: ModuleSettingKind::Select,
             bit: 0,
+            layout_option: None,
             width: 1,
             min: 0,
             max: 2,
@@ -2227,6 +2322,7 @@ mod tests {
                     qsid: 300,
                     kind: ModuleSettingKind::Select,
                     bit: 0,
+                    layout_option: None,
                     width: 1,
                     min: 0,
                     max: 1,
@@ -2424,6 +2520,85 @@ mod tests {
         assert_eq!(field.variants, vec!["Normal", "Scroll"]);
         assert_eq!(field.min, 0);
         assert_eq!(field.max, 1);
+    }
+
+    #[test]
+    fn boolean_module_setting_can_own_a_layout_option() {
+        let field = EntropyApp::parse_module_setting_field(
+            &serde_json::json!({
+                "title": "Trackball enabled",
+                "qsid": 334,
+                "type": "boolean",
+                "bit": 0,
+                "layoutOption": 0
+            }),
+            &[334],
+        )
+        .expect("supported boolean field should parse");
+
+        assert_eq!(field.layout_option, Some(0));
+
+        let select = EntropyApp::parse_module_setting_field(
+            &serde_json::json!({
+                "title": "Mode",
+                "qsid": 135,
+                "type": "select",
+                "layoutOption": 0,
+                "variants": ["Normal", "Scroll"]
+            }),
+            &[135],
+        )
+        .expect("supported select field should parse");
+        assert_eq!(select.layout_option, None);
+    }
+
+    #[test]
+    fn firmware_managed_layout_option_tracks_boolean_setting_and_is_not_user_configurable() {
+        let mut app = test_app();
+        let mut layout = test_layout_with_encoders(&[]);
+        layout.layout_options = vec![LayoutOption {
+            label: "Right trackball instead of key".to_owned(),
+            choices: Vec::new(),
+        }];
+        app.layout = Some(layout.clone());
+        app.layout_options_value = Some(0);
+        app.module_settings.fields = vec![ModuleSettingField {
+            title: "Trackball enabled".to_owned(),
+            qsid: 334,
+            kind: ModuleSettingKind::Boolean,
+            bit: 0,
+            layout_option: Some(0),
+            width: 1,
+            min: 0,
+            max: 1,
+            variants: Vec::new(),
+        }];
+        app.module_settings.supported = true;
+
+        app.module_settings.set_value(334, 1);
+        app.sync_firmware_managed_layout_options();
+        assert_eq!(app.layout_options_value, Some(1));
+        assert!(app.user_layout_option_indices(&layout).is_empty());
+        assert!(!EntropyApp::layout_condition_visible(
+            &layout,
+            Some(crate::keyboard::LayoutCondition {
+                option_idx: 0,
+                value: 0,
+            }),
+            app.layout_options_value,
+        ));
+
+        app.module_settings.set_value(334, 0);
+        app.sync_firmware_managed_layout_options();
+        assert_eq!(app.layout_options_value, Some(0));
+        assert!(EntropyApp::layout_condition_visible(
+            &layout,
+            Some(crate::keyboard::LayoutCondition {
+                option_idx: 0,
+                value: 0,
+            }),
+            app.layout_options_value,
+        ));
     }
 
     #[test]

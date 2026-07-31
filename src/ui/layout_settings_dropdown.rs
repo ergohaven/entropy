@@ -60,10 +60,7 @@ impl EntropyApp {
             let rgb_available_for_menu = self.rgb_settings.supported || layout.supports_rgb;
             let layer_leds_available_for_menu = self.layer_led_settings.supported;
             let show_encoders_item = self.show_separate_encoder_visibility_settings(layout);
-            let show_layout_options_item = layout
-                .layout_options
-                .iter()
-                .any(|option| !Self::is_encoder_layout_option(option));
+            let show_layout_options_item = !self.user_layout_option_indices(layout).is_empty();
             #[cfg(not(target_arch = "wasm32"))]
             let deferred_modules = self.deferred_section_available(DeferredLoadSection::Modules);
             #[cfg(target_arch = "wasm32")]

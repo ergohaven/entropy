@@ -858,6 +858,7 @@ impl EntropyApp {
             }
             DeferredLoadPayload::Modules(settings) => {
                 self.module_settings = settings;
+                self.sync_firmware_managed_layout_options();
                 if let Some(layout) = self.layout.as_ref() {
                     let encoder_count = layout.encoder_count();
                     self.encoder_visibility = Self::resolve_initial_encoder_visibility(

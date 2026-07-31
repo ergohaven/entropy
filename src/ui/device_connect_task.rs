@@ -1144,7 +1144,7 @@ impl EntropyApp {
                 let module_settings = if staged_bluetooth_load {
                     let mut settings =
                         Self::module_settings_from_definition(&json, &supported_qmk_settings);
-                    Self::read_module_selector_values(&mut settings, &dev_conn);
+                    Self::read_initial_module_values(&mut settings, &dev_conn);
                     settings
                 } else {
                     Self::read_module_settings(&json, &supported_qmk_settings, &dev_conn)
