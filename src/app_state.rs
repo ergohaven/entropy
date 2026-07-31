@@ -1778,6 +1778,23 @@ impl std::fmt::Display for ModuleSettingWritebackError {
 }
 
 impl ModuleSettingsState {
+    pub(crate) fn is_trackball_page(&self) -> bool {
+        let mut has_trackball_group = false;
+        let only_trackball_groups = self.groups.iter().all(|group| match group.kind {
+            ModuleSettingsGroupKind::AutoLayer => true,
+            ModuleSettingsGroupKind::Other => {
+                let is_trackball = group
+                    .title
+                    .split(|character: char| !character.is_ascii_alphanumeric())
+                    .any(|word| word.eq_ignore_ascii_case("trackball"));
+                has_trackball_group |= is_trackball;
+                is_trackball
+            }
+            ModuleSettingsGroupKind::Left | ModuleSettingsGroupKind::Right => false,
+        });
+        has_trackball_group && only_trackball_groups
+    }
+
     pub(crate) fn selected_module_group(&self) -> Option<usize> {
         let selected = self.groups.get(self.selected_module_group)?;
         if matches!(

@@ -155,7 +155,10 @@ impl EntropyApp {
                 settings_menu_labels.push(crate::i18n::tr(lang, TrKey::DisplayPresetsTitle));
             }
             if show_modules_item {
-                settings_menu_labels.push(crate::i18n::tr_catalog(lang, "modules_settings.title"));
+                settings_menu_labels.push(crate::i18n::tr_catalog(
+                    lang,
+                    self.module_settings_title_key(),
+                ));
             }
             if show_touchpad_item {
                 settings_menu_labels.push(crate::i18n::tr(lang, TrKey::TouchpadTitle));
@@ -301,7 +304,10 @@ impl EntropyApp {
                                     top_dropdown_item(
                                         ui,
                                         item_width,
-                                        crate::i18n::tr_catalog(lang, "modules_settings.title"),
+                                        crate::i18n::tr_catalog(
+                                            lang,
+                                            self.module_settings_title_key(),
+                                        ),
                                         true,
                                         self.main_menu_tab == MainMenuTab::Settings
                                             && self.settings_tab == SettingsTab::Modules,

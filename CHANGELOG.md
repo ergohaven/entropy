@@ -5,6 +5,12 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.15
+
+### Features
+
+- Renamed dedicated trackball firmware settings pages and added localized controls for trackball availability and auto-layer timeout
+
 ## v0.3.14
 
 ### Fixes

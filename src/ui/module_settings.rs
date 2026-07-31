@@ -104,6 +104,10 @@ fn module_setting_catalog_keys(title: &str) -> Option<(&'static str, &'static st
             "modules_settings.auto_layer_timeout",
             "modules_settings.auto_layer_timeout_tooltip",
         )),
+        "trackball enabled" => Some((
+            "modules_settings.trackball_enabled",
+            "modules_settings.trackball_enabled_tooltip",
+        )),
         _ => None,
     }
 }
@@ -141,6 +145,22 @@ enum ModuleSettingsRow {
 }
 
 impl EntropyApp {
+    pub(super) fn module_settings_title_key(&self) -> &'static str {
+        if self.module_settings.is_trackball_page() {
+            "modules_settings.trackball_title"
+        } else {
+            "modules_settings.title"
+        }
+    }
+
+    fn module_settings_description_key(&self) -> &'static str {
+        if self.module_settings.is_trackball_page() {
+            "modules_settings.trackball_description"
+        } else {
+            "modules_settings.description"
+        }
+    }
+
     fn module_setting_label(&self, group_kind: ModuleSettingsGroupKind, title: &str) -> String {
         let lang = self.app_settings.language;
         let display_title = group_kind.field_base_title(title);
@@ -683,15 +703,18 @@ impl EntropyApp {
             ui.vertical_centered(|ui| {
                 ui.add_space(18.0);
                 ui.label(
-                    RichText::new(crate::i18n::tr_catalog(lang, "modules_settings.title"))
-                        .size(18.0)
-                        .strong(),
+                    RichText::new(crate::i18n::tr_catalog(
+                        lang,
+                        self.module_settings_title_key(),
+                    ))
+                    .size(18.0)
+                    .strong(),
                 );
                 ui.add_space(6.0);
                 ui.label(
                     RichText::new(crate::i18n::tr_catalog(
                         lang,
-                        "modules_settings.description",
+                        self.module_settings_description_key(),
                     ))
                     .size(13.0)
                     .color(app_muted_text(dark)),
@@ -1367,6 +1390,29 @@ mod tests {
                 })
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn dedicated_trackball_groups_use_trackball_page_title() {
+        let mut app = test_app();
+        app.module_settings.groups = vec![
+            ModuleSettingsGroup {
+                title: "Trackball".to_owned(),
+                kind: ModuleSettingsGroupKind::Other,
+                fields: vec![test_module_field()],
+            },
+            ModuleSettingsGroup {
+                title: "Auto layer".to_owned(),
+                kind: ModuleSettingsGroupKind::AutoLayer,
+                fields: vec![module_filter_field("Auto layer timeout", 324)],
+            },
+        ];
+
+        assert!(app.module_settings.is_trackball_page());
+        assert_eq!(
+            app.module_settings_title_key(),
+            "modules_settings.trackball_title"
         );
     }
 }
