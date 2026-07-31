@@ -91,7 +91,7 @@ impl KeycodePicker {
         crate::ui_style::centered_modal_window(
             ctx,
             window_title.as_str(),
-            self.popup_state.id(PopupKey::TdKeyPickWindow),
+            self.popup_state.id(PopupWindow::TdKeyPick),
             &mut still_open,
             popup_size,
         )

@@ -9,6 +9,20 @@ struct QwertyPickerGridKey {
     value: u16,
 }
 
+#[derive(Clone, Copy)]
+struct QwertyPickerGridMetrics {
+    cell_w: f32,
+    cell_h: f32,
+    gap: f32,
+}
+
+#[derive(Clone, Copy)]
+struct QwertyPickerGridPosition {
+    row: usize,
+    col: usize,
+    span: usize,
+}
+
 const fn qwerty_picker_grid_key(
     row: usize,
     col: usize,
@@ -168,24 +182,22 @@ impl KeycodePicker {
         &mut self,
         ui: &mut egui::Ui,
         origin: egui::Pos2,
-        cell_w: f32,
-        cell_h: f32,
-        gap: f32,
-        row: usize,
-        col: usize,
-        span: usize,
+        metrics: QwertyPickerGridMetrics,
+        position: QwertyPickerGridPosition,
         label: &str,
         value: u16,
     ) {
-        let x = origin.x + col as f32 * (cell_w + gap);
-        let right_nav_extra_gap = if col >= 16 && matches!(row, 1 | 2) {
+        let x = origin.x + position.col as f32 * (metrics.cell_w + metrics.gap);
+        let right_nav_extra_gap = if position.col >= 16 && matches!(position.row, 1 | 2) {
             14.0
         } else {
             0.0
         };
-        let y = origin.y + row as f32 * (cell_h + gap) + right_nav_extra_gap;
-        let width = span as f32 * cell_w + span.saturating_sub(1) as f32 * gap;
-        let rect = egui::Rect::from_min_size(egui::pos2(x, y), Vec2::new(width, cell_h));
+        let y =
+            origin.y + position.row as f32 * (metrics.cell_h + metrics.gap) + right_nav_extra_gap;
+        let width = position.span as f32 * metrics.cell_w
+            + position.span.saturating_sub(1) as f32 * metrics.gap;
+        let rect = egui::Rect::from_min_size(egui::pos2(x, y), Vec2::new(width, metrics.cell_h));
         let resp = picker_keycap_button_in_rect(ui, rect, label, true, false);
         if resp.clicked() {
             self.assign_keycode_value(value);
@@ -305,12 +317,16 @@ impl KeycodePicker {
             self.basic_key_button_at(
                 ui,
                 origin,
-                cell_w,
-                cell_h,
-                gap,
-                key.row,
-                key.col,
-                key.span,
+                QwertyPickerGridMetrics {
+                    cell_w,
+                    cell_h,
+                    gap,
+                },
+                QwertyPickerGridPosition {
+                    row: key.row,
+                    col: key.col,
+                    span: key.span,
+                },
                 &display_label,
                 assigned_value,
             );

@@ -4,7 +4,7 @@ use crate::keycode::{
     gui_label, gui_mod_name, key_label_font_sizes, keycode_label_with_names_and_layout,
     keycode_tooltip, modifier_label_from_bits, KeyLegendLayout, KeycodeCategory, KEYCODES,
 };
-use crate::popup_state::{PopupKey, PopupState};
+use crate::popup_state::{PopupState, PopupWindow};
 use egui::{Color32, Key, RichText, Vec2};
 
 #[path = "keycode_picker_keyboard.rs"]
@@ -253,9 +253,11 @@ mod tests {
     #[test]
     fn pending_modifier_picker_renders_layout_and_list_tabs() {
         let ctx = egui::Context::default();
-        let mut picker = KeycodePicker::default();
-        picker.open = true;
-        picker.vial_quantum_pending_mod = Some(0x0100);
+        let mut picker = KeycodePicker {
+            open: true,
+            vial_quantum_pending_mod: Some(0x0100),
+            ..Default::default()
+        };
 
         let mut render = || {
             let mut input = egui::RawInput::default();
@@ -885,18 +887,17 @@ impl KeycodePicker {
             self.vial_quantum_pending_mod.is_some() || self.vial_quantum_pending_mt.is_some();
         let td_key_pick_open = self.td_key_pick.is_some() || self.td_mod_key_pick.is_some();
 
+        self.popup_state.begin_frame(PopupWindow::Picker, self.open);
         self.popup_state
-            .begin_frame(PopupKey::PickerWindow, self.open);
+            .begin_frame(PopupWindow::MacroKeyPick, macro_key_pick_open);
         self.popup_state
-            .begin_frame(PopupKey::MacroKeyPickWindow, macro_key_pick_open);
+            .begin_frame(PopupWindow::RegularKeyPick, regular_key_pick_open);
         self.popup_state
-            .begin_frame(PopupKey::RegularKeyPickWindow, regular_key_pick_open);
+            .begin_frame(PopupWindow::PickLayer, layer_pick_open);
         self.popup_state
-            .begin_frame(PopupKey::PickLayerWindow, layer_pick_open);
+            .begin_frame(PopupWindow::PendingKeyPick, pending_key_pick_open);
         self.popup_state
-            .begin_frame(PopupKey::PendingKeyPickWindow, pending_key_pick_open);
-        self.popup_state
-            .begin_frame(PopupKey::TdKeyPickWindow, td_key_pick_open);
+            .begin_frame(PopupWindow::TdKeyPick, td_key_pick_open);
 
         if !self.open {
             return;
@@ -923,7 +924,7 @@ impl KeycodePicker {
             crate::ui_style::centered_modal_window(
                 ctx,
                 tr_picker(self.language, "key_picker.pick_key_title"),
-                self.popup_state.id(PopupKey::MacroKeyPickWindow),
+                self.popup_state.id(PopupWindow::MacroKeyPick),
                 &mut pick_open,
                 popup_size,
             )
@@ -1127,7 +1128,7 @@ impl KeycodePicker {
         crate::ui_style::centered_modal_window(
             ctx,
             tr_picker(self.language, "key_picker.title"),
-            self.popup_state.id(PopupKey::PickerWindow),
+            self.popup_state.id(PopupWindow::Picker),
             &mut still_open,
             picker_size,
         )
@@ -1288,7 +1289,7 @@ impl KeycodePicker {
         crate::ui_style::centered_modal_window(
             ctx,
             window_title.as_str(),
-            self.popup_state.id(PopupKey::RegularKeyPickWindow),
+            self.popup_state.id(PopupWindow::RegularKeyPick),
             &mut still_open,
             popup_size,
         )
@@ -1474,7 +1475,7 @@ impl KeycodePicker {
             let _resp_win = crate::ui_style::centered_modal_window(
                 ctx,
                 tr_picker(self.language, "key_picker.pick_layer_title"),
-                self.popup_state.id(PopupKey::PickLayerWindow),
+                self.popup_state.id(PopupWindow::PickLayer),
                 &mut still_open,
                 Vec2::new(300.0, 120.0),
             )
@@ -1578,7 +1579,7 @@ impl KeycodePicker {
             let _resp_win = crate::ui_style::centered_modal_window(
                 ctx,
                 title,
-                self.popup_state.id(PopupKey::PendingKeyPickWindow),
+                self.popup_state.id(PopupWindow::PendingKeyPick),
                 &mut still_open,
                 popup_size,
             )

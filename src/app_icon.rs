@@ -55,14 +55,12 @@ fn draw_capsule(
     pixel: &mut [f32; 4],
     x: f32,
     y: f32,
-    ax: f32,
-    ay: f32,
-    bx: f32,
-    by: f32,
+    start: (f32, f32),
+    end: (f32, f32),
     radius: f32,
     color: [f32; 4],
 ) {
-    let distance = sd_capsule(x, y, ax, ay, bx, by, radius);
+    let distance = sd_capsule(x, y, start.0, start.1, end.0, end.1, radius);
     let alpha = smooth_alpha(distance, 0.020) * color[3];
     if alpha > 0.0 {
         blend(pixel, [color[0], color[1], color[2], alpha]);
@@ -108,17 +106,15 @@ fn draw_letter_e(pixel: &mut [f32; 4], x: f32, y: f32) {
             pixel,
             x,
             y,
-            ax + 0.030,
-            ay + 0.030,
-            bx + 0.030,
-            by + 0.030,
+            (ax + 0.030, ay + 0.030),
+            (bx + 0.030, by + 0.030),
             radius,
             shadow,
         );
     }
 
     for (ax, ay, bx, by, radius) in strokes {
-        draw_capsule(pixel, x, y, ax, ay, bx, by, radius, cream);
+        draw_capsule(pixel, x, y, (ax, ay), (bx, by), radius, cream);
     }
 }
 

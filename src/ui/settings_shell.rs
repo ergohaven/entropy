@@ -230,11 +230,6 @@ impl EntropyApp {
         self.main_menu_tab = MainMenuTab::Settings;
     }
 
-    pub(super) fn open_grave_escape_settings_page(&mut self) {
-        self.settings_tab = SettingsTab::GraveEscape;
-        self.main_menu_tab = MainMenuTab::Settings;
-    }
-
     pub(super) fn can_return_from_settings_page(
         &self,
         ctx: &egui::Context,
