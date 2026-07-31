@@ -5,102 +5,32 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
-## v0.3.17
+## v0.3.1 - Public Beta
 
-### Features
+### Main Features
 
-- Added Launch minimized after Launch at startup and forwarded it through Windows, Linux, and macOS autostart registration
-
-### Fixes
-
-- Restored right-click editing, modifier-side switching, hover tooltips, and layout hints for lossless RMK Mod-Tap actions with shifted tap symbols
-
-## v0.3.16
-
-### Fixes
-
-- Derived firmware-managed layout geometry from the trackball availability setting, removing the duplicate Velvet control from Display Presets
-
-## v0.3.15
-
-### Features
-
-- Renamed dedicated trackball firmware settings pages and added localized controls for trackball availability and auto-layer timeout
-
-## v0.3.14
-
-### Fixes
-
-- Retried incomplete split-battery reads promptly until both halves are available instead of keeping a single level for five minutes
-
-## v0.3.13
-
-### Features
-
+- Added a dedicated Trackball Settings page with localized controls for trackball availability and auto-layer timeout
 - Added lossless RMK key-action loading and writing so nested shifted Mod-Tap actions remain visible, editable, undoable, mirrorable, and portable through `.entlayout` files
 - Exposed shifted HID symbols in the Mod+Key, Mod-Tap, and Tap Dance key pickers whenever the target firmware can represent them
-
-## v0.3.10
-
-### Fixes
-
-- Routed Linux Bluetooth Vial requests through the kernel HID output path while receiving replies through BlueZ GATT, because BlueZ intentionally blocks D-Bus writes to its claimed HID service
-
-## v0.3.9
-
-### Fixes
-
-- Discovered Vial inside RMK's current single Bluetooth HID service through its HID Report Map and Report Reference metadata instead of falling back to the non-responsive Linux hidraw endpoint
-
-## v0.3.8
-
-### Fixes
-
-- Negotiated the reliable BlueZ GATT write mode during Linux Bluetooth Vial connections instead of retrying forever when Write Without Response was silently dropped
-
-## v0.3.7
-
-### Fixes
-
-- Preserved K:04 identity when a fresh Linux Bluetooth connection switches from kernel HID to a BlueZ GATT endpoint with a different transport product id
-- Made Choose device leave Bluetooth reconnect and wait for an explicit device choice instead of immediately reconnecting the only detected keyboard
-
-## v0.3.6
-
-### Fixes
-
-- Preloaded K:04 module selectors so installed encoders render as round controls on the first layout view
-
-## v0.3.5
-
-### Fixes
-
-- Kept Bluetooth Settings stable while the shared Bluetooth HID session finishes background device loading
-
-## v0.3.4
-
-### Features
-
+- Added Launch minimized after Launch at startup for Windows, Linux, and macOS
 - Added Ctrl+GUI to Mod+Key choices for both Vial-RMK and Vial-QMK keyboards, including compact secondary and Tap Dance pickers
 
-## v0.3.3
-
 ### Fixes
 
-- Restored separate List and Layout views in the Mod+Key and Mod-Tap secondary pickers instead of rendering both views together
-
-## v0.3.2
-
-### Fixes
-
+- Stabilized Linux Bluetooth Vial after fresh pairing and reconnects, including composite HOGP discovery, reliable BlueZ writes, kernel HID output routing, GATT replies, vendor-service selection, and keyboard identity preservation
+- Made Choose device wait for an explicit selection instead of immediately reconnecting the only detected Bluetooth keyboard
+- Retried incomplete split-battery reads promptly until both halves are available instead of keeping a single level for five minutes
+- Derived firmware-managed layout geometry from the trackball availability setting and removed the duplicate Velvet control from Display Presets
+- Restored right-click editing, modifier-side switching, hover tooltips, and layout hints for lossless RMK Mod-Tap actions with shifted tap symbols
+- Restored separate List and Layout views in the Mod+Key and Mod-Tap secondary pickers
+- Kept Bluetooth Settings stable while the shared Bluetooth HID session finishes background device loading
+- Preloaded K:04 module selectors so installed encoders render as round controls on the first layout view
 - Removed the redundant USB suffix from K:04 Qube device names while keeping Standalone USB and Bluetooth connections labeled
+- Fixed the About Device manufacturer fallback when firmware metadata is incomplete
 
-## v0.3.1
+### Contributors
 
-### Fixes
-
-- Recovered initial Linux Bluetooth connections after fresh pairing while BlueZ resolves the Vial GATT service
-- Preserved the keyboard identity when discovery switches from the temporary kernel HID path to direct BlueZ GATT
+- Special thanks to @IgorArkhipov for the Clippy cleanup and encoder-visibility refactoring in #113, #114, and #116-#120
 
 ## v0.3.0 - Public Beta
 
