@@ -411,10 +411,22 @@ impl KeycodePicker {
                 "Ctrl+Alt".into(),
             ),
             (
+                picker_mod_tap_label(0x2900),
+                0x2900,
+                None,
+                format!("Ctrl+{lgui}"),
+            ),
+            (
                 picker_mod_tap_label(0x2600),
                 0x2600,
                 None,
                 "Shift+Alt (LSA)".into(),
+            ),
+            (
+                picker_mod_tap_label(0x2A00),
+                0x2A00,
+                None,
+                format!("Shift+{lgui}"),
             ),
             (
                 picker_mod_tap_label(0x2700),
@@ -506,6 +518,16 @@ mod tests {
         assert_eq!(shift_gui.right_value, Some(0x52BA));
         assert_eq!(shift_gui.label, "OSM\nS+GUI");
         assert_eq!(shift_gui.mod_name, "Shift+GUI");
+    }
+
+    #[test]
+    fn mod_tap_choices_include_gui_chords() {
+        for (base, modifier) in [(0x2900, "Ctrl"), (0x2A00, "Shift")] {
+            assert_eq!(
+                picker_mod_tap_label(base),
+                format!("Hold {modifier}+{}/key", crate::keycode::gui_sym())
+            );
+        }
     }
 
     #[test]
