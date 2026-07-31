@@ -158,15 +158,17 @@ impl EntropyApp {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 crate::ui_style::settings_list_row_with_tooltip(
                     ui,
-                    row_content_width,
-                    row_height,
+                    crate::ui_style::SettingsListRowLayout::new(
+                        row_content_width,
+                        row_height,
+                        control_width,
+                    ),
                     crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.entry"),
                     true,
                     Some(crate::i18n::tr_catalog(
                         self.app_settings.language,
                         "combo_editor.select_combo_slot",
                     )),
-                    control_width,
                     |ui| {
                         let dropdown_id = ui.make_persistent_id("combo_entry_dropdown");
                         let dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
@@ -268,15 +270,17 @@ impl EntropyApp {
                 let mut combo_name_changed = false;
                 crate::ui_style::settings_list_row_with_tooltip(
                     ui,
-                    row_content_width,
-                    row_height,
+                    crate::ui_style::SettingsListRowLayout::new(
+                        row_content_width,
+                        row_height,
+                        control_width,
+                    ),
                     crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.name"),
                     true,
                     Some(crate::i18n::tr_catalog(
                         self.app_settings.language,
                         "combo_editor.local_name_for_this_combo_slot",
                     )),
-                    control_width,
                     |ui| {
                         if let Some(name) = self.combo_names.get_mut(combo_idx) {
                             let resp = crate::ui_style::modern_text_field_sized(
@@ -315,15 +319,17 @@ impl EntropyApp {
                 let color_swatch_size = metrics.size(64.0, 34.0);
                 crate::ui_style::settings_list_row_with_tooltip(
                     ui,
-                    row_content_width,
-                    row_height,
+                    crate::ui_style::SettingsListRowLayout::new(
+                        row_content_width,
+                        row_height,
+                        color_swatch_width,
+                    ),
                     crate::i18n::tr_catalog(self.app_settings.language, "common.color"),
                     true,
                     Some(crate::i18n::tr_catalog(
                         self.app_settings.language,
                         "combo_editor.local_color_for_combo_slot",
                     )),
-                    color_swatch_width,
                     |ui| {
                         let popup_id = ui.make_persistent_id(("combo_color_picker", combo_idx));
                         let popup_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
@@ -461,15 +467,17 @@ impl EntropyApp {
 
                 crate::ui_style::settings_list_row_with_tooltip(
                     ui,
-                    row_content_width,
-                    input_keys_row_height,
+                    crate::ui_style::SettingsListRowLayout::new(
+                        row_content_width,
+                        input_keys_row_height,
+                        input_keys_control_width,
+                    ),
                     crate::i18n::tr_catalog(self.app_settings.language, "combo_editor.input_keys"),
                     true,
                     Some(crate::i18n::tr_catalog(
                         self.app_settings.language,
                         "combo_editor.keys_that_must_be_pressed_together",
                     )),
-                    input_keys_control_width,
                     |ui| {
                         ui.spacing_mut().item_spacing.x = 4.0 * scale;
                         for key_idx in 0..4 {
@@ -517,15 +525,17 @@ impl EntropyApp {
 
                 crate::ui_style::settings_list_row_with_tooltip(
                     ui,
-                    row_content_width,
-                    input_keys_row_height,
+                    crate::ui_style::SettingsListRowLayout::new(
+                        row_content_width,
+                        input_keys_row_height,
+                        input_key_size.x,
+                    ),
                     crate::i18n::tr_catalog(self.app_settings.language, "combo_editor.output_key"),
                     true,
                     Some(crate::i18n::tr_catalog(
                         self.app_settings.language,
                         "combo_editor.keycode_sent_when_the_combo_activates",
                     )),
-                    input_key_size.x,
                     |ui| {
                         let value = self.combo_entries[combo_idx].output;
                         let button_label = if value == 0 {
@@ -568,15 +578,17 @@ impl EntropyApp {
                 if let Some(current_combo_term) = self.combo_term {
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        row_content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            row_content_width,
+                            row_height,
+                            timeout_control_width,
+                        ),
                         crate::i18n::tr_catalog(self.app_settings.language, "common.timeout"),
                         true,
                         Some(crate::i18n::tr_catalog(
                             self.app_settings.language,
                             "combo_editor.maximum_time_between_combo_key_presses",
                         )),
-                        timeout_control_width,
                         |ui| {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),

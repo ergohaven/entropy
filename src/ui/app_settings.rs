@@ -129,12 +129,14 @@ impl EntropyApp {
                     let mut selected_language = self.app_settings.language;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            metrics.settings_control_width(),
+                        ),
                         crate::i18n::tr(lang, TrKey::LanguageLabel),
                         true,
                         tooltip(crate::i18n::tr(lang, TrKey::LanguageTooltip)),
-                        metrics.settings_control_width(),
                         |ui| {
                             let dropdown_id = ui.make_persistent_id("app_language_dropdown");
                             let dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
@@ -208,12 +210,14 @@ impl EntropyApp {
                     let mut selected_key_legend_layout = self.app_settings.key_legend_layout;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            metrics.settings_control_width(),
+                        ),
                         crate::i18n::tr_catalog(lang, "ui.key_legends_label"),
                         true,
                         tooltip(crate::i18n::tr_catalog(lang, "ui.key_legends_tooltip")),
-                        metrics.settings_control_width(),
                         |ui| {
                             let dropdown_id = ui.make_persistent_id("app_key_legends_dropdown");
                             let dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
@@ -309,12 +313,14 @@ impl EntropyApp {
                     );
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            switch_width,
+                        ),
                         close_behavior_label,
                         true,
                         tooltip(close_behavior_tooltip),
-                        switch_width,
                         |ui| {
                             let _ = crate::ui_style::settings_switch_sized_stable(
                                 ui,
@@ -344,12 +350,14 @@ impl EntropyApp {
                     let mut launch_at_startup = self.app_settings.launch_at_startup;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            switch_width,
+                        ),
                         crate::i18n::tr(lang, TrKey::LaunchAtStartupLabel),
                         true,
                         tooltip(crate::i18n::tr(lang, TrKey::LaunchAtStartupTooltip)),
-                        switch_width,
                         |ui| {
                             let _ = crate::ui_style::settings_switch_sized_stable(
                                 ui,
@@ -372,12 +380,14 @@ impl EntropyApp {
                     let mut show_shifted_symbols = self.app_settings.show_shifted_number_symbols;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            switch_width,
+                        ),
                         crate::i18n::tr(lang, TrKey::ShiftedNumberSymbolsLabel),
                         true,
                         tooltip(crate::i18n::tr(lang, TrKey::ShiftedNumberSymbolsTooltip)),
-                        switch_width,
                         |ui| {
                             let _ = crate::ui_style::settings_switch_sized_stable(
                                 ui,
@@ -396,12 +406,14 @@ impl EntropyApp {
                     let mut layer_hover_preview = self.app_settings.layer_hover_preview;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            switch_width,
+                        ),
                         crate::i18n::tr(lang, TrKey::LayerHoverPreviewLabel),
                         true,
                         tooltip(crate::i18n::tr(lang, TrKey::LayerHoverPreviewTooltip)),
-                        switch_width,
                         |ui| {
                             let _ = crate::ui_style::settings_switch_sized_stable(
                                 ui,
@@ -423,12 +435,14 @@ impl EntropyApp {
                     let mut encoder_hover_enlarge = self.app_settings.encoder_hover_enlarge;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            switch_width,
+                        ),
                         crate::i18n::tr(lang, TrKey::EncoderHoverZoomLabel),
                         true,
                         tooltip(crate::i18n::tr(lang, TrKey::EncoderHoverZoomTooltip)),
-                        switch_width,
                         |ui| {
                             let _ = crate::ui_style::settings_switch_sized_stable(
                                 ui,
@@ -447,12 +461,14 @@ impl EntropyApp {
                     let mut selected_accent = self.app_settings.accent_color;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            metrics.value(218.0),
+                        ),
                         crate::i18n::tr(lang, TrKey::AccentColorLabel),
                         true,
                         tooltip(crate::i18n::tr(lang, TrKey::AccentColorTooltip)),
-                        metrics.value(218.0),
                         |ui| {
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 7.0;
@@ -499,15 +515,17 @@ impl EntropyApp {
                 8 => {
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            metrics.settings_control_width(),
+                        ),
                         crate::i18n::tr_catalog(lang, "onboarding_tour.settings_row_label"),
                         true,
                         tooltip(crate::i18n::tr_catalog(
                             lang,
                             "onboarding_tour.settings_row_tooltip",
                         )),
-                        metrics.settings_control_width(),
                         |ui| {
                             if crate::ui_style::modern_button(
                                 ui,
@@ -532,12 +550,14 @@ impl EntropyApp {
                     );
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            switch_width,
+                        ),
                         crate::i18n::tr_catalog(lang, "ui.diagnostics_mode_label"),
                         true,
                         (!suppress_tooltips).then_some(diagnostics_tooltip.as_str()),
-                        switch_width,
                         |ui| {
                             let _ = crate::ui_style::settings_switch_sized_stable(
                                 ui,
@@ -562,15 +582,17 @@ impl EntropyApp {
                     let mut show_signature = self.app_settings.show_made_by_signature;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            switch_width,
+                        ),
                         crate::i18n::tr_catalog(lang, "ui.show_made_by_signature_label"),
                         true,
                         tooltip(crate::i18n::tr_catalog(
                             lang,
                             "ui.show_made_by_signature_tooltip",
                         )),
-                        switch_width,
                         |ui| {
                             let _ = crate::ui_style::settings_switch_sized_stable(
                                 ui,
@@ -606,12 +628,14 @@ impl EntropyApp {
 
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
-            content_width,
-            row_height,
+            crate::ui_style::SettingsListRowLayout::new(
+                content_width,
+                row_height,
+                metrics.settings_control_width(),
+            ),
             crate::i18n::tr_catalog(lang, "ui.vial_udev_rules_label"),
             true,
             tooltip,
-            metrics.settings_control_width(),
             |ui| {
                 if linux_vial_udev_rules_installed() {
                     draw_app_settings_value(

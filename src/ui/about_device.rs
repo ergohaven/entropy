@@ -536,12 +536,14 @@ fn draw_about_rows(
         for row in &rows[list.first_visible_row..list.last_visible_row] {
             crate::ui_style::settings_list_row_with_tooltip(
                 ui,
-                list.row_content_width,
-                list.row_height,
+                crate::ui_style::SettingsListRowLayout::new(
+                    list.row_content_width,
+                    list.row_height,
+                    control_width,
+                ),
                 row.label,
                 true,
                 tooltip_enabled.then_some(row.tooltip),
-                control_width,
                 |ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let mut text = RichText::new(row.value.as_str())

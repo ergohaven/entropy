@@ -333,12 +333,10 @@ impl EntropyApp {
             let mut checked = (*mask & bit) != 0;
             crate::ui_style::settings_list_row_with_tooltip(
                 ui,
-                popup_width,
-                row_height,
+                crate::ui_style::SettingsListRowLayout::new(popup_width, row_height, switch_width),
                 label.as_str(),
                 true,
                 None,
-                switch_width,
                 |ui| {
                     let resp =
                         crate::ui_style::settings_switch_sized(ui, &mut checked, switch_size);
@@ -495,12 +493,14 @@ impl EntropyApp {
                                         0 => {
                                             crate::ui_style::settings_list_row_with_tooltip(
                                                 ui,
-                                                row_content_width,
-                                                row_height,
+                                                crate::ui_style::SettingsListRowLayout::new(
+                                                    row_content_width,
+                                                    row_height,
+                                                    control_width,
+                                                ),
                                                 crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.entry"),
                                                 true,
                                                 Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.select_key_override_slot")),
-                                                control_width,
                                                 |ui| {
                                                     let dropdown_id = ui.make_persistent_id("key_override_entry_dropdown");
                                                     let dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
@@ -583,12 +583,14 @@ impl EntropyApp {
                                             let mut name_changed = false;
                                             crate::ui_style::settings_list_row_with_tooltip(
                                                 ui,
-                                                row_content_width,
-                                                row_height,
+                                                crate::ui_style::SettingsListRowLayout::new(
+                                                    row_content_width,
+                                                    row_height,
+                                                    control_width,
+                                                ),
                                                 crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.name"),
                                                 true,
                                                 Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.local_name_for_this_key_override_slot")),
-                                                control_width,
                                                 |ui| {
                                                     if let Some(name) = self.key_override_names.get_mut(idx) {
                                                         let resp = crate::ui_style::modern_text_field_sized(
@@ -613,12 +615,14 @@ impl EntropyApp {
                                         2 => {
                                             crate::ui_style::settings_list_row_with_tooltip(
                                                 ui,
-                                                row_content_width,
-                                                row_height,
+                                                crate::ui_style::SettingsListRowLayout::new(
+                                                    row_content_width,
+                                                    row_height,
+                                                    control_width,
+                                                ),
                                                 crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.trigger"),
                                                 true,
                                                 Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.original_key_that_can_be_overridden")),
-                                                control_width,
                                                 |ui| {
                                                     let resp = crate::ui_style::modern_button_with_font(ui, trigger_label.as_str(), Vec2::new(control_width, control_height), control_font_size, true);
                                                     if resp.clicked() {
@@ -631,12 +635,14 @@ impl EntropyApp {
                                         3 => {
                                             crate::ui_style::settings_list_row_with_tooltip(
                                                 ui,
-                                                row_content_width,
-                                                row_height,
+                                                crate::ui_style::SettingsListRowLayout::new(
+                                                    row_content_width,
+                                                    row_height,
+                                                    control_width,
+                                                ),
                                                 crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.replacement"),
                                                 true,
                                                 Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.keycode_sent_while_override_conditions_match")),
-                                                control_width,
                                                 |ui| {
                                                     let resp = crate::ui_style::modern_button_with_font(ui, replacement_label.as_str(), Vec2::new(control_width, control_height), control_font_size, true);
                                                     if resp.clicked() {
@@ -649,12 +655,14 @@ impl EntropyApp {
                                         4 => {
                                             crate::ui_style::settings_list_row_with_tooltip(
                                                 ui,
-                                                row_content_width,
-                                                row_height,
+                                                crate::ui_style::SettingsListRowLayout::new(
+                                                    row_content_width,
+                                                    row_height,
+                                                    control_width,
+                                                ),
                                                 crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.suppressed_mods"),
                                                 true,
                                                 Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.modifiers_hidden_while_the_replacement_is_active")),
-                                                control_width,
                                                 |ui| {
                                                     let popup_id = ui.make_persistent_id(("ko_suppressed_mods_popup", idx));
                                                     let summary = Self::key_override_mod_mask_summary(self.app_settings.language, edited.suppressed_mods);
@@ -671,12 +679,14 @@ impl EntropyApp {
                                         5 => {
                                             crate::ui_style::settings_list_row_with_tooltip(
                                                 ui,
-                                                row_content_width,
-                                                row_height,
+                                                crate::ui_style::SettingsListRowLayout::new(
+                                                    row_content_width,
+                                                    row_height,
+                                                    control_width,
+                                                ),
                                                 crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.trigger_mods"),
                                                 true,
                                                 Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.modifiers_required_for_this_override")),
-                                                control_width,
                                                 |ui| {
                                                     let popup_id = ui.make_persistent_id(("ko_trigger_mods_popup", idx));
                                                     let summary = Self::key_override_mod_mask_summary(self.app_settings.language, edited.trigger_mods);
@@ -693,12 +703,14 @@ impl EntropyApp {
                                         6 => {
                                             crate::ui_style::settings_list_row_with_tooltip(
                                                 ui,
-                                                row_content_width,
-                                                row_height,
+                                                crate::ui_style::SettingsListRowLayout::new(
+                                                    row_content_width,
+                                                    row_height,
+                                                    control_width,
+                                                ),
                                                 crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.negative_mods"),
                                                 true,
                                                 Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.modifiers_that_block_this_override")),
-                                                control_width,
                                                 |ui| {
                                                     let popup_id = ui.make_persistent_id(("ko_negative_mods_popup", idx));
                                                     let summary = Self::key_override_mod_mask_summary(self.app_settings.language, edited.negative_mod_mask);
@@ -715,12 +727,14 @@ impl EntropyApp {
                                         7 => {
                                             crate::ui_style::settings_list_row_with_tooltip(
                                                 ui,
-                                                row_content_width,
-                                                row_height,
+                                                crate::ui_style::SettingsListRowLayout::new(
+                                                    row_content_width,
+                                                    row_height,
+                                                    control_width,
+                                                ),
                                                 crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.enable_on_layers"),
                                                 true,
                                                 Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.layers_where_this_override_can_activate")),
-                                                control_width,
                                                 |ui| {
                                                     let popup_id = ui.make_persistent_id(("ko_layers_popup", idx));
                                                     let summary = Self::key_override_layers_summary(self.app_settings.language, edited.layers);
@@ -734,12 +748,78 @@ impl EntropyApp {
                                                 },
                                             );
                                         }
-                                        8 => crate::ui_style::settings_list_row_with_tooltip(ui, row_content_width, row_height, crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.trigger_press"), true, Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.activate_when_the_trigger_key_is_pressed")), switch_width, |ui| { crate::ui_style::settings_switch_sized_stable(ui, ("key_override_settings", "trigger_press"), &mut edited.options.activation_trigger_down, switch_size); }),
-                                        9 => crate::ui_style::settings_list_row_with_tooltip(ui, row_content_width, row_height, crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.required_mod_press"), true, Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.activate_when_a_required_modifier_is_pressed")), switch_width, |ui| { crate::ui_style::settings_switch_sized_stable(ui, ("key_override_settings", "required_mod_press"), &mut edited.options.activation_required_mod_down, switch_size); }),
-                                        10 => crate::ui_style::settings_list_row_with_tooltip(ui, row_content_width, row_height, crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.blocked_mod_release"), true, Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.activate_when_a_blocking_modifier_is_released")), switch_width, |ui| { crate::ui_style::settings_switch_sized_stable(ui, ("key_override_settings", "blocked_mod_release"), &mut edited.options.activation_negative_mod_up, switch_size); }),
-                                        11 => crate::ui_style::settings_list_row_with_tooltip(ui, row_content_width, row_height, crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.any_one_mod"), true, Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.any_one_trigger_modifier_is_enough")), switch_width, |ui| { crate::ui_style::settings_switch_sized_stable(ui, ("key_override_settings", "any_one_mod"), &mut edited.options.one_mod, switch_size); }),
-                                        12 => crate::ui_style::settings_list_row_with_tooltip(ui, row_content_width, row_height, crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.no_re_send"), true, Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.do_not_resend_the_trigger_after_override_ends")), switch_width, |ui| { crate::ui_style::settings_switch_sized_stable(ui, ("key_override_settings", "no_re_send"), &mut edited.options.no_reregister_trigger, switch_size); }),
-                                        13 => crate::ui_style::settings_list_row_with_tooltip(ui, row_content_width, row_height, crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.stay_active"), true, Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.stay_active_when_another_key_is_pressed")), switch_width, |ui| { crate::ui_style::settings_switch_sized_stable(ui, ("key_override_settings", "stay_active"), &mut edited.options.no_unregister_on_other_key_down, switch_size); }),
+                                        8 => crate::ui_style::settings_list_row_with_tooltip(
+                                            ui,
+                                            crate::ui_style::SettingsListRowLayout::new(
+                                                row_content_width,
+                                                row_height,
+                                                switch_width,
+                                            ),
+                                            crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.trigger_press"),
+                                            true,
+                                            Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.activate_when_the_trigger_key_is_pressed")),
+                                            |ui| { crate::ui_style::settings_switch_sized_stable(ui, ("key_override_settings", "trigger_press"), &mut edited.options.activation_trigger_down, switch_size); },
+                                        ),
+                                        9 => crate::ui_style::settings_list_row_with_tooltip(
+                                            ui,
+                                            crate::ui_style::SettingsListRowLayout::new(
+                                                row_content_width,
+                                                row_height,
+                                                switch_width,
+                                            ),
+                                            crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.required_mod_press"),
+                                            true,
+                                            Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.activate_when_a_required_modifier_is_pressed")),
+                                            |ui| { crate::ui_style::settings_switch_sized_stable(ui, ("key_override_settings", "required_mod_press"), &mut edited.options.activation_required_mod_down, switch_size); },
+                                        ),
+                                        10 => crate::ui_style::settings_list_row_with_tooltip(
+                                            ui,
+                                            crate::ui_style::SettingsListRowLayout::new(
+                                                row_content_width,
+                                                row_height,
+                                                switch_width,
+                                            ),
+                                            crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.blocked_mod_release"),
+                                            true,
+                                            Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.activate_when_a_blocking_modifier_is_released")),
+                                            |ui| { crate::ui_style::settings_switch_sized_stable(ui, ("key_override_settings", "blocked_mod_release"), &mut edited.options.activation_negative_mod_up, switch_size); },
+                                        ),
+                                        11 => crate::ui_style::settings_list_row_with_tooltip(
+                                            ui,
+                                            crate::ui_style::SettingsListRowLayout::new(
+                                                row_content_width,
+                                                row_height,
+                                                switch_width,
+                                            ),
+                                            crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.any_one_mod"),
+                                            true,
+                                            Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.any_one_trigger_modifier_is_enough")),
+                                            |ui| { crate::ui_style::settings_switch_sized_stable(ui, ("key_override_settings", "any_one_mod"), &mut edited.options.one_mod, switch_size); },
+                                        ),
+                                        12 => crate::ui_style::settings_list_row_with_tooltip(
+                                            ui,
+                                            crate::ui_style::SettingsListRowLayout::new(
+                                                row_content_width,
+                                                row_height,
+                                                switch_width,
+                                            ),
+                                            crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.no_re_send"),
+                                            true,
+                                            Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.do_not_resend_the_trigger_after_override_ends")),
+                                            |ui| { crate::ui_style::settings_switch_sized_stable(ui, ("key_override_settings", "no_re_send"), &mut edited.options.no_reregister_trigger, switch_size); },
+                                        ),
+                                        13 => crate::ui_style::settings_list_row_with_tooltip(
+                                            ui,
+                                            crate::ui_style::SettingsListRowLayout::new(
+                                                row_content_width,
+                                                row_height,
+                                                switch_width,
+                                            ),
+                                            crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.stay_active"),
+                                            true,
+                                            Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.stay_active_when_another_key_is_pressed")),
+                                            |ui| { crate::ui_style::settings_switch_sized_stable(ui, ("key_override_settings", "stay_active"), &mut edited.options.no_unregister_on_other_key_down, switch_size); },
+                                        ),
                                         _ => {}
                                     }
                     }

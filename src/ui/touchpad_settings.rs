@@ -189,8 +189,11 @@ impl EntropyApp {
                         (self.touchpad_settings.dpi as usize).min(variants.len().saturating_sub(1));
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            dropdown_width + status_width,
+                        ),
                         label,
                         true,
                         if suppress_tooltips {
@@ -201,7 +204,6 @@ impl EntropyApp {
                                 "touchpad_settings.touchpad_pointer_resolution_in_dots_per_inch",
                             ))
                         },
-                        dropdown_width + status_width,
                         |ui| {
                             self.draw_settings_write_status(ui, 120, metrics, suppress_tooltips);
                             if variants.is_empty() {
@@ -320,8 +322,11 @@ impl EntropyApp {
                     let mut value = current as f32;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            slider_control_width + status_width,
+                        ),
                         label,
                         true,
                         if suppress_tooltips {
@@ -329,7 +334,6 @@ impl EntropyApp {
                         } else {
                             Some(tooltip)
                         },
-                        slider_control_width + status_width,
                         |ui| {
                             self.draw_settings_write_status(ui, qsid, metrics, suppress_tooltips);
                             ui.spacing_mut().item_spacing.x = 0.0;
@@ -405,8 +409,11 @@ impl EntropyApp {
                     };
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            switch_width + status_width,
+                        ),
                         label,
                         true,
                         if suppress_tooltips {
@@ -414,7 +421,6 @@ impl EntropyApp {
                         } else {
                             Some(tooltip)
                         },
-                        switch_width + status_width,
                         |ui| {
                             self.draw_settings_write_status(ui, 124, metrics, suppress_tooltips);
                             let old_bits = self.touchpad_settings.bits;
@@ -439,8 +445,11 @@ impl EntropyApp {
                     );
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            switch_width + status_width,
+                        ),
                         label,
                         true,
                         if suppress_tooltips {
@@ -448,7 +457,6 @@ impl EntropyApp {
                         } else {
                             Some(crate::i18n::tr_catalog(self.app_settings.language, "touchpad_settings.automatically_switch_to_the_selected_layer_while_the_touchpad_is_activ"))
                         },
-                        switch_width + status_width,
                         |ui| {
                             self.draw_settings_write_status(ui, 142, metrics, suppress_tooltips);
                             let mut value = self.touchpad_settings.auto_layer_enable;
@@ -476,8 +484,11 @@ impl EntropyApp {
                         .min(variants.len().saturating_sub(1));
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            dropdown_width + status_width,
+                        ),
                         label,
                         true,
                         if suppress_tooltips {
@@ -488,7 +499,6 @@ impl EntropyApp {
                                 "touchpad_settings.layer_selected_automatically_while_the_touchpad_is_active",
                             ))
                         },
-                        dropdown_width + status_width,
                         |ui| {
                             self.draw_settings_write_status(ui, 143, metrics, suppress_tooltips);
                             let dropdown_id = ui.make_persistent_id("touchpad_auto_layer_dropdown");

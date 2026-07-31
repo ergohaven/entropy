@@ -147,8 +147,11 @@ impl EntropyApp {
                         .clamp(0.0, 100.0);
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            slider_control_width,
+                        ),
                         crate::i18n::tr_catalog(
                             self.app_settings.language,
                             "advanced_settings.led_brightness",
@@ -162,7 +165,6 @@ impl EntropyApp {
                                 "advanced_settings.global_led_brightness_for_layer_color_lighting",
                             ))
                         },
-                        slider_control_width,
                         |ui| {
                             let value_text = format!("{}%", value.round() as u8);
                             if self.draw_layer_led_slider_control(
@@ -219,8 +221,11 @@ impl EntropyApp {
                     };
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            slider_control_width,
+                        ),
                         crate::i18n::tr_catalog(
                             self.app_settings.language,
                             "advanced_settings.led_timeout",
@@ -234,7 +239,6 @@ impl EntropyApp {
                                 tooltip_key,
                             ))
                         },
-                        slider_control_width,
                         |ui| {
                             let value_text = if value.round() as u16 == 0 {
                                 crate::i18n::tr_catalog(
@@ -439,8 +443,7 @@ impl EntropyApp {
             .min((LAYER_LED_PALETTE.len() - 1) as u16) as u8;
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
-            content_width,
-            row_height,
+            crate::ui_style::SettingsListRowLayout::new(content_width, row_height, swatch_width),
             label,
             true,
             if suppress_tooltips {
@@ -448,7 +451,6 @@ impl EntropyApp {
             } else {
                 Some(tooltip)
             },
-            swatch_width,
             |ui| {
                 let dark = ui.visuals().dark_mode;
                 let popup_id = match target {

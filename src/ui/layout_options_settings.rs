@@ -100,15 +100,17 @@ impl EntropyApp {
                             let mut enabled = values.get(row_idx).copied().unwrap_or(0) != 0;
                             crate::ui_style::settings_list_row_with_tooltip(
                                 ui,
-                                row_content_width,
-                                row_height,
+                                crate::ui_style::SettingsListRowLayout::new(
+                                    row_content_width,
+                                    row_height,
+                                    switch_width,
+                                ),
                                 translated_option_label.as_str(),
                                 true,
                                 Some(crate::i18n::tr_catalog(
                                     self.app_settings.language,
                                     "auto_shift_settings.toggle_firmware_layout_display_option",
                                 )),
-                                switch_width,
                                 |ui| {
                                     let resp = crate::ui_style::settings_switch_sized_stable(
                                         ui,
@@ -148,12 +150,14 @@ impl EntropyApp {
                             };
                             crate::ui_style::settings_list_row_with_tooltip(
                                 ui,
-                                row_content_width,
-                                row_height,
+                                crate::ui_style::SettingsListRowLayout::new(
+                                    row_content_width,
+                                    row_height,
+                                    dropdown_width,
+                                ),
                                 translated_label,
                                 true,
                                 Some(&tooltip),
-                                dropdown_width,
                                 |ui| {
                                     let dropdown_id =
                                         ui.make_persistent_id(("layout_option_dropdown", row_idx));

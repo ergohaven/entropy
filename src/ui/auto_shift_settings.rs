@@ -205,12 +205,10 @@ impl EntropyApp {
             };
             crate::ui_style::settings_list_row_with_tooltip(
                 ui,
-                content_width,
-                row_height,
+                crate::ui_style::SettingsListRowLayout::new(content_width, row_height, 46.0),
                 row.0,
                 enabled,
                 tooltip,
-                46.0,
                 |ui| {
                     let resp = crate::ui_style::settings_switch_sized_stable_interactive(
                         ui,
@@ -241,12 +239,10 @@ impl EntropyApp {
             }
             crate::ui_style::settings_list_row_with_tooltip(
                 ui,
-                content_width,
-                row_height,
+                crate::ui_style::SettingsListRowLayout::new(content_width, row_height, field_width),
                 row.0,
                 enabled,
                 tooltip,
-                field_width,
                 |ui| {
                     let edit_id = egui::Id::new("auto_shift_timeout");
                     let resp = crate::ui_style::modern_text_field_interactive(

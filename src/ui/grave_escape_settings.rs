@@ -119,12 +119,14 @@ impl EntropyApp {
                             let mut value = self.grave_escape_settings.bit(bit);
                             crate::ui_style::settings_list_row_with_tooltip(
                                 ui,
-                                row_content_width,
-                                row_height,
+                                crate::ui_style::SettingsListRowLayout::new(
+                                    row_content_width,
+                                    row_height,
+                                    switch_width,
+                                ),
                                 &label,
                                 true,
                                 Some(&tooltip),
-                                switch_width,
                                 |ui| {
                                     let resp = crate::ui_style::settings_switch_sized(
                                         ui,

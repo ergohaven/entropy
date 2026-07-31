@@ -468,8 +468,11 @@ impl EntropyApp {
                     .unwrap_or_else(|| self.tap_hold_bool_value(qsid));
                 crate::ui_style::settings_list_row_with_tooltip(
                     ui,
-                    content_width,
-                    row_height,
+                    crate::ui_style::SettingsListRowLayout::new(
+                        content_width,
+                        row_height,
+                        switch_width,
+                    ),
                     label,
                     true,
                     if suppress_tooltips {
@@ -477,7 +480,6 @@ impl EntropyApp {
                     } else {
                         Some(tooltip)
                     },
-                    switch_width,
                     |ui| {
                         let resp = crate::ui_style::settings_switch_sized_stable(
                             ui,
@@ -498,8 +500,11 @@ impl EntropyApp {
                 let current = self.pending_settings_write_value(qsid).unwrap_or(current);
                 crate::ui_style::settings_list_row_with_tooltip(
                     ui,
-                    content_width,
-                    row_height,
+                    crate::ui_style::SettingsListRowLayout::new(
+                        content_width,
+                        row_height,
+                        field_width,
+                    ),
                     label,
                     true,
                     if suppress_tooltips {
@@ -507,7 +512,6 @@ impl EntropyApp {
                     } else {
                         Some(tooltip)
                     },
-                    field_width,
                     |ui| {
                         let edit_id = egui::Id::new((
                             match kind {

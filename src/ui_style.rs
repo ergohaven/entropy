@@ -962,6 +962,23 @@ pub fn modal_centered_text_block(ui: &mut Ui, width: f32, add_contents: impl FnO
     });
 }
 
+#[derive(Clone, Copy)]
+pub struct SettingsListRowLayout {
+    content_width: f32,
+    row_height: f32,
+    control_width: f32,
+}
+
+impl SettingsListRowLayout {
+    pub const fn new(content_width: f32, row_height: f32, control_width: f32) -> Self {
+        Self {
+            content_width,
+            row_height,
+            control_width,
+        }
+    }
+}
+
 pub fn settings_list_row(
     ui: &mut Ui,
     content_width: f32,
@@ -973,36 +990,34 @@ pub fn settings_list_row(
 ) {
     settings_list_row_with_tooltip(
         ui,
-        content_width,
-        row_height,
+        SettingsListRowLayout::new(content_width, row_height, control_width),
         label,
         label_enabled,
         None,
-        control_width,
         add_control,
     );
 }
 
 pub fn settings_list_row_with_tooltip(
     ui: &mut Ui,
-    content_width: f32,
-    row_height: f32,
+    layout: SettingsListRowLayout,
     label: &str,
     label_enabled: bool,
     tooltip: Option<&str>,
-    control_width: f32,
     add_control: impl FnOnce(&mut Ui),
 ) {
     let dark = ui.visuals().dark_mode;
-    let (row_rect, _) =
-        ui.allocate_exact_size(egui::vec2(content_width, row_height), egui::Sense::hover());
+    let (row_rect, _) = ui.allocate_exact_size(
+        egui::vec2(layout.content_width, layout.row_height),
+        egui::Sense::hover(),
+    );
     let separator = border_color(dark).gamma_multiply(if dark { 0.72 } else { 0.9 });
     ui.painter().line_segment(
         [row_rect.left_bottom(), row_rect.right_bottom()],
         Stroke::new(1.0_f32, separator),
     );
 
-    let label_scale = (content_width / 452.0).clamp(1.0, 1.12);
+    let label_scale = (layout.content_width / 452.0).clamp(1.0, 1.12);
     let label_color = if label_enabled {
         ui.visuals().text_color()
     } else {
@@ -1018,7 +1033,7 @@ pub fn settings_list_row_with_tooltip(
 
     if let Some(tooltip) = tooltip {
         let text_width = (label.chars().count() as f32 * 7.4 * label_scale + 8.0)
-            .min((content_width - control_width - 20.0).max(0.0));
+            .min((layout.content_width - layout.control_width - 20.0).max(0.0));
         let label_rect = egui::Rect::from_center_size(
             egui::pos2(
                 row_rect.left() + 2.0 + text_width / 2.0,
@@ -1039,11 +1054,11 @@ pub fn settings_list_row_with_tooltip(
     }
 
     let control_rect = egui::Rect::from_min_size(
-        egui::pos2(row_rect.right() - control_width, row_rect.top()),
-        egui::vec2(control_width, row_height),
+        egui::pos2(row_rect.right() - layout.control_width, row_rect.top()),
+        egui::vec2(layout.control_width, layout.row_height),
     );
     crate::ui_style::allocate_ui_at_rect(ui, control_rect, |ui| {
-        ui.set_min_size(egui::vec2(control_width, row_height));
+        ui.set_min_size(egui::vec2(layout.control_width, layout.row_height));
         ui.with_layout(
             egui::Layout::left_to_right(egui::Align::Center),
             add_control,

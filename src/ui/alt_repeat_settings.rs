@@ -221,8 +221,11 @@ impl EntropyApp {
                             0 => {
                                 crate::ui_style::settings_list_row_with_tooltip(
                                     ui,
-                                    row_content_width,
-                                    row_height,
+                                    crate::ui_style::SettingsListRowLayout::new(
+                                        row_content_width,
+                                        row_height,
+                                        control_width,
+                                    ),
                                     crate::i18n::tr_catalog(
                                         self.app_settings.language,
                                         "alt_repeat_editor.entry",
@@ -232,7 +235,6 @@ impl EntropyApp {
                                         self.app_settings.language,
                                         "alt_repeat_editor.select_alt_repeat_slot",
                                     )),
-                                    control_width,
                                     |ui| {
                                         let dropdown_id =
                                             ui.make_persistent_id("alt_repeat_entry_dropdown");
@@ -364,8 +366,11 @@ impl EntropyApp {
                                 let mut name_changed = false;
                                 crate::ui_style::settings_list_row_with_tooltip(
                                     ui,
-                                    row_content_width,
-                                    row_height,
+                                    crate::ui_style::SettingsListRowLayout::new(
+                                        row_content_width,
+                                        row_height,
+                                        control_width,
+                                    ),
                                     crate::i18n::tr_catalog(
                                         self.app_settings.language,
                                         "alt_repeat_editor.name",
@@ -375,7 +380,6 @@ impl EntropyApp {
                                         self.app_settings.language,
                                         "alt_repeat_editor.local_name_for_this_slot",
                                     )),
-                                    control_width,
                                     |ui| {
                                         if let Some(name) = self.alt_repeat_names.get_mut(idx) {
                                             let resp = crate::ui_style::modern_text_field_sized(
@@ -410,15 +414,17 @@ impl EntropyApp {
                             2 => {
                                 crate::ui_style::settings_list_row_with_tooltip(
                                     ui,
-                                    row_content_width,
-                                    row_height,
+                                    crate::ui_style::SettingsListRowLayout::new(
+                                        row_content_width,
+                                        row_height,
+                                        control_width,
+                                    ),
                                     crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.last_key"),
                                     true,
                                     Some(crate::i18n::tr_catalog(
                                         self.app_settings.language,
                                         "alt_repeat_editor.key_that_triggers_alternate_repeat_behavior",
                                     )),
-                                    control_width,
                                     |ui| {
                                         let resp = crate::ui_style::modern_button_with_font(
                                             ui,
@@ -442,15 +448,17 @@ impl EntropyApp {
                             3 => {
                                 crate::ui_style::settings_list_row_with_tooltip(
                                     ui,
-                                    row_content_width,
-                                    row_height,
+                                    crate::ui_style::SettingsListRowLayout::new(
+                                        row_content_width,
+                                        row_height,
+                                        control_width,
+                                    ),
                                     crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.alt_key"),
                                     true,
                                     Some(crate::i18n::tr_catalog(
                                         self.app_settings.language,
                                         "alt_repeat_editor.key_repeated_when_alternate_repeat_activates",
                                     )),
-                                    control_width,
                                     |ui| {
                                         let resp = crate::ui_style::modern_button_with_font(
                                             ui,
@@ -513,8 +521,11 @@ impl EntropyApp {
                                 };
                                 crate::ui_style::settings_list_row_with_tooltip(
                                     ui,
-                                    row_content_width,
-                                    row_height,
+                                    crate::ui_style::SettingsListRowLayout::new(
+                                        row_content_width,
+                                        row_height,
+                                        mod_control_width,
+                                    ),
                                     row_label.as_str(),
                                     true,
                                     Some(match row_idx {
@@ -535,7 +546,6 @@ impl EntropyApp {
                                             "alt_repeat_editor.allowed_os_modifiers",
                                         ),
                                     }),
-                                    mod_control_width,
                                     |ui| {
                                         ui.with_layout(
                                             egui::Layout::right_to_left(egui::Align::Center),
@@ -613,8 +623,11 @@ impl EntropyApp {
                             8 => {
                                 crate::ui_style::settings_list_row_with_tooltip(
                                     ui,
-                                    row_content_width,
-                                    row_height,
+                                    crate::ui_style::SettingsListRowLayout::new(
+                                        row_content_width,
+                                        row_height,
+                                        metrics.value(46.0),
+                                    ),
                                     crate::i18n::tr_catalog(
                                         self.app_settings.language,
                                         "alt_repeat_editor.default_alt_key",
@@ -624,7 +637,6 @@ impl EntropyApp {
                                         self.app_settings.language,
                                         "alt_repeat_editor.use_this_alt_key_by_default",
                                     )),
-                                    metrics.value(46.0),
                                     |ui| {
                                         crate::ui_style::settings_switch_sized(
                                             ui,
@@ -637,8 +649,11 @@ impl EntropyApp {
                             9 => {
                                 crate::ui_style::settings_list_row_with_tooltip(
                                     ui,
-                                    row_content_width,
-                                    row_height,
+                                    crate::ui_style::SettingsListRowLayout::new(
+                                        row_content_width,
+                                        row_height,
+                                        metrics.value(46.0),
+                                    ),
                                     crate::i18n::tr_catalog(
                                         self.app_settings.language,
                                         "alt_repeat_editor.bidirectional",
@@ -648,7 +663,6 @@ impl EntropyApp {
                                         self.app_settings.language,
                                         "alt_repeat_editor.allow_both_keys_to_alternate_each_other",
                                     )),
-                                    metrics.value(46.0),
                                     |ui| {
                                         crate::ui_style::settings_switch_sized(
                                             ui,
@@ -661,12 +675,14 @@ impl EntropyApp {
                             10 => {
                                 crate::ui_style::settings_list_row_with_tooltip(
                                     ui,
-                                    row_content_width,
-                                    row_height,
+                                    crate::ui_style::SettingsListRowLayout::new(
+                                        row_content_width,
+                                        row_height,
+                                        metrics.value(46.0),
+                                    ),
                                     crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.ignore_handedness"),
                                     true,
                                     Some(crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.treat_left_and_right_modifiers_as_equivalent")),
-                                    metrics.value(46.0),
                                     |ui| {
                                         crate::ui_style::settings_switch_sized(
                                             ui,

@@ -59,12 +59,14 @@ impl EntropyApp {
         };
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
-            metrics.settings_row_content_width(),
-            metrics.settings_row_height(),
+            crate::ui_style::SettingsListRowLayout::new(
+                metrics.settings_row_content_width(),
+                metrics.settings_row_height(),
+                metrics.settings_control_width(),
+            ),
             label,
             true,
             hint,
-            metrics.settings_control_width(),
             |ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
@@ -100,15 +102,17 @@ impl EntropyApp {
         let switch_size = metrics.size(46.0, 24.0);
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
-            metrics.settings_row_content_width(),
-            metrics.settings_row_height(),
+            crate::ui_style::SettingsListRowLayout::new(
+                metrics.settings_row_content_width(),
+                metrics.settings_row_height(),
+                metrics.settings_control_width(),
+            ),
             crate::i18n::tr_catalog(lang, "live_features.layout_sync"),
             true,
             Some(crate::i18n::tr_catalog(
                 lang,
                 "live_features.layout_sync_tooltip",
             )),
-            metrics.settings_control_width(),
             |ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let _ = crate::ui_style::settings_switch_sized_stable(

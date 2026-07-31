@@ -234,8 +234,11 @@ impl EntropyApp {
                     let mut enabled = setting.value;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            switch_width,
+                        ),
                         crate::i18n::tr_catalog(
                             self.app_settings.language,
                             "bluetooth_settings.charge_indicator",
@@ -249,7 +252,6 @@ impl EntropyApp {
                                 "bluetooth_settings.charge_indicator_tooltip",
                             ))
                         },
-                        switch_width,
                         |ui| {
                             let response = crate::ui_style::settings_switch_sized_stable(
                                 ui,
@@ -320,12 +322,10 @@ impl EntropyApp {
         let selected_idx = (setting.value as usize).min(variants.len().saturating_sub(1));
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
-            content_width,
-            row_height,
+            crate::ui_style::SettingsListRowLayout::new(content_width, row_height, dropdown_width),
             label.as_str(),
             true,
             tooltip.as_deref(),
-            dropdown_width,
             |ui| {
                 let dropdown_id =
                     ui.make_persistent_id(("bluetooth_setting_dropdown", setting.qsid));

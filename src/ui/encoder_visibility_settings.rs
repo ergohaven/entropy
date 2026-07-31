@@ -220,12 +220,14 @@ impl EntropyApp {
         };
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
-            row.content_width,
-            row.height,
+            crate::ui_style::SettingsListRowLayout::new(
+                row.content_width,
+                row.height,
+                metrics.value(46.0),
+            ),
             &label,
             true,
             (!row.suppress_tooltips).then_some(tooltip.as_str()),
-            metrics.value(46.0),
             |ui| {
                 let resp = crate::ui_style::settings_switch_sized_stable(
                     ui,

@@ -181,8 +181,7 @@ impl EntropyApp {
 
             crate::ui_style::settings_list_row_with_tooltip(
                 ui,
-                content_width,
-                row_height,
+                crate::ui_style::SettingsListRowLayout::new(content_width, row_height, field_width),
                 crate::i18n::tr_catalog(lang, label),
                 true,
                 if suppress_tooltips {
@@ -190,7 +189,6 @@ impl EntropyApp {
                 } else {
                     Some(crate::i18n::tr_catalog(lang, tooltip))
                 },
-                field_width,
                 |ui| {
                     let edit_id = egui::Id::new(("mouse_keys_edit", qsid));
                     let mut text = ui.ctx().data_mut(|d| {

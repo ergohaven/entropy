@@ -301,12 +301,14 @@ impl EntropyApp {
         match row_idx {
             0 => crate::ui_style::settings_list_row_with_tooltip(
                 ui,
-                row.content_width,
-                row.height,
+                crate::ui_style::SettingsListRowLayout::new(
+                    row.content_width,
+                    row.height,
+                    row.metrics.settings_control_width(),
+                ),
                 crate::i18n::tr_catalog(row.lang, "universal_symbols_setup.current_backend"),
                 true,
                 tooltip("universal_symbols_setup.current_backend_tooltip"),
-                row.metrics.settings_control_width(),
                 |ui| {
                     draw_universal_symbols_value(
                         ui,
@@ -322,24 +324,28 @@ impl EntropyApp {
             3 => self.draw_macos_event_capture_status_row(ui, row),
             4 => crate::ui_style::settings_list_row_with_tooltip(
                 ui,
-                row.content_width,
-                row.height,
+                crate::ui_style::SettingsListRowLayout::new(
+                    row.content_width,
+                    row.height,
+                    row.metrics.settings_control_width(),
+                ),
                 crate::i18n::tr_catalog(row.lang, "universal_symbols_setup.recommended_setup"),
                 true,
                 tooltip("universal_symbols_setup.recommended_setup_tooltip"),
-                row.metrics.settings_control_width(),
                 |ui| self.draw_universal_symbols_recommended_control(ui, row.metrics, row.lang),
             ),
             5 => draw_universal_symbols_finish_step_row(ui, row, universal_symbols_finish_step_2()),
             6 => draw_universal_symbols_finish_step_row(ui, row, universal_symbols_finish_step_3()),
             7 => crate::ui_style::settings_list_row_with_tooltip(
                 ui,
-                row.content_width,
-                row.height,
+                crate::ui_style::SettingsListRowLayout::new(
+                    row.content_width,
+                    row.height,
+                    row.metrics.value(220.0),
+                ),
                 crate::i18n::tr_catalog(row.lang, "universal_symbols_setup.text_expander"),
                 true,
                 tooltip("universal_symbols_setup.text_expander_tooltip"),
-                row.metrics.value(220.0),
                 |ui| {
                     draw_universal_symbols_value(
                         ui,
@@ -401,12 +407,14 @@ impl EntropyApp {
 
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
-            row_content_width,
-            row_height,
+            crate::ui_style::SettingsListRowLayout::new(
+                row_content_width,
+                row_height,
+                metrics.settings_control_width(),
+            ),
             crate::i18n::tr_catalog(lang, "universal_symbols_setup.current_backend"),
             true,
             tooltip("universal_symbols_setup.current_backend_tooltip"),
-            metrics.settings_control_width(),
             |ui| {
                 draw_universal_symbols_value(
                     ui,
@@ -420,12 +428,14 @@ impl EntropyApp {
 
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
-            row_content_width,
-            row_height,
+            crate::ui_style::SettingsListRowLayout::new(
+                row_content_width,
+                row_height,
+                metrics.settings_control_width(),
+            ),
             crate::i18n::tr_catalog(lang, "universal_symbols_setup.recommended_setup"),
             true,
             tooltip("universal_symbols_setup.recommended_setup_tooltip"),
-            metrics.settings_control_width(),
             |ui| self.draw_universal_symbols_recommended_control(ui, metrics, lang),
         );
 
@@ -441,12 +451,14 @@ impl EntropyApp {
 
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
-            row_content_width,
-            row_height,
+            crate::ui_style::SettingsListRowLayout::new(
+                row_content_width,
+                row_height,
+                metrics.value(220.0),
+            ),
             crate::i18n::tr_catalog(lang, "universal_symbols_setup.text_expander"),
             true,
             tooltip("universal_symbols_setup.text_expander_tooltip"),
-            metrics.value(220.0),
             |ui| {
                 draw_universal_symbols_value(
                     ui,
@@ -667,13 +679,15 @@ impl EntropyApp {
 
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
-            row.content_width,
-            row.height,
+            crate::ui_style::SettingsListRowLayout::new(
+                row.content_width,
+                row.height,
+                row.metrics.value(250.0),
+            ),
             crate::i18n::tr_catalog(row.lang, permission.label_key),
             true,
             (!row.suppress_tooltips)
                 .then_some(crate::i18n::tr_catalog(row.lang, permission.tooltip_key)),
-            row.metrics.value(250.0),
             |ui| {
                 draw_universal_symbols_value(
                     ui,
@@ -700,15 +714,17 @@ impl EntropyApp {
 
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
-            row.content_width,
-            row.height,
+            crate::ui_style::SettingsListRowLayout::new(
+                row.content_width,
+                row.height,
+                row.metrics.value(250.0),
+            ),
             crate::i18n::tr_catalog(row.lang, "universal_symbols_setup.event_capture_status"),
             true,
             (!row.suppress_tooltips).then_some(crate::i18n::tr_catalog(
                 row.lang,
                 "universal_symbols_setup.event_capture_status_tooltip",
             )),
-            row.metrics.value(250.0),
             |ui| {
                 let status_label = if status.event_tap_active {
                     active
@@ -894,12 +910,14 @@ fn draw_universal_symbols_finish_step_row(
 ) {
     crate::ui_style::settings_list_row_with_tooltip(
         ui,
-        row.content_width,
-        row.height,
+        crate::ui_style::SettingsListRowLayout::new(
+            row.content_width,
+            row.height,
+            row.metrics.value(250.0),
+        ),
         crate::i18n::tr_catalog(row.lang, step.label_key),
         true,
         Some(crate::i18n::tr_catalog(row.lang, step.tooltip_key)),
-        row.metrics.value(250.0),
         |ui| {
             if let Some(detail_key) = step.detail_key {
                 draw_universal_symbols_two_line_value(
@@ -941,12 +959,14 @@ fn draw_universal_symbols_action_row_with_tooltip_state(
     let mut clicked = false;
     crate::ui_style::settings_list_row_with_tooltip(
         ui,
-        row.content_width,
-        row.height,
+        crate::ui_style::SettingsListRowLayout::new(
+            row.content_width,
+            row.height,
+            row.metrics.settings_control_width(),
+        ),
         crate::i18n::tr_catalog(row.lang, action.label_key),
         true,
         (!row.suppress_tooltips).then_some(crate::i18n::tr_catalog(row.lang, action.tooltip_key)),
-        row.metrics.settings_control_width(),
         |ui| {
             clicked = crate::ui_style::modern_button(
                 ui,

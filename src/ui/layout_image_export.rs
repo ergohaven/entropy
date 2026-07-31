@@ -580,12 +580,14 @@ impl EntropyApp {
                     let mut format = before;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            metrics.settings_control_width(),
+                        ),
                         export_text(lang, "format"),
                         true,
                         tooltip(export_text(lang, "format_tooltip")),
-                        metrics.settings_control_width(),
                         |ui| draw_format_dropdown(ui, metrics, dark, lang, &mut format),
                     );
                     if format != before {
@@ -598,12 +600,14 @@ impl EntropyApp {
                     let mut theme = before;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            metrics.settings_control_width(),
+                        ),
                         export_text(lang, "theme"),
                         true,
                         tooltip(export_text(lang, "theme_tooltip")),
-                        metrics.settings_control_width(),
                         |ui| draw_theme_dropdown(ui, metrics, dark, lang, &mut theme),
                     );
                     if theme != before {
@@ -616,12 +620,14 @@ impl EntropyApp {
                     let mut key_legend_layout = before;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            metrics.settings_control_width(),
+                        ),
                         export_text(lang, "legends"),
                         true,
                         tooltip(export_text(lang, "legends_tooltip")),
-                        metrics.settings_control_width(),
                         |ui| {
                             draw_key_legend_dropdown(
                                 ui,
@@ -642,12 +648,14 @@ impl EntropyApp {
                     let mut show_layer_names = before;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            switch_width,
+                        ),
                         export_text(lang, "layer_names"),
                         true,
                         tooltip(export_text(lang, "layer_names_tooltip")),
-                        switch_width,
                         |ui| {
                             let _ = crate::ui_style::settings_switch_sized_stable(
                                 ui,
@@ -677,12 +685,14 @@ impl EntropyApp {
                     let label = layer_export_label(lang, &self.layer_names, layer_idx);
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
-                        content_width,
-                        row_height,
+                        crate::ui_style::SettingsListRowLayout::new(
+                            content_width,
+                            row_height,
+                            switch_width,
+                        ),
                         label.as_str(),
                         true,
                         tooltip(export_text(lang, "layer_tooltip")),
-                        switch_width,
                         |ui| {
                             let _ = crate::ui_style::settings_switch_sized_stable(
                                 ui,

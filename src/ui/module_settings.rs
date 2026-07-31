@@ -261,12 +261,14 @@ impl EntropyApp {
                 let mut checked = raw_value & mask != 0;
                 crate::ui_style::settings_list_row_with_tooltip(
                     ui,
-                    content_width,
-                    row_height,
+                    crate::ui_style::SettingsListRowLayout::new(
+                        content_width,
+                        row_height,
+                        switch_width,
+                    ),
                     label.as_str(),
                     true,
                     tooltip.as_deref(),
-                    switch_width,
                     |ui| {
                         let resp = crate::ui_style::settings_switch_sized_stable(
                             ui,
@@ -289,12 +291,14 @@ impl EntropyApp {
                 let field_width = metrics.value(86.0);
                 crate::ui_style::settings_list_row_with_tooltip(
                     ui,
-                    content_width,
-                    row_height,
+                    crate::ui_style::SettingsListRowLayout::new(
+                        content_width,
+                        row_height,
+                        field_width,
+                    ),
                     label.as_str(),
                     true,
                     tooltip.as_deref(),
-                    field_width,
                     |ui| {
                         let edit_id = egui::Id::new(("module_setting_edit", group_idx, field.qsid));
                         let current = raw_value.clamp(field.min, field.max);
@@ -351,12 +355,14 @@ impl EntropyApp {
                     .collect::<Vec<_>>();
                 crate::ui_style::settings_list_row_with_tooltip(
                     ui,
-                    content_width,
-                    row_height,
+                    crate::ui_style::SettingsListRowLayout::new(
+                        content_width,
+                        row_height,
+                        dropdown_width,
+                    ),
                     label.as_str(),
                     true,
                     tooltip.as_deref(),
-                    dropdown_width,
                     |ui| {
                         let dropdown_id = ui.make_persistent_id((
                             "module_setting_dropdown",
@@ -605,12 +611,10 @@ impl EntropyApp {
         });
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
-            content_width,
-            row_height,
+            crate::ui_style::SettingsListRowLayout::new(content_width, row_height, dropdown_width),
             crate::i18n::tr_catalog(lang, "modules_settings.module_side"),
             true,
             tooltip.as_deref(),
-            dropdown_width,
             |ui| {
                 let dropdown_id = ui.make_persistent_id("module_settings_side_dropdown");
                 let (_, picked) = Self::draw_touchpad_select_control(
