@@ -380,16 +380,18 @@ impl EntropyApp {
                                         if let Some(name) = self.alt_repeat_names.get_mut(idx) {
                                             let resp = crate::ui_style::modern_text_field_sized(
                                                 ui,
-                                                egui::Id::new(("alt_repeat_name", idx)),
-                                                name,
-                                                control_width,
-                                                metrics.settings_control_height(),
-                                                crate::i18n::tr_catalog(
-                                                    self.app_settings.language,
-                                                    "alt_repeat_editor.name",
+                                                crate::ui_style::ModernTextField::new(
+                                                    egui::Id::new(("alt_repeat_name", idx)),
+                                                    name,
+                                                    control_width,
+                                                    metrics.settings_control_height(),
+                                                    crate::i18n::tr_catalog(
+                                                        self.app_settings.language,
+                                                        "alt_repeat_editor.name",
+                                                    ),
+                                                    12,
+                                                    egui::Align::Center,
                                                 ),
-                                                12,
-                                                egui::Align::Center,
                                             );
                                             name_changed = resp.changed();
                                             resp.clone().on_hover_text(crate::i18n::tr_catalog(

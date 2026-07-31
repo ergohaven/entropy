@@ -205,13 +205,15 @@ impl EntropyApp {
 
                     let resp = crate::ui_style::modern_text_field_sized(
                         ui,
-                        edit_id,
-                        &mut text,
-                        field_width,
-                        control_height,
-                        "",
-                        5,
-                        egui::Align::RIGHT,
+                        crate::ui_style::ModernTextField::new(
+                            edit_id,
+                            &mut text,
+                            field_width,
+                            control_height,
+                            "",
+                            5,
+                            egui::Align::RIGHT,
+                        ),
                     );
                     let resp = settings_field_unit_tooltip(resp, lang, suppress_tooltips, unit);
 

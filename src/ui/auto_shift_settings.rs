@@ -251,12 +251,15 @@ impl EntropyApp {
                     let edit_id = egui::Id::new("auto_shift_timeout");
                     let resp = crate::ui_style::modern_text_field_interactive(
                         ui,
-                        edit_id,
-                        &mut self.auto_shift_timeout_text,
-                        field_width,
-                        "",
-                        5,
-                        egui::Align::RIGHT,
+                        crate::ui_style::ModernTextField::new(
+                            edit_id,
+                            &mut self.auto_shift_timeout_text,
+                            field_width,
+                            32.0,
+                            "",
+                            5,
+                            egui::Align::RIGHT,
+                        ),
                         enabled,
                     );
                     let resp = settings_field_unit_tooltip(

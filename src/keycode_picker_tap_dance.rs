@@ -87,13 +87,15 @@ impl KeycodePicker {
         let mut edited_name = prev_name.clone();
         let resp = crate::ui_style::modern_text_field_sized(
             ui,
-            ui.make_persistent_id(("tap_dance_name", n)),
-            &mut edited_name,
-            124.0 * scale,
-            32.0 * scale,
-            crate::i18n::tr_catalog(self.language, "tap_dance_editor.td_name"),
-            7,
-            egui::Align::Center,
+            crate::ui_style::ModernTextField::new(
+                ui.make_persistent_id(("tap_dance_name", n)),
+                &mut edited_name,
+                124.0 * scale,
+                32.0 * scale,
+                crate::i18n::tr_catalog(self.language, "tap_dance_editor.td_name"),
+                7,
+                egui::Align::Center,
+            ),
         );
         if resp.changed() {
             let trimmed: String = edited_name.chars().take(7).collect();
@@ -189,13 +191,15 @@ impl KeycodePicker {
                     let mut term_str = prev_term.to_string();
                     if crate::ui_style::modern_text_field_sized(
                         ui,
-                        ui.make_persistent_id(("tap_dance_term", n)),
-                        &mut term_str,
-                        76.0 * scale,
-                        32.0 * scale,
-                        "",
-                        5,
-                        egui::Align::Center,
+                        crate::ui_style::ModernTextField::new(
+                            ui.make_persistent_id(("tap_dance_term", n)),
+                            &mut term_str,
+                            76.0 * scale,
+                            32.0 * scale,
+                            "",
+                            5,
+                            egui::Align::Center,
+                        ),
                     )
                     .on_hover_text(crate::i18n::tr_catalog(
                         self.language,

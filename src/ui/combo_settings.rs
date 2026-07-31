@@ -281,16 +281,18 @@ impl EntropyApp {
                         if let Some(name) = self.combo_names.get_mut(combo_idx) {
                             let resp = crate::ui_style::modern_text_field_sized(
                                 ui,
-                                egui::Id::new(("combo_name", combo_idx)),
-                                name,
-                                control_width,
-                                control_height,
-                                crate::i18n::tr_catalog(
-                                    self.app_settings.language,
-                                    "alt_repeat_editor.name",
+                                crate::ui_style::ModernTextField::new(
+                                    egui::Id::new(("combo_name", combo_idx)),
+                                    name,
+                                    control_width,
+                                    control_height,
+                                    crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "alt_repeat_editor.name",
+                                    ),
+                                    12,
+                                    egui::Align::Center,
                                 ),
-                                12,
-                                egui::Align::Center,
                             );
                             combo_name_changed = resp.changed();
                             resp.clone().on_hover_text(crate::i18n::tr_catalog(
@@ -594,13 +596,15 @@ impl EntropyApp {
                                     }
                                     let resp = crate::ui_style::modern_text_field_sized(
                                         ui,
-                                        edit_id,
-                                        &mut combo_term_text,
-                                        70.0 * scale,
-                                        control_height,
-                                        "",
-                                        4,
-                                        egui::Align::RIGHT,
+                                        crate::ui_style::ModernTextField::new(
+                                            edit_id,
+                                            &mut combo_term_text,
+                                            70.0 * scale,
+                                            control_height,
+                                            "",
+                                            4,
+                                            egui::Align::RIGHT,
+                                        ),
                                     );
                                     let resp = settings_field_unit_tooltip(
                                         resp,

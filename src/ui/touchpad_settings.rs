@@ -218,13 +218,15 @@ impl EntropyApp {
                                 }
                                 let resp = crate::ui_style::modern_text_field_sized(
                                     ui,
-                                    edit_id,
-                                    &mut text,
-                                    field_width,
-                                    metrics.settings_control_height(),
-                                    "",
-                                    5,
-                                    egui::Align::Center,
+                                    crate::ui_style::ModernTextField::new(
+                                        edit_id,
+                                        &mut text,
+                                        field_width,
+                                        metrics.settings_control_height(),
+                                        "",
+                                        5,
+                                        egui::Align::Center,
+                                    ),
                                 );
                                 let commit = resp.lost_focus()
                                     || (resp.has_focus()

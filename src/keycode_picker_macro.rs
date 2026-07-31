@@ -306,13 +306,15 @@ impl KeycodePicker {
             if let Some(name) = self.macro_names.get_mut(n) {
                 let resp = crate::ui_style::modern_text_field_sized(
                     ui,
-                    ui.make_persistent_id(("macro_name", grid_id, n)),
-                    name,
-                    124.0 * scale,
-                    32.0 * scale,
-                    crate::i18n::tr_catalog(language, "macro_editor.macro_name"),
-                    MACRO_NAME_CHAR_LIMIT,
-                    egui::Align::Center,
+                    crate::ui_style::ModernTextField::new(
+                        ui.make_persistent_id(("macro_name", grid_id, n)),
+                        name,
+                        124.0 * scale,
+                        32.0 * scale,
+                        crate::i18n::tr_catalog(language, "macro_editor.macro_name"),
+                        MACRO_NAME_CHAR_LIMIT,
+                        egui::Align::Center,
+                    ),
                 );
                 if resp.changed() {
                     limit_chars(name, MACRO_NAME_CHAR_LIMIT);
@@ -324,13 +326,15 @@ impl KeycodePicker {
                 let description_w = ui.available_width().max(180.0 * scale).min(360.0 * scale);
                 let resp = crate::ui_style::modern_text_field_sized(
                     ui,
-                    ui.make_persistent_id(("macro_description", grid_id, n)),
-                    description,
-                    description_w,
-                    32.0 * scale,
-                    crate::i18n::tr_catalog(language, "macro_editor.macro_description"),
-                    MACRO_DESCRIPTION_CHAR_LIMIT,
-                    egui::Align::Min,
+                    crate::ui_style::ModernTextField::new(
+                        ui.make_persistent_id(("macro_description", grid_id, n)),
+                        description,
+                        description_w,
+                        32.0 * scale,
+                        crate::i18n::tr_catalog(language, "macro_editor.macro_description"),
+                        MACRO_DESCRIPTION_CHAR_LIMIT,
+                        egui::Align::Min,
+                    ),
                 )
                 .on_hover_text(crate::i18n::tr_catalog(
                     language,
@@ -434,16 +438,18 @@ impl KeycodePicker {
                             let text_w = (avail_w - 220.0 * scale).max(150.0 * scale);
                             if crate::ui_style::modern_text_field_sized(
                                 ui,
-                                ui.make_persistent_id(("macro_text_action", grid_id, n, i)),
-                                text,
-                                text_w,
-                                32.0 * scale,
-                                crate::i18n::tr_catalog(
-                                    self.language,
-                                    "macro_editor.type_text_here",
+                                crate::ui_style::ModernTextField::new(
+                                    ui.make_persistent_id(("macro_text_action", grid_id, n, i)),
+                                    text,
+                                    text_w,
+                                    32.0 * scale,
+                                    crate::i18n::tr_catalog(
+                                        self.language,
+                                        "macro_editor.type_text_here",
+                                    ),
+                                    256,
+                                    egui::Align::Min,
                                 ),
-                                256,
-                                egui::Align::Min,
                             )
                             .on_hover_text(crate::i18n::tr_catalog(
                                 self.language,
@@ -527,13 +533,15 @@ impl KeycodePicker {
                             let mut ms_str = ms.to_string();
                             if crate::ui_style::modern_text_field_sized(
                                 ui,
-                                ui.make_persistent_id(("macro_delay", grid_id, n, i)),
-                                &mut ms_str,
-                                80.0 * scale,
-                                32.0 * scale,
-                                "",
-                                5,
-                                egui::Align::Center,
+                                crate::ui_style::ModernTextField::new(
+                                    ui.make_persistent_id(("macro_delay", grid_id, n, i)),
+                                    &mut ms_str,
+                                    80.0 * scale,
+                                    32.0 * scale,
+                                    "",
+                                    5,
+                                    egui::Align::Center,
+                                ),
                             )
                             .on_hover_text(crate::i18n::tr_catalog(
                                 self.language,

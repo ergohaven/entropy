@@ -450,67 +450,65 @@ pub fn modern_button_with_font(
     resp
 }
 
-pub fn modern_text_field_sized(
-    ui: &mut Ui,
+pub(crate) struct ModernTextField<'a> {
     id: egui::Id,
-    text: &mut String,
+    text: &'a mut String,
     width: f32,
     height: f32,
-    hint: &str,
+    hint: &'a str,
     char_limit: usize,
     horizontal_align: egui::Align,
-) -> egui::Response {
-    let font_size = 12.5 * (height / 32.0).clamp(1.0, 1.3);
-    modern_text_field_impl(
-        ui,
-        id,
-        text,
-        width,
-        height,
-        font_size,
-        hint,
-        char_limit,
-        horizontal_align,
-        true,
-    )
 }
 
-pub fn modern_text_field_interactive(
+impl<'a> ModernTextField<'a> {
+    pub(crate) fn new(
+        id: egui::Id,
+        text: &'a mut String,
+        width: f32,
+        height: f32,
+        hint: &'a str,
+        char_limit: usize,
+        horizontal_align: egui::Align,
+    ) -> Self {
+        Self {
+            id,
+            text,
+            width,
+            height,
+            hint,
+            char_limit,
+            horizontal_align,
+        }
+    }
+}
+
+pub(crate) fn modern_text_field_sized(ui: &mut Ui, field: ModernTextField<'_>) -> egui::Response {
+    modern_text_field_impl(ui, field, true)
+}
+
+pub(crate) fn modern_text_field_interactive(
     ui: &mut Ui,
-    id: egui::Id,
-    text: &mut String,
-    width: f32,
-    hint: &str,
-    char_limit: usize,
-    horizontal_align: egui::Align,
+    field: ModernTextField<'_>,
     interactive: bool,
 ) -> egui::Response {
-    modern_text_field_impl(
-        ui,
-        id,
-        text,
-        width,
-        32.0,
-        12.5,
-        hint,
-        char_limit,
-        horizontal_align,
-        interactive,
-    )
+    modern_text_field_impl(ui, field, interactive)
 }
 
 fn modern_text_field_impl(
     ui: &mut Ui,
-    id: egui::Id,
-    text: &mut String,
-    width: f32,
-    height: f32,
-    font_size: f32,
-    hint: &str,
-    char_limit: usize,
-    horizontal_align: egui::Align,
+    field: ModernTextField<'_>,
     interactive: bool,
 ) -> egui::Response {
+    let ModernTextField {
+        id,
+        text,
+        width,
+        height,
+        hint,
+        char_limit,
+        horizontal_align,
+    } = field;
+    let font_size = 12.5 * (height / 32.0).clamp(1.0, 1.3);
     let dark = ui.visuals().dark_mode;
     let field_size = Vec2::new(width, height);
     let (field_rect, _) = ui.allocate_exact_size(field_size, Sense::hover());

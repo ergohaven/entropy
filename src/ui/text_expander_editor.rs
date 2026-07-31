@@ -1049,13 +1049,15 @@ impl EntropyApp {
                         trigger_resp = Some(
                             crate::ui_style::modern_text_field_sized(
                                 ui,
-                                ui.make_persistent_id(("text_expander_trigger", idx)),
-                                &mut rule.trigger,
-                                trigger_width,
-                                field_height,
-                                crate::i18n::tr_catalog(lang, "text_expander.trigger_hint"),
-                                32,
-                                egui::Align::Center,
+                                crate::ui_style::ModernTextField::new(
+                                    ui.make_persistent_id(("text_expander_trigger", idx)),
+                                    &mut rule.trigger,
+                                    trigger_width,
+                                    field_height,
+                                    crate::i18n::tr_catalog(lang, "text_expander.trigger_hint"),
+                                    32,
+                                    egui::Align::Center,
+                                ),
                             )
                             .on_hover_text(crate::i18n::tr_catalog(
                                 lang,
@@ -1077,13 +1079,15 @@ impl EntropyApp {
                         replacement_resp = Some(
                             crate::ui_style::modern_text_field_sized(
                                 ui,
-                                ui.make_persistent_id(("text_expander_replacement", idx)),
-                                &mut rule.replacement,
-                                replacement_width,
-                                field_height,
-                                crate::i18n::tr_catalog(lang, "text_expander.replacement_hint"),
-                                480,
-                                egui::Align::Min,
+                                crate::ui_style::ModernTextField::new(
+                                    ui.make_persistent_id(("text_expander_replacement", idx)),
+                                    &mut rule.replacement,
+                                    replacement_width,
+                                    field_height,
+                                    crate::i18n::tr_catalog(lang, "text_expander.replacement_hint"),
+                                    480,
+                                    egui::Align::Min,
+                                ),
                             )
                             .on_hover_text(crate::i18n::tr_catalog(
                                 lang,

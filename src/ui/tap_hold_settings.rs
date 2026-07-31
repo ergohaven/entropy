@@ -531,13 +531,15 @@ impl EntropyApp {
                         }
                         let resp = crate::ui_style::modern_text_field_sized(
                             ui,
-                            edit_id,
-                            &mut text,
-                            field_width,
-                            control_height,
-                            "",
-                            5,
-                            egui::Align::RIGHT,
+                            crate::ui_style::ModernTextField::new(
+                                edit_id,
+                                &mut text,
+                                field_width,
+                                control_height,
+                                "",
+                                5,
+                                egui::Align::RIGHT,
+                            ),
                         );
                         let resp = match (kind, qsid) {
                             (SettingsRowKind::TapHold, 7 | 25 | 18 | 19 | 27)

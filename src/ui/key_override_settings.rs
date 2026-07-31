@@ -593,13 +593,15 @@ impl EntropyApp {
                                                     if let Some(name) = self.key_override_names.get_mut(idx) {
                                                         let resp = crate::ui_style::modern_text_field_sized(
                                                             ui,
-                                                            egui::Id::new(("key_override_name", idx)),
-                                                            name,
-                                                            control_width,
-                                                            32.0 * scale,
-                                                            crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.name"),
-                                                            12,
-                                                            egui::Align::Center,
+                                                            crate::ui_style::ModernTextField::new(
+                                                                egui::Id::new(("key_override_name", idx)),
+                                                                name,
+                                                                control_width,
+                                                                32.0 * scale,
+                                                                crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.name"),
+                                                                12,
+                                                                egui::Align::Center,
+                                                            ),
                                                         );
                                                         name_changed = resp.changed();
                                                         resp.clone().on_hover_text(crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.stored_locally_in_entropy"));
