@@ -1175,16 +1175,17 @@ impl eframe::App for EntropyApp {
         // Auto-scan for device connect/disconnect changes.
         self.secondary_click_handled = false;
 
-        if let Some((layer, ki, kc)) = self.pending_handed_swap {
+        if let Some((layer, ki, binding)) = self.pending_handed_swap {
             if !ctx.input(|i| i.modifiers.ctrl) {
                 #[cfg(not(target_arch = "wasm32"))]
-                if !self.hid_write_task_active() && self.assign_keycode(ctx, layer, ki, kc) {
+                if !self.hid_write_task_active() && self.assign_key_binding(ctx, layer, ki, binding)
+                {
                     self.pending_handed_swap = None;
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
                     if let Some(layout) = &mut self.layout {
-                        layout.set_keycode(layer, ki, kc);
+                        layout.set_key_binding(layer, ki, binding);
                     }
                     self.pending_handed_swap = None;
                 }

@@ -199,10 +199,31 @@ impl EntropyApp {
         &mut self,
         ctx: &egui::Context,
         ctrl_held: bool,
-        kc: u16,
+        binding: crate::keyboard::KeyBinding,
         key_target: Option<usize>,
         encoder_target: Option<usize>,
     ) {
+        let kc = binding.vial_keycode();
+        if let crate::keyboard::KeyBinding::Rmk(action) = binding {
+            if let Some(parts) = crate::rmk_native::rmk_mod_tap_parts(action) {
+                if ctrl_held {
+                    if let Some(ki) = key_target {
+                        let swapped = crate::rmk_native::toggle_handed_key_action(action);
+                        self.pending_handed_swap = Some((
+                            self.selected_layer,
+                            ki,
+                            crate::keyboard::KeyBinding::Rmk(swapped),
+                        ));
+                    }
+                } else {
+                    self.open_picker_for_target(key_target, encoder_target);
+                    self.keycode_picker.vial_quantum_pending_mt = Some(parts.vial_base());
+                    self.keycode_picker.vial_quantum_pending_mod = None;
+                }
+                self.secondary_click_handled = true;
+                return;
+            }
+        }
         if !ctrl_held {
             if let Some(target_layer) = vial_layer_target(kc) {
                 if target_layer != self.selected_layer {
@@ -235,7 +256,11 @@ impl EntropyApp {
                         layout.set_encoder_keycode(self.selected_layer, visual_idx, swapped);
                     }
                 } else if let Some(ki) = key_target {
-                    self.pending_handed_swap = Some((self.selected_layer, ki, swapped));
+                    self.pending_handed_swap = Some((
+                        self.selected_layer,
+                        ki,
+                        crate::keyboard::KeyBinding::Vial(swapped),
+                    ));
                 }
                 self.secondary_click_handled = true;
             } else {
@@ -465,5 +490,41 @@ impl EntropyApp {
                 self.undo_layer_snapshot(layer, old, requires_firmware);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmk_types::action::{Action, KeyAction};
+    use rmk_types::keycode::HidKeyCode;
+    use rmk_types::modifier::ModifierCombination;
+
+    #[test]
+    fn right_click_reopens_native_mod_tap_tap_key_picker() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let action = KeyAction::TapHold(
+            Action::KeyWithModifier(HidKeyCode::LeftBracket, ModifierCombination::LSHIFT),
+            Action::Modifier(ModifierCombination::RCTRL),
+            Default::default(),
+        );
+
+        app.handle_secondary_target(
+            &ctx,
+            false,
+            crate::keyboard::KeyBinding::Rmk(action),
+            Some(0),
+            None,
+        );
+
+        assert!(app.secondary_click_handled);
+        assert!(app.keycode_picker.open);
+        assert_eq!(
+            app.keycode_picker.vial_quantum_pending_mt,
+            Some(0x2000 | ((ModifierCombination::RCTRL.into_packed_bits() as u16) << 8))
+        );
+        assert!(app.keycode_picker.rmk_native_key_actions_allowed_for_target);
     }
 }

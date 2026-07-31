@@ -148,6 +148,7 @@ impl EntropyApp {
         // Pass 2: hover + clicks + tooltips
         let mut hovered_key: Option<usize> = None;
         for (ki, _, response) in &mut rects {
+            let binding = layout.get_key_binding(self.selected_layer, *ki);
             if response.hovered() {
                 hovered_key = Some(*ki);
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -159,15 +160,13 @@ impl EntropyApp {
             // Right-click actions: layer jump/retarget, modifier side swap, editors/settings.
             if response.secondary_clicked() {
                 let ctrl_held = ui.input(|i| i.modifiers.ctrl);
-                let kc = layout.get_keycode(self.selected_layer, *ki);
-                self.handle_secondary_target(ui.ctx(), ctrl_held, kc, Some(*ki), None);
+                self.handle_secondary_target(ui.ctx(), ctrl_held, binding, Some(*ki), None);
                 if self.secondary_click_handled {
                     continue;
                 }
             }
 
             // Tooltip — for layer keys show mini layout preview
-            let binding = layout.get_key_binding(self.selected_layer, *ki);
             let kc = binding.vial_keycode();
             // MO/TG/TO/OSL/TT/DF range and LT; OSM also lives in 0x52xx
             // but is deliberately excluded by vial_layer_target().
@@ -546,7 +545,13 @@ impl EntropyApp {
             }
             if top_resp.secondary_clicked() {
                 if let Some((visual_idx, kc)) = cw {
-                    self.handle_secondary_target(ui.ctx(), ctrl_held, *kc, None, Some(*visual_idx));
+                    self.handle_secondary_target(
+                        ui.ctx(),
+                        ctrl_held,
+                        (*kc).into(),
+                        None,
+                        Some(*visual_idx),
+                    );
                 }
             }
             if top_resp.clicked() {
@@ -557,10 +562,10 @@ impl EntropyApp {
             if let (Some((press_ki, _)), Some(middle_resp)) = (press_slot, middle_resp.as_ref()) {
                 if middle_resp.hovered() {
                     hovered_key = Some(press_ki);
-                    let kc = layout.get_keycode(self.selected_layer, press_ki);
-                    hovered_encoder_keycode = Some(kc);
-                    let tip = keycode_tooltip_with_macro_names(
-                        kc,
+                    let binding = layout.get_key_binding(self.selected_layer, press_ki);
+                    hovered_encoder_keycode = Some(binding.vial_keycode());
+                    let tip = key_binding_tooltip_with_macro_names(
+                        binding,
                         &layout.custom_keycodes,
                         &self.layer_names,
                         &self.keycode_picker.macro_names,
@@ -572,8 +577,14 @@ impl EntropyApp {
                         .on_hover_text(crate::i18n::tr_text(self.app_settings.language, &tip));
                 }
                 if middle_resp.secondary_clicked() {
-                    let kc = layout.get_keycode(self.selected_layer, press_ki);
-                    self.handle_secondary_target(ui.ctx(), ctrl_held, kc, Some(press_ki), None);
+                    let binding = layout.get_key_binding(self.selected_layer, press_ki);
+                    self.handle_secondary_target(
+                        ui.ctx(),
+                        ctrl_held,
+                        binding,
+                        Some(press_ki),
+                        None,
+                    );
                 }
                 if middle_resp.clicked() {
                     self.open_picker_for_target(Some(press_ki), None);
@@ -598,7 +609,13 @@ impl EntropyApp {
             }
             if bottom_resp.secondary_clicked() {
                 if let Some((visual_idx, kc)) = ccw {
-                    self.handle_secondary_target(ui.ctx(), ctrl_held, *kc, None, Some(*visual_idx));
+                    self.handle_secondary_target(
+                        ui.ctx(),
+                        ctrl_held,
+                        (*kc).into(),
+                        None,
+                        Some(*visual_idx),
+                    );
                 }
             }
             if bottom_resp.clicked() {

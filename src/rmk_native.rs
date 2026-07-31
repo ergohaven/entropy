@@ -31,6 +31,44 @@ pub(crate) struct RmkNativeActionAt {
     pub(crate) action: KeyAction,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RmkModTapParts {
+    tap_value: u16,
+    hold_modifier_bits: u8,
+}
+
+impl RmkModTapParts {
+    pub(crate) fn tap_value(self) -> u16 {
+        self.tap_value
+    }
+
+    pub(crate) fn hold_modifier_bits(self) -> u8 {
+        self.hold_modifier_bits
+    }
+
+    pub(crate) fn vial_base(self) -> u16 {
+        0x2000 | ((self.hold_modifier_bits as u16) << 8)
+    }
+}
+
+pub(crate) fn rmk_mod_tap_parts(action: KeyAction) -> Option<RmkModTapParts> {
+    use rmk_types::action::Action;
+
+    let KeyAction::TapHold(
+        Action::KeyWithModifier(key, tap_modifiers),
+        Action::Modifier(hold_modifiers),
+        _,
+    ) = action
+    else {
+        return None;
+    };
+
+    Some(RmkModTapParts {
+        tap_value: ((tap_modifiers.into_packed_bits() as u16) << 8) | key as u16,
+        hold_modifier_bits: hold_modifiers.into_packed_bits(),
+    })
+}
+
 pub(crate) fn apply_rmk_native_actions(
     layout: &mut crate::keyboard::KeyboardLayout,
     actions: &[RmkNativeActionAt],
@@ -325,6 +363,30 @@ mod tests {
         assert!(label.contains('{'), "{label}");
         assert!(tooltip.contains("RMK Mod Tap"), "{tooltip}");
         assert!(tooltip.contains("Ctrl"), "{tooltip}");
+        assert!(tooltip.contains("Right click"), "{tooltip}");
+        let ru_tooltip = crate::i18n::tr_text(crate::i18n::Language::Russian, &tooltip);
+        assert!(ru_tooltip.contains("Правый клик"), "{ru_tooltip}");
+    }
+
+    #[test]
+    fn native_mod_tap_exposes_lossless_tap_value_and_vial_edit_base() {
+        let action = KeyAction::TapHold(
+            Action::KeyWithModifier(HidKeyCode::LeftBracket, ModifierCombination::LSHIFT),
+            Action::Modifier(ModifierCombination::RCTRL),
+            Default::default(),
+        );
+
+        let parts = rmk_mod_tap_parts(action).expect("native Mod Tap should be recognized");
+
+        assert_eq!(
+            parts.tap_value(),
+            ((ModifierCombination::LSHIFT.into_packed_bits() as u16) << 8)
+                | HidKeyCode::LeftBracket as u16
+        );
+        assert_eq!(
+            parts.vial_base(),
+            0x2000 | ((ModifierCombination::RCTRL.into_packed_bits() as u16) << 8)
+        );
     }
 
     #[test]

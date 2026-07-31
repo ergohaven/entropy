@@ -338,6 +338,8 @@ pub enum Key {
     RunInBackgroundTooltip,
     LaunchAtStartupLabel,
     LaunchAtStartupTooltip,
+    LaunchMinimizedLabel,
+    LaunchMinimizedTooltip,
     ShiftedNumberSymbolsLabel,
     ShiftedNumberSymbolsTooltip,
     LayerHoverPreviewLabel,
@@ -426,6 +428,8 @@ impl Key {
             Key::RunInBackgroundTooltip => "ui.run_in_background_tooltip",
             Key::LaunchAtStartupLabel => "ui.launch_at_startup_label",
             Key::LaunchAtStartupTooltip => "ui.launch_at_startup_tooltip",
+            Key::LaunchMinimizedLabel => "ui.launch_minimized_label",
+            Key::LaunchMinimizedTooltip => "ui.launch_minimized_tooltip",
             Key::ShiftedNumberSymbolsLabel => "ui.shifted_number_symbols_label",
             Key::ShiftedNumberSymbolsTooltip => "ui.shifted_number_symbols_tooltip",
             Key::LayerHoverPreviewLabel => "ui.layer_hover_preview_label",
@@ -1985,23 +1989,40 @@ pub fn tr_text(language: Language, text: &str) -> String {
             "Unknown keycode",
             tr_catalog(language, "dynamic_tooltips.unknown_keycode"),
         ),
-        other if other.starts_with("Mod Tap — tap for ") => other
-            .replace(
-                "Mod Tap — tap for ",
-                tr_catalog(language, "dynamic_tooltips.mod_tap_tap_for"),
-            )
-            .replace(
-                ", hold for Left ",
-                tr_catalog(language, "dynamic_tooltips.hold_for_left"),
-            )
-            .replace(
-                ", hold for Right ",
-                tr_catalog(language, "dynamic_tooltips.hold_for_right"),
-            )
-            .replace(
-                ", hold for ",
-                tr_catalog(language, "dynamic_tooltips.hold_for"),
-            ),
+        other
+            if other.starts_with("Mod Tap — tap for ")
+                || other.starts_with("RMK Mod Tap — tap for ") =>
+        {
+            other
+                .replace(
+                    "RMK Mod Tap — tap for ",
+                    tr_catalog(language, "dynamic_tooltips.mod_tap_tap_for"),
+                )
+                .replace(
+                    "Mod Tap — tap for ",
+                    tr_catalog(language, "dynamic_tooltips.mod_tap_tap_for"),
+                )
+                .replace(
+                    ", hold for Left ",
+                    tr_catalog(language, "dynamic_tooltips.hold_for_left"),
+                )
+                .replace(
+                    ", hold for Right ",
+                    tr_catalog(language, "dynamic_tooltips.hold_for_right"),
+                )
+                .replace(
+                    ", hold for ",
+                    tr_catalog(language, "dynamic_tooltips.hold_for"),
+                )
+                .replace(
+                    "Right click to change tap key",
+                    tr_catalog(language, "key_hints.change_mod_tap_key"),
+                )
+                .replace(
+                    "Ctrl+right-click to switch left/right side",
+                    tr_catalog(language, "key_hints.switch_modifier_side"),
+                )
+        }
         other if other.starts_with("Universal Cyrillic ") => other
             .replace("types", tr_catalog(language, "dynamic_tooltips.types"))
             .replace(

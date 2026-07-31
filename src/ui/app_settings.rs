@@ -111,7 +111,7 @@ impl EntropyApp {
 
         for row_idx in row_range {
             #[cfg(target_os = "linux")]
-            if row_idx == 4 {
+            if row_idx == 5 {
                 self.draw_linux_vial_udev_rules_row(
                     ui,
                     content_width,
@@ -360,7 +360,10 @@ impl EntropyApp {
                         },
                     );
                     if launch_at_startup != self.app_settings.launch_at_startup {
-                        if self.set_launch_at_startup(launch_at_startup) {
+                        if self.set_launch_at_startup(
+                            launch_at_startup,
+                            self.app_settings.launch_minimized,
+                        ) {
                             self.app_settings.launch_at_startup = launch_at_startup;
                             save_app_settings(&self.app_settings);
                         } else {
@@ -369,6 +372,36 @@ impl EntropyApp {
                     }
                 }
                 4 => {
+                    let mut launch_minimized = self.app_settings.launch_minimized;
+                    crate::ui_style::settings_list_row_with_tooltip(
+                        ui,
+                        content_width,
+                        row_height,
+                        crate::i18n::tr(lang, TrKey::LaunchMinimizedLabel),
+                        true,
+                        tooltip(crate::i18n::tr(lang, TrKey::LaunchMinimizedTooltip)),
+                        switch_width,
+                        |ui| {
+                            let _ = crate::ui_style::settings_switch_sized_stable(
+                                ui,
+                                "app_settings_launch_minimized",
+                                &mut launch_minimized,
+                                switch_size,
+                            );
+                        },
+                    );
+                    if launch_minimized != self.app_settings.launch_minimized {
+                        let registration_updated = !self.app_settings.launch_at_startup
+                            || self.set_launch_at_startup(true, launch_minimized);
+                        if registration_updated {
+                            self.app_settings.launch_minimized = launch_minimized;
+                            save_app_settings(&self.app_settings);
+                        } else {
+                            self.status_msg = "Failed to update startup setting".into();
+                        }
+                    }
+                }
+                5 => {
                     let mut show_shifted_symbols = self.app_settings.show_shifted_number_symbols;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -392,7 +425,7 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
-                5 => {
+                6 => {
                     let mut layer_hover_preview = self.app_settings.layer_hover_preview;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -419,7 +452,7 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
-                6 => {
+                7 => {
                     let mut encoder_hover_enlarge = self.app_settings.encoder_hover_enlarge;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -443,7 +476,7 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
-                7 => {
+                8 => {
                     let mut selected_accent = self.app_settings.accent_color;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -496,7 +529,7 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
-                8 => {
+                9 => {
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
                         content_width,
@@ -522,7 +555,7 @@ impl EntropyApp {
                         },
                     );
                 }
-                9 => {
+                10 => {
                     let mut diagnostics_enabled = self.app_settings.diagnostics_enabled;
                     let diagnostics_log_path = crate::diagnostics::active_log_path_display();
                     let diagnostics_tooltip = crate::i18n::tr_catalog_format(
@@ -558,7 +591,7 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
-                10 => {
+                11 => {
                     let mut show_signature = self.app_settings.show_made_by_signature;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -663,7 +696,7 @@ impl EntropyApp {
 }
 
 fn total_app_settings_rows() -> usize {
-    let rows = 11;
+    let rows = 12;
     #[cfg(target_os = "linux")]
     {
         rows + 1
@@ -677,7 +710,7 @@ fn total_app_settings_rows() -> usize {
 fn app_settings_base_row_index(row_idx: usize) -> usize {
     #[cfg(target_os = "linux")]
     {
-        if row_idx > 4 {
+        if row_idx > 5 {
             return row_idx - 1;
         }
     }

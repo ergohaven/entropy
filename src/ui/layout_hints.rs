@@ -19,26 +19,27 @@ impl EntropyApp {
         let any_hovered = self.prev_hovered_key.is_some() || self.prev_hovered_encoder;
         let hint_language = self.app_settings.language;
         let tr_hint = |key: &'static str| crate::i18n::tr_catalog(hint_language, key);
-        let hint_kc = || {
+        let hint_binding = || {
             self.prev_hovered_key
                 .and_then(|ki| {
                     self.layout
                         .as_ref()
-                        .map(|l| l.get_keycode(self.selected_layer, ki))
+                        .map(|l| l.get_key_binding(self.selected_layer, ki))
                 })
-                .or(self.prev_hovered_encoder_keycode)
+                .or_else(|| self.prev_hovered_encoder_keycode.map(Into::into))
                 .or_else(|| {
                     self.selected_key.and_then(|(selected_layer, selected_ki)| {
                         (selected_layer == self.selected_layer)
                             .then(|| {
                                 self.layout
                                     .as_ref()
-                                    .map(|l| l.get_keycode(self.selected_layer, selected_ki))
+                                    .map(|l| l.get_key_binding(self.selected_layer, selected_ki))
                             })
                             .flatten()
                     })
                 })
         };
+        let hint_kc = || hint_binding().map(crate::keyboard::KeyBinding::vial_keycode);
         if let Some(hl) = self.hover_layer {
             let hl_name = self
                 .layer_names
@@ -129,9 +130,16 @@ impl EntropyApp {
                 hovered_is_grave_escape,
                 hovered_is_layer,
                 hovered_is_lt,
+                hovered_is_mod_tap,
             ) = {
-                hint_kc()
-                    .map(|kc| {
+                hint_binding()
+                    .map(|binding| {
+                        let kc = binding.vial_keycode();
+                        let is_native_mod_tap = binding
+                            .rmk_action()
+                            .and_then(crate::rmk_native::rmk_mod_tap_parts)
+                            .is_some();
+                        let is_mod_tap = (0x2000..0x4000).contains(&kc) || is_native_mod_tap;
                         let is_plain_mod = (0x00E0..=0x00E7).contains(&kc)
                             || matches!(
                                 kc,
@@ -147,9 +155,10 @@ impl EntropyApp {
                                     | 0x52B8
                             );
                         let is_mod = is_plain_mod
-                            || (0x2000..0x4000).contains(&kc)
+                            || is_mod_tap
                             || ((0x0100..0x2000).contains(&kc) && (kc & 0xFF) != 0);
-                        let can_swap_side = toggle_handed_modifier(kc).is_some();
+                        let can_swap_side =
+                            toggle_handed_modifier(kc).is_some() || is_native_mod_tap;
                         let is_macro = (0x7700..=0x77FF).contains(&kc);
                         let is_tap_dance = (0x5700..=0x57FF).contains(&kc);
                         let is_mouse = is_mouse_keycode(kc);
@@ -158,8 +167,7 @@ impl EntropyApp {
                         let is_layer = vial_layer_target(kc).is_some();
                         let is_lt = kc & 0xF000 == 0x4000;
                         let can_retarget_mod_key = !is_layer
-                            && ((0x2000..0x4000).contains(&kc)
-                                || ((0x0100..0x2000).contains(&kc) && (kc & 0xFF) != 0));
+                            && (is_mod_tap || ((0x0100..0x2000).contains(&kc) && (kc & 0xFF) != 0));
                         (
                             is_mod,
                             can_swap_side,
@@ -171,10 +179,11 @@ impl EntropyApp {
                             is_grave_escape,
                             is_layer,
                             is_lt,
+                            is_mod_tap,
                         )
                     })
                     .unwrap_or((
-                        false, false, false, false, false, false, false, false, false, false,
+                        false, false, false, false, false, false, false, false, false, false, false,
                     ))
             };
             if hovered_is_mod {
@@ -198,7 +207,11 @@ impl EntropyApp {
                         ui.painter().text(
                             egui::pos2(center_x, hint_y - 4.0),
                             egui::Align2::CENTER_CENTER,
-                            tr_hint("key_hints.change_modifier_key"),
+                            if hovered_is_mod_tap {
+                                tr_hint("key_hints.change_mod_tap_key")
+                            } else {
+                                tr_hint("key_hints.change_modifier_key")
+                            },
                             secondary_hint_font.clone(),
                             hint_color,
                         );
