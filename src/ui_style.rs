@@ -450,7 +450,6 @@ pub fn modern_button_with_font(
     resp
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn modern_text_field_sized(
     ui: &mut Ui,
     id: egui::Id,
@@ -476,7 +475,6 @@ pub fn modern_text_field_sized(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn modern_text_field_interactive(
     ui: &mut Ui,
     id: egui::Id,
@@ -501,7 +499,6 @@ pub fn modern_text_field_interactive(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn modern_text_field_impl(
     ui: &mut Ui,
     id: egui::Id,
@@ -986,7 +983,6 @@ pub fn settings_list_row(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn settings_list_row_with_tooltip(
     ui: &mut Ui,
     content_width: f32,
