@@ -77,7 +77,12 @@
             inherit version;
             src = self;
 
-            cargoLock.lockFile = ./Cargo.lock;
+            cargoLock = {
+              lockFile = ./Cargo.lock;
+              outputHashes = {
+                "rmk-config-0.6.1" = "sha256-hTmYQ5aPdrSOBok4AbzLzW/qCX17gjVC80wMsvZlT88=";
+              };
+            };
 
             nativeBuildInputs = with pkgs; [
               pkg-config
