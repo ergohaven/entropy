@@ -100,15 +100,11 @@ pub(crate) enum CloseToTrayBehavior {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub(crate) enum StickyLayoutVisibilityMode {
+    #[default]
     LayoutAndPresses,
     PressedOnly,
-}
-
-impl Default for StickyLayoutVisibilityMode {
-    fn default() -> Self {
-        Self::LayoutAndPresses
-    }
 }
 
 pub(crate) fn default_show_shifted_number_symbols() -> bool {
@@ -2534,15 +2530,11 @@ pub(crate) use super::typing_trainer_words::{TypingTrainerLanguage, TYPING_TRAIN
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub(crate) enum TypingTrainerMode {
+    #[default]
     Time,
     Words,
-}
-
-impl Default for TypingTrainerMode {
-    fn default() -> Self {
-        Self::Time
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -4102,8 +4094,10 @@ mod layout_image_export_persist_tests {
 
     #[test]
     fn pdf_persists_backward_compatibly() {
-        let mut state = LayoutImageExportState::default();
-        state.format = LayoutImageExportFormat::Pdf;
+        let state = LayoutImageExportState {
+            format: LayoutImageExportFormat::Pdf,
+            ..Default::default()
+        };
         let json = serde_json::to_value(&state).unwrap();
         // A pre-PDF build only understands png/svg for `format`; PDF is stored
         // in the ignored `export_pdf` sidecar so it can't break their parsing.
@@ -4117,8 +4111,10 @@ mod layout_image_export_persist_tests {
             (LayoutImageExportFormat::Png, "png"),
             (LayoutImageExportFormat::Svg, "svg"),
         ] {
-            let mut state = LayoutImageExportState::default();
-            state.format = fmt;
+            let state = LayoutImageExportState {
+                format: fmt,
+                ..Default::default()
+            };
             let json = serde_json::to_value(&state).unwrap();
             assert_eq!(json["format"], expected);
             assert_eq!(json["export_pdf"], false);
@@ -4132,8 +4128,10 @@ mod layout_image_export_persist_tests {
             LayoutImageExportFormat::Svg,
             LayoutImageExportFormat::Pdf,
         ] {
-            let mut state = LayoutImageExportState::default();
-            state.format = fmt;
+            let state = LayoutImageExportState {
+                format: fmt,
+                ..Default::default()
+            };
             let json = serde_json::to_string(&state).unwrap();
             let back: LayoutImageExportState = serde_json::from_str(&json).unwrap();
             assert_eq!(back.format, fmt);

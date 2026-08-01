@@ -253,16 +253,20 @@ mod tests {
     #[test]
     fn pending_modifier_picker_renders_layout_and_list_tabs() {
         let ctx = egui::Context::default();
-        let mut picker = KeycodePicker::default();
-        picker.open = true;
-        picker.vial_quantum_pending_mod = Some(0x0100);
+        let mut picker = KeycodePicker {
+            open: true,
+            vial_quantum_pending_mod: Some(0x0100),
+            ..Default::default()
+        };
 
         let mut render = || {
-            let mut input = egui::RawInput::default();
-            input.screen_rect = Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(1_100.0, 800.0),
-            ));
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1_100.0, 800.0),
+                )),
+                ..Default::default()
+            };
             ctx.run_ui(input, |_ui| {
                 picker.show(
                     &ctx,

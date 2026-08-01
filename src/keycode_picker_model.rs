@@ -298,10 +298,7 @@ fn is_symbol(value: u16) -> bool {
 }
 
 fn is_modifier_or_layer_action(value: u16) -> bool {
-    matches!(
-        value,
-        0x0100..=0x3FFF | 0x4000..=0x4FFF | 0x5000..=0x52FF
-    )
+    matches!(value, 0x0100..=0x52FF)
 }
 
 #[cfg(test)]

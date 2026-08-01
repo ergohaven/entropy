@@ -29,8 +29,9 @@ pub(crate) enum UpdateCheckOutcome {
     Failed(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) enum UpdateCheckState {
+    #[default]
     Idle,
     Checking {
         #[cfg(not(target_arch = "wasm32"))]
@@ -38,12 +39,6 @@ pub(crate) enum UpdateCheckState {
     },
     Ready(UpdateCheckResult),
     Failed(String),
-}
-
-impl Default for UpdateCheckState {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 #[derive(serde::Deserialize)]
