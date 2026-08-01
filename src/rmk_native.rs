@@ -11,6 +11,7 @@ const ERGOHAVEN_CUSTOM_NEXT_NATIVE_KEY_ACTION: u8 = 0x04;
 const ERGOHAVEN_NATIVE_KEY_ACTION_VERSION: u8 = 0x01;
 const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_GET_SET: u16 = 0x0001;
 const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_UNIVERSAL_SYMBOLS: u16 = 0x0002;
+const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_RUSSIAN_LETTERS: u16 = 0x0004;
 const NATIVE_KEY_ACTION_STATUS_OK: u8 = 0x00;
 const NATIVE_KEY_ACTION_STATUS_END: u8 = 0x01;
 const NATIVE_KEY_ACTION_STATUS_UNSUPPORTED_VERSION: u8 = 0x02;
@@ -25,6 +26,7 @@ const NATIVE_KEY_ACTION_MAX_PAYLOAD: usize = MSG_LEN - NATIVE_KEY_ACTION_SET_PAY
 pub(crate) struct RmkNativeCapabilities {
     pub(crate) key_actions: bool,
     pub(crate) universal_symbols: bool,
+    pub(crate) russian_letters: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -153,6 +155,7 @@ fn decode_native_capabilities(response: &[u8; MSG_LEN]) -> RmkNativeCapabilities
     RmkNativeCapabilities {
         key_actions: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_GET_SET != 0,
         universal_symbols: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_UNIVERSAL_SYMBOLS != 0,
+        russian_letters: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_RUSSIAN_LETTERS != 0,
     }
 }
 
@@ -333,7 +336,8 @@ mod tests {
         response[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
         response[4..6].copy_from_slice(
             &(ERGOHAVEN_NATIVE_KEY_ACTION_CAP_GET_SET
-                | ERGOHAVEN_NATIVE_KEY_ACTION_CAP_UNIVERSAL_SYMBOLS)
+                | ERGOHAVEN_NATIVE_KEY_ACTION_CAP_UNIVERSAL_SYMBOLS
+                | ERGOHAVEN_NATIVE_KEY_ACTION_CAP_RUSSIAN_LETTERS)
                 .to_le_bytes(),
         );
 
@@ -342,8 +346,15 @@ mod tests {
             RmkNativeCapabilities {
                 key_actions: true,
                 universal_symbols: true,
+                russian_letters: true,
             }
         );
+        response[4..6].copy_from_slice(
+            &(ERGOHAVEN_NATIVE_KEY_ACTION_CAP_GET_SET
+                | ERGOHAVEN_NATIVE_KEY_ACTION_CAP_UNIVERSAL_SYMBOLS)
+                .to_le_bytes(),
+        );
+        assert!(!decode_native_capabilities(&response).russian_letters);
         response[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION + 1;
         assert_eq!(
             decode_native_capabilities(&response),
@@ -356,10 +367,12 @@ mod tests {
         assert!(supports_layout_sync(RmkNativeCapabilities {
             key_actions: true,
             universal_symbols: true,
+            russian_letters: false,
         }));
         assert!(!supports_layout_sync(RmkNativeCapabilities {
             key_actions: true,
             universal_symbols: false,
+            russian_letters: false,
         }));
     }
 

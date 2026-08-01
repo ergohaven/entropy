@@ -353,6 +353,7 @@ set_english = "Universal Symbols: switch to English"
 set_russian = "Universal Symbols: switch to Russian"
 toggle_platform = "Universal Symbols: toggle PC/macOS Russian-layout mappings"
 symbol_tooltip = "Universal Symbols: firmware types {symbol} in English and Russian layouts"
+russian_letter_tooltip = "Universal Symbols: firmware types {letter} in the Russian layout; hold Shift for uppercase"
 
 [shared_text]
 effect = "Effect"

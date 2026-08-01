@@ -6,6 +6,7 @@ pub(crate) const USER_SET_ENGLISH: u8 = 0x82;
 pub(crate) const USER_SET_RUSSIAN: u8 = 0x83;
 pub(crate) const USER_TOGGLE_MACOS: u8 = 0x84;
 pub(crate) const USER_SYMBOL_START: u8 = 0x90;
+pub(crate) const USER_RUSSIAN_LETTER_START: u8 = 0xB0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct UniversalSymbolControl {
@@ -18,6 +19,12 @@ pub(crate) struct UniversalSymbolControl {
 pub(crate) struct UniversalSymbol {
     pub(crate) user_id: u8,
     pub(crate) symbol: char,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct UniversalRussianLetter {
+    pub(crate) user_id: u8,
+    pub(crate) letter: char,
 }
 
 pub(crate) const CONTROLS: &[UniversalSymbolControl] = &[
@@ -83,10 +90,24 @@ pub(crate) const SYMBOLS: &[UniversalSymbol] = &[
     symbol(31, '_', "Underscore"),
 ];
 
+pub(crate) const RUSSIAN_LETTERS: &[UniversalRussianLetter] = &[
+    russian_letter(0, 'х'),
+    russian_letter(1, 'б'),
+    russian_letter(2, 'ю'),
+    russian_letter(3, 'ъ'),
+];
+
 const fn symbol(offset: u8, symbol: char, _name: &'static str) -> UniversalSymbol {
     UniversalSymbol {
         user_id: USER_SYMBOL_START + offset,
         symbol,
+    }
+}
+
+const fn russian_letter(offset: u8, letter: char) -> UniversalRussianLetter {
+    UniversalRussianLetter {
+        user_id: USER_RUSSIAN_LETTER_START + offset,
+        letter,
     }
 }
 
@@ -108,6 +129,22 @@ pub(crate) fn user_id(action: KeyAction) -> Option<u8> {
                 .any(|symbol| symbol.user_id == user_id)
                 .then_some(user_id)
         })
+        .or_else(|| {
+            RUSSIAN_LETTERS
+                .iter()
+                .any(|letter| letter.user_id == user_id)
+                .then_some(user_id)
+        })
+}
+
+pub(crate) fn russian_letter_user_id(action: KeyAction) -> Option<u8> {
+    let KeyAction::Single(Action::User(user_id)) = action else {
+        return None;
+    };
+    RUSSIAN_LETTERS
+        .iter()
+        .any(|letter| letter.user_id == user_id)
+        .then_some(user_id)
 }
 
 pub(crate) fn label(action: KeyAction) -> Option<String> {
@@ -121,6 +158,12 @@ pub(crate) fn label(action: KeyAction) -> Option<String> {
                 .iter()
                 .find(|symbol| symbol.user_id == user_id)
                 .map(|symbol| symbol.symbol.to_string())
+        })
+        .or_else(|| {
+            RUSSIAN_LETTERS
+                .iter()
+                .find(|letter| letter.user_id == user_id)
+                .map(|letter| letter.letter.to_string())
         })
 }
 
@@ -138,6 +181,17 @@ pub(crate) fn tooltip(action: KeyAction) -> Option<String> {
                     format!(
                         "Universal Symbols: firmware types {} in English and Russian layouts",
                         symbol.symbol
+                    )
+                })
+        })
+        .or_else(|| {
+            RUSSIAN_LETTERS
+                .iter()
+                .find(|letter| letter.user_id == user_id)
+                .map(|letter| {
+                    format!(
+                        "Universal Symbols: firmware types {} in the Russian layout; hold Shift for uppercase",
+                        letter.letter
                     )
                 })
         })
@@ -161,6 +215,18 @@ mod tests {
     }
 
     #[test]
+    fn russian_letter_table_has_stable_ids() {
+        assert_eq!(RUSSIAN_LETTERS.len(), 4);
+        assert_eq!(
+            RUSSIAN_LETTERS
+                .iter()
+                .map(|entry| (entry.user_id, entry.letter))
+                .collect::<Vec<_>>(),
+            vec![(0xB0, 'х'), (0xB1, 'б'), (0xB2, 'ю'), (0xB3, 'ъ')]
+        );
+    }
+
+    #[test]
     fn labels_decode_firmware_user_actions() {
         assert_eq!(
             label(binding(0x90).rmk_action().unwrap()).as_deref(),
@@ -169,6 +235,10 @@ mod tests {
         assert_eq!(
             label(binding(USER_SYNC).rmk_action().unwrap()).as_deref(),
             Some("Lang\nSync")
+        );
+        assert_eq!(
+            label(binding(USER_RUSSIAN_LETTER_START).rmk_action().unwrap()).as_deref(),
+            Some("х")
         );
         assert!(label(KeyAction::Single(Action::User(0x70))).is_none());
     }

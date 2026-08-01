@@ -1,6 +1,8 @@
 //! Small built-in qmk-hid-host bridge for display presets that expect host data.
 //! Sends the same Raw HID packet family as https://github.com/ergohaven/qmk-hid-host.
 
+#[cfg(target_os = "linux")]
+use std::sync::OnceLock;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -15,6 +17,12 @@ const DATA_LAYOUT: u8 = 0xAC;
 const DATA_MEDIA_ARTIST: u8 = 0xAD;
 const DATA_MEDIA_TITLE: u8 = 0xAE;
 const DEFAULT_LAYOUT_CODES: [&str; 2] = ["en", "ru"];
+#[cfg(target_os = "linux")]
+const KDE_LAYOUT_DESTINATION: &str = "org.kde.keyboard";
+#[cfg(target_os = "linux")]
+const KDE_LAYOUT_PATH: &str = "/Layouts";
+#[cfg(target_os = "linux")]
+const KDE_LAYOUT_INTERFACE: &str = "org.kde.KeyboardLayouts";
 #[cfg(target_os = "macos")]
 const MACOS_AUTOMATION_COMMAND_TIMEOUT: Duration = Duration::from_millis(1_500);
 #[cfg(not(target_os = "windows"))]
@@ -165,7 +173,19 @@ fn platform_layout_check() -> FeatureCheck {
 
 #[cfg(target_os = "linux")]
 fn platform_layout_check() -> FeatureCheck {
-    if std::env::var_os("DISPLAY").is_some() && x11_dl::xlib::Xlib::open().is_ok() {
+    if kde_layout_available() {
+        FeatureCheck {
+            ok: true,
+            label: "KDE Plasma / D-Bus",
+            hint: "Uses the active KDE keyboard layout on Wayland and X11",
+        }
+    } else if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        FeatureCheck {
+            ok: false,
+            label: "unsupported Wayland session",
+            hint: "Wayland Layout Sync is currently available on KDE Plasma",
+        }
+    } else if std::env::var_os("DISPLAY").is_some() && x11_dl::xlib::Xlib::open().is_ok() {
         FeatureCheck {
             ok: true,
             label: "X11 / XKB",
@@ -175,9 +195,15 @@ fn platform_layout_check() -> FeatureCheck {
         FeatureCheck {
             ok: false,
             label: "missing X11 / XKB",
-            hint: "Layout sync currently needs an X11 session",
+            hint: "Layout Sync needs KDE Plasma or an X11 session",
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn kde_layout_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| KdeLayoutTracker::new().is_some())
 }
 
 #[cfg(target_os = "macos")]
@@ -778,6 +804,15 @@ mod tests {
         assert_eq!(layout_code_index("de"), None);
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn kde_layout_index_maps_configured_layout_order() {
+        let layouts = vec!["us".to_owned(), "ru".to_owned()];
+        assert_eq!(kde_layout_code_index(0, &layouts), Some(0));
+        assert_eq!(kde_layout_code_index(1, &layouts), Some(1));
+        assert_eq!(kde_layout_code_index(2, &layouts), None);
+    }
+
     #[test]
     fn command_stdout_timeout_returns_successful_output() {
         let output =
@@ -835,7 +870,86 @@ mod tests {
 }
 
 #[cfg(target_os = "linux")]
-struct LayoutTracker {
+enum LayoutTracker {
+    Kde(KdeLayoutTracker),
+    X11(X11LayoutTracker),
+}
+
+#[cfg(target_os = "linux")]
+impl LayoutTracker {
+    fn new() -> Option<Self> {
+        if let Some(tracker) = KdeLayoutTracker::new() {
+            return Some(Self::Kde(tracker));
+        }
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            return None;
+        }
+        X11LayoutTracker::new().map(Self::X11)
+    }
+
+    fn current_layout_index(&mut self) -> Option<u8> {
+        match self {
+            Self::Kde(tracker) => tracker.current_layout_index(),
+            Self::X11(tracker) => tracker.current_layout_index(),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct KdeLayoutTracker {
+    connection: zbus::blocking::Connection,
+    layout_codes: Vec<String>,
+}
+
+#[cfg(target_os = "linux")]
+impl KdeLayoutTracker {
+    fn new() -> Option<Self> {
+        let connection = zbus::blocking::Connection::session().ok()?;
+        let layout_codes = {
+            let proxy = zbus::blocking::Proxy::new(
+                &connection,
+                KDE_LAYOUT_DESTINATION,
+                KDE_LAYOUT_PATH,
+                KDE_LAYOUT_INTERFACE,
+            )
+            .ok()?;
+            proxy
+                .call::<_, _, Vec<(String, String, String)>>("getLayoutsList", &())
+                .ok()?
+                .into_iter()
+                .map(|(short_name, _, _)| short_name)
+                .collect::<Vec<_>>()
+        };
+        if layout_codes.is_empty() {
+            return None;
+        }
+        Some(Self {
+            connection,
+            layout_codes,
+        })
+    }
+
+    fn current_layout_index(&mut self) -> Option<u8> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            KDE_LAYOUT_DESTINATION,
+            KDE_LAYOUT_PATH,
+            KDE_LAYOUT_INTERFACE,
+        )
+        .ok()?;
+        let layout = proxy.call::<_, _, u32>("getLayout", &()).ok()?;
+        kde_layout_code_index(layout, &self.layout_codes)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn kde_layout_code_index(layout: u32, layout_codes: &[String]) -> Option<u8> {
+    let raw = layout_codes.get(usize::try_from(layout).ok()?)?;
+    layout_code_index(raw)
+}
+
+#[cfg(target_os = "linux")]
+struct X11LayoutTracker {
     xlib: x11_dl::xlib::Xlib,
     display: *mut x11_dl::xlib::Display,
     keyboard: x11_dl::xlib::XkbDescPtr,
@@ -843,7 +957,7 @@ struct LayoutTracker {
 }
 
 #[cfg(target_os = "linux")]
-impl LayoutTracker {
+impl X11LayoutTracker {
     fn new() -> Option<Self> {
         unsafe {
             let xlib = x11_dl::xlib::Xlib::open().ok()?;
@@ -887,7 +1001,7 @@ impl LayoutTracker {
 }
 
 #[cfg(target_os = "linux")]
-impl Drop for LayoutTracker {
+impl Drop for X11LayoutTracker {
     fn drop(&mut self) {
         unsafe {
             if !self.keyboard.is_null() {

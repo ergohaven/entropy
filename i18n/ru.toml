@@ -353,6 +353,7 @@ set_english = "Universal Symbols: переключиться на English"
 set_russian = "Universal Symbols: переключиться на Russian"
 toggle_platform = "Universal Symbols: переключить соответствия PC/macOS для русской раскладки"
 symbol_tooltip = "Universal Symbols: прошивка вводит {symbol} в английской и русской раскладках"
+russian_letter_tooltip = "Universal Symbols: прошивка вводит {letter} в русской раскладке; удерживайте Shift для заглавной буквы"
 
 [shared_text]
 effect = "Эффект"

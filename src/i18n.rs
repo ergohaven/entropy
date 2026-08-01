@@ -1227,6 +1227,22 @@ pub fn tr_text(language: Language, text: &str) -> String {
                 &[("symbol", symbol)],
             )
         }
+        other
+            if other.starts_with("Universal Symbols: firmware types ")
+                && other.ends_with(" in the Russian layout; hold Shift for uppercase") =>
+        {
+            let letter = other
+                .strip_prefix("Universal Symbols: firmware types ")
+                .and_then(|rest| {
+                    rest.strip_suffix(" in the Russian layout; hold Shift for uppercase")
+                })
+                .unwrap_or("");
+            tr_catalog_string_format(
+                language,
+                "universal_symbols.russian_letter_tooltip",
+                &[("letter", letter)],
+            )
+        }
         other if other.starts_with("Connecting to ") => {
             let device = other
                 .strip_prefix("Connecting to ")

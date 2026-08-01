@@ -700,6 +700,7 @@ mod tests {
             lighting_mode: None,
             supports_rmk_native_key_actions: false,
             supports_universal_symbols: false,
+            supports_universal_russian_letters: false,
         })
     }
 

@@ -521,6 +521,7 @@ pub(crate) struct DeferredDeviceLoadContext {
     pub(crate) lighting_mode: Option<String>,
     pub(crate) supports_rmk_native_key_actions: bool,
     pub(crate) supports_universal_symbols: bool,
+    pub(crate) supports_universal_russian_letters: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -565,6 +566,7 @@ impl DeferredDeviceLoadContext {
             && self.lighting_mode == other.lighting_mode
             && self.supports_rmk_native_key_actions == other.supports_rmk_native_key_actions
             && self.supports_universal_symbols == other.supports_universal_symbols
+            && self.supports_universal_russian_letters == other.supports_universal_russian_letters
     }
 }
 
@@ -952,6 +954,8 @@ pub(crate) struct ConnectResult {
     pub(crate) supports_rmk_native_key_actions: bool,
     /// Firmware implements native EN/RU Universal Symbols actions.
     pub(crate) supports_universal_symbols: bool,
+    /// Firmware implements native Russian-letter Universal Symbols actions.
+    pub(crate) supports_universal_russian_letters: bool,
     pub(crate) macro_ext_keycodes_disabled_reason: Option<MacroExtKeycodesDisabledReason>,
     /// Tap dance entries
     pub(crate) tap_dance_entries: Vec<crate::keycode_picker::TapDanceEntry>,

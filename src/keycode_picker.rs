@@ -139,6 +139,7 @@ pub struct KeycodePicker {
     pub supports_macro_ext_keycodes: bool,
     pub supports_rmk_native_key_actions: bool,
     pub supports_universal_symbols: bool,
+    pub supports_universal_russian_letters: bool,
     pub rmk_native_key_actions_allowed_for_target: bool,
     pub macro_ext_keycodes_disabled_reason: Option<MacroExtKeycodesDisabledReason>,
     pub layer_names: Vec<String>,
@@ -217,6 +218,7 @@ mod tests {
         let supported = KeycodePicker {
             supports_rmk_native_key_actions: true,
             supports_universal_symbols: true,
+            supports_universal_russian_letters: true,
             rmk_native_key_actions_allowed_for_target: true,
             ..Default::default()
         };
@@ -226,24 +228,46 @@ mod tests {
             KeycodePicker {
                 supports_rmk_native_key_actions: false,
                 supports_universal_symbols: true,
+                supports_universal_russian_letters: true,
                 rmk_native_key_actions_allowed_for_target: true,
                 ..Default::default()
             },
             KeycodePicker {
                 supports_rmk_native_key_actions: true,
                 supports_universal_symbols: false,
+                supports_universal_russian_letters: true,
                 rmk_native_key_actions_allowed_for_target: true,
                 ..Default::default()
             },
             KeycodePicker {
                 supports_rmk_native_key_actions: true,
                 supports_universal_symbols: true,
+                supports_universal_russian_letters: true,
                 rmk_native_key_actions_allowed_for_target: false,
                 ..Default::default()
             },
         ] {
             assert!(!unsupported.universal_symbols_available());
         }
+
+        assert!(supported.universal_russian_letters_available());
+        assert!(!KeycodePicker {
+            supports_rmk_native_key_actions: true,
+            supports_universal_symbols: true,
+            supports_universal_russian_letters: false,
+            rmk_native_key_actions_allowed_for_target: true,
+            ..Default::default()
+        }
+        .universal_russian_letters_available());
+    }
+
+    #[test]
+    fn russian_universal_letter_reopens_on_special_tab() {
+        let mut picker = KeycodePicker::default();
+        picker.select_tab_for_binding(crate::universal_symbols::binding(
+            crate::universal_symbols::USER_RUSSIAN_LETTER_START,
+        ));
+        assert_eq!(picker.selected_tab, KeycodeTab::Special);
     }
 
     #[test]
@@ -604,6 +628,7 @@ impl Default for KeycodePicker {
             supports_macro_ext_keycodes: true,
             supports_rmk_native_key_actions: false,
             supports_universal_symbols: false,
+            supports_universal_russian_letters: false,
             rmk_native_key_actions_allowed_for_target: false,
             macro_ext_keycodes_disabled_reason: None,
             layer_names: (0..16).map(|i| i.to_string()).collect(),
@@ -645,6 +670,12 @@ impl Default for KeycodePicker {
 impl KeycodePicker {
     fn universal_symbols_available(&self) -> bool {
         self.supports_universal_symbols
+            && self.supports_rmk_native_key_actions
+            && self.rmk_native_key_actions_allowed_for_target
+    }
+
+    fn universal_russian_letters_available(&self) -> bool {
+        self.supports_universal_russian_letters
             && self.supports_rmk_native_key_actions
             && self.rmk_native_key_actions_allowed_for_target
     }
@@ -887,6 +918,11 @@ impl KeycodePicker {
             crate::keyboard::KeyBinding::Vial(value) => self.select_tab_for_keycode(value),
             crate::keyboard::KeyBinding::Rmk(rmk_types::action::KeyAction::TapHold(_, _, _)) => {
                 self.selected_tab = KeycodeTab::Modifiers
+            }
+            crate::keyboard::KeyBinding::Rmk(action)
+                if crate::universal_symbols::russian_letter_user_id(action).is_some() =>
+            {
+                self.selected_tab = KeycodeTab::Special
             }
             crate::keyboard::KeyBinding::Rmk(action)
                 if crate::universal_symbols::user_id(action).is_some() =>

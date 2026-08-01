@@ -563,6 +563,8 @@ impl EntropyApp {
                 self.keycode_picker.supports_rmk_native_key_actions =
                     r.supports_rmk_native_key_actions;
                 self.keycode_picker.supports_universal_symbols = r.supports_universal_symbols;
+                self.keycode_picker.supports_universal_russian_letters =
+                    r.supports_universal_russian_letters;
                 self.keycode_picker.macro_ext_keycodes_disabled_reason =
                     r.macro_ext_keycodes_disabled_reason;
                 // Parse macro texts into actions (Vial protocol v2+ bytecode).

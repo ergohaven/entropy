@@ -5,6 +5,16 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.4
+
+### Improvements
+
+- Added firmware-native Russian `х`, `б`, `ю`, and `ъ` keys under Special > International when the connected firmware advertises support
+
+### Fixes
+
+- Fixed automatic Universal Symbols layout synchronization on KDE Plasma Wayland by reading the native KDE keyboard-layout D-Bus service instead of stale XWayland state
+
 ## v0.3.3
 
 ### Main Features

@@ -672,7 +672,7 @@ Repeat"
                 painter.text(
                     egui::pos2(rect.center().x, rect.center().y - 6.5),
                     egui::Align2::CENTER_CENTER,
-                    *top,
+                    top,
                     egui::FontId::proportional(top_font),
                     cadet_top_color,
                 );
@@ -701,26 +701,53 @@ Repeat"
             .color(Color32::from_gray(150)),
         );
         ui.add_space(4.0);
-        let international_keys: &[(&str, &str, u16, &str)] = &[
-            ("JIS", "\\ _", 0x0087, "JIS \\ and _"),
-            ("JIS", "Kana", 0x0088, "JIS Katakana/Hiragana"),
-            ("JIS", "¥ |", 0x0089, "JIS ¥ and |"),
-            ("JIS", "Henkan", 0x008A, "JIS Henkan"),
-            ("JIS", "Muhenk", 0x008B, "JIS Muhenkan"),
-            ("JIS", "Num ,", 0x008C, "JIS Numpad ,"),
-            ("Hangul", "Eng", 0x0090, "Hangul/English"),
-            ("Hangul", "Hanja", 0x0091, "Hanja"),
-            ("JIS", "Katak", 0x0092, "JIS Katakana"),
-            ("JIS", "Hirag", 0x0093, "JIS Hiragana"),
-            ("JIS", "ZenHan", 0x0094, "JIS Zenkaku/Hankaku"),
-        ];
+        let mut international_keys: Vec<(String, String, crate::keyboard::KeyBinding, String)> =
+            Vec::new();
+        if self.universal_russian_letters_available() {
+            international_keys.extend(crate::universal_symbols::RUSSIAN_LETTERS.iter().map(
+                |letter| {
+                    let binding = crate::universal_symbols::binding(letter.user_id);
+                    (
+                        "Universal".to_owned(),
+                        letter.letter.to_string(),
+                        binding,
+                        crate::universal_symbols::tooltip(binding.rmk_action().unwrap())
+                            .unwrap_or_default(),
+                    )
+                },
+            ));
+        }
+        international_keys.extend(
+            [
+                ("JIS", "\\ _", 0x0087, "JIS \\ and _"),
+                ("JIS", "Kana", 0x0088, "JIS Katakana/Hiragana"),
+                ("JIS", "¥ |", 0x0089, "JIS ¥ and |"),
+                ("JIS", "Henkan", 0x008A, "JIS Henkan"),
+                ("JIS", "Muhenk", 0x008B, "JIS Muhenkan"),
+                ("JIS", "Num ,", 0x008C, "JIS Numpad ,"),
+                ("Hangul", "Eng", 0x0090, "Hangul/English"),
+                ("Hangul", "Hanja", 0x0091, "Hanja"),
+                ("JIS", "Katak", 0x0092, "JIS Katakana"),
+                ("JIS", "Hirag", 0x0093, "JIS Hiragana"),
+                ("JIS", "ZenHan", 0x0094, "JIS Zenkaku/Hankaku"),
+            ]
+            .into_iter()
+            .map(|(top, bottom, value, tip)| {
+                (
+                    top.to_owned(),
+                    bottom.to_owned(),
+                    crate::keyboard::KeyBinding::Vial(value),
+                    tip.to_owned(),
+                )
+            }),
+        );
         ui.horizontal_wrapped(|ui| {
             let intl_top_color = if ui.visuals().dark_mode {
                 Color32::from_gray(105)
             } else {
                 Color32::from_gray(145)
             };
-            for (top, bottom, value, tip) in international_keys {
+            for (top, bottom, binding, tip) in &international_keys {
                 let mut resp = ui.add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""));
                 let rect = resp.rect;
                 let painter = ui.painter();
@@ -738,19 +765,20 @@ Repeat"
                 painter.text(
                     egui::pos2(rect.center().x, rect.center().y - 6.5),
                     egui::Align2::CENTER_CENTER,
-                    *top,
+                    top,
                     egui::FontId::proportional(top_font),
                     intl_top_color,
                 );
                 painter.text(
                     egui::pos2(rect.center().x, rect.center().y + 6.5),
                     egui::Align2::CENTER_CENTER,
-                    *bottom,
+                    bottom,
                     egui::FontId::proportional(bottom_font),
                     main_color,
                 );
                 if resp.clicked() {
-                    self.assign_keycode_value(*value);
+                    self.result = Some(*binding);
+                    self.open = false;
                 }
                 resp = resp.on_hover_text(crate::i18n::tr_text(self.language, tip));
                 let _ = resp;

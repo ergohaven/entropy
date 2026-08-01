@@ -926,6 +926,7 @@ impl EntropyApp {
                     });
                 let supports_rmk_native_key_actions = rmk_native_capabilities.key_actions;
                 let supports_universal_symbols = rmk_native_capabilities.universal_symbols;
+                let supports_universal_russian_letters = rmk_native_capabilities.russian_letters;
                 layout.live_features.layout |=
                     crate::rmk_native::supports_layout_sync(rmk_native_capabilities);
                 if supports_rmk_native_key_actions {
@@ -1303,6 +1304,7 @@ impl EntropyApp {
                         lighting_mode: layout.lighting_mode.clone(),
                         supports_rmk_native_key_actions,
                         supports_universal_symbols,
+                        supports_universal_russian_letters,
                     })
                 } else {
                     DeferredDeviceLoadState::complete(layer_count)
@@ -1346,6 +1348,7 @@ impl EntropyApp {
                     supports_macro_ext_keycodes,
                     supports_rmk_native_key_actions,
                     supports_universal_symbols,
+                    supports_universal_russian_letters,
                     macro_ext_keycodes_disabled_reason,
                     tap_dance_entries,
                     combo_entries,
