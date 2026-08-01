@@ -35,6 +35,22 @@ enum SettingsWriteTarget {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SettingsReadback {
+    qsid: u16,
+    value: u16,
+}
+
+pub(super) struct ModuleSettingWrite {
+    pub(super) group_title: String,
+    pub(super) field_title: String,
+    pub(super) display_label: String,
+    pub(super) qsid: u16,
+    pub(super) width: u8,
+    pub(super) old_value: u16,
+    pub(super) requested: u16,
+}
+
 impl SettingsWriteTarget {
     fn display_label(&self) -> &str {
         match self {
@@ -86,41 +102,41 @@ impl SettingsWriteTarget {
         tap_hold_settings: &mut TapHoldSettingsState,
         one_shot_settings: &mut OneShotSettingsState,
         layer_led_settings: &mut LayerLedSettingsState,
-        qsid: u16,
-        readback: u16,
+        readback: SettingsReadback,
     ) {
+        let SettingsReadback { qsid, value } = readback;
         match self {
-            Self::Module { .. } => module_settings.set_value(qsid, readback),
+            Self::Module { .. } => module_settings.set_value(qsid, value),
             Self::Touchpad { .. } => match qsid {
-                120 => touchpad_settings.dpi = readback,
-                121 => touchpad_settings.sniper_sens = readback.min(u8::MAX as u16) as u8,
-                122 => touchpad_settings.scroll_sens = readback.min(u8::MAX as u16) as u8,
-                123 => touchpad_settings.text_sens = readback.min(u8::MAX as u16) as u8,
-                124 => touchpad_settings.bits = readback.min(u8::MAX as u16) as u8,
-                142 => touchpad_settings.auto_layer_enable = readback != 0,
-                143 => touchpad_settings.auto_layer = readback.min(u8::MAX as u16) as u8,
+                120 => touchpad_settings.dpi = value,
+                121 => touchpad_settings.sniper_sens = value.min(u8::MAX as u16) as u8,
+                122 => touchpad_settings.scroll_sens = value.min(u8::MAX as u16) as u8,
+                123 => touchpad_settings.text_sens = value.min(u8::MAX as u16) as u8,
+                124 => touchpad_settings.bits = value.min(u8::MAX as u16) as u8,
+                142 => touchpad_settings.auto_layer_enable = value != 0,
+                143 => touchpad_settings.auto_layer = value.min(u8::MAX as u16) as u8,
                 _ => {}
             },
             Self::TapHold { .. } => match qsid {
-                7 => tap_hold_settings.tapping_term = readback,
-                18 => tap_hold_settings.tap_code_delay = readback,
-                19 => tap_hold_settings.tap_hold_caps_delay = readback,
-                20 => tap_hold_settings.tapping_toggle = readback,
-                22 => tap_hold_settings.permissive_hold = readback != 0,
-                23 => tap_hold_settings.hold_on_other_key_press = readback != 0,
-                24 => tap_hold_settings.retro_tapping = readback != 0,
-                25 => tap_hold_settings.quick_tap_term = readback,
-                26 => tap_hold_settings.chordal_hold = readback != 0,
-                27 => tap_hold_settings.flow_tap = readback,
+                7 => tap_hold_settings.tapping_term = value,
+                18 => tap_hold_settings.tap_code_delay = value,
+                19 => tap_hold_settings.tap_hold_caps_delay = value,
+                20 => tap_hold_settings.tapping_toggle = value,
+                22 => tap_hold_settings.permissive_hold = value != 0,
+                23 => tap_hold_settings.hold_on_other_key_press = value != 0,
+                24 => tap_hold_settings.retro_tapping = value != 0,
+                25 => tap_hold_settings.quick_tap_term = value,
+                26 => tap_hold_settings.chordal_hold = value != 0,
+                27 => tap_hold_settings.flow_tap = value,
                 _ => {}
             },
             Self::OneShot { .. } => match qsid {
-                5 => one_shot_settings.tap_toggle = readback.min(u8::MAX as u16) as u8,
-                6 => one_shot_settings.timeout = readback,
+                5 => one_shot_settings.tap_toggle = value.min(u8::MAX as u16) as u8,
+                6 => one_shot_settings.timeout = value,
                 _ => {}
             },
             Self::LayerLed { .. } => {
-                layer_led_settings.set_value(qsid, readback);
+                layer_led_settings.set_value(qsid, value);
             }
         }
     }
@@ -372,16 +388,16 @@ impl EntropyApp {
         }
     }
 
-    pub(super) fn queue_module_setting_write(
-        &mut self,
-        group_title: String,
-        field_title: String,
-        display_label: String,
-        qsid: u16,
-        width: u8,
-        old_value: u16,
-        requested: u16,
-    ) {
+    pub(super) fn queue_module_setting_write(&mut self, write: ModuleSettingWrite) {
+        let ModuleSettingWrite {
+            group_title,
+            field_title,
+            display_label,
+            qsid,
+            width,
+            old_value,
+            requested,
+        } = write;
         self.queue_settings_write(SettingsWriteRequest {
             id: 0,
             generation: self.settings_write_generation,
@@ -661,8 +677,10 @@ impl EntropyApp {
                         &mut self.tap_hold_settings,
                         &mut self.one_shot_settings,
                         &mut self.layer_led_settings,
-                        request.qsid,
-                        readback,
+                        SettingsReadback {
+                            qsid: request.qsid,
+                            value: readback,
+                        },
                     );
                     if request.target.is_touchpad() {
                         self.status_msg = crate::i18n::tr_catalog_format(
@@ -701,8 +719,10 @@ impl EntropyApp {
                             &mut self.tap_hold_settings,
                             &mut self.one_shot_settings,
                             &mut self.layer_led_settings,
-                            request.qsid,
-                            *actual,
+                            SettingsReadback {
+                                qsid: request.qsid,
+                                value: *actual,
+                            },
                         );
                     }
                     self.status_msg = crate::i18n::tr_catalog_format(
@@ -853,8 +873,7 @@ mod tests {
             &mut tap_hold_settings,
             &mut one_shot_settings,
             &mut layer_led_settings,
-            7,
-            3,
+            SettingsReadback { qsid: 7, value: 3 },
         );
         SettingsWriteTarget::Touchpad {
             display_label: "Scroll sensitivity".to_owned(),
@@ -865,8 +884,10 @@ mod tests {
             &mut tap_hold_settings,
             &mut one_shot_settings,
             &mut layer_led_settings,
-            122,
-            9,
+            SettingsReadback {
+                qsid: 122,
+                value: 9,
+            },
         );
         SettingsWriteTarget::TapHold {
             display_label: "Tap-hold timeout".to_owned(),
@@ -877,8 +898,10 @@ mod tests {
             &mut tap_hold_settings,
             &mut one_shot_settings,
             &mut layer_led_settings,
-            7,
-            175,
+            SettingsReadback {
+                qsid: 7,
+                value: 175,
+            },
         );
         SettingsWriteTarget::OneShot {
             display_label: "One-shot timeout".to_owned(),
@@ -889,8 +912,10 @@ mod tests {
             &mut tap_hold_settings,
             &mut one_shot_settings,
             &mut layer_led_settings,
-            6,
-            800,
+            SettingsReadback {
+                qsid: 6,
+                value: 800,
+            },
         );
         SettingsWriteTarget::LayerLed {
             display_label: "Layer LED brightness".to_owned(),
@@ -901,8 +926,10 @@ mod tests {
             &mut tap_hold_settings,
             &mut one_shot_settings,
             &mut layer_led_settings,
-            316,
-            128,
+            SettingsReadback {
+                qsid: 316,
+                value: 128,
+            },
         );
 
         assert_eq!(module_settings.value(7), 3);

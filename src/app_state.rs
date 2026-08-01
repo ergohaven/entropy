@@ -3101,7 +3101,11 @@ fn typing_trainer_number_token(seed: usize, idx: usize) -> String {
 }
 
 fn typing_trainer_should_append_punctuation(seed: usize, idx: usize, word_count: usize) -> bool {
-    idx + 1 < word_count && seed.wrapping_add(idx * 17).wrapping_add(idx / 4) % 5 == 0
+    idx + 1 < word_count
+        && seed
+            .wrapping_add(idx * 17)
+            .wrapping_add(idx / 4)
+            .is_multiple_of(5)
 }
 
 fn typing_trainer_punctuation_mark(seed: usize, idx: usize) -> char {
@@ -4102,8 +4106,10 @@ mod layout_image_export_persist_tests {
 
     #[test]
     fn pdf_persists_backward_compatibly() {
-        let mut state = LayoutImageExportState::default();
-        state.format = LayoutImageExportFormat::Pdf;
+        let state = LayoutImageExportState {
+            format: LayoutImageExportFormat::Pdf,
+            ..Default::default()
+        };
         let json = serde_json::to_value(&state).unwrap();
         // A pre-PDF build only understands png/svg for `format`; PDF is stored
         // in the ignored `export_pdf` sidecar so it can't break their parsing.
@@ -4117,8 +4123,10 @@ mod layout_image_export_persist_tests {
             (LayoutImageExportFormat::Png, "png"),
             (LayoutImageExportFormat::Svg, "svg"),
         ] {
-            let mut state = LayoutImageExportState::default();
-            state.format = fmt;
+            let state = LayoutImageExportState {
+                format: fmt,
+                ..Default::default()
+            };
             let json = serde_json::to_value(&state).unwrap();
             assert_eq!(json["format"], expected);
             assert_eq!(json["export_pdf"], false);
@@ -4132,8 +4140,10 @@ mod layout_image_export_persist_tests {
             LayoutImageExportFormat::Svg,
             LayoutImageExportFormat::Pdf,
         ] {
-            let mut state = LayoutImageExportState::default();
-            state.format = fmt;
+            let state = LayoutImageExportState {
+                format: fmt,
+                ..Default::default()
+            };
             let json = serde_json::to_string(&state).unwrap();
             let back: LayoutImageExportState = serde_json::from_str(&json).unwrap();
             assert_eq!(back.format, fmt);

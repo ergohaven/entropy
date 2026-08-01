@@ -235,15 +235,15 @@ impl EntropyApp {
         let old_value = self.module_settings.value(field.qsid);
         let requested = Self::module_setting_transport_value(field, value);
 
-        self.queue_module_setting_write(
+        self.queue_module_setting_write(super::settings_write_queue::ModuleSettingWrite {
             group_title,
             field_title,
             display_label,
-            field.qsid,
-            field.width,
+            qsid: field.qsid,
+            width: field.width,
             old_value,
             requested,
-        );
+        });
         self.sync_firmware_managed_layout_options();
     }
 

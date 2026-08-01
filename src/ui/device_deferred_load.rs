@@ -1249,12 +1249,10 @@ impl EntropyApp {
                         let status = self.deferred_device_load.section_status(section);
                         (!status.ready()).then_some(DeferredOverlayTarget::Section(section, status))
                     })
-                    .unwrap_or_else(|| {
-                        DeferredOverlayTarget::Layer(
-                            self.selected_layer,
-                            DeferredLoadStatus::Loaded,
-                        )
-                    })
+                    .unwrap_or(DeferredOverlayTarget::Layer(
+                        self.selected_layer,
+                        DeferredLoadStatus::Loaded,
+                    ))
             } else {
                 DeferredOverlayTarget::Layer(self.selected_layer, DeferredLoadStatus::Loaded)
             }

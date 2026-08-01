@@ -219,11 +219,6 @@ pub fn text_expander_runs_outside_entropy_process() -> bool {
     matches!(linux_session_kind(), LinuxSessionKind::Wayland)
 }
 
-#[cfg(not(target_os = "linux"))]
-pub fn text_expander_runs_outside_entropy_process() -> bool {
-    false
-}
-
 #[cfg(target_os = "linux")]
 fn linux_input_method_hint() -> &'static str {
     let combined = linux_input_method_env();

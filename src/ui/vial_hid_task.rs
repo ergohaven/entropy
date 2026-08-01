@@ -777,7 +777,7 @@ mod tests {
         assert_eq!(requests.len(), 5);
         assert!(requests
             .iter()
-            .all(|request| &request[..3] == [0x08, 0xE8, 0x01]));
+            .all(|request| request[..3] == [0x08, 0xE8, 0x01]));
     }
 
     #[test]
@@ -1045,15 +1045,15 @@ mod tests {
         assert!(app.hid_device.is_none());
         assert!(app.qmk_setting_transport_available());
 
-        app.queue_module_setting_write(
-            "Left Modules".to_owned(),
-            "Mode".to_owned(),
-            "Mode".to_owned(),
-            134,
-            1,
-            0,
-            3,
-        );
+        app.queue_module_setting_write(super::settings_write_queue::ModuleSettingWrite {
+            group_title: "Left Modules".to_owned(),
+            field_title: "Mode".to_owned(),
+            display_label: "Mode".to_owned(),
+            qsid: 134,
+            width: 1,
+            old_value: 0,
+            requested: 3,
+        });
         app.queue_layer_led_setting_write("Layer LED brightness".to_owned(), 316, 2, 32, 128);
 
         assert!(app.settings_write_task.is_none());
