@@ -5,6 +5,14 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.2
+
+### Improvements
+
+- Replaced direction arrows in Russian vertical and horizontal inversion setting labels with text
+- Enlarged circular encoder controls by 10% across layout views and exports
+- Rendered macOS Command key legends as `Cmd` text on layouts and in key pickers
+
 ## v0.3.1 - Public Beta
 
 ### Main Features

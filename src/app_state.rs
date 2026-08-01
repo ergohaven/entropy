@@ -3731,7 +3731,7 @@ impl Default for LayoutImageExportState {
 pub(crate) const LAYOUT_BASE_UNIT: f32 = 54.0_f32 * 1.15;
 pub(crate) const LAYOUT_KEY_PADDING: f32 = 2.5_f32;
 pub(crate) const LAYOUT_FIT_MARGIN: f32 = 40.0_f32;
-pub(crate) const LAYOUT_ENCODER_RADIUS_FACTOR: f32 = 0.47_f32;
+pub(crate) const LAYOUT_ENCODER_RADIUS_FACTOR: f32 = 0.47_f32 * 1.10_f32;
 pub(crate) const LAYOUT_ENCODER_FILL_EXTRA: f32 = 1.0_f32;
 pub(crate) const LAYOUT_TOP_RESERVED_H: f32 = 32.0_f32 + 4.0_f32 + 68.0_f32;
 pub(crate) const LAYOUT_BOTTOM_RESERVED_H: f32 = 76.0_f32;

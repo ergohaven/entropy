@@ -1,28 +1,27 @@
 //! QMK/Vial keycode definitions — protocol v6
 //! Reference: vial-gui/src/main/python/keycodes/keycodes_v6.py
 
+fn gui_name_for_target_os(target_os: &str) -> &'static str {
+    match target_os {
+        "macos" => "Cmd",
+        "windows" => "Win",
+        _ => "Super",
+    }
+}
+
 /// Returns the platform-appropriate generic label for the GUI/Super/Win/Cmd key.
 /// Side-specific info belongs in tooltips, not the keycap label.
 pub fn gui_label(_right: bool) -> &'static str {
-    #[cfg(target_os = "macos")]
-    { "⌘" }
-    #[cfg(target_os = "windows")]
-    { "Win" }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    { "Super" }
+    gui_name_for_target_os(std::env::consts::OS)
 }
 
-/// Short GUI symbol for use in compound labels (e.g. MT, mod combos).
+/// Short GUI label for use in compound labels (e.g. MT, mod combos).
 pub fn gui_sym() -> &'static str {
-    #[cfg(target_os = "macos")] { "⌘" }
-    #[cfg(target_os = "windows")] { "Win" }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))] { "Super" }
+    gui_name_for_target_os(std::env::consts::OS)
 }
 
 pub fn gui_mod_name() -> &'static str {
-    #[cfg(target_os = "macos")] { "Cmd" }
-    #[cfg(target_os = "windows")] { "Win" }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))] { "Super" }
+    gui_name_for_target_os(std::env::consts::OS)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1307,5 +1306,15 @@ fn simple_key_tooltip(kc: &Keycode) -> String {
         KeycodeCategory::Function => format!("{} function key", kc.label),
         KeycodeCategory::Numpad   => format!("Numpad {}", kc.label.trim_start_matches("Num")),
         _ => kc.label.replace('\n', " / "),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn macos_gui_legends_use_cmd_text() {
+        assert_eq!(gui_name_for_target_os("macos"), "Cmd");
     }
 }

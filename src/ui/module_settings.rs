@@ -1418,4 +1418,26 @@ mod tests {
             "modules_settings.trackball_title"
         );
     }
+
+    #[test]
+    fn russian_inversion_labels_use_direction_words_without_arrows() {
+        let mut app = test_app();
+        app.app_settings.language = crate::i18n::Language::Russian;
+
+        for (title, direction) in [
+            ("Invert scroll vertical", "вертикали"),
+            ("Invert scroll horizontal", "горизонтали"),
+            ("Invert text vertical", "вертикали"),
+            ("Invert text horizontal", "горизонтали"),
+        ] {
+            let label = app.module_setting_label(ModuleSettingsGroupKind::Left, title);
+            assert!(label.contains(direction), "{label}");
+            assert!(
+                !label
+                    .chars()
+                    .any(|character| matches!(character, '↑' | '↓' | '←' | '→')),
+                "{label}"
+            );
+        }
+    }
 }
