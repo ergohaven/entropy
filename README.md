@@ -35,7 +35,7 @@ and firmware settings from one coherent interface.
 - Support for keyboards, macropads, trackballs, touchpads, encoders, displays,
   and modular input devices
 - Text Expander for local shortcuts from programmable devices
-- Universal Symbols for typography, arrows, math, currency, and custom characters
+- Firmware-native Universal Symbols for consistent EN/RU punctuation
 - Fast keycode picker with layouts, symbols, modifiers, macros, and smart filtering
 - Custom names for layers, combos, macros, tap dance entries, and other device objects
 - Live Features as a built-in qmk-hid-host replacement for firmware host data
@@ -44,7 +44,7 @@ and firmware settings from one coherent interface.
 - Advanced pages for Auto Shift, Mouse Keys, Tap-Hold, One Shot, Grave Escape,
   Magic, Layer LEDs, touchpad settings, and modules
 - Light/dark themes, accent color, UI scaling, settings import/export, and tray mode
-- Linux udev helper plus optional IBus integration for Wayland input workflows
+- Linux udev helper plus optional IBus integration for Text Expander
 
 ## Platforms
 
@@ -98,7 +98,7 @@ open /Applications/Entropy.app
 1. Download the build for your platform from GitHub Releases
 2. Connect a Vial-compatible device
 3. On Linux, install Vial udev rules if Entropy cannot open the device
-   and install the IBus backend if you want Wayland text expansion
+   and install the IBus backend if you want Text Expander on Linux
 4. Launch Entropy
 5. Select the device from the top-left device dropdown
 6. Edit layers, keycodes, advanced firmware features, or app settings
@@ -118,7 +118,7 @@ Replug the device after installing the rule.
 
 ## Linux IBus Backend
 
-On Wayland, Entropy uses IBus for Universal Symbols and Text Expander input. Use
+On Linux, Entropy uses IBus for Text Expander input. Use
 the **Install IBus** action in Entropy settings to install the bundled Entropy
 IBus engine. The AppImage includes the installer and engine, so a separate source
 checkout is not required.
@@ -131,35 +131,24 @@ sudo apt-get install ibus python3-gi gir1.2-ibus-1.0
 ```
 
 After installation, restart IBus if Entropy did not do it automatically, then add
-**Entropy Universal Symbols** as an input source in your desktop input settings.
+an **Entropy Text Expander** layout as an input source in your desktop input settings.
 
 ## Universal Symbols
 
-Universal Symbols let a keyboard type the same punctuation, typography, math,
-currency, and Cyrillic characters regardless of the active OS keyboard layout.
-They are intended for characters that are inconvenient or inconsistent across
-language layouts.
+Universal Symbols are native RMK firmware actions for punctuation that should
+produce the same character in English and Russian layouts. Supported firmware
+tracks the active EN/RU layout and emits ordinary HID key presses, so assigned
+symbols work without Entropy or another background service.
 
-Entropy implements this by using `F13`-`F24` as transport keys. Firmware sends
-`F13`-`F24`, optionally with `Shift`, `Ctrl`, and/or `Alt`; Entropy catches those
-carrier events and types the mapped Unicode character through the native OS
-input backend.
+When Entropy is running, the existing Layout Sync bridge reports the active OS
+layout to the keyboard and corrects firmware state after layout changes made by
+the operating system. Manual Toggle, Sync, English, and Russian actions remain
+available for fully autonomous use.
 
-Because of that, `F13`-`F24` must be treated as reserved when Universal Symbols
-are enabled:
-
-- Do not assign `F13`-`F24` to personal firmware actions, macros, combos, tap
-  dance entries, key overrides, or OS/application shortcuts
-- Do not use modified `F13`-`F24` chords such as `Alt+F13`, `Ctrl+F13`, or
-  `Ctrl+Alt+F13` for unrelated firmware behavior
-- Assign Universal Symbols from Entropy's key picker instead of manually reusing
-  raw `F13`-`F24` keycodes
-- Keep Entropy running while using Universal Symbols; without Entropy, the OS
-  will receive raw `F13`-`F24` events
-
-This reservation avoids conflicts where browsers, mail clients, or other desktop
-apps interpret raw or modified `F13`-`F24` events as interface shortcuts instead
-of text input.
+Entropy shows the Universal Symbols picker section only when connected firmware
+advertises this capability. The catalog intentionally contains only punctuation
+implemented by the firmware; the former Unicode typography, arrows, math, and
+currency extras are not exposed.
 
 ## Compatibility
 

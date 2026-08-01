@@ -1031,7 +1031,7 @@ fn linux_close_to_tray_prompt_copy(
         ),
         (crate::i18n::Language::Russian, false) => (
             "Закрыть Entropy?",
-            "X11 Text Expander остановится; оставьте Entropy работать в фоне",
+            "Text Expander работает через IBus; фоновое окно Entropy его не заменяет",
             "Запомнить выбор",
             "Закрыть",
             "В фон",
@@ -1039,7 +1039,7 @@ fn linux_close_to_tray_prompt_copy(
         ),
         (crate::i18n::Language::English, false) => (
             "Close Entropy?",
-            "X11 Text Expander will stop; keep Entropy running in background",
+            "Text Expander uses IBus; keeping the Entropy window open does not replace it",
             "Remember my choice",
             "Close",
             "Keep running",

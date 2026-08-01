@@ -183,13 +183,13 @@ impl EntropyApp {
         crate::ui_style::allocate_ui_at_rect(ui, button_rect, |ui| {
             if crate::ui_style::modern_button(
                 ui,
-                crate::i18n::tr_catalog(lang, "text_expander.open_universal_symbols_setup"),
+                crate::i18n::tr_catalog(lang, "text_expander.open_backend_setup"),
                 button_size,
                 true,
             )
             .clicked()
             {
-                self.open_universal_symbols_setup_page();
+                self.open_text_expander_setup_page();
             }
         });
     }
@@ -199,14 +199,7 @@ impl EntropyApp {
 fn text_expander_backend_hint_key() -> &'static str {
     #[cfg(target_os = "linux")]
     {
-        match crate::smart_input::linux_recommended_input_backend() {
-            crate::smart_input::LinuxRecommendedInputBackend::X11Native => {
-                "text_expander.backend_hint_linux_x11"
-            }
-            crate::smart_input::LinuxRecommendedInputBackend::IBus => {
-                "text_expander.backend_hint_linux_ibus"
-            }
-        }
+        "text_expander.backend_hint_linux_ibus"
     }
     #[cfg(target_os = "macos")]
     {

@@ -10,6 +10,7 @@ const ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION: u8 = 0x03;
 const ERGOHAVEN_CUSTOM_NEXT_NATIVE_KEY_ACTION: u8 = 0x04;
 const ERGOHAVEN_NATIVE_KEY_ACTION_VERSION: u8 = 0x01;
 const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_GET_SET: u16 = 0x0001;
+const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_UNIVERSAL_SYMBOLS: u16 = 0x0002;
 const NATIVE_KEY_ACTION_STATUS_OK: u8 = 0x00;
 const NATIVE_KEY_ACTION_STATUS_END: u8 = 0x01;
 const NATIVE_KEY_ACTION_STATUS_UNSUPPORTED_VERSION: u8 = 0x02;
@@ -23,6 +24,7 @@ const NATIVE_KEY_ACTION_MAX_PAYLOAD: usize = MSG_LEN - NATIVE_KEY_ACTION_SET_PAY
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct RmkNativeCapabilities {
     pub(crate) key_actions: bool,
+    pub(crate) universal_symbols: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,6 +143,23 @@ fn native_response_header_matches(response: &[u8; MSG_LEN], subcommand: u8) -> b
         && response[2] == subcommand
 }
 
+fn decode_native_capabilities(response: &[u8; MSG_LEN]) -> RmkNativeCapabilities {
+    if !native_response_header_matches(response, ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS)
+        || response[3] != ERGOHAVEN_NATIVE_KEY_ACTION_VERSION
+    {
+        return RmkNativeCapabilities::default();
+    }
+    let flags = u16::from_le_bytes([response[4], response[5]]);
+    RmkNativeCapabilities {
+        key_actions: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_GET_SET != 0,
+        universal_symbols: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_UNIVERSAL_SYMBOLS != 0,
+    }
+}
+
+pub(crate) const fn supports_layout_sync(capabilities: RmkNativeCapabilities) -> bool {
+    capabilities.universal_symbols
+}
+
 fn decode_native_action(
     response: &[u8; MSG_LEN],
     status_offset: usize,
@@ -170,15 +189,7 @@ impl crate::hid::HidDevice {
         command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
         command[2] = ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS;
         let response = self.usb_send(&command)?;
-        if !native_response_header_matches(&response, ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS)
-            || response[3] != ERGOHAVEN_NATIVE_KEY_ACTION_VERSION
-        {
-            return Ok(RmkNativeCapabilities::default());
-        }
-        let flags = u16::from_le_bytes([response[4], response[5]]);
-        Ok(RmkNativeCapabilities {
-            key_actions: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_GET_SET != 0,
-        })
+        Ok(decode_native_capabilities(&response))
     }
 
     pub(crate) fn get_rmk_key_action(&self, layer: u8, row: u8, col: u8) -> Result<KeyAction> {
@@ -312,6 +323,45 @@ mod tests {
     use rmk_types::action::Action;
     use rmk_types::keycode::HidKeyCode;
     use rmk_types::modifier::ModifierCombination;
+
+    #[test]
+    fn decodes_universal_symbols_capability_independently() {
+        let mut response = [0u8; MSG_LEN];
+        response[0] = CMD_VIA_CUSTOM_GET_VALUE;
+        response[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
+        response[2] = ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS;
+        response[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
+        response[4..6].copy_from_slice(
+            &(ERGOHAVEN_NATIVE_KEY_ACTION_CAP_GET_SET
+                | ERGOHAVEN_NATIVE_KEY_ACTION_CAP_UNIVERSAL_SYMBOLS)
+                .to_le_bytes(),
+        );
+
+        assert_eq!(
+            decode_native_capabilities(&response),
+            RmkNativeCapabilities {
+                key_actions: true,
+                universal_symbols: true,
+            }
+        );
+        response[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION + 1;
+        assert_eq!(
+            decode_native_capabilities(&response),
+            RmkNativeCapabilities::default()
+        );
+    }
+
+    #[test]
+    fn universal_symbols_capability_enables_existing_layout_sync_bridge() {
+        assert!(supports_layout_sync(RmkNativeCapabilities {
+            key_actions: true,
+            universal_symbols: true,
+        }));
+        assert!(!supports_layout_sync(RmkNativeCapabilities {
+            key_actions: true,
+            universal_symbols: false,
+        }));
+    }
 
     #[test]
     fn decodes_native_mod_tap_payload() {

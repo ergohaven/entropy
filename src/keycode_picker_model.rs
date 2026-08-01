@@ -259,10 +259,6 @@ impl KeycodeTab {
         if (0x5700..=0x57FF).contains(&value) {
             return KeycodeTab::TapDance;
         }
-        if crate::smart_input::smart_symbol_for_keycode(value).is_some() {
-            return KeycodeTab::Symbols;
-        }
-
         if let Some(kc) = crate::keycode::find_keycode(value) {
             if kc.name.starts_with("RGB_") {
                 return KeycodeTab::Rgb;

@@ -26,6 +26,7 @@ mod rmk_native;
 mod smart_input;
 mod text_expander;
 mod ui_style;
+mod universal_symbols;
 
 use app::EntropyApp;
 

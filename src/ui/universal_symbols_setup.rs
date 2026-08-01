@@ -112,7 +112,7 @@ fn universal_symbols_finish_step_3() -> UniversalSymbolsFinishStep {
 }
 
 impl EntropyApp {
-    pub(super) fn draw_universal_symbols_setup_page(
+    pub(super) fn draw_text_expander_setup_page(
         &mut self,
         ui: &mut egui::Ui,
         content_rect: egui::Rect,
@@ -145,9 +145,9 @@ impl EntropyApp {
                         ui.add_sized(
                             Vec2::new(content_width, metrics.value(24.0)),
                             egui::Label::new(
-                                RichText::new(crate::i18n::tr(
+                                RichText::new(crate::i18n::tr_catalog(
                                     lang,
-                                    crate::i18n::Key::UniversalSymbolsSetupTitle,
+                                    "text_expander.setup_title",
                                 ))
                                 .size(metrics.value(18.0))
                                 .strong(),
@@ -209,12 +209,9 @@ impl EntropyApp {
                 ui.add_sized(
                     Vec2::new(content_width, metrics.value(24.0)),
                     egui::Label::new(
-                        RichText::new(crate::i18n::tr(
-                            lang,
-                            crate::i18n::Key::UniversalSymbolsSetupTitle,
-                        ))
-                        .size(metrics.value(18.0))
-                        .strong(),
+                        RichText::new(crate::i18n::tr_catalog(lang, "text_expander.setup_title"))
+                            .size(metrics.value(18.0))
+                            .strong(),
                     )
                     .halign(egui::Align::Center),
                 );
@@ -467,31 +464,15 @@ impl EntropyApp {
     ) {
         #[cfg(target_os = "linux")]
         {
-            match crate::smart_input::linux_recommended_input_backend() {
-                crate::smart_input::LinuxRecommendedInputBackend::X11Native => {
-                    draw_universal_symbols_value(
-                        ui,
-                        metrics,
-                        168.0,
-                        crate::i18n::tr_catalog(lang, "universal_symbols_setup.no_install_needed"),
-                        ui.visuals().text_color(),
-                    );
-                }
-                crate::smart_input::LinuxRecommendedInputBackend::IBus => {
-                    if crate::ui_style::modern_button(
-                        ui,
-                        crate::i18n::tr_catalog(lang, "universal_symbols_setup.setup_ibus"),
-                        metrics.size(168.0, 34.0),
-                        true,
-                    )
-                    .clicked()
-                    {
-                        self.run_linux_universal_symbols_setup(
-                            "linux/ibus/install-user.sh",
-                            "IBus",
-                        );
-                    }
-                }
+            if crate::ui_style::modern_button(
+                ui,
+                crate::i18n::tr_catalog(lang, "universal_symbols_setup.setup_ibus"),
+                metrics.size(168.0, 34.0),
+                true,
+            )
+            .clicked()
+            {
+                self.run_linux_universal_symbols_setup("linux/ibus/install-user.sh", "IBus");
             }
         }
 
@@ -656,7 +637,7 @@ impl EntropyApp {
         row: UniversalSymbolsRowContext,
         permission: MacosPermissionRow,
     ) {
-        let status = crate::smart_input::macos_universal_symbols_status();
+        let status = crate::smart_input::macos_text_expander_status();
         let granted =
             crate::i18n::tr_catalog(row.lang, "universal_symbols_setup.permission_granted");
         let denied = crate::i18n::tr_catalog(row.lang, "universal_symbols_setup.permission_denied");
@@ -692,7 +673,7 @@ impl EntropyApp {
         ui: &mut egui::Ui,
         row: UniversalSymbolsRowContext,
     ) {
-        let status = crate::smart_input::macos_universal_symbols_status();
+        let status = crate::smart_input::macos_text_expander_status();
         let active = crate::i18n::tr_catalog(row.lang, "universal_symbols_setup.event_tap_active");
         let inactive =
             crate::i18n::tr_catalog(row.lang, "universal_symbols_setup.event_tap_inactive");
@@ -806,7 +787,7 @@ fn macos_permission_color(granted: bool, dark: bool) -> Color32 {
 #[cfg(target_os = "macos")]
 fn macos_event_capture_detail(
     lang: crate::i18n::Language,
-    status: &crate::smart_input::MacosUniversalSymbolsStatus,
+    status: &crate::smart_input::MacosTextExpanderStatus,
 ) -> String {
     if let Some(reason) = &status.failure_reason {
         return reason.clone();
@@ -963,14 +944,7 @@ fn draw_universal_symbols_action_row_with_tooltip_state(
 fn universal_symbols_intro_key() -> &'static str {
     #[cfg(target_os = "linux")]
     {
-        match crate::smart_input::linux_recommended_input_backend() {
-            crate::smart_input::LinuxRecommendedInputBackend::X11Native => {
-                "universal_symbols_setup.intro_linux_x11"
-            }
-            crate::smart_input::LinuxRecommendedInputBackend::IBus => {
-                "universal_symbols_setup.intro_linux_ibus"
-            }
-        }
+        "universal_symbols_setup.intro_linux_ibus"
     }
     #[cfg(target_os = "windows")]
     {
@@ -989,14 +963,7 @@ fn universal_symbols_intro_key() -> &'static str {
 fn universal_symbols_backend_value_key() -> &'static str {
     #[cfg(target_os = "linux")]
     {
-        match crate::smart_input::linux_recommended_input_backend() {
-            crate::smart_input::LinuxRecommendedInputBackend::X11Native => {
-                "universal_symbols_setup.backend_linux_x11"
-            }
-            crate::smart_input::LinuxRecommendedInputBackend::IBus => {
-                "universal_symbols_setup.backend_linux_ibus"
-            }
-        }
+        "universal_symbols_setup.backend_linux_ibus"
     }
     #[cfg(target_os = "windows")]
     {
@@ -1015,14 +982,7 @@ fn universal_symbols_backend_value_key() -> &'static str {
 fn universal_symbols_finish_step_2_key() -> &'static str {
     #[cfg(target_os = "linux")]
     {
-        match crate::smart_input::linux_recommended_input_backend() {
-            crate::smart_input::LinuxRecommendedInputBackend::X11Native => {
-                "universal_symbols_setup.finish_step_2_x11"
-            }
-            crate::smart_input::LinuxRecommendedInputBackend::IBus => {
-                "universal_symbols_setup.finish_step_2_ibus"
-            }
-        }
+        "universal_symbols_setup.finish_step_2_ibus"
     }
     #[cfg(target_os = "windows")]
     {
@@ -1041,12 +1001,7 @@ fn universal_symbols_finish_step_2_key() -> &'static str {
 fn universal_symbols_finish_step_2_detail_key() -> Option<&'static str> {
     #[cfg(target_os = "linux")]
     {
-        match crate::smart_input::linux_recommended_input_backend() {
-            crate::smart_input::LinuxRecommendedInputBackend::IBus => {
-                Some("universal_symbols_setup.finish_step_2_ibus_detail")
-            }
-            _ => None,
-        }
+        Some("universal_symbols_setup.finish_step_2_ibus_detail")
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -1057,14 +1012,7 @@ fn universal_symbols_finish_step_2_detail_key() -> Option<&'static str> {
 fn universal_symbols_finish_step_3_key() -> &'static str {
     #[cfg(target_os = "linux")]
     {
-        match crate::smart_input::linux_recommended_input_backend() {
-            crate::smart_input::LinuxRecommendedInputBackend::X11Native => {
-                "universal_symbols_setup.finish_step_3_x11"
-            }
-            crate::smart_input::LinuxRecommendedInputBackend::IBus => {
-                "universal_symbols_setup.finish_step_3_ibus"
-            }
-        }
+        "universal_symbols_setup.finish_step_3_ibus"
     }
     #[cfg(target_os = "windows")]
     {
@@ -1083,12 +1031,7 @@ fn universal_symbols_finish_step_3_key() -> &'static str {
 fn universal_symbols_finish_step_3_detail_key() -> Option<&'static str> {
     #[cfg(target_os = "linux")]
     {
-        match crate::smart_input::linux_recommended_input_backend() {
-            crate::smart_input::LinuxRecommendedInputBackend::IBus => {
-                Some("universal_symbols_setup.finish_step_3_ibus_detail")
-            }
-            _ => None,
-        }
+        Some("universal_symbols_setup.finish_step_3_ibus_detail")
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -1099,14 +1042,7 @@ fn universal_symbols_finish_step_3_detail_key() -> Option<&'static str> {
 fn universal_symbols_text_expander_key() -> &'static str {
     #[cfg(target_os = "linux")]
     {
-        match crate::smart_input::linux_recommended_input_backend() {
-            crate::smart_input::LinuxRecommendedInputBackend::X11Native => {
-                "universal_symbols_setup.text_expander_x11"
-            }
-            crate::smart_input::LinuxRecommendedInputBackend::IBus => {
-                "universal_symbols_setup.text_expander_ibus"
-            }
-        }
+        "universal_symbols_setup.text_expander_ibus"
     }
     #[cfg(target_os = "windows")]
     {

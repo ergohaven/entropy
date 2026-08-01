@@ -116,7 +116,7 @@ impl EntropyApp {
             );
             let show_lock_item = lock_menu_state.visible;
             let default_lock_label = crate::i18n::tr_catalog(lang, "ui.unlock_keyboard_action");
-            let settings_item_count = 3
+            let settings_item_count = 2
                 + show_matrix_item as usize
                 + show_rgb_item as usize
                 + show_layer_leds_item as usize
@@ -132,10 +132,7 @@ impl EntropyApp {
             // Keep hover bridge in sync with actual item height (30px) and frame padding.
             // Underestimating this makes lower items close the dropdown on hover.
             let dropdown_height = settings_item_count as f32 * 30.0 + 12.0;
-            let mut settings_menu_labels = vec![
-                crate::i18n::tr(lang, TrKey::AppSettingsTitle),
-                crate::i18n::tr(lang, TrKey::UniversalSymbolsTitle),
-            ];
+            let mut settings_menu_labels = vec![crate::i18n::tr(lang, TrKey::AppSettingsTitle)];
             if show_matrix_item {
                 settings_menu_labels.push(crate::i18n::tr(lang, TrKey::MatrixTesterTitle));
             }
@@ -207,7 +204,6 @@ impl EntropyApp {
                 let (
                     app_hovered,
                     matrix_hovered,
-                    universal_symbols_hovered,
                     rgb_hovered,
                     layer_leds_hovered,
                     encoders_hovered,
@@ -247,14 +243,6 @@ impl EntropyApp {
                                             && self.settings_tab == SettingsTab::MatrixTester,
                                     )
                                 });
-                                let universal_symbols_resp = top_dropdown_item(
-                                    ui,
-                                    item_width,
-                                    crate::i18n::tr(lang, TrKey::UniversalSymbolsTitle),
-                                    true,
-                                    self.main_menu_tab == MainMenuTab::Settings
-                                        && self.settings_tab == SettingsTab::UniversalSymbolsSetup,
-                                );
                                 let rgb_resp = if show_rgb_item {
                                     Some(top_dropdown_item(
                                         ui,
@@ -392,10 +380,6 @@ impl EntropyApp {
                                     self.matrix_tester_lock_checked = false;
                                     self.main_menu_tab = MainMenuTab::Settings;
                                 }
-                                if universal_symbols_resp.clicked() {
-                                    self.close_top_dropdowns(ui.ctx());
-                                    self.open_universal_symbols_setup_page();
-                                }
                                 if let Some(rgb_resp) = &rgb_resp {
                                     if rgb_resp.clicked() && rgb_available {
                                         self.close_top_dropdowns(ui.ctx());
@@ -492,7 +476,6 @@ impl EntropyApp {
                                 (
                                     app_resp.hovered(),
                                     matrix_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
-                                    universal_symbols_resp.hovered(),
                                     rgb_resp
                                         .as_ref()
                                         .map(|resp| resp.hovered())
@@ -525,7 +508,6 @@ impl EntropyApp {
                                             .as_ref()
                                             .map(|r| r.clicked())
                                             .unwrap_or(false)
-                                        || universal_symbols_resp.clicked()
                                         || rgb_resp
                                             .as_ref()
                                             .map(|resp| resp.clicked() && rgb_available)
@@ -580,7 +562,6 @@ impl EntropyApp {
                             && (settings_tab_hovered
                                 || app_hovered
                                 || matrix_hovered
-                                || universal_symbols_hovered
                                 || rgb_hovered
                                 || layer_leds_hovered
                                 || encoders_hovered

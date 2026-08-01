@@ -1371,6 +1371,7 @@ mod tests {
             rgb_supported: false,
             lighting_mode: None,
             supports_rmk_native_key_actions: false,
+            supports_universal_symbols: false,
         }
     }
 

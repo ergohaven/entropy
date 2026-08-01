@@ -163,14 +163,14 @@ mod text_expander_editor;
 mod text_expander_runtime;
 #[path = "ui/text_expander_settings.rs"]
 mod text_expander_settings_ui;
+#[path = "ui/universal_symbols_setup.rs"]
+mod text_expander_setup;
 #[path = "ui/touchpad_settings.rs"]
 mod touchpad_settings_ui;
 #[path = "ui/typing_trainer.rs"]
 mod typing_trainer_ui;
 #[path = "ui/ui_scale.rs"]
 mod ui_scale;
-#[path = "ui/universal_symbols_setup.rs"]
-mod universal_symbols_setup;
 #[path = "ui/vial_hid_task.rs"]
 mod vial_hid_task;
 #[cfg(not(target_arch = "wasm32"))]

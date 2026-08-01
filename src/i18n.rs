@@ -229,74 +229,6 @@ fn parse_catalog_value(value: &str) -> Option<String> {
     None
 }
 
-fn ru_smart_symbol_name(name: &str) -> &str {
-    match name {
-        "Left brace" => "левая фигурная скобка",
-        "Right brace" => "правая фигурная скобка",
-        "Left bracket" => "левая квадратная скобка",
-        "Right bracket" => "правая квадратная скобка",
-        "Left parenthesis" => "левая круглая скобка",
-        "Right parenthesis" => "правая круглая скобка",
-        "Less-than" => "знак «меньше»",
-        "Greater-than" => "знак «больше»",
-        "Number sign" => "решётка",
-        "At sign" => "собака",
-        "Numero sign" => "знак номера",
-        "Ruble sign" => "знак рубля",
-        "Exclamation mark" => "восклицательный знак",
-        "Quotation mark" => "двойная кавычка",
-        "Dollar sign" => "знак доллара",
-        "Percent sign" => "знак процента",
-        "Ampersand" => "амперсанд",
-        "Apostrophe" => "апостроф",
-        "Asterisk" => "звёздочка",
-        "Plus sign" => "плюс",
-        "Equals sign" => "знак равенства",
-        "Question mark" => "вопросительный знак",
-        "Vertical bar" => "вертикальная черта",
-        "Backslash" => "обратный слэш",
-        "Left guillemet" => "левая ёлочка",
-        "Right guillemet" => "правая ёлочка",
-        "Euro sign" => "знак евро",
-        "Em dash" => "длинное тире",
-        "En dash" => "среднее тире",
-        "Bullet" => "маркер списка",
-        "Multiplication sign" => "знак умножения",
-        "Plus-minus sign" => "плюс-минус",
-        "Not equal sign" => "знак неравенства",
-        "Almost equal sign" => "знак примерного равенства",
-        "Check mark" => "галочка",
-        "Section sign" => "знак параграфа",
-        "Full stop" => "точка",
-        "Comma" => "запятая",
-        "Semicolon" => "точка с запятой",
-        "Colon" => "двоеточие",
-        "Slash" => "слэш",
-        "Grave accent" => "гравис",
-        "Caret" => "карет",
-        "Cyrillic be" | "Cyrillic Be" => "кириллическая Б",
-        "Cyrillic yu" | "Cyrillic Yu" => "кириллическая Ю",
-        "Cyrillic zhe" | "Cyrillic Zhe" => "кириллическая Ж",
-        "Cyrillic e" | "Cyrillic E" => "кириллическая Э",
-        "Cyrillic ha" | "Cyrillic Ha" => "кириллическая Х",
-        "Cyrillic hard sign" | "Cyrillic Hard Sign" => "кириллический твёрдый знак",
-        "Cyrillic yo" | "Cyrillic Yo" => "кириллическая Ё",
-        "Degree sign" => "знак градуса",
-        "Per mille sign" => "промилле",
-        "Prime" => "штрих",
-        "Double prime" => "двойной штрих",
-        "Left single quotation mark" => "левая одинарная кавычка",
-        "Right single quotation mark" => "правая одинарная кавычка",
-        "Double low quotation mark" => "нижняя двойная кавычка",
-        "Left double quotation mark" => "левая двойная кавычка",
-        "Right double quotation mark" => "правая двойная кавычка",
-        "Trade mark sign" => "знак торговой марки",
-        "Tilde" => "тильда",
-        "Underscore" => "нижнее подчёркивание",
-        _ => name,
-    }
-}
-
 fn ru_modifier_name(name: &str) -> String {
     name.replace("Left ", "левый ").replace("Right ", "правый ")
 }
@@ -313,8 +245,6 @@ pub enum Key {
     MouseKeysTitle,
     MatrixTesterTitle,
     MatrixTesterDescription,
-    UniversalSymbolsSetupTitle,
-    UniversalSymbolsTitle,
     RgbTitle,
     LayerLedsTitle,
     EncodersTitle,
@@ -403,8 +333,6 @@ impl Key {
             Key::MouseKeysTitle => "ui.mouse_keys_title",
             Key::MatrixTesterTitle => "ui.matrix_tester_title",
             Key::MatrixTesterDescription => "ui.matrix_tester_description",
-            Key::UniversalSymbolsSetupTitle => "ui.universal_symbols_setup_title",
-            Key::UniversalSymbolsTitle => "ui.universal_symbols_title",
             Key::RgbTitle => "ui.rgb_title",
             Key::LayerLedsTitle => "ui.layer_leds_title",
             Key::EncodersTitle => "ui.encoders_title",
@@ -667,7 +595,6 @@ fn static_catalog_key(text: &str) -> Option<&'static str> {
         "Basic keys — standard keyboard layout" => Some("key_picker_text.basic_keys_standard_keyboard_layout"),
         "Universal symbols — same output in any language" => Some("key_picker_text.universal_symbols_same_output_in_any_language"),
         "Layout symbols — follow the active keyboard language" => Some("key_picker_text.layout_symbols_follow_the_active_keyboard_language"),
-        "Extra universal symbols — typography and math" => Some("key_picker_text.extra_universal_symbols_typography_and_math"),
         "Custom keycodes — defined by this device" => Some("key_picker_text.custom_keycodes_defined_by_this_keyboard"),
         "Layers: choose a layer action, then pick the target layer" => Some("key_picker_text.layers_choose_a_layer_action_then_pick_the_target_layer"),
         "Plain modifiers" => Some("key_picker_text.plain_modifiers"),
@@ -937,18 +864,10 @@ fn static_catalog_key(text: &str) -> Option<&'static str> {
 
 fn exact_text_catalog_key(text: &str) -> Option<&'static str> {
     match text {
-        "No extra setup is required on Windows" => Some("universal_symbols_setup.no_extra_setup_is_required_on_windows"),
-        "Keep Entropy running while using Universal Symbols" => Some("universal_symbols_setup.keep_entropy_running_while_using_universal_symbols"),
-        "Assign keys from Symbols → Universal symbols in the key picker" => Some("universal_symbols_setup.assign_keys_from_symbols_to_universal_symbols_in_the_key_picker"),
         "Open Privacy & Security" => Some("universal_symbols_setup.open_privacy_and_security"),
         "Allow Entropy in Accessibility" => Some("universal_symbols_setup.allow_entropy_in_accessibility"),
         "If prompted, allow Entropy in Input Monitoring too" => Some("universal_symbols_setup.if_prompted_allow_entropy_in_input_monitoring_too"),
         "Restart Entropy after changing permissions" => Some("universal_symbols_setup.restart_entropy_after_changing_permissions"),
-        "X11: install xdotool and keep Entropy running" => Some("universal_symbols_setup.x11_install_xdotool_and_keep_entropy_running"),
-        "Wayland + IBus: install Entropy Universal Symbols and select it as an input source" => Some("universal_symbols_setup.wayland_plus_ibus_install_entropy_universal_symbols_and_select_it_as_a"),
-        "Universal Symbols are not supported on this OS yet" => Some("universal_symbols_setup.universal_symbols_are_not_supported_on_this_os_yet"),
-        "Open Config → Universal Symbols to finish permissions setup" => Some("universal_symbols_setup.open_config_to_universal_symbols_to_finish_permissions_setup"),
-        "Open Config → Universal Symbols to finish Linux setup" => Some("universal_symbols_setup.open_config_to_universal_symbols_to_finish_linux_setup"),
         "Disabled" => Some("status_text.disabled"),
         "OLED master" => Some("status_text.oled_master"),
         "OLED slave" => Some("status_text.oled_slave"),
@@ -957,9 +876,6 @@ fn exact_text_catalog_key(text: &str) -> Option<&'static str> {
         "Media" => Some("status_text.media"),
         "default" => Some("status_text.default"),
         "Unknown" => Some("status_text.unknown"),
-        "Universal output backend: Windows native" => Some("universal_symbols_setup.universal_output_backend_windows_native"),
-        "Universal output backend: macOS native — requires Accessibility/Input Monitoring permission" => Some("universal_symbols_setup.universal_output_backend_macos_native_requires_accessibility_input_mon"),
-        "Universal output backend: unsupported on this OS" => Some("universal_symbols_setup.universal_output_backend_unsupported_on_this_os"),
         "Esc" => Some("key_names.esc"),
         "Escape" => Some("key_names.escape"),
         "Backspace" => Some("key_names.backspace"),
@@ -1282,6 +1198,35 @@ pub fn tr_text(language: Language, text: &str) -> String {
         "Entropy refreshed from a repeated launch" => {
             tr_catalog_string(language, "dynamic_status.entropy_refreshed")
         }
+        "Universal Symbols: toggle English/Russian layout" => {
+            tr_catalog_string(language, "universal_symbols.toggle_layout")
+        }
+        "Universal Symbols: sync firmware layout state without changing the OS" => {
+            tr_catalog_string(language, "universal_symbols.sync_layout")
+        }
+        "Universal Symbols: switch to English" => {
+            tr_catalog_string(language, "universal_symbols.set_english")
+        }
+        "Universal Symbols: switch to Russian" => {
+            tr_catalog_string(language, "universal_symbols.set_russian")
+        }
+        "Universal Symbols: toggle PC/macOS Russian-layout mappings" => {
+            tr_catalog_string(language, "universal_symbols.toggle_platform")
+        }
+        other
+            if other.starts_with("Universal Symbols: firmware types ")
+                && other.ends_with(" in English and Russian layouts") =>
+        {
+            let symbol = other
+                .strip_prefix("Universal Symbols: firmware types ")
+                .and_then(|rest| rest.strip_suffix(" in English and Russian layouts"))
+                .unwrap_or("");
+            tr_catalog_string_format(
+                language,
+                "universal_symbols.symbol_tooltip",
+                &[("symbol", symbol)],
+            )
+        }
         other if other.starts_with("Connecting to ") => {
             let device = other
                 .strip_prefix("Connecting to ")
@@ -1593,19 +1538,6 @@ pub fn tr_text(language: Language, text: &str) -> String {
                     &[("modifier_ru", modifier_ru.as_str())],
                 )
             }
-        }
-        other if other.starts_with("Universal symbol: ") && other.contains(" — types ") => {
-            let rest = other.strip_prefix("Universal symbol: ").unwrap_or(other);
-            let (name, rest) = rest.split_once(" — types ").unwrap_or((rest, ""));
-            let symbol = rest
-                .split(" consistently regardless of the active keyboard language")
-                .next()
-                .unwrap_or(rest);
-            tr_catalog_string_format(
-                language,
-                "dynamic_tooltips.universal_symbol",
-                &[("name", ru_smart_symbol_name(name)), ("symbol", symbol)],
-            )
         }
         other if other.starts_with("One-Shot ") => other
             .replace(
@@ -2022,35 +1954,6 @@ pub fn tr_text(language: Language, text: &str) -> String {
                     "Ctrl+right-click to switch left/right side",
                     tr_catalog(language, "key_hints.switch_modifier_side"),
                 )
-        }
-        other if other.starts_with("Universal Cyrillic ") => other
-            .replace("types", tr_catalog(language, "dynamic_tooltips.types"))
-            .replace(
-                "consistently regardless of the active keyboard language",
-                tr_catalog(language, "dynamic_tooltips.universal_cyrillic_consistent"),
-            )
-            .replace(
-                "hold Shift for",
-                tr_catalog(language, "dynamic_tooltips.hold_shift_for"),
-            ),
-        other if other.starts_with("Universal output backend: Wayland via IBus input method") => {
-            other.replacen(
-                "Universal output backend: Wayland via IBus input method",
-                tr_catalog(language, "dynamic_tooltips.backend_wayland_ibus"),
-                1,
-            )
-        }
-        other if other.starts_with("Universal output backend: Linux X11 native") => other.replacen(
-            "Universal output backend: Linux X11 native; Wayland uses IBus",
-            tr_catalog(language, "dynamic_tooltips.backend_linux_x11_native"),
-            1,
-        ),
-        other if other.starts_with("Universal output backend: Linux; use IBus for Wayland") => {
-            other.replacen(
-                "Universal output backend: Linux; use IBus for Wayland",
-                tr_catalog(language, "dynamic_tooltips.backend_linux_wayland_hint"),
-                1,
-            )
         }
         other => other.to_owned(),
     }

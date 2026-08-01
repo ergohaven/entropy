@@ -1,6 +1,6 @@
 # Entropy IBus backend
 
-Wayland does not allow a normal application to globally intercept keys and inject text. This IBus backend is the safe Wayland-native path for Entropy Universal Symbols and Text Expander: it consumes the reserved `F13..F20` transport chords, watches ordinary typing while selected as an input method, and commits matching text through IBus.
+Entropy uses this IBus backend for Text Expander on Linux. While selected as an input method, it watches typing and commits matching expansions through IBus; this is also the safe input path required by Wayland.
 
 ## Install for current user
 
@@ -11,15 +11,15 @@ ibus restart
 
 Then add/select Entropy input sources in the system input-source/input-method settings:
 
-- **Entropy EN** for the `us` layout
-- **Entropy EN UK** for the `gb` layout
-- **Entropy DE** for the `de` layout
-- **Entropy FR** for the `fr` layout
-- **Entropy ES** for the `es` layout
-- **Entropy IT** for the `it` layout
-- **Entropy PT** for the `pt` layout
-- **Entropy BR** for the `br` layout
-- **Entropy RU** for the `ru` layout
+- **Entropy Text Expander EN** for the `us` layout
+- **Entropy Text Expander EN UK** for the `gb` layout
+- **Entropy Text Expander DE** for the `de` layout
+- **Entropy Text Expander FR** for the `fr` layout
+- **Entropy Text Expander ES** for the `es` layout
+- **Entropy Text Expander IT** for the `it` layout
+- **Entropy Text Expander PT** for the `pt` layout
+- **Entropy Text Expander BR** for the `br` layout
+- **Entropy Text Expander RU** for the `ru` layout
 
 Switch between those system input sources to change language while keeping Entropy Text Expander active.
 
@@ -37,8 +37,6 @@ Required distro packages are usually:
 
 ## Behavior
 
-- Handles only Entropy transport keys: `F13..F20` with `Shift`, `Ctrl`, `Alt`, and `Super`
-- Commits the same Unicode symbols as Entropy Smart Input
 - Loads Text Expander settings from `~/.config/entropy/app_settings.json`
 - Loads primary and selected extra rules from `~/.config/entropy/text_expander_rules/`
 - Passes normal typing through unless a trigger matches
@@ -47,4 +45,4 @@ Required distro packages are usually:
 
 ## Scope
 
-This is the sole Wayland backend for Universal Symbols and Text Expander.
+This is the Linux backend for Text Expander. Universal Symbols are implemented by supported RMK firmware and do not use IBus.

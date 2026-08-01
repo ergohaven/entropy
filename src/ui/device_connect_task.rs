@@ -918,13 +918,16 @@ impl EntropyApp {
                     }
                 }
 
-                let supports_rmk_native_key_actions = dev_conn
+                let rmk_native_capabilities = dev_conn
                     .get_rmk_native_capabilities()
-                    .map(|capabilities| capabilities.key_actions)
                     .unwrap_or_else(|error| {
                         log::debug!("RMK native key-action capability unavailable: {error:#}");
-                        false
+                        crate::rmk_native::RmkNativeCapabilities::default()
                     });
+                let supports_rmk_native_key_actions = rmk_native_capabilities.key_actions;
+                let supports_universal_symbols = rmk_native_capabilities.universal_symbols;
+                layout.live_features.layout |=
+                    crate::rmk_native::supports_layout_sync(rmk_native_capabilities);
                 if supports_rmk_native_key_actions {
                     let matrix_size = layout.rows.saturating_mul(layout.cols);
                     let native_actions = dev_conn
@@ -1299,6 +1302,7 @@ impl EntropyApp {
                         rgb_supported: layout.supports_rgb,
                         lighting_mode: layout.lighting_mode.clone(),
                         supports_rmk_native_key_actions,
+                        supports_universal_symbols,
                     })
                 } else {
                     DeferredDeviceLoadState::complete(layer_count)
@@ -1341,6 +1345,7 @@ impl EntropyApp {
                     macro_texts,
                     supports_macro_ext_keycodes,
                     supports_rmk_native_key_actions,
+                    supports_universal_symbols,
                     macro_ext_keycodes_disabled_reason,
                     tap_dance_entries,
                     combo_entries,

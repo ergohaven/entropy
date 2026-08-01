@@ -288,6 +288,9 @@ pub(crate) fn key_binding_label_with_macro_names(
             key_legend_layout,
         ),
         crate::keyboard::KeyBinding::Rmk(action) => {
+            if let Some(label) = crate::universal_symbols::label(action) {
+                return label;
+            }
             if let Some(parts) = crate::rmk_native::rmk_mod_tap_parts(action) {
                 let hold =
                     crate::keycode::modifier_label_from_bits(parts.hold_modifier_bits() as u16);
@@ -322,6 +325,9 @@ pub(crate) fn key_binding_tooltip_with_macro_names(
             tap_dance_names,
         ),
         crate::keyboard::KeyBinding::Rmk(action) => {
+            if let Some(tooltip) = crate::universal_symbols::tooltip(action) {
+                return tooltip;
+            }
             if let Some(parts) = crate::rmk_native::rmk_mod_tap_parts(action) {
                 let hold =
                     crate::keycode::modifier_label_from_bits(parts.hold_modifier_bits() as u16);
@@ -514,6 +520,7 @@ pub(crate) struct DeferredDeviceLoadContext {
     pub(crate) rgb_supported: bool,
     pub(crate) lighting_mode: Option<String>,
     pub(crate) supports_rmk_native_key_actions: bool,
+    pub(crate) supports_universal_symbols: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -557,6 +564,7 @@ impl DeferredDeviceLoadContext {
             && self.rgb_supported == other.rgb_supported
             && self.lighting_mode == other.lighting_mode
             && self.supports_rmk_native_key_actions == other.supports_rmk_native_key_actions
+            && self.supports_universal_symbols == other.supports_universal_symbols
     }
 }
 
@@ -942,6 +950,8 @@ pub(crate) struct ConnectResult {
     pub(crate) supports_macro_ext_keycodes: bool,
     /// Firmware exposes the lossless RMK KeyAction Get/Set extension.
     pub(crate) supports_rmk_native_key_actions: bool,
+    /// Firmware implements native EN/RU Universal Symbols actions.
+    pub(crate) supports_universal_symbols: bool,
     pub(crate) macro_ext_keycodes_disabled_reason: Option<MacroExtKeycodesDisabledReason>,
     /// Tap dance entries
     pub(crate) tap_dance_entries: Vec<crate::keycode_picker::TapDanceEntry>,
@@ -2502,7 +2512,7 @@ pub(crate) enum ComboPickField {
 pub(crate) enum SettingsTab {
     AppSettings,
     MatrixTester,
-    UniversalSymbolsSetup,
+    TextExpanderSetup,
     TextExpander,
     TypingTrainer,
     AutoShift,

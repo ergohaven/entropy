@@ -5,6 +5,19 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.3
+
+### Main Features
+
+- Replaced application-injected Universal Symbols with firmware-native EN/RU punctuation actions for compatible RMK keyboards
+- Added automatic Universal Symbols layout synchronization through the existing Layout Sync bridge while keeping firmware-only use fully autonomous
+
+### Improvements
+
+- Hide the complete Universal Symbols picker section unless connected firmware advertises native support
+- Removed the Unicode typography, arrows, math, currency, F13-F24 transport, and desktop symbol-injection backends
+- Kept the IBus integration exclusively for Text Expander on Linux and moved its setup entry under Text Expander
+
 ## v0.3.2
 
 ### Improvements

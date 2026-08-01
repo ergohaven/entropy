@@ -136,17 +136,13 @@ impl KeycodePicker {
     pub(super) fn show_vial_symbols(&mut self, ui: &mut egui::Ui) {
         let custom_pairs = self.custom_keycode_pairs();
 
-        if let Some(value) = show_universal_symbol_section(
-            ui,
-            self.language,
-            "key_picker.section_universal_symbols",
-            UNIVERSAL_MAIN_SYMBOL_ORDER,
-            true,
-        ) {
-            self.assign_keycode_value(value);
+        if self.universal_symbols_available() {
+            if let Some(binding) = show_universal_symbol_section(ui, self.language) {
+                self.result = Some(binding);
+                self.open = false;
+            }
+            ui.add_space(10.0);
         }
-
-        ui.add_space(10.0);
         ui.label(
             RichText::new(tr_picker(
                 self.language,
@@ -182,17 +178,6 @@ impl KeycodePicker {
                 }
             }
         });
-
-        ui.add_space(10.0);
-        if let Some(value) = show_universal_symbol_section(
-            ui,
-            self.language,
-            "key_picker.section_extra_universal_symbols",
-            UNIVERSAL_EXTRA_SYMBOL_ORDER,
-            false,
-        ) {
-            self.assign_keycode_value(value);
-        }
     }
 
     pub(super) fn show_vial_generic(&mut self, ui: &mut egui::Ui) {

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""IBus engine for Entropy Universal Symbols and Text Expander.
+"""IBus engine for Entropy Text Expander.
 
-The backend consumes Entropy transport keys (F13..F20 plus Ctrl/Shift/Alt/Super
-banks) and can also expand configured Text Expander triggers through IBus.
-Other keys continue through the normal input stack.
+The backend expands configured Text Expander triggers through IBus. Other keys
+continue through the normal input stack.
 """
 
 import json
@@ -26,65 +25,65 @@ except Exception as exc:  # pragma: no cover - depends on distro packages
     )
     sys.exit(1)
 
-ENGINE_DESCRIPTION = "Universal Unicode symbols and text expansion for Ergohaven keyboards"
+ENGINE_DESCRIPTION = "Text expansion for Ergohaven keyboards"
 ENGINE_DESCRIPTORS = (
     {
         "name": "entropy-universal-symbols",
-        "longname": "Entropy Symbols",
+        "longname": "Entropy Text Expander",
         "language": "x-other",
         "layout": "default",
     },
     {
         "name": "entropy-universal-symbols-us",
-        "longname": "Entropy EN",
+        "longname": "Entropy Text Expander EN",
         "language": "en",
         "layout": "us",
     },
     {
         "name": "entropy-universal-symbols-gb",
-        "longname": "Entropy EN UK",
+        "longname": "Entropy Text Expander EN UK",
         "language": "en",
         "layout": "gb",
     },
     {
         "name": "entropy-universal-symbols-de",
-        "longname": "Entropy DE",
+        "longname": "Entropy Text Expander DE",
         "language": "de",
         "layout": "de",
     },
     {
         "name": "entropy-universal-symbols-fr",
-        "longname": "Entropy FR",
+        "longname": "Entropy Text Expander FR",
         "language": "fr",
         "layout": "fr",
     },
     {
         "name": "entropy-universal-symbols-es",
-        "longname": "Entropy ES",
+        "longname": "Entropy Text Expander ES",
         "language": "es",
         "layout": "es",
     },
     {
         "name": "entropy-universal-symbols-it",
-        "longname": "Entropy IT",
+        "longname": "Entropy Text Expander IT",
         "language": "it",
         "layout": "it",
     },
     {
         "name": "entropy-universal-symbols-pt",
-        "longname": "Entropy PT",
+        "longname": "Entropy Text Expander PT",
         "language": "pt",
         "layout": "pt",
     },
     {
         "name": "entropy-universal-symbols-br",
-        "longname": "Entropy BR",
+        "longname": "Entropy Text Expander BR",
         "language": "pt",
         "layout": "br",
     },
     {
         "name": "entropy-universal-symbols-ru",
-        "longname": "Entropy RU",
+        "longname": "Entropy Text Expander RU",
         "language": "ru",
         "layout": "ru",
     },
@@ -92,14 +91,6 @@ ENGINE_DESCRIPTORS = (
 ENGINE_NAMES = {descriptor["name"] for descriptor in ENGINE_DESCRIPTORS}
 TEXT_EXPANDER_MAIN_RULES_FILE = "text_expansion_rules.json"
 
-XK_F13 = 0xFFCA
-KC_F13 = 0x0068
-MOD_CTRL = 0x0100
-MOD_SHIFT = 0x0200
-MOD_ALT = 0x0400
-MOD_GUI = 0x0800
-EVDEV_F13_KEYCODE = 183
-XKB_F13_KEYCODE = EVDEV_F13_KEYCODE + 8
 TERMINAL_CLIENT_MARKERS = (
     "blackbox",
     "console",
@@ -112,59 +103,6 @@ TERMINAL_CLIENT_MARKERS = (
     "vte",
     "wezterm",
 )
-
-
-def _symbol_entries():
-    entries = []
-
-    def add(offset, symbol, modifiers=0):
-        entries.append((KC_F13 + offset, modifiers, symbol))
-
-    # F13..F20
-    for idx, symbol in enumerate(["{", "}", "[", "]", "(", ")", "<", ">"]):
-        add(idx, symbol)
-
-    # Shift+F13..F20
-    for idx, symbol in enumerate(["!", '"', "$", "%", "&", "'", "*", "+"]):
-        add(idx, symbol, MOD_SHIFT)
-
-    # Ctrl+F13..F20
-    for idx, symbol in enumerate(["«", "»", "€", "—", "–", "•", "×", "±"]):
-        add(idx, symbol, MOD_CTRL)
-
-    # Alt+F13..F20
-    for idx, symbol in enumerate([".", ",", ";", ":", "/", "`", "^", "≠"]):
-        add(idx, symbol, MOD_ALT)
-
-    # Alt+Shift+F13..F20
-    for idx, symbol in enumerate(["#", "@", "№", "₽", "=", "?", "|", "\\"]):
-        add(idx, symbol, MOD_ALT | MOD_SHIFT)
-
-    # Ctrl+Alt+F13..F20
-    for idx, symbol in enumerate(["б", "ю", "ж", "э", "х", "ъ", "ё", "≈"]):
-        add(idx, symbol, MOD_CTRL | MOD_ALT)
-
-    # Ctrl+Alt+Shift+F13..F20
-    for idx, symbol in enumerate(["Б", "Ю", "Ж", "Э", "Х", "Ъ", "Ё", "✓"]):
-        add(idx, symbol, MOD_CTRL | MOD_ALT | MOD_SHIFT)
-
-    # Ctrl+Shift+F13..F20
-    for idx, symbol in enumerate(["°", "‰", "′", "″", "‘", "’", "„", "“"]):
-        add(idx, symbol, MOD_CTRL | MOD_SHIFT)
-
-    # Super+F13..F18
-    for idx, symbol in enumerate(["§", "”", "™", "~", "_", "-"]):
-        add(idx, symbol, MOD_GUI)
-
-    # Super+Shift+F13..F17
-    for idx, symbol in enumerate(["←", "↑", "→", "↓", "↔"]):
-        add(idx, symbol, MOD_GUI | MOD_SHIFT)
-
-    return entries
-
-
-SMART_SYMBOLS = {(keycode, modifiers): symbol for keycode, modifiers, symbol in _symbol_entries()}
-
 
 def _config_home():
     return os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
@@ -636,36 +574,6 @@ class TextExpanderRuntime:
 SHARED_TEXT_EXPANDER_RUNTIME = TextExpanderRuntime()
 
 
-def _transport_keycode_from_keyval(keyval):
-    if XK_F13 <= keyval <= XK_F13 + 7:
-        return KC_F13 + (keyval - XK_F13)
-    return None
-
-
-def _transport_keycode_from_event(keyval, keycode):
-    by_keyval = _transport_keycode_from_keyval(keyval)
-    if by_keyval is not None:
-        return by_keyval, "keyval"
-    if EVDEV_F13_KEYCODE <= keycode <= EVDEV_F13_KEYCODE + 7:
-        return KC_F13 + (keycode - EVDEV_F13_KEYCODE), "evdev-keycode"
-    if XKB_F13_KEYCODE <= keycode <= XKB_F13_KEYCODE + 7:
-        return KC_F13 + (keycode - XKB_F13_KEYCODE), "xkb-keycode"
-    return None, None
-
-
-def _transport_modifiers(state):
-    modifiers = 0
-    if state & IBus.ModifierType.CONTROL_MASK:
-        modifiers |= MOD_CTRL
-    if state & IBus.ModifierType.SHIFT_MASK:
-        modifiers |= MOD_SHIFT
-    if state & IBus.ModifierType.MOD1_MASK:
-        modifiers |= MOD_ALT
-    if state & getattr(IBus.ModifierType, "SUPER_MASK", 0):
-        modifiers |= MOD_GUI
-    return modifiers
-
-
 class EntropyEngine(IBus.Engine):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -690,17 +598,6 @@ class EntropyEngine(IBus.Engine):
         self._input_purpose = purpose
 
     def do_process_key_event(self, keyval, keycode, state):
-        base_keycode, source = _transport_keycode_from_event(keyval, keycode)
-        if base_keycode is not None:
-            modifiers = _transport_modifiers(state)
-            symbol = SMART_SYMBOLS.get((base_keycode, modifiers))
-            del source
-            if symbol is not None:
-                # Commit text on key-down only.
-                if not (state & IBus.ModifierType.RELEASE_MASK):
-                    self._commit_text_expander_aware_text(symbol)
-            return True
-
         return self._process_text_expander_key(keyval, keycode, state)
 
     def _process_text_expander_key(self, keyval, keycode, state):

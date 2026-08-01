@@ -138,6 +138,7 @@ pub struct KeycodePicker {
     pub supports_persistent_default_layer: bool,
     pub supports_macro_ext_keycodes: bool,
     pub supports_rmk_native_key_actions: bool,
+    pub supports_universal_symbols: bool,
     pub rmk_native_key_actions_allowed_for_target: bool,
     pub macro_ext_keycodes_disabled_reason: Option<MacroExtKeycodesDisabledReason>,
     pub layer_names: Vec<String>,
@@ -190,16 +191,6 @@ fn tr_picker(language: crate::i18n::Language, key: &'static str) -> &'static str
     crate::i18n::tr_catalog(language, key)
 }
 
-const UNIVERSAL_MAIN_SYMBOL_ORDER: &[char] = &[
-    '.', ',', ';', ':', '!', '?', '/', '`', '~', '\'', '"', '(', ')', '[', ']', '{', '}', '<', '>',
-    '-', '+', '*', '=', '#', '@', '$', '%', '^', '&', '|', '\\', '_',
-];
-
-const UNIVERSAL_EXTRA_SYMBOL_ORDER: &[char] = &[
-    '₽', '€', '«', '»', '‘', '’', '„', '“', '”', '—', '–', '←', '↑', '→', '↓', '↔', '•', '×', '±',
-    '≠', '≈', '✓', '§', '°', '‰', '′', '″', '™', '№',
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,16 +210,40 @@ mod tests {
     }
 
     #[test]
-    fn universal_extra_symbols_include_common_arrows() {
-        for symbol in ['←', '↑', '→', '↓', '↔'] {
-            assert!(UNIVERSAL_EXTRA_SYMBOL_ORDER.contains(&symbol));
-        }
-    }
+    fn universal_symbols_are_hidden_without_firmware_capability() {
+        let picker = KeycodePicker::default();
+        assert!(!picker.universal_symbols_available());
 
-    #[test]
-    fn universal_main_symbols_include_hyphen_minus() {
-        assert_eq!(UNIVERSAL_MAIN_SYMBOL_ORDER.len(), 32);
-        assert!(UNIVERSAL_MAIN_SYMBOL_ORDER.contains(&'-'));
+        let supported = KeycodePicker {
+            supports_rmk_native_key_actions: true,
+            supports_universal_symbols: true,
+            rmk_native_key_actions_allowed_for_target: true,
+            ..Default::default()
+        };
+        assert!(supported.universal_symbols_available());
+
+        for unsupported in [
+            KeycodePicker {
+                supports_rmk_native_key_actions: false,
+                supports_universal_symbols: true,
+                rmk_native_key_actions_allowed_for_target: true,
+                ..Default::default()
+            },
+            KeycodePicker {
+                supports_rmk_native_key_actions: true,
+                supports_universal_symbols: false,
+                rmk_native_key_actions_allowed_for_target: true,
+                ..Default::default()
+            },
+            KeycodePicker {
+                supports_rmk_native_key_actions: true,
+                supports_universal_symbols: true,
+                rmk_native_key_actions_allowed_for_target: false,
+                ..Default::default()
+            },
+        ] {
+            assert!(!unsupported.universal_symbols_available());
+        }
     }
 
     #[test]
@@ -382,50 +397,48 @@ mod tests {
 fn show_universal_symbol_section(
     ui: &mut egui::Ui,
     language: crate::i18n::Language,
-    section_key: &'static str,
-    symbols: &[char],
-    show_setup_hint: bool,
-) -> Option<u16> {
+) -> Option<crate::keyboard::KeyBinding> {
     let mut picked = None;
 
     ui.label(
-        RichText::new(tr_picker(language, section_key))
+        RichText::new(tr_picker(language, "key_picker.section_universal_symbols"))
             .size(11.0)
             .color(Color32::from_gray(150)),
     );
-    if show_setup_hint {
-        if let Some(hint) = crate::smart_input::universal_output_setup_hint() {
-            ui.add_space(3.0);
-            ui.label(
-                RichText::new(crate::i18n::tr_text(language, hint))
-                    .size(10.0)
-                    .color(Color32::from_gray(120)),
-            );
-        }
-    }
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
-        for wanted in symbols {
-            let Some(smart) = crate::smart_input::SMART_SYMBOLS
-                .iter()
-                .copied()
-                .find(|smart| smart.symbol == *wanted)
-            else {
-                continue;
-            };
-            let label = smart.symbol.to_string();
-            let tip = format!(
-                "Universal symbol: {} — types {} consistently regardless of the active keyboard language",
-                smart.name, smart.symbol
-            );
+        for control in crate::universal_symbols::CONTROLS {
             let resp = ui
-                .add_sized(KeycodePicker::picker_key_size(ui.ctx()), egui::Button::new(""))
+                .add_sized(
+                    KeycodePicker::picker_key_size(ui.ctx()),
+                    egui::Button::new(""),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            KeycodePicker::paint_compact_picker_label(ui, &resp, control.label);
+            if resp.clicked() {
+                picked = Some(crate::universal_symbols::binding(control.user_id));
+            }
+            resp.on_hover_text(crate::i18n::tr_text(language, control.name));
+        }
+        for symbol in crate::universal_symbols::SYMBOLS {
+            let label = symbol.symbol.to_string();
+            let resp = ui
+                .add_sized(
+                    KeycodePicker::picker_key_size(ui.ctx()),
+                    egui::Button::new(""),
+                )
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
             KeycodePicker::paint_compact_picker_label(ui, &resp, &label);
             if resp.clicked() {
-                picked = Some(smart.trigger_keycode);
+                picked = Some(crate::universal_symbols::binding(symbol.user_id));
             }
-            resp.on_hover_text(crate::i18n::tr_text(language, &tip));
+            resp.on_hover_text(crate::i18n::tr_text(
+                language,
+                &format!(
+                    "Universal Symbols: firmware types {} in English and Russian layouts",
+                    symbol.symbol
+                ),
+            ));
         }
     });
 
@@ -590,6 +603,7 @@ impl Default for KeycodePicker {
             supports_persistent_default_layer: true,
             supports_macro_ext_keycodes: true,
             supports_rmk_native_key_actions: false,
+            supports_universal_symbols: false,
             rmk_native_key_actions_allowed_for_target: false,
             macro_ext_keycodes_disabled_reason: None,
             layer_names: (0..16).map(|i| i.to_string()).collect(),
@@ -629,6 +643,12 @@ impl Default for KeycodePicker {
 }
 
 impl KeycodePicker {
+    fn universal_symbols_available(&self) -> bool {
+        self.supports_universal_symbols
+            && self.supports_rmk_native_key_actions
+            && self.rmk_native_key_actions_allowed_for_target
+    }
+
     fn picker_keycode_tooltip(
         &self,
         value: u16,
@@ -867,6 +887,11 @@ impl KeycodePicker {
             crate::keyboard::KeyBinding::Vial(value) => self.select_tab_for_keycode(value),
             crate::keyboard::KeyBinding::Rmk(rmk_types::action::KeyAction::TapHold(_, _, _)) => {
                 self.selected_tab = KeycodeTab::Modifiers
+            }
+            crate::keyboard::KeyBinding::Rmk(action)
+                if crate::universal_symbols::user_id(action).is_some() =>
+            {
+                self.selected_tab = KeycodeTab::Symbols
             }
             crate::keyboard::KeyBinding::Rmk(_) => self.selected_tab = KeycodeTab::Basic,
         }

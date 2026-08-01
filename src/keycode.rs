@@ -540,19 +540,6 @@ pub fn find_keycode(value: u16) -> Option<&'static Keycode> {
     KEYCODES.iter().find(|k| k.value == value)
 }
 
-fn smart_symbol_label(value: u16) -> Option<String> {
-    crate::smart_input::smart_symbol_for_keycode(value).map(|smart| smart.symbol.to_string())
-}
-
-fn smart_symbol_tooltip(value: u16) -> Option<String> {
-    crate::smart_input::smart_symbol_for_keycode(value).map(|smart| {
-        format!(
-            "Universal symbol: {} — types {} consistently regardless of the active keyboard language",
-            smart.name, smart.symbol
-        )
-    })
-}
-
 fn magic_keycode_label(value: u16) -> Option<String> {
     let gui = gui_mod_name();
     match value {
@@ -691,9 +678,6 @@ pub fn keycode_label_with_names(value: u16, custom: &[CustomKeycode], layer_name
     }
 
     if let Some(label) = magic_keycode_label(value) {
-        return label;
-    }
-    if let Some(label) = smart_symbol_label(value) {
         return label;
     }
     if let Some(kc) = find_keycode(value) {
@@ -992,10 +976,6 @@ pub fn keycode_tooltip(value: u16, custom: &[CustomKeycode], layer_names: &[Stri
     if let Some(tip) = magic_keycode_tooltip(value) {
         return tip;
     }
-    if let Some(tip) = smart_symbol_tooltip(value) {
-        return tip;
-    }
-
     // ── One-shot mod: 0x52A0..=0x52BF (Vial protocol v6) ─────────────────────
     if let Some(bits) = osm_mod_bits(value) {
         let full_name = osm_mod_full_name(bits);
