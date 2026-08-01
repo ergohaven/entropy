@@ -390,7 +390,7 @@ fn select_hid_vial_endpoints(
                 })
                 .and_then(|descriptor| {
                     (descriptor.value.len() >= 2)
-                        .then_some((descriptor.value[0], descriptor.value[1]))
+                        .then(|| (descriptor.value[0], descriptor.value[1]))
                 })
         };
 
