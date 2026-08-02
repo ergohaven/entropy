@@ -5,6 +5,12 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.5
+
+### Fixes
+
+- Added native Layout Sync on GNOME Wayland through the session IBus D-Bus service, including GNOME's built-in XKB and Entropy Text Expander input sources
+
 ## v0.3.4
 
 ### Improvements
