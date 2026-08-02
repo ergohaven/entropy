@@ -45,6 +45,10 @@ fn layer_after_wheel(selected: usize, layer_count: usize, wheel_delta: f32) -> u
     }
 }
 
+fn layer_name_edit_is_available(hid_busy: bool, background_layers_pending: bool) -> bool {
+    !hid_busy && !background_layers_pending
+}
+
 impl EntropyApp {
     fn main_menu_battery_status(&self) -> MainMenuBatteryStatus {
         main_menu_battery_status(
@@ -303,7 +307,10 @@ impl EntropyApp {
                     self.jump_back_stack.clear();
                 }
                 #[cfg(not(target_arch = "wasm32"))]
-                let layer_name_edit_available = !self.hid_write_task_active();
+                let layer_name_edit_available = layer_name_edit_is_available(
+                    self.hid_write_task_active(),
+                    self.deferred_device_load.next_unloaded_layer().is_some(),
+                );
                 #[cfg(target_arch = "wasm32")]
                 let layer_name_edit_available = true;
                 if name_r.hovered() && layer_name_edit_available {
@@ -360,7 +367,11 @@ impl EntropyApp {
                     text_color,
                 );
 
-                self.draw_layout_bottom_hints(ui, center_x, name_r.hovered());
+                self.draw_layout_bottom_hints(
+                    ui,
+                    center_x,
+                    name_r.hovered() && layer_name_edit_available,
+                );
             }
 
             self.draw_main_menu_battery_status(ui, center_x, mid_y);
@@ -373,9 +384,17 @@ mod tests {
     use crate::app::DeviceAboutInfo;
 
     use super::{
-        layer_after_wheel, main_menu_battery_status, main_menu_reserves_battery_status_space,
-        MainMenuBatteryStatus,
+        layer_after_wheel, layer_name_edit_is_available, main_menu_battery_status,
+        main_menu_reserves_battery_status_space, MainMenuBatteryStatus,
     };
+
+    #[test]
+    fn layer_name_edit_stays_disabled_between_background_load_steps() {
+        assert!(!layer_name_edit_is_available(true, true));
+        assert!(!layer_name_edit_is_available(false, true));
+        assert!(layer_name_edit_is_available(false, false));
+        assert!(!layer_name_edit_is_available(true, false));
+    }
 
     #[test]
     fn split_batteries_keep_left_and_right_order() {

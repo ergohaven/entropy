@@ -5,6 +5,12 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.8
+
+### Fixes
+
+- Kept the layer-name hover cursor stable while Bluetooth layers load in the background
+
 ## v0.3.7
 
 ### Fixes
