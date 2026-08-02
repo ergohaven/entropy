@@ -887,7 +887,8 @@ impl EntropyApp {
                 log::info!("Layer count: {layer_count}");
 
                 let num_keys = layout.keys.len();
-                layout.layers = vec![vec![0u16; num_keys]; layer_count];
+                layout.layers =
+                    vec![vec![crate::keyboard::KeyBinding::default(); num_keys]; layer_count];
 
                 progress("Reading keymap…");
                 let initial_layer_count = if staged_bluetooth_load {
@@ -903,7 +904,7 @@ impl EntropyApp {
                                     + key.row as usize * layout.cols
                                     + key.col as usize;
                                 if let Some(&kc) = buf.get(idx) {
-                                    layout.layers[layer][ki] = kc;
+                                    layout.layers[layer][ki] = kc.into();
                                 }
                             }
                         }
@@ -915,6 +916,26 @@ impl EntropyApp {
                         }
                         log::warn!("get_keymap_buffer failed: {e}");
                     }
+                }
+
+                let supports_rmk_native_key_actions = dev_conn
+                    .get_rmk_native_capabilities()
+                    .map(|capabilities| capabilities.key_actions)
+                    .unwrap_or_else(|error| {
+                        log::debug!("RMK native key-action capability unavailable: {error:#}");
+                        false
+                    });
+                if supports_rmk_native_key_actions {
+                    let matrix_size = layout.rows.saturating_mul(layout.cols);
+                    let native_actions = dev_conn
+                        .get_rmk_native_key_actions_in_range(
+                            0,
+                            initial_layer_count.saturating_mul(matrix_size),
+                        )
+                        .map_err(|error| format!("RMK native key-action scan failed: {error:#}"))?;
+                    let loaded =
+                        crate::rmk_native::apply_rmk_native_actions(&mut layout, &native_actions);
+                    log::info!("Loaded {loaded} lossless RMK key action(s)");
                 }
 
                 if layout.layer_names.len() < layer_count {
@@ -1121,7 +1142,10 @@ impl EntropyApp {
 
                 progress("Reading module settings…");
                 let module_settings = if staged_bluetooth_load {
-                    Self::module_settings_from_definition(&json, &supported_qmk_settings)
+                    let mut settings =
+                        Self::module_settings_from_definition(&json, &supported_qmk_settings);
+                    Self::read_initial_module_values(&mut settings, &dev_conn);
+                    settings
                 } else {
                     Self::read_module_settings(&json, &supported_qmk_settings, &dev_conn)
                 };
@@ -1274,6 +1298,7 @@ impl EntropyApp {
                         layer_leds_supported,
                         rgb_supported: layout.supports_rgb,
                         lighting_mode: layout.lighting_mode.clone(),
+                        supports_rmk_native_key_actions,
                     })
                 } else {
                     DeferredDeviceLoadState::complete(layer_count)
@@ -1315,6 +1340,7 @@ impl EntropyApp {
                     layer_names_from_firmware,
                     macro_texts,
                     supports_macro_ext_keycodes,
+                    supports_rmk_native_key_actions,
                     macro_ext_keycodes_disabled_reason,
                     tap_dance_entries,
                     combo_entries,

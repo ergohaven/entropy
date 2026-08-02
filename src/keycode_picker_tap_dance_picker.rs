@@ -22,17 +22,11 @@ impl KeycodePicker {
                         ..
                     } = event
                     {
-                        if !modifiers.any() {
-                            if let Some(qmk) = egui_key_to_qmk(*key, *modifiers) {
-                                if self.is_tap_dance_regular_key(qmk) {
-                                    self.set_tap_dance_field(
-                                        pending_td_idx,
-                                        pending_field,
-                                        base | qmk,
-                                    );
-                                    self.td_mod_key_pick = None;
-                                    self.td_key_pick = None;
-                                }
+                        if let Some(qmk) = egui_key_to_qmk(*key, *modifiers) {
+                            if self.is_tap_dance_regular_key(qmk) {
+                                self.set_tap_dance_field(pending_td_idx, pending_field, base | qmk);
+                                self.td_mod_key_pick = None;
+                                self.td_key_pick = None;
                             }
                         }
                     }
@@ -157,10 +151,7 @@ impl KeycodePicker {
                     } else if matches!(field, 1 | 3) {
                         self.show_tap_dance_hold_picker_content(ui, td_idx, field);
                     } else {
-                        let key_choices: Vec<&'static crate::keycode::Keycode> = KEYCODES
-                            .iter()
-                            .filter(|kc| is_8bit_tap_key_choice(kc) && !kc.name.starts_with("RGB_"))
-                            .collect();
+                        let key_choices = self.tap_dance_regular_key_choices();
                         match self.popup_view_mode {
                             PickerViewMode::Layout => {
                                 if let Some(value) =
@@ -364,32 +355,24 @@ impl KeycodePicker {
                 .strong(),
         );
         ui.add_space(4.0);
-        let shortcuts: Vec<(String, u16, u16, String)> = vec![
-            (picker_mod_key_label(0x0100), 0x0100, 0x1100, "Ctrl".into()),
-            (picker_mod_key_label(0x0200), 0x0200, 0x1200, "Shift".into()),
-            (picker_mod_key_label(0x0400), 0x0400, 0x1400, "Alt".into()),
-            (
-                picker_mod_key_label(0x0800),
-                0x0800,
-                0x1800,
-                gui_mod_name().to_string(),
-            ),
-        ];
+        let shortcuts = mod_key_choices(true);
         ui.horizontal_wrapped(|ui| {
-            for (label, left_base, right_base, mod_name) in &shortcuts {
+            for choice in &shortcuts {
                 let resp = ui
                     .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
-                Self::paint_compact_picker_label(ui, &resp, label);
+                Self::paint_compact_picker_label(ui, &resp, &choice.label);
                 if resp.clicked_by(egui::PointerButton::Primary) {
-                    self.td_mod_key_pick = Some((td_idx, field, *left_base));
+                    self.td_mod_key_pick = Some((td_idx, field, choice.left_value));
                 }
-                if resp.clicked_by(egui::PointerButton::Secondary) {
-                    self.td_mod_key_pick = Some((td_idx, field, *right_base));
+                if let Some(right_value) = choice.right_value {
+                    if resp.clicked_by(egui::PointerButton::Secondary) {
+                        self.td_mod_key_pick = Some((td_idx, field, right_value));
+                    }
                 }
                 resp.on_hover_text(crate::i18n::tr_text(
                     self.language,
-                    &mod_combo_tooltip(mod_name, true),
+                    &mod_combo_tooltip(&choice.mod_name, choice.right_value.is_some()),
                 ));
             }
         });
@@ -399,11 +382,7 @@ impl KeycodePicker {
     fn tap_dance_regular_key_choices(&self) -> Vec<&'static crate::keycode::Keycode> {
         KEYCODES
             .iter()
-            .filter(|kc| {
-                is_8bit_tap_key_choice(kc)
-                    && !matches!(kc.category, KeycodeCategory::Modifier)
-                    && !kc.name.starts_with("RGB_")
-            })
+            .filter(|kc| is_mod_key_tap_key_choice(kc) && !kc.name.starts_with("RGB_"))
             .collect()
     }
 

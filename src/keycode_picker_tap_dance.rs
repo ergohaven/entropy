@@ -304,7 +304,7 @@ impl KeycodePicker {
                 )
                 .clicked()
                 {
-                    self.result = Some(0x5700 + n as u16);
+                    self.result = Some((0x5700 + n as u16).into());
                     self.tap_dance_dirty = true;
                     self.tap_dance_editor_open = None;
                     self.open = false;

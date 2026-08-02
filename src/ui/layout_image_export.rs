@@ -181,6 +181,24 @@ fn export_keycode_label_with_macro_names(
     ))
 }
 
+fn export_key_binding_label_with_macro_names(
+    binding: crate::keyboard::KeyBinding,
+    custom: &[crate::keyboard::CustomKeycode],
+    layer_names: &[String],
+    macro_names: &[String],
+    tap_dance_names: &[String],
+    key_legend_layout: KeyLegendLayout,
+) -> String {
+    export_safe_key_label(key_binding_label_with_macro_names(
+        binding,
+        custom,
+        layer_names,
+        macro_names,
+        tap_dance_names,
+        key_legend_layout,
+    ))
+}
+
 fn draw_format_dropdown(
     ui: &mut egui::Ui,
     metrics: crate::ui_style::ResponsiveMetrics,
@@ -928,32 +946,32 @@ impl EntropyApp {
             );
             write_rotated_rect_svg(svg, rect, key.rotation, palette)?;
 
-            let kc = layout.get_keycode(layer_idx, key_idx);
-            let (label, dimmed) = match kc {
-                0x0000 => (String::new(), false),
-                0x0001 => {
-                    let fallback = (0..layer_idx)
-                        .rev()
-                        .map(|fallback_layer| layout.get_keycode(fallback_layer, key_idx))
-                        .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
-                    match fallback {
-                        Some(fallback_kc) => (
-                            export_keycode_label_with_macro_names(
-                                fallback_kc,
-                                &layout.custom_keycodes,
-                                &self.layer_names,
-                                &self.keycode_picker.macro_names,
-                                &self.keycode_picker.tap_dance_names,
-                                self.app_settings.layout_image_export.key_legend_layout,
-                            ),
-                            true,
+            let binding = layout.get_key_binding(layer_idx, key_idx);
+            let (label, dimmed) = if binding.is_no() {
+                (String::new(), false)
+            } else if binding.is_transparent() {
+                let fallback = (0..layer_idx)
+                    .rev()
+                    .map(|fallback_layer| layout.get_key_binding(fallback_layer, key_idx))
+                    .find(|fallback| !fallback.is_no() && !fallback.is_transparent());
+                match fallback {
+                    Some(fallback_binding) => (
+                        export_key_binding_label_with_macro_names(
+                            fallback_binding,
+                            &layout.custom_keycodes,
+                            &self.layer_names,
+                            &self.keycode_picker.macro_names,
+                            &self.keycode_picker.tap_dance_names,
+                            self.app_settings.layout_image_export.key_legend_layout,
                         ),
-                        None => (String::new(), false),
-                    }
+                        true,
+                    ),
+                    None => (String::new(), false),
                 }
-                value => (
-                    export_keycode_label_with_macro_names(
-                        value,
+            } else {
+                (
+                    export_key_binding_label_with_macro_names(
+                        binding,
                         &layout.custom_keycodes,
                         &self.layer_names,
                         &self.keycode_picker.macro_names,
@@ -961,7 +979,7 @@ impl EntropyApp {
                         self.app_settings.layout_image_export.key_legend_layout,
                     ),
                     false,
-                ),
+                )
             };
             if !label.is_empty() {
                 let label = number_row_shifted_label(
@@ -1108,32 +1126,32 @@ impl EntropyApp {
                 1.4,
             );
 
-            let kc = layout.get_keycode(layer_idx, key_idx);
-            let (label, dimmed) = match kc {
-                0x0000 => (String::new(), false),
-                0x0001 => {
-                    let fallback = (0..layer_idx)
-                        .rev()
-                        .map(|fallback_layer| layout.get_keycode(fallback_layer, key_idx))
-                        .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
-                    match fallback {
-                        Some(fallback_kc) => (
-                            export_keycode_label_with_macro_names(
-                                fallback_kc,
-                                &layout.custom_keycodes,
-                                &self.layer_names,
-                                &self.keycode_picker.macro_names,
-                                &self.keycode_picker.tap_dance_names,
-                                self.app_settings.layout_image_export.key_legend_layout,
-                            ),
-                            true,
+            let binding = layout.get_key_binding(layer_idx, key_idx);
+            let (label, dimmed) = if binding.is_no() {
+                (String::new(), false)
+            } else if binding.is_transparent() {
+                let fallback = (0..layer_idx)
+                    .rev()
+                    .map(|fallback_layer| layout.get_key_binding(fallback_layer, key_idx))
+                    .find(|fallback| !fallback.is_no() && !fallback.is_transparent());
+                match fallback {
+                    Some(fallback_binding) => (
+                        export_key_binding_label_with_macro_names(
+                            fallback_binding,
+                            &layout.custom_keycodes,
+                            &self.layer_names,
+                            &self.keycode_picker.macro_names,
+                            &self.keycode_picker.tap_dance_names,
+                            self.app_settings.layout_image_export.key_legend_layout,
                         ),
-                        None => (String::new(), false),
-                    }
+                        true,
+                    ),
+                    None => (String::new(), false),
                 }
-                value => (
-                    export_keycode_label_with_macro_names(
-                        value,
+            } else {
+                (
+                    export_key_binding_label_with_macro_names(
+                        binding,
                         &layout.custom_keycodes,
                         &self.layer_names,
                         &self.keycode_picker.macro_names,
@@ -1141,7 +1159,7 @@ impl EntropyApp {
                         self.app_settings.layout_image_export.key_legend_layout,
                     ),
                     false,
-                ),
+                )
             };
             if !label.is_empty() {
                 let label = number_row_shifted_label(

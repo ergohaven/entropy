@@ -1,6 +1,6 @@
 [package]
 name = "ergohaven-entropy"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 description = "Desktop app for configuring Vial-QMK and Vial-RMK programmable keyboards and input devices"
 authors = ["Ergohaven"]
@@ -46,6 +46,8 @@ chrono = "0.4"
 base64 = "0.21"
 ab_glyph = "0.2"
 image = { version = "0.25", default-features = false, features = ["png"] }
+postcard = "1"
+rmk-types = { git = "https://github.com/ergohaven/rmk.git", rev = "99cdcd542600eb1a439675455997fe7cf3928600", default-features = false }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = "0.15"
@@ -71,6 +73,8 @@ objc = "0.2"
 tray-icon = "0.22"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+async-channel = "2"
+futures-lite = "2"
 hidapi = { version = "2.6", default-features = false, features = ["linux-native-basic-udev"] }
 x11-dl = "2"
 zbus = "5.16"

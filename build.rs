@@ -13,9 +13,10 @@ fn main() {
         return;
     }
 
-    if !Path::new(WINDOWS_ICON_PATH).is_file() {
-        panic!("Windows icon file is missing: {WINDOWS_ICON_PATH}");
-    }
+    assert!(
+        Path::new(WINDOWS_ICON_PATH).is_file(),
+        "Windows icon file is missing: {WINDOWS_ICON_PATH}"
+    );
 
     let mut res = winresource::WindowsResource::new();
     if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("gnu") && env::var_os("WINDRES").is_none()

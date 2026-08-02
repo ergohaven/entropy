@@ -723,6 +723,7 @@ impl EntropyApp {
                 );
             }
         }
+        self.sync_firmware_managed_layout_options();
 
         if disconnected {
             let error = crate::i18n::tr_catalog(

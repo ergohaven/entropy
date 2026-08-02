@@ -381,8 +381,8 @@ impl EntropyApp {
             } else {
                 layer
             };
-            let kc = layout.get_keycode(key_layer, *ki);
-            let is_transparent = kc == 0x0001;
+            let binding = layout.get_key_binding(key_layer, *ki);
+            let is_transparent = binding.is_transparent();
             let fill = if is_pressed {
                 app_hover_fill(dark)
             } else {
@@ -397,25 +397,25 @@ impl EntropyApp {
                 Stroke::new(1.0_f32, stroke),
             );
 
-            if kc == 0x0000 {
+            if binding.is_no() {
                 continue;
             }
 
-            let label_kc = if is_transparent {
+            let label_binding = if is_transparent {
                 (0..key_layer)
                     .rev()
-                    .map(|fallback_layer| layout.get_keycode(fallback_layer, *ki))
-                    .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001))
-                    .unwrap_or(0x0000)
+                    .map(|fallback_layer| layout.get_key_binding(fallback_layer, *ki))
+                    .find(|fallback| !fallback.is_no() && !fallback.is_transparent())
+                    .unwrap_or_default()
             } else {
-                kc
+                binding
             };
-            if label_kc == 0x0000 {
+            if label_binding.is_no() {
                 continue;
             }
             let label = number_row_shifted_label(
-                keycode_label_with_macro_names(
-                    label_kc,
+                key_binding_label_with_macro_names(
+                    label_binding,
                     &layout.custom_keycodes,
                     layer_names,
                     macro_names,
@@ -636,19 +636,19 @@ impl EntropyApp {
                         .and_then(|source_layer| *source_layer)
                         .filter(|source_layer| *source_layer < layout.layers.len())
                         .unwrap_or(layer);
-                    let kc = layout.get_keycode(press_layer, press_ki);
-                    if kc == 0x0001 {
-                        let fallback_kc = (0..press_layer)
+                    let binding = layout.get_key_binding(press_layer, press_ki);
+                    if binding.is_transparent() {
+                        let fallback_binding = (0..press_layer)
                             .rev()
-                            .map(|fallback_layer| layout.get_keycode(fallback_layer, press_ki))
-                            .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001))
-                            .unwrap_or(0x0000);
-                        if fallback_kc == 0x0000 {
+                            .map(|fallback_layer| layout.get_key_binding(fallback_layer, press_ki))
+                            .find(|fallback| !fallback.is_no() && !fallback.is_transparent())
+                            .unwrap_or_default();
+                        if fallback_binding.is_no() {
                             ("▽".to_string(), false)
                         } else {
                             (
-                                keycode_label_with_macro_names(
-                                    fallback_kc,
+                                key_binding_label_with_macro_names(
+                                    fallback_binding,
                                     &layout.custom_keycodes,
                                     layer_names,
                                     macro_names,
@@ -658,12 +658,12 @@ impl EntropyApp {
                                 true,
                             )
                         }
-                    } else if kc == 0x0000 {
+                    } else if binding.is_no() {
                         (String::new(), false)
                     } else {
                         (
-                            keycode_label_with_macro_names(
-                                kc,
+                            key_binding_label_with_macro_names(
+                                binding,
                                 &layout.custom_keycodes,
                                 layer_names,
                                 macro_names,

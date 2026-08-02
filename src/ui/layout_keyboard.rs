@@ -148,6 +148,7 @@ impl EntropyApp {
         // Pass 2: hover + clicks + tooltips
         let mut hovered_key: Option<usize> = None;
         for (ki, _, response) in &mut rects {
+            let binding = layout.get_key_binding(self.selected_layer, *ki);
             if response.hovered() {
                 hovered_key = Some(*ki);
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -159,15 +160,14 @@ impl EntropyApp {
             // Right-click actions: layer jump/retarget, modifier side swap, editors/settings.
             if response.secondary_clicked() {
                 let ctrl_held = ui.input(|i| i.modifiers.ctrl);
-                let kc = layout.get_keycode(self.selected_layer, *ki);
-                self.handle_secondary_target(ui.ctx(), ctrl_held, kc, Some(*ki), None);
+                self.handle_secondary_target(ui.ctx(), ctrl_held, binding, Some(*ki), None);
                 if self.secondary_click_handled {
                     continue;
                 }
             }
 
             // Tooltip — for layer keys show mini layout preview
-            let kc = layout.get_keycode(self.selected_layer, *ki);
+            let kc = binding.vial_keycode();
             // MO/TG/TO/OSL/TT/DF range and LT; OSM also lives in 0x52xx
             // but is deliberately excluded by vial_layer_target().
             let preview_layer: Option<usize> = vial_layer_target(kc);
@@ -178,8 +178,8 @@ impl EntropyApp {
                     if self.app_settings.layer_hover_preview {
                         self.hover_layer = Some(preview_layer_idx);
                     } else {
-                        let tip = keycode_tooltip_with_macro_names(
-                            kc,
+                        let tip = key_binding_tooltip_with_macro_names(
+                            binding,
                             &layout.custom_keycodes,
                             &self.layer_names,
                             &self.keycode_picker.macro_names,
@@ -199,8 +199,8 @@ impl EntropyApp {
                     self.secondary_click_handled = true;
                 }
             } else if response.hovered() {
-                let tip = keycode_tooltip_with_macro_names(
-                    kc,
+                let tip = key_binding_tooltip_with_macro_names(
+                    binding,
                     &layout.custom_keycodes,
                     &self.layer_names,
                     &self.keycode_picker.macro_names,
@@ -291,7 +291,8 @@ impl EntropyApp {
                 continue;
             }
 
-            let kc = layout.get_keycode(layer, *ki);
+            let binding = layout.get_key_binding(layer, *ki);
+            let kc = binding.vial_keycode();
             let combo_colors = combo_key_colors.get(*ki);
             let combo_outline = combo_colors
                 .and_then(|colors| combo_key_outline_color(colors))
@@ -313,16 +314,16 @@ impl EntropyApp {
             if kc == 0x0001 {
                 paint_layout_keycap(painter, draw_rect, key.rotation, bg, key_border_stroke);
                 if !is_hovering {
-                    let fallback_kc = (0..layer)
+                    let fallback_binding = (0..layer)
                         .rev()
-                        .map(|l| layout.get_keycode(l, *ki))
-                        .find(|&k| k != 0x0001)
-                        .unwrap_or(0x0000);
-                    let label = if fallback_kc == 0x0000 || fallback_kc == 0x0001 {
+                        .map(|l| layout.get_key_binding(l, *ki))
+                        .find(|binding| !binding.is_transparent())
+                        .unwrap_or_default();
+                    let label = if fallback_binding.is_no() || fallback_binding.is_transparent() {
                         String::new()
                     } else {
-                        keycode_label_with_macro_names(
-                            fallback_kc,
+                        key_binding_label_with_macro_names(
+                            fallback_binding,
                             &layout.custom_keycodes,
                             &self.layer_names,
                             &self.keycode_picker.macro_names,
@@ -344,13 +345,13 @@ impl EntropyApp {
                         key.rotation.to_radians(),
                     );
                 }
-            } else if kc == 0x0000 {
+            } else if binding.is_no() {
                 paint_layout_keycap(painter, draw_rect, key.rotation, bg, key_border_stroke);
             } else {
                 paint_layout_keycap(painter, draw_rect, key.rotation, bg, key_border_stroke);
                 let label = number_row_shifted_label(
-                    keycode_label_with_macro_names(
-                        kc,
+                    key_binding_label_with_macro_names(
+                        binding,
                         &layout.custom_keycodes,
                         &self.layer_names,
                         &self.keycode_picker.macro_names,
@@ -544,7 +545,13 @@ impl EntropyApp {
             }
             if top_resp.secondary_clicked() {
                 if let Some((visual_idx, kc)) = cw {
-                    self.handle_secondary_target(ui.ctx(), ctrl_held, *kc, None, Some(*visual_idx));
+                    self.handle_secondary_target(
+                        ui.ctx(),
+                        ctrl_held,
+                        (*kc).into(),
+                        None,
+                        Some(*visual_idx),
+                    );
                 }
             }
             if top_resp.clicked() {
@@ -555,10 +562,10 @@ impl EntropyApp {
             if let (Some((press_ki, _)), Some(middle_resp)) = (press_slot, middle_resp.as_ref()) {
                 if middle_resp.hovered() {
                     hovered_key = Some(press_ki);
-                    let kc = layout.get_keycode(self.selected_layer, press_ki);
-                    hovered_encoder_keycode = Some(kc);
-                    let tip = keycode_tooltip_with_macro_names(
-                        kc,
+                    let binding = layout.get_key_binding(self.selected_layer, press_ki);
+                    hovered_encoder_keycode = Some(binding.vial_keycode());
+                    let tip = key_binding_tooltip_with_macro_names(
+                        binding,
                         &layout.custom_keycodes,
                         &self.layer_names,
                         &self.keycode_picker.macro_names,
@@ -570,8 +577,14 @@ impl EntropyApp {
                         .on_hover_text(crate::i18n::tr_text(self.app_settings.language, &tip));
                 }
                 if middle_resp.secondary_clicked() {
-                    let kc = layout.get_keycode(self.selected_layer, press_ki);
-                    self.handle_secondary_target(ui.ctx(), ctrl_held, kc, Some(press_ki), None);
+                    let binding = layout.get_key_binding(self.selected_layer, press_ki);
+                    self.handle_secondary_target(
+                        ui.ctx(),
+                        ctrl_held,
+                        binding,
+                        Some(press_ki),
+                        None,
+                    );
                 }
                 if middle_resp.clicked() {
                     self.open_picker_for_target(Some(press_ki), None);
@@ -596,7 +609,13 @@ impl EntropyApp {
             }
             if bottom_resp.secondary_clicked() {
                 if let Some((visual_idx, kc)) = ccw {
-                    self.handle_secondary_target(ui.ctx(), ctrl_held, *kc, None, Some(*visual_idx));
+                    self.handle_secondary_target(
+                        ui.ctx(),
+                        ctrl_held,
+                        (*kc).into(),
+                        None,
+                        Some(*visual_idx),
+                    );
                 }
             }
             if bottom_resp.clicked() {

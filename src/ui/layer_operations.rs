@@ -2,7 +2,7 @@ use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LayerSnapshot {
-    pub(super) keycodes: Vec<u16>,
+    pub(super) keycodes: Vec<crate::keyboard::KeyBinding>,
     pub(super) encoder_keycodes: Vec<u16>,
 }
 
@@ -35,7 +35,7 @@ fn capture_layer(layout: &KeyboardLayout, layer: usize) -> Option<LayerSnapshot>
     layout.layers.get(layer)?;
     Some(LayerSnapshot {
         keycodes: (0..layout.keys.len())
-            .map(|key_idx| layout.get_keycode(layer, key_idx))
+            .map(|key_idx| layout.get_key_binding(layer, key_idx))
             .collect(),
         encoder_keycodes: (0..layout.encoders.len())
             .map(|encoder_idx| layout.get_encoder_keycode(layer, encoder_idx))
@@ -228,18 +228,18 @@ fn filled_layer_snapshot(
     keycode: u16,
 ) -> Option<LayerSnapshot> {
     let mut snapshot = capture_layer(layout, layer)?;
-    snapshot.keycodes.fill(keycode);
+    snapshot.keycodes.fill(keycode.into());
     Some(snapshot)
 }
 
 fn apply_layer_updates(
     layout: &mut KeyboardLayout,
     layer: usize,
-    key_updates: &[(usize, u16)],
+    key_updates: &[(usize, crate::keyboard::KeyBinding)],
     encoder_updates: &[(usize, u16)],
 ) {
-    for &(key_idx, keycode) in key_updates {
-        layout.set_keycode(layer, key_idx, keycode);
+    for &(key_idx, binding) in key_updates {
+        layout.set_key_binding(layer, key_idx, binding);
     }
     for &(encoder_idx, keycode) in encoder_updates {
         layout.set_encoder_keycode(layer, encoder_idx, keycode);
@@ -340,9 +340,13 @@ fn mirrored_layer_snapshot_with_mapping(
     let current = capture_layer(layout, layer).ok_or(LayerOperationError::MissingLayer)?;
     let keycodes = mapping
         .iter()
-        .map(|&source_idx| {
-            let keycode = current.keycodes[source_idx];
-            toggle_handed_modifier(keycode).unwrap_or(keycode)
+        .map(|&source_idx| match current.keycodes[source_idx] {
+            crate::keyboard::KeyBinding::Vial(keycode) => {
+                toggle_handed_modifier(keycode).unwrap_or(keycode).into()
+            }
+            crate::keyboard::KeyBinding::Rmk(action) => {
+                crate::rmk_native::toggle_handed_key_action(action).into()
+            }
         })
         .collect();
     Ok(LayerSnapshot {
@@ -372,7 +376,7 @@ fn layer_operation_menu_labels(language: crate::i18n::Language) -> [String; 5] {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-type KeyChange = (usize, u8, u8, u16);
+type KeyChange = (usize, u8, u8, crate::keyboard::KeyBinding);
 
 #[cfg(not(target_arch = "wasm32"))]
 type EncoderChange = (usize, u8, u8, u16);
@@ -426,7 +430,7 @@ struct LayerWriteResult {
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, PartialEq, Eq)]
 struct LayerWriteProgress {
-    key_updates: Vec<(usize, u16)>,
+    key_updates: Vec<(usize, crate::keyboard::KeyBinding)>,
     encoder_updates: Vec<(usize, u16)>,
     written: usize,
     error: Option<String>,
@@ -436,7 +440,10 @@ struct LayerWriteProgress {
 #[cfg(not(target_arch = "wasm32"))]
 enum KeyWriteOutcome {
     Saved,
-    Mismatch { readback: u16, error: String },
+    Mismatch {
+        readback: crate::keyboard::KeyBinding,
+        error: String,
+    },
     Failed(String),
 }
 
@@ -444,7 +451,7 @@ enum KeyWriteOutcome {
 fn run_layer_writes(
     key_changes: &[KeyChange],
     encoder_changes: &[EncoderChange],
-    mut write_key: impl FnMut(u8, u8, u16) -> KeyWriteOutcome,
+    mut write_key: impl FnMut(u8, u8, crate::keyboard::KeyBinding) -> KeyWriteOutcome,
     mut write_encoder: impl FnMut(u8, u8, u16) -> Result<(), String>,
 ) -> LayerWriteProgress {
     let mut progress = LayerWriteProgress {
@@ -455,10 +462,10 @@ fn run_layer_writes(
         disconnect: false,
     };
 
-    for &(key_idx, row, col, keycode) in key_changes {
-        match write_key(row, col, keycode) {
+    for &(key_idx, row, col, binding) in key_changes {
+        match write_key(row, col, binding) {
             KeyWriteOutcome::Saved => {
-                progress.key_updates.push((key_idx, keycode));
+                progress.key_updates.push((key_idx, binding));
                 progress.written += 1;
             }
             KeyWriteOutcome::Mismatch { readback, error } => {
@@ -949,15 +956,23 @@ impl EntropyApp {
             let progress = run_layer_writes(
                 &key_changes,
                 &encoder_changes,
-                |row, col, keycode| match hid_device.set_keycode(layer_u8, row, col, keycode) {
-                    Ok(()) => KeyWriteOutcome::Saved,
-                    Err(error) => match crate::hid::keycode_writeback_readback(&error) {
-                        Some(readback) => KeyWriteOutcome::Mismatch {
-                            readback,
-                            error: error.to_string(),
-                        },
-                        None => KeyWriteOutcome::Failed(error.to_string()),
-                    },
+                |row, col, binding| match binding {
+                    crate::keyboard::KeyBinding::Vial(keycode) => {
+                        match hid_device.set_keycode(layer_u8, row, col, keycode) {
+                            Ok(()) => KeyWriteOutcome::Saved,
+                            Err(error) => match crate::hid::keycode_writeback_readback(&error) {
+                                Some(readback) => KeyWriteOutcome::Mismatch {
+                                    readback: readback.into(),
+                                    error: error.to_string(),
+                                },
+                                None => KeyWriteOutcome::Failed(error.to_string()),
+                            },
+                        }
+                    }
+                    crate::keyboard::KeyBinding::Rmk(action) => hid_device
+                        .set_rmk_key_action(layer_u8, row, col, action)
+                        .map(|()| KeyWriteOutcome::Saved)
+                        .unwrap_or_else(|error| KeyWriteOutcome::Failed(error.to_string())),
                 },
                 |device_idx, direction, keycode| {
                     hid_device
@@ -1145,8 +1160,8 @@ impl EntropyApp {
             return;
         }
         if let Some(layout) = &mut self.layout {
-            for (key_idx, keycode) in desired.keycodes.into_iter().enumerate() {
-                layout.set_keycode(layer, key_idx, keycode);
+            for (key_idx, binding) in desired.keycodes.into_iter().enumerate() {
+                layout.set_key_binding(layer, key_idx, binding);
             }
             for (encoder_idx, keycode) in desired.encoder_keycodes.into_iter().enumerate() {
                 layout.set_encoder_keycode(layer, encoder_idx, keycode);
@@ -1175,6 +1190,11 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keyboard::KeyBinding;
+
+    fn bindings(keycodes: &[u16]) -> Vec<KeyBinding> {
+        keycodes.iter().copied().map(Into::into).collect()
+    }
 
     fn physical_key(index: usize, x: f32, y: f32) -> PhysicalKey {
         PhysicalKey {
@@ -1227,7 +1247,7 @@ mod tests {
                 .enumerate()
                 .map(|(idx, _)| physical_encoder(idx, idx as f32, 0.0))
                 .collect(),
-            layers: vec![keycodes.to_vec()],
+            layers: vec![bindings(keycodes)],
             encoder_layers: vec![encoder_keycodes.to_vec()],
             layer_names: vec![],
             custom_keycodes: vec![],
@@ -1255,7 +1275,7 @@ mod tests {
         let copied = capture_clipboard(&source, 0).expect("source layer");
         let pasted = layer_snapshot_for_paste(&copied, &target, 0).expect("compatible layer");
 
-        assert_eq!(pasted.keycodes, vec![10, 11, 12, 13]);
+        assert_eq!(pasted.keycodes, bindings(&[10, 11, 12, 13]));
         assert_eq!(pasted.encoder_keycodes, vec![20, 21]);
     }
 
@@ -1275,7 +1295,7 @@ mod tests {
         let copied = capture_clipboard(&source, 0).expect("source layer");
         let pasted = layer_snapshot_for_paste(&copied, &target, 0).expect("compatible geometry");
 
-        assert_eq!(pasted.keycodes, vec![13, 10, 12, 11]);
+        assert_eq!(pasted.keycodes, bindings(&[13, 10, 12, 11]));
     }
 
     #[test]
@@ -1315,7 +1335,7 @@ mod tests {
 
         let pasted = layer_snapshot_for_paste(&copied, &target, 0).expect("same key count");
 
-        assert_eq!(pasted.keycodes, vec![10, 11, 12, 13]);
+        assert_eq!(pasted.keycodes, bindings(&[10, 11, 12, 13]));
         assert_eq!(pasted.encoder_keycodes, vec![30, 31]);
 
         let different_target = layout(
@@ -1350,8 +1370,8 @@ mod tests {
         let none = filled_layer_snapshot(&target, 0, 0x0000).expect("layer");
         let inherit = filled_layer_snapshot(&target, 0, 0x0001).expect("layer");
 
-        assert_eq!(none.keycodes, vec![0x0000; 4]);
-        assert_eq!(inherit.keycodes, vec![0x0001; 4]);
+        assert_eq!(none.keycodes, bindings(&[0x0000; 4]));
+        assert_eq!(inherit.keycodes, bindings(&[0x0001; 4]));
         assert_eq!(none.encoder_keycodes, vec![20, 21]);
         assert_eq!(inherit.encoder_keycodes, vec![20, 21]);
     }
@@ -1359,14 +1379,23 @@ mod tests {
     #[test]
     fn fill_updates_stay_on_the_selected_raw_layer() {
         let mut target = layout(&[(0.0, 0.0), (1.0, 0.0)], &[10, 11], &[20]);
-        target.layers = vec![vec![10, 11], vec![12, 13], vec![14, 15]];
+        target.layers = vec![
+            bindings(&[10, 11]),
+            bindings(&[12, 13]),
+            bindings(&[14, 15]),
+        ];
         target.encoder_layers = vec![vec![20], vec![21], vec![22]];
 
-        apply_layer_updates(&mut target, 1, &[(0, 0x0001), (1, 0x0001)], &[]);
+        apply_layer_updates(
+            &mut target,
+            1,
+            &[(0, 0x0001.into()), (1, 0x0001.into())],
+            &[],
+        );
 
-        assert_eq!(target.layers[0], vec![10, 11]);
-        assert_eq!(target.layers[1], vec![0x0001, 0x0001]);
-        assert_eq!(target.layers[2], vec![14, 15]);
+        assert_eq!(target.layers[0], bindings(&[10, 11]));
+        assert_eq!(target.layers[1], bindings(&[0x0001, 0x0001]));
+        assert_eq!(target.layers[2], bindings(&[14, 15]));
         assert_eq!(target.encoder_layers, vec![vec![20], vec![21], vec![22]]);
     }
 
@@ -1391,7 +1420,7 @@ mod tests {
 
         assert_eq!(
             mirrored.keycodes,
-            vec![0x00E2, 12, 11, 0x00E4, 23, 22, 21, 20]
+            bindings(&[0x00E2, 12, 11, 0x00E4, 23, 22, 21, 20])
         );
         assert_eq!(mirrored.encoder_keycodes, vec![30]);
     }
@@ -1452,7 +1481,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn layer_write_runner_records_successful_keys_and_encoders() {
-        let keys = vec![(0, 0, 0, 10), (1, 0, 1, 11)];
+        let keys = vec![(0, 0, 0, 10.into()), (1, 0, 1, 11.into())];
         let encoders = vec![(0, 0, 1, 20)];
 
         let progress = run_layer_writes(
@@ -1465,7 +1494,7 @@ mod tests {
         assert_eq!(
             progress,
             LayerWriteProgress {
-                key_updates: vec![(0, 10), (1, 11)],
+                key_updates: vec![(0, 10.into()), (1, 11.into())],
                 encoder_updates: vec![(0, 20)],
                 written: 3,
                 error: None,
@@ -1477,7 +1506,11 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn layer_write_runner_stops_after_disconnect_and_skips_encoders() {
-        let keys = vec![(0, 0, 0, 10), (1, 0, 1, 11), (2, 0, 2, 12)];
+        let keys = vec![
+            (0, 0, 0, 10.into()),
+            (1, 0, 1, 11.into()),
+            (2, 0, 2, 12.into()),
+        ];
         let encoders = vec![(0, 0, 1, 20)];
         let mut encoder_calls = 0;
 
@@ -1485,7 +1518,7 @@ mod tests {
             &keys,
             &encoders,
             |_, _, keycode| {
-                if keycode == 11 {
+                if keycode == 11.into() {
                     KeyWriteOutcome::Failed("device disconnected".into())
                 } else {
                     KeyWriteOutcome::Saved
@@ -1497,7 +1530,7 @@ mod tests {
             },
         );
 
-        assert_eq!(progress.key_updates, vec![(0, 10)]);
+        assert_eq!(progress.key_updates, vec![(0, 10.into())]);
         assert!(progress.encoder_updates.is_empty());
         assert_eq!(progress.written, 1);
         assert_eq!(progress.error.as_deref(), Some("device disconnected"));
@@ -1508,19 +1541,19 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn layer_write_runner_reconciles_readback_mismatch_without_disconnect() {
-        let keys = vec![(0, 0, 0, 10)];
+        let keys = vec![(0, 0, 0, 10.into())];
 
         let progress = run_layer_writes(
             &keys,
             &[],
             |_, _, _| KeyWriteOutcome::Mismatch {
-                readback: 99,
+                readback: 99.into(),
                 error: "writeback mismatch".into(),
             },
             |_, _, _| Ok(()),
         );
 
-        assert_eq!(progress.key_updates, vec![(0, 99)]);
+        assert_eq!(progress.key_updates, vec![(0, 99.into())]);
         assert_eq!(progress.written, 0);
         assert_eq!(progress.error.as_deref(), Some("writeback mismatch"));
         assert!(!progress.disconnect);
@@ -1554,11 +1587,11 @@ mod tests {
     #[test]
     fn failed_layer_undo_requeues_desired_snapshot() {
         let old = LayerSnapshot {
-            keycodes: vec![1, 2],
+            keycodes: bindings(&[1, 2]),
             encoder_keycodes: vec![],
         };
         let desired = LayerSnapshot {
-            keycodes: vec![3, 4],
+            keycodes: bindings(&[3, 4]),
             encoder_keycodes: vec![],
         };
         let context = LayerWriteContext {
@@ -1583,14 +1616,14 @@ mod tests {
     #[test]
     fn partial_normal_write_records_old_snapshot_for_undo() {
         let old = LayerSnapshot {
-            keycodes: vec![1, 2],
+            keycodes: bindings(&[1, 2]),
             encoder_keycodes: vec![],
         };
         let context = LayerWriteContext {
             layer: 0,
             old: old.clone(),
             desired: LayerSnapshot {
-                keycodes: vec![3, 4],
+                keycodes: bindings(&[3, 4]),
                 encoder_keycodes: vec![],
             },
             action: "Paste".into(),

@@ -322,7 +322,7 @@ impl KeycodePicker {
         ui: &mut egui::Ui,
         is_allowed: impl Fn(u16) -> bool,
     ) -> Option<u16> {
-        if qwerty_picker_grid_keys_for_values(|value| is_allowed(value)).is_empty() {
+        if qwerty_picker_grid_keys_for_values(&is_allowed).is_empty() {
             return None;
         }
 

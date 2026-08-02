@@ -3,6 +3,57 @@ use serde::{Deserialize, Serialize};
 
 use crate::firmware::FirmwareProtocol;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum KeyBinding {
+    Vial(u16),
+    Rmk(rmk_types::action::KeyAction),
+}
+
+impl Default for KeyBinding {
+    fn default() -> Self {
+        Self::Vial(0)
+    }
+}
+
+impl From<u16> for KeyBinding {
+    fn from(value: u16) -> Self {
+        Self::Vial(value)
+    }
+}
+
+impl From<rmk_types::action::KeyAction> for KeyBinding {
+    fn from(action: rmk_types::action::KeyAction) -> Self {
+        Self::Rmk(action)
+    }
+}
+
+impl KeyBinding {
+    pub fn vial_keycode(self) -> u16 {
+        match self {
+            Self::Vial(value) => value,
+            Self::Rmk(_) => 0,
+        }
+    }
+
+    pub fn rmk_action(self) -> Option<rmk_types::action::KeyAction> {
+        match self {
+            Self::Vial(_) => None,
+            Self::Rmk(action) => Some(action),
+        }
+    }
+
+    pub fn is_no(self) -> bool {
+        match self {
+            Self::Vial(value) => value == 0,
+            Self::Rmk(action) => matches!(action, rmk_types::action::KeyAction::No),
+        }
+    }
+
+    pub fn is_transparent(self) -> bool {
+        matches!(self, Self::Vial(0x0001))
+    }
+}
+
 /// A physical key on the keyboard with position and matrix mapping.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhysicalKey {
@@ -103,7 +154,7 @@ pub struct KeyboardLayout {
     pub cols: usize,
     pub keys: Vec<PhysicalKey>,
     pub encoders: Vec<PhysicalEncoder>,
-    pub layers: Vec<Vec<u16>>, // layers[layer][key_idx] = keycode (Vial)
+    pub layers: Vec<Vec<KeyBinding>>, // layers[layer][key_idx] = key binding
     pub encoder_layers: Vec<Vec<u16>>, // encoder_layers[layer][encoder_visual_idx] = keycode (Vial)
     /// Layer names from descriptor/firmware when available.
     #[serde(default)]
@@ -366,7 +417,16 @@ impl KeyboardLayout {
             .get(layer)
             .and_then(|l| l.get(key_idx))
             .copied()
-            .unwrap_or(0)
+            .unwrap_or_default()
+            .vial_keycode()
+    }
+
+    pub fn get_key_binding(&self, layer: usize, key_idx: usize) -> KeyBinding {
+        self.layers
+            .get(layer)
+            .and_then(|l| l.get(key_idx))
+            .copied()
+            .unwrap_or_default()
     }
 
     pub fn get_encoder_keycode(&self, layer: usize, encoder_visual_idx: usize) -> u16 {
@@ -386,14 +446,28 @@ impl KeyboardLayout {
     }
 
     pub fn set_keycode(&mut self, layer: usize, key_idx: usize, keycode: u16) {
+        self.set_key_binding(layer, key_idx, KeyBinding::Vial(keycode));
+    }
+
+    pub fn set_key_binding(&mut self, layer: usize, key_idx: usize, binding: KeyBinding) {
         while self.layers.len() <= layer {
-            self.layers.push(vec![0; self.keys.len()]);
+            self.layers
+                .push(vec![KeyBinding::default(); self.keys.len()]);
         }
         if let Some(layer_data) = self.layers.get_mut(layer) {
             if let Some(slot) = layer_data.get_mut(key_idx) {
-                *slot = keycode;
+                *slot = binding;
             }
         }
+    }
+
+    pub fn set_rmk_key_action(
+        &mut self,
+        layer: usize,
+        key_idx: usize,
+        action: rmk_types::action::KeyAction,
+    ) {
+        self.set_key_binding(layer, key_idx, KeyBinding::Rmk(action));
     }
 
     pub fn set_encoder_keycode(&mut self, layer: usize, encoder_visual_idx: usize, keycode: u16) {
@@ -617,7 +691,7 @@ impl KeyboardLayout {
             cols,
             keys,
             encoders,
-            layers: vec![vec![0u16; num_keys]; 4],
+            layers: vec![vec![KeyBinding::default(); num_keys]; 4],
             encoder_layers: vec![],
             layer_names,
             custom_keycodes,

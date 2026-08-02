@@ -224,7 +224,6 @@ impl EntropyApp {
                 self.close_to_tray_prompt_open = true;
                 self.close_to_tray_prompt_remember = false;
                 ctx.request_repaint();
-                return;
             }
             CloseToTrayBehavior::Ask | CloseToTrayBehavior::Close | CloseToTrayBehavior::Tray => {
                 #[cfg(not(target_arch = "wasm32"))]
@@ -552,13 +551,14 @@ impl EntropyApp {
         }
     }
 
-    pub(super) fn set_launch_at_startup(&mut self, enabled: bool) -> bool {
+    pub(super) fn set_launch_at_startup(&mut self, enabled: bool, launch_minimized: bool) -> bool {
         #[cfg(target_os = "windows")]
         {
             let Ok(exe) = std::env::current_exe() else {
                 return false;
             };
-            let exe_arg = format!("\"{}\"", exe.display());
+            let exe_arg =
+                with_launch_minimized_arg(format!("\"{}\"", exe.display()), launch_minimized);
             let status = if enabled {
                 std::process::Command::new("reg")
                     .args([
@@ -616,7 +616,10 @@ impl EntropyApp {
                 return false;
             }
 
-            let exec = desktop_exec_arg(&exe.to_string_lossy());
+            let exec = with_launch_minimized_arg(
+                desktop_exec_arg(&exe.to_string_lossy()),
+                launch_minimized,
+            );
             let desktop_entry = format!(
                 "[Desktop Entry]\nType=Application\nName=Entropy\nComment=Modern app for programmable keyboards and input devices\nExec={exec}\nTerminal=false\nStartupNotify=false\nX-GNOME-Autostart-enabled=true\n"
             );
@@ -648,7 +651,7 @@ impl EntropyApp {
             let Ok(exe) = std::env::current_exe() else {
                 return false;
             };
-            let program_arguments = macos_launch_agent_program_arguments(&exe);
+            let program_arguments = macos_launch_agent_program_arguments(&exe, launch_minimized);
 
             if let Err(e) = std::fs::create_dir_all(&launch_agents_dir) {
                 log::warn!("failed to create macOS LaunchAgents directory: {e}");
@@ -664,7 +667,7 @@ impl EntropyApp {
         }
         #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
         {
-            let _ = enabled;
+            let _ = (enabled, launch_minimized);
             false
         }
     }
@@ -918,20 +921,42 @@ fn desktop_exec_arg(value: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+fn with_launch_minimized_arg(command: String, launch_minimized: bool) -> String {
+    if launch_minimized {
+        format!("{command} {}", crate::LAUNCH_MINIMIZED_ARG)
+    } else {
+        command
+    }
+}
+
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn macos_launch_agent_program_arguments(exe: &std::path::Path) -> Vec<String> {
+fn macos_launch_agent_program_arguments(
+    exe: &std::path::Path,
+    launch_minimized: bool,
+) -> Vec<String> {
     if let Some(app_bundle) = exe.ancestors().find(|path| {
         path.extension()
             .is_some_and(|ext| ext == std::ffi::OsStr::new("app"))
     }) {
-        return vec![
+        let mut arguments = vec![
             "/usr/bin/open".to_string(),
             "-n".to_string(),
             app_bundle.to_string_lossy().into_owned(),
         ];
+        if launch_minimized {
+            arguments.extend([
+                "--args".to_string(),
+                crate::LAUNCH_MINIMIZED_ARG.to_string(),
+            ]);
+        }
+        return arguments;
     }
 
-    vec![exe.to_string_lossy().into_owned()]
+    let mut arguments = vec![exe.to_string_lossy().into_owned()];
+    if launch_minimized {
+        arguments.push(crate::LAUNCH_MINIMIZED_ARG.to_string());
+    }
+    arguments
 }
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -1033,6 +1058,40 @@ mod tests {
         assert!(should_keep_vial_unlock_visible(false, true));
         assert!(should_keep_vial_unlock_visible(true, true));
         assert!(!should_keep_vial_unlock_visible(false, false));
+    }
+
+    #[test]
+    fn startup_command_only_adds_minimized_argument_when_enabled() {
+        assert_eq!(
+            with_launch_minimized_arg("\"/opt/Entropy\"".to_owned(), false),
+            "\"/opt/Entropy\""
+        );
+        assert_eq!(
+            with_launch_minimized_arg("\"/opt/Entropy\"".to_owned(), true),
+            "\"/opt/Entropy\" --minimized"
+        );
+    }
+
+    #[test]
+    fn macos_launch_agent_forwards_minimized_argument() {
+        let bundled = macos_launch_agent_program_arguments(
+            std::path::Path::new("/Applications/Entropy.app/Contents/MacOS/entropy"),
+            true,
+        );
+        assert_eq!(
+            bundled,
+            vec![
+                "/usr/bin/open",
+                "-n",
+                "/Applications/Entropy.app",
+                "--args",
+                "--minimized"
+            ]
+        );
+
+        let direct =
+            macos_launch_agent_program_arguments(std::path::Path::new("/usr/bin/entropy"), true);
+        assert_eq!(direct, vec!["/usr/bin/entropy", "--minimized"]);
     }
 
     #[cfg(not(target_arch = "wasm32"))]

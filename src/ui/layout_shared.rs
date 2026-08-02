@@ -742,7 +742,10 @@ mod tests {
                 physical_encoder(0, encoder_condition),
                 physical_encoder(1, encoder_condition),
             ],
-            layers: vec![vec![0; key_conditions.len()]],
+            layers: vec![vec![
+                crate::keyboard::KeyBinding::default();
+                key_conditions.len()
+            ]],
             encoder_layers: vec![vec![0; 2]],
             layer_names: vec![],
             custom_keycodes: vec![],

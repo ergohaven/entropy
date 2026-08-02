@@ -80,14 +80,17 @@ fn should_disable_layout_background(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn connection_replaces_layout_canvas(connect_state: &ConnectState) -> bool {
-    matches!(
-        connect_state,
+fn connection_replaces_layout_canvas(connect_state: &ConnectState, layout_loaded: bool) -> bool {
+    match connect_state {
         ConnectState::Loading {
-            reconnect: None,
-            ..
-        }
-    )
+            reconnect: None, ..
+        } => true,
+        ConnectState::Reconnecting(_)
+        | ConnectState::Loading {
+            reconnect: Some(_), ..
+        } => !layout_loaded,
+        ConnectState::Idle | ConnectState::SelectingDevice => false,
+    }
 }
 
 impl EntropyApp {
@@ -454,7 +457,9 @@ mod tests {
     #[test]
     fn only_device_connection_replaces_the_layout_canvas() {
         let idle = ConnectState::Idle;
-        assert!(!connection_replaces_layout_canvas(&idle));
+        assert!(!connection_replaces_layout_canvas(&idle, false));
+        let selecting = ConnectState::SelectingDevice;
+        assert!(!connection_replaces_layout_canvas(&selecting, false));
 
         let (_sender, receiver) = std::sync::mpsc::channel();
         let now = std::time::Instant::now();
@@ -464,7 +469,8 @@ mod tests {
             last_progress_at: now,
             reconnect: None,
         };
-        assert!(connection_replaces_layout_canvas(&loading));
+        assert!(connection_replaces_layout_canvas(&loading, false));
+        assert!(connection_replaces_layout_canvas(&loading, true));
 
         let reconnecting_loading = ConnectState::Loading {
             rx: std::sync::mpsc::channel().1,
@@ -485,7 +491,14 @@ mod tests {
                 "K:04 (Bluetooth)".to_owned(),
             )),
         };
-        assert!(!connection_replaces_layout_canvas(&reconnecting_loading));
+        assert!(connection_replaces_layout_canvas(
+            &reconnecting_loading,
+            false
+        ));
+        assert!(!connection_replaces_layout_canvas(
+            &reconnecting_loading,
+            true
+        ));
     }
 
     #[test]
@@ -551,7 +564,7 @@ mod tests {
         app.keycode_picker.tap_dance_dirty = true;
         app.key_override_entries = vec![KeyOverrideEntry::default()];
         app.key_override_pick_target = Some(KeyOverridePickField::Trigger);
-        app.keycode_picker.result = Some(0x0004);
+        app.keycode_picker.result = Some(0x0004.into());
         app.pending_tap_hold_numeric_writes.insert(7, 175);
         app.tap_hold_numeric_write_due = Some(std::time::Instant::now());
         app.exit_after_hid_write = true;
@@ -665,7 +678,7 @@ mod tests {
 
         app.key_override_entries = vec![KeyOverrideEntry::default()];
         app.key_override_pick_target = Some(KeyOverridePickField::Trigger);
-        app.keycode_picker.result = Some(0x0004);
+        app.keycode_picker.result = Some(0x0004.into());
         app.pending_tap_hold_numeric_writes.insert(7, 175);
         app.layout = Some(KeyboardLayout {
             name: "Test".into(),
@@ -689,7 +702,7 @@ mod tests {
         app.layout_options_value = Some(1);
 
         app.apply_picker_results(&ctx);
-        assert_eq!(app.keycode_picker.result, Some(0x0004));
+        assert_eq!(app.keycode_picker.result, Some(0x0004.into()));
         assert_eq!(app.key_override_entries[0].trigger, 0);
 
         app.refresh_current_device_data();
@@ -878,7 +891,7 @@ mod tests {
                 layout_condition: None,
             }],
             encoders: vec![],
-            layers: vec![vec![0x0004]],
+            layers: vec![vec![0x0004.into()]],
             encoder_layers: vec![vec![]],
             layer_names: vec![],
             custom_keycodes: vec![],
@@ -891,7 +904,7 @@ mod tests {
         app.apply_layer_snapshot(
             0,
             LayerSnapshot {
-                keycodes: vec![0x0005],
+                keycodes: vec![0x0005.into()],
                 encoder_keycodes: vec![],
             },
             "layer_actions.paste",
@@ -1162,18 +1175,17 @@ impl eframe::App for EntropyApp {
         // Auto-scan for device connect/disconnect changes.
         self.secondary_click_handled = false;
 
-        if let Some((layer, ki, kc)) = self.pending_handed_swap {
+        if let Some((layer, ki, binding)) = self.pending_handed_swap {
             if !ctx.input(|i| i.modifiers.ctrl) {
                 #[cfg(not(target_arch = "wasm32"))]
-                if !self.hid_write_task_active() {
-                    if self.assign_keycode(ctx, layer, ki, kc) {
-                        self.pending_handed_swap = None;
-                    }
+                if !self.hid_write_task_active() && self.assign_key_binding(ctx, layer, ki, binding)
+                {
+                    self.pending_handed_swap = None;
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
                     if let Some(layout) = &mut self.layout {
-                        layout.set_keycode(layer, ki, kc);
+                        layout.set_key_binding(layer, ki, binding);
                     }
                     self.pending_handed_swap = None;
                 }
@@ -1240,7 +1252,8 @@ impl eframe::App for EntropyApp {
         // Only a device connection replaces the canvas. Background HID writes keep the
         // current layer visible until their result is applied.
         #[cfg(not(target_arch = "wasm32"))]
-        let is_loading = connection_replaces_layout_canvas(&self.connect_state);
+        let is_loading =
+            connection_replaces_layout_canvas(&self.connect_state, self.layout.is_some());
         #[cfg(target_arch = "wasm32")]
         let is_loading = false;
 
@@ -1361,7 +1374,9 @@ impl eframe::App for EntropyApp {
 
             if is_loading {
                 let rect = ui.max_rect();
-                let text = if self.status_msg.is_empty() {
+                let text = if self.status_msg.is_empty()
+                    || (self.bluetooth_reconnect_active() && self.layout.is_none())
+                {
                     crate::i18n::tr_catalog(
                         self.app_settings.language,
                         "connection.loading_keyboard",
@@ -1443,6 +1458,11 @@ impl eframe::App for EntropyApp {
                 self.draw_placeholder(ui);
             }
         });
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.bluetooth_reconnect_active() && self.layout.is_none() {
+            self.draw_bluetooth_reconnect_status(ctx);
+        }
 
         self.draw_sticky_layout_window(ctx);
 
@@ -1825,14 +1845,12 @@ impl eframe::App for EntropyApp {
             // Consume this attempt. Failed device entries remain different from the
             // synced snapshot and retry after the next edit or picker close.
             self.keycode_picker.tap_dance_dirty = false;
-            if td_save_ok {
-                if self.status_msg.is_empty() || self.status_msg.starts_with("✓") {
-                    self.status_msg = crate::i18n::tr_catalog(
-                        self.app_settings.language,
-                        "status_messages.tap_dance_saved",
-                    )
-                    .into();
-                }
+            if td_save_ok && (self.status_msg.is_empty() || self.status_msg.starts_with("✓")) {
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "status_messages.tap_dance_saved",
+                )
+                .into();
             }
         }
 

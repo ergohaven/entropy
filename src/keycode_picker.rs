@@ -124,7 +124,7 @@ pub struct KeycodePicker {
     pub basic_layout: BasicPickerLayout,
     pub popup_view_mode: PickerViewMode,
     pub search_query: String,
-    pub result: Option<u16>,
+    pub result: Option<crate::keyboard::KeyBinding>,
     pub custom_keycodes: Vec<(String, String, String, u16)>,
     pub supports_rgb: bool,
     pub supports_macro: bool,
@@ -137,6 +137,8 @@ pub struct KeycodePicker {
     pub supports_layer_lock: bool,
     pub supports_persistent_default_layer: bool,
     pub supports_macro_ext_keycodes: bool,
+    pub supports_rmk_native_key_actions: bool,
+    pub rmk_native_key_actions_allowed_for_target: bool,
     pub macro_ext_keycodes_disabled_reason: Option<MacroExtKeycodesDisabledReason>,
     pub layer_names: Vec<String>,
     pub layer_count: usize,
@@ -202,6 +204,20 @@ const UNIVERSAL_EXTRA_SYMBOL_ORDER: &[char] = &[
 mod tests {
     use super::*;
 
+    fn collect_text(shape: &egui::Shape, text: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(text_shape) => {
+                text.push(text_shape.galley.job.text.clone());
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect_text(shape, text);
+                }
+            }
+            _ => {}
+        }
+    }
+
     #[test]
     fn universal_extra_symbols_include_common_arrows() {
         for symbol in ['←', '↑', '→', '↓', '↔'] {
@@ -217,10 +233,13 @@ mod tests {
 
     #[test]
     fn rmk_macro_ext_guard_hides_layer_macro_choices_and_explains_why() {
-        let mut picker = KeycodePicker::default();
-        picker.supports_macro_ext_keycodes = false;
-        picker.macro_ext_keycodes_disabled_reason =
-            Some(MacroExtKeycodesDisabledReason::RmkVialMacroExtUnsupported);
+        let picker = KeycodePicker {
+            supports_macro_ext_keycodes: false,
+            macro_ext_keycodes_disabled_reason: Some(
+                MacroExtKeycodesDisabledReason::RmkVialMacroExtUnsupported,
+            ),
+            ..Default::default()
+        };
 
         assert!(picker
             .macro_layer_key_choices(MacroKeyPickKind::Tap)
@@ -229,6 +248,134 @@ mod tests {
             .macro_ext_keycodes_notice(crate::i18n::Language::English)
             .expect("RMK notice should be present")
             .contains("RMK"));
+    }
+
+    #[test]
+    fn pending_modifier_picker_renders_layout_and_list_tabs() {
+        let ctx = egui::Context::default();
+        let mut picker = KeycodePicker::default();
+        picker.open = true;
+        picker.vial_quantum_pending_mod = Some(0x0100);
+
+        let mut render = || {
+            let mut input = egui::RawInput::default();
+            input.screen_rect = Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1_100.0, 800.0),
+            ));
+            ctx.run_ui(input, |_ui| {
+                picker.show(
+                    &ctx,
+                    DeferredPickerDataState::Ready,
+                    DeferredPickerDataState::Ready,
+                );
+            })
+        };
+        let _ = render();
+        let output = render();
+        let mut text = Vec::new();
+        for clipped_shape in &output.shapes {
+            collect_text(&clipped_shape.shape, &mut text);
+        }
+
+        assert!(text.iter().any(|value| value == "List"), "{text:?}");
+        assert!(text.iter().any(|value| value == "Layout"), "{text:?}");
+    }
+
+    #[test]
+    fn mod_key_choices_include_ctrl_gui_for_full_and_compact_pickers() {
+        let expected_label = format!("Ctrl+{}/key", crate::keycode::gui_sym());
+        for compact_only in [false, true] {
+            let choice = mod_key_choices(compact_only)
+                .into_iter()
+                .find(|choice| choice.left_value == 0x0900)
+                .expect("Ctrl+GUI Mod+Key choice should be available");
+
+            assert_eq!(choice.right_value, None);
+            assert_eq!(choice.label, expected_label);
+        }
+    }
+
+    #[test]
+    fn shifted_symbols_are_available_to_mod_key_pickers() {
+        let picker = KeycodePicker {
+            regular_key_pick_allow_mod_key: true,
+            supports_rmk_native_key_actions: true,
+            rmk_native_key_actions_allowed_for_target: true,
+            ..Default::default()
+        };
+
+        for value in [0x0222, 0x022E] {
+            let keycode = KEYCODES
+                .iter()
+                .find(|keycode| keycode.value == value)
+                .expect("shifted symbol should exist in the shared keycode catalog");
+            assert!(is_mod_key_tap_key_choice(keycode));
+            assert!(picker.pending_quantum_key_supported(keycode, false));
+            assert!(picker.pending_quantum_key_supported(keycode, true));
+            assert!(picker
+                .regular_key_pick_choices()
+                .iter()
+                .any(|choice| choice.value == value));
+        }
+    }
+
+    #[test]
+    fn shifted_mod_tap_uses_lossless_rmk_action_when_supported() {
+        use rmk_types::action::{Action, KeyAction};
+        use rmk_types::keycode::HidKeyCode;
+        use rmk_types::modifier::ModifierCombination;
+
+        let mut picker = KeycodePicker {
+            supports_rmk_native_key_actions: true,
+            rmk_native_key_actions_allowed_for_target: true,
+            ..Default::default()
+        };
+        picker.finish_quantum_pending_key(0x2100, 0x0227, true);
+
+        assert_eq!(
+            picker.result,
+            Some(
+                KeyAction::TapHold(
+                    Action::KeyWithModifier(HidKeyCode::Kc0, ModifierCombination::LSHIFT),
+                    Action::Modifier(ModifierCombination::LCTRL),
+                    Default::default(),
+                )
+                .into()
+            )
+        );
+
+        picker.finish_quantum_pending_key(0x3100, 0x022F, true);
+        assert_eq!(
+            picker.result,
+            Some(
+                KeyAction::TapHold(
+                    Action::KeyWithModifier(HidKeyCode::LeftBracket, ModifierCombination::LSHIFT,),
+                    Action::Modifier(ModifierCombination::RCTRL),
+                    Default::default(),
+                )
+                .into()
+            )
+        );
+    }
+
+    #[test]
+    fn native_mod_tap_reopens_on_the_modifiers_tab() {
+        use rmk_types::action::{Action, KeyAction};
+        use rmk_types::keycode::HidKeyCode;
+        use rmk_types::modifier::ModifierCombination;
+
+        let mut picker = KeycodePicker::default();
+        picker.select_tab_for_binding(
+            KeyAction::TapHold(
+                Action::KeyWithModifier(HidKeyCode::LeftBracket, ModifierCombination::LSHIFT),
+                Action::Modifier(ModifierCombination::RCTRL),
+                Default::default(),
+            )
+            .into(),
+        );
+
+        assert_eq!(picker.selected_tab, KeycodeTab::Modifiers);
     }
 }
 
@@ -293,6 +440,103 @@ fn picker_mod_key_label(base: u16) -> String {
     format!("{}/key", picker_modifier_label_from_bits(base >> 8))
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct ModKeyChoice {
+    label: String,
+    left_value: u16,
+    right_value: Option<u16>,
+    mod_name: String,
+    compact: bool,
+}
+
+fn mod_key_choices(compact_only: bool) -> Vec<ModKeyChoice> {
+    let gui = gui_label(false);
+    let choices = vec![
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0100),
+            left_value: 0x0100,
+            right_value: Some(0x1100),
+            mod_name: "Ctrl".into(),
+            compact: true,
+        },
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0200),
+            left_value: 0x0200,
+            right_value: Some(0x1200),
+            mod_name: "Shift".into(),
+            compact: true,
+        },
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0400),
+            left_value: 0x0400,
+            right_value: Some(0x1400),
+            mod_name: "Alt".into(),
+            compact: true,
+        },
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0800),
+            left_value: 0x0800,
+            right_value: Some(0x1800),
+            mod_name: gui.to_string(),
+            compact: true,
+        },
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0300),
+            left_value: 0x0300,
+            right_value: None,
+            mod_name: "Ctrl+Shift".into(),
+            compact: false,
+        },
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0500),
+            left_value: 0x0500,
+            right_value: None,
+            mod_name: "Ctrl+Alt".into(),
+            compact: false,
+        },
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0900),
+            left_value: 0x0900,
+            right_value: None,
+            mod_name: format!("Ctrl+{gui}"),
+            compact: true,
+        },
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0600),
+            left_value: 0x0600,
+            right_value: None,
+            mod_name: "Shift+Alt (LSA)".into(),
+            compact: false,
+        },
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0700),
+            left_value: 0x0700,
+            right_value: None,
+            mod_name: "Ctrl+Shift+Alt".into(),
+            compact: false,
+        },
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0A00),
+            left_value: 0x0A00,
+            right_value: None,
+            mod_name: format!("{gui}+Shift"),
+            compact: false,
+        },
+        ModKeyChoice {
+            label: picker_mod_key_label(0x0F00),
+            left_value: 0x0F00,
+            right_value: None,
+            mod_name: format!("Ctrl+Shift+Alt+{}", gui_mod_name()),
+            compact: false,
+        },
+    ];
+
+    choices
+        .into_iter()
+        .filter(|choice| !compact_only || choice.compact)
+        .collect()
+}
+
 fn picker_mod_tap_label(base: u16) -> String {
     format!(
         "Hold {}/key",
@@ -345,6 +589,8 @@ impl Default for KeycodePicker {
             supports_layer_lock: true,
             supports_persistent_default_layer: true,
             supports_macro_ext_keycodes: true,
+            supports_rmk_native_key_actions: false,
+            rmk_native_key_actions_allowed_for_target: false,
             macro_ext_keycodes_disabled_reason: None,
             layer_names: (0..16).map(|i| i.to_string()).collect(),
             layer_count: 4,
@@ -392,7 +638,7 @@ impl KeycodePicker {
     }
 
     fn assign_keycode_value(&mut self, value: u16) {
-        self.result = Some(value);
+        self.result = Some(crate::keyboard::KeyBinding::Vial(value));
         self.open = false;
     }
 
@@ -486,11 +732,45 @@ impl KeycodePicker {
     }
 
     fn finish_quantum_pending_key(&mut self, base: u16, key_value: u16, is_mt: bool) {
-        let _ = is_mt;
-        self.result = Some(base | key_value);
+        let binding = if is_mt
+            && (0x0100..0x2000).contains(&key_value)
+            && self.supports_rmk_native_key_actions
+            && self.rmk_native_key_actions_allowed_for_target
+        {
+            use rmk_types::action::{Action, KeyAction};
+            use rmk_types::keycode::HidKeyCode;
+            use rmk_types::modifier::ModifierCombination;
+
+            KeyAction::TapHold(
+                Action::KeyWithModifier(
+                    HidKeyCode::from((key_value & 0x00FF) as u8),
+                    ModifierCombination::from_packed_bits((key_value >> 8) as u8),
+                ),
+                Action::Modifier(ModifierCombination::from_packed_bits(
+                    ((base >> 8) & 0x1F) as u8,
+                )),
+                Default::default(),
+            )
+            .into()
+        } else {
+            crate::keyboard::KeyBinding::Vial(base | key_value)
+        };
+        self.result = Some(binding);
         self.vial_quantum_pending_mod = None;
         self.vial_quantum_pending_mt = None;
         self.open = false;
+    }
+
+    fn pending_quantum_key_supported(
+        &self,
+        keycode: &crate::keycode::Keycode,
+        is_mt: bool,
+    ) -> bool {
+        (is_8bit_tap_key_choice(keycode) && !matches!(keycode.category, KeycodeCategory::Modifier))
+            || (is_shifted_hid_key_choice(keycode)
+                && (!is_mt
+                    || (self.supports_rmk_native_key_actions
+                        && self.rmk_native_key_actions_allowed_for_target)))
     }
 
     fn finalize_vial_special_tab_close(&mut self) {
@@ -498,7 +778,7 @@ impl KeycodePicker {
             if let Some(raw_n) = self.macro_inline_selected {
                 if (raw_n as usize) < self.macro_count {
                     self.encode_macro(raw_n as usize);
-                    self.result = Some(0x7700 + raw_n as u16);
+                    self.result = Some((0x7700 + raw_n as u16).into());
                     self.macros_dirty = true;
                 }
             }
@@ -506,7 +786,7 @@ impl KeycodePicker {
         if self.selected_tab == KeycodeTab::TapDance {
             let td_n = self.tap_dance_editor_open.unwrap_or(0);
             if (td_n as usize) < self.tap_dance_entries.len() {
-                self.result = Some(0x5700 + td_n as u16);
+                self.result = Some((0x5700 + td_n as u16).into());
                 self.tap_dance_dirty = true;
             }
         }
@@ -536,6 +816,7 @@ impl KeycodePicker {
         self.macro_key_pick = None;
         self.td_key_pick = None;
         self.td_mod_key_pick = None;
+        self.rmk_native_key_actions_allowed_for_target = false;
     }
 
     pub(crate) fn open_regular_key_picker_with_mod_key(&mut self, allow_mod_key: bool) {
@@ -548,6 +829,7 @@ impl KeycodePicker {
         self.vial_quantum_pending_mod = None;
         self.vial_quantum_pending_mt = None;
         self.vial_layer_pending = None;
+        self.rmk_native_key_actions_allowed_for_target = false;
     }
 
     pub(crate) fn open_full_key_picker(&mut self, selected_tab: KeycodeTab) {
@@ -560,6 +842,7 @@ impl KeycodePicker {
         self.vial_quantum_pending_mod = None;
         self.vial_quantum_pending_mt = None;
         self.vial_layer_pending = None;
+        self.rmk_native_key_actions_allowed_for_target = false;
         self.tap_dance_editor_open = None;
         self.td_key_pick = None;
         self.td_mod_key_pick = None;
@@ -577,6 +860,16 @@ impl KeycodePicker {
         } else {
             KeycodeTab::Basic
         };
+    }
+
+    pub(crate) fn select_tab_for_binding(&mut self, binding: crate::keyboard::KeyBinding) {
+        match binding {
+            crate::keyboard::KeyBinding::Vial(value) => self.select_tab_for_keycode(value),
+            crate::keyboard::KeyBinding::Rmk(rmk_types::action::KeyAction::TapHold(_, _, _)) => {
+                self.selected_tab = KeycodeTab::Modifiers
+            }
+            crate::keyboard::KeyBinding::Rmk(_) => self.selected_tab = KeycodeTab::Basic,
+        }
     }
 
     pub fn show(
@@ -961,7 +1254,7 @@ impl KeycodePicker {
                     }
                     if let Some(qmk) = egui_key_to_qmk(*key, *modifiers) {
                         if let Some(base) = self.regular_mod_key_pick {
-                            if !modifiers.any() && self.is_regular_key_pick_value(qmk) {
+                            if self.is_regular_key_pick_value(qmk) {
                                 self.finish_regular_key_pick(base | qmk);
                             }
                         } else if qmk > 0 && qmk < 0x0100 {
@@ -1064,7 +1357,7 @@ impl KeycodePicker {
     }
 
     fn finish_regular_key_pick(&mut self, value: u16) {
-        self.result = Some(value);
+        self.result = Some(value.into());
         self.regular_mod_key_pick = None;
         self.regular_key_pick = false;
         self.regular_key_pick_allow_mod_key = false;
@@ -1075,9 +1368,10 @@ impl KeycodePicker {
         KEYCODES
             .iter()
             .filter(|kc| {
-                is_8bit_tap_key_choice(kc)
+                (is_8bit_tap_key_choice(kc)
                     && !matches!(kc.category, KeycodeCategory::Modifier)
-                    && !kc.name.starts_with("RGB_")
+                    && !kc.name.starts_with("RGB_"))
+                    || (self.regular_key_pick_allow_mod_key && is_shifted_hid_key_choice(kc))
             })
             .collect()
     }
@@ -1135,32 +1429,24 @@ impl KeycodePicker {
                 .color(Color32::from_gray(150)),
         );
         ui.add_space(4.0);
-        let shortcuts: Vec<(String, u16, u16, String)> = vec![
-            (picker_mod_key_label(0x0100), 0x0100, 0x1100, "Ctrl".into()),
-            (picker_mod_key_label(0x0200), 0x0200, 0x1200, "Shift".into()),
-            (picker_mod_key_label(0x0400), 0x0400, 0x1400, "Alt".into()),
-            (
-                picker_mod_key_label(0x0800),
-                0x0800,
-                0x1800,
-                gui_mod_name().to_string(),
-            ),
-        ];
+        let shortcuts = mod_key_choices(true);
         ui.horizontal_wrapped(|ui| {
-            for (label, left_base, right_base, mod_name) in &shortcuts {
+            for choice in &shortcuts {
                 let resp = ui
                     .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
-                Self::paint_compact_picker_label(ui, &resp, label);
+                Self::paint_compact_picker_label(ui, &resp, &choice.label);
                 if resp.clicked_by(egui::PointerButton::Primary) {
-                    self.regular_mod_key_pick = Some(*left_base);
+                    self.regular_mod_key_pick = Some(choice.left_value);
                 }
-                if resp.clicked_by(egui::PointerButton::Secondary) {
-                    self.regular_mod_key_pick = Some(*right_base);
+                if let Some(right_value) = choice.right_value {
+                    if resp.clicked_by(egui::PointerButton::Secondary) {
+                        self.regular_mod_key_pick = Some(right_value);
+                    }
                 }
                 resp.on_hover_text(crate::i18n::tr_text(
                     self.language,
-                    &mod_combo_tooltip(mod_name, true),
+                    &mod_combo_tooltip(&choice.mod_name, choice.right_value.is_some()),
                 ));
             }
         });
@@ -1227,11 +1513,11 @@ impl KeycodePicker {
                                 if value & 0xFF == 0 {
                                     self.vial_quantum_pending_mt = Some(value);
                                 } else {
-                                    self.result = Some(value);
+                                    self.result = Some(value.into());
                                     self.open = false;
                                 }
                             } else {
-                                self.result = Some(base + n);
+                                self.result = Some((base + n).into());
                                 self.vial_layer_pending = None;
                                 self.open = false;
                             }
@@ -1267,9 +1553,10 @@ impl KeycodePicker {
                         self.open = false;
                         return;
                     }
-                    if !modifiers.any() {
-                        if let Some(qmk) = egui_key_to_qmk(*key, *modifiers) {
-                            if qmk > 0 && qmk < 0x0100 {
+                    if let Some(qmk) = egui_key_to_qmk(*key, *modifiers) {
+                        if let Some(keycode) = KEYCODES.iter().find(|keycode| keycode.value == qmk)
+                        {
+                            if self.pending_quantum_key_supported(keycode, is_mt) {
                                 if let Some(base) = pending {
                                     self.finish_quantum_pending_key(base, qmk, is_mt);
                                 }
@@ -1297,6 +1584,7 @@ impl KeycodePicker {
             )
             .show(ctx, |ui| {
                 apply_picker_button_visuals(ui);
+                self.show_popup_view_mode_header(ui);
                 crate::ui_style::modal_intro(
                     ui,
                     tr_picker(self.language, "key_picker.press_key_or_click_cancel"),
@@ -1305,74 +1593,61 @@ impl KeycodePicker {
 
                 let key_choices: Vec<&'static crate::keycode::Keycode> = KEYCODES
                     .iter()
-                    .filter(|kc| {
-                        is_8bit_tap_key_choice(kc)
-                            && !matches!(kc.category, KeycodeCategory::Modifier)
-                    })
+                    .filter(|kc| self.pending_quantum_key_supported(kc, is_mt))
                     .collect();
                 egui::ScrollArea::vertical()
                     .max_height(key_picker_popup_scroll_height(popup_size))
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.label(
-                            RichText::new(tr_picker(
-                                self.language,
-                                "key_picker.section_plain_modifiers",
-                            ))
-                            .size(11.0)
-                            .color(Color32::from_gray(150)),
-                        );
-                        ui.add_space(4.0);
-                        ui.horizontal_wrapped(|ui| {
-                            let plain_modifiers = [
-                                ("Ctrl".to_owned(), 0x00E0u16, 0x00E4u16, "Ctrl".to_owned()),
-                                ("Shift".to_owned(), 0x00E1u16, 0x00E5u16, "Shift".to_owned()),
-                                ("Alt".to_owned(), 0x00E2u16, 0x00E6u16, "Alt".to_owned()),
-                                (
-                                    gui_label(false).to_string(),
-                                    0x00E3u16,
-                                    0x00E7u16,
-                                    gui_mod_name().to_string(),
-                                ),
-                            ];
-                            for (label, left_value, right_value, mod_name) in plain_modifiers {
-                                let resp = picker_keycap_button(
-                                    ui,
-                                    &label,
-                                    Self::picker_key_size(ui.ctx()),
-                                    true,
-                                    false,
-                                )
-                                .on_hover_text(
-                                    crate::i18n::tr_text(
-                                        self.language,
-                                        &plain_modifier_tooltip(&mod_name),
+                        if self.popup_view_mode == PickerViewMode::List {
+                            ui.label(
+                                RichText::new(tr_picker(
+                                    self.language,
+                                    "key_picker.section_plain_modifiers",
+                                ))
+                                .size(11.0)
+                                .color(Color32::from_gray(150)),
+                            );
+                            ui.add_space(4.0);
+                            ui.horizontal_wrapped(|ui| {
+                                let plain_modifiers = [
+                                    ("Ctrl".to_owned(), 0x00E0u16, 0x00E4u16, "Ctrl".to_owned()),
+                                    ("Shift".to_owned(), 0x00E1u16, 0x00E5u16, "Shift".to_owned()),
+                                    ("Alt".to_owned(), 0x00E2u16, 0x00E6u16, "Alt".to_owned()),
+                                    (
+                                        gui_label(false).to_string(),
+                                        0x00E3u16,
+                                        0x00E7u16,
+                                        gui_mod_name().to_string(),
                                     ),
-                                );
-                                if resp.clicked_by(egui::PointerButton::Primary) {
-                                    self.finish_quantum_pending_key(base, left_value, is_mt);
+                                ];
+                                for (label, left_value, right_value, mod_name) in plain_modifiers {
+                                    let resp = picker_keycap_button(
+                                        ui,
+                                        &label,
+                                        Self::picker_key_size(ui.ctx()),
+                                        true,
+                                        false,
+                                    )
+                                    .on_hover_text(
+                                        crate::i18n::tr_text(
+                                            self.language,
+                                            &plain_modifier_tooltip(&mod_name),
+                                        ),
+                                    );
+                                    if resp.clicked_by(egui::PointerButton::Primary) {
+                                        self.finish_quantum_pending_key(base, left_value, is_mt);
+                                    }
+                                    if resp.clicked_by(egui::PointerButton::Secondary) {
+                                        self.finish_quantum_pending_key(base, right_value, is_mt);
+                                    }
                                 }
-                                if resp.clicked_by(egui::PointerButton::Secondary) {
-                                    self.finish_quantum_pending_key(base, right_value, is_mt);
-                                }
-                            }
-                        });
-                        ui.add_space(crate::ui_style::modal_space_sm());
-
-                        if let Some(value) = self.show_qwerty_popup_key_grid(ui, |value| {
-                            key_choices.iter().any(|kc| kc.value == value)
-                        }) {
-                            self.finish_quantum_pending_key(base, value, is_mt);
+                            });
+                            ui.add_space(crate::ui_style::modal_space_sm());
                         }
 
-                        if let Some(value) = show_grouped_popup_key_buttons(
-                            ui,
-                            key_choices,
-                            &self.layer_names,
-                            false,
-                            self.language,
-                            self.key_legend_layout,
-                        ) {
+                        if let Some(value) = self.show_popup_key_choice_view(ui, key_choices, false)
+                        {
                             self.finish_quantum_pending_key(base, value, is_mt);
                         }
                     });

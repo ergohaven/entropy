@@ -5,7 +5,18 @@ const BATTERY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_
 #[cfg(not(target_arch = "wasm32"))]
 const BATTERY_REFRESH_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 #[cfg(not(target_arch = "wasm32"))]
+const BATTERY_INCOMPLETE_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+#[cfg(not(target_arch = "wasm32"))]
 const INITIAL_BATTERY_REFRESH_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
+#[cfg(not(target_arch = "wasm32"))]
+fn battery_refresh_delay(battery: Option<crate::hid::BatteryHalves>) -> std::time::Duration {
+    if battery.is_some_and(crate::hid::BatteryHalves::is_complete) {
+        BATTERY_REFRESH_INTERVAL
+    } else {
+        BATTERY_INCOMPLETE_REFRESH_INTERVAL
+    }
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
@@ -25,8 +36,8 @@ pub(super) enum VialHidOperation {
         key_index: usize,
         row: u8,
         col: u8,
-        old_keycode: u16,
-        keycode: u16,
+        old_binding: crate::keyboard::KeyBinding,
+        binding: crate::keyboard::KeyBinding,
         is_undo: bool,
     },
     EncoderWrite {
@@ -122,11 +133,16 @@ fn run_vial_hid_operation(
             layer,
             row,
             col,
-            keycode,
+            binding,
             ..
-        } => hid
-            .set_keycode(layer as u8, row, col, keycode)
-            .map(|()| VialHidOutcome::KeyWritten),
+        } => match binding {
+            crate::keyboard::KeyBinding::Vial(keycode) => hid
+                .set_keycode(layer as u8, row, col, keycode)
+                .map(|()| VialHidOutcome::KeyWritten),
+            crate::keyboard::KeyBinding::Rmk(action) => hid
+                .set_rmk_key_action(layer as u8, row, col, action)
+                .map(|()| VialHidOutcome::KeyWritten),
+        },
         VialHidOperation::EncoderWrite {
             layer,
             encoder_index,
@@ -154,12 +170,15 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn schedule_next_battery_refresh(&mut self) {
+    pub(super) fn schedule_battery_refresh_for_result(
+        &mut self,
+        battery: Option<crate::hid::BatteryHalves>,
+    ) {
         self.next_battery_refresh_at = self
             .device_about_info
             .as_ref()
             .filter(|info| info.supports_battery_halves)
-            .map(|_| std::time::Instant::now() + BATTERY_REFRESH_INTERVAL);
+            .map(|_| std::time::Instant::now() + battery_refresh_delay(battery));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -371,19 +390,19 @@ impl EntropyApp {
                 if let Some(info) = self.device_about_info.as_mut() {
                     info.battery_halves = battery;
                 }
-                self.schedule_next_battery_refresh();
+                self.schedule_battery_refresh_for_result(battery);
             }
             Ok(VialHidOutcome::KeyWritten) => {
                 if let VialHidOperation::KeyWrite {
                     layer,
                     key_index,
-                    old_keycode,
-                    keycode,
+                    old_binding,
+                    binding,
                     is_undo,
                     ..
                 } = result.operation
                 {
-                    self.finish_keycode_write(layer, key_index, old_keycode, keycode, is_undo);
+                    self.finish_keycode_write(layer, key_index, old_binding, binding, is_undo);
                 }
             }
             Ok(VialHidOutcome::EncoderWritten) => {
@@ -431,18 +450,18 @@ impl EntropyApp {
         &mut self,
         layer: usize,
         key_index: usize,
-        old_keycode: u16,
-        keycode: u16,
+        old_binding: crate::keyboard::KeyBinding,
+        binding: crate::keyboard::KeyBinding,
         is_undo: bool,
     ) {
         if let Some(layout) = self.layout.as_mut() {
-            layout.set_keycode(layer, key_index, keycode);
+            layout.set_key_binding(layer, key_index, binding);
         }
         if !is_undo {
             self.undo_stack.push(UndoAction::Key {
                 layer,
                 key_idx: key_index,
-                old_kc: old_keycode,
+                old_binding,
             });
         }
         self.refresh_layer_picker_content_flags();
@@ -483,21 +502,21 @@ impl EntropyApp {
             VialHidOperation::KeyWrite {
                 layer,
                 key_index,
-                old_keycode,
-                keycode,
+                old_binding,
+                binding,
                 is_undo,
                 ..
             } => {
                 if let Some(layout) = self.layout.as_mut() {
-                    if layout.get_keycode(*layer, *key_index) == *keycode {
-                        layout.set_keycode(*layer, *key_index, *old_keycode);
+                    if layout.get_key_binding(*layer, *key_index) == *binding {
+                        layout.set_key_binding(*layer, *key_index, *old_binding);
                     }
                 }
                 if *is_undo {
                     self.undo_stack.push(UndoAction::Key {
                         layer: *layer,
                         key_idx: *key_index,
-                        old_kc: *keycode,
+                        old_binding: *binding,
                     });
                 }
                 self.refresh_layer_picker_content_flags();
@@ -625,6 +644,7 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keyboard::KeyBinding;
 
     fn single_key_layout(keycode: u16) -> KeyboardLayout {
         KeyboardLayout {
@@ -645,7 +665,7 @@ mod tests {
                 layout_condition: None,
             }],
             encoders: vec![],
-            layers: vec![vec![keycode]],
+            layers: vec![vec![keycode.into()]],
             encoder_layers: vec![vec![]],
             layer_names: vec!["Layer 0".into()],
             custom_keycodes: vec![],
@@ -678,6 +698,7 @@ mod tests {
             layer_leds_supported: false,
             rgb_supported: false,
             lighting_mode: None,
+            supports_rmk_native_key_actions: false,
         })
     }
 
@@ -753,9 +774,32 @@ mod tests {
 
         assert!(matches!(outcome, VialHidOutcome::Battery(_)));
         let requests = recorder.requests();
-        assert_eq!(requests.len(), 2);
-        assert_eq!(&requests[0][..3], &[0x08, 0xE8, 0x01]);
-        assert_eq!(&requests[1][..3], &[0x08, 0xE8, 0x01]);
+        assert_eq!(requests.len(), 5);
+        assert!(requests
+            .iter()
+            .all(|request| &request[..3] == [0x08, 0xE8, 0x01]));
+    }
+
+    #[test]
+    fn incomplete_split_battery_results_retry_soon() {
+        assert_eq!(
+            battery_refresh_delay(Some(crate::hid::BatteryHalves {
+                left: Some(80),
+                right: Some(75),
+            })),
+            BATTERY_REFRESH_INTERVAL
+        );
+        assert_eq!(
+            battery_refresh_delay(Some(crate::hid::BatteryHalves {
+                left: Some(80),
+                right: None,
+            })),
+            BATTERY_INCOMPLETE_REFRESH_INTERVAL
+        );
+        assert_eq!(
+            battery_refresh_delay(None),
+            BATTERY_INCOMPLETE_REFRESH_INTERVAL
+        );
     }
 
     #[test]
@@ -769,8 +813,8 @@ mod tests {
                 key_index: 0,
                 row: 2,
                 col: 3,
-                old_keycode: 0x0004,
-                keycode: 0,
+                old_binding: 0x0004.into(),
+                binding: 0.into(),
                 is_undo: false,
             },
         )
@@ -819,7 +863,7 @@ mod tests {
             Some(UndoAction::Key {
                 layer: 0,
                 key_idx: 0,
-                old_kc: 0x0004,
+                old_binding: KeyBinding::Vial(0x0004),
             })
         ));
         assert_eq!(recorder.requests().len(), 2);
@@ -833,7 +877,7 @@ mod tests {
         let (hid, recorder) = crate::hid::HidDevice::test_device();
         let context = background_layer_context();
         let mut layout = single_key_layout(0x0004);
-        layout.layers.push(vec![0]);
+        layout.layers.push(vec![0.into()]);
         layout.layer_names.push("Layer 1".into());
         layout.encoder_layers.push(Vec::new());
         app.layout = Some(layout);
@@ -841,7 +885,7 @@ mod tests {
         app.undo_stack.push(UndoAction::Key {
             layer: 0,
             key_idx: 0,
-            old_kc: 0,
+            old_binding: 0.into(),
         });
         app.hid_device = Some(hid);
 
@@ -898,7 +942,7 @@ mod tests {
         let (hid, recorder) = crate::hid::HidDevice::test_device();
         let context = background_layer_context();
         let mut layout = single_key_layout(0x0004);
-        layout.layers.push(vec![0]);
+        layout.layers.push(vec![0.into()]);
         layout.layer_names.push("Layer 1".into());
         layout.encoder_layers.push(Vec::new());
         app.layout = Some(layout);
@@ -924,7 +968,7 @@ mod tests {
         app.apply_layer_snapshot(
             0,
             LayerSnapshot {
-                keycodes: vec![0],
+                keycodes: vec![0.into()],
                 encoder_keycodes: Vec::new(),
             },
             "layer_actions.fill_none",
@@ -955,7 +999,7 @@ mod tests {
                 layer: 0,
                 old: LayerSnapshot { keycodes, .. },
                 requires_firmware: true,
-            }) if keycodes == &[0x0004]
+            }) if keycodes == &[0x0004.into()]
         ));
         let requests = recorder.requests();
         assert_eq!(requests.len(), 3);

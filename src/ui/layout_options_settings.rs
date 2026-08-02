@@ -30,11 +30,11 @@ impl EntropyApp {
             .as_ref()
             .map(|layout| layout.layout_options.clone())
             .unwrap_or_default();
-        let display_option_indices: Vec<usize> = options
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, option)| (!Self::is_encoder_layout_option(option)).then_some(idx))
-            .collect();
+        let display_option_indices = self
+            .layout
+            .as_ref()
+            .map(|layout| self.user_layout_option_indices(layout))
+            .unwrap_or_default();
 
         crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {

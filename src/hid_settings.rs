@@ -50,6 +50,15 @@ pub(crate) struct BatteryHalves {
     pub(crate) right: Option<u8>,
 }
 
+impl BatteryHalves {
+    pub(crate) fn is_complete(self) -> bool {
+        self.left.is_some() && self.right.is_some()
+    }
+}
+
+const BATTERY_HALVES_READ_ATTEMPTS: usize = 5;
+const BATTERY_HALVES_READ_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+
 fn format_via_firmware_version(value: u32) -> Option<String> {
     if value == 0 {
         return None;
@@ -96,9 +105,17 @@ fn parse_battery_halves_response(resp: &[u8; MSG_LEN]) -> Result<Option<BatteryH
 #[cfg(not(target_arch = "wasm32"))]
 impl HidDevice {
     pub fn get_battery_halves(&self) -> Result<Option<BatteryHalves>> {
-        let _ = self.get_battery_halves_once()?;
-        std::thread::sleep(std::time::Duration::from_millis(400));
-        self.get_battery_halves_once()
+        let mut latest = None;
+        for attempt in 0..BATTERY_HALVES_READ_ATTEMPTS {
+            latest = self.get_battery_halves_once()?;
+            if latest.is_some_and(BatteryHalves::is_complete) {
+                break;
+            }
+            if attempt + 1 < BATTERY_HALVES_READ_ATTEMPTS {
+                std::thread::sleep(BATTERY_HALVES_READ_RETRY_DELAY);
+            }
+        }
+        Ok(latest)
     }
 
     fn get_battery_halves_once(&self) -> Result<Option<BatteryHalves>> {

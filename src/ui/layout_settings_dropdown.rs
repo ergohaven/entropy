@@ -60,10 +60,7 @@ impl EntropyApp {
             let rgb_available_for_menu = self.rgb_settings.supported || layout.supports_rgb;
             let layer_leds_available_for_menu = self.layer_led_settings.supported;
             let show_encoders_item = self.show_separate_encoder_visibility_settings(layout);
-            let show_layout_options_item = layout
-                .layout_options
-                .iter()
-                .any(|option| !Self::is_encoder_layout_option(option));
+            let show_layout_options_item = !self.user_layout_option_indices(layout).is_empty();
             #[cfg(not(target_arch = "wasm32"))]
             let deferred_modules = self.deferred_section_available(DeferredLoadSection::Modules);
             #[cfg(target_arch = "wasm32")]
@@ -155,7 +152,10 @@ impl EntropyApp {
                 settings_menu_labels.push(crate::i18n::tr(lang, TrKey::DisplayPresetsTitle));
             }
             if show_modules_item {
-                settings_menu_labels.push(crate::i18n::tr_catalog(lang, "modules_settings.title"));
+                settings_menu_labels.push(crate::i18n::tr_catalog(
+                    lang,
+                    self.module_settings_title_key(),
+                ));
             }
             if show_touchpad_item {
                 settings_menu_labels.push(crate::i18n::tr(lang, TrKey::TouchpadTitle));
@@ -301,7 +301,10 @@ impl EntropyApp {
                                     top_dropdown_item(
                                         ui,
                                         item_width,
-                                        crate::i18n::tr_catalog(lang, "modules_settings.title"),
+                                        crate::i18n::tr_catalog(
+                                            lang,
+                                            self.module_settings_title_key(),
+                                        ),
                                         true,
                                         self.main_menu_tab == MainMenuTab::Settings
                                             && self.settings_tab == SettingsTab::Modules,

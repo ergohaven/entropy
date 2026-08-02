@@ -317,89 +317,28 @@ impl KeycodePicker {
                 .color(Color32::from_gray(150)),
         );
         ui.add_space(4.0);
-        let mk: Vec<(String, u16, Option<u16>, String)> = vec![
-            (
-                picker_mod_key_label(0x0100),
-                0x0100,
-                Some(0x1100),
-                "Ctrl".into(),
-            ),
-            (
-                picker_mod_key_label(0x0200),
-                0x0200,
-                Some(0x1200),
-                "Shift".into(),
-            ),
-            (
-                picker_mod_key_label(0x0400),
-                0x0400,
-                Some(0x1400),
-                "Alt".into(),
-            ),
-            (
-                picker_mod_key_label(0x0800),
-                0x0800,
-                Some(0x1800),
-                lgui.to_string(),
-            ),
-            (
-                picker_mod_key_label(0x0300),
-                0x0300,
-                None,
-                "Ctrl+Shift".into(),
-            ),
-            (
-                picker_mod_key_label(0x0500),
-                0x0500,
-                None,
-                "Ctrl+Alt".into(),
-            ),
-            (
-                picker_mod_key_label(0x0600),
-                0x0600,
-                None,
-                "Shift+Alt (LSA)".into(),
-            ),
-            (
-                picker_mod_key_label(0x0700),
-                0x0700,
-                None,
-                "Ctrl+Shift+Alt".into(),
-            ),
-            (
-                picker_mod_key_label(0x0A00),
-                0x0A00,
-                None,
-                format!("{}+Shift", lgui),
-            ),
-            (
-                picker_mod_key_label(0x0F00),
-                0x0F00,
-                None,
-                format!("Ctrl+Shift+Alt+{}", gui_mod_name()),
-            ),
-        ];
+        let mk = mod_key_choices(false);
         ui.horizontal_wrapped(|ui| {
-            for (label, left_value, right_value, mod_name) in &mk {
+            for choice in &mk {
                 let resp = ui
                     .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
-                Self::paint_compact_picker_label(ui, &resp, label);
+                Self::paint_compact_picker_label(ui, &resp, &choice.label);
                 if resp.clicked_by(egui::PointerButton::Primary) {
-                    self.vial_quantum_pending_mod = Some(*left_value);
+                    self.vial_quantum_pending_mod = Some(choice.left_value);
                 }
-                if let Some(right_value) = right_value {
+                if let Some(right_value) = choice.right_value {
                     if resp.clicked_by(egui::PointerButton::Secondary) {
-                        self.vial_quantum_pending_mod = Some(*right_value);
+                        self.vial_quantum_pending_mod = Some(right_value);
                     }
                     resp.on_hover_text(crate::i18n::tr_text(
                         self.language,
-                        &mod_combo_tooltip(mod_name, true),
+                        &mod_combo_tooltip(&choice.mod_name, true),
                     ));
                 } else {
                     resp.on_hover_text(crate::i18n::tr_text(
                         self.language,
-                        &mod_combo_tooltip(mod_name, false),
+                        &mod_combo_tooltip(&choice.mod_name, false),
                     ));
                 }
             }

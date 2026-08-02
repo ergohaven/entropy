@@ -1,5 +1,9 @@
 use crate::firmware::FirmwareProtocol;
 
+const ERGOHAVEN_VENDOR_ID: u16 = 0xE126;
+const K04_QUBE_PRODUCT_ID_START: u16 = 0x0071;
+const K04_QUBE_PRODUCT_ID_END: u16 = 0x0073;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DeviceIdentity {
     vendor_id: u16,
@@ -82,12 +86,19 @@ impl Device {
     }
 
     pub fn display_name_with_transport(&self, display_name: &str) -> String {
-        let transport = if self.is_bluetooth_transport() {
-            "Bluetooth"
+        let display_name = display_name.trim();
+        if self.is_bluetooth_transport() {
+            format!("{display_name} (Bluetooth)")
+        } else if self.is_k04_qube() {
+            display_name.to_owned()
         } else {
-            "USB"
-        };
-        format!("{} ({transport})", display_name.trim())
+            format!("{display_name} (USB)")
+        }
+    }
+
+    fn is_k04_qube(&self) -> bool {
+        self.vendor_id == ERGOHAVEN_VENDOR_ID
+            && (K04_QUBE_PRODUCT_ID_START..=K04_QUBE_PRODUCT_ID_END).contains(&self.product_id)
     }
 }
 
@@ -201,16 +212,33 @@ fn deduplicate_kernel_bluetooth_devices(devices: &mut Vec<Device>) {
 
 #[cfg(target_os = "linux")]
 fn merge_bluez_vial_devices(devices: &mut Vec<Device>, bluez_devices: Vec<Device>) {
-    for bluez_device in bluez_devices {
+    for mut bluez_device in bluez_devices {
         let bluez_identity = normalized_bluetooth_identity(&bluez_device.serial_number);
-        let matching_kernel_hid = !bluez_identity.is_empty()
-            && devices.iter().any(|device| {
-                device.is_bluetooth_transport()
-                    && !device.uses_bluez_gatt_transport()
-                    && normalized_bluetooth_identity(&device.serial_number) == bluez_identity
-            });
+        let matching_kernel_hid = if bluez_identity.is_empty() {
+            None
+        } else {
+            devices
+                .iter()
+                .find(|device| {
+                    device.is_bluetooth_transport()
+                        && !device.uses_bluez_gatt_transport()
+                        && normalized_bluetooth_identity(&device.serial_number) == bluez_identity
+                })
+                .cloned()
+        };
 
-        if matching_kernel_hid {
+        if let Some(kernel_hid) = matching_kernel_hid {
+            // BlueZ can expose the resolved GATT service one scan before its
+            // Modalias metadata, and that metadata can use a different product
+            // id from the kernel HID endpoint. The matching Bluetooth address
+            // proves both endpoints belong to the same keyboard, so keep the
+            // kernel HID identity unconditionally. Otherwise an in-flight
+            // reconnect stops recognizing the keyboard when transport switches.
+            bluez_device.vendor_id = kernel_hid.vendor_id;
+            bluez_device.product_id = kernel_hid.product_id;
+            if bluez_device.manufacturer.trim().is_empty() {
+                bluez_device.manufacturer = kernel_hid.manufacturer;
+            }
             devices.retain(|device| {
                 !device.is_bluetooth_transport()
                     || device.uses_bluez_gatt_transport()
@@ -264,13 +292,29 @@ mod tests {
     }
 
     #[test]
-    fn suffixes_usb_display_name() {
-        let device = test_device("Usb", "IOService:/AppleUserUSBHostHIDDevice");
+    fn suffixes_regular_usb_display_name() {
+        let mut device = test_device("Usb", "IOService:/AppleUserUSBHostHIDDevice");
+        device.vendor_id = ERGOHAVEN_VENDOR_ID;
+        device.product_id = K04_QUBE_PRODUCT_ID_END + 1;
 
         assert_eq!(
             device.display_name_with_transport("Ergohaven K:04"),
             "Ergohaven K:04 (USB)"
         );
+    }
+
+    #[test]
+    fn leaves_all_k04_qube_usb_display_names_unmarked() {
+        for product_id in K04_QUBE_PRODUCT_ID_START..=K04_QUBE_PRODUCT_ID_END {
+            let mut device = test_device("Usb", "IOService:/AppleUserUSBHostHIDDevice");
+            device.vendor_id = ERGOHAVEN_VENDOR_ID;
+            device.product_id = product_id;
+
+            assert_eq!(
+                device.display_name_with_transport("Ergohaven K:04"),
+                "Ergohaven K:04"
+            );
+        }
     }
 
     #[test]
@@ -353,6 +397,32 @@ mod tests {
 
         assert_eq!(devices.len(), 1);
         assert!(devices[0].uses_bluez_gatt_transport());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn bluez_transport_keeps_kernel_identity_while_services_settle() {
+        let mut kernel_hid = test_device("Bluetooth", "/dev/hidraw7");
+        kernel_hid.serial_number = "c6:9e:29:c4:f4:c7".to_owned();
+        let identity = kernel_hid.stable_identity();
+        let mut bluez = test_device(
+            "Bluetooth",
+            "bluez-gatt:/org/bluez/hci0/dev_C6_9E_29_C4_F4_C7/service002a",
+        );
+        bluez.serial_number = "C6:9E:29:C4:F4:C7".to_owned();
+        bluez.vendor_id = 0xE126;
+        bluez.product_id = 0x0041;
+        bluez.manufacturer.clear();
+        let mut devices = vec![kernel_hid];
+
+        merge_bluez_vial_devices(&mut devices, vec![bluez]);
+
+        assert_eq!(devices.len(), 1);
+        assert!(devices[0].uses_bluez_gatt_transport());
+        assert_eq!(devices[0].vendor_id, 0x1209);
+        assert_eq!(devices[0].product_id, 0x2327);
+        assert_eq!(devices[0].manufacturer, "Entropy");
+        assert!(identity.matches(&devices[0]));
     }
 
     #[cfg(target_os = "linux")]

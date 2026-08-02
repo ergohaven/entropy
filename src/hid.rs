@@ -233,6 +233,44 @@ enum HidBackend {
     },
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) struct LinuxBluetoothHidWriter {
+    device: hidapi::HidDevice,
+    write_framing: HidWriteFraming,
+    path: Option<PathBuf>,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxBluetoothHidWriter {
+    pub(crate) fn open(device: &crate::device::Device) -> Result<Self> {
+        let local = HidDevice::open_fresh_for_local(device)?;
+        let HidBackend::Local {
+            device,
+            transport,
+            write_framing,
+            path,
+            ..
+        } = local.backend
+        else {
+            bail!("Linux Bluetooth HID writer did not open a local HID backend");
+        };
+        if !transport.is_bluetooth() {
+            bail!("Linux Bluetooth HID writer opened a non-Bluetooth endpoint");
+        }
+
+        Ok(Self {
+            device,
+            write_framing,
+            path,
+        })
+    }
+
+    pub(crate) fn write_output_report(&self, data: &[u8]) -> Result<()> {
+        ensure_output_report_len(data)?;
+        write_output_report_local(&self.device, self.write_framing, self.path.as_deref(), data)
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HidTransport {
@@ -359,21 +397,26 @@ impl Drop for HidProxy {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+pub fn is_disconnect_error_message(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("disconnected")
+        || message.contains("device did not respond")
+        || message.contains("hid helper timed out")
+        || message.contains("failed to write hid helper request")
+        || message.contains("failed to flush hid helper request")
+        || message.contains("hid write failed")
+        || message.contains("hid read failed")
+        || message.contains("broken pipe")
+        || message.contains("pipe is being closed")
+        || message.contains("the device is not connected")
+        || message.contains("org.bluez.error.notconnected")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn is_disconnect_error(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        let message = cause.to_string().to_ascii_lowercase();
-        message.contains("disconnected")
-            || message.contains("device did not respond")
-            || message.contains("hid helper timed out")
-            || message.contains("failed to write hid helper request")
-            || message.contains("failed to flush hid helper request")
-            || message.contains("hid write failed")
-            || message.contains("hid read failed")
-            || message.contains("broken pipe")
-            || message.contains("pipe is being closed")
-            || message.contains("the device is not connected")
-            || message.contains("org.bluez.error.notconnected")
-    })
+    error
+        .chain()
+        .any(|cause| is_disconnect_error_message(&cause.to_string()))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -712,7 +755,7 @@ impl HidDevice {
     }
 
     /// Send exactly MSG_LEN bytes (with 0x00 report ID prepended), receive MSG_LEN bytes back.
-    fn usb_send(&self, data: &[u8]) -> Result<[u8; MSG_LEN]> {
+    pub(crate) fn usb_send(&self, data: &[u8]) -> Result<[u8; MSG_LEN]> {
         match &self.backend {
             HidBackend::Local {
                 device,
@@ -1246,6 +1289,21 @@ fn analyze_hid_report_descriptor(descriptor: &[u8]) -> HidReportDescriptorLayout
     }
 
     layout
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn vial_report_id_from_hid_descriptor(descriptor: &[u8]) -> Option<u8> {
+    let layout = analyze_hid_report_descriptor(descriptor);
+    if !layout.vial_collection_found
+        || layout.vial_report_id_conflict
+        || (layout.vial_uses_unnumbered_reports && layout.has_numbered_reports)
+    {
+        return None;
+    }
+
+    layout
+        .vial_report_id
+        .or_else(|| layout.vial_uses_unnumbered_reports.then_some(0))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1855,6 +1913,8 @@ mod tests {
         assert_eq!(layout.vial_report_id, Some(5));
         assert!(!layout.vial_uses_unnumbered_reports);
         assert!(!layout.vial_report_id_conflict);
+        #[cfg(target_os = "linux")]
+        assert_eq!(vial_report_id_from_hid_descriptor(&descriptor), Some(5));
     }
 
     #[test]
@@ -1875,6 +1935,8 @@ mod tests {
         assert!(layout.vial_collection_found);
         assert_eq!(layout.vial_report_id, None);
         assert!(layout.vial_uses_unnumbered_reports);
+        #[cfg(target_os = "linux")]
+        assert_eq!(vial_report_id_from_hid_descriptor(&descriptor), Some(0));
     }
 
     #[test]
@@ -1901,6 +1963,8 @@ mod tests {
         assert!(layout.vial_collection_found);
         assert_eq!(layout.vial_report_id, None);
         assert!(layout.vial_uses_unnumbered_reports);
+        #[cfg(target_os = "linux")]
+        assert_eq!(vial_report_id_from_hid_descriptor(&descriptor), None);
     }
 
     #[test]
