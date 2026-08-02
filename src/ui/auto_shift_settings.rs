@@ -293,9 +293,12 @@ impl EntropyApp {
         let Some(hid) = &self.hid_device else {
             return;
         };
-        if let Err(e) = hid.set_qmk_setting_u8(3, self.auto_shift_options.bits()) {
-            self.status_msg = format!("Failed to save Auto Shift flags: {}", e);
-            log::warn!("set_qmk_setting_u8(auto_shift_flags) failed: {e}");
+        match hid.set_qmk_setting_u8(3, self.auto_shift_options.bits()) {
+            Ok(()) => self.auto_shift_options.loaded = true,
+            Err(e) => {
+                self.status_msg = format!("Failed to save Auto Shift flags: {}", e);
+                log::warn!("set_qmk_setting_u8(auto_shift_flags) failed: {e}");
+            }
         }
     }
 

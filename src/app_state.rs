@@ -1335,6 +1335,30 @@ pub(crate) struct AltRepeatKeyEntry {
     pub(crate) options: AltRepeatKeyOptionsState,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct QmkSettingValueSet {
+    words: [u64; 4],
+}
+
+impl QmkSettingValueSet {
+    pub(crate) fn mark(&mut self, qsid: u16) {
+        let word = usize::from(qsid) / u64::BITS as usize;
+        let bit = usize::from(qsid) % u64::BITS as usize;
+        if let Some(bits) = self.words.get_mut(word) {
+            *bits |= 1u64 << bit;
+        }
+    }
+
+    pub(crate) fn contains(self, qsid: u16) -> bool {
+        let word = usize::from(qsid) / u64::BITS as usize;
+        let bit = usize::from(qsid) % u64::BITS as usize;
+        self.words
+            .get(word)
+            .map(|bits| bits & (1u64 << bit) != 0)
+            .unwrap_or(false)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct AutoShiftOptionsState {
     pub(crate) enabled: bool,
@@ -1344,6 +1368,8 @@ pub(crate) struct AutoShiftOptionsState {
     pub(crate) no_alpha: bool,
     pub(crate) enable_keyrepeat: bool,
     pub(crate) disable_keyrepeat_timeout: bool,
+    /// Whether qsid 3 was read successfully or acknowledged by the firmware.
+    pub(crate) loaded: bool,
 }
 
 impl AutoShiftOptionsState {
@@ -1356,6 +1382,7 @@ impl AutoShiftOptionsState {
             no_alpha: bits & (1 << 4) != 0,
             enable_keyrepeat: bits & (1 << 5) != 0,
             disable_keyrepeat_timeout: bits & (1 << 6) != 0,
+            loaded: true,
         }
     }
 
@@ -1393,6 +1420,8 @@ pub(crate) struct MouseKeysSettingsState {
     pub(crate) wheel_time_to_max: u16,
     /// Whether any of the qsids were readable (firmware support flag)
     pub(crate) supported: bool,
+    /// Mouse-key qsids whose values were read successfully or acknowledged.
+    pub(crate) loaded_qsids: QmkSettingValueSet,
 }
 
 /// Ergohaven K:03 Pro touchpad settings exposed by firmware QMK Settings.
@@ -1420,6 +1449,8 @@ pub(crate) struct TouchpadSettingsState {
     pub(crate) auto_layer_variants: Vec<String>,
     /// Whether qsid 120..124 were readable and advertised by firmware definition/query
     pub(crate) supported: bool,
+    /// Touchpad qsids whose values were read successfully or acknowledged.
+    pub(crate) loaded_qsids: QmkSettingValueSet,
 }
 
 impl TouchpadSettingsState {
@@ -1883,6 +1914,8 @@ pub(crate) struct TapHoldSettingsState {
     pub(crate) flow_tap: u16,
     /// Bitset of tap-hold qsids advertised by this firmware.
     pub(crate) supported_qsids: u64,
+    /// Tap-hold qsids whose values were read successfully or acknowledged.
+    pub(crate) loaded_qsids: QmkSettingValueSet,
     /// Whether qsid 7 was readable (firmware support flag)
     pub(crate) supported: bool,
 }
@@ -1896,6 +1929,14 @@ impl TapHoldSettingsState {
 
     pub(crate) fn supports_qsid(&self, qsid: u16) -> bool {
         qsid < u64::BITS as u16 && self.supported_qsids & (1u64 << qsid) != 0
+    }
+
+    pub(crate) fn set_qsid_loaded(&mut self, qsid: u16) {
+        self.loaded_qsids.mark(qsid);
+    }
+
+    pub(crate) fn qsid_loaded(&self, qsid: u16) -> bool {
+        self.loaded_qsids.contains(qsid)
     }
 }
 

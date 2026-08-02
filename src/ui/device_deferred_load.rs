@@ -70,12 +70,14 @@ pub(super) enum DeferredLoadPayload {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-const ENTLAYOUT_EXPORT_SECTIONS: [DeferredLoadSection; 5] = [
+const ENTLAYOUT_EXPORT_SECTIONS: [DeferredLoadSection; 7] = [
     DeferredLoadSection::Macros,
     DeferredLoadSection::Combos,
     DeferredLoadSection::TapDance,
     DeferredLoadSection::KeyOverrides,
     DeferredLoadSection::AltRepeat,
+    DeferredLoadSection::BehaviorSettings,
+    DeferredLoadSection::Touchpad,
 ];
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1513,6 +1515,44 @@ mod tests {
         assert!(deferred_full_layout_data_ready(
             &state,
             DeferredFullLayoutAction::ImportEntlayout
+        ));
+    }
+
+    #[test]
+    fn entlayout_export_waits_for_behavior_and_touchpad_values_over_bluetooth() {
+        let mut load_context = context_with_behavior_settings();
+        load_context.touchpad_supported = true;
+        let mut state = DeferredDeviceLoadState::staged(load_context);
+        for layer in 1..4 {
+            state.set_layer_status(layer, DeferredLoadStatus::Loaded);
+        }
+        for section in ENTLAYOUT_EXPORT_SECTIONS {
+            if state.section_supported(section)
+                && !matches!(
+                    section,
+                    DeferredLoadSection::BehaviorSettings | DeferredLoadSection::Touchpad
+                )
+            {
+                state.set_section_status(section, DeferredLoadStatus::Loaded);
+            }
+        }
+
+        assert!(!deferred_full_layout_data_ready(
+            &state,
+            DeferredFullLayoutAction::ExportEntlayout
+        ));
+        state.set_section_status(
+            DeferredLoadSection::BehaviorSettings,
+            DeferredLoadStatus::Loaded,
+        );
+        assert!(!deferred_full_layout_data_ready(
+            &state,
+            DeferredFullLayoutAction::ExportEntlayout
+        ));
+        state.set_section_status(DeferredLoadSection::Touchpad, DeferredLoadStatus::Loaded);
+        assert!(deferred_full_layout_data_ready(
+            &state,
+            DeferredFullLayoutAction::ExportEntlayout
         ));
     }
 

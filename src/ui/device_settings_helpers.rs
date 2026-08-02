@@ -479,26 +479,35 @@ impl EntropyApp {
                 Some(Ok(value)) => {
                     settings.delay = value as u16;
                     settings.supported = true;
-                    let read = |qsid: u16| -> u16 {
+                    settings.loaded_qsids.mark(9);
+                    let read = |qsid: u16| -> Option<u16> {
                         if !has_qmk_setting(qsid) {
-                            return 0;
+                            return None;
                         }
                         match dev_conn.get_qmk_setting_u8(qsid) {
-                            Ok(value) => value as u16,
+                            Ok(value) => Some(value as u16),
                             Err(e) => {
                                 log::warn!("get_qmk_setting_u8(mouse_keys qsid {qsid}): {e}");
-                                0
+                                None
                             }
                         }
                     };
-                    settings.interval = read(10);
-                    settings.move_delta = read(11);
-                    settings.max_speed = read(12);
-                    settings.time_to_max = read(13);
-                    settings.wheel_delay = read(14);
-                    settings.wheel_interval = read(15);
-                    settings.wheel_max_speed = read(16);
-                    settings.wheel_time_to_max = read(17);
+                    for (qsid, value) in
+                        (10u16..=17).filter_map(|qsid| read(qsid).map(|v| (qsid, v)))
+                    {
+                        match qsid {
+                            10 => settings.interval = value,
+                            11 => settings.move_delta = value,
+                            12 => settings.max_speed = value,
+                            13 => settings.time_to_max = value,
+                            14 => settings.wheel_delay = value,
+                            15 => settings.wheel_interval = value,
+                            16 => settings.wheel_max_speed = value,
+                            17 => settings.wheel_time_to_max = value,
+                            _ => unreachable!(),
+                        }
+                        settings.loaded_qsids.mark(qsid);
+                    }
                 }
                 Some(Err(e)) => {
                     log::warn!("get_qmk_setting_u8(mouse_keys delay): {e}");
@@ -514,54 +523,73 @@ impl EntropyApp {
                 Some(Ok(value)) => {
                     settings.tapping_term = value;
                     settings.supported = true;
+                    settings.set_qsid_loaded(7);
                     for qsid in [7u16, 18, 19, 20, 22, 23, 24, 25, 26, 27] {
                         if has_qmk_setting(qsid) {
                             settings.set_qsid_supported(qsid);
                         }
                     }
-                    let read_bool = |qsid: u16| -> bool {
+                    let read_bool = |qsid: u16| -> Option<bool> {
                         if !has_qmk_setting(qsid) {
-                            return false;
+                            return None;
                         }
                         match dev_conn.get_qmk_setting_u8(qsid) {
-                            Ok(value) => value != 0,
+                            Ok(value) => Some(value != 0),
                             Err(e) => {
                                 log::warn!("get_qmk_setting_u8(tap_hold qsid {qsid}): {e}");
-                                false
+                                None
                             }
                         }
                     };
-                    let read_u16 = |qsid: u16| -> u16 {
+                    let read_u16 = |qsid: u16| -> Option<u16> {
                         if !has_qmk_setting(qsid) {
-                            return 0;
+                            return None;
                         }
                         match dev_conn.get_qmk_setting_u16(qsid) {
-                            Ok(value) => value,
+                            Ok(value) => Some(value),
                             Err(e) => {
                                 log::warn!("get_qmk_setting_u16(tap_hold qsid {qsid}): {e}");
-                                0
+                                None
                             }
                         }
                     };
-                    settings.permissive_hold = read_bool(22);
-                    settings.hold_on_other_key_press = read_bool(23);
-                    settings.retro_tapping = read_bool(24);
-                    settings.quick_tap_term = read_u16(25);
-                    settings.tap_code_delay = read_u16(18);
-                    settings.tap_hold_caps_delay = read_u16(19);
-                    settings.tapping_toggle = if has_qmk_setting(20) {
-                        dev_conn
-                            .get_qmk_setting_u8(20)
-                            .map(|value| value as u16)
-                            .unwrap_or_else(|e| {
+                    for (qsid, value) in [22u16, 23, 24, 26]
+                        .into_iter()
+                        .filter_map(|qsid| read_bool(qsid).map(|value| (qsid, value)))
+                    {
+                        match qsid {
+                            22 => settings.permissive_hold = value,
+                            23 => settings.hold_on_other_key_press = value,
+                            24 => settings.retro_tapping = value,
+                            26 => settings.chordal_hold = value,
+                            _ => unreachable!(),
+                        }
+                        settings.set_qsid_loaded(qsid);
+                    }
+                    for (qsid, value) in [18u16, 19, 25, 27]
+                        .into_iter()
+                        .filter_map(|qsid| read_u16(qsid).map(|value| (qsid, value)))
+                    {
+                        match qsid {
+                            18 => settings.tap_code_delay = value,
+                            19 => settings.tap_hold_caps_delay = value,
+                            25 => settings.quick_tap_term = value,
+                            27 => settings.flow_tap = value,
+                            _ => unreachable!(),
+                        }
+                        settings.set_qsid_loaded(qsid);
+                    }
+                    if has_qmk_setting(20) {
+                        match dev_conn.get_qmk_setting_u8(20) {
+                            Ok(value) => {
+                                settings.tapping_toggle = value as u16;
+                                settings.set_qsid_loaded(20);
+                            }
+                            Err(e) => {
                                 log::warn!("get_qmk_setting_u8(tap_hold qsid 20): {e}");
-                                0
-                            })
-                    } else {
-                        0
-                    };
-                    settings.chordal_hold = read_bool(26);
-                    settings.flow_tap = read_u16(27);
+                            }
+                        }
+                    }
                 }
                 Some(Err(e)) => {
                     log::warn!("get_qmk_setting_u16(tap_hold tapping_term): {e}");
@@ -663,39 +691,48 @@ impl EntropyApp {
 
         settings.dpi = dpi;
         settings.supported = true;
-        settings.sniper_sens = dev_conn.get_qmk_setting_u8(121).unwrap_or_else(|error| {
-            log::warn!("get_qmk_setting_u8(touchpad sniper sens): {error}");
-            0
-        });
-        settings.scroll_sens = dev_conn.get_qmk_setting_u8(122).unwrap_or_else(|error| {
-            log::warn!("get_qmk_setting_u8(touchpad scroll sens): {error}");
-            0
-        });
-        settings.text_sens = dev_conn.get_qmk_setting_u8(123).unwrap_or_else(|error| {
-            log::warn!("get_qmk_setting_u8(touchpad text sens): {error}");
-            0
-        });
-        settings.bits = dev_conn.get_qmk_setting_u8(124).unwrap_or_else(|error| {
-            log::warn!("get_qmk_setting_u8(touchpad bits): {error}");
-            0
-        });
+        settings.loaded_qsids.mark(120);
+        for qsid in 121u16..=124 {
+            match dev_conn.get_qmk_setting_u8(qsid) {
+                Ok(value) => {
+                    match qsid {
+                        121 => settings.sniper_sens = value,
+                        122 => settings.scroll_sens = value,
+                        123 => settings.text_sens = value,
+                        124 => settings.bits = value,
+                        _ => unreachable!(),
+                    }
+                    settings.loaded_qsids.mark(qsid);
+                }
+                Err(error) => {
+                    log::warn!("get_qmk_setting_u8(touchpad qsid {qsid}): {error}");
+                }
+            }
+        }
 
         if supported_qmk_settings.contains(&142) && Self::touchpad_setting_exists(json, 142) {
             settings.auto_layer_enable_supported = true;
-            settings.auto_layer_enable = dev_conn
-                .get_qmk_setting_u8(142)
-                .map(|value| value != 0)
-                .unwrap_or_else(|error| {
+            match dev_conn.get_qmk_setting_u8(142) {
+                Ok(value) => {
+                    settings.auto_layer_enable = value != 0;
+                    settings.loaded_qsids.mark(142);
+                }
+                Err(error) => {
                     log::warn!("get_qmk_setting_u8(touchpad auto layer enable): {error}");
-                    false
-                });
+                }
+            }
         }
         if supported_qmk_settings.contains(&143) && Self::touchpad_setting_exists(json, 143) {
             settings.auto_layer_variants = Self::touchpad_setting_variants(json, 143);
-            settings.auto_layer = dev_conn.get_qmk_setting_u8(143).unwrap_or_else(|error| {
-                log::warn!("get_qmk_setting_u8(touchpad auto layer): {error}");
-                0
-            });
+            match dev_conn.get_qmk_setting_u8(143) {
+                Ok(value) => {
+                    settings.auto_layer = value;
+                    settings.loaded_qsids.mark(143);
+                }
+                Err(error) => {
+                    log::warn!("get_qmk_setting_u8(touchpad auto layer): {error}");
+                }
+            }
         }
 
         settings
@@ -1940,6 +1977,50 @@ mod tests {
             Some("Text sensitivity")
         );
         assert!(EntropyApp::module_settings_groups(&json, &[120, 121, 122, 123, 124]).is_empty());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn behavior_reader_does_not_mark_failed_mouse_key_reads_as_loaded_zeroes() {
+        let (hid, _) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+            1,
+            crate::hid::TestHidFault::Disconnect,
+        )));
+
+        let settings = EntropyApp::read_behavior_settings(&(9u16..=17).collect::<Vec<_>>(), &hid);
+
+        assert!(settings.mouse_keys.supported);
+        assert!(settings.mouse_keys.loaded_qsids.contains(9));
+        assert!(!settings.mouse_keys.loaded_qsids.contains(10));
+        assert!(settings.mouse_keys.loaded_qsids.contains(11));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn touchpad_reader_tracks_each_successful_value_independently() {
+        let json = serde_json::json!({
+            "settings": [{
+                "name": "Touchpad",
+                "fields": [
+                    { "title": "DPI", "qsid": 120, "type": "select", "variants": ["400", "800"] },
+                    { "title": "Sniper", "qsid": 121, "type": "integer" },
+                    { "title": "Scroll", "qsid": 122, "type": "integer" },
+                    { "title": "Text", "qsid": 123, "type": "integer" },
+                    { "title": "Flags", "qsid": 124, "type": "integer" }
+                ]
+            }]
+        });
+        let (hid, _) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+            1,
+            crate::hid::TestHidFault::Disconnect,
+        )));
+
+        let settings = EntropyApp::read_touchpad_settings(&json, &[120, 121, 122, 123, 124], &hid);
+
+        assert!(settings.supported);
+        assert!(settings.loaded_qsids.contains(120));
+        assert!(!settings.loaded_qsids.contains(121));
+        assert!(settings.loaded_qsids.contains(122));
     }
 
     #[test]
