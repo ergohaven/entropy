@@ -11,7 +11,7 @@ pub(crate) const USER_RUSSIAN_LETTER_START: u8 = 0xB0;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct UniversalSymbolControl {
     pub(crate) user_id: u8,
-    pub(crate) label: &'static str,
+    pub(crate) action_label: &'static str,
     pub(crate) name: &'static str,
 }
 
@@ -30,27 +30,27 @@ pub(crate) struct UniversalRussianLetter {
 pub(crate) const CONTROLS: &[UniversalSymbolControl] = &[
     UniversalSymbolControl {
         user_id: USER_TOGGLE,
-        label: "Lang\nToggle",
+        action_label: "Toggle",
         name: "Universal Symbols: toggle English/Russian layout",
     },
     UniversalSymbolControl {
         user_id: USER_SYNC,
-        label: "Lang\nSync",
+        action_label: "Sync",
         name: "Universal Symbols: sync firmware layout state without changing the OS",
     },
     UniversalSymbolControl {
         user_id: USER_SET_ENGLISH,
-        label: "Lang\nEN",
+        action_label: "EN",
         name: "Universal Symbols: switch to English",
     },
     UniversalSymbolControl {
         user_id: USER_SET_RUSSIAN,
-        label: "Lang\nRU",
+        action_label: "RU",
         name: "Universal Symbols: switch to Russian",
     },
     UniversalSymbolControl {
         user_id: USER_TOGGLE_MACOS,
-        label: "PC /\nmacOS",
+        action_label: "macOS",
         name: "Universal Symbols: toggle PC/macOS Russian-layout mappings",
     },
 ];
@@ -147,24 +147,27 @@ pub(crate) fn russian_letter_user_id(action: KeyAction) -> Option<u8> {
         .then_some(user_id)
 }
 
-pub(crate) fn label(action: KeyAction) -> Option<String> {
-    let user_id = user_id(action)?;
+pub(crate) fn label_for_user_id(user_id: u8) -> Option<String> {
     CONTROLS
         .iter()
         .find(|control| control.user_id == user_id)
-        .map(|control| control.label.to_owned())
+        .map(|control| format!("Universal\n{}", control.action_label))
         .or_else(|| {
             SYMBOLS
                 .iter()
                 .find(|symbol| symbol.user_id == user_id)
-                .map(|symbol| symbol.symbol.to_string())
+                .map(|symbol| format!("Universal\n{}", symbol.symbol))
         })
         .or_else(|| {
             RUSSIAN_LETTERS
                 .iter()
                 .find(|letter| letter.user_id == user_id)
-                .map(|letter| letter.letter.to_string())
+                .map(|letter| format!("Universal\n{}", letter.letter))
         })
+}
+
+pub(crate) fn label(action: KeyAction) -> Option<String> {
+    label_for_user_id(user_id(action)?)
 }
 
 pub(crate) fn tooltip(action: KeyAction) -> Option<String> {
@@ -230,16 +233,39 @@ mod tests {
     fn labels_decode_firmware_user_actions() {
         assert_eq!(
             label(binding(0x90).rmk_action().unwrap()).as_deref(),
-            Some(".")
+            Some("Universal\n.")
         );
         assert_eq!(
             label(binding(USER_SYNC).rmk_action().unwrap()).as_deref(),
-            Some("Lang\nSync")
+            Some("Universal\nSync")
+        );
+        assert_eq!(
+            label(binding(USER_TOGGLE_MACOS).rmk_action().unwrap()).as_deref(),
+            Some("Universal\nmacOS")
         );
         assert_eq!(
             label(binding(USER_RUSSIAN_LETTER_START).rmk_action().unwrap()).as_deref(),
-            Some("х")
+            Some("Universal\nх")
         );
         assert!(label(KeyAction::Single(Action::User(0x70))).is_none());
+    }
+
+    #[test]
+    fn every_universal_action_uses_the_same_two_line_label_shape() {
+        let ids = CONTROLS
+            .iter()
+            .map(|entry| entry.user_id)
+            .chain(SYMBOLS.iter().map(|entry| entry.user_id))
+            .chain(RUSSIAN_LETTERS.iter().map(|entry| entry.user_id));
+
+        for user_id in ids {
+            let label = label_for_user_id(user_id).expect("known action should have a label");
+            let (top, bottom) = label
+                .split_once('\n')
+                .expect("universal labels should have exactly two lines");
+            assert_eq!(top, "Universal");
+            assert!(!bottom.is_empty());
+            assert!(!bottom.contains('\n'));
+        }
     }
 }

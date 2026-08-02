@@ -709,9 +709,14 @@ Repeat"
             international_keys.extend(crate::universal_symbols::RUSSIAN_LETTERS.iter().map(
                 |letter| {
                     let binding = crate::universal_symbols::binding(letter.user_id);
+                    let label = crate::universal_symbols::label_for_user_id(letter.user_id)
+                        .expect("universal Russian letter should have a display label");
+                    let (top, bottom) = label
+                        .split_once('\n')
+                        .expect("universal display labels should have two lines");
                     (
-                        "Universal".to_owned(),
-                        letter.letter.to_string(),
+                        top.to_owned(),
+                        bottom.to_owned(),
                         binding,
                         crate::universal_symbols::tooltip(binding.rmk_action().unwrap())
                             .unwrap_or_default(),

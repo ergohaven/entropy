@@ -465,20 +465,23 @@ fn show_universal_symbol_section(
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
         for control in crate::universal_symbols::CONTROLS {
+            let label = crate::universal_symbols::label_for_user_id(control.user_id)
+                .expect("universal symbol control should have a display label");
             let resp = ui
                 .add_sized(
                     KeycodePicker::picker_key_size(ui.ctx()),
                     egui::Button::new(""),
                 )
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
-            KeycodePicker::paint_compact_picker_label(ui, &resp, control.label);
+            KeycodePicker::paint_compact_picker_label(ui, &resp, &label);
             if resp.clicked() {
                 picked = Some(crate::universal_symbols::binding(control.user_id));
             }
             resp.on_hover_text(crate::i18n::tr_text(language, control.name));
         }
         for symbol in crate::universal_symbols::SYMBOLS {
-            let label = symbol.symbol.to_string();
+            let label = crate::universal_symbols::label_for_user_id(symbol.user_id)
+                .expect("universal symbol should have a display label");
             let resp = ui
                 .add_sized(
                     KeycodePicker::picker_key_size(ui.ctx()),
