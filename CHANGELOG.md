@@ -5,73 +5,28 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
-## v0.3.10
-
-### Changes
-
-- Unified Universal Symbols keycap labels as `Universal` above every action, symbol, and Russian letter in the picker and layout
-
-## v0.3.9
-
-### Changes
-
-- Moved firmware-native Universal Symbols into a dedicated picker tab immediately after Symbols
-
-## v0.3.8
-
-### Fixes
-
-- Kept the layer-name hover cursor stable while Bluetooth layers load in the background
-
-## v0.3.7
-
-### Fixes
-
-- Prevented cached Bluetooth encoder replies from being decoded as layer names during staged loading
-- Removed the long `Reading keymap…` delay on QMK-Vial keyboards when an unsupported RMK capabilities probe is echoed
-
-## v0.3.6
-
-### Fixes
-
-- Prevented stale RMK native key-action scan replies from aborting K:04 device loading by matching each reply against the requested scan cursor
-
-## v0.3.5
-
-### Fixes
-
-- Added native Layout Sync on GNOME Wayland through the session IBus D-Bus service, including GNOME's built-in XKB and Entropy Text Expander input sources
-
-## v0.3.4
-
-### Improvements
-
-- Added firmware-native Russian `х`, `б`, `ю`, and `ъ` keys under Special > International when the connected firmware advertises support
-
-### Fixes
-
-- Fixed automatic Universal Symbols layout synchronization on KDE Plasma Wayland by reading the native KDE keyboard-layout D-Bus service instead of stale XWayland state
-
-## v0.3.3
+## v0.3.2-rc.1 - Public Beta
 
 ### Main Features
 
-- Replaced application-injected Universal Symbols with firmware-native EN/RU punctuation actions for compatible RMK keyboards
-- Added automatic Universal Symbols layout synchronization through the existing Layout Sync bridge while keeping firmware-only use fully autonomous
+- Replaced application-injected Universal Symbols with firmware-native EN/RU punctuation actions on compatible RMK keyboards, with autonomous layout controls and optional Entropy Layout Sync
+- Added a dedicated firmware-gated Universal picker tab with consistent `Universal` keycap labels in the picker, layout, previews, and exports
+- Added firmware-native Russian `х`, `б`, `ю`, and `ъ` keys under Special > International
 
 ### Improvements
 
-- Hide the complete Universal Symbols picker section unless connected firmware advertises native support
-- Removed the Unicode typography, arrows, math, currency, F13-F24 transport, and desktop symbol-injection backends
-- Kept the IBus integration exclusively for Text Expander on Linux and moved its setup entry under Text Expander
+- Added native Universal Symbols layout tracking for KDE Plasma Wayland and GNOME Wayland
+- Removed the legacy F13-F24 symbol transport, desktop Unicode injection, and unsupported typography, arrows, math, and currency extras; Linux IBus remains only for Text Expander
+- Replaced direction arrows in Russian inversion-setting labels with text, enlarged circular encoder controls, and rendered macOS Command legends as `Cmd`
+- Added native macOS Layout Indicator opacity support
 
-## v0.3.2
+### Fixes
 
-### Improvements
-
-- Replaced direction arrows in Russian vertical and horizontal inversion setting labels with text
-- Enlarged circular encoder controls by 10% across layout views and exports
-- Rendered macOS Command key legends as `Cmd` text on layouts and in key pickers
+- Prevented a Linux Bluetooth startup panic caused by retaining references to stale HID reports
+- Rejected stale RMK native-action scan replies instead of aborting K:04 loading
+- Prevented cached Bluetooth encoder replies from being decoded as layer names during staged loading
+- Removed the long `Reading keymap…` delay on QMK-Vial keyboards when an unsupported RMK capabilities probe is echoed
+- Kept the layer-name hover cursor stable while Bluetooth layers load in the background
 
 ## v0.3.1 - Public Beta
 
