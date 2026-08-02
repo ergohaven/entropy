@@ -390,7 +390,7 @@ fn select_hid_vial_endpoints(
                 })
                 .and_then(|descriptor| {
                     (descriptor.value.len() >= 2)
-                        .then_some((descriptor.value[0], descriptor.value[1]))
+                        .then(|| (descriptor.value[0], descriptor.value[1]))
                 })
         };
 
@@ -1182,7 +1182,7 @@ mod tests {
     }
 
     #[test]
-    fn selects_vial_report_from_current_single_hid_service() {
+    fn selects_vial_report_when_another_report_has_an_empty_reference() {
         let services = HashMap::from([("/service/combined".to_owned(), "/device".to_owned())]);
         let vial_report_map = vec![
             0x06, 0x60, 0xFF, // Usage Page 0xFF60
@@ -1204,6 +1204,12 @@ mod tests {
         report_map.value = vial_report_map;
         let characteristics = vec![
             report_map,
+            characteristic(
+                "/service/combined/malformed_report",
+                "/service/combined",
+                REPORT_CHARACTERISTIC_UUID,
+                &["read", "notify"],
+            ),
             characteristic(
                 "/service/combined/keyboard_input",
                 "/service/combined",
@@ -1229,7 +1235,15 @@ mod tests {
                 &["read", "write", "write-without-response"],
             ),
         ];
+        let mut empty_reference = descriptor(
+            "/service/combined/malformed_report/reference",
+            "/service/combined/malformed_report",
+            0,
+            0,
+        );
+        empty_reference.value.clear();
         let descriptors = vec![
+            empty_reference,
             descriptor(
                 "/service/combined/keyboard_input/reference",
                 "/service/combined/keyboard_input",
