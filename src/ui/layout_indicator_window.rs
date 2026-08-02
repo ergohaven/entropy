@@ -60,6 +60,49 @@ fn set_windows_window_opacity_by_title(title: &str, opacity: f32) {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn set_macos_window_opacity_by_title(title: &str, opacity: f32) {
+    use objc::{msg_send, sel, sel_impl};
+
+    let opacity = clamp_sticky_layout_opacity(opacity) as f64;
+    unsafe {
+        let Some(ns_application) = objc::runtime::Class::get("NSApplication") else {
+            return;
+        };
+        let app: *mut objc::runtime::Object = msg_send![ns_application, sharedApplication];
+        if app.is_null() {
+            return;
+        }
+        let windows: *mut objc::runtime::Object = msg_send![app, windows];
+        if windows.is_null() {
+            return;
+        }
+        let count: usize = msg_send![windows, count];
+        for idx in 0..count {
+            let window: *mut objc::runtime::Object = msg_send![windows, objectAtIndex: idx];
+            if window.is_null() {
+                continue;
+            }
+            let ns_title: *mut objc::runtime::Object = msg_send![window, title];
+            if ns_title.is_null() {
+                continue;
+            }
+            let utf8: *const std::os::raw::c_char = msg_send![ns_title, UTF8String];
+            if utf8.is_null() {
+                continue;
+            }
+            let matches = std::ffi::CStr::from_ptr(utf8)
+                .to_str()
+                .map(|value| value == title)
+                .unwrap_or(false);
+            if matches {
+                let _: () = msg_send![window, setAlphaValue: opacity];
+                break;
+            }
+        }
+    }
+}
+
 const STICKY_LAYOUT_WINDOW_W: f32 = 720.0_f32;
 const STICKY_LAYOUT_WINDOW_H: f32 = 360.0_f32;
 const STICKY_LAYOUT_WINDOW_MARGIN: f32 = 1.0_f32;
@@ -430,10 +473,12 @@ impl EntropyApp {
                     } else {
                         sticky_opacity
                     };
-                    #[cfg(not(target_os = "windows"))]
-                    ui.set_opacity(effective_sticky_opacity);
                     #[cfg(target_os = "windows")]
                     set_windows_window_opacity_by_title(&window_title, effective_sticky_opacity);
+                    #[cfg(target_os = "macos")]
+                    set_macos_window_opacity_by_title(&window_title, effective_sticky_opacity);
+                    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+                    ui.set_opacity(effective_sticky_opacity);
                     let panel_bg = app_panel_fill(dark);
                     let full_rect = ui.max_rect();
                     ui.painter().rect_filled(full_rect, 0.0, panel_bg);
