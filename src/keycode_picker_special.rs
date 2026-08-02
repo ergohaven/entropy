@@ -22,9 +22,11 @@ impl KeycodePicker {
     pub(super) fn tab_content_width(&self, ui: &egui::Ui) -> f32 {
         let spacing = ui.spacing().item_spacing.x;
         let width = match self.selected_tab {
-            KeycodeTab::Symbols | KeycodeTab::Special | KeycodeTab::Rgb | KeycodeTab::Custom => {
-                Self::key_grid_width(ui, 13, spacing)
-            }
+            KeycodeTab::Symbols
+            | KeycodeTab::UniversalSymbols
+            | KeycodeTab::Special
+            | KeycodeTab::Rgb
+            | KeycodeTab::Custom => Self::key_grid_width(ui, 13, spacing),
             KeycodeTab::Modifiers => Self::key_grid_width(ui, 13, spacing),
             KeycodeTab::Macro | KeycodeTab::TapDance => Self::slot_grid_width(16, 4.0),
             _ => 840.0,

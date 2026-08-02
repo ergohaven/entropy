@@ -136,13 +136,6 @@ impl KeycodePicker {
     pub(super) fn show_vial_symbols(&mut self, ui: &mut egui::Ui) {
         let custom_pairs = self.custom_keycode_pairs();
 
-        if self.universal_symbols_available() {
-            if let Some(binding) = show_universal_symbol_section(ui, self.language) {
-                self.result = Some(binding);
-                self.open = false;
-            }
-            ui.add_space(10.0);
-        }
         ui.label(
             RichText::new(tr_picker(
                 self.language,
@@ -178,6 +171,13 @@ impl KeycodePicker {
                 }
             }
         });
+    }
+
+    pub(super) fn show_vial_universal_symbols(&mut self, ui: &mut egui::Ui) {
+        if let Some(binding) = show_universal_symbol_section(ui, self.language) {
+            self.result = Some(binding);
+            self.open = false;
+        }
     }
 
     pub(super) fn show_vial_generic(&mut self, ui: &mut egui::Ui) {

@@ -194,6 +194,7 @@ impl BasicPickerLayout {
 pub enum KeycodeTab {
     Basic,
     Symbols,
+    UniversalSymbols,
     Modifiers,
     Layers,
     Media,
@@ -208,6 +209,7 @@ impl KeycodeTab {
     pub const VIAL_TABS: &'static [KeycodeTab] = &[
         KeycodeTab::Basic,
         KeycodeTab::Symbols,
+        KeycodeTab::UniversalSymbols,
         KeycodeTab::Modifiers,
         KeycodeTab::Special,
         KeycodeTab::Rgb,
@@ -220,6 +222,7 @@ impl KeycodeTab {
         match self {
             KeycodeTab::Basic => "key_picker.tab_basic",
             KeycodeTab::Symbols => "key_picker.tab_symbols",
+            KeycodeTab::UniversalSymbols => "key_picker.tab_universal_symbols",
             KeycodeTab::Modifiers => "key_picker.tab_modifiers",
             KeycodeTab::Layers => "key_picker.tab_layers",
             KeycodeTab::Media => "key_picker.tab_media",
@@ -337,6 +340,19 @@ mod tests {
         assert_eq!(
             KeycodeTab::preferred_for_vial_keycode(0x7E00, true),
             KeycodeTab::Custom
+        );
+    }
+
+    #[test]
+    fn universal_symbols_tab_follows_layout_symbols() {
+        let symbols_index = KeycodeTab::VIAL_TABS
+            .iter()
+            .position(|tab| *tab == KeycodeTab::Symbols)
+            .expect("Symbols tab should exist");
+
+        assert_eq!(
+            KeycodeTab::VIAL_TABS.get(symbols_index + 1),
+            Some(&KeycodeTab::UniversalSymbols)
         );
     }
 

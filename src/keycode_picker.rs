@@ -271,6 +271,39 @@ mod tests {
     }
 
     #[test]
+    fn universal_symbol_reopens_on_its_own_tab() {
+        let mut picker = KeycodePicker::default();
+        picker.select_tab_for_binding(crate::universal_symbols::binding(
+            crate::universal_symbols::USER_SYMBOL_START,
+        ));
+        assert_eq!(picker.selected_tab, KeycodeTab::UniversalSymbols);
+    }
+
+    #[test]
+    fn universal_symbols_tab_is_gated_and_follows_symbols() {
+        let unsupported = KeycodePicker::default();
+        assert!(!unsupported
+            .visible_vial_tabs()
+            .contains(&KeycodeTab::UniversalSymbols));
+
+        let supported = KeycodePicker {
+            supports_rmk_native_key_actions: true,
+            supports_universal_symbols: true,
+            rmk_native_key_actions_allowed_for_target: true,
+            ..Default::default()
+        };
+        let tabs = supported.visible_vial_tabs();
+        let symbols_index = tabs
+            .iter()
+            .position(|tab| *tab == KeycodeTab::Symbols)
+            .expect("Symbols tab should be visible");
+        assert_eq!(
+            tabs.get(symbols_index + 1),
+            Some(&KeycodeTab::UniversalSymbols)
+        );
+    }
+
+    #[test]
     fn rmk_macro_ext_guard_hides_layer_macro_choices_and_explains_why() {
         let picker = KeycodePicker {
             supports_macro_ext_keycodes: false,
@@ -927,7 +960,7 @@ impl KeycodePicker {
             crate::keyboard::KeyBinding::Rmk(action)
                 if crate::universal_symbols::user_id(action).is_some() =>
             {
-                self.selected_tab = KeycodeTab::Symbols
+                self.selected_tab = KeycodeTab::UniversalSymbols
             }
             crate::keyboard::KeyBinding::Rmk(_) => self.selected_tab = KeycodeTab::Basic,
         }
@@ -1207,12 +1240,7 @@ impl KeycodePicker {
             }
 
             // Tab bar
-            let tabs = KeycodeTab::VIAL_TABS;
-            let visible_tabs: Vec<KeycodeTab> = tabs
-                .iter()
-                .copied()
-                .filter(|tab| self.vial_tab_supported(*tab))
-                .collect();
+            let visible_tabs = self.visible_vial_tabs();
             let tab_spacing = 6.0;
             let tab_bar_width: f32 = visible_tabs
                 .iter()
@@ -1723,12 +1751,21 @@ impl KeycodePicker {
 
     fn vial_tab_supported(&self, tab: KeycodeTab) -> bool {
         match tab {
+            KeycodeTab::UniversalSymbols => self.universal_symbols_available(),
             KeycodeTab::Rgb => self.supports_rgb,
             KeycodeTab::Macro => self.supports_macro,
             KeycodeTab::TapDance => self.supports_tap_dance,
             KeycodeTab::Custom => self.has_visible_custom_keycodes(),
             _ => true,
         }
+    }
+
+    fn visible_vial_tabs(&self) -> Vec<KeycodeTab> {
+        KeycodeTab::VIAL_TABS
+            .iter()
+            .copied()
+            .filter(|tab| self.vial_tab_supported(*tab))
+            .collect()
     }
 
     fn vial_keycode_supported(&self, kc: &crate::keycode::Keycode) -> bool {
@@ -1800,6 +1837,7 @@ impl KeycodePicker {
         match self.selected_tab {
             KeycodeTab::Basic => self.show_vial_basic(ui),
             KeycodeTab::Symbols => self.show_vial_symbols(ui),
+            KeycodeTab::UniversalSymbols => self.show_vial_universal_symbols(ui),
             KeycodeTab::Layers => self.show_vial_layers(ui),
             KeycodeTab::Modifiers => self.show_vial_modifiers(ui),
             KeycodeTab::Rgb => self.show_vial_rgb(ui),
