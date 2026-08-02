@@ -14,7 +14,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{mpsc, Mutex};
 
 #[path = "hid_protocol.rs"]
-mod hid_protocol;
+pub(crate) mod hid_protocol;
 use hid_protocol::*;
 
 /// hidapi's macOS backend uses a process-global IOHIDManager. Concurrent
@@ -1533,7 +1533,26 @@ fn response_matches_qmk_settings_set(command: &[u8], resp: &[u8; MSG_LEN]) -> bo
 
 #[cfg(not(target_arch = "wasm32"))]
 fn response_matches_qmk_settings_get(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
-    command.len() >= 4 && (resp[0] == 0 || response_echoes_vial_command(command, resp))
+    let Some(qsid_bytes) = command.get(2..4) else {
+        return false;
+    };
+    if response_echoes_vial_command(command, resp) {
+        return true;
+    }
+    if resp[0] != 0 {
+        return false;
+    }
+
+    let qsid = u16::from_le_bytes([qsid_bytes[0], qsid_bytes[1]]);
+    if !(200..232).contains(&qsid) {
+        return true;
+    }
+
+    let payload = &resp[1..];
+    let Some(end) = payload.iter().position(|byte| *byte == 0) else {
+        return false;
+    };
+    end <= 15 && std::str::from_utf8(&payload[..end]).is_ok()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2112,6 +2131,19 @@ mod tests {
     }
 
     #[test]
+    fn layer_name_get_rejects_stale_encoder_payload() {
+        let command = qmk_settings_command(CMD_VIAL_QMK_SETTINGS_GET, 201);
+        let mut stale_encoder = [0u8; MSG_LEN];
+        stale_encoder[..4].copy_from_slice(&[0x00, 0xEA, 0x00, 0xE9]);
+
+        assert!(!response_matches_command(&command, &stale_encoder));
+
+        let mut valid_name = [0u8; MSG_LEN];
+        valid_name[1..5].copy_from_slice(b"Nav\0");
+        assert!(response_matches_command(&command, &valid_name));
+    }
+
+    #[test]
     fn qmk_settings_query_accepts_advancing_qsids_and_terminator() {
         let command = qmk_settings_command(CMD_VIAL_QMK_SETTINGS_QUERY, 100);
         let mut response = [u8::MAX; MSG_LEN];
@@ -2155,5 +2187,15 @@ mod tests {
         stale_response[5..7].copy_from_slice(&58u16.to_le_bytes());
 
         assert!(!response_matches_command(&command, &stale_response));
+    }
+
+    #[test]
+    fn native_capabilities_accepts_exact_qmk_echo_as_unsupported() {
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_CUSTOM_GET_VALUE;
+        command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
+        command[2] = 0x02;
+
+        assert!(response_matches_command(&command, &command));
     }
 }

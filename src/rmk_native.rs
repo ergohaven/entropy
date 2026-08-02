@@ -164,6 +164,16 @@ pub(crate) fn matches_rmk_native_get_response(
         return None;
     }
 
+    // Standard QMK-Vial echoes unknown custom GET commands unchanged. Treat an
+    // exact capabilities probe echo as a terminal "RMK unsupported" response;
+    // the decoder below will return empty capabilities without transport retries.
+    if subcommand == ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS
+        && command.len() == response.len()
+        && command == response
+    {
+        return Some(true);
+    }
+
     let header_matches = response[0] == CMD_VIA_CUSTOM_GET_VALUE
         && response[1] == ERGOHAVEN_CUSTOM_NAMESPACE
         && response[2] == subcommand
@@ -434,6 +444,23 @@ mod tests {
         assert_eq!(
             matches_rmk_native_get_response(&command, &response),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn native_capability_probe_accepts_exact_qmk_echo() {
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_CUSTOM_GET_VALUE;
+        command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
+        command[2] = ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS;
+
+        assert_eq!(
+            matches_rmk_native_get_response(&command, &command),
+            Some(true)
+        );
+        assert_eq!(
+            decode_native_capabilities(&command),
+            RmkNativeCapabilities::default()
         );
     }
 

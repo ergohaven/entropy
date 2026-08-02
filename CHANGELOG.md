@@ -5,6 +5,13 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.7
+
+### Fixes
+
+- Prevented cached Bluetooth encoder replies from being decoded as layer names during staged loading
+- Removed the long `Reading keymap…` delay on QMK-Vial keyboards when an unsupported RMK capabilities probe is echoed
+
 ## v0.3.6
 
 ### Fixes

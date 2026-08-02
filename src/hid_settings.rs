@@ -35,7 +35,21 @@ fn truncate_qmk_string_payload(value: &str, max_decoded: usize, max_escaped: usi
     payload
 }
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+
+fn decode_qmk_setting_string(response: &[u8; MSG_LEN], qsid: u16) -> Result<String> {
+    if response[0] != 0 {
+        anyhow::bail!("qmk setting get error or unsupported qsid: {qsid}");
+    }
+    let bytes = &response[1..];
+    let end = bytes
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(bytes.len());
+    let value = std::str::from_utf8(&bytes[..end])
+        .with_context(|| format!("qmk setting {qsid} returned invalid UTF-8"))?;
+    Ok(value.trim().to_owned())
+}
 
 fn qmk_setting_set_succeeded(command: &[u8; MSG_LEN], response: &[u8; MSG_LEN]) -> bool {
     // Vial/QMK returns a status byte. RMK built-in behavior settings echo the
@@ -254,12 +268,7 @@ impl HidDevice {
         cmd[1] = CMD_VIAL_QMK_SETTINGS_GET;
         cmd[2..4].copy_from_slice(&qsid.to_le_bytes());
         let resp = self.usb_send(&cmd)?;
-        if resp[0] != 0 {
-            anyhow::bail!("qmk setting get error or unsupported qsid: {qsid}");
-        }
-        let bytes = &resp[1..];
-        let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-        Ok(String::from_utf8_lossy(&bytes[..end]).trim().to_string())
+        decode_qmk_setting_string(&resp, qsid)
     }
 
     pub fn set_qmk_setting_string(&self, qsid: u16, value: &str) -> Result<()> {
@@ -503,6 +512,24 @@ mod tests {
         let out = truncate_qmk_string_payload("МАКРОСЛОЙ", QMK_STRING_MAX_DECODED_BYTES, 27);
         assert!(out.len() <= QMK_STRING_MAX_DECODED_BYTES);
         assert!(std::str::from_utf8(&out).is_ok());
+    }
+
+    #[test]
+    fn qmk_setting_string_rejects_invalid_utf8_instead_of_replacing_it() {
+        let mut response = [0u8; MSG_LEN];
+        response[1] = 0xEA;
+
+        let error = decode_qmk_setting_string(&response, 201).unwrap_err();
+
+        assert!(error.to_string().contains("invalid UTF-8"));
+    }
+
+    #[test]
+    fn qmk_setting_string_decodes_valid_utf8() {
+        let mut response = [0u8; MSG_LEN];
+        response[1..9].copy_from_slice("Слой".as_bytes());
+
+        assert_eq!(decode_qmk_setting_string(&response, 201).unwrap(), "Слой");
     }
 
     #[test]

@@ -1,5 +1,8 @@
 use crate::device::Device;
 use crate::firmware::FirmwareProtocol;
+use crate::hid::hid_protocol::{
+    CMD_VIAL_GET_ENCODER, CMD_VIAL_QMK_SETTINGS_GET, CMD_VIA_VIAL_PREFIX,
+};
 use anyhow::{bail, Context, Result};
 use futures_lite::{future, StreamExt};
 use std::collections::HashMap;
@@ -36,6 +39,25 @@ const BLUEZ_REPLY_TIMEOUT: Duration = Duration::from_millis(2_500);
 // and keymap request. One connection interval is enough; a response that is
 // not ready yet is rejected by `response_matches` and retried safely.
 const BLUEZ_REPLY_POLL_INTERVAL: Duration = Duration::from_millis(8);
+// GET_ENCODER and QMK_SETTINGS_GET do not echo an identifier in successful
+// replies. BlueZ may therefore return the previous characteristic value before
+// RMK has processed the new request. Keep notifications immediate, but give
+// the direct ReadValue fallback four 7.5 ms connection intervals to become
+// fresh for these otherwise uncorrelated commands.
+const BLUEZ_UNCORRELATED_READ_SETTLE: Duration = Duration::from_millis(32);
+
+fn direct_read_settle_for_command(data: &[u8]) -> Duration {
+    if data.first() == Some(&CMD_VIA_VIAL_PREFIX)
+        && matches!(
+            data.get(1),
+            Some(&CMD_VIAL_GET_ENCODER | &CMD_VIAL_QMK_SETTINGS_GET)
+        )
+    {
+        BLUEZ_UNCORRELATED_READ_SETTLE
+    } else {
+        Duration::ZERO
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CharacteristicSummary {
@@ -868,14 +890,21 @@ impl LinuxBleDevice {
         while notifications.try_recv().is_ok() {}
 
         self.write_value_with_type(data, write_type)?;
+        let direct_read_not_before = Instant::now() + direct_read_settle_for_command(data);
 
-        self.wait_for_reply(data, notifications, response_matches)
+        self.wait_for_reply(
+            data,
+            notifications,
+            direct_read_not_before,
+            response_matches,
+        )
     }
 
     fn wait_for_reply(
         &self,
         data: &[u8],
         notifications: &mpsc::Receiver<Vec<u8>>,
+        direct_read_not_before: Instant,
         response_matches: &impl Fn(&[u8; 32]) -> bool,
     ) -> Result<[u8; 32]> {
         let deadline = Instant::now() + BLUEZ_REPLY_TIMEOUT;
@@ -907,6 +936,10 @@ impl LinuxBleDevice {
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     bail!("Bluetooth GATT disconnected while waiting for a Vial reply")
                 }
+            }
+
+            if Instant::now() < direct_read_not_before {
+                continue;
             }
 
             let read_options = HashMap::<&str, Value<'_>>::new();
@@ -965,7 +998,13 @@ impl LinuxBleDevice {
             writer
                 .write_output_report(data)
                 .context("Failed to write the Bluetooth Vial request through Linux HID")?;
-            return self.wait_for_reply(data, &notifications, &response_matches);
+            let direct_read_not_before = Instant::now() + direct_read_settle_for_command(data);
+            return self.wait_for_reply(
+                data,
+                &notifications,
+                direct_read_not_before,
+                &response_matches,
+            );
         }
 
         let preferred = self
@@ -1313,5 +1352,25 @@ mod tests {
         prefixed[1..].copy_from_slice(&response);
         assert_eq!(normalize_notification(&prefixed), Some(response));
         assert_eq!(normalize_notification(&[0u8; 31]), None);
+    }
+
+    #[test]
+    fn delays_direct_reads_only_for_uncorrelated_vial_gets() {
+        let mut command = [0u8; 32];
+        command[0] = CMD_VIA_VIAL_PREFIX;
+        command[1] = CMD_VIAL_GET_ENCODER;
+        assert_eq!(
+            direct_read_settle_for_command(&command),
+            BLUEZ_UNCORRELATED_READ_SETTLE
+        );
+
+        command[1] = CMD_VIAL_QMK_SETTINGS_GET;
+        assert_eq!(
+            direct_read_settle_for_command(&command),
+            BLUEZ_UNCORRELATED_READ_SETTLE
+        );
+
+        command[1] = 0x00;
+        assert_eq!(direct_read_settle_for_command(&command), Duration::ZERO);
     }
 }
