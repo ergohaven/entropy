@@ -1,6 +1,7 @@
 # Home-manager module for Entropy
 #
-# Installs the app and, with ibus.enable, the Universal Symbols IBus engine.
+# Installs the app and, with ibus.enable, the Entropy IBus engine that backs
+# Text Expander on Wayland.
 #
 # Two caveats compared to nixosModules.default:
 #   - the Vial udev rule needs root and lives only in the NixOS module;
@@ -39,9 +40,10 @@ in
         type = lib.types.bool;
         default = true;
         description = ''
-          Register the Entropy Universal Symbols IBus engine by pointing
-          IBUS_COMPONENT_PATH at it. Has no effect if IBus comes from the NixOS
-          `i18n.inputMethod` module — use programs.entropy.ibus there instead.
+          Register the Entropy IBus engine, which backs the Text Expander
+          feature on Wayland, by pointing IBUS_COMPONENT_PATH at it. Has no
+          effect if IBus comes from the NixOS `i18n.inputMethod` module — use
+          programs.entropy.ibus there instead.
         '';
       };
 

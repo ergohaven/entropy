@@ -48,9 +48,10 @@ in
         type = lib.types.bool;
         default = true;
         description = ''
-          Register the Entropy Universal Symbols IBus engine, used by the
-          Universal Symbols and Text Expander features. Enables IBus as the
-          system input method if nothing else has claimed that slot.
+          Register the Entropy IBus engine, which backs the Text Expander
+          feature on Wayland. Universal Symbols do not need it on firmware
+          that exposes native RMK key actions. Enables IBus as the system
+          input method if nothing else has claimed that slot.
         '';
       };
 

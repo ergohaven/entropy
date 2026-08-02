@@ -161,11 +161,16 @@ covers both:
 }
 ```
 
-This installs the app, the Vial hidraw udev rule, and the Entropy Universal
-Symbols IBus engine (`programs.entropy.ibus.enable`, on by default). Add
-**Entropy Universal Symbols** as an input source after rebuilding. Entropy's
-settings screen will still report the engine as not installed — it only looks in
+This installs the app, the Vial hidraw udev rule, and the Entropy IBus engine
+(`programs.entropy.ibus.enable`, on by default), which backs Text Expander on
+Wayland. Add **Entropy Symbols** — or the layout-specific variant, e.g.
+**Entropy EN** — as an input source after rebuilding. Entropy's settings screen
+will still report the engine as not installed — it only looks in
 `$XDG_DATA_HOME`; leave the install button alone.
+
+Universal Symbols need no input method on firmware that exposes native RMK key
+actions, so `programs.entropy.ibus.enable = false;` is enough if Text Expander
+is not used.
 
 A `homeManagerModules.default` is also available, but the udev rule needs root,
 so it only covers the app and the IBus engine, and its IBus registration works
