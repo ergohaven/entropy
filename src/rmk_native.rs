@@ -145,6 +145,43 @@ fn native_response_header_matches(response: &[u8; MSG_LEN], subcommand: u8) -> b
         && response[2] == subcommand
 }
 
+pub(crate) fn matches_rmk_native_get_response(
+    command: &[u8],
+    response: &[u8; MSG_LEN],
+) -> Option<bool> {
+    if command.first() != Some(&CMD_VIA_CUSTOM_GET_VALUE)
+        || command.get(1) != Some(&ERGOHAVEN_CUSTOM_NAMESPACE)
+    {
+        return None;
+    }
+    let subcommand = *command.get(2)?;
+    if !matches!(
+        subcommand,
+        ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS
+            | ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION
+            | ERGOHAVEN_CUSTOM_NEXT_NATIVE_KEY_ACTION
+    ) {
+        return None;
+    }
+
+    let header_matches = response[0] == CMD_VIA_CUSTOM_GET_VALUE
+        && response[1] == ERGOHAVEN_CUSTOM_NAMESPACE
+        && response[2] == subcommand
+        && response[3] == ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
+    if !header_matches || subcommand != ERGOHAVEN_CUSTOM_NEXT_NATIVE_KEY_ACTION {
+        return Some(header_matches);
+    }
+
+    if response[4] != NATIVE_KEY_ACTION_STATUS_OK {
+        return Some(true);
+    }
+    let requested_cursor = command
+        .get(4..6)
+        .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))?;
+    let returned_index = u16::from_le_bytes([response[5], response[6]]);
+    Some(returned_index >= requested_cursor)
+}
+
 fn decode_native_capabilities(response: &[u8; MSG_LEN]) -> RmkNativeCapabilities {
     if !native_response_header_matches(response, ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS)
         || response[3] != ERGOHAVEN_NATIVE_KEY_ACTION_VERSION
@@ -374,6 +411,30 @@ mod tests {
             universal_symbols: false,
             russian_letters: false,
         }));
+    }
+
+    #[test]
+    fn native_action_scan_response_must_reach_the_requested_cursor() {
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_CUSTOM_GET_VALUE;
+        command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
+        command[2] = ERGOHAVEN_CUSTOM_NEXT_NATIVE_KEY_ACTION;
+        command[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
+        command[4..6].copy_from_slice(&59u16.to_le_bytes());
+
+        let mut response = command;
+        response[4] = NATIVE_KEY_ACTION_STATUS_OK;
+        response[5..7].copy_from_slice(&58u16.to_le_bytes());
+        assert_eq!(
+            matches_rmk_native_get_response(&command, &response),
+            Some(false)
+        );
+
+        response[5..7].copy_from_slice(&59u16.to_le_bytes());
+        assert_eq!(
+            matches_rmk_native_get_response(&command, &response),
+            Some(true)
+        );
     }
 
     #[test]

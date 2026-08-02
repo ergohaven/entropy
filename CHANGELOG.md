@@ -5,6 +5,12 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.6
+
+### Fixes
+
+- Prevented stale RMK native key-action scan replies from aborting K:04 device loading by matching each reply against the requested scan cursor
+
 ## v0.3.5
 
 ### Fixes

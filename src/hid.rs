@@ -1458,7 +1458,9 @@ fn response_matches_command(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
         }
         CMD_VIA_MACRO_GET_COUNT | CMD_VIA_MACRO_GET_BUFFER_SIZE => resp[0] == cmd,
         CMD_VIA_CUSTOM_GET_VALUE if command.get(1) == Some(&ERGOHAVEN_CUSTOM_NAMESPACE) => {
-            command.len() >= 3 && resp[0] == cmd && resp[1..3] == command[1..3]
+            crate::rmk_native::matches_rmk_native_get_response(command, resp).unwrap_or_else(|| {
+                command.len() >= 3 && resp[0] == cmd && resp[1..3] == command[1..3]
+            })
         }
         CMD_VIA_GET_KEYBOARD_VALUE | CMD_VIA_LIGHTING_GET_VALUE => {
             command.len() >= 2 && resp[0] == cmd && resp[1] == command[1]
@@ -2137,5 +2139,21 @@ mod tests {
         response[4..6].copy_from_slice(&300u16.to_le_bytes());
 
         assert!(!response_matches_command(&command, &response));
+    }
+
+    #[test]
+    fn native_action_scan_rejects_a_stale_flat_index() {
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_CUSTOM_GET_VALUE;
+        command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
+        command[2] = 0x04;
+        command[3] = 0x01;
+        command[4..6].copy_from_slice(&59u16.to_le_bytes());
+
+        let mut stale_response = command;
+        stale_response[4] = 0;
+        stale_response[5..7].copy_from_slice(&58u16.to_le_bytes());
+
+        assert!(!response_matches_command(&command, &stale_response));
     }
 }
