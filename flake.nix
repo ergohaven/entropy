@@ -183,7 +183,7 @@
             '';
 
             meta = {
-              description = "IBus engine for Entropy Universal Symbols and Text Expander";
+              description = "IBus engine backing the Entropy Text Expander";
               inherit (cargoToml.package) homepage;
               license = pkgs.lib.licenses.gpl3Plus;
               platforms = supportedSystems;
@@ -250,6 +250,14 @@
             # Same as wrapGAppsHook3 does for the packaged build.
             XDG_DATA_DIRS = "${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}:${pkgs.hicolor-icon-theme}/share";
           };
+        }
+      );
+
+      checks = forAllSystems (
+        system:
+        import ./nix/checks.nix {
+          inherit self nixpkgs system;
+          pkgs = import nixpkgs { inherit system; };
         }
       );
 
