@@ -58,7 +58,7 @@ tasks:
           elif command -v inkscape >/dev/null 2>&1; then
             inkscape assets/entropy.svg -w "$1" -h "$1" -o "$2" >/dev/null 2>&1
           else
-            echo "need rsvg-convert (librsvg2-bin) or inkscape to rasterize SVG" >&2
+            echo "need rsvg-convert or inkscape to rasterize SVG (rsvg-convert: librsvg2-bin on Debian/Ubuntu, rsvg-convert on openSUSE, librsvg2-tools on Fedora, librsvg on Arch)" >&2
             exit 1
           fi
         }
@@ -66,7 +66,7 @@ tasks:
         im() {
           if command -v magick >/dev/null 2>&1; then magick "$@";
           elif command -v convert >/dev/null 2>&1; then convert "$@";
-          else echo "need ImageMagick (magick or convert) to build the .ico" >&2; exit 1; fi
+          else echo "need ImageMagick (imagemagick on Debian/Ubuntu and Arch, ImageMagick on openSUSE/Fedora) to build the .ico" >&2; exit 1; fi
         }
         for s in 16 32 48 64 128 256 512; do
           mkdir -p "assets/icons/hicolor/${s}x${s}/apps"
@@ -88,7 +88,7 @@ tasks:
             assets/icons/hicolor/256x256/apps/entropy.png \
             assets/icons/hicolor/512x512/apps/entropy.png
         else
-          echo "png2icns not found (icnsutils); skipping .icns (build it on macOS or in the container)" >&2
+          echo "png2icns not found (icnsutils on Debian/Ubuntu, icns-utils on openSUSE, libicns-utils on Fedora); skipping .icns (build it on macOS or in the container)" >&2
         fi
 
   # ---- native build & package (current host) ------------------------------

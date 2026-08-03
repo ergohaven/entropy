@@ -1,6 +1,7 @@
 /target
 /dist
 /.cache
+/.task
 /assets/icons
 /assets/entropy.icns
 *.swp

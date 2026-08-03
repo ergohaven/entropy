@@ -188,17 +188,39 @@ sudo apt-get install \
   libgtk-3-dev
 ```
 
-Build a macOS app bundle and DMG on macOS:
+### Packaging
+
+Builds and packages are driven by [go-task](https://taskfile.dev); `task --list`
+shows every target. The two entry points are:
 
 ```sh
-scripts/build_macos_app.sh
+task package      # native package(s) for the current host OS
+task docker:dist  # Linux + Windows artifacts in the pinned toolchain container
 ```
 
-Build a Windows release binary from Linux with the GNU target:
+`task docker:dist` is what CI runs and needs nothing on the host but Docker.
+Individual targets are available too: `task linux:deb`, `task linux:rpm`,
+`task linux:arch`, `task linux:appimage`, `task windows:portable`,
+`task windows:msi`, and `task macos:all` (macOS host only).
 
-```sh
-cargo build --release --target x86_64-pc-windows-gnu
-```
+Native packaging on Linux needs these host tools:
+
+| Tool | Needed for | Debian/Ubuntu | openSUSE | Fedora | Arch |
+| --- | --- | --- | --- | --- | --- |
+| `rsvg-convert` (or `inkscape`) | rasterizing `assets/entropy.svg` | `librsvg2-bin` | `rsvg-convert` | `librsvg2-tools` | `librsvg` |
+| `magick` / `convert` | `assets/entropy.ico` | `imagemagick` | `ImageMagick` | `ImageMagick` | `imagemagick` |
+| `envsubst` | nfpm config templating | `gettext-base` | `envsubst` | `gettext-envsubst` | `gettext` |
+| `wixl` | Windows MSI | `wixl` | `msitools` | `msitools` | `msitools` |
+| `png2icns` | macOS `.icns`, optional elsewhere | `icnsutils` | `icns-utils` | `libicns-utils` | AUR `libicns` |
+
+Tools that are not packaged by distros: [nfpm](https://github.com/goreleaser/nfpm)
+(deb/rpm/archlinux) and [go-task](https://taskfile.dev/installation/) come from
+upstream releases, `appimagetool` is downloaded into `target/tools` on first use,
+and the Windows cross-build additionally needs `zig` plus `cargo-zigbuild`.
+
+Building macOS artifacts requires a Mac (real signing and a native `.dmg`);
+`task macos:cross` cross-builds them from Linux, but stays experimental and
+unsigned.
 
 ## Changelog
 
