@@ -24,6 +24,11 @@ let
   cfg = config.programs.entropy;
 in
 {
+  # nixpkgs carries its own programs/ergohaven-entropy.nix declaring the same
+  # option, so importing both aborts the eval. This module supersedes it: it
+  # tracks the version this repo is at and lets the package be overridden.
+  disabledModules = [ "programs/ergohaven-entropy.nix" ];
+
   options.programs.entropy = {
     enable = lib.mkEnableOption "Entropy keyboard configurator";
 
