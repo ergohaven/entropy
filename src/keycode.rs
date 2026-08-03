@@ -1,28 +1,27 @@
 //! QMK/Vial keycode definitions — protocol v6
 //! Reference: vial-gui/src/main/python/keycodes/keycodes_v6.py
 
+fn gui_name_for_target_os(target_os: &str) -> &'static str {
+    match target_os {
+        "macos" => "Cmd",
+        "windows" => "Win",
+        _ => "Super",
+    }
+}
+
 /// Returns the platform-appropriate generic label for the GUI/Super/Win/Cmd key.
 /// Side-specific info belongs in tooltips, not the keycap label.
 pub fn gui_label(_right: bool) -> &'static str {
-    #[cfg(target_os = "macos")]
-    { "⌘" }
-    #[cfg(target_os = "windows")]
-    { "Win" }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    { "Super" }
+    gui_name_for_target_os(std::env::consts::OS)
 }
 
-/// Short GUI symbol for use in compound labels (e.g. MT, mod combos).
+/// Short GUI label for use in compound labels (e.g. MT, mod combos).
 pub fn gui_sym() -> &'static str {
-    #[cfg(target_os = "macos")] { "⌘" }
-    #[cfg(target_os = "windows")] { "Win" }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))] { "Super" }
+    gui_name_for_target_os(std::env::consts::OS)
 }
 
 pub fn gui_mod_name() -> &'static str {
-    #[cfg(target_os = "macos")] { "Cmd" }
-    #[cfg(target_os = "windows")] { "Win" }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))] { "Super" }
+    gui_name_for_target_os(std::env::consts::OS)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -541,19 +540,6 @@ pub fn find_keycode(value: u16) -> Option<&'static Keycode> {
     KEYCODES.iter().find(|k| k.value == value)
 }
 
-fn smart_symbol_label(value: u16) -> Option<String> {
-    crate::smart_input::smart_symbol_for_keycode(value).map(|smart| smart.symbol.to_string())
-}
-
-fn smart_symbol_tooltip(value: u16) -> Option<String> {
-    crate::smart_input::smart_symbol_for_keycode(value).map(|smart| {
-        format!(
-            "Universal symbol: {} — types {} consistently regardless of the active keyboard language",
-            smart.name, smart.symbol
-        )
-    })
-}
-
 fn magic_keycode_label(value: u16) -> Option<String> {
     let gui = gui_mod_name();
     match value {
@@ -694,9 +680,6 @@ pub fn keycode_label_with_names(value: u16, custom: &[CustomKeycode], layer_name
     if let Some(label) = magic_keycode_label(value) {
         return label;
     }
-    if let Some(label) = smart_symbol_label(value) {
-        return label;
-    }
     if let Some(kc) = find_keycode(value) {
         return kc.label.to_string();
     }
@@ -821,6 +804,7 @@ pub fn modifier_label_from_bits(mods: u16) -> String {
         0x05 | 0x15 => "Ctrl+Alt".to_string(),
         0x06 | 0x16 => "Shift+Alt".to_string(),
         0x07 | 0x17 => "Meh".to_string(),
+        0x09 | 0x19 => format!("Ctrl+{}", gui_sym()),
         0x0F | 0x1F => "Hyper".to_string(),
         0x0A | 0x1A => format!("Shift+{}", gui_sym()),
         _ => "Mod".to_string(),
@@ -992,10 +976,6 @@ pub fn keycode_tooltip(value: u16, custom: &[CustomKeycode], layer_names: &[Stri
     if let Some(tip) = magic_keycode_tooltip(value) {
         return tip;
     }
-    if let Some(tip) = smart_symbol_tooltip(value) {
-        return tip;
-    }
-
     // ── One-shot mod: 0x52A0..=0x52BF (Vial protocol v6) ─────────────────────
     if let Some(bits) = osm_mod_bits(value) {
         let full_name = osm_mod_full_name(bits);
@@ -1306,5 +1286,15 @@ fn simple_key_tooltip(kc: &Keycode) -> String {
         KeycodeCategory::Function => format!("{} function key", kc.label),
         KeycodeCategory::Numpad   => format!("Numpad {}", kc.label.trim_start_matches("Num")),
         _ => kc.label.replace('\n', " / "),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn macos_gui_legends_use_cmd_text() {
+        assert_eq!(gui_name_for_target_os("macos"), "Cmd");
     }
 }

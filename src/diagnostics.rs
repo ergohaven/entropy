@@ -30,6 +30,11 @@ impl Log for DiagnosticsLogger {
         if !self.enabled(record.metadata()) {
             return;
         }
+        if record.target() == "sctk_adwaita::buttons"
+            && should_suppress_external_log(record.target(), &record.args().to_string())
+        {
+            return;
+        }
 
         let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f%:z");
         let line = format!(
@@ -250,6 +255,14 @@ fn max_level_for_target(diagnostics_enabled: bool, target: &str) -> Level {
     }
 }
 
+fn should_suppress_external_log(target: &str, message: &str) -> bool {
+    target == "sctk_adwaita::buttons"
+        && matches!(
+            message.trim(),
+            "Ignoring unknown button type:" | "No valid buttons found in configuration"
+        )
+}
+
 fn display_path(path: &std::path::Path) -> String {
     let raw = path.to_string_lossy();
     if let Some(home) = std::env::var_os("HOME") {
@@ -285,5 +298,25 @@ mod tests {
             panic_log_message("connect failed", None),
             "panic at unknown location: connect failed"
         );
+    }
+
+    #[test]
+    fn suppresses_only_known_empty_wayland_decoration_warnings() {
+        assert!(should_suppress_external_log(
+            "sctk_adwaita::buttons",
+            "Ignoring unknown button type:"
+        ));
+        assert!(should_suppress_external_log(
+            "sctk_adwaita::buttons",
+            "No valid buttons found in configuration"
+        ));
+        assert!(!should_suppress_external_log(
+            "sctk_adwaita::buttons",
+            "Ignoring unknown button type: shade"
+        ));
+        assert!(!should_suppress_external_log(
+            "zbus::message_stream",
+            "Failed to remove match rule"
+        ));
     }
 }

@@ -14,14 +14,15 @@ impl EntropyApp {
         use crate::i18n::Key as TrKey;
 
         if let Some(advanced_rect) = advanced_tab_rect {
-            let dropdown_id = ui.make_persistent_id("advanced_dropdown_open");
+            let dropdown_id = advanced_dropdown_open_id();
             let was_open = ui
                 .ctx()
                 .data(|d| d.get_temp::<bool>(dropdown_id))
                 .unwrap_or(false);
             let combo_supported = !self.combo_entries.is_empty();
             let key_override_supported = !self.key_override_entries.is_empty();
-            let auto_shift_supported = self.auto_shift_timeout.is_some();
+            let auto_shift_supported =
+                self.auto_shift_timeout.is_some() || self.supported_qmk_settings.contains(&4);
             let advanced_item_count = 2
                 + combo_supported as usize
                 + auto_shift_supported as usize

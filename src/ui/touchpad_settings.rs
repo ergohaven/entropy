@@ -10,7 +10,7 @@ impl EntropyApp {
         }
     }
 
-    fn set_touchpad_numeric_value(&mut self, qsid: u16, value: u16) {
+    pub(super) fn set_touchpad_numeric_value(&mut self, qsid: u16, value: u16) {
         match qsid {
             121 => self.touchpad_settings.sniper_sens = value.min(u8::MAX as u16) as u8,
             122 => self.touchpad_settings.scroll_sens = value.min(u8::MAX as u16) as u8,
@@ -19,45 +19,64 @@ impl EntropyApp {
         }
     }
 
-    fn write_touchpad_numeric_setting(&mut self, qsid: u16, value: u16) {
-        let Some(hid) = &self.hid_device else {
-            return;
-        };
+    fn write_touchpad_numeric_setting(
+        &mut self,
+        ctx: &egui::Context,
+        qsid: u16,
+        old_value: u16,
+        value: u16,
+        display_label: &str,
+    ) {
         let value = value.clamp(1, 255) as u8;
-        if let Err(e) = hid.set_qmk_setting_u8(qsid, value) {
-            self.status_msg = format!("Failed to save Touchpad setting (qsid {qsid}): {}", e);
-            log::warn!("set_qmk_setting_u8(touchpad qsid {qsid}) failed: {e}");
-        }
+        self.debounce_touchpad_setting_write(
+            ctx,
+            display_label.to_owned(),
+            qsid,
+            old_value,
+            value as u16,
+        );
     }
 
-    fn write_touchpad_select_setting(&mut self, qsid: u16, value: u8) {
-        let Some(hid) = &self.hid_device else {
-            return;
-        };
-        if let Err(e) = hid.set_qmk_setting_u8(qsid, value) {
-            self.status_msg = format!("Failed to save Touchpad setting (qsid {qsid}): {}", e);
-            log::warn!("set_qmk_setting_u8(touchpad qsid {qsid}) failed: {e}");
-        }
+    fn write_touchpad_select_setting(
+        &mut self,
+        qsid: u16,
+        old_value: u16,
+        value: u8,
+        display_label: &str,
+    ) {
+        self.queue_touchpad_setting_write(
+            display_label.to_owned(),
+            qsid,
+            1,
+            old_value,
+            value as u16,
+        );
     }
 
-    fn write_touchpad_bool_setting(&mut self, qsid: u16, value: bool) {
-        let Some(hid) = &self.hid_device else {
-            return;
-        };
-        if let Err(e) = hid.set_qmk_setting_u8(qsid, u8::from(value)) {
-            self.status_msg = format!("Failed to save Touchpad setting (qsid {qsid}): {}", e);
-            log::warn!("set_qmk_setting_u8(touchpad qsid {qsid}) failed: {e}");
-        }
+    fn write_touchpad_bool_setting(
+        &mut self,
+        qsid: u16,
+        old_value: bool,
+        value: bool,
+        display_label: &str,
+    ) {
+        self.queue_touchpad_setting_write(
+            display_label.to_owned(),
+            qsid,
+            1,
+            u16::from(old_value),
+            u16::from(value),
+        );
     }
 
-    fn write_touchpad_bits(&mut self) {
-        let Some(hid) = &self.hid_device else {
-            return;
-        };
-        if let Err(e) = hid.set_qmk_setting_u8(124, self.touchpad_settings.bits) {
-            self.status_msg = format!("Failed to save Touchpad options: {}", e);
-            log::warn!("set_qmk_setting_u8(touchpad qsid 124) failed: {e}");
-        }
+    fn write_touchpad_bits(&mut self, old_value: u8, display_label: &str) {
+        self.queue_touchpad_setting_write(
+            display_label.to_owned(),
+            124,
+            1,
+            old_value as u16,
+            self.touchpad_settings.bits as u16,
+        );
     }
 
     pub(super) fn draw_touchpad_select_control(
@@ -83,7 +102,7 @@ impl EntropyApp {
             metrics.settings_control_font_size(),
         );
         let mut picked = None;
-        egui::popup_below_widget(
+        crate::ui_style::popup_below_widget(
             ui,
             dropdown_id,
             &dropdown_resp,
@@ -133,7 +152,7 @@ impl EntropyApp {
                             );
                             if option_resp.clicked() {
                                 picked = Some(idx);
-                                ui.memory_mut(|m| m.close_popup());
+                                egui::Popup::close_all(ui.ctx());
                             }
                         }
                     });
@@ -155,11 +174,16 @@ impl EntropyApp {
         let switch_width = metrics.value(46.0);
         let switch_size = metrics.size(46.0, 24.0);
         let dropdown_width = metrics.value(120.0);
+        let status_width = self.settings_write_status_width(metrics);
         let dark = ui.visuals().dark_mode;
 
         for row_idx in row_range {
             match row_idx {
                 0 => {
+                    let label = crate::i18n::tr_catalog(
+                        self.app_settings.language,
+                        "touchpad_settings.dpi",
+                    );
                     let variants = self.touchpad_settings.dpi_variants.clone();
                     let selected_idx =
                         (self.touchpad_settings.dpi as usize).min(variants.len().saturating_sub(1));
@@ -167,10 +191,7 @@ impl EntropyApp {
                         ui,
                         content_width,
                         row_height,
-                        crate::i18n::tr_catalog(
-                            self.app_settings.language,
-                            "touchpad_settings.dpi",
-                        ),
+                        label,
                         true,
                         if suppress_tooltips {
                             None
@@ -180,8 +201,9 @@ impl EntropyApp {
                                 "touchpad_settings.touchpad_pointer_resolution_in_dots_per_inch",
                             ))
                         },
-                        dropdown_width,
+                        dropdown_width + status_width,
                         |ui| {
+                            self.draw_settings_write_status(ui, 120, metrics, suppress_tooltips);
                             if variants.is_empty() {
                                 let current = self.touchpad_settings.dpi;
                                 let edit_id = egui::Id::new(("touchpad_edit", 120u16));
@@ -213,19 +235,13 @@ impl EntropyApp {
                                             let value = value.clamp(100, 1000);
                                             if value != current {
                                                 self.touchpad_settings.dpi = value;
-                                                if let Some(hid) = &self.hid_device {
-                                                    if let Err(e) =
-                                                        hid.set_qmk_setting_u16(120, value)
-                                                    {
-                                                        self.status_msg = format!(
-                                                            "Failed to save Touchpad setting (qsid 120): {}",
-                                                            e
-                                                        );
-                                                        log::warn!(
-                                                            "set_qmk_setting_u16(touchpad qsid 120) failed: {e}"
-                                                        );
-                                                    }
-                                                }
+                                                self.queue_touchpad_setting_write(
+                                                    label.to_owned(),
+                                                    120,
+                                                    2,
+                                                    current,
+                                                    value,
+                                                );
                                             }
                                             text = value.to_string();
                                         }
@@ -244,8 +260,14 @@ impl EntropyApp {
                                     dropdown_width,
                                 );
                                 if let Some(picked) = picked {
+                                    let old_value = self.touchpad_settings.dpi;
                                     self.touchpad_settings.dpi = picked as u16;
-                                    self.write_touchpad_select_setting(120, picked as u8);
+                                    self.write_touchpad_select_setting(
+                                        120,
+                                        old_value,
+                                        picked as u8,
+                                        label,
+                                    );
                                 }
                             }
                         },
@@ -307,8 +329,9 @@ impl EntropyApp {
                         } else {
                             Some(tooltip)
                         },
-                        slider_control_width,
+                        slider_control_width + status_width,
                         |ui| {
+                            self.draw_settings_write_status(ui, qsid, metrics, suppress_tooltips);
                             ui.spacing_mut().item_spacing.x = 0.0;
                             let slider_fill = if dark {
                                 Color32::from_rgb(92, 92, 96)
@@ -319,7 +342,7 @@ impl EntropyApp {
                             ui.visuals_mut().widgets.active.bg_fill = slider_fill;
                             ui.visuals_mut().widgets.active.weak_bg_fill = slider_fill;
                             ui.visuals_mut().widgets.hovered.bg_stroke =
-                                Stroke::new(1.0, slider_fill);
+                                Stroke::new(1.0_f32, slider_fill);
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
@@ -351,7 +374,13 @@ impl EntropyApp {
                                                 as u16;
                                         if new_value != current {
                                             self.set_touchpad_numeric_value(qsid, new_value);
-                                            self.write_touchpad_numeric_setting(qsid, new_value);
+                                            self.write_touchpad_numeric_setting(
+                                                ui.ctx(),
+                                                qsid,
+                                                current,
+                                                new_value,
+                                                label,
+                                            );
                                         }
                                     }
                                 },
@@ -385,8 +414,10 @@ impl EntropyApp {
                         } else {
                             Some(tooltip)
                         },
-                        switch_width,
+                        switch_width + status_width,
                         |ui| {
+                            self.draw_settings_write_status(ui, 124, metrics, suppress_tooltips);
+                            let old_bits = self.touchpad_settings.bits;
                             let mut value = self.touchpad_settings.bit(bit);
                             let resp = crate::ui_style::settings_switch_sized_stable(
                                 ui,
@@ -396,28 +427,30 @@ impl EntropyApp {
                             );
                             if resp.changed() {
                                 self.touchpad_settings.set_bit(bit, value);
-                                self.write_touchpad_bits();
+                                self.write_touchpad_bits(old_bits, label);
                             }
                         },
                     );
                 }
                 7 if self.touchpad_settings.auto_layer_enable_supported => {
+                    let label = crate::i18n::tr_catalog(
+                        self.app_settings.language,
+                        "touchpad_settings.auto_layer_enable",
+                    );
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
                         content_width,
                         row_height,
-                        crate::i18n::tr_catalog(
-                            self.app_settings.language,
-                            "touchpad_settings.auto_layer_enable",
-                        ),
+                        label,
                         true,
                         if suppress_tooltips {
                             None
                         } else {
                             Some(crate::i18n::tr_catalog(self.app_settings.language, "touchpad_settings.automatically_switch_to_the_selected_layer_while_the_touchpad_is_activ"))
                         },
-                        switch_width,
+                        switch_width + status_width,
                         |ui| {
+                            self.draw_settings_write_status(ui, 142, metrics, suppress_tooltips);
                             let mut value = self.touchpad_settings.auto_layer_enable;
                             let resp = crate::ui_style::settings_switch_sized_stable(
                                 ui,
@@ -426,13 +459,18 @@ impl EntropyApp {
                                 switch_size,
                             );
                             if resp.changed() {
+                                let old_value = self.touchpad_settings.auto_layer_enable;
                                 self.touchpad_settings.auto_layer_enable = value;
-                                self.write_touchpad_bool_setting(142, value);
+                                self.write_touchpad_bool_setting(142, old_value, value, label);
                             }
                         },
                     );
                 }
                 8 if self.touchpad_settings.auto_layer_supported() => {
+                    let label = crate::i18n::tr_catalog(
+                        self.app_settings.language,
+                        "touchpad_settings.auto_layer",
+                    );
                     let variants = self.touchpad_settings.auto_layer_variants.clone();
                     let selected_idx = (self.touchpad_settings.auto_layer as usize)
                         .min(variants.len().saturating_sub(1));
@@ -440,10 +478,7 @@ impl EntropyApp {
                         ui,
                         content_width,
                         row_height,
-                        crate::i18n::tr_catalog(
-                            self.app_settings.language,
-                            "touchpad_settings.auto_layer",
-                        ),
+                        label,
                         true,
                         if suppress_tooltips {
                             None
@@ -453,8 +488,9 @@ impl EntropyApp {
                                 "touchpad_settings.layer_selected_automatically_while_the_touchpad_is_active",
                             ))
                         },
-                        dropdown_width,
+                        dropdown_width + status_width,
                         |ui| {
+                            self.draw_settings_write_status(ui, 143, metrics, suppress_tooltips);
                             let dropdown_id = ui.make_persistent_id("touchpad_auto_layer_dropdown");
                             let (_, picked) = Self::draw_touchpad_select_control(
                                 ui,
@@ -465,8 +501,14 @@ impl EntropyApp {
                                 dropdown_width,
                             );
                             if let Some(picked) = picked {
+                                let old_value = self.touchpad_settings.auto_layer;
                                 self.touchpad_settings.auto_layer = picked as u8;
-                                self.write_touchpad_select_setting(143, picked as u8);
+                                self.write_touchpad_select_setting(
+                                    143,
+                                    old_value as u16,
+                                    picked as u8,
+                                    label,
+                                );
                             }
                         },
                     );
@@ -487,7 +529,7 @@ impl EntropyApp {
         let hid_ready = {
             #[cfg(not(target_arch = "wasm32"))]
             {
-                self.hid_device.is_some()
+                self.qmk_setting_transport_available()
             }
             #[cfg(target_arch = "wasm32")]
             {

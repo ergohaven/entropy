@@ -29,6 +29,12 @@ impl EntropyApp {
             egui::pos2(stable_rect.right() - 20.0, stable_hint_bottom - 76.0),
         );
 
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.draw_deferred_settings_gate(ui, content_rect) {
+            self.draw_settings_navigation_hint(ui, stable_hint_center_x, stable_hint_bottom, false);
+            return;
+        }
+
         let combo_keycap_hovered = match self.settings_tab {
             SettingsTab::AppSettings => {
                 self.draw_app_settings_page(ui, content_rect);
@@ -38,8 +44,8 @@ impl EntropyApp {
                 self.draw_matrix_tester_settings(ui, layout, content_rect, dark);
                 false
             }
-            SettingsTab::UniversalSymbolsSetup => {
-                self.draw_universal_symbols_setup_page(ui, content_rect);
+            SettingsTab::TextExpanderSetup => {
+                self.draw_text_expander_setup_page(ui, content_rect);
                 false
             }
             SettingsTab::TextExpander => {
@@ -184,9 +190,9 @@ impl EntropyApp {
         self.main_menu_tab = MainMenuTab::Settings;
     }
 
-    pub(super) fn open_universal_symbols_setup_page(&mut self) {
-        self.settings_tab = SettingsTab::UniversalSymbolsSetup;
-        self.main_menu_tab = MainMenuTab::Settings;
+    pub(super) fn open_text_expander_setup_page(&mut self) {
+        self.settings_tab = SettingsTab::TextExpanderSetup;
+        self.main_menu_tab = MainMenuTab::Advanced;
     }
 
     pub(super) fn open_about_device_page(&mut self) {
@@ -246,8 +252,8 @@ impl EntropyApp {
             && !self.vial_unlock_polling
             && !modal_or_popup_open_at_frame_start
             && !keyboard_input_wanted_at_frame_start
-            && !ctx.wants_keyboard_input()
-            && !ctx.memory(|m| m.any_popup_open())
+            && !ctx.egui_wants_keyboard_input()
+            && !egui::Popup::is_any_open(ctx)
             && !self.top_dropdown_open(ctx)
     }
 }

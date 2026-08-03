@@ -4,19 +4,58 @@ use super::hid_parse::{
 };
 use super::hid_protocol::*;
 use super::HidDevice;
-use anyhow::Result;
 
-fn verify_qmk_setting_writeback(qsid: u16, requested: u16, readback: u16) -> Result<()> {
-    if readback == requested {
-        return Ok(());
+/// Layer names land in a 16-byte firmware buffer (15 data bytes + NUL). The
+/// name is `%`-decoded by the firmware, so what must fit is the *decoded* length
+/// — the on-wire escaped form can be longer.
+const QMK_STRING_MAX_DECODED_BYTES: usize = 15;
+
+/// Escape `%` as `%%` and pack `value` into the wire payload, stopping at a whole
+/// character so it never splits a UTF-8 codepoint or a `%%` pair. Honours two
+/// limits: `max_decoded` bytes after the firmware un-escapes it (so it isn't cut
+/// mid-character inside firmware's own buffer) and `max_escaped` on-wire bytes.
+fn truncate_qmk_string_payload(value: &str, max_decoded: usize, max_escaped: usize) -> Vec<u8> {
+    let mut payload: Vec<u8> = Vec::with_capacity(max_escaped.min(value.len() + 1));
+    let mut decoded_len = 0usize;
+    for ch in value.chars() {
+        let decoded = ch.len_utf8();
+        let escaped = if ch == '%' { 2 } else { decoded };
+        if decoded_len + decoded > max_decoded || payload.len() + escaped > max_escaped {
+            break;
+        }
+        if ch == '%' {
+            payload.push(b'%');
+            payload.push(b'%');
+        } else {
+            let mut buf = [0u8; 4];
+            payload.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+        }
+        decoded_len += decoded;
     }
+    payload
+}
 
-    anyhow::bail!(
-        "qmk setting writeback mismatch for qsid {}: wrote {}, read back {}",
-        qsid,
-        requested,
-        readback
-    )
+use anyhow::{Context, Result};
+
+fn decode_qmk_setting_string(response: &[u8; MSG_LEN], qsid: u16) -> Result<String> {
+    if response[0] != 0 {
+        anyhow::bail!("qmk setting get error or unsupported qsid: {qsid}");
+    }
+    let bytes = &response[1..];
+    let end = bytes
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(bytes.len());
+    let value = std::str::from_utf8(&bytes[..end])
+        .with_context(|| format!("qmk setting {qsid} returned invalid UTF-8"))?;
+    Ok(value.trim().to_owned())
+}
+
+fn qmk_setting_set_succeeded(command: &[u8; MSG_LEN], response: &[u8; MSG_LEN]) -> bool {
+    // Vial/QMK returns a status byte. RMK built-in behavior settings echo the
+    // complete SET report, while RMK device settings replace only byte zero
+    // with the success status.
+    response[0] == 0 || response == command
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -24,6 +63,15 @@ pub(crate) struct BatteryHalves {
     pub(crate) left: Option<u8>,
     pub(crate) right: Option<u8>,
 }
+
+impl BatteryHalves {
+    pub(crate) fn is_complete(self) -> bool {
+        self.left.is_some() && self.right.is_some()
+    }
+}
+
+const BATTERY_HALVES_READ_ATTEMPTS: usize = 5;
+const BATTERY_HALVES_READ_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
 
 fn format_via_firmware_version(value: u32) -> Option<String> {
     if value == 0 {
@@ -71,9 +119,17 @@ fn parse_battery_halves_response(resp: &[u8; MSG_LEN]) -> Result<Option<BatteryH
 #[cfg(not(target_arch = "wasm32"))]
 impl HidDevice {
     pub fn get_battery_halves(&self) -> Result<Option<BatteryHalves>> {
-        let _ = self.get_battery_halves_once()?;
-        std::thread::sleep(std::time::Duration::from_millis(400));
-        self.get_battery_halves_once()
+        let mut latest = None;
+        for attempt in 0..BATTERY_HALVES_READ_ATTEMPTS {
+            latest = self.get_battery_halves_once()?;
+            if latest.is_some_and(BatteryHalves::is_complete) {
+                break;
+            }
+            if attempt + 1 < BATTERY_HALVES_READ_ATTEMPTS {
+                std::thread::sleep(BATTERY_HALVES_READ_RETRY_DELAY);
+            }
+        }
+        Ok(latest)
     }
 
     fn get_battery_halves_once(&self) -> Result<Option<BatteryHalves>> {
@@ -175,16 +231,10 @@ impl HidDevice {
         cmd[2..4].copy_from_slice(&qsid.to_le_bytes());
         cmd[4] = value;
         let resp = self.usb_send(&cmd)?;
-        if resp[0] != 0 {
+        if !qmk_setting_set_succeeded(&cmd, &resp) {
             anyhow::bail!("qmk setting set error or unsupported qsid: {qsid}");
         }
         Ok(())
-    }
-
-    pub fn set_qmk_setting_u8_verified(&self, qsid: u16, value: u8) -> Result<()> {
-        self.set_qmk_setting_u8(qsid, value)?;
-        let readback = self.get_qmk_setting_u8(qsid)?;
-        verify_qmk_setting_writeback(qsid, value as u16, readback as u16)
     }
 
     pub fn get_qmk_setting_u16(&self, qsid: u16) -> Result<u16> {
@@ -206,16 +256,10 @@ impl HidDevice {
         cmd[2..4].copy_from_slice(&qsid.to_le_bytes());
         cmd[4..6].copy_from_slice(&value.to_le_bytes());
         let resp = self.usb_send(&cmd)?;
-        if resp[0] != 0 {
+        if !qmk_setting_set_succeeded(&cmd, &resp) {
             anyhow::bail!("qmk setting set error or unsupported qsid: {qsid}");
         }
         Ok(())
-    }
-
-    pub fn set_qmk_setting_u16_verified(&self, qsid: u16, value: u16) -> Result<()> {
-        self.set_qmk_setting_u16(qsid, value)?;
-        let readback = self.get_qmk_setting_u16(qsid)?;
-        verify_qmk_setting_writeback(qsid, value, readback)
     }
 
     pub fn get_qmk_setting_string(&self, qsid: u16) -> Result<String> {
@@ -224,12 +268,7 @@ impl HidDevice {
         cmd[1] = CMD_VIAL_QMK_SETTINGS_GET;
         cmd[2..4].copy_from_slice(&qsid.to_le_bytes());
         let resp = self.usb_send(&cmd)?;
-        if resp[0] != 0 {
-            anyhow::bail!("qmk setting get error or unsupported qsid: {qsid}");
-        }
-        let bytes = &resp[1..];
-        let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-        Ok(String::from_utf8_lossy(&bytes[..end]).trim().to_string())
+        decode_qmk_setting_string(&resp, qsid)
     }
 
     pub fn set_qmk_setting_string(&self, qsid: u16, value: &str) -> Result<()> {
@@ -238,15 +277,18 @@ impl HidDevice {
         cmd[1] = CMD_VIAL_QMK_SETTINGS_SET;
         cmd[2..4].copy_from_slice(&qsid.to_le_bytes());
 
-        let safe_value = value.replace('%', "%%");
-        let bytes = safe_value.as_bytes();
+        // Escape '%' as '%%' and pack into the fixed payload, truncating only at
+        // whole characters — never mid-codepoint and never splitting a '%%' pair,
+        // either of which would leave a corrupted string in firmware. Bound by
+        // both the firmware label buffer (decoded) and the wire packet (escaped).
         let max_len = cmd.len().saturating_sub(4);
-        let copy_len = bytes.len().min(max_len.saturating_sub(1));
-        cmd[4..4 + copy_len].copy_from_slice(&bytes[..copy_len]);
-        cmd[4 + copy_len] = 0;
+        let wire_budget = max_len.saturating_sub(1); // reserve one byte for the null terminator
+        let payload = truncate_qmk_string_payload(value, QMK_STRING_MAX_DECODED_BYTES, wire_budget);
+        cmd[4..4 + payload.len()].copy_from_slice(&payload);
+        cmd[4 + payload.len()] = 0;
 
         let resp = self.usb_send(&cmd)?;
-        if resp[0] != 0 {
+        if !qmk_setting_set_succeeded(&cmd, &resp) {
             anyhow::bail!("qmk setting set error or unsupported qsid: {qsid}");
         }
         Ok(())
@@ -382,16 +424,112 @@ mod tests {
     use super::*;
 
     #[test]
-    fn qmk_setting_writeback_accepts_matching_value() {
-        assert!(verify_qmk_setting_writeback(7, 150, 150).is_ok());
+    fn accepts_vial_status_and_rmk_echo_setting_set_responses() {
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_VIAL_PREFIX;
+        command[1] = CMD_VIAL_QMK_SETTINGS_SET;
+        command[2..4].copy_from_slice(&7u16.to_le_bytes());
+        command[4..6].copy_from_slice(&175u16.to_le_bytes());
+
+        let vial_success = [0u8; MSG_LEN];
+        let mut rmk_device_setting_success = command;
+        rmk_device_setting_success[0] = 0;
+        let rmk_builtin_success = command;
+
+        assert!(qmk_setting_set_succeeded(&command, &vial_success));
+        assert!(qmk_setting_set_succeeded(
+            &command,
+            &rmk_device_setting_success
+        ));
+        assert!(qmk_setting_set_succeeded(&command, &rmk_builtin_success));
     }
 
     #[test]
-    fn qmk_setting_writeback_rejects_stale_value() {
-        let error = verify_qmk_setting_writeback(7, 150, 250).unwrap_err();
+    fn rejects_qmk_setting_set_error_response() {
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_VIAL_PREFIX;
+        command[1] = CMD_VIAL_QMK_SETTINGS_SET;
+        command[2..4].copy_from_slice(&7u16.to_le_bytes());
 
-        assert!(error.to_string().contains("qmk setting writeback mismatch"));
-        assert!(error.to_string().contains("qsid 7"));
+        let mut error = [0u8; MSG_LEN];
+        error[0] = u8::MAX;
+
+        assert!(!qmk_setting_set_succeeded(&command, &error));
+    }
+
+    #[test]
+    fn truncate_short_ascii_is_unchanged() {
+        assert_eq!(truncate_qmk_string_payload("BASE", 15, 27), b"BASE");
+    }
+
+    #[test]
+    fn truncate_percent_is_escaped_and_not_split() {
+        assert_eq!(truncate_qmk_string_payload("a%b", 15, 27), b"a%%b");
+        // Wire budget only fits `a` plus one byte: the `%%` pair must not split.
+        assert_eq!(truncate_qmk_string_payload("a%", 15, 2), b"a");
+    }
+
+    #[test]
+    fn truncate_multibyte_on_codepoint_boundary() {
+        // "🙂" is 4 bytes; a 3-byte wire budget fits nothing, output stays valid.
+        let out = truncate_qmk_string_payload("🙂", 15, 3);
+        assert!(out.is_empty());
+        assert!(std::str::from_utf8(&out).is_ok());
+
+        // Two emoji (8 bytes) with a 5-byte wire budget keeps one whole emoji.
+        let out = truncate_qmk_string_payload("🙂🙂", 15, 5);
+        assert_eq!(out, "🙂".as_bytes());
+        assert!(std::str::from_utf8(&out).is_ok());
+    }
+
+    #[test]
+    fn truncate_cyrillic_on_codepoint_boundary() {
+        // Each Cyrillic letter is 2 bytes; a 5-byte wire budget keeps two.
+        let out = truncate_qmk_string_payload("СЛОЙ", 15, 5);
+        assert_eq!(out, "СЛ".as_bytes());
+        assert!(std::str::from_utf8(&out).is_ok());
+    }
+
+    #[test]
+    fn truncate_respects_decoded_label_limit() {
+        // The wire budget is generous, but the firmware label buffer (decoded)
+        // binds first: four 4-byte emoji (16 decoded bytes) keep only three,
+        // never splitting the fourth mid-codepoint.
+        let out = truncate_qmk_string_payload("🙂🙂🙂🙂", 15, 27);
+        assert_eq!(out, "🙂🙂🙂".as_bytes());
+        assert_eq!(out.len(), 12);
+        assert!(std::str::from_utf8(&out).is_ok());
+
+        // Sixteen ASCII chars decode to 16 bytes; only fifteen may be stored.
+        let out = truncate_qmk_string_payload("0123456789ABCDEF", 15, 27);
+        assert_eq!(out, b"0123456789ABCDE");
+    }
+
+    #[test]
+    fn truncate_production_set_string_bounds_layer_name() {
+        // Exercise the exact limits set_qmk_setting_string uses (15 decoded / 27
+        // wire) so those production values can't regress silently.
+        let out = truncate_qmk_string_payload("МАКРОСЛОЙ", QMK_STRING_MAX_DECODED_BYTES, 27);
+        assert!(out.len() <= QMK_STRING_MAX_DECODED_BYTES);
+        assert!(std::str::from_utf8(&out).is_ok());
+    }
+
+    #[test]
+    fn qmk_setting_string_rejects_invalid_utf8_instead_of_replacing_it() {
+        let mut response = [0u8; MSG_LEN];
+        response[1] = 0xEA;
+
+        let error = decode_qmk_setting_string(&response, 201).unwrap_err();
+
+        assert!(error.to_string().contains("invalid UTF-8"));
+    }
+
+    #[test]
+    fn qmk_setting_string_decodes_valid_utf8() {
+        let mut response = [0u8; MSG_LEN];
+        response[1..9].copy_from_slice("Слой".as_bytes());
+
+        assert_eq!(decode_qmk_setting_string(&response, 201).unwrap(), "Слой");
     }
 
     #[test]

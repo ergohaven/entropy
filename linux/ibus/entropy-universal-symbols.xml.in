@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <component>
   <name>org.freedesktop.IBus.Entropy</name>
-  <description>Entropy Universal Symbols and Text Expander</description>
+  <description>Entropy Text Expander</description>
   <exec>@ENGINE_PATH@</exec>
   <version>1.0.0</version>
   <author>Ergohaven</author>
@@ -16,8 +16,8 @@
       <author>Ergohaven</author>
       <icon>input-keyboard</icon>
       <layout>default</layout>
-      <longname>Entropy Symbols</longname>
-      <description>Universal Unicode symbols and text expansion for Ergohaven keyboards</description>
+      <longname>Entropy Text Expander</longname>
+      <description>Text expansion for Ergohaven keyboards</description>
     </engine>
     <engine>
       <name>entropy-universal-symbols-us</name>
@@ -26,8 +26,8 @@
       <author>Ergohaven</author>
       <icon>input-keyboard</icon>
       <layout>us</layout>
-      <longname>Entropy EN</longname>
-      <description>Universal Unicode symbols and text expansion for Ergohaven keyboards</description>
+      <longname>Entropy Text Expander EN</longname>
+      <description>Text expansion for Ergohaven keyboards</description>
     </engine>
     <engine>
       <name>entropy-universal-symbols-gb</name>
@@ -36,8 +36,8 @@
       <author>Ergohaven</author>
       <icon>input-keyboard</icon>
       <layout>gb</layout>
-      <longname>Entropy EN UK</longname>
-      <description>Universal Unicode symbols and text expansion for Ergohaven keyboards</description>
+      <longname>Entropy Text Expander EN UK</longname>
+      <description>Text expansion for Ergohaven keyboards</description>
     </engine>
     <engine>
       <name>entropy-universal-symbols-de</name>
@@ -46,8 +46,8 @@
       <author>Ergohaven</author>
       <icon>input-keyboard</icon>
       <layout>de</layout>
-      <longname>Entropy DE</longname>
-      <description>Universal Unicode symbols and text expansion for Ergohaven keyboards</description>
+      <longname>Entropy Text Expander DE</longname>
+      <description>Text expansion for Ergohaven keyboards</description>
     </engine>
     <engine>
       <name>entropy-universal-symbols-fr</name>
@@ -56,8 +56,8 @@
       <author>Ergohaven</author>
       <icon>input-keyboard</icon>
       <layout>fr</layout>
-      <longname>Entropy FR</longname>
-      <description>Universal Unicode symbols and text expansion for Ergohaven keyboards</description>
+      <longname>Entropy Text Expander FR</longname>
+      <description>Text expansion for Ergohaven keyboards</description>
     </engine>
     <engine>
       <name>entropy-universal-symbols-es</name>
@@ -66,8 +66,8 @@
       <author>Ergohaven</author>
       <icon>input-keyboard</icon>
       <layout>es</layout>
-      <longname>Entropy ES</longname>
-      <description>Universal Unicode symbols and text expansion for Ergohaven keyboards</description>
+      <longname>Entropy Text Expander ES</longname>
+      <description>Text expansion for Ergohaven keyboards</description>
     </engine>
     <engine>
       <name>entropy-universal-symbols-it</name>
@@ -76,8 +76,8 @@
       <author>Ergohaven</author>
       <icon>input-keyboard</icon>
       <layout>it</layout>
-      <longname>Entropy IT</longname>
-      <description>Universal Unicode symbols and text expansion for Ergohaven keyboards</description>
+      <longname>Entropy Text Expander IT</longname>
+      <description>Text expansion for Ergohaven keyboards</description>
     </engine>
     <engine>
       <name>entropy-universal-symbols-pt</name>
@@ -86,8 +86,8 @@
       <author>Ergohaven</author>
       <icon>input-keyboard</icon>
       <layout>pt</layout>
-      <longname>Entropy PT</longname>
-      <description>Universal Unicode symbols and text expansion for Ergohaven keyboards</description>
+      <longname>Entropy Text Expander PT</longname>
+      <description>Text expansion for Ergohaven keyboards</description>
     </engine>
     <engine>
       <name>entropy-universal-symbols-br</name>
@@ -96,8 +96,8 @@
       <author>Ergohaven</author>
       <icon>input-keyboard</icon>
       <layout>br</layout>
-      <longname>Entropy BR</longname>
-      <description>Universal Unicode symbols and text expansion for Ergohaven keyboards</description>
+      <longname>Entropy Text Expander BR</longname>
+      <description>Text expansion for Ergohaven keyboards</description>
     </engine>
     <engine>
       <name>entropy-universal-symbols-ru</name>
@@ -106,8 +106,8 @@
       <author>Ergohaven</author>
       <icon>input-keyboard</icon>
       <layout>ru</layout>
-      <longname>Entropy RU</longname>
-      <description>Universal Unicode symbols and text expansion for Ergohaven keyboards</description>
+      <longname>Entropy Text Expander RU</longname>
+      <description>Text expansion for Ergohaven keyboards</description>
     </engine>
   </engines>
 </component>

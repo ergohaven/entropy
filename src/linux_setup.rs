@@ -28,26 +28,6 @@ const BUNDLED_LINUX_FILES: &[BundledLinuxFile] = &[
         executable: false,
     },
     BundledLinuxFile {
-        path: "linux/fcitx5/install-user.sh",
-        bytes: include_bytes!("../linux/fcitx5/install-user.sh"),
-        executable: true,
-    },
-    BundledLinuxFile {
-        path: "linux/fcitx5/CMakeLists.txt",
-        bytes: include_bytes!("../linux/fcitx5/CMakeLists.txt"),
-        executable: false,
-    },
-    BundledLinuxFile {
-        path: "linux/fcitx5/entropyuniversalsymbols.conf",
-        bytes: include_bytes!("../linux/fcitx5/entropyuniversalsymbols.conf"),
-        executable: false,
-    },
-    BundledLinuxFile {
-        path: "linux/fcitx5/src/entropyuniversalsymbols.cpp",
-        bytes: include_bytes!("../linux/fcitx5/src/entropyuniversalsymbols.cpp"),
-        executable: false,
-    },
-    BundledLinuxFile {
         path: "linux/udev/install-vial-rules.sh",
         bytes: include_bytes!("../linux/udev/install-vial-rules.sh"),
         executable: true,

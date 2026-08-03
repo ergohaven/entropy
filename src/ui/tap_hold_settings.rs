@@ -40,20 +40,23 @@ enum SettingsRow {
     },
 }
 
-fn rmk_hrm_profile_notice(lang: crate::i18n::Language) -> &'static str {
-    match lang {
-        crate::i18n::Language::Russian => {
-            "RMK HRM при перекатах зависит от Morse/Tap-Hold profiles в firmware и карты рук матрицы. Entropy показывает только runtime settings, которые прошивка явно открывает; profiles и карту рук нужно настраивать в RMK firmware."
-        }
-        crate::i18n::Language::English => {
-            "RMK HRM rolling behavior depends on firmware Morse/Tap-Hold profiles and the matrix hand map. Entropy shows only runtime settings exposed by this firmware; profiles and hand mapping must be configured in RMK firmware."
-        }
-    }
-}
-
 fn push_tap_hold_row(
     rows: &mut Vec<SettingsRow>,
     settings: &TapHoldSettingsState,
+    row: SettingsRow,
+) {
+    let SettingsRow::Setting { qsid, .. } = row else {
+        rows.push(row);
+        return;
+    };
+    if settings.supports_qsid(qsid) {
+        rows.push(row);
+    }
+}
+
+fn push_one_shot_row(
+    rows: &mut Vec<SettingsRow>,
+    settings: &OneShotSettingsState,
     row: SettingsRow,
 ) {
     let SettingsRow::Setting { qsid, .. } = row else {
@@ -69,6 +72,7 @@ fn tap_hold_one_shot_rows(
     lang: crate::i18n::Language,
     tap_hold_settings: &TapHoldSettingsState,
     one_shot_settings: &OneShotSettingsState,
+    is_rmk: bool,
 ) -> Vec<SettingsRow> {
     let mut rows: Vec<SettingsRow> = Vec::with_capacity(13);
     if tap_hold_settings.supported {
@@ -138,10 +142,21 @@ fn tap_hold_one_shot_rows(
             SettingsRow::Setting {
                 kind: SettingsRowKind::TapHold,
                 qsid: 26,
-                label: crate::i18n::tr_catalog(lang, "tap_hold_settings.chordal_hold"),
+                label: crate::i18n::tr_catalog(
+                    lang,
+                    if is_rmk {
+                        "tap_hold_settings.same_hand_tap"
+                    } else {
+                        "tap_hold_settings.chordal_hold"
+                    },
+                ),
                 tooltip: crate::i18n::tr_catalog(
                     lang,
-                    "tap_hold_settings.same_hand_chords_prefer_tap_to_reduce_home_row_mod_accidents",
+                    if is_rmk {
+                        "tap_hold_settings.same_hand_key_press_chooses_tap_for_home_row_mods"
+                    } else {
+                        "tap_hold_settings.same_hand_chords_prefer_tap_to_reduce_home_row_mod_accidents"
+                    },
                 ),
                 is_bool: true,
                 max: 1,
@@ -168,10 +183,21 @@ fn tap_hold_one_shot_rows(
             SettingsRow::Setting {
                 kind: SettingsRowKind::TapHold,
                 qsid: 18,
-                label: crate::i18n::tr_catalog(lang, "tap_hold_settings.tap_code_delay"),
+                label: crate::i18n::tr_catalog(
+                    lang,
+                    if is_rmk {
+                        "tap_hold_settings.tap_interval"
+                    } else {
+                        "tap_hold_settings.tap_code_delay"
+                    },
+                ),
                 tooltip: crate::i18n::tr_catalog(
                     lang,
-                    "tap_hold_settings.delay_between_register_and_unregister_in_tap_code",
+                    if is_rmk {
+                        "tap_hold_settings.delay_between_consecutive_tap_actions"
+                    } else {
+                        "tap_hold_settings.delay_between_register_and_unregister_in_tap_code"
+                    },
                 ),
                 is_bool: false,
                 max: TAP_HOLD_DELAY_MAX_MS,
@@ -183,10 +209,21 @@ fn tap_hold_one_shot_rows(
             SettingsRow::Setting {
                 kind: SettingsRowKind::TapHold,
                 qsid: 19,
-                label: crate::i18n::tr_catalog(lang, "tap_hold_settings.tap_hold_caps_delay"),
+                label: crate::i18n::tr_catalog(
+                    lang,
+                    if is_rmk {
+                        "tap_hold_settings.caps_lock_tap_interval"
+                    } else {
+                        "tap_hold_settings.tap_hold_caps_delay"
+                    },
+                ),
                 tooltip: crate::i18n::tr_catalog(
                     lang,
-                    "tap_hold_settings.extra_delay_for_lt_mt_keys_whose_tap_action_is_caps_lock",
+                    if is_rmk {
+                        "tap_hold_settings.delay_used_for_caps_lock_tap_actions"
+                    } else {
+                        "tap_hold_settings.extra_delay_for_lt_mt_keys_whose_tap_action_is_caps_lock"
+                    },
                 ),
                 is_bool: false,
                 max: TAP_HOLD_DELAY_MAX_MS,
@@ -213,10 +250,21 @@ fn tap_hold_one_shot_rows(
             SettingsRow::Setting {
                 kind: SettingsRowKind::TapHold,
                 qsid: 27,
-                label: crate::i18n::tr_catalog(lang, "tap_hold_settings.flow_tap"),
+                label: crate::i18n::tr_catalog(
+                    lang,
+                    if is_rmk {
+                        "tap_hold_settings.fast_typing_window"
+                    } else {
+                        "tap_hold_settings.flow_tap"
+                    },
+                ),
                 tooltip: crate::i18n::tr_catalog(
                     lang,
-                    "tap_hold_settings.fast_typing_timeout_that_forces_mt_lt_keys_to_tap",
+                    if is_rmk {
+                        "tap_hold_settings.recent_typing_within_this_window_chooses_tap"
+                    } else {
+                        "tap_hold_settings.fast_typing_timeout_that_forces_mt_lt_keys_to_tap"
+                    },
                 ),
                 is_bool: false,
                 max: TAP_HOLD_TERM_MAX_MS,
@@ -230,7 +278,9 @@ fn tap_hold_one_shot_rows(
                 "tap_hold_settings.one_shot_keys",
             )));
         }
-        rows.extend([
+        push_one_shot_row(
+            &mut rows,
+            one_shot_settings,
             SettingsRow::Setting {
                 kind: SettingsRowKind::OneShot,
                 qsid: 5,
@@ -242,6 +292,10 @@ fn tap_hold_one_shot_rows(
                 is_bool: false,
                 max: ONE_SHOT_TAP_TOGGLE_MAX_TAPS,
             },
+        );
+        push_one_shot_row(
+            &mut rows,
+            one_shot_settings,
             SettingsRow::Setting {
                 kind: SettingsRowKind::OneShot,
                 qsid: 6,
@@ -253,7 +307,7 @@ fn tap_hold_one_shot_rows(
                 is_bool: false,
                 max: ONE_SHOT_TIMEOUT_MAX_MS,
             },
-        ]);
+        );
     }
     rows
 }
@@ -266,16 +320,7 @@ impl EntropyApp {
     ) {
         let lang = self.app_settings.language;
         let dark = ui.visuals().dark_mode;
-        let hid_ready = {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                self.hid_device.is_some()
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                false
-            }
-        };
+        let hid_ready = self.qmk_setting_transport_available();
 
         crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
@@ -319,9 +364,12 @@ impl EntropyApp {
 
                 if self.current_device_is_likely_rmk() && self.tap_hold_settings.supported {
                     ui.label(
-                        RichText::new(rmk_hrm_profile_notice(lang))
-                            .size(12.0)
-                            .color(Color32::from_rgb(180, 120, 40)),
+                        RichText::new(crate::i18n::tr_catalog(
+                            lang,
+                            "tap_hold_settings.rmk_profile_notice",
+                        ))
+                        .size(12.0)
+                        .color(app_muted_text(dark)),
                     );
                     ui.add_space(12.0);
                 }
@@ -366,6 +414,7 @@ impl EntropyApp {
             self.app_settings.language,
             &self.tap_hold_settings,
             &self.one_shot_settings,
+            self.current_device_is_likely_rmk(),
         )
         .len()
     }
@@ -382,6 +431,7 @@ impl EntropyApp {
             self.app_settings.language,
             &self.tap_hold_settings,
             &self.one_shot_settings,
+            self.current_device_is_likely_rmk(),
         );
         let scale = (row_height / 54.0).clamp(1.0, 1.12);
         let field_width = 86.0 * scale;
@@ -412,7 +462,10 @@ impl EntropyApp {
             let is_bool = *is_bool;
             let max = *max;
             if is_bool {
-                let mut value = self.tap_hold_bool_value(qsid);
+                let mut value = self
+                    .pending_settings_write_value(qsid)
+                    .map(|value| value != 0)
+                    .unwrap_or_else(|| self.tap_hold_bool_value(qsid));
                 crate::ui_style::settings_list_row_with_tooltip(
                     ui,
                     content_width,
@@ -442,6 +495,7 @@ impl EntropyApp {
                     SettingsRowKind::TapHold => self.tap_hold_numeric_value(qsid),
                     SettingsRowKind::OneShot => self.one_shot_numeric_value(qsid),
                 };
+                let current = self.pending_settings_write_value(qsid).unwrap_or(current);
                 crate::ui_style::settings_list_row_with_tooltip(
                     ui,
                     content_width,
@@ -521,7 +575,6 @@ impl EntropyApp {
                                     }
                                 }
                                 SettingsRowKind::OneShot if new_value != current => {
-                                    self.set_one_shot_numeric_value(qsid, new_value);
                                     self.write_one_shot_numeric_setting(qsid, new_value);
                                 }
                                 SettingsRowKind::OneShot => {}
@@ -561,7 +614,7 @@ impl EntropyApp {
             crate::ui_style::border_color(dark).gamma_multiply(if dark { 0.72 } else { 0.9 });
         ui.painter().line_segment(
             [row_rect.left_bottom(), row_rect.right_bottom()],
-            egui::Stroke::new(1.0, separator),
+            egui::Stroke::new(1.0_f32, separator),
         );
         ui.painter().text(
             row_rect.center(),
@@ -580,27 +633,27 @@ impl EntropyApp {
         }
     }
 
-    fn set_one_shot_numeric_value(&mut self, qsid: u16, value: u16) {
-        match qsid {
-            5 => self.one_shot_settings.tap_toggle = value.min(u8::MAX as u16) as u8,
-            6 => self.one_shot_settings.timeout = value,
-            _ => {}
-        }
-    }
-
     fn write_one_shot_numeric_setting(&mut self, qsid: u16, value: u16) {
-        let Some(hid) = &self.hid_device else {
+        if !self.qmk_setting_transport_available() {
+            self.tap_hold_write_error(
+                qsid,
+                crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "status_messages.device_unavailable",
+                ),
+            );
             return;
-        };
-        let result = if qsid == 5 {
-            hid.set_qmk_setting_u8(qsid, value.min(u8::MAX as u16) as u8)
-        } else {
-            hid.set_qmk_setting_u16(qsid, value)
-        };
-        if let Err(e) = result {
-            self.status_msg = format!("Failed to save One Shot setting (qsid {qsid}): {}", e);
-            log::warn!("set_qmk_setting(one_shot qsid {qsid}) failed: {e}");
         }
+        let width = if qsid == 5 { 1 } else { 2 };
+        let old_value = self.one_shot_numeric_value(qsid);
+        self.queue_one_shot_setting_write(
+            self.tap_hold_setting_label(SettingsRowKind::OneShot, qsid)
+                .to_owned(),
+            qsid,
+            width,
+            old_value,
+            value,
+        );
     }
 
     fn tap_hold_numeric_value(&self, qsid: u16) -> u16 {
@@ -615,18 +668,6 @@ impl EntropyApp {
         }
     }
 
-    fn set_tap_hold_numeric_value(&mut self, qsid: u16, value: u16) {
-        match qsid {
-            7 => self.tap_hold_settings.tapping_term = value,
-            25 => self.tap_hold_settings.quick_tap_term = value,
-            18 => self.tap_hold_settings.tap_code_delay = value,
-            19 => self.tap_hold_settings.tap_hold_caps_delay = value,
-            20 => self.tap_hold_settings.tapping_toggle = value,
-            27 => self.tap_hold_settings.flow_tap = value,
-            _ => {}
-        }
-    }
-
     fn tap_hold_bool_value(&self, qsid: u16) -> bool {
         match qsid {
             22 => self.tap_hold_settings.permissive_hold,
@@ -634,16 +675,6 @@ impl EntropyApp {
             24 => self.tap_hold_settings.retro_tapping,
             26 => self.tap_hold_settings.chordal_hold,
             _ => false,
-        }
-    }
-
-    fn set_tap_hold_bool_value(&mut self, qsid: u16, value: bool) {
-        match qsid {
-            22 => self.tap_hold_settings.permissive_hold = value,
-            23 => self.tap_hold_settings.hold_on_other_key_press = value,
-            24 => self.tap_hold_settings.retro_tapping = value,
-            26 => self.tap_hold_settings.chordal_hold = value,
-            _ => {}
         }
     }
 
@@ -671,12 +702,18 @@ impl EntropyApp {
         self.tap_hold_numeric_write_due = None;
         let pending = std::mem::take(&mut self.pending_tap_hold_numeric_writes);
         for (qsid, value) in pending {
-            self.write_tap_hold_numeric_setting(qsid, value);
+            if !self.write_tap_hold_numeric_setting(qsid, value) {
+                self.pending_tap_hold_numeric_writes.insert(qsid, value);
+            }
+        }
+        if !self.pending_tap_hold_numeric_writes.is_empty() {
+            self.tap_hold_numeric_write_due =
+                Some(std::time::Instant::now() + TAP_HOLD_WRITE_DEBOUNCE);
         }
     }
 
-    fn write_tap_hold_numeric_setting(&mut self, qsid: u16, value: u16) {
-        let Some(hid) = &self.hid_device else {
+    fn write_tap_hold_numeric_setting(&mut self, qsid: u16, value: u16) -> bool {
+        if !self.qmk_setting_transport_available() {
             self.tap_hold_write_error(
                 qsid,
                 crate::i18n::tr_catalog(
@@ -684,26 +721,23 @@ impl EntropyApp {
                     "status_messages.device_unavailable",
                 ),
             );
-            return;
-        };
-        let result = if qsid == 20 {
-            hid.set_qmk_setting_u8_verified(qsid, value.min(u8::MAX as u16) as u8)
-        } else {
-            hid.set_qmk_setting_u16_verified(qsid, value)
-        };
-        match result {
-            Ok(()) => {
-                self.set_tap_hold_numeric_value(qsid, value);
-            }
-            Err(e) => {
-                self.tap_hold_write_error(qsid, &e.to_string());
-                log::warn!("set_qmk_setting(tap_hold qsid {qsid}) failed: {e}");
-            }
+            return false;
         }
+        let width = if qsid == 20 { 1 } else { 2 };
+        let old_value = self.tap_hold_numeric_value(qsid);
+        self.queue_tap_hold_setting_write(
+            self.tap_hold_setting_label(SettingsRowKind::TapHold, qsid)
+                .to_owned(),
+            qsid,
+            width,
+            old_value,
+            value,
+        );
+        true
     }
 
     fn write_tap_hold_bool_setting(&mut self, qsid: u16, value: bool) {
-        let Some(hid) = &self.hid_device else {
+        if !self.qmk_setting_transport_available() {
             self.tap_hold_write_error(
                 qsid,
                 crate::i18n::tr_catalog(
@@ -712,14 +746,36 @@ impl EntropyApp {
                 ),
             );
             return;
-        };
-        match hid.set_qmk_setting_u8_verified(qsid, u8::from(value)) {
-            Ok(()) => self.set_tap_hold_bool_value(qsid, value),
-            Err(e) => {
-                self.tap_hold_write_error(qsid, &e.to_string());
-                log::warn!("set_qmk_setting_u8(tap_hold qsid {qsid}) failed: {e}");
-            }
         }
+        let old_value = u16::from(self.tap_hold_bool_value(qsid));
+        self.queue_tap_hold_setting_write(
+            self.tap_hold_setting_label(SettingsRowKind::TapHold, qsid)
+                .to_owned(),
+            qsid,
+            1,
+            old_value,
+            u16::from(value),
+        );
+    }
+
+    fn tap_hold_setting_label(&self, kind: SettingsRowKind, qsid: u16) -> &'static str {
+        tap_hold_one_shot_rows(
+            self.app_settings.language,
+            &self.tap_hold_settings,
+            &self.one_shot_settings,
+            self.current_device_is_likely_rmk(),
+        )
+        .into_iter()
+        .find_map(|row| match row {
+            SettingsRow::Setting {
+                kind: row_kind,
+                qsid: row_qsid,
+                label,
+                ..
+            } if row_kind == kind && row_qsid == qsid => Some(label),
+            _ => None,
+        })
+        .unwrap_or("Tap-Hold")
     }
 }
 
@@ -727,16 +783,33 @@ impl EntropyApp {
 mod tests {
     use super::*;
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn pending_numeric_write_is_retained_when_hid_is_unavailable() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        app.pending_tap_hold_numeric_writes.insert(7, 175);
+
+        app.flush_pending_tap_hold_numeric_writes();
+
+        assert_eq!(app.pending_tap_hold_numeric_writes.get(&7), Some(&175));
+        assert!(app.tap_hold_numeric_write_due.is_some());
+    }
+
     #[test]
     fn tap_hold_rows_hide_unadvertised_qsids() {
-        let mut tap_hold = TapHoldSettingsState::default();
-        tap_hold.supported = true;
+        let mut tap_hold = TapHoldSettingsState {
+            supported: true,
+            ..Default::default()
+        };
         tap_hold.set_qsid_supported(7);
 
         let rows = tap_hold_one_shot_rows(
             crate::i18n::Language::English,
             &tap_hold,
             &OneShotSettingsState::default(),
+            false,
         );
         let qsids: Vec<u16> = rows
             .iter()
@@ -750,8 +823,66 @@ mod tests {
     }
 
     #[test]
+    fn rmk_rows_use_rmk_behavior_names() {
+        let mut tap_hold = TapHoldSettingsState {
+            supported: true,
+            ..Default::default()
+        };
+        for qsid in [18, 19, 26, 27] {
+            tap_hold.set_qsid_supported(qsid);
+        }
+
+        let rows = tap_hold_one_shot_rows(
+            crate::i18n::Language::English,
+            &tap_hold,
+            &OneShotSettingsState::default(),
+            true,
+        );
+        let labels: std::collections::BTreeMap<u16, &str> = rows
+            .iter()
+            .filter_map(|row| match row {
+                SettingsRow::Setting { qsid, label, .. } => Some((*qsid, *label)),
+                SettingsRow::Section(_) => None,
+            })
+            .collect();
+
+        assert_eq!(labels.get(&18), Some(&"Inter-tap interval"));
+        assert_eq!(labels.get(&19), Some(&"Caps Lock tap interval"));
+        assert_eq!(labels.get(&26), Some(&"Same-hand tap"));
+        assert_eq!(labels.get(&27), Some(&"Fast-typing window"));
+    }
+
+    #[test]
+    fn one_shot_rows_follow_advertised_qsids_independently() {
+        let mut one_shot = OneShotSettingsState {
+            supported: true,
+            ..Default::default()
+        };
+        one_shot.set_qsid_supported(6);
+
+        let rows = tap_hold_one_shot_rows(
+            crate::i18n::Language::English,
+            &TapHoldSettingsState::default(),
+            &one_shot,
+            true,
+        );
+        let qsids: Vec<u16> = rows
+            .iter()
+            .filter_map(|row| match row {
+                SettingsRow::Setting { qsid, .. } => Some(*qsid),
+                SettingsRow::Section(_) => None,
+            })
+            .collect();
+
+        assert_eq!(qsids, vec![6]);
+    }
+
+    #[test]
     fn rmk_hrm_notice_mentions_firmware_profiles() {
-        let notice = rmk_hrm_profile_notice(crate::i18n::Language::English);
+        let notice = crate::i18n::tr_catalog(
+            crate::i18n::Language::English,
+            "tap_hold_settings.rmk_profile_notice",
+        );
 
         assert!(notice.contains("RMK"));
         assert!(notice.contains("firmware"));

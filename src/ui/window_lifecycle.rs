@@ -10,6 +10,65 @@ fn should_keep_vial_unlock_visible(unlock_open: bool, unlock_polling: bool) -> b
 }
 
 impl EntropyApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn deferred_exit_has_pending_hid_writes(&self) -> bool {
+        self.keycode_picker.macros_dirty
+            || self.combo_dirty
+            || self.combo_term_dirty
+            || self.keycode_picker.tap_dance_dirty
+            || self.key_override_dirty
+            || !self.pending_tap_hold_numeric_writes.is_empty()
+            || self.qmk_settings_write_pending()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn defer_exit_until_hid_write_returns(&mut self, ctx: &egui::Context) -> bool {
+        if !self.hid_write_lifecycle_busy() && !self.deferred_exit_has_pending_hid_writes() {
+            return false;
+        }
+
+        self.exit_after_hid_write = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        true
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn finish_deferred_exit_after_hid_write(&mut self, ctx: &egui::Context) {
+        if !self.exit_after_hid_write {
+            return;
+        }
+
+        self.flush_pending_qmk_setting_writes();
+        if self.hid_write_lifecycle_busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            return;
+        }
+
+        // Keep unsaved state and its failure status for a later retry, but do
+        // not block close forever when no transport remains to drain it.
+        if self.hid_device.is_none() {
+            self.exit_after_hid_write = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+
+        self.flush_pending_tap_hold_numeric_writes();
+        if self.hid_write_lifecycle_busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            return;
+        }
+        self.fallback_entropy_display_presets_before_exit();
+
+        if self.deferred_exit_has_pending_hid_writes() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            return;
+        }
+
+        self.exit_after_hid_write = false;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
     fn keep_vial_unlock_visible(&mut self, ctx: &egui::Context) {
         self.restore_from_tray(ctx);
         self.status_msg = crate::i18n::tr_catalog(
@@ -122,6 +181,9 @@ impl EntropyApp {
             return;
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
+        self.flush_pending_qmk_setting_writes();
+
         if should_keep_vial_unlock_visible(self.unlock_open, self.vial_unlock_polling) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.keep_vial_unlock_visible(ctx);
@@ -130,10 +192,18 @@ impl EntropyApp {
 
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         if self.consume_tray_quit_request() {
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.defer_exit_until_hid_write_returns(ctx) {
+                return;
+            }
             return;
         }
 
         if self.force_close_requested {
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.defer_exit_until_hid_write_returns(ctx) {
+                return;
+            }
             return;
         }
 
@@ -155,7 +225,12 @@ impl EntropyApp {
                 self.close_to_tray_prompt_remember = false;
                 ctx.request_repaint();
             }
-            CloseToTrayBehavior::Ask | CloseToTrayBehavior::Close | CloseToTrayBehavior::Tray => {}
+            CloseToTrayBehavior::Ask | CloseToTrayBehavior::Close | CloseToTrayBehavior::Tray => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.defer_exit_until_hid_write_returns(ctx);
+                }
+            }
         }
     }
 
@@ -225,8 +300,8 @@ impl EntropyApp {
             return;
         }
 
-        let dark = ctx.style().visuals.dark_mode;
-        let screen_rect = ctx.screen_rect();
+        let dark = ctx.global_style().visuals.dark_mode;
+        let screen_rect = ctx.content_rect();
         egui::Area::new("close_to_tray_prompt_backdrop".into())
             .order(egui::Order::Foreground)
             .fixed_pos(screen_rect.min)
@@ -305,7 +380,7 @@ impl EntropyApp {
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .fixed_size(panel_size)
             .frame(crate::ui_style::modal_window_frame(
-                ctx.style().as_ref(),
+                ctx.global_style().as_ref(),
                 dark,
             ))
             .show(ctx, |ui| {
@@ -364,7 +439,7 @@ impl EntropyApp {
                 let checkbox_size = 13.0;
                 let remember_gap = 7.0;
                 let remember_font = FontId::proportional(12.5);
-                let remember_text_width = ui.fonts(|f| {
+                let remember_text_width = ui.fonts_mut(|f| {
                     f.layout_no_wrap(
                         remember.to_owned(),
                         remember_font.clone(),
@@ -476,13 +551,14 @@ impl EntropyApp {
         }
     }
 
-    pub(super) fn set_launch_at_startup(&mut self, enabled: bool) -> bool {
+    pub(super) fn set_launch_at_startup(&mut self, enabled: bool, launch_minimized: bool) -> bool {
         #[cfg(target_os = "windows")]
         {
             let Ok(exe) = std::env::current_exe() else {
                 return false;
             };
-            let exe_arg = format!("\"{}\"", exe.display());
+            let exe_arg =
+                with_launch_minimized_arg(format!("\"{}\"", exe.display()), launch_minimized);
             let status = if enabled {
                 std::process::Command::new("reg")
                     .args([
@@ -540,7 +616,10 @@ impl EntropyApp {
                 return false;
             }
 
-            let exec = desktop_exec_arg(&exe.to_string_lossy());
+            let exec = with_launch_minimized_arg(
+                desktop_exec_arg(&exe.to_string_lossy()),
+                launch_minimized,
+            );
             let desktop_entry = format!(
                 "[Desktop Entry]\nType=Application\nName=Entropy\nComment=Modern app for programmable keyboards and input devices\nExec={exec}\nTerminal=false\nStartupNotify=false\nX-GNOME-Autostart-enabled=true\n"
             );
@@ -572,7 +651,7 @@ impl EntropyApp {
             let Ok(exe) = std::env::current_exe() else {
                 return false;
             };
-            let program_arguments = macos_launch_agent_program_arguments(&exe);
+            let program_arguments = macos_launch_agent_program_arguments(&exe, launch_minimized);
 
             if let Err(e) = std::fs::create_dir_all(&launch_agents_dir) {
                 log::warn!("failed to create macOS LaunchAgents directory: {e}");
@@ -588,7 +667,7 @@ impl EntropyApp {
         }
         #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
         {
-            let _ = enabled;
+            let _ = (enabled, launch_minimized);
             false
         }
     }
@@ -842,20 +921,42 @@ fn desktop_exec_arg(value: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+fn with_launch_minimized_arg(command: String, launch_minimized: bool) -> String {
+    if launch_minimized {
+        format!("{command} {}", crate::LAUNCH_MINIMIZED_ARG)
+    } else {
+        command
+    }
+}
+
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn macos_launch_agent_program_arguments(exe: &std::path::Path) -> Vec<String> {
+fn macos_launch_agent_program_arguments(
+    exe: &std::path::Path,
+    launch_minimized: bool,
+) -> Vec<String> {
     if let Some(app_bundle) = exe.ancestors().find(|path| {
         path.extension()
             .is_some_and(|ext| ext == std::ffi::OsStr::new("app"))
     }) {
-        return vec![
+        let mut arguments = vec![
             "/usr/bin/open".to_string(),
             "-n".to_string(),
             app_bundle.to_string_lossy().into_owned(),
         ];
+        if launch_minimized {
+            arguments.extend([
+                "--args".to_string(),
+                crate::LAUNCH_MINIMIZED_ARG.to_string(),
+            ]);
+        }
+        return arguments;
     }
 
-    vec![exe.to_string_lossy().into_owned()]
+    let mut arguments = vec![exe.to_string_lossy().into_owned()];
+    if launch_minimized {
+        arguments.push(crate::LAUNCH_MINIMIZED_ARG.to_string());
+    }
+    arguments
 }
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -914,7 +1015,7 @@ fn linux_close_to_tray_prompt_copy(
     match (lang, input_method_backend) {
         (crate::i18n::Language::Russian, true) => (
             "Закрыть Entropy?",
-            "Text Expander продолжит работать через IBus/Fcitx после закрытия Entropy",
+            "Text Expander продолжит работать через IBus после закрытия Entropy",
             "Запомнить выбор",
             "Закрыть",
             "В фон",
@@ -922,7 +1023,7 @@ fn linux_close_to_tray_prompt_copy(
         ),
         (crate::i18n::Language::English, true) => (
             "Close Entropy?",
-            "Text Expander keeps running through IBus/Fcitx after Entropy closes",
+            "Text Expander keeps running through IBus after Entropy closes",
             "Remember my choice",
             "Close",
             "Keep running",
@@ -930,7 +1031,7 @@ fn linux_close_to_tray_prompt_copy(
         ),
         (crate::i18n::Language::Russian, false) => (
             "Закрыть Entropy?",
-            "X11 Text Expander остановится; оставьте Entropy работать в фоне",
+            "Text Expander работает через IBus; фоновое окно Entropy его не заменяет",
             "Запомнить выбор",
             "Закрыть",
             "В фон",
@@ -938,7 +1039,7 @@ fn linux_close_to_tray_prompt_copy(
         ),
         (crate::i18n::Language::English, false) => (
             "Close Entropy?",
-            "X11 Text Expander will stop; keep Entropy running in background",
+            "Text Expander uses IBus; keeping the Entropy window open does not replace it",
             "Remember my choice",
             "Close",
             "Keep running",
@@ -957,5 +1058,90 @@ mod tests {
         assert!(should_keep_vial_unlock_visible(false, true));
         assert!(should_keep_vial_unlock_visible(true, true));
         assert!(!should_keep_vial_unlock_visible(false, false));
+    }
+
+    #[test]
+    fn startup_command_only_adds_minimized_argument_when_enabled() {
+        assert_eq!(
+            with_launch_minimized_arg("\"/opt/Entropy\"".to_owned(), false),
+            "\"/opt/Entropy\""
+        );
+        assert_eq!(
+            with_launch_minimized_arg("\"/opt/Entropy\"".to_owned(), true),
+            "\"/opt/Entropy\" --minimized"
+        );
+    }
+
+    #[test]
+    fn macos_launch_agent_forwards_minimized_argument() {
+        let bundled = macos_launch_agent_program_arguments(
+            std::path::Path::new("/Applications/Entropy.app/Contents/MacOS/entropy"),
+            true,
+        );
+        assert_eq!(
+            bundled,
+            vec![
+                "/usr/bin/open",
+                "-n",
+                "/Applications/Entropy.app",
+                "--args",
+                "--minimized"
+            ]
+        );
+
+        let direct =
+            macos_launch_agent_program_arguments(std::path::Path::new("/usr/bin/entropy"), true);
+        assert_eq!(direct, vec!["/usr/bin/entropy", "--minimized"]);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn deferred_exit_flushes_debounce_added_after_close_request() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid_device, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        app.exit_after_hid_write = true;
+        app.touchpad_settings.scroll_sens = 12;
+        app.debounce_touchpad_setting_write(&ctx, "Scroll sensitivity".to_owned(), 122, 8, 12);
+
+        let first_output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+            app.finish_deferred_exit_after_hid_write(&ctx);
+        });
+        assert!(app.settings_write_task.is_some());
+        assert!(!first_output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .into_iter()
+            .flat_map(|viewport| &viewport.commands)
+            .any(|command| *command == egui::ViewportCommand::Close));
+
+        let mut close_sent = false;
+        for _ in 0..200 {
+            app.poll_settings_write(&ctx);
+            let output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+                app.finish_deferred_exit_after_hid_write(&ctx);
+            });
+            close_sent |= output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .is_some_and(|viewport| viewport.commands.contains(&egui::ViewportCommand::Close));
+            if close_sent {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        assert!(close_sent);
+        assert!(!app.qmk_settings_write_pending());
+        assert!(
+            recorder
+                .requests()
+                .iter()
+                .filter(|request| request[2] == 122 && request[3] == 0)
+                .count()
+                >= 2
+        );
     }
 }

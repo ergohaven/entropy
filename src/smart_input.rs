@@ -1,26 +1,24 @@
 #![allow(non_snake_case)]
 
-use crate::text_expander::{TextExpansionConfig, TextExpansionEngine, TextExpansionRule};
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
+use crate::text_expander::TextExpansionEngine;
+use crate::text_expander::{TextExpansionConfig, TextExpansionRule};
 use std::sync::{Mutex, OnceLock, RwLock};
 
-#[path = "smart_input_symbols.rs"]
-mod smart_input_symbols;
 #[cfg(any(target_os = "windows", test))]
 #[path = "smart_input_windows.rs"]
 mod smart_input_windows;
-#[cfg(any(target_os = "windows", test))]
-use smart_input_symbols::windows_smart_symbol_for_keycode;
-pub use smart_input_symbols::{smart_symbol_for_keycode, SMART_SYMBOLS};
-use smart_input_symbols::{KC_F13, MOD_ALT, MOD_CTRL, MOD_GUI, MOD_SHIFT};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextExpanderAppCandidate {
     pub exe: String,
     pub title: String,
 }
 
+#[cfg(target_os = "macos")]
 type ForegroundCacheState = Option<(std::time::Instant, Option<TextExpanderAppCandidate>)>;
 
 static TEXT_EXPANDER_CONFIG: OnceLock<RwLock<TextExpansionConfig>> = OnceLock::new();
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
 static TEXT_EXPANDER_ENGINE: OnceLock<Mutex<TextExpansionEngine>> = OnceLock::new();
 static RECENT_FOREGROUND_APPS: OnceLock<Mutex<Vec<TextExpanderAppCandidate>>> = OnceLock::new();
 
@@ -28,6 +26,7 @@ fn text_expander_config() -> &'static RwLock<TextExpansionConfig> {
     TEXT_EXPANDER_CONFIG.get_or_init(|| RwLock::new(TextExpansionConfig::default()))
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
 fn text_expander_engine() -> &'static Mutex<TextExpansionEngine> {
     TEXT_EXPANDER_ENGINE.get_or_init(|| Mutex::new(TextExpansionEngine::default()))
 }
@@ -36,6 +35,7 @@ fn recent_foreground_apps() -> &'static Mutex<Vec<TextExpanderAppCandidate>> {
     RECENT_FOREGROUND_APPS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn current_process_name_lower() -> Option<String> {
     std::env::current_exe()
         .ok()
@@ -43,6 +43,7 @@ fn current_process_name_lower() -> Option<String> {
         .and_then(|name| name.to_str().map(|name| name.to_ascii_lowercase()))
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn remember_foreground_app(candidate: TextExpanderAppCandidate) {
     let exe = candidate.exe.trim().to_ascii_lowercase();
     if exe.is_empty() {
@@ -89,11 +90,15 @@ pub fn set_text_expander_config(
     if let Ok(mut guard) = text_expander_config().write() {
         *guard = config;
     }
-    if let Ok(mut engine) = text_expander_engine().lock() {
-        engine.set_rules(rules);
+    #[cfg(any(target_os = "windows", target_os = "macos", test))]
+    {
+        if let Ok(mut engine) = text_expander_engine().lock() {
+            engine.set_rules(rules);
+        }
     }
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
 fn text_expander_enabled() -> bool {
     text_expander_config()
         .read()
@@ -101,6 +106,7 @@ fn text_expander_enabled() -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn text_expander_suppressed_for_context() -> bool {
     text_expander_config()
         .read()
@@ -129,118 +135,18 @@ pub fn platform_open_window_candidates() -> Vec<TextExpanderAppCandidate> {
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-fn foreground_app_blacklisted(_app_blacklist: &[String]) -> bool {
-    false
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn platform_open_window_candidates() -> Vec<TextExpanderAppCandidate> {
     Vec::new()
 }
 
-#[cfg(target_os = "windows")]
-pub fn universal_output_status() -> String {
-    "Universal output backend: Windows native".to_owned()
-}
-
-#[cfg(target_os = "macos")]
-pub fn universal_output_status() -> String {
-    format!(
-        "Universal output backend: macOS native ({}) — requires Accessibility/Input Monitoring permission",
-        crate::hid::macos_runtime_architecture_status(),
-    )
-}
-
-#[cfg(target_os = "linux")]
-pub fn universal_output_status() -> String {
-    let session = linux_session_kind();
-    let input_method = linux_input_method_hint();
-    match session {
-        LinuxSessionKind::Wayland => format!(
-            "Universal output backend: Wayland via IBus/Fcitx5 input method{}",
-            input_method
-        ),
-        LinuxSessionKind::X11 => {
-            "Universal output backend: Linux X11 native; Wayland uses IBus/Fcitx5".to_owned()
-        }
-        LinuxSessionKind::Unknown => format!(
-            "Universal output backend: Linux; use IBus/Fcitx5 for Wayland{}",
-            input_method
-        ),
-    }
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-pub fn universal_output_status() -> String {
-    "Universal output backend: unsupported on this OS".to_owned()
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LinuxSessionKind {
-    Wayland,
-    X11,
-    Unknown,
-}
-
-#[cfg(target_os = "linux")]
-fn linux_session_kind() -> LinuxSessionKind {
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-        LinuxSessionKind::Wayland
-    } else if std::env::var_os("DISPLAY").is_some() {
-        LinuxSessionKind::X11
-    } else {
-        LinuxSessionKind::Unknown
-    }
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LinuxRecommendedInputBackend {
-    X11Native,
-    IBus,
-    Fcitx5,
-}
-
-#[cfg(target_os = "linux")]
-pub fn linux_recommended_input_backend() -> LinuxRecommendedInputBackend {
-    match linux_session_kind() {
-        LinuxSessionKind::X11 => LinuxRecommendedInputBackend::X11Native,
-        LinuxSessionKind::Wayland | LinuxSessionKind::Unknown => {
-            let input_method = linux_input_method_env();
-            if input_method.contains("fcitx") {
-                LinuxRecommendedInputBackend::Fcitx5
-            } else if input_method.contains("ibus") {
-                LinuxRecommendedInputBackend::IBus
-            } else if linux_command_available("fcitx5") && !linux_command_available("ibus") {
-                LinuxRecommendedInputBackend::Fcitx5
-            } else {
-                LinuxRecommendedInputBackend::IBus
-            }
-        }
-    }
-}
-
 #[cfg(target_os = "linux")]
 pub fn text_expander_runs_outside_entropy_process() -> bool {
-    matches!(linux_session_kind(), LinuxSessionKind::Wayland)
+    linux_input_method_env().contains("ibus")
 }
 
 #[cfg(not(target_os = "linux"))]
 pub fn text_expander_runs_outside_entropy_process() -> bool {
     false
-}
-
-#[cfg(target_os = "linux")]
-fn linux_input_method_hint() -> &'static str {
-    let combined = linux_input_method_env();
-    if combined.contains("fcitx") {
-        " — Fcitx detected"
-    } else if combined.contains("ibus") {
-        " — IBus detected"
-    } else {
-        ""
-    }
 }
 
 #[cfg(target_os = "linux")]
@@ -357,95 +263,13 @@ fn refresh_ibus_registry() {
         .status();
 }
 
-#[cfg(target_os = "macos")]
-pub fn universal_output_setup_hint() -> Option<&'static str> {
-    Some("Open Config → Universal Symbols to finish permissions setup")
-}
-
-#[cfg(target_os = "linux")]
-pub fn universal_output_setup_hint() -> Option<&'static str> {
-    Some("Open Config → Universal Symbols to finish Linux setup")
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-pub fn universal_output_setup_hint() -> Option<&'static str> {
-    None
-}
-
-fn smart_symbol_for_transport(
-    base_keycode: u16,
-    ctrl: bool,
-    shift: bool,
-    alt: bool,
-    gui: bool,
-) -> Option<(char, u16)> {
-    let mut trigger_keycode = base_keycode;
-    if ctrl {
-        trigger_keycode |= MOD_CTRL;
-    }
-    if shift {
-        trigger_keycode |= MOD_SHIFT;
-    }
-    if alt {
-        trigger_keycode |= MOD_ALT;
-    }
-    if gui {
-        trigger_keycode |= MOD_GUI;
-    }
-    smart_symbol_for_keycode(trigger_keycode).map(|symbol| (symbol.symbol, trigger_keycode))
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn windows_smart_symbol_for_transport(
-    base_keycode: u16,
-    ctrl: bool,
-    shift: bool,
-    alt: bool,
-    gui: bool,
-    observed_modifiers: u16,
-) -> Option<(char, u16)> {
-    let mut trigger_keycode = base_keycode;
-    if ctrl || observed_modifiers & MOD_CTRL != 0 {
-        trigger_keycode |= MOD_CTRL;
-    }
-    if shift || observed_modifiers & MOD_SHIFT != 0 {
-        trigger_keycode |= MOD_SHIFT;
-    }
-    if alt || observed_modifiers & MOD_ALT != 0 {
-        trigger_keycode |= MOD_ALT;
-    }
-    if gui || observed_modifiers & MOD_GUI != 0 {
-        trigger_keycode |= MOD_GUI;
-    }
-    windows_smart_symbol_for_keycode(trigger_keycode).map(|symbol| (symbol.symbol, trigger_keycode))
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn app_prefers_clipboard_unicode_input(exe: &str) -> bool {
-    matches!(
-        exe.strip_suffix(".exe").unwrap_or(exe),
-        "brave"
-            | "chrome"
-            | "editplus"
-            | "firefox"
-            | "librewolf"
-            | "msedge"
-            | "opera"
-            | "opera_gx"
-            | "thunderbird"
-            | "vivaldi"
-            | "waterfox"
-            | "yandex"
-    )
-}
-
 #[cfg(target_os = "windows")]
 pub fn start() {
     smart_input_windows::start();
 }
 
 #[cfg(target_os = "macos")]
-pub struct MacosUniversalSymbolsStatus {
+pub struct MacosTextExpanderStatus {
     pub accessibility_granted: bool,
     pub input_monitoring_granted: bool,
     pub event_tap_active: bool,
@@ -467,7 +291,7 @@ fn macos_event_tap_startup_decision(
 ) -> MacosEventTapStartupDecision {
     if !accessibility_granted {
         return MacosEventTapStartupDecision::WaitForPermission(
-            "Accessibility permission is required for Universal Symbols",
+            "Accessibility permission is required for Text Expander",
         );
     }
 
@@ -483,13 +307,18 @@ fn macos_effective_input_monitoring_granted(
 }
 
 #[cfg(target_os = "macos")]
-pub fn macos_universal_symbols_status() -> MacosUniversalSymbolsStatus {
+pub fn macos_text_expander_status() -> MacosTextExpanderStatus {
     macos::status_snapshot()
 }
 
 #[cfg(target_os = "macos")]
 pub fn request_input_monitoring_access() -> bool {
     macos::request_input_monitoring_access()
+}
+
+#[cfg(target_os = "macos")]
+pub fn input_monitoring_access_granted() -> bool {
+    macos::input_monitoring_granted()
 }
 
 #[cfg(target_os = "macos")]
@@ -503,13 +332,7 @@ pub fn start() {
 }
 
 #[cfg(target_os = "linux")]
-pub fn start() {
-    use std::sync::Once;
-    static START: Once = Once::new();
-    START.call_once(|| {
-        std::thread::spawn(linux_x11::run_x11_loop);
-    });
-}
+pub fn start() {}
 
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 pub fn start() {}
@@ -572,13 +395,13 @@ mod macos {
         }
     }
 
-    pub fn status_snapshot() -> MacosUniversalSymbolsStatus {
+    pub fn status_snapshot() -> MacosTextExpanderStatus {
         let last_event_ms_ago = LAST_EVENT_AT
             .lock()
             .ok()
             .and_then(|guard| guard.as_ref().map(|at| at.elapsed().as_millis()));
         let event_tap_active = EVENT_TAP_ACTIVE.load(Ordering::SeqCst);
-        MacosUniversalSymbolsStatus {
+        MacosTextExpanderStatus {
             accessibility_granted: accessibility_granted(),
             input_monitoring_granted: macos_effective_input_monitoring_granted(
                 input_monitoring_granted(),
@@ -632,7 +455,7 @@ mod macos {
         unsafe { AXIsProcessTrusted() }
     }
 
-    fn input_monitoring_granted() -> bool {
+    pub(super) fn input_monitoring_granted() -> bool {
         unsafe { CGPreflightListenEventAccess() }
     }
 
@@ -752,26 +575,6 @@ mod macos {
         }
         let keycode = CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE) as u16;
         let flags = CGEventGetFlags(event);
-        let ctrl = flags & K_CG_EVENT_FLAG_MASK_CONTROL != 0;
-        let shift = flags & K_CG_EVENT_FLAG_MASK_SHIFT != 0;
-        let alt = flags & K_CG_EVENT_FLAG_MASK_ALTERNATE != 0;
-        let command = flags & K_CG_EVENT_FLAG_MASK_COMMAND != 0;
-
-        if let Some(base_keycode) = mac_keycode_to_qmk_f_key(keycode) {
-            if let Some((symbol, _trigger_keycode)) =
-                smart_symbol_for_transport(base_keycode, ctrl, shift, alt, command)
-            {
-                if event_type == K_CG_EVENT_KEY_DOWN {
-                    schedule_unicode_char(symbol);
-                }
-                return null_mut();
-            }
-        } else if is_probable_f_key(keycode) {
-            log::debug!(
-                "Smart Input: unmapped macOS F-key keycode 0x{keycode:02X} (decimal {keycode})"
-            );
-        }
-
         if event_type == K_CG_EVENT_KEY_DOWN {
             handle_text_expander_key_down(event, keycode, flags);
         }
@@ -988,34 +791,6 @@ end tell"#;
         Some(String::from_utf8_lossy(&output.stdout).trim().to_owned())
     }
 
-    fn is_probable_f_key(keycode: u16) -> bool {
-        matches!(
-            keycode,
-            0x40 | 0x4F | 0x50 | 0x5A | 0x5B | 0x5C | 0x5D | 0x5E | 0x69 | 0x6A | 0x6B | 0x71
-        )
-    }
-
-    fn mac_keycode_to_qmk_f_key(keycode: u16) -> Option<u16> {
-        let offset = match keycode {
-            0x69 => 0, // F13
-            0x6B => 1, // F14
-            0x71 => 2, // F15
-            0x6A => 3, // F16
-            0x40 => 4, // F17
-            0x4F => 5, // F18
-            0x50 => 6, // F19
-            0x5A => 7, // F20
-            _ => return None,
-        };
-        Some(KC_F13 + offset)
-    }
-
-    fn schedule_unicode_char(symbol: char) {
-        std::thread::spawn(move || unsafe {
-            send_unicode_char(symbol);
-        });
-    }
-
     unsafe fn send_unicode_char(symbol: char) {
         let mut buffer = [0u16; 2];
         let units = symbol.encode_utf16(&mut buffer);
@@ -1085,123 +860,6 @@ end tell"#;
     }
 }
 
-#[cfg(target_os = "linux")]
-mod linux_x11 {
-    use super::*;
-    use std::process::Command;
-
-    const XK_F13: u64 = 0xffca;
-    const SHIFT_MASK: u32 = 1;
-    const LOCK_MASK: u32 = 2;
-    const CONTROL_MASK: u32 = 4;
-    const MOD1_MASK: u32 = 8;
-    const MOD4_MASK: u32 = 64;
-    const KEY_PRESS: i32 = 2;
-    const KEY_RELEASE: i32 = 3;
-
-    pub fn run_x11_loop() {
-        unsafe {
-            let Ok(xlib) = x11_dl::xlib::Xlib::open() else {
-                log::warn!("Smart Input: Xlib is unavailable");
-                return;
-            };
-            let display = (xlib.XOpenDisplay)(std::ptr::null());
-            if display.is_null() {
-                log::warn!("Smart Input: X11 display is unavailable; Wayland is not supported yet");
-                return;
-            }
-            let root = (xlib.XDefaultRootWindow)(display);
-            let mut keycodes = Vec::new();
-            for idx in 0..8u16 {
-                let keycode = (xlib.XKeysymToKeycode)(display, XK_F13 + idx as u64);
-                if keycode == 0 {
-                    continue;
-                }
-                keycodes.push((keycode, KC_F13 + idx));
-                for modifiers in transport_modifier_masks() {
-                    (xlib.XGrabKey)(
-                        display,
-                        keycode as i32,
-                        modifiers,
-                        root,
-                        1,
-                        x11_dl::xlib::GrabModeAsync,
-                        x11_dl::xlib::GrabModeAsync,
-                    );
-                }
-            }
-            (xlib.XFlush)(display);
-
-            loop {
-                let mut event: x11_dl::xlib::XEvent = std::mem::zeroed();
-                (xlib.XNextEvent)(display, &mut event);
-                let event_type = event.get_type();
-                if event_type != KEY_PRESS && event_type != KEY_RELEASE {
-                    continue;
-                }
-                let xkey = event.key;
-                let Some((_, base_keycode)) = keycodes
-                    .iter()
-                    .find(|(keycode, _)| *keycode == xkey.keycode as u8)
-                else {
-                    continue;
-                };
-                let ctrl = xkey.state & CONTROL_MASK != 0;
-                let shift = xkey.state & SHIFT_MASK != 0;
-                let alt = xkey.state & MOD1_MASK != 0;
-                let gui = xkey.state & MOD4_MASK != 0;
-                if let Some((symbol, _trigger_keycode)) =
-                    smart_symbol_for_transport(*base_keycode, ctrl, shift, alt, gui)
-                {
-                    if event_type == KEY_PRESS {
-                        type_unicode(symbol);
-                    }
-                }
-            }
-        }
-    }
-
-    fn transport_modifier_masks() -> Vec<u32> {
-        let base_masks = [
-            0,
-            SHIFT_MASK,
-            CONTROL_MASK,
-            MOD1_MASK,
-            CONTROL_MASK | SHIFT_MASK,
-            CONTROL_MASK | MOD1_MASK,
-            SHIFT_MASK | MOD1_MASK,
-            CONTROL_MASK | SHIFT_MASK | MOD1_MASK,
-            MOD4_MASK,
-            SHIFT_MASK | MOD4_MASK,
-            CONTROL_MASK | MOD4_MASK,
-            MOD1_MASK | MOD4_MASK,
-            CONTROL_MASK | SHIFT_MASK | MOD4_MASK,
-            CONTROL_MASK | MOD1_MASK | MOD4_MASK,
-            SHIFT_MASK | MOD1_MASK | MOD4_MASK,
-            CONTROL_MASK | SHIFT_MASK | MOD1_MASK | MOD4_MASK,
-        ];
-        let lock_masks = [0, LOCK_MASK];
-        let mut masks = Vec::with_capacity(base_masks.len() * lock_masks.len());
-        for base in base_masks {
-            for lock in lock_masks {
-                masks.push(base | lock);
-            }
-        }
-        masks
-    }
-
-    fn type_unicode(symbol: char) {
-        let status = Command::new("xdotool")
-            .arg("type")
-            .arg("--clearmodifiers")
-            .arg(symbol.to_string())
-            .status();
-        if !matches!(status, Ok(status) if status.success()) {
-            log::warn!("Smart Input: xdotool failed or is not installed");
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1261,49 +919,6 @@ mod tests {
         set_text_expander_config(false, vec![rule(":hello", "Привет")], Vec::new());
 
         assert!(!text_expander_enabled());
-    }
-
-    #[test]
-    fn editplus_uses_clipboard_fallback_for_universal_symbols() {
-        assert!(app_prefers_clipboard_unicode_input("editplus.exe"));
-    }
-
-    #[test]
-    fn windows_transport_uses_observed_alt_state_for_rapid_punctuation_pairs() {
-        let comma =
-            windows_smart_symbol_for_transport(KC_F13 + 1, false, false, false, false, MOD_ALT)
-                .unwrap();
-        assert_eq!(comma.0, ',');
-
-        let dot = windows_smart_symbol_for_transport(KC_F13, false, false, false, false, MOD_ALT)
-            .unwrap();
-        assert_eq!(dot.0, '.');
-    }
-
-    #[test]
-    fn windows_transport_uses_legacy_alt_slots_for_arrow_symbols() {
-        let left_arrow =
-            windows_smart_symbol_for_transport(KC_F13 + 7, false, false, true, false, 0).unwrap();
-        assert_eq!(left_arrow.0, '←');
-    }
-
-    #[test]
-    fn windows_transport_does_not_use_gui_shortcut_slots() {
-        assert_eq!(
-            windows_smart_symbol_for_transport(KC_F13 + 4, false, false, false, true, MOD_GUI),
-            None
-        );
-    }
-
-    #[test]
-    fn windows_transport_decodes_cyrillic_ha_and_hard_sign() {
-        let ha =
-            windows_smart_symbol_for_transport(KC_F13 + 4, true, false, true, false, 0).unwrap();
-        assert_eq!(ha.0, 'х');
-
-        let hard_sign =
-            windows_smart_symbol_for_transport(KC_F13 + 5, true, false, true, false, 0).unwrap();
-        assert_eq!(hard_sign.0, 'ъ');
     }
 
     #[test]

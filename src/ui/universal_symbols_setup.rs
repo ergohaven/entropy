@@ -10,8 +10,109 @@ enum MacosPermissionStatusKind {
     InputMonitoring,
 }
 
+#[derive(Clone, Copy)]
+struct UniversalSymbolsRowContext {
+    content_width: f32,
+    height: f32,
+    metrics: crate::ui_style::ResponsiveMetrics,
+    lang: crate::i18n::Language,
+    dark: bool,
+    suppress_tooltips: bool,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+struct MacosPermissionRow {
+    label_key: &'static str,
+    tooltip_key: &'static str,
+    status_kind: MacosPermissionStatusKind,
+}
+
+#[derive(Clone, Copy)]
+struct UniversalSymbolsFinishStep {
+    label_key: &'static str,
+    tooltip_key: &'static str,
+    value_key: &'static str,
+    detail_key: Option<&'static str>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[derive(Clone, Copy)]
+struct UniversalSymbolsAction {
+    label_key: &'static str,
+    tooltip_key: &'static str,
+    button_key: &'static str,
+}
+
+#[cfg(target_os = "macos")]
+const MACOS_ACCESSIBILITY_STATUS_ROW: MacosPermissionRow = MacosPermissionRow {
+    label_key: "universal_symbols_setup.accessibility_status",
+    tooltip_key: "universal_symbols_setup.accessibility_status_tooltip",
+    status_kind: MacosPermissionStatusKind::Accessibility,
+};
+
+#[cfg(target_os = "macos")]
+const MACOS_INPUT_MONITORING_STATUS_ROW: MacosPermissionRow = MacosPermissionRow {
+    label_key: "universal_symbols_setup.input_monitoring_status",
+    tooltip_key: "universal_symbols_setup.input_monitoring_status_tooltip",
+    status_kind: MacosPermissionStatusKind::InputMonitoring,
+};
+
+#[cfg(target_os = "macos")]
+const OPEN_MACOS_ACCESSIBILITY_ACTION: UniversalSymbolsAction = UniversalSymbolsAction {
+    label_key: "universal_symbols_setup.open_accessibility_settings",
+    tooltip_key: "universal_symbols_setup.open_accessibility_settings_tooltip",
+    button_key: "universal_symbols_setup.open_privacy_settings",
+};
+
+#[cfg(target_os = "macos")]
+const OPEN_MACOS_INPUT_MONITORING_ACTION: UniversalSymbolsAction = UniversalSymbolsAction {
+    label_key: "universal_symbols_setup.open_input_monitoring_settings",
+    tooltip_key: "universal_symbols_setup.open_input_monitoring_settings_tooltip",
+    button_key: "universal_symbols_setup.open_privacy_settings",
+};
+
+#[cfg(target_os = "macos")]
+const RESTART_MACOS_EVENT_TAP_ACTION: UniversalSymbolsAction = UniversalSymbolsAction {
+    label_key: "universal_symbols_setup.restart_event_tap",
+    tooltip_key: "universal_symbols_setup.restart_event_tap_tooltip",
+    button_key: "universal_symbols_setup.restart_event_tap_button",
+};
+
+#[cfg(target_os = "linux")]
+const SETUP_IBUS_ACTION: UniversalSymbolsAction = UniversalSymbolsAction {
+    label_key: "universal_symbols_setup.wayland_ibus",
+    tooltip_key: "universal_symbols_setup.wayland_ibus_tooltip",
+    button_key: "universal_symbols_setup.setup_ibus",
+};
+
+#[cfg(target_os = "linux")]
+const REMOVE_IBUS_ACTION: UniversalSymbolsAction = UniversalSymbolsAction {
+    label_key: "universal_symbols_setup.remove_ibus_source",
+    tooltip_key: "universal_symbols_setup.remove_ibus_source_tooltip",
+    button_key: "universal_symbols_setup.remove_ibus",
+};
+
+fn universal_symbols_finish_step_2() -> UniversalSymbolsFinishStep {
+    UniversalSymbolsFinishStep {
+        label_key: "universal_symbols_setup.finish_step_2",
+        tooltip_key: "universal_symbols_setup.finish_step_2_tooltip",
+        value_key: universal_symbols_finish_step_2_key(),
+        detail_key: universal_symbols_finish_step_2_detail_key(),
+    }
+}
+
+fn universal_symbols_finish_step_3() -> UniversalSymbolsFinishStep {
+    UniversalSymbolsFinishStep {
+        label_key: "universal_symbols_setup.finish_step_3",
+        tooltip_key: "universal_symbols_setup.finish_step_3_tooltip",
+        value_key: universal_symbols_finish_step_3_key(),
+        detail_key: universal_symbols_finish_step_3_detail_key(),
+    }
+}
+
 impl EntropyApp {
-    pub(super) fn draw_universal_symbols_setup_page(
+    pub(super) fn draw_text_expander_setup_page(
         &mut self,
         ui: &mut egui::Ui,
         content_rect: egui::Rect,
@@ -44,9 +145,9 @@ impl EntropyApp {
                         ui.add_sized(
                             Vec2::new(content_width, metrics.value(24.0)),
                             egui::Label::new(
-                                RichText::new(crate::i18n::tr(
+                                RichText::new(crate::i18n::tr_catalog(
                                     lang,
-                                    crate::i18n::Key::UniversalSymbolsSetupTitle,
+                                    "text_expander.setup_title",
                                 ))
                                 .size(metrics.value(18.0))
                                 .strong(),
@@ -108,12 +209,9 @@ impl EntropyApp {
                 ui.add_sized(
                     Vec2::new(content_width, metrics.value(24.0)),
                     egui::Label::new(
-                        RichText::new(crate::i18n::tr(
-                            lang,
-                            crate::i18n::Key::UniversalSymbolsSetupTitle,
-                        ))
-                        .size(metrics.value(18.0))
-                        .strong(),
+                        RichText::new(crate::i18n::tr_catalog(lang, "text_expander.setup_title"))
+                            .size(metrics.value(18.0))
+                            .strong(),
                     )
                     .halign(egui::Align::Center),
                 );
@@ -147,17 +245,16 @@ impl EntropyApp {
                     ui.set_clip_rect(list.viewport);
                     ui.set_min_size(list.content_rect.size());
                     ui.spacing_mut().item_spacing.y = 0.0;
+                    let row = UniversalSymbolsRowContext {
+                        content_width: list.row_content_width,
+                        height: list.row_height,
+                        metrics,
+                        lang,
+                        dark,
+                        suppress_tooltips: list.suppress_tooltips,
+                    };
                     for row_idx in list.first_visible_row..list.last_visible_row {
-                        self.draw_macos_universal_symbols_setup_row(
-                            ui,
-                            row_idx,
-                            list.row_content_width,
-                            list.row_height,
-                            metrics,
-                            lang,
-                            dark,
-                            list.suppress_tooltips,
-                        );
+                        self.draw_macos_universal_symbols_setup_row(ui, row_idx, row);
                     }
                 });
 
@@ -193,162 +290,88 @@ impl EntropyApp {
         &mut self,
         ui: &mut egui::Ui,
         row_idx: usize,
-        row_content_width: f32,
-        row_height: f32,
-        metrics: crate::ui_style::ResponsiveMetrics,
-        lang: crate::i18n::Language,
-        dark: bool,
-        suppress_tooltips: bool,
+        row: UniversalSymbolsRowContext,
     ) {
-        let tooltip =
-            |key: &'static str| (!suppress_tooltips).then_some(crate::i18n::tr_catalog(lang, key));
+        let tooltip = |key: &'static str| {
+            (!row.suppress_tooltips).then_some(crate::i18n::tr_catalog(row.lang, key))
+        };
         match row_idx {
             0 => crate::ui_style::settings_list_row_with_tooltip(
                 ui,
-                row_content_width,
-                row_height,
-                crate::i18n::tr_catalog(lang, "universal_symbols_setup.current_backend"),
+                row.content_width,
+                row.height,
+                crate::i18n::tr_catalog(row.lang, "universal_symbols_setup.current_backend"),
                 true,
                 tooltip("universal_symbols_setup.current_backend_tooltip"),
-                metrics.settings_control_width(),
+                row.metrics.settings_control_width(),
                 |ui| {
                     draw_universal_symbols_value(
                         ui,
-                        metrics,
+                        row.metrics,
                         168.0,
-                        crate::i18n::tr_catalog(lang, universal_symbols_backend_value_key()),
+                        crate::i18n::tr_catalog(row.lang, universal_symbols_backend_value_key()),
                         ui.visuals().text_color(),
                     );
                 },
             ),
-            1 => self.draw_macos_permission_status_row(
-                ui,
-                row_content_width,
-                row_height,
-                metrics,
-                lang,
-                dark,
-                "universal_symbols_setup.accessibility_status",
-                "universal_symbols_setup.accessibility_status_tooltip",
-                MacosPermissionStatusKind::Accessibility,
-                suppress_tooltips,
-            ),
-            2 => self.draw_macos_permission_status_row(
-                ui,
-                row_content_width,
-                row_height,
-                metrics,
-                lang,
-                dark,
-                "universal_symbols_setup.input_monitoring_status",
-                "universal_symbols_setup.input_monitoring_status_tooltip",
-                MacosPermissionStatusKind::InputMonitoring,
-                suppress_tooltips,
-            ),
-            3 => self.draw_macos_event_capture_status_row(
-                ui,
-                row_content_width,
-                row_height,
-                metrics,
-                lang,
-                dark,
-                suppress_tooltips,
-            ),
+            1 => self.draw_macos_permission_status_row(ui, row, MACOS_ACCESSIBILITY_STATUS_ROW),
+            2 => self.draw_macos_permission_status_row(ui, row, MACOS_INPUT_MONITORING_STATUS_ROW),
+            3 => self.draw_macos_event_capture_status_row(ui, row),
             4 => crate::ui_style::settings_list_row_with_tooltip(
                 ui,
-                row_content_width,
-                row_height,
-                crate::i18n::tr_catalog(lang, "universal_symbols_setup.recommended_setup"),
+                row.content_width,
+                row.height,
+                crate::i18n::tr_catalog(row.lang, "universal_symbols_setup.recommended_setup"),
                 true,
                 tooltip("universal_symbols_setup.recommended_setup_tooltip"),
-                metrics.settings_control_width(),
-                |ui| self.draw_universal_symbols_recommended_control(ui, metrics, lang),
+                row.metrics.settings_control_width(),
+                |ui| self.draw_universal_symbols_recommended_control(ui, row.metrics, row.lang),
             ),
-            5 => draw_universal_symbols_finish_step_row(
-                ui,
-                metrics,
-                row_content_width,
-                row_height,
-                lang,
-                dark,
-                "universal_symbols_setup.finish_step_2",
-                "universal_symbols_setup.finish_step_2_tooltip",
-                universal_symbols_finish_step_2_key(),
-                universal_symbols_finish_step_2_detail_key(),
-            ),
-            6 => draw_universal_symbols_finish_step_row(
-                ui,
-                metrics,
-                row_content_width,
-                row_height,
-                lang,
-                dark,
-                "universal_symbols_setup.finish_step_3",
-                "universal_symbols_setup.finish_step_3_tooltip",
-                universal_symbols_finish_step_3_key(),
-                universal_symbols_finish_step_3_detail_key(),
-            ),
+            5 => draw_universal_symbols_finish_step_row(ui, row, universal_symbols_finish_step_2()),
+            6 => draw_universal_symbols_finish_step_row(ui, row, universal_symbols_finish_step_3()),
             7 => crate::ui_style::settings_list_row_with_tooltip(
                 ui,
-                row_content_width,
-                row_height,
-                crate::i18n::tr_catalog(lang, "universal_symbols_setup.text_expander"),
+                row.content_width,
+                row.height,
+                crate::i18n::tr_catalog(row.lang, "universal_symbols_setup.text_expander"),
                 true,
                 tooltip("universal_symbols_setup.text_expander_tooltip"),
-                metrics.value(220.0),
+                row.metrics.value(220.0),
                 |ui| {
                     draw_universal_symbols_value(
                         ui,
-                        metrics,
+                        row.metrics,
                         220.0,
-                        crate::i18n::tr_catalog(lang, universal_symbols_text_expander_key()),
-                        app_muted_text(dark),
+                        crate::i18n::tr_catalog(row.lang, universal_symbols_text_expander_key()),
+                        app_muted_text(row.dark),
                     );
                 },
             ),
             8 => {
                 if draw_universal_symbols_action_row_with_tooltip_state(
                     ui,
-                    metrics,
-                    row_content_width,
-                    row_height,
-                    lang,
-                    "universal_symbols_setup.open_accessibility_settings",
-                    "universal_symbols_setup.open_accessibility_settings_tooltip",
-                    "universal_symbols_setup.open_privacy_settings",
-                    suppress_tooltips,
+                    row,
+                    OPEN_MACOS_ACCESSIBILITY_ACTION,
                 ) {
-                    self.open_macos_accessibility_settings(lang);
+                    self.open_macos_accessibility_settings(row.lang);
                 }
             }
             9 => {
                 if draw_universal_symbols_action_row_with_tooltip_state(
                     ui,
-                    metrics,
-                    row_content_width,
-                    row_height,
-                    lang,
-                    "universal_symbols_setup.open_input_monitoring_settings",
-                    "universal_symbols_setup.open_input_monitoring_settings_tooltip",
-                    "universal_symbols_setup.open_privacy_settings",
-                    suppress_tooltips,
+                    row,
+                    OPEN_MACOS_INPUT_MONITORING_ACTION,
                 ) {
-                    self.open_macos_input_monitoring_settings(lang);
+                    self.open_macos_input_monitoring_settings(row.lang);
                 }
             }
             10 if draw_universal_symbols_action_row_with_tooltip_state(
                 ui,
-                metrics,
-                row_content_width,
-                row_height,
-                lang,
-                "universal_symbols_setup.restart_event_tap",
-                "universal_symbols_setup.restart_event_tap_tooltip",
-                "universal_symbols_setup.restart_event_tap_button",
-                suppress_tooltips,
+                row,
+                RESTART_MACOS_EVENT_TAP_ACTION,
             ) =>
             {
-                self.restart_macos_event_tap(lang);
+                self.restart_macos_event_tap(row.lang);
             }
             _ => {}
         }
@@ -364,6 +387,14 @@ impl EntropyApp {
         let row_height = metrics.settings_row_height();
         let row_content_width = metrics.settings_row_content_width();
         let tooltip = |key: &'static str| Some(crate::i18n::tr_catalog(lang, key));
+        let row = UniversalSymbolsRowContext {
+            content_width: row_content_width,
+            height: row_height,
+            metrics,
+            lang,
+            dark,
+            suppress_tooltips: false,
+        };
 
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
@@ -401,31 +432,9 @@ impl EntropyApp {
             crate::i18n::tr_catalog(lang, "universal_symbols_setup.next_step"),
         );
 
-        draw_universal_symbols_finish_step_row(
-            ui,
-            metrics,
-            row_content_width,
-            row_height,
-            lang,
-            dark,
-            "universal_symbols_setup.finish_step_2",
-            "universal_symbols_setup.finish_step_2_tooltip",
-            universal_symbols_finish_step_2_key(),
-            universal_symbols_finish_step_2_detail_key(),
-        );
+        draw_universal_symbols_finish_step_row(ui, row, universal_symbols_finish_step_2());
 
-        draw_universal_symbols_finish_step_row(
-            ui,
-            metrics,
-            row_content_width,
-            row_height,
-            lang,
-            dark,
-            "universal_symbols_setup.finish_step_3",
-            "universal_symbols_setup.finish_step_3_tooltip",
-            universal_symbols_finish_step_3_key(),
-            universal_symbols_finish_step_3_detail_key(),
-        );
+        draw_universal_symbols_finish_step_row(ui, row, universal_symbols_finish_step_3());
 
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
@@ -455,46 +464,15 @@ impl EntropyApp {
     ) {
         #[cfg(target_os = "linux")]
         {
-            match crate::smart_input::linux_recommended_input_backend() {
-                crate::smart_input::LinuxRecommendedInputBackend::X11Native => {
-                    draw_universal_symbols_value(
-                        ui,
-                        metrics,
-                        168.0,
-                        crate::i18n::tr_catalog(lang, "universal_symbols_setup.no_install_needed"),
-                        ui.visuals().text_color(),
-                    );
-                }
-                crate::smart_input::LinuxRecommendedInputBackend::IBus => {
-                    if crate::ui_style::modern_button(
-                        ui,
-                        crate::i18n::tr_catalog(lang, "universal_symbols_setup.setup_ibus"),
-                        metrics.size(168.0, 34.0),
-                        true,
-                    )
-                    .clicked()
-                    {
-                        self.run_linux_universal_symbols_setup(
-                            "linux/ibus/install-user.sh",
-                            "IBus",
-                        );
-                    }
-                }
-                crate::smart_input::LinuxRecommendedInputBackend::Fcitx5 => {
-                    if crate::ui_style::modern_button(
-                        ui,
-                        crate::i18n::tr_catalog(lang, "universal_symbols_setup.setup_fcitx5"),
-                        metrics.size(168.0, 34.0),
-                        true,
-                    )
-                    .clicked()
-                    {
-                        self.run_linux_universal_symbols_setup(
-                            "linux/fcitx5/install-user.sh",
-                            "Fcitx5",
-                        );
-                    }
-                }
+            if crate::ui_style::modern_button(
+                ui,
+                crate::i18n::tr_catalog(lang, "universal_symbols_setup.setup_ibus"),
+                metrics.size(168.0, 34.0),
+                true,
+            )
+            .clicked()
+            {
+                self.run_linux_universal_symbols_setup("linux/ibus/install-user.sh", "IBus");
             }
         }
 
@@ -548,47 +526,29 @@ impl EntropyApp {
         #[cfg(target_os = "macos")]
         {
             let lang = self.app_settings.language;
-            let row_height = metrics.settings_row_height();
-            let row_content_width = metrics.settings_row_content_width();
-
-            let accessibility_clicked = draw_universal_symbols_action_row(
-                ui,
+            let row = UniversalSymbolsRowContext {
+                content_width: metrics.settings_row_content_width(),
+                height: metrics.settings_row_height(),
                 metrics,
-                row_content_width,
-                row_height,
                 lang,
-                "universal_symbols_setup.open_accessibility_settings",
-                "universal_symbols_setup.open_accessibility_settings_tooltip",
-                "universal_symbols_setup.open_privacy_settings",
-            );
+                dark: ui.visuals().dark_mode,
+                suppress_tooltips: false,
+            };
+
+            let accessibility_clicked =
+                draw_universal_symbols_action_row(ui, row, OPEN_MACOS_ACCESSIBILITY_ACTION);
             if accessibility_clicked {
                 self.open_macos_accessibility_settings(lang);
             }
 
-            let monitoring_clicked = draw_universal_symbols_action_row(
-                ui,
-                metrics,
-                row_content_width,
-                row_height,
-                lang,
-                "universal_symbols_setup.open_input_monitoring_settings",
-                "universal_symbols_setup.open_input_monitoring_settings_tooltip",
-                "universal_symbols_setup.open_privacy_settings",
-            );
+            let monitoring_clicked =
+                draw_universal_symbols_action_row(ui, row, OPEN_MACOS_INPUT_MONITORING_ACTION);
             if monitoring_clicked {
                 self.open_macos_input_monitoring_settings(lang);
             }
 
-            let restart_clicked = draw_universal_symbols_action_row(
-                ui,
-                metrics,
-                row_content_width,
-                row_height,
-                lang,
-                "universal_symbols_setup.restart_event_tap",
-                "universal_symbols_setup.restart_event_tap_tooltip",
-                "universal_symbols_setup.restart_event_tap_button",
-            );
+            let restart_clicked =
+                draw_universal_symbols_action_row(ui, row, RESTART_MACOS_EVENT_TAP_ACTION);
             if restart_clicked {
                 self.restart_macos_event_tap(lang);
             }
@@ -597,8 +557,14 @@ impl EntropyApp {
         #[cfg(target_os = "linux")]
         {
             let lang = self.app_settings.language;
-            let row_height = metrics.settings_row_height();
-            let row_content_width = metrics.settings_row_content_width();
+            let row = UniversalSymbolsRowContext {
+                content_width: metrics.settings_row_content_width(),
+                height: metrics.settings_row_height(),
+                metrics,
+                lang,
+                dark: ui.visuals().dark_mode,
+                suppress_tooltips: false,
+            };
 
             ui.vertical_centered(|ui| {
                 ui.label(
@@ -612,112 +578,14 @@ impl EntropyApp {
             });
             ui.add_space(metrics.value(2.0));
 
-            match crate::smart_input::linux_recommended_input_backend() {
-                crate::smart_input::LinuxRecommendedInputBackend::X11Native => {
-                    let ibus_clicked = draw_universal_symbols_action_row(
-                        ui,
-                        metrics,
-                        row_content_width,
-                        row_height,
-                        lang,
-                        "universal_symbols_setup.wayland_ibus",
-                        "universal_symbols_setup.wayland_ibus_tooltip",
-                        "universal_symbols_setup.setup_ibus",
-                    );
-                    if ibus_clicked {
-                        self.run_linux_universal_symbols_setup(
-                            "linux/ibus/install-user.sh",
-                            "IBus",
-                        );
-                    }
+            let ibus_clicked = draw_universal_symbols_action_row(ui, row, SETUP_IBUS_ACTION);
+            if ibus_clicked {
+                self.run_linux_universal_symbols_setup("linux/ibus/install-user.sh", "IBus");
+            }
 
-                    let fcitx5_clicked = draw_universal_symbols_action_row(
-                        ui,
-                        metrics,
-                        row_content_width,
-                        row_height,
-                        lang,
-                        "universal_symbols_setup.wayland_fcitx5",
-                        "universal_symbols_setup.wayland_fcitx5_tooltip",
-                        "universal_symbols_setup.setup_fcitx5",
-                    );
-                    if fcitx5_clicked {
-                        self.run_linux_universal_symbols_setup(
-                            "linux/fcitx5/install-user.sh",
-                            "Fcitx5",
-                        );
-                    }
-                }
-                crate::smart_input::LinuxRecommendedInputBackend::IBus => {
-                    let alternative_clicked = draw_universal_symbols_action_row(
-                        ui,
-                        metrics,
-                        row_content_width,
-                        row_height,
-                        lang,
-                        "universal_symbols_setup.alternative_backend",
-                        "universal_symbols_setup.alternative_backend_tooltip",
-                        "universal_symbols_setup.setup_fcitx5",
-                    );
-                    if alternative_clicked {
-                        self.run_linux_universal_symbols_setup(
-                            "linux/fcitx5/install-user.sh",
-                            "Fcitx5",
-                        );
-                    }
-
-                    let remove_clicked = draw_universal_symbols_action_row(
-                        ui,
-                        metrics,
-                        row_content_width,
-                        row_height,
-                        lang,
-                        "universal_symbols_setup.remove_ibus_source",
-                        "universal_symbols_setup.remove_ibus_source_tooltip",
-                        "universal_symbols_setup.remove_ibus",
-                    );
-                    if remove_clicked {
-                        self.run_linux_universal_symbols_setup(
-                            "linux/ibus/uninstall-user.sh",
-                            "IBus",
-                        );
-                    }
-                }
-                crate::smart_input::LinuxRecommendedInputBackend::Fcitx5 => {
-                    let text_expansion_clicked = draw_universal_symbols_action_row(
-                        ui,
-                        metrics,
-                        row_content_width,
-                        row_height,
-                        lang,
-                        "universal_symbols_setup.text_expansion_backend",
-                        "universal_symbols_setup.text_expansion_backend_tooltip",
-                        "universal_symbols_setup.setup_ibus",
-                    );
-                    if text_expansion_clicked {
-                        self.run_linux_universal_symbols_setup(
-                            "linux/ibus/install-user.sh",
-                            "IBus",
-                        );
-                    }
-
-                    let remove_clicked = draw_universal_symbols_action_row(
-                        ui,
-                        metrics,
-                        row_content_width,
-                        row_height,
-                        lang,
-                        "universal_symbols_setup.remove_ibus_source",
-                        "universal_symbols_setup.remove_ibus_source_tooltip",
-                        "universal_symbols_setup.remove_ibus",
-                    );
-                    if remove_clicked {
-                        self.run_linux_universal_symbols_setup(
-                            "linux/ibus/uninstall-user.sh",
-                            "IBus",
-                        );
-                    }
-                }
+            let remove_clicked = draw_universal_symbols_action_row(ui, row, REMOVE_IBUS_ACTION);
+            if remove_clicked {
+                self.run_linux_universal_symbols_setup("linux/ibus/uninstall-user.sh", "IBus");
             }
         }
 
@@ -746,7 +614,7 @@ impl EntropyApp {
         self.status_msg = match output {
             Ok(output) if output.status.success() => crate::i18n::tr_catalog(
                 self.app_settings.language,
-                linux_setup_success_status_key(script, backend),
+                linux_setup_success_status_key(script),
             )
             .to_owned(),
             Ok(output) => {
@@ -766,39 +634,34 @@ impl EntropyApp {
     fn draw_macos_permission_status_row(
         &mut self,
         ui: &mut egui::Ui,
-        row_content_width: f32,
-        row_height: f32,
-        metrics: crate::ui_style::ResponsiveMetrics,
-        lang: crate::i18n::Language,
-        dark: bool,
-        label_key: &'static str,
-        tooltip_key: &'static str,
-        status_kind: MacosPermissionStatusKind,
-        suppress_tooltips: bool,
+        row: UniversalSymbolsRowContext,
+        permission: MacosPermissionRow,
     ) {
-        let status = crate::smart_input::macos_universal_symbols_status();
-        let granted = crate::i18n::tr_catalog(lang, "universal_symbols_setup.permission_granted");
-        let denied = crate::i18n::tr_catalog(lang, "universal_symbols_setup.permission_denied");
-        let is_granted = match status_kind {
+        let status = crate::smart_input::macos_text_expander_status();
+        let granted =
+            crate::i18n::tr_catalog(row.lang, "universal_symbols_setup.permission_granted");
+        let denied = crate::i18n::tr_catalog(row.lang, "universal_symbols_setup.permission_denied");
+        let is_granted = match permission.status_kind {
             MacosPermissionStatusKind::Accessibility => status.accessibility_granted,
             MacosPermissionStatusKind::InputMonitoring => status.input_monitoring_granted,
         };
 
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
-            row_content_width,
-            row_height,
-            crate::i18n::tr_catalog(lang, label_key),
+            row.content_width,
+            row.height,
+            crate::i18n::tr_catalog(row.lang, permission.label_key),
             true,
-            (!suppress_tooltips).then_some(crate::i18n::tr_catalog(lang, tooltip_key)),
-            metrics.value(250.0),
+            (!row.suppress_tooltips)
+                .then_some(crate::i18n::tr_catalog(row.lang, permission.tooltip_key)),
+            row.metrics.value(250.0),
             |ui| {
                 draw_universal_symbols_value(
                     ui,
-                    metrics,
+                    row.metrics,
                     250.0,
                     if is_granted { granted } else { denied },
-                    macos_permission_color(is_granted, dark),
+                    macos_permission_color(is_granted, row.dark),
                 );
             },
         );
@@ -808,29 +671,25 @@ impl EntropyApp {
     fn draw_macos_event_capture_status_row(
         &mut self,
         ui: &mut egui::Ui,
-        row_content_width: f32,
-        row_height: f32,
-        metrics: crate::ui_style::ResponsiveMetrics,
-        lang: crate::i18n::Language,
-        dark: bool,
-        suppress_tooltips: bool,
+        row: UniversalSymbolsRowContext,
     ) {
-        let status = crate::smart_input::macos_universal_symbols_status();
-        let active = crate::i18n::tr_catalog(lang, "universal_symbols_setup.event_tap_active");
-        let inactive = crate::i18n::tr_catalog(lang, "universal_symbols_setup.event_tap_inactive");
-        let capture_detail = macos_event_capture_detail(lang, &status);
+        let status = crate::smart_input::macos_text_expander_status();
+        let active = crate::i18n::tr_catalog(row.lang, "universal_symbols_setup.event_tap_active");
+        let inactive =
+            crate::i18n::tr_catalog(row.lang, "universal_symbols_setup.event_tap_inactive");
+        let capture_detail = macos_event_capture_detail(row.lang, &status);
 
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
-            row_content_width,
-            row_height,
-            crate::i18n::tr_catalog(lang, "universal_symbols_setup.event_capture_status"),
+            row.content_width,
+            row.height,
+            crate::i18n::tr_catalog(row.lang, "universal_symbols_setup.event_capture_status"),
             true,
-            (!suppress_tooltips).then_some(crate::i18n::tr_catalog(
-                lang,
+            (!row.suppress_tooltips).then_some(crate::i18n::tr_catalog(
+                row.lang,
                 "universal_symbols_setup.event_capture_status_tooltip",
             )),
-            metrics.value(250.0),
+            row.metrics.value(250.0),
             |ui| {
                 let status_label = if status.event_tap_active {
                     active
@@ -840,19 +699,19 @@ impl EntropyApp {
                 if capture_detail.is_empty() {
                     draw_universal_symbols_value(
                         ui,
-                        metrics,
+                        row.metrics,
                         250.0,
                         status_label,
-                        macos_permission_color(status.event_tap_active, dark),
+                        macos_permission_color(status.event_tap_active, row.dark),
                     );
                 } else {
                     draw_universal_symbols_two_line_value(
                         ui,
-                        metrics,
+                        row.metrics,
                         250.0,
                         status_label,
                         &capture_detail,
-                        dark,
+                        row.dark,
                     );
                 }
             },
@@ -928,7 +787,7 @@ fn macos_permission_color(granted: bool, dark: bool) -> Color32 {
 #[cfg(target_os = "macos")]
 fn macos_event_capture_detail(
     lang: crate::i18n::Language,
-    status: &crate::smart_input::MacosUniversalSymbolsStatus,
+    status: &crate::smart_input::MacosTextExpanderStatus,
 ) -> String {
     if let Some(reason) = &status.failure_reason {
         return reason.clone();
@@ -1011,41 +870,34 @@ fn draw_universal_symbols_section_label(
 
 fn draw_universal_symbols_finish_step_row(
     ui: &mut egui::Ui,
-    metrics: crate::ui_style::ResponsiveMetrics,
-    row_content_width: f32,
-    row_height: f32,
-    lang: crate::i18n::Language,
-    dark: bool,
-    label_key: &'static str,
-    tooltip_key: &'static str,
-    value_key: &'static str,
-    detail_key: Option<&'static str>,
+    row: UniversalSymbolsRowContext,
+    step: UniversalSymbolsFinishStep,
 ) {
     crate::ui_style::settings_list_row_with_tooltip(
         ui,
-        row_content_width,
-        row_height,
-        crate::i18n::tr_catalog(lang, label_key),
+        row.content_width,
+        row.height,
+        crate::i18n::tr_catalog(row.lang, step.label_key),
         true,
-        Some(crate::i18n::tr_catalog(lang, tooltip_key)),
-        metrics.value(250.0),
+        Some(crate::i18n::tr_catalog(row.lang, step.tooltip_key)),
+        row.metrics.value(250.0),
         |ui| {
-            if let Some(detail_key) = detail_key {
+            if let Some(detail_key) = step.detail_key {
                 draw_universal_symbols_two_line_value(
                     ui,
-                    metrics,
+                    row.metrics,
                     250.0,
-                    crate::i18n::tr_catalog(lang, value_key),
-                    crate::i18n::tr_catalog(lang, detail_key),
-                    dark,
+                    crate::i18n::tr_catalog(row.lang, step.value_key),
+                    crate::i18n::tr_catalog(row.lang, detail_key),
+                    row.dark,
                 );
             } else {
                 draw_universal_symbols_value(
                     ui,
-                    metrics,
+                    row.metrics,
                     250.0,
-                    crate::i18n::tr_catalog(lang, value_key),
-                    app_muted_text(dark),
+                    crate::i18n::tr_catalog(row.lang, step.value_key),
+                    app_muted_text(row.dark),
                 );
             }
         },
@@ -1055,53 +907,32 @@ fn draw_universal_symbols_finish_step_row(
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn draw_universal_symbols_action_row(
     ui: &mut egui::Ui,
-    metrics: crate::ui_style::ResponsiveMetrics,
-    row_content_width: f32,
-    row_height: f32,
-    lang: crate::i18n::Language,
-    label_key: &'static str,
-    tooltip_key: &'static str,
-    button_key: &'static str,
+    row: UniversalSymbolsRowContext,
+    action: UniversalSymbolsAction,
 ) -> bool {
-    draw_universal_symbols_action_row_with_tooltip_state(
-        ui,
-        metrics,
-        row_content_width,
-        row_height,
-        lang,
-        label_key,
-        tooltip_key,
-        button_key,
-        false,
-    )
+    draw_universal_symbols_action_row_with_tooltip_state(ui, row, action)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn draw_universal_symbols_action_row_with_tooltip_state(
     ui: &mut egui::Ui,
-    metrics: crate::ui_style::ResponsiveMetrics,
-    row_content_width: f32,
-    row_height: f32,
-    lang: crate::i18n::Language,
-    label_key: &'static str,
-    tooltip_key: &'static str,
-    button_key: &'static str,
-    suppress_tooltips: bool,
+    row: UniversalSymbolsRowContext,
+    action: UniversalSymbolsAction,
 ) -> bool {
     let mut clicked = false;
     crate::ui_style::settings_list_row_with_tooltip(
         ui,
-        row_content_width,
-        row_height,
-        crate::i18n::tr_catalog(lang, label_key),
+        row.content_width,
+        row.height,
+        crate::i18n::tr_catalog(row.lang, action.label_key),
         true,
-        (!suppress_tooltips).then_some(crate::i18n::tr_catalog(lang, tooltip_key)),
-        metrics.settings_control_width(),
+        (!row.suppress_tooltips).then_some(crate::i18n::tr_catalog(row.lang, action.tooltip_key)),
+        row.metrics.settings_control_width(),
         |ui| {
             clicked = crate::ui_style::modern_button(
                 ui,
-                crate::i18n::tr_catalog(lang, button_key),
-                metrics.size(168.0, 34.0),
+                crate::i18n::tr_catalog(row.lang, action.button_key),
+                row.metrics.size(168.0, 34.0),
                 true,
             )
             .clicked();
@@ -1113,17 +944,7 @@ fn draw_universal_symbols_action_row_with_tooltip_state(
 fn universal_symbols_intro_key() -> &'static str {
     #[cfg(target_os = "linux")]
     {
-        match crate::smart_input::linux_recommended_input_backend() {
-            crate::smart_input::LinuxRecommendedInputBackend::X11Native => {
-                "universal_symbols_setup.intro_linux_x11"
-            }
-            crate::smart_input::LinuxRecommendedInputBackend::IBus => {
-                "universal_symbols_setup.intro_linux_ibus"
-            }
-            crate::smart_input::LinuxRecommendedInputBackend::Fcitx5 => {
-                "universal_symbols_setup.intro_linux_fcitx5"
-            }
-        }
+        "universal_symbols_setup.intro_linux_ibus"
     }
     #[cfg(target_os = "windows")]
     {
@@ -1142,17 +963,7 @@ fn universal_symbols_intro_key() -> &'static str {
 fn universal_symbols_backend_value_key() -> &'static str {
     #[cfg(target_os = "linux")]
     {
-        match crate::smart_input::linux_recommended_input_backend() {
-            crate::smart_input::LinuxRecommendedInputBackend::X11Native => {
-                "universal_symbols_setup.backend_linux_x11"
-            }
-            crate::smart_input::LinuxRecommendedInputBackend::IBus => {
-                "universal_symbols_setup.backend_linux_ibus"
-            }
-            crate::smart_input::LinuxRecommendedInputBackend::Fcitx5 => {
-                "universal_symbols_setup.backend_linux_fcitx5"
-            }
-        }
+        "universal_symbols_setup.backend_linux_ibus"
     }
     #[cfg(target_os = "windows")]
     {
@@ -1171,17 +982,7 @@ fn universal_symbols_backend_value_key() -> &'static str {
 fn universal_symbols_finish_step_2_key() -> &'static str {
     #[cfg(target_os = "linux")]
     {
-        match crate::smart_input::linux_recommended_input_backend() {
-            crate::smart_input::LinuxRecommendedInputBackend::X11Native => {
-                "universal_symbols_setup.finish_step_2_x11"
-            }
-            crate::smart_input::LinuxRecommendedInputBackend::IBus => {
-                "universal_symbols_setup.finish_step_2_ibus"
-            }
-            crate::smart_input::LinuxRecommendedInputBackend::Fcitx5 => {
-                "universal_symbols_setup.finish_step_2_fcitx5"
-            }
-        }
+        "universal_symbols_setup.finish_step_2_ibus"
     }
     #[cfg(target_os = "windows")]
     {
@@ -1200,12 +1001,7 @@ fn universal_symbols_finish_step_2_key() -> &'static str {
 fn universal_symbols_finish_step_2_detail_key() -> Option<&'static str> {
     #[cfg(target_os = "linux")]
     {
-        match crate::smart_input::linux_recommended_input_backend() {
-            crate::smart_input::LinuxRecommendedInputBackend::IBus => {
-                Some("universal_symbols_setup.finish_step_2_ibus_detail")
-            }
-            _ => None,
-        }
+        Some("universal_symbols_setup.finish_step_2_ibus_detail")
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -1216,17 +1012,7 @@ fn universal_symbols_finish_step_2_detail_key() -> Option<&'static str> {
 fn universal_symbols_finish_step_3_key() -> &'static str {
     #[cfg(target_os = "linux")]
     {
-        match crate::smart_input::linux_recommended_input_backend() {
-            crate::smart_input::LinuxRecommendedInputBackend::X11Native => {
-                "universal_symbols_setup.finish_step_3_x11"
-            }
-            crate::smart_input::LinuxRecommendedInputBackend::IBus => {
-                "universal_symbols_setup.finish_step_3_ibus"
-            }
-            crate::smart_input::LinuxRecommendedInputBackend::Fcitx5 => {
-                "universal_symbols_setup.finish_step_3_fcitx5"
-            }
-        }
+        "universal_symbols_setup.finish_step_3_ibus"
     }
     #[cfg(target_os = "windows")]
     {
@@ -1245,12 +1031,7 @@ fn universal_symbols_finish_step_3_key() -> &'static str {
 fn universal_symbols_finish_step_3_detail_key() -> Option<&'static str> {
     #[cfg(target_os = "linux")]
     {
-        match crate::smart_input::linux_recommended_input_backend() {
-            crate::smart_input::LinuxRecommendedInputBackend::IBus => {
-                Some("universal_symbols_setup.finish_step_3_ibus_detail")
-            }
-            _ => None,
-        }
+        Some("universal_symbols_setup.finish_step_3_ibus_detail")
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -1261,17 +1042,7 @@ fn universal_symbols_finish_step_3_detail_key() -> Option<&'static str> {
 fn universal_symbols_text_expander_key() -> &'static str {
     #[cfg(target_os = "linux")]
     {
-        match crate::smart_input::linux_recommended_input_backend() {
-            crate::smart_input::LinuxRecommendedInputBackend::X11Native => {
-                "universal_symbols_setup.text_expander_x11"
-            }
-            crate::smart_input::LinuxRecommendedInputBackend::IBus => {
-                "universal_symbols_setup.text_expander_ibus"
-            }
-            crate::smart_input::LinuxRecommendedInputBackend::Fcitx5 => {
-                "universal_symbols_setup.text_expander_fcitx5"
-            }
-        }
+        "universal_symbols_setup.text_expander_ibus"
     }
     #[cfg(target_os = "windows")]
     {
@@ -1288,11 +1059,9 @@ fn universal_symbols_text_expander_key() -> &'static str {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_setup_success_status_key(script: &str, backend: &str) -> &'static str {
+fn linux_setup_success_status_key(script: &str) -> &'static str {
     if script.contains("uninstall") {
         "universal_symbols_setup.ibus_uninstalled_status"
-    } else if backend == "Fcitx5" {
-        "universal_symbols_setup.fcitx5_installed_status"
     } else {
         "universal_symbols_setup.ibus_installed_status"
     }

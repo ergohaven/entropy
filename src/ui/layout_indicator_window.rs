@@ -19,13 +19,13 @@ fn sticky_layout_visuals(dark: bool) -> egui::Visuals {
     visuals.faint_bg_color = app_panel_fill(dark);
     visuals.extreme_bg_color = app_panel_fill(dark);
     visuals.widgets.noninteractive.bg_fill = app_panel_fill(dark);
-    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, app_border_color(dark));
+    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, app_border_color(dark));
     visuals.widgets.inactive.bg_fill = app_surface_fill(dark);
     visuals.widgets.inactive.weak_bg_fill = app_surface_fill(dark);
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, app_border_color(dark));
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, app_border_color(dark));
     visuals.widgets.hovered.bg_fill = app_hover_fill(dark);
     visuals.widgets.hovered.weak_bg_fill = app_hover_fill(dark);
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, app_border_color(dark));
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, app_border_color(dark));
     visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
     visuals
 }
@@ -57,6 +57,49 @@ fn set_windows_window_opacity_by_title(title: &str, opacity: f32) {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED as isize);
         }
         SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn set_macos_window_opacity_by_title(title: &str, opacity: f32) {
+    use objc::{msg_send, sel, sel_impl};
+
+    let opacity = clamp_sticky_layout_opacity(opacity) as f64;
+    unsafe {
+        let Some(ns_application) = objc::runtime::Class::get("NSApplication") else {
+            return;
+        };
+        let app: *mut objc::runtime::Object = msg_send![ns_application, sharedApplication];
+        if app.is_null() {
+            return;
+        }
+        let windows: *mut objc::runtime::Object = msg_send![app, windows];
+        if windows.is_null() {
+            return;
+        }
+        let count: usize = msg_send![windows, count];
+        for idx in 0..count {
+            let window: *mut objc::runtime::Object = msg_send![windows, objectAtIndex: idx];
+            if window.is_null() {
+                continue;
+            }
+            let ns_title: *mut objc::runtime::Object = msg_send![window, title];
+            if ns_title.is_null() {
+                continue;
+            }
+            let utf8: *const std::os::raw::c_char = msg_send![ns_title, UTF8String];
+            if utf8.is_null() {
+                continue;
+            }
+            let matches = std::ffi::CStr::from_ptr(utf8)
+                .to_str()
+                .map(|value| value == title)
+                .unwrap_or(false);
+            if matches {
+                let _: () = msg_send![window, setAlphaValue: opacity];
+                break;
+            }
+        }
     }
 }
 
@@ -121,7 +164,7 @@ fn draw_sticky_layout_transparency_dropdown(
     );
 
     let mut changed = false;
-    egui::popup_below_widget(
+    crate::ui_style::popup_below_widget(
         ui,
         dropdown_id,
         &dropdown_resp,
@@ -165,7 +208,7 @@ fn draw_sticky_layout_transparency_dropdown(
                     if pressed_resp.clicked() {
                         *visibility_mode = StickyLayoutVisibilityMode::PressedOnly;
                         changed = true;
-                        ui.memory_mut(|m| m.close_popup());
+                        egui::Popup::close_all(ui.ctx());
                     }
 
                     for (idx, value) in OPACITY_VALUES.iter().copied().enumerate() {
@@ -206,7 +249,7 @@ fn draw_sticky_layout_transparency_dropdown(
                             *visibility_mode = StickyLayoutVisibilityMode::LayoutAndPresses;
                             *opacity = value;
                             changed = true;
-                            ui.memory_mut(|m| m.close_popup());
+                            egui::Popup::close_all(ui.ctx());
                         }
                     }
                 });
@@ -243,7 +286,7 @@ fn sticky_layout_window_icon_button(
         rect,
         8.0,
         fill,
-        Stroke::new(if active { 1.2 } else { 0.8 }, stroke_color),
+        Stroke::new(if active { 1.2_f32 } else { 0.8_f32 }, stroke_color),
         egui::StrokeKind::Inside,
     );
 
@@ -252,7 +295,7 @@ fn sticky_layout_window_icon_button(
     } else {
         app_muted_text(dark)
     };
-    let stroke = Stroke::new(1.7, color);
+    let stroke = Stroke::new(1.7_f32, color);
     match kind {
         StickyLayoutWindowButton::Close => {
             let a = rect.center() + egui::vec2(-4.5, -4.5);
@@ -323,7 +366,14 @@ impl EntropyApp {
         let selected_device_name = self
             .selected_device
             .and_then(|idx| self.device_manager.devices().get(idx))
-            .map(|device| device.name.clone());
+            .map(|device| {
+                let display_name = self
+                    .device_display_names
+                    .get(&device.display_name_cache_key())
+                    .map(String::as_str)
+                    .unwrap_or(device.name.as_str());
+                device.display_name_with_transport(display_name)
+            });
         let indicator_title =
             crate::i18n::tr_catalog(lang, "ui.sticky_layout_window_title").to_string();
         let device_title = selected_device_name
@@ -346,6 +396,7 @@ impl EntropyApp {
             .as_ref()
             .map(|layout| self.sync_sticky_layout_layer_state(layout))
             .unwrap_or(0);
+        self.sticky_layout_active_layer = sticky_layer;
         let layer_names = self.layer_names.clone();
         let macro_names = self.keycode_picker.macro_names.clone();
         let tap_dance_names = self.keycode_picker.tap_dance_names.clone();
@@ -387,7 +438,8 @@ impl EntropyApp {
         ctx.show_viewport_immediate(
             viewport_id,
             viewport_builder,
-            |viewport_ctx, viewport_class| {
+            |viewport_ui, viewport_class| {
+                let viewport_ctx = viewport_ui.ctx().clone();
                 if viewport_ctx.input(|i| i.viewport().close_requested()) {
                     should_close = true;
                     return;
@@ -414,8 +466,6 @@ impl EntropyApp {
                     }
                 }
 
-                let viewport_default_size = sticky_window_size;
-
                 let mut draw_contents = |ui: &mut egui::Ui, should_close: &mut bool| {
                     *ui.visuals_mut() = sticky_layout_visuals(dark);
                     let effective_sticky_opacity = if resize_opacity_hold_frames > 0 {
@@ -423,10 +473,12 @@ impl EntropyApp {
                     } else {
                         sticky_opacity
                     };
-                    #[cfg(not(target_os = "windows"))]
-                    ui.set_opacity(effective_sticky_opacity);
                     #[cfg(target_os = "windows")]
                     set_windows_window_opacity_by_title(&window_title, effective_sticky_opacity);
+                    #[cfg(target_os = "macos")]
+                    set_macos_window_opacity_by_title(&window_title, effective_sticky_opacity);
+                    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+                    ui.set_opacity(effective_sticky_opacity);
                     let panel_bg = app_panel_fill(dark);
                     let full_rect = ui.max_rect();
                     ui.painter().rect_filled(full_rect, 0.0, panel_bg);
@@ -434,7 +486,7 @@ impl EntropyApp {
                         full_rect.shrink(0.5),
                         0.0,
                         Color32::TRANSPARENT,
-                        Stroke::new(1.0, app_border_color(dark)),
+                        Stroke::new(1.0_f32, app_border_color(dark)),
                         egui::StrokeKind::Inside,
                     );
                     let title_rect = egui::Rect::from_min_max(
@@ -454,7 +506,7 @@ impl EntropyApp {
                             egui::pos2(title_rect.left(), title_rect.bottom()),
                             egui::pos2(title_rect.right(), title_rect.bottom()),
                         ],
-                        Stroke::new(1.0, app_border_color(dark)),
+                        Stroke::new(1.0_f32, app_border_color(dark)),
                     );
 
                     let title_x = title_rect.left() + 12.0;
@@ -554,7 +606,7 @@ impl EntropyApp {
                             egui::pos2(footer_rect.left(), footer_rect.top()),
                             egui::pos2(footer_rect.right(), footer_rect.top()),
                         ],
-                        Stroke::new(1.0, app_border_color(dark)),
+                        Stroke::new(1.0_f32, app_border_color(dark)),
                     );
                     let footer_drag_rect = egui::Rect::from_min_max(
                         egui::pos2(footer_rect.left() + 124.0, footer_rect.top()),
@@ -603,7 +655,7 @@ impl EntropyApp {
                             rect,
                             16.0,
                             app_surface_fill(dark),
-                            Stroke::new(1.0, app_border_color(dark)),
+                            Stroke::new(1.0_f32, app_border_color(dark)),
                             egui::StrokeKind::Inside,
                         );
                         ui.painter().text(
@@ -672,28 +724,17 @@ impl EntropyApp {
                                 egui::pos2(full_rect.right() - offset, full_rect.bottom() - 5.0),
                                 egui::pos2(full_rect.right() - 5.0, full_rect.bottom() - offset),
                             ],
-                            Stroke::new(1.0, grip_color),
+                            Stroke::new(1.0_f32, grip_color),
                         );
                     }
                 };
 
-                if matches!(viewport_class, egui::ViewportClass::Embedded) {
-                    let mut open = true;
-                    egui::Window::new(window_title.as_str())
-                        .open(&mut open)
-                        .default_size(viewport_default_size)
-                        .min_size(sticky_layout_default_window_size())
-                        .resizable(true)
-                        .show(viewport_ctx, |ui| {
-                            draw_contents(ui, &mut should_close);
-                        });
-                    if !open {
-                        should_close = true;
-                    }
+                if matches!(viewport_class, egui::ViewportClass::EmbeddedWindow) {
+                    draw_contents(viewport_ui, &mut should_close);
                 } else {
                     egui::CentralPanel::default()
                         .frame(egui::Frame::NONE.fill(app_panel_fill(dark)))
-                        .show(viewport_ctx, |ui| {
+                        .show_inside(viewport_ui, |ui| {
                             draw_contents(ui, &mut should_close);
                         });
                 }

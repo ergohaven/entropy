@@ -1,6 +1,6 @@
 [package]
 name = "ergohaven-entropy"
-version = "0.2.8"
+version = "0.3.2"
 edition = "2021"
 description = "Desktop app for configuring Vial-QMK and Vial-RMK programmable keyboards and input devices"
 authors = ["Ergohaven"]
@@ -32,8 +32,8 @@ path = "src/main.rs"
 winresource = "0.1"
 
 [dependencies]
-eframe = { version = "0.31", features = ["persistence"] }
-egui = "0.31"
+eframe = { version = "0.34.3", default-features = false, features = ["accesskit", "default_fonts", "glow", "persistence", "wayland", "web_screen_reader", "x11"] }
+egui = "0.34.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
@@ -46,28 +46,38 @@ chrono = "0.4"
 base64 = "0.21"
 ab_glyph = "0.2"
 image = { version = "0.25", default-features = false, features = ["png"] }
+postcard = "1"
+rmk-types = { git = "https://github.com/ergohaven/rmk.git", rev = "99cdcd542600eb1a439675455997fe7cf3928600", default-features = false }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = "0.15"
 ureq = { version = "2", features = ["json"] }
+# Preserve eframe's native winit defaults while selecting its Glow renderer.
+winit = "0.30.13"
+raw-window-handle = "0.6"
 
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))'.dependencies]
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "linux"), not(target_os = "macos")))'.dependencies]
 hidapi = "2.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-raw-window-handle = "0.6"
 tray-icon = "0.22"
 windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Globalization", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
 windows = { version = "0.56", features = ["Foundation", "Media_Control", "Win32_Media_Audio_Endpoints", "Win32_System_Com_StructuredStorage"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# Vial shares a Bluetooth HID service with the keyboard reports. Shared mode
+# prevents hidapi from trying to seize the whole keyboard, which macOS rejects.
+hidapi = { version = "2.6", features = ["macos-shared-device"] }
+dispatch2 = "0.3.1"
 objc = "0.2"
-raw-window-handle = "0.6"
 tray-icon = "0.22"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+async-channel = "2"
+futures-lite = "2"
 hidapi = { version = "2.6", default-features = false, features = ["linux-native-basic-udev"] }
 x11-dl = "2"
+zbus = "5.16"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"

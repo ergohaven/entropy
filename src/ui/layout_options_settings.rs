@@ -30,11 +30,11 @@ impl EntropyApp {
             .as_ref()
             .map(|layout| layout.layout_options.clone())
             .unwrap_or_default();
-        let display_option_indices: Vec<usize> = options
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, option)| (!Self::is_encoder_layout_option(option)).then_some(idx))
-            .collect();
+        let display_option_indices = self
+            .layout
+            .as_ref()
+            .map(|layout| self.user_layout_option_indices(layout))
+            .unwrap_or_default();
 
         crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
@@ -168,7 +168,7 @@ impl EntropyApp {
                                             metrics.settings_control_font_size(),
                                         );
 
-                                    egui::popup_below_widget(
+                                    crate::ui_style::popup_below_widget(
                                         ui,
                                         dropdown_id,
                                         &dropdown_resp,
@@ -238,7 +238,7 @@ impl EntropyApp {
                                                                 row_idx,
                                                                 choice_idx as u32,
                                                             );
-                                                            ui.memory_mut(|m| m.close_popup());
+                                                            egui::Popup::close_all(ui.ctx());
                                                         }
                                                     }
                                                 });

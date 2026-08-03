@@ -1,6 +1,121 @@
 use super::*;
 
+pub(super) const MAIN_MENU_BATTERY_RESERVED_H: f32 = 34.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MainMenuBatteryStatus {
+    None,
+    Single(u8),
+    Split { left: u8, right: u8 },
+}
+
+fn main_menu_battery_status(battery: Option<crate::hid::BatteryHalves>) -> MainMenuBatteryStatus {
+    match battery {
+        Some(crate::hid::BatteryHalves {
+            left: Some(left),
+            right: Some(right),
+        }) => MainMenuBatteryStatus::Split { left, right },
+        Some(crate::hid::BatteryHalves {
+            left: Some(value),
+            right: None,
+        })
+        | Some(crate::hid::BatteryHalves {
+            left: None,
+            right: Some(value),
+        }) => MainMenuBatteryStatus::Single(value),
+        _ => MainMenuBatteryStatus::None,
+    }
+}
+
+fn main_menu_reserves_battery_status_space(info: Option<&DeviceAboutInfo>) -> bool {
+    info.map(|info| info.supports_battery_halves)
+        .unwrap_or(false)
+}
+
+fn layer_after_wheel(selected: usize, layer_count: usize, wheel_delta: f32) -> usize {
+    if layer_count == 0 {
+        return 0;
+    }
+    if wheel_delta < 0.0 {
+        (selected + 1).min(layer_count - 1)
+    } else if wheel_delta > 0.0 {
+        selected.saturating_sub(1)
+    } else {
+        selected.min(layer_count - 1)
+    }
+}
+
+fn layer_name_edit_is_available(hid_busy: bool, background_layers_pending: bool) -> bool {
+    !hid_busy && !background_layers_pending
+}
+
 impl EntropyApp {
+    fn main_menu_battery_status(&self) -> MainMenuBatteryStatus {
+        main_menu_battery_status(
+            self.device_about_info
+                .as_ref()
+                .and_then(|info| info.battery_halves),
+        )
+    }
+
+    pub(super) fn main_menu_reserves_battery_status_space(&self) -> bool {
+        main_menu_reserves_battery_status_space(self.device_about_info.as_ref())
+    }
+
+    fn draw_main_menu_battery_status(&self, ui: &mut egui::Ui, center_x: f32, layer_center_y: f32) {
+        let status = self.main_menu_battery_status();
+        if status == MainMenuBatteryStatus::None {
+            return;
+        }
+
+        let lang = self.app_settings.language;
+        let text_color = app_muted_text(self.dark_mode);
+        let font = FontId::proportional(13.0);
+        let center_y = layer_center_y + 42.0;
+        let paint_value = |x: f32, value: u8| {
+            let painter = ui.painter();
+            let value_text = about_device_ui::battery_percent_text(lang, Some(value));
+            let galley = painter.layout_no_wrap(value_text, font.clone(), text_color);
+            let icon_gap = 5.0;
+            let content_width = crate::ui_style::BATTERY_ICON_WIDTH + icon_gap + galley.size().x;
+            let content_left = x - content_width * 0.5;
+            crate::ui_style::paint_battery_icon(
+                painter,
+                egui::pos2(
+                    content_left + crate::ui_style::BATTERY_ICON_WIDTH * 0.5,
+                    center_y,
+                ),
+                value,
+                text_color,
+            );
+            painter.galley(
+                egui::pos2(
+                    content_left + crate::ui_style::BATTERY_ICON_WIDTH + icon_gap,
+                    center_y - galley.size().y * 0.5,
+                ),
+                galley,
+                text_color,
+            );
+        };
+
+        match status {
+            MainMenuBatteryStatus::None => {}
+            MainMenuBatteryStatus::Single(value) => paint_value(center_x, value),
+            MainMenuBatteryStatus::Split { left, right } => {
+                let value_offset = 44.0;
+                paint_value(center_x - value_offset, left);
+                paint_value(center_x + value_offset, right);
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(center_x, center_y - 8.0),
+                        egui::pos2(center_x, center_y + 8.0),
+                    ],
+                    top_menu_divider_stroke(self.dark_mode),
+                );
+            }
+        }
+    }
+
     pub(super) fn draw_layout_layer_switcher_and_hints(
         &mut self,
         ui: &mut egui::Ui,
@@ -28,6 +143,7 @@ impl EntropyApp {
             let name = display_name;
             let center_x = ui.max_rect().center().x;
             let bar_y = top_base_y + main_tabs_h + 24.0;
+            let mid_y = bar_y + layer_bar_h / 2.0;
             // Layer name / edit field
             let name_rect = egui::Rect::from_min_size(
                 egui::pos2(center_x - 85.0, bar_y),
@@ -72,7 +188,7 @@ impl EntropyApp {
                         .font(editing_font)
                         .horizontal_align(egui::Align::Center)
                         .char_limit(12)
-                        .frame(false),
+                        .frame(egui::Frame::NONE),
                 );
                 // Request focus only on the first frame so lost_focus() works correctly.
                 if !self.editing_layer_focus_requested {
@@ -118,8 +234,6 @@ impl EntropyApp {
                     self.editing_layer_focus_requested = false;
                 }
             } else {
-                let mid_y = bar_y + layer_bar_h / 2.0;
-
                 // Fixed arrow positions based on max 7-char name width so
                 // arrows never jump around as the layer name changes.
                 // name_rect is 170px wide → half = 85px; gap keeps arrows clear.
@@ -130,7 +244,7 @@ impl EntropyApp {
                 let right_center = egui::pos2(center_x + fixed_half + gap + 24.0, arrow_y);
 
                 // Still measure actual text width for painting the name and edit icon.
-                let text_w = ui.fonts(|f| {
+                let text_w = ui.fonts_mut(|f| {
                     f.layout_no_wrap(name.clone(), label_font.clone(), text_color)
                         .size()
                         .x
@@ -156,11 +270,22 @@ impl EntropyApp {
 
                 // Scroll wheel over the whole layer bar switches layers (down = next, up = prev)
                 if wheel_r.hovered() {
-                    let scroll = ui.input(|i| i.raw_scroll_delta.y);
-                    if scroll < 0.0 && selected > 0 {
-                        self.selected_layer = selected - 1;
-                    } else if scroll > 0.0 && selected + 1 < layer_count {
-                        self.selected_layer = selected + 1;
+                    // Use the raw wheel event once. The smoothed delta persists across
+                    // repaint frames and used to race through every layer per notch.
+                    let scroll = ui.input(|i| {
+                        i.raw
+                            .events
+                            .iter()
+                            .find_map(|event| match event {
+                                egui::Event::MouseWheel { delta, .. } => Some(delta.y),
+                                _ => None,
+                            })
+                            .unwrap_or(0.0)
+                    });
+                    let next_layer = layer_after_wheel(selected, layer_count, scroll);
+                    if next_layer != selected {
+                        self.selected_layer = next_layer;
+                        self.jump_back_stack.clear();
                     }
                 }
 
@@ -181,15 +306,20 @@ impl EntropyApp {
                     self.selected_layer = selected + 1;
                     self.jump_back_stack.clear();
                 }
-                if name_r.hovered() {
+                #[cfg(not(target_arch = "wasm32"))]
+                let layer_name_edit_available = layer_name_edit_is_available(
+                    self.hid_write_task_active(),
+                    self.deferred_device_load.next_unloaded_layer().is_some(),
+                );
+                #[cfg(target_arch = "wasm32")]
+                let layer_name_edit_available = true;
+                if name_r.hovered() && layer_name_edit_available {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
-                if name_r.clicked() {
+                if name_r.clicked() && layer_name_edit_available {
                     self.editing_layer = Some(selected);
                     self.editing_layer_text = raw_name.clone();
                 }
-
-                self.draw_layer_actions_menu(ui, egui::pos2(right_center.x + 42.0, arrow_y));
 
                 // Paint
                 let dis = if self.dark_mode {
@@ -237,8 +367,96 @@ impl EntropyApp {
                     text_color,
                 );
 
-                self.draw_layout_bottom_hints(ui, center_x, name_r.hovered());
+                self.draw_layout_bottom_hints(
+                    ui,
+                    center_x,
+                    name_r.hovered() && layer_name_edit_available,
+                );
             }
+
+            self.draw_main_menu_battery_status(ui, center_x, mid_y);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::app::DeviceAboutInfo;
+
+    use super::{
+        layer_after_wheel, layer_name_edit_is_available, main_menu_battery_status,
+        main_menu_reserves_battery_status_space, MainMenuBatteryStatus,
+    };
+
+    #[test]
+    fn layer_name_edit_stays_disabled_between_background_load_steps() {
+        assert!(!layer_name_edit_is_available(true, true));
+        assert!(!layer_name_edit_is_available(false, true));
+        assert!(layer_name_edit_is_available(false, false));
+        assert!(!layer_name_edit_is_available(true, false));
+    }
+
+    #[test]
+    fn split_batteries_keep_left_and_right_order() {
+        assert_eq!(
+            main_menu_battery_status(Some(crate::hid::BatteryHalves {
+                left: Some(98),
+                right: Some(95),
+            })),
+            MainMenuBatteryStatus::Split {
+                left: 98,
+                right: 95,
+            }
+        );
+    }
+
+    #[test]
+    fn one_reported_battery_is_centered() {
+        assert_eq!(
+            main_menu_battery_status(Some(crate::hid::BatteryHalves {
+                left: None,
+                right: Some(95),
+            })),
+            MainMenuBatteryStatus::Single(95)
+        );
+    }
+
+    #[test]
+    fn missing_battery_values_hide_the_main_menu_status() {
+        assert_eq!(
+            main_menu_battery_status(Some(crate::hid::BatteryHalves::default())),
+            MainMenuBatteryStatus::None
+        );
+        assert_eq!(main_menu_battery_status(None), MainMenuBatteryStatus::None);
+    }
+
+    #[test]
+    fn battery_capability_reserves_space_before_values_arrive() {
+        let mut info = DeviceAboutInfo {
+            supports_battery_halves: true,
+            ..Default::default()
+        };
+
+        assert!(main_menu_reserves_battery_status_space(Some(&info)));
+        info.battery_halves = Some(crate::hid::BatteryHalves {
+            left: Some(84),
+            right: Some(81),
+        });
+        assert!(main_menu_reserves_battery_status_space(Some(&info)));
+        assert!(!main_menu_reserves_battery_status_space(None));
+    }
+
+    #[test]
+    fn wheel_event_moves_exactly_one_layer_without_wrapping() {
+        assert_eq!(layer_after_wheel(0, 6, -120.0), 1);
+        assert_eq!(layer_after_wheel(1, 6, 120.0), 0);
+        assert_eq!(layer_after_wheel(5, 6, -120.0), 5);
+        assert_eq!(layer_after_wheel(0, 6, 120.0), 0);
+    }
+
+    #[test]
+    fn wheel_magnitude_does_not_skip_layers() {
+        assert_eq!(layer_after_wheel(2, 8, -10_000.0), 3);
+        assert_eq!(layer_after_wheel(2, 8, 10_000.0), 1);
     }
 }

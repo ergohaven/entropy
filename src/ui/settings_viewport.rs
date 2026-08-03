@@ -83,7 +83,7 @@ pub(crate) fn allocate_adaptive_settings_list_viewport(
     };
 
     let mut scroll_active = false;
-    let popup_open = ui.memory(|m| m.any_popup_open());
+    let popup_open = egui::Popup::is_any_open(ui.ctx());
     let viewport_hovered = !popup_open
         && ui.input(|i| {
             i.pointer
@@ -91,13 +91,7 @@ pub(crate) fn allocate_adaptive_settings_list_viewport(
                 .is_some_and(|pos| viewport.contains(pos))
         });
     let scroll_delta = if viewport_hovered {
-        ui.input(|i| {
-            if i.smooth_scroll_delta.y.abs() > 0.0 {
-                i.smooth_scroll_delta.y
-            } else {
-                i.raw_scroll_delta.y
-            }
-        })
+        ui.input(|i| i.smooth_scroll_delta.y)
     } else {
         0.0
     };

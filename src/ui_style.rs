@@ -18,6 +18,27 @@ pub fn accent() -> Color32 {
     )
 }
 
+pub fn popup_below_widget<R>(
+    _parent_ui: &Ui,
+    popup_id: egui::Id,
+    widget_response: &egui::Response,
+    close_behavior: egui::PopupCloseBehavior,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
+    let response = egui::Popup::from_response(widget_response)
+        .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
+        .open_memory(None)
+        .close_behavior(close_behavior)
+        .id(popup_id)
+        .align(egui::RectAlign::BOTTOM_START)
+        .width(widget_response.rect.width())
+        .show(|ui| {
+            ui.set_min_width(ui.available_width());
+            add_contents(ui)
+        })?;
+    Some(response.inner)
+}
+
 pub fn panel_fill(dark: bool) -> Color32 {
     if dark {
         Color32::from_rgb(30, 30, 30)
@@ -76,11 +97,50 @@ pub fn muted_text(dark: bool) -> Color32 {
     }
 }
 
+pub const BATTERY_ICON_WIDTH: f32 = 16.0;
+
+pub fn paint_battery_icon(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    percent: u8,
+    color: Color32,
+) {
+    let body = egui::Rect::from_min_size(
+        egui::pos2(center.x - BATTERY_ICON_WIDTH * 0.5, center.y - 4.5),
+        Vec2::new(14.0, 9.0),
+    );
+    painter.rect_stroke(
+        body,
+        2.0,
+        Stroke::new(1.0_f32, color),
+        egui::StrokeKind::Inside,
+    );
+
+    let terminal = egui::Rect::from_min_max(
+        egui::pos2(body.right(), center.y - 2.5),
+        egui::pos2(body.right() + 2.0, center.y + 2.5),
+    );
+    painter.rect_filled(terminal, 1.0, color);
+
+    let fill_bounds = body.shrink(2.0);
+    let fill_width = fill_bounds.width() * f32::from(percent.min(100)) / 100.0;
+    if fill_width > 0.0 {
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                fill_bounds.min,
+                egui::pos2(fill_bounds.left() + fill_width, fill_bounds.bottom()),
+            ),
+            0.8,
+            color,
+        );
+    }
+}
+
 pub fn modal_outline_stroke(dark: bool) -> Stroke {
     if dark {
-        Stroke::new(1.0, Color32::from_rgb(54, 54, 58))
+        Stroke::new(1.0_f32, Color32::from_rgb(54, 54, 58))
     } else {
-        Stroke::new(1.0, Color32::from_rgb(230, 230, 233))
+        Stroke::new(1.0_f32, Color32::from_rgb(230, 230, 233))
     }
 }
 
@@ -104,7 +164,7 @@ impl ResponsiveMetrics {
             .native_pixels_per_point()
             .unwrap_or_else(|| ctx.pixels_per_point() / ctx.zoom_factor().max(0.1))
             .max(1.0);
-        let short_side = ctx.screen_rect().width().min(ctx.screen_rect().height()) * native_scale;
+        let short_side = ctx.content_rect().width().min(ctx.content_rect().height()) * native_scale;
         let t = ((short_side - 1_500.0) / (2_160.0 - 1_500.0)).clamp(0.0, 1.0);
         Self {
             scale: 1.0 + 0.12 * t,
@@ -299,7 +359,7 @@ pub fn settings_segmented_control(
                     egui::pos2(x, rect.top() + 7.0),
                     egui::pos2(x, rect.bottom() - 7.0),
                 ],
-                Stroke::new(1.0, border_color(dark).gamma_multiply(0.75)),
+                Stroke::new(1.0_f32, border_color(dark).gamma_multiply(0.75)),
             );
         }
         let text_color = if is_selected {
@@ -388,27 +448,6 @@ pub fn modern_button_with_font(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     resp
-}
-
-pub fn modern_text_field(
-    ui: &mut Ui,
-    id: egui::Id,
-    text: &mut String,
-    width: f32,
-    hint: &str,
-    char_limit: usize,
-    horizontal_align: egui::Align,
-) -> egui::Response {
-    modern_text_field_interactive(
-        ui,
-        id,
-        text,
-        width,
-        hint,
-        char_limit,
-        horizontal_align,
-        true,
-    )
 }
 
 pub fn modern_text_field_sized(
@@ -510,7 +549,7 @@ fn modern_text_field_impl(
                 .hint_text(hint)
                 .font(FontId::proportional(font_size))
                 .char_limit(char_limit)
-                .frame(false)
+                .frame(egui::Frame::NONE)
                 .interactive(interactive)
                 .horizontal_align(horizontal_align)
                 .vertical_align(egui::Align::Center),
@@ -543,14 +582,14 @@ pub fn modern_dropdown_button_sized(
     font_size: f32,
 ) -> egui::Response {
     let dark = ui.visuals().dark_mode;
-    let dropdown_open = ui.memory(|m| m.is_popup_open(id));
+    let dropdown_open = egui::Popup::is_id_open(ui.ctx(), id);
     let (dropdown_rect, dropdown_resp) =
         ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
     if dropdown_resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     if dropdown_resp.clicked() {
-        ui.memory_mut(|m| m.toggle_popup(id));
+        egui::Popup::toggle_id(ui.ctx(), id);
     }
 
     let dropdown_fill = if dropdown_open || dropdown_resp.hovered() {
@@ -580,14 +619,14 @@ pub fn modern_dropdown_button_sized(
             egui::pos2(chevron_x - 4.5, chevron_y - 2.0),
             egui::pos2(chevron_x, chevron_y + 2.5),
         ],
-        Stroke::new(1.4, chevron_color),
+        Stroke::new(1.4_f32, chevron_color),
     );
     ui.painter().line_segment(
         [
             egui::pos2(chevron_x, chevron_y + 2.5),
             egui::pos2(chevron_x + 4.5, chevron_y - 2.0),
         ],
-        Stroke::new(1.4, chevron_color),
+        Stroke::new(1.4_f32, chevron_color),
     );
     dropdown_resp
 }
@@ -613,7 +652,7 @@ pub fn modern_dropdown_select_sized(
         font_size,
     );
     let mut picked = None;
-    egui::popup_below_widget(
+    crate::ui_style::popup_below_widget(
         ui,
         id,
         &dropdown_resp,
@@ -662,7 +701,7 @@ pub fn modern_dropdown_select_sized(
                         );
                         if option_resp.clicked() {
                             picked = Some(idx);
-                            ui.memory_mut(|m| m.close_popup());
+                            egui::Popup::close_all(ui.ctx());
                         }
                     }
                 });
@@ -697,7 +736,10 @@ pub fn modern_toggle_pill(
         surface_fill(dark)
     };
     let stroke = if selected {
-        Stroke::new(1.1, mix(modal_outline_stroke(dark).color, accent(), 0.42))
+        Stroke::new(
+            1.1_f32,
+            mix(modal_outline_stroke(dark).color, accent(), 0.42),
+        )
     } else {
         modal_outline_stroke(dark)
     };
@@ -799,22 +841,6 @@ pub fn modal_action_button_size() -> Vec2 {
     Vec2::new(104.0, 32.0)
 }
 
-pub fn modal_tab_button_size() -> Vec2 {
-    Vec2::new(52.0, 28.0)
-}
-
-pub fn modal_tab_add_button_size() -> Vec2 {
-    Vec2::new(28.0, 28.0)
-}
-
-pub fn modal_field_button_height() -> f32 {
-    34.0
-}
-
-pub fn modal_field_button_size(width: f32) -> Vec2 {
-    Vec2::new(width, modal_field_button_height())
-}
-
 pub fn modal_small_button_size(width: f32) -> Vec2 {
     Vec2::new(width, 32.0)
 }
@@ -825,10 +851,6 @@ pub fn modal_space_xs() -> f32 {
 
 pub fn modal_space_sm() -> f32 {
     8.0
-}
-
-pub fn modal_space_md() -> f32 {
-    12.0
 }
 
 pub fn modal_window_frame(style: &egui::Style, dark: bool) -> egui::Frame {
@@ -883,8 +905,8 @@ pub fn centered_modal_window<'a>(
         .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
         .fixed_size(size)
         .frame(modal_window_frame(
-            ctx.style().as_ref(),
-            ctx.style().visuals.dark_mode,
+            ctx.global_style().as_ref(),
+            ctx.global_style().visuals.dark_mode,
         ))
 }
 
@@ -899,10 +921,6 @@ pub fn modal_content(ui: &mut Ui, layout: ModalLayout, add_contents: impl FnOnce
             add_contents,
         );
     });
-}
-
-pub fn modal_section_title(ui: &mut Ui, title: &str) {
-    ui.label(RichText::new(title).size(12.5).strong());
 }
 
 pub fn modal_intro(ui: &mut Ui, text: &str) {
@@ -933,11 +951,6 @@ pub fn modal_empty_state(ui: &mut Ui, title: &str, detail: Option<&str>) {
     });
 }
 
-pub fn modal_action_row(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui)) {
-    ui.add_space(18.0);
-    ui.horizontal_centered(add_contents);
-}
-
 #[allow(dead_code)]
 pub fn modal_centered_text_block(ui: &mut Ui, width: f32, add_contents: impl FnOnce(&mut Ui)) {
     ui.horizontal_centered(|ui| {
@@ -947,64 +960,6 @@ pub fn modal_centered_text_block(ui: &mut Ui, width: f32, add_contents: impl FnO
             add_contents,
         );
     });
-}
-
-pub fn modal_checkbox_label_row(
-    ui: &mut Ui,
-    content_width: f32,
-    row_height: f32,
-    checked: &mut bool,
-    label: &str,
-    checkbox_label_gap: f32,
-) -> bool {
-    let mut changed = false;
-    ui.allocate_ui_with_layout(
-        egui::vec2(content_width, row_height),
-        egui::Layout::left_to_right(egui::Align::Center),
-        |ui| {
-            ui.horizontal_centered(|ui| {
-                let resp = ui.add(egui::Checkbox::without_text(checked));
-                if resp.hovered() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                }
-                if resp.changed() {
-                    changed = true;
-                }
-                if checkbox_label_gap > 0.0 {
-                    ui.add_space(checkbox_label_gap);
-                }
-                ui.label(label);
-            });
-        },
-    );
-    changed
-}
-
-pub fn modal_labeled_row(
-    ui: &mut Ui,
-    content_width: f32,
-    label_width: f32,
-    row_height: f32,
-    add_label: impl FnOnce(&mut Ui),
-    add_control: impl FnOnce(&mut Ui),
-) {
-    let control_width = (content_width - label_width).max(0.0);
-    ui.allocate_ui_with_layout(
-        egui::vec2(content_width, row_height),
-        egui::Layout::left_to_right(egui::Align::Center),
-        |ui| {
-            ui.allocate_ui_with_layout(
-                egui::vec2(label_width, row_height),
-                egui::Layout::left_to_right(egui::Align::Center),
-                add_label,
-            );
-            ui.allocate_ui_with_layout(
-                egui::vec2(control_width, row_height),
-                egui::Layout::left_to_right(egui::Align::Center),
-                add_control,
-            );
-        },
-    );
 }
 
 pub fn settings_list_row(
@@ -1044,7 +999,7 @@ pub fn settings_list_row_with_tooltip(
     let separator = border_color(dark).gamma_multiply(if dark { 0.72 } else { 0.9 });
     ui.painter().line_segment(
         [row_rect.left_bottom(), row_rect.right_bottom()],
-        Stroke::new(1.0, separator),
+        Stroke::new(1.0_f32, separator),
     );
 
     let label_scale = (content_width / 452.0).clamp(1.0, 1.12);

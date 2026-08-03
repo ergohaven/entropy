@@ -61,6 +61,24 @@ fn device_about_description(lang: crate::i18n::Language) -> &'static str {
     }
 }
 
+fn refresh_device_data_label(lang: crate::i18n::Language) -> &'static str {
+    match lang {
+        crate::i18n::Language::Russian => "Обновить данные",
+        crate::i18n::Language::English => "Refresh device data",
+    }
+}
+
+fn refresh_device_data_tooltip(lang: crate::i18n::Language) -> &'static str {
+    match lang {
+        crate::i18n::Language::Russian => {
+            "Удалить сохраненные данные Vial и QMK, затем переподключить устройство"
+        }
+        crate::i18n::Language::English => {
+            "Discard the cached definition and QMK settings, then reconnect the device"
+        }
+    }
+}
+
 struct AboutRow {
     label: &'static str,
     tooltip: &'static str,
@@ -135,7 +153,7 @@ fn macro_ext_keycodes_status(lang: crate::i18n::Language, info: &DeviceAboutInfo
     }
 }
 
-fn battery_percent_text(lang: crate::i18n::Language, value: Option<u8>) -> String {
+pub(super) fn battery_percent_text(lang: crate::i18n::Language, value: Option<u8>) -> String {
     value
         .map(|percent| format!("{percent}%"))
         .unwrap_or_else(|| not_reported(lang).to_owned())
@@ -157,8 +175,8 @@ fn device_about_rows(lang: crate::i18n::Language, info: &DeviceAboutInfo) -> Vec
             lang,
             "Производитель",
             "Manufacturer",
-            "USB manufacturer string",
-            "USB manufacturer string",
+            "Производитель из HID или метаданных прошивки",
+            "Manufacturer from HID or firmware metadata",
             text_or_unknown(&info.manufacturer),
         ),
         localized_row(
@@ -504,14 +522,10 @@ fn draw_about_rows(
     id_salt: &'static str,
     metrics: crate::ui_style::ResponsiveMetrics,
     rows: &[AboutRow],
+    bottom_reserve: f32,
 ) -> egui::Rect {
-    let list = allocate_adaptive_settings_list_viewport(
-        ui,
-        id_salt,
-        metrics,
-        rows.len(),
-        metrics.value(4.0),
-    );
+    let list =
+        allocate_adaptive_settings_list_viewport(ui, id_salt, metrics, rows.len(), bottom_reserve);
 
     crate::ui_style::allocate_ui_at_rect(ui, list.content_rect, |ui| {
         ui.set_clip_rect(list.viewport);
@@ -589,7 +603,34 @@ impl EntropyApp {
                         .color(app_muted_text(dark)),
                 );
                 ui.add_space(metrics.value(24.0));
-                draw_about_rows(ui, "about_device", metrics, &rows);
+                let list_viewport =
+                    draw_about_rows(ui, "about_device", metrics, &rows, metrics.value(54.0));
+                let button_size = egui::vec2(metrics.value(180.0), metrics.value(32.0));
+                let actions_rect = egui::Rect::from_center_size(
+                    egui::pos2(
+                        list_viewport.center().x,
+                        list_viewport.bottom() + metrics.value(34.0),
+                    ),
+                    button_size,
+                );
+                #[cfg(not(target_arch = "wasm32"))]
+                let refresh_enabled = !self.hid_write_lifecycle_busy();
+                #[cfg(target_arch = "wasm32")]
+                let refresh_enabled = true;
+                crate::ui_style::allocate_ui_at_rect(ui, actions_rect, |ui| {
+                    ui.set_min_size(actions_rect.size());
+                    if crate::ui_style::modern_button(
+                        ui,
+                        refresh_device_data_label(lang),
+                        button_size,
+                        refresh_enabled,
+                    )
+                    .on_hover_text(refresh_device_data_tooltip(lang))
+                    .clicked()
+                    {
+                        self.refresh_current_device_data();
+                    }
+                });
             });
         });
     }
@@ -615,7 +656,8 @@ impl EntropyApp {
                         .color(app_muted_text(dark)),
                 );
                 ui.add_space(metrics.value(24.0));
-                let list_viewport = draw_about_rows(ui, "about_entropy", metrics, &rows);
+                let list_viewport =
+                    draw_about_rows(ui, "about_entropy", metrics, &rows, metrics.value(54.0));
 
                 let checking = matches!(self.update_check, UpdateCheckState::Checking { .. });
                 let ready = match &self.update_check {

@@ -7,7 +7,6 @@ pub enum PopupKey {
     RegularKeyPickWindow,
     PickLayerWindow,
     PendingKeyPickWindow,
-    TapDanceEditorWindow,
     TdKeyPickWindow,
 }
 

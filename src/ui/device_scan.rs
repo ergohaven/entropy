@@ -4,7 +4,40 @@ fn should_wait_for_manual_device_selection(status_msg: &str) -> bool {
     status_msg.starts_with("Open failed:") || status_msg.starts_with("Connect timeout")
 }
 
+fn should_auto_connect_only_device(device_count: usize) -> bool {
+    device_count == 1
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn unique_reconnect_device_index(devices: &[Device], identity: &DeviceIdentity) -> Option<usize> {
+    let mut matches = devices
+        .iter()
+        .enumerate()
+        .filter_map(|(index, device)| identity.matches(device).then_some(index));
+    let first = matches.next()?;
+    matches.next().is_none().then_some(first)
+}
+
 impl EntropyApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn maybe_start_bluetooth_reconnect_scan(&mut self, ctx: &egui::Context) {
+        let Some(next_attempt_at) = (match &self.connect_state {
+            ConnectState::Reconnecting(state) => Some(state.next_attempt_at),
+            ConnectState::Idle | ConnectState::SelectingDevice | ConnectState::Loading { .. } => {
+                None
+            }
+        }) else {
+            return;
+        };
+
+        let now = std::time::Instant::now();
+        if now >= next_attempt_at {
+            self.start_device_scan();
+        } else {
+            ctx.request_repaint_after(next_attempt_at.saturating_duration_since(now));
+        }
+    }
+
     pub(super) fn start_device_scan(&mut self) {
         if !matches!(self.device_scan_state, DeviceScanState::Idle) {
             return;
@@ -47,11 +80,36 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn apply_device_scan_result(&mut self, devices: Vec<Device>) {
+        if let ConnectState::Reconnecting(reconnect) = &self.connect_state {
+            let reconnect = reconnect.clone();
+            let reconnect_device_index =
+                unique_reconnect_device_index(&devices, &reconnect.identity);
+            self.device_manager.replace_devices(devices);
+            let connected_display_name_keys: std::collections::HashSet<String> = self
+                .device_manager
+                .devices()
+                .iter()
+                .map(Device::display_name_cache_key)
+                .collect();
+            self.device_display_names
+                .retain(|key, _| connected_display_name_keys.contains(key));
+
+            if let Some(device_index) = reconnect_device_index {
+                self.selected_device = Some(device_index);
+                self.start_reconnect_connect(device_index, reconnect);
+            } else {
+                self.selected_device = None;
+                self.schedule_bluetooth_reconnect_retry(reconnect, "device not found");
+            }
+            return;
+        }
+
         let previous_device_key = self
             .selected_device
             .and_then(|idx| self.device_manager.devices().get(idx))
             .map(Device::display_name_cache_key);
         let was_loading = matches!(self.connect_state, ConnectState::Loading { .. });
+        let selecting_device = matches!(self.connect_state, ConnectState::SelectingDevice);
 
         self.device_manager.replace_devices(devices);
         let connected_display_name_keys: std::collections::HashSet<String> = self
@@ -64,12 +122,24 @@ impl EntropyApp {
             .retain(|key, _| connected_display_name_keys.contains(key));
 
         if self.device_manager.devices().is_empty() {
+            if selecting_device {
+                self.selected_device = None;
+                self.qmk_hid_hosts.clear();
+                return;
+            }
             if self.selected_device.is_some() || self.layout.is_some() || was_loading {
                 self.selected_device = None;
                 self.clear_connected_keyboard_state("No device detected");
             } else {
                 self.qmk_hid_hosts.clear();
             }
+            return;
+        }
+
+        if selecting_device {
+            self.selected_device = None;
+            self.status_msg.clear();
+            self.qmk_hid_hosts.clear();
             return;
         }
 
@@ -87,6 +157,11 @@ impl EntropyApp {
             && self.layout.is_none()
             && !was_loading
             && !super::app_settings_ui::linux_vial_udev_rules_installed()
+            && !self
+                .device_manager
+                .devices()
+                .iter()
+                .any(Device::uses_bluez_gatt_transport)
         {
             self.qmk_hid_hosts.clear();
             return;
@@ -109,6 +184,17 @@ impl EntropyApp {
             }
         }
 
+        if !should_auto_connect_only_device(self.device_manager.devices().len()) {
+            if self.selected_device.is_some() || self.layout.is_some() || was_loading {
+                self.selected_device = None;
+                self.clear_connected_keyboard_state("");
+            } else {
+                self.status_msg.clear();
+                self.qmk_hid_hosts.clear();
+            }
+            return;
+        }
+
         self.selected_device = Some(0);
         self.start_connect(0);
     }
@@ -127,5 +213,82 @@ mod tests {
             "Connect timeout — RMK/Vial device did not finish loading"
         ));
         assert!(!should_wait_for_manual_device_selection(""));
+    }
+
+    #[test]
+    fn startup_auto_connects_only_when_exactly_one_device_exists() {
+        assert!(!should_auto_connect_only_device(0));
+        assert!(should_auto_connect_only_device(1));
+        assert!(!should_auto_connect_only_device(2));
+        assert!(!should_auto_connect_only_device(8));
+    }
+
+    #[test]
+    fn explicit_device_selection_does_not_auto_connect_only_scan_result() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        let device = Device {
+            name: "K:04".to_owned(),
+            vendor_id: 0xE126,
+            product_id: 0x0074,
+            manufacturer: "Ergohaven".to_owned(),
+            serial_number: "AA:BB:CC:DD:EE:FF".to_owned(),
+            bus_type: "Bluetooth".to_owned(),
+            path: "/dev/hidraw4".to_owned(),
+            firmware: FirmwareProtocol::Vial,
+        };
+        app.connect_state = ConnectState::SelectingDevice;
+
+        app.apply_device_scan_result(vec![device]);
+
+        assert!(app.selected_device.is_none());
+        assert!(matches!(app.connect_state, ConnectState::SelectingDevice));
+        assert_eq!(app.device_manager.devices().len(), 1);
+    }
+
+    #[test]
+    fn reconnect_selects_only_the_same_bluetooth_identity() {
+        let mut expected = Device {
+            name: "K:04".to_owned(),
+            vendor_id: 0xE126,
+            product_id: 0x0074,
+            manufacturer: "Ergohaven".to_owned(),
+            serial_number: "AA:BB:CC:DD:EE:FF".to_owned(),
+            bus_type: "Bluetooth".to_owned(),
+            path: "/dev/hidraw4".to_owned(),
+            firmware: FirmwareProtocol::Vial,
+        };
+        let identity = expected.stable_identity();
+        expected.path = "/dev/hidraw9".to_owned();
+        let mut other = expected.clone();
+        other.serial_number = "11:22:33:44:55:66".to_owned();
+
+        assert_eq!(
+            unique_reconnect_device_index(&[other, expected], &identity),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn reconnect_refuses_an_ambiguous_serial_less_match() {
+        let expected = Device {
+            name: "K:04".to_owned(),
+            vendor_id: 0xE126,
+            product_id: 0x0074,
+            manufacturer: "Ergohaven".to_owned(),
+            serial_number: String::new(),
+            bus_type: "Bluetooth".to_owned(),
+            path: "/dev/hidraw4".to_owned(),
+            firmware: FirmwareProtocol::Vial,
+        };
+        let identity = expected.stable_identity();
+        let mut duplicate = expected.clone();
+        duplicate.path = "/dev/hidraw9".to_owned();
+
+        assert_eq!(
+            unique_reconnect_device_index(&[expected, duplicate], &identity),
+            None
+        );
     }
 }

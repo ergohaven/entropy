@@ -9,9 +9,10 @@ pub enum BasicPickerLayout {
     Norman,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum PickerViewMode {
     Layout,
+    #[default]
     List,
 }
 
@@ -34,12 +35,6 @@ impl PickerViewMode {
             PickerViewMode::Layout => "key_picker.view_layout",
             PickerViewMode::List => "key_picker.view_list",
         }
-    }
-}
-
-impl Default for PickerViewMode {
-    fn default() -> Self {
-        Self::List
     }
 }
 
@@ -199,18 +194,14 @@ impl BasicPickerLayout {
 pub enum KeycodeTab {
     Basic,
     Symbols,
-    Function,
-    Navigation,
+    UniversalSymbols,
     Modifiers,
     Layers,
     Media,
-    Mouse,
-    Numpad,
     Special,
     Rgb,
     Macro,
     TapDance,
-    Quantum,
     Custom,
 }
 
@@ -218,6 +209,7 @@ impl KeycodeTab {
     pub const VIAL_TABS: &'static [KeycodeTab] = &[
         KeycodeTab::Basic,
         KeycodeTab::Symbols,
+        KeycodeTab::UniversalSymbols,
         KeycodeTab::Modifiers,
         KeycodeTab::Special,
         KeycodeTab::Rgb,
@@ -230,18 +222,14 @@ impl KeycodeTab {
         match self {
             KeycodeTab::Basic => "key_picker.tab_basic",
             KeycodeTab::Symbols => "key_picker.tab_symbols",
-            KeycodeTab::Function => "key_picker.tab_function",
-            KeycodeTab::Navigation => "key_picker.tab_navigation",
+            KeycodeTab::UniversalSymbols => "key_picker.tab_universal_symbols",
             KeycodeTab::Modifiers => "key_picker.tab_modifiers",
             KeycodeTab::Layers => "key_picker.tab_layers",
             KeycodeTab::Media => "key_picker.tab_media",
-            KeycodeTab::Mouse => "key_picker.tab_mouse",
-            KeycodeTab::Numpad => "key_picker.tab_numpad",
             KeycodeTab::Special => "key_picker.tab_special",
             KeycodeTab::Rgb => "key_picker.tab_rgb",
             KeycodeTab::Macro => "key_picker.tab_macro",
             KeycodeTab::TapDance => "key_picker.tab_tap_dance",
-            KeycodeTab::Quantum => "key_picker.tab_quantum",
             KeycodeTab::Custom => "key_picker.tab_custom",
         }
     }
@@ -254,17 +242,11 @@ impl KeycodeTab {
             KeycodeTab::Symbols => {
                 matches!(kc.category, KeycodeCategory::Basic) && is_symbol(kc.value)
             }
-            KeycodeTab::Function => {
-                matches!(kc.category, KeycodeCategory::Function) && kc.value <= 0x0045
-            }
-            KeycodeTab::Navigation => matches!(kc.category, KeycodeCategory::Navigation),
             KeycodeTab::Modifiers => matches!(kc.category, KeycodeCategory::Modifier),
             KeycodeTab::Layers => matches!(kc.category, KeycodeCategory::Layer),
             KeycodeTab::Media => {
                 matches!(kc.category, KeycodeCategory::Media | KeycodeCategory::Mouse)
             }
-            KeycodeTab::Mouse => matches!(kc.category, KeycodeCategory::Mouse),
-            KeycodeTab::Numpad => matches!(kc.category, KeycodeCategory::Numpad),
             KeycodeTab::Special => matches!(kc.category, KeycodeCategory::Special),
             _ => false,
         }
@@ -280,10 +262,6 @@ impl KeycodeTab {
         if (0x5700..=0x57FF).contains(&value) {
             return KeycodeTab::TapDance;
         }
-        if crate::smart_input::smart_symbol_for_keycode(value).is_some() {
-            return KeycodeTab::Symbols;
-        }
-
         if let Some(kc) = crate::keycode::find_keycode(value) {
             if kc.name.starts_with("RGB_") {
                 return KeycodeTab::Rgb;
@@ -362,6 +340,19 @@ mod tests {
         assert_eq!(
             KeycodeTab::preferred_for_vial_keycode(0x7E00, true),
             KeycodeTab::Custom
+        );
+    }
+
+    #[test]
+    fn universal_symbols_tab_follows_layout_symbols() {
+        let symbols_index = KeycodeTab::VIAL_TABS
+            .iter()
+            .position(|tab| *tab == KeycodeTab::Symbols)
+            .expect("Symbols tab should exist");
+
+        assert_eq!(
+            KeycodeTab::VIAL_TABS.get(symbols_index + 1),
+            Some(&KeycodeTab::UniversalSymbols)
         );
     }
 

@@ -69,6 +69,10 @@ jobs:
         if: matrix.kind == 'macos'
         run: TARGET="${{ matrix.target }}" scripts/build_macos_app.sh
 
+      - name: Test
+        if: matrix.kind == 'linux'
+        run: cargo test --all-targets
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

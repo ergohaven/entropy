@@ -779,7 +779,7 @@ impl KeycodePicker {
                 .clicked()
                 {
                     self.encode_macro(n);
-                    self.result = Some(0x7700 + n as u16);
+                    self.result = Some((0x7700 + n as u16).into());
                     self.macros_dirty = true;
                     self.open = false;
                 }
@@ -833,13 +833,6 @@ impl KeycodePicker {
 
     fn macro_description(&self, n: usize) -> Option<String> {
         self.macro_descriptions
-            .get(n)
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-    }
-
-    fn macro_custom_name(&self, n: usize) -> Option<String> {
-        self.macro_names
             .get(n)
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())

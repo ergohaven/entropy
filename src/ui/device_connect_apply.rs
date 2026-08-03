@@ -8,11 +8,35 @@ fn is_default_layer_name(index: usize, name: &str) -> bool {
         || trimmed.eq_ignore_ascii_case(&format!("layer {index}"))
 }
 
-fn has_firmware_layer_names(names: &[String]) -> bool {
+/// Merge firmware-read layer names with locally saved ones.
+///
+/// A name the firmware actually stored (`from_firmware[i]`) is authoritative,
+/// even when it looks like a default such as "Main". A locally saved name only
+/// fills a layer the firmware left as a generated descriptor placeholder, so
+/// provenance — not the string — decides. One real firmware name therefore no
+/// longer suppresses saved names for the other layers.
+fn resolve_layer_names(
+    firmware_names: &[String],
+    from_firmware: &[bool],
+    local_names: Option<&[String]>,
+    layer_count: usize,
+) -> Vec<String> {
+    let mut names: Vec<String> = firmware_names.to_vec();
+    if names.len() < layer_count {
+        let start = names.len();
+        names.extend((start..layer_count).map(|layer| layer.to_string()));
+    }
+    names.truncate(layer_count);
+    if let Some(local) = local_names {
+        for (idx, name) in local.iter().enumerate().take(layer_count) {
+            let from_firmware = from_firmware.get(idx).copied().unwrap_or(false);
+            if !name.trim().is_empty() && !from_firmware && is_default_layer_name(idx, &names[idx])
+            {
+                names[idx] = name.clone();
+            }
+        }
+    }
     names
-        .iter()
-        .enumerate()
-        .any(|(index, name)| !is_default_layer_name(index, name))
 }
 
 fn connect_apply_start_log(
@@ -29,6 +53,35 @@ fn connect_apply_error_log(error: &str) -> String {
 
 fn is_hid_open_failure(error: &str) -> bool {
     error.starts_with("Open failed:")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+enum ConnectTaskChannelState {
+    Empty,
+    Progress(String),
+    Done(Box<Result<ConnectResult, String>>),
+    Disconnected,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn drain_connect_task_messages(rx: &mpsc::Receiver<ConnectTaskMessage>) -> ConnectTaskChannelState {
+    let mut latest_progress = None;
+    loop {
+        match rx.try_recv() {
+            Ok(ConnectTaskMessage::Progress(message)) => latest_progress = Some(message),
+            Ok(ConnectTaskMessage::Done(result)) => {
+                return ConnectTaskChannelState::Done(result);
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                return latest_progress
+                    .map(ConnectTaskChannelState::Progress)
+                    .unwrap_or(ConnectTaskChannelState::Empty);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                return ConnectTaskChannelState::Disconnected;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -58,6 +111,249 @@ mod tests {
         ));
         assert!(!is_hid_open_failure("Layout parse failed: missing matrix"));
     }
+
+    #[test]
+    fn fresh_pairing_timeout_is_classified_as_a_disconnect() {
+        let error = "VIA protocol read failed: HID notification probe failed: \
+            HID timeout — device did not respond; Get Input Report fallback failed: \
+            hidapi error: ioctl (GINPUT): EIO: I/O error";
+
+        assert!(crate::hid::is_disconnect_error_message(error));
+    }
+
+    #[test]
+    fn empty_connect_poll_is_throttled() {
+        assert_eq!(CONNECT_POLL_INTERVAL, std::time::Duration::from_millis(250));
+    }
+
+    #[test]
+    fn connect_progress_queue_keeps_only_the_latest_message() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(ConnectTaskMessage::Progress("first".to_owned()))
+            .unwrap();
+        tx.send(ConnectTaskMessage::Progress("latest".to_owned()))
+            .unwrap();
+
+        assert!(matches!(
+            drain_connect_task_messages(&rx),
+            ConnectTaskChannelState::Progress(message) if message == "latest"
+        ));
+    }
+
+    #[test]
+    fn connect_done_bypasses_queued_progress_messages() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(ConnectTaskMessage::Progress("first".to_owned()))
+            .unwrap();
+        tx.send(ConnectTaskMessage::Progress("latest".to_owned()))
+            .unwrap();
+        tx.send(ConnectTaskMessage::Done(Box::new(Err(
+            "finished".to_owned()
+        ))))
+        .unwrap();
+
+        assert!(matches!(
+            drain_connect_task_messages(&rx),
+            ConnectTaskChannelState::Done(result)
+                if matches!(*result, Err(ref error) if error == "finished")
+        ));
+    }
+
+    fn s(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn resolve_prefers_firmware_names_even_when_default_looking() {
+        // Firmware stored "Main" for layer 0; a stale local name must not win.
+        let names = resolve_layer_names(
+            &s(&["Main", "1"]),
+            &[true, false],
+            Some(&s(&["OLD", "LOWER"])),
+            2,
+        );
+        assert_eq!(names, s(&["Main", "LOWER"]));
+    }
+
+    #[test]
+    fn resolve_fills_placeholder_layers_from_local() {
+        // Firmware provided nothing (all placeholders); local names fill them.
+        let names = resolve_layer_names(
+            &s(&["0", "1", "2"]),
+            &[false, false, false],
+            Some(&s(&["BASE", "LOWER", ""])),
+            3,
+        );
+        // Empty local name leaves the placeholder untouched.
+        assert_eq!(names, s(&["BASE", "LOWER", "2"]));
+    }
+
+    #[test]
+    fn resolve_mixed_firmware_and_local() {
+        // Layer 0 real firmware name kept; layers 1/2 placeholders filled locally.
+        let names = resolve_layer_names(
+            &s(&["BASE", "1", "2"]),
+            &[true, false, false],
+            Some(&s(&["X", "RAISE", "ADJUST"])),
+            3,
+        );
+        assert_eq!(names, s(&["BASE", "RAISE", "ADJUST"]));
+    }
+
+    #[test]
+    fn resolve_extends_and_truncates_to_layer_count() {
+        let names = resolve_layer_names(&s(&["BASE"]), &[true], None, 3);
+        assert_eq!(names, s(&["BASE", "1", "2"]));
+        let names = resolve_layer_names(&s(&["A", "B", "C"]), &[true, true, true], None, 2);
+        assert_eq!(names, s(&["A", "B"]));
+    }
+
+    use std::cell::RefCell;
+    use std::collections::{BTreeSet, HashMap};
+
+    /// In-memory [`LayerNameStore`] standing in for the HID device so the
+    /// production sync path can be tested without hardware. Records every read
+    /// and write and lets a test inject transport errors per qsid.
+    struct MockStore {
+        supported: BTreeSet<u16>,
+        stored: RefCell<HashMap<u16, String>>,
+        read_errors: BTreeSet<u16>,
+        write_errors: BTreeSet<u16>,
+        reads: RefCell<Vec<u16>>,
+        writes: RefCell<Vec<(u16, String)>>,
+    }
+
+    impl MockStore {
+        fn new(supported: &[u16]) -> Self {
+            MockStore {
+                supported: supported.iter().copied().collect(),
+                stored: RefCell::new(HashMap::new()),
+                read_errors: BTreeSet::new(),
+                write_errors: BTreeSet::new(),
+                reads: RefCell::new(Vec::new()),
+                writes: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn with_stored(mut self, qsid: u16, value: &str) -> Self {
+            self.stored.get_mut().insert(qsid, value.to_string());
+            self
+        }
+
+        fn failing_reads(mut self, qsids: &[u16]) -> Self {
+            self.read_errors = qsids.iter().copied().collect();
+            self
+        }
+
+        fn failing_writes(mut self, qsids: &[u16]) -> Self {
+            self.write_errors = qsids.iter().copied().collect();
+            self
+        }
+    }
+
+    impl LayerNameStore for MockStore {
+        fn is_supported(&self, qsid: u16) -> bool {
+            self.supported.contains(&qsid)
+        }
+
+        fn get_string(&self, qsid: u16) -> anyhow::Result<String> {
+            self.reads.borrow_mut().push(qsid);
+            if self.read_errors.contains(&qsid) {
+                anyhow::bail!("read transport error on qsid {qsid}");
+            }
+            Ok(self.stored.borrow().get(&qsid).cloned().unwrap_or_default())
+        }
+
+        fn set_string(&self, qsid: u16, value: &str) -> anyhow::Result<()> {
+            self.writes.borrow_mut().push((qsid, value.to_string()));
+            if self.write_errors.contains(&qsid) {
+                anyhow::bail!("write transport error on qsid {qsid}");
+            }
+            self.stored.borrow_mut().insert(qsid, value.to_string());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn sync_unsupported_storage_is_not_a_failure_and_never_touches_the_wire() {
+        // Firmware advertises no layer-name settings at all.
+        let store = MockStore::new(&[]);
+        let failed = sync_layer_names_to_store(&store, &s(&["BASE", "LOWER"]), 2);
+        assert!(failed.is_empty());
+        assert!(store.reads.borrow().is_empty());
+        assert!(store.writes.borrow().is_empty());
+    }
+
+    #[test]
+    fn sync_transient_first_layer_read_failure_is_reported_not_swallowed() {
+        // Regression: a read error on layer 0 used to be treated as "storage
+        // unsupported", aborting the sync and reporting success. Now the layer
+        // is reported failed and later layers still get written.
+        let store = MockStore::new(&[200, 201]).failing_reads(&[200]);
+        let failed = sync_layer_names_to_store(&store, &s(&["BASE", "LOWER"]), 2);
+        assert_eq!(failed, vec![0]);
+        // Layer 1 was still read and written back.
+        assert_eq!(
+            store.writes.borrow().as_slice(),
+            &[(201, "LOWER".to_string())]
+        );
+        assert_eq!(
+            store.stored.borrow().get(&201).map(String::as_str),
+            Some("LOWER")
+        );
+    }
+
+    #[test]
+    fn sync_middle_layer_read_failure_only_fails_that_layer() {
+        let store = MockStore::new(&[200, 201, 202]).failing_reads(&[201]);
+        let failed = sync_layer_names_to_store(&store, &s(&["BASE", "LOWER", "RAISE"]), 3);
+        assert_eq!(failed, vec![1]);
+        assert_eq!(
+            store.stored.borrow().get(&200).map(String::as_str),
+            Some("BASE")
+        );
+        assert_eq!(
+            store.stored.borrow().get(&202).map(String::as_str),
+            Some("RAISE")
+        );
+    }
+
+    #[test]
+    fn sync_set_failure_reports_layer_but_continues() {
+        let store = MockStore::new(&[200, 201]).failing_writes(&[200]);
+        let failed = sync_layer_names_to_store(&store, &s(&["BASE", "LOWER"]), 2);
+        assert_eq!(failed, vec![0]);
+        // The later layer still persisted despite the earlier SET error.
+        assert_eq!(
+            store.stored.borrow().get(&201).map(String::as_str),
+            Some("LOWER")
+        );
+    }
+
+    #[test]
+    fn sync_skips_matching_and_empty_names() {
+        let store = MockStore::new(&[200, 201]).with_stored(201, "LOWER");
+        // Layer 0 empty (skipped, no read); layer 1 already matches (no write).
+        let failed = sync_layer_names_to_store(&store, &s(&["", "LOWER"]), 2);
+        assert!(failed.is_empty());
+        assert_eq!(store.reads.borrow().as_slice(), &[201]);
+        assert!(store.writes.borrow().is_empty());
+    }
+
+    #[test]
+    fn sync_persists_then_is_idempotent_on_reconnect() {
+        let names = s(&["BASE", "LOWER"]);
+        let store = MockStore::new(&[200, 201]);
+        // First sync writes both names.
+        let failed = sync_layer_names_to_store(&store, &names, 2);
+        assert!(failed.is_empty());
+        assert_eq!(store.writes.borrow().len(), 2);
+        // A second sync (as after a reconnect) reads them back and writes nothing.
+        store.writes.borrow_mut().clear();
+        let failed = sync_layer_names_to_store(&store, &names, 2);
+        assert!(failed.is_empty());
+        assert!(store.writes.borrow().is_empty());
+    }
 }
 
 impl EntropyApp {
@@ -67,20 +363,40 @@ impl EntropyApp {
         const CONNECT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
         const CONNECT_TOTAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(240);
 
-        let result = match &mut self.connect_state {
+        enum ConnectPollEvent {
+            Done {
+                result: Result<ConnectResult, String>,
+                reconnect: Option<BluetoothReconnectState>,
+            },
+            Failed {
+                error: String,
+                reconnect: Option<BluetoothReconnectState>,
+            },
+        }
+
+        let event = match &mut self.connect_state {
             ConnectState::Loading {
                 rx,
                 started_at,
                 last_progress_at,
-            } => match rx.try_recv() {
-                Ok(ConnectTaskMessage::Progress(message)) => {
-                    self.status_msg = message;
+                reconnect,
+            } => match drain_connect_task_messages(rx) {
+                ConnectTaskChannelState::Progress(message) => {
+                    if reconnect.is_none() {
+                        self.status_msg = message;
+                    }
                     *last_progress_at = std::time::Instant::now();
                     ctx.request_repaint();
                     return;
                 }
-                Ok(ConnectTaskMessage::Done(result)) => *result,
-                Err(mpsc::TryRecvError::Empty) => {
+                ConnectTaskChannelState::Done(result) => {
+                    ctx.request_repaint();
+                    ConnectPollEvent::Done {
+                        result: *result,
+                        reconnect: reconnect.clone(),
+                    }
+                }
+                ConnectTaskChannelState::Empty => {
                     let idle_timeout = last_progress_at.elapsed() > CONNECT_IDLE_TIMEOUT;
                     let total_timeout = started_at.elapsed() > CONNECT_TOTAL_TIMEOUT;
                     if idle_timeout || total_timeout {
@@ -89,41 +405,74 @@ impl EntropyApp {
                         } else {
                             self.status_msg.clone()
                         };
-                        self.status_msg = format!(
+                        let error = format!(
                             "Connect timeout — RMK/Vial device did not finish loading while: {stage}"
                         );
                         log::warn!("Connect timeout while waiting for stage: {stage}");
-                        self.connect_state = ConnectState::Idle;
+                        ConnectPollEvent::Failed {
+                            error,
+                            reconnect: reconnect.clone(),
+                        }
+                    } else {
+                        #[cfg(not(target_os = "windows"))]
+                        ctx.request_repaint_after(CONNECT_POLL_INTERVAL);
                         return;
                     }
-                    ctx.request_repaint(); // keep polling
-                    return;
                 }
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    self.status_msg = "Connect thread died".into();
+                ConnectTaskChannelState::Disconnected => {
                     log::error!("Connect thread died before returning a result");
-                    self.connect_state = ConnectState::Idle;
-                    return;
+                    ConnectPollEvent::Failed {
+                        error: "Connect thread died".to_owned(),
+                        reconnect: reconnect.clone(),
+                    }
                 }
             },
-            ConnectState::Idle => return,
+            ConnectState::Idle | ConnectState::SelectingDevice | ConnectState::Reconnecting(_) => {
+                return
+            }
         };
 
         self.connect_state = ConnectState::Idle;
+        let (result, reconnect) = match event {
+            ConnectPollEvent::Done { result, reconnect } => (result, reconnect),
+            ConnectPollEvent::Failed { error, reconnect } => (Err(error), reconnect),
+        };
 
         match result {
-            Ok(r) => {
+            Ok(mut r) => {
+                if reconnect.is_some() && self.layout.is_some() {
+                    self.preserve_deferred_snapshot_on_reconnect(&mut r);
+                }
+                let staged_bluetooth_load = r.deferred_load.is_staged();
                 self.pending_tap_hold_numeric_writes.clear();
                 self.tap_hold_numeric_write_due = None;
                 log::info!(
                     "{}",
                     connect_apply_start_log(&r.device_name, r.layer_count, r.layout.firmware)
                 );
+                // A new device is now active; invalidate any file dialog that was
+                // opened against the previous connection.
+                self.connection_generation = self.connection_generation.wrapping_add(1);
                 self.layer_count = r.layer_count;
                 self.firmware = r.layout.firmware;
                 self.current_device_name = r.device_name.clone();
                 self.current_keyboard_id = Some(r.keyboard_id);
+                match &r.vial_unlock_status {
+                    Some((unlocked, keys)) => {
+                        self.vial_unlocked = Some(*unlocked);
+                        self.vial_unlock_keys = keys.clone();
+                    }
+                    None => {
+                        self.vial_unlocked = None;
+                        self.vial_unlock_keys.clear();
+                    }
+                }
                 self.device_about_info = Some(r.about_info.clone());
+                if staged_bluetooth_load {
+                    self.schedule_initial_battery_refresh();
+                } else {
+                    self.schedule_battery_refresh_for_result(r.about_info.battery_halves);
+                }
                 self.matrix_tester_rmk_byte_order = self.current_device_is_likely_rmk();
                 self.current_encoder_visibility_id =
                     encoder_visibility_id(&r.device_name, r.keyboard_id);
@@ -137,6 +486,10 @@ impl EntropyApp {
                 self.keycode_picker.tap_dance_entries = r.tap_dance_entries.clone();
                 self.keycode_picker.tap_dance_synced_entries = r.tap_dance_entries.clone();
                 self.combo_entries = r.combo_entries.clone();
+                self.combo_synced_entries = r.combo_entries.clone();
+                self.combo_dirty = false;
+                self.combo_edit_revision = self.combo_edit_revision.wrapping_add(1);
+                self.combo_attempted_revision = None;
                 self.key_override_entries = r.key_override_entries.clone();
                 self.alt_repeat_entries = r.alt_repeat_entries.clone();
                 self.alt_repeat_names = load_alt_repeat_names(&self.current_device_name);
@@ -207,6 +560,11 @@ impl EntropyApp {
                 self.keycode_picker.macro_descriptions = macro_metadata.descriptions;
                 self.keycode_picker.macro_metadata_dirty = false;
                 self.keycode_picker.supports_macro_ext_keycodes = r.supports_macro_ext_keycodes;
+                self.keycode_picker.supports_rmk_native_key_actions =
+                    r.supports_rmk_native_key_actions;
+                self.keycode_picker.supports_universal_symbols = r.supports_universal_symbols;
+                self.keycode_picker.supports_universal_russian_letters =
+                    r.supports_universal_russian_letters;
                 self.keycode_picker.macro_ext_keycodes_disabled_reason =
                     r.macro_ext_keycodes_disabled_reason;
                 // Parse macro texts into actions (Vial protocol v2+ bytecode).
@@ -216,39 +574,34 @@ impl EntropyApp {
                     .map(|bytes| crate::keycode_picker::decode_macro_actions(bytes))
                     .collect();
 
-                self.status_msg = format!("Connected: {}", r.device_name);
+                let connected_display_name = self
+                    .selected_device
+                    .and_then(|idx| self.device_manager.devices().get(idx))
+                    .map(|device| device.display_name_with_transport(&r.device_name))
+                    .unwrap_or_else(|| r.device_name.clone());
+                self.status_msg = format!("Connected: {connected_display_name}");
 
-                // Load per-device layer names
+                // Load per-device layer names.
                 let device_name = r.device_name.clone();
-                // Prefer names from descriptor/firmware, then overlay local overrides only if a real saved file exists
-                let mut layer_names = r.layout.layer_names.clone();
-                if layer_names.len() < r.layer_count {
-                    let start = layer_names.len();
-                    layer_names.extend((start..r.layer_count).map(|layer| layer.to_string()));
-                }
-                layer_names.truncate(r.layer_count);
-                if !has_firmware_layer_names(&layer_names) {
-                    if let Some(local_layer_names) = load_saved_layer_names(&device_name) {
-                        for (idx, name) in local_layer_names
-                            .into_iter()
-                            .enumerate()
-                            .take(r.layer_count)
-                        {
-                            if !name.trim().is_empty() {
-                                layer_names[idx] = name;
-                            }
-                        }
-                    }
-                }
-                self.layer_names = layer_names;
+                let local_layer_names = load_saved_layer_names(&device_name);
+                self.layer_names = resolve_layer_names(
+                    &r.layout.layer_names,
+                    &r.layer_names_from_firmware,
+                    local_layer_names.as_deref(),
+                    r.layer_count,
+                );
 
                 let encoder_count = r.layout.encoder_count();
-                self.encoder_visibility =
-                    load_encoder_visibility(&self.current_encoder_visibility_id, encoder_count);
-                Self::apply_encoder_layout_options_to_visibility(
+                let hide_modular_encoders_by_default =
+                    self.hide_modular_encoders_by_default(&r.layout);
+                self.encoder_visibility = Self::resolve_initial_encoder_visibility(
                     &r.layout,
                     self.layout_options_value,
-                    &mut self.encoder_visibility,
+                    load_saved_encoder_visibility(
+                        &self.current_encoder_visibility_id,
+                        encoder_count,
+                    ),
+                    hide_modular_encoders_by_default,
                 );
 
                 // Populate picker
@@ -260,7 +613,7 @@ impl EntropyApp {
                 // firmware does not expose Vial/QMK mouse-key settings.
                 self.keycode_picker.supports_mouse_keys = true;
                 self.keycode_picker.supports_combo = !self.combo_entries.is_empty();
-                self.keycode_picker.supports_auto_shift = self.auto_shift_timeout.is_some();
+                self.keycode_picker.supports_auto_shift = r.supported_qmk_settings.contains(&4);
                 self.keycode_picker.supports_caps_word = r.vial_features.caps_word;
                 self.keycode_picker.supports_repeat_key = r.vial_features.repeat_key;
                 self.keycode_picker.supports_layer_lock = r.vial_features.layer_lock;
@@ -290,16 +643,25 @@ impl EntropyApp {
                 self.sticky_layout_prev_pressed.clear();
                 self.sticky_layout_pressed_key_layers.clear();
                 self.sticky_layout_toggled_layers = vec![false; r.layout.layers.len().max(1)];
+                self.sticky_layout_active_combos = vec![false; r.combo_entries.len()];
+                self.sticky_layout_tap_dance_states.clear();
                 self.sticky_layout_base_layer = 0;
+                self.sticky_layout_active_layer = 0;
 
                 self.layout = Some(r.layout);
+                self.sync_firmware_managed_layout_options();
                 self.refresh_layer_picker_content_flags();
 
                 // Keep the same HID owner that loaded the keyboard, matching vial-gui's
                 // open-once/reload/use model. Avoid Entropy-only reopen churn when switching
                 // between qmk-vial and RMK devices.
+                self.shared_hid_output = r
+                    .hid_device
+                    .as_ref()
+                    .and_then(crate::hid::HidDevice::shared_output);
                 self.hid_device = r.hid_device;
-                self.sync_layer_names_to_firmware();
+                self.supported_qmk_settings = r.supported_qmk_settings;
+                self.deferred_device_load = r.deferred_load;
 
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -309,12 +671,23 @@ impl EntropyApp {
 
                 log::info!(
                     "Connected: {} ({} layers, {:?})",
-                    r.device_name,
+                    connected_display_name,
                     r.layer_count,
                     self.firmware
                 );
             }
             Err(e) => {
+                if let Some(reconnect) = reconnect {
+                    self.schedule_bluetooth_reconnect_retry(reconnect, &e);
+                    return;
+                }
+
+                if crate::hid::is_disconnect_error_message(&e)
+                    && self.begin_bluetooth_reconnect(e.clone())
+                {
+                    return;
+                }
+
                 if is_hid_open_failure(&e) {
                     self.selected_device = None;
                     self.clear_connected_keyboard_state(e);
@@ -329,35 +702,101 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn sync_layer_names_to_firmware(&self) {
+        let _ = self.write_layer_names_to_firmware(&self.layer_names);
+    }
+
+    /// Write `names` to firmware (qsid 200 + layer), one layer at a time so a
+    /// single failing SET does not abort the rest. Skips names that already
+    /// match. Returns the indices of layers whose write did not land, so callers
+    /// like the .entlayout import can aggregate and report them. An empty result
+    /// means every non-empty name was already correct or was written back —
+    /// never a masked transport error.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn write_layer_names_to_firmware(&self, names: &[String]) -> Vec<usize> {
         if self.firmware != FirmwareProtocol::Vial {
-            return;
+            return Vec::new();
         }
         let Some(dev) = &self.hid_device else {
-            return;
+            return Vec::new();
         };
+        let store = HidLayerNameStore {
+            dev,
+            supported: &self.supported_qmk_settings,
+        };
+        sync_layer_names_to_store(&store, names, self.layer_count)
+    }
+}
 
-        for (layer, name) in self.layer_names.iter().enumerate().take(self.layer_count) {
-            let qsid = 200 + layer as u16;
-            let name = name.trim();
-            if name.is_empty() {
-                continue;
+/// Storage seam for layer-name persistence, so the sync loop can be exercised
+/// without a real HID device. `is_supported` reports whether the firmware
+/// exposes storage for the setting id at all — used to keep genuine
+/// "unsupported storage" apart from a transient read/write failure.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) trait LayerNameStore {
+    fn is_supported(&self, qsid: u16) -> bool;
+    fn get_string(&self, qsid: u16) -> anyhow::Result<String>;
+    fn set_string(&self, qsid: u16, value: &str) -> anyhow::Result<()>;
+}
+
+/// Production [`LayerNameStore`] backed by the open HID connection and the
+/// setting ids the firmware advertised during connect.
+#[cfg(not(target_arch = "wasm32"))]
+struct HidLayerNameStore<'a> {
+    dev: &'a crate::hid::HidDevice,
+    supported: &'a [u16],
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl LayerNameStore for HidLayerNameStore<'_> {
+    fn is_supported(&self, qsid: u16) -> bool {
+        self.supported.contains(&qsid)
+    }
+    fn get_string(&self, qsid: u16) -> anyhow::Result<String> {
+        self.dev.get_qmk_setting_string(qsid)
+    }
+    fn set_string(&self, qsid: u16, value: &str) -> anyhow::Result<()> {
+        self.dev.set_qmk_setting_string(qsid, value)
+    }
+}
+
+/// Persist `names` to `store`, one layer at a time. A layer is reported failed
+/// only when its storage is supported yet a read or write actually errors — an
+/// unsupported id is skipped silently (the name lives on in the local per-device
+/// store), and a transport error never masquerades as "unsupported".
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn sync_layer_names_to_store<S: LayerNameStore>(
+    store: &S,
+    names: &[String],
+    layer_count: usize,
+) -> Vec<usize> {
+    let mut failed = Vec::new();
+    for (layer, name) in names.iter().enumerate().take(layer_count) {
+        let qsid = 200 + layer as u16;
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        if !store.is_supported(qsid) {
+            // Firmware exposes no storage for this layer name; nothing to persist.
+            continue;
+        }
+        match store.get_string(qsid) {
+            Ok(current) if current == name => {}
+            Ok(_) => {
+                if let Err(e) = store.set_string(qsid, name) {
+                    log::warn!(
+                        "Vial set_qmk_setting_string failed while syncing layer {layer}: {e}"
+                    );
+                    failed.push(layer);
+                }
             }
-            match dev.get_qmk_setting_string(qsid) {
-                Ok(current) if current == name => {}
-                Ok(_) => {
-                    if let Err(e) = dev.set_qmk_setting_string(qsid, name) {
-                        log::warn!(
-                            "Vial set_qmk_setting_string failed while syncing layer {layer}: {e}"
-                        );
-                    }
-                }
-                Err(e) => {
-                    log::debug!("Vial layer name qsid {qsid} not synced: {e}");
-                    if layer == 0 {
-                        break;
-                    }
-                }
+            Err(e) => {
+                // The id is advertised as supported, so a read error is a real
+                // transport failure, not missing storage — surface it.
+                log::warn!("Vial get_qmk_setting_string failed while syncing layer {layer}: {e}");
+                failed.push(layer);
             }
         }
     }
+    failed
 }

@@ -2,7 +2,7 @@ use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LayerSnapshot {
-    pub(super) keycodes: Vec<u16>,
+    pub(super) keycodes: Vec<crate::keyboard::KeyBinding>,
     pub(super) encoder_keycodes: Vec<u16>,
 }
 
@@ -35,7 +35,7 @@ fn capture_layer(layout: &KeyboardLayout, layer: usize) -> Option<LayerSnapshot>
     layout.layers.get(layer)?;
     Some(LayerSnapshot {
         keycodes: (0..layout.keys.len())
-            .map(|key_idx| layout.get_keycode(layer, key_idx))
+            .map(|key_idx| layout.get_key_binding(layer, key_idx))
             .collect(),
         encoder_keycodes: (0..layout.encoders.len())
             .map(|encoder_idx| layout.get_encoder_keycode(layer, encoder_idx))
@@ -228,8 +228,22 @@ fn filled_layer_snapshot(
     keycode: u16,
 ) -> Option<LayerSnapshot> {
     let mut snapshot = capture_layer(layout, layer)?;
-    snapshot.keycodes.fill(keycode);
+    snapshot.keycodes.fill(keycode.into());
     Some(snapshot)
+}
+
+fn apply_layer_updates(
+    layout: &mut KeyboardLayout,
+    layer: usize,
+    key_updates: &[(usize, crate::keyboard::KeyBinding)],
+    encoder_updates: &[(usize, u16)],
+) {
+    for &(key_idx, binding) in key_updates {
+        layout.set_key_binding(layer, key_idx, binding);
+    }
+    for &(encoder_idx, keycode) in encoder_updates {
+        layout.set_encoder_keycode(layer, encoder_idx, keycode);
+    }
 }
 
 fn mirror_key_mapping(keys: &[PhysicalKey]) -> Result<Vec<usize>, LayerOperationError> {
@@ -326,9 +340,13 @@ fn mirrored_layer_snapshot_with_mapping(
     let current = capture_layer(layout, layer).ok_or(LayerOperationError::MissingLayer)?;
     let keycodes = mapping
         .iter()
-        .map(|&source_idx| {
-            let keycode = current.keycodes[source_idx];
-            toggle_handed_modifier(keycode).unwrap_or(keycode)
+        .map(|&source_idx| match current.keycodes[source_idx] {
+            crate::keyboard::KeyBinding::Vial(keycode) => {
+                toggle_handed_modifier(keycode).unwrap_or(keycode).into()
+            }
+            crate::keyboard::KeyBinding::Rmk(action) => {
+                crate::rmk_native::toggle_handed_key_action(action).into()
+            }
         })
         .collect();
     Ok(LayerSnapshot {
@@ -345,8 +363,20 @@ enum LayerUiAction {
     FillInherit,
 }
 
+pub(super) const LAYER_OPERATIONS_SUBMENU_HEIGHT: f32 = 174.0;
+
+fn layer_operation_menu_labels(language: crate::i18n::Language) -> [String; 5] {
+    [
+        crate::i18n::tr_catalog(language, "layer_actions.copy").to_owned(),
+        crate::i18n::tr_catalog(language, "layer_actions.paste").to_owned(),
+        crate::i18n::tr_catalog(language, "layer_actions.mirror").to_owned(),
+        crate::i18n::tr_catalog(language, "layer_actions.fill_none").to_owned(),
+        crate::i18n::tr_catalog(language, "layer_actions.fill_inherit").to_owned(),
+    ]
+}
+
 #[cfg(not(target_arch = "wasm32"))]
-type KeyChange = (usize, u8, u8, u16);
+type KeyChange = (usize, u8, u8, crate::keyboard::KeyBinding);
 
 #[cfg(not(target_arch = "wasm32"))]
 type EncoderChange = (usize, u8, u8, u16);
@@ -375,6 +405,14 @@ pub(super) struct LayerWriteTask {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+pub(super) struct PendingLayerWrite {
+    layer: usize,
+    desired: LayerSnapshot,
+    action_key: &'static str,
+    undo_behavior: LayerUndoBehavior,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 struct LayerWriteFallback {
     layer: usize,
     desired: LayerSnapshot,
@@ -392,7 +430,7 @@ struct LayerWriteResult {
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, PartialEq, Eq)]
 struct LayerWriteProgress {
-    key_updates: Vec<(usize, u16)>,
+    key_updates: Vec<(usize, crate::keyboard::KeyBinding)>,
     encoder_updates: Vec<(usize, u16)>,
     written: usize,
     error: Option<String>,
@@ -402,7 +440,10 @@ struct LayerWriteProgress {
 #[cfg(not(target_arch = "wasm32"))]
 enum KeyWriteOutcome {
     Saved,
-    Mismatch { readback: u16, error: String },
+    Mismatch {
+        readback: crate::keyboard::KeyBinding,
+        error: String,
+    },
     Failed(String),
 }
 
@@ -410,7 +451,7 @@ enum KeyWriteOutcome {
 fn run_layer_writes(
     key_changes: &[KeyChange],
     encoder_changes: &[EncoderChange],
-    mut write_key: impl FnMut(u8, u8, u16) -> KeyWriteOutcome,
+    mut write_key: impl FnMut(u8, u8, crate::keyboard::KeyBinding) -> KeyWriteOutcome,
     mut write_encoder: impl FnMut(u8, u8, u16) -> Result<(), String>,
 ) -> LayerWriteProgress {
     let mut progress = LayerWriteProgress {
@@ -421,10 +462,10 @@ fn run_layer_writes(
         disconnect: false,
     };
 
-    for &(key_idx, row, col, keycode) in key_changes {
-        match write_key(row, col, keycode) {
+    for &(key_idx, row, col, binding) in key_changes {
+        match write_key(row, col, binding) {
             KeyWriteOutcome::Saved => {
-                progress.key_updates.push((key_idx, keycode));
+                progress.key_updates.push((key_idx, binding));
                 progress.written += 1;
             }
             KeyWriteOutcome::Mismatch { readback, error } => {
@@ -505,10 +546,11 @@ impl EntropyApp {
     }
 
     fn fill_selected_layer(&mut self, keycode: u16) {
+        let target_layer = self.selected_layer;
         let desired = self
             .layout
             .as_ref()
-            .and_then(|layout| filled_layer_snapshot(layout, self.selected_layer, keycode));
+            .and_then(|layout| filled_layer_snapshot(layout, target_layer, keycode));
         let Some(desired) = desired else {
             self.report_layer_operation_error(LayerOperationError::MissingLayer);
             return;
@@ -518,7 +560,7 @@ impl EntropyApp {
         } else {
             "layer_actions.fill_none"
         };
-        self.apply_layer_snapshot(self.selected_layer, desired, action_key);
+        self.apply_layer_snapshot(target_layer, desired, action_key);
     }
 
     fn mirror_selected_layer(&mut self, mapping: &[usize]) {
@@ -552,164 +594,121 @@ impl EntropyApp {
         layer_snapshot_for_paste(copied, layout, self.selected_layer)
     }
 
-    pub(super) fn draw_layer_actions_menu(&mut self, ui: &mut egui::Ui, center: egui::Pos2) {
+    pub(super) fn layer_operations_submenu_width(&self, ui: &egui::Ui) -> f32 {
         let language = self.app_settings.language;
-        let popup_id = ui.make_persistent_id("layout_layer_actions_popup");
-        let button_rect = egui::Rect::from_center_size(center, egui::vec2(34.0, 36.0));
-        let button_response = ui.interact(
-            button_rect,
-            ui.make_persistent_id("layout_layer_actions_button"),
-            Sense::click(),
-        );
-        if button_response.clicked() {
-            ui.memory_mut(|memory| memory.toggle_popup(popup_id));
-        }
-        if button_response.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-        let popup_open = ui.memory(|memory| memory.is_popup_open(popup_id));
-        if button_response.hovered() || popup_open {
-            ui.painter()
-                .rect_filled(button_rect, 8.0, app_hover_fill(self.dark_mode));
-        }
-        ui.painter().text(
-            button_rect.center() + egui::vec2(0.0, -3.0),
-            egui::Align2::CENTER_CENTER,
-            "⋯",
-            FontId::proportional(24.0),
-            if button_response.hovered() || popup_open {
-                app_accent()
-            } else {
-                app_muted_text(self.dark_mode)
-            },
-        );
-        let button_response = button_response.on_hover_text(crate::i18n::tr_catalog(
-            language,
-            "layer_actions.menu_tooltip",
-        ));
+        let labels = layer_operation_menu_labels(language);
+        adaptive_top_dropdown_width(ui, labels.iter().map(String::as_str), 210.0)
+    }
 
-        if !popup_open {
-            return;
-        }
-
-        let copy_label = crate::i18n::tr_catalog(language, "layer_actions.copy").to_owned();
-        let paste_label = crate::i18n::tr_catalog(language, "layer_actions.paste").to_owned();
-        let mirror_label = crate::i18n::tr_catalog(language, "layer_actions.mirror").to_owned();
-        let fill_none_label =
-            crate::i18n::tr_catalog(language, "layer_actions.fill_none").to_owned();
-        let fill_inherit_label =
-            crate::i18n::tr_catalog(language, "layer_actions.fill_inherit").to_owned();
-        let menu_width = adaptive_top_dropdown_width(
-            ui,
-            [
-                copy_label.as_str(),
-                paste_label.as_str(),
-                mirror_label.as_str(),
-                fill_none_label.as_str(),
-                fill_inherit_label.as_str(),
-            ],
-            210.0,
-        );
+    pub(super) fn draw_layer_operations_submenu(
+        &mut self,
+        ui: &mut egui::Ui,
+        menu_width: f32,
+    ) -> bool {
+        let language = self.app_settings.language;
+        let [copy_label, paste_label, mirror_label, fill_none_label, fill_inherit_label] =
+            layer_operation_menu_labels(language);
         let paste_snapshot = self.layer_paste_snapshot();
         let mirror_mapping = self
             .layout
             .as_ref()
             .ok_or(LayerOperationError::MissingLayer)
             .and_then(|layout| mirror_key_mapping(&layout.keys));
+        #[cfg(not(target_arch = "wasm32"))]
+        let layer_mutation_available = self.pending_layer_write.is_none()
+            && !self.pending_layout_undo
+            && !self.hid_user_action_busy();
+        #[cfg(target_arch = "wasm32")]
+        let layer_mutation_available = true;
         let mut requested_action = None;
 
-        ui.style_mut().visuals.window_stroke =
-            crate::ui_style::modal_outline_stroke(self.dark_mode);
-        ui.style_mut().visuals.window_fill = app_surface_fill(self.dark_mode);
-        egui::popup_below_widget(
+        ui.set_min_width(menu_width);
+        ui.set_max_width(menu_width);
+        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+
+        let copy_response = top_dropdown_item(ui, menu_width, &copy_label, true, false);
+        let copy_clicked = copy_response.clicked();
+        copy_response.on_hover_text(crate::i18n::tr_catalog(
+            language,
+            "layer_actions.copy_tooltip",
+        ));
+        if copy_clicked {
+            requested_action = Some(LayerUiAction::Copy);
+        }
+
+        let paste_enabled = layer_mutation_available && paste_snapshot.is_ok();
+        let paste_response = top_dropdown_item(ui, menu_width, &paste_label, paste_enabled, false);
+        let paste_clicked = paste_response.clicked();
+        let paste_tooltip = if self.layer_clipboard.is_none() {
+            crate::i18n::tr_catalog(language, "layer_actions.clipboard_empty").to_owned()
+        } else if let Err(error) = paste_snapshot.as_ref() {
+            self.layer_operation_error_message(error.clone())
+        } else {
+            crate::i18n::tr_catalog(language, "layer_actions.paste_tooltip").to_owned()
+        };
+        paste_response.on_hover_text(paste_tooltip);
+        if paste_clicked {
+            requested_action = paste_snapshot
+                .as_ref()
+                .ok()
+                .cloned()
+                .map(LayerUiAction::Paste);
+        }
+
+        ui.add_space(6.0);
+
+        let mirror_enabled = layer_mutation_available && mirror_mapping.is_ok();
+        let mirror_response =
+            top_dropdown_item(ui, menu_width, &mirror_label, mirror_enabled, false);
+        let mirror_clicked = mirror_response.clicked();
+        let mirror_tooltip = if let Err(error) = mirror_mapping.as_ref() {
+            self.layer_operation_error_message(error.clone())
+        } else {
+            crate::i18n::tr_catalog(language, "layer_actions.mirror_tooltip").to_owned()
+        };
+        mirror_response.on_hover_text(mirror_tooltip);
+        if mirror_clicked {
+            requested_action = mirror_mapping
+                .as_ref()
+                .ok()
+                .map(|mapping| LayerUiAction::Mirror(mapping.clone()));
+        }
+
+        ui.add_space(6.0);
+
+        let none_response = top_dropdown_item(
             ui,
-            popup_id,
-            &button_response,
-            egui::PopupCloseBehavior::CloseOnClickOutside,
-            |ui| {
-                ui.set_min_width(menu_width);
-                ui.set_max_width(menu_width);
-                ui.spacing_mut().item_spacing = egui::vec2(0.0, 2.0);
-
-                let copy_response = top_dropdown_item(ui, menu_width, &copy_label, true, false);
-                let copy_clicked = copy_response.clicked();
-                copy_response.on_hover_text(crate::i18n::tr_catalog(
-                    language,
-                    "layer_actions.copy_tooltip",
-                ));
-                if copy_clicked {
-                    requested_action = Some(LayerUiAction::Copy);
-                }
-
-                let paste_enabled = paste_snapshot.is_ok();
-                let paste_response =
-                    top_dropdown_item(ui, menu_width, &paste_label, paste_enabled, false);
-                let paste_clicked = paste_response.clicked();
-                let paste_tooltip = if self.layer_clipboard.is_none() {
-                    crate::i18n::tr_catalog(language, "layer_actions.clipboard_empty").to_owned()
-                } else if let Err(error) = paste_snapshot.as_ref() {
-                    self.layer_operation_error_message(error.clone())
-                } else {
-                    crate::i18n::tr_catalog(language, "layer_actions.paste_tooltip").to_owned()
-                };
-                paste_response.on_hover_text(paste_tooltip);
-                if paste_clicked {
-                    requested_action = paste_snapshot
-                        .as_ref()
-                        .ok()
-                        .cloned()
-                        .map(LayerUiAction::Paste);
-                }
-
-                ui.separator();
-
-                let mirror_enabled = mirror_mapping.is_ok();
-                let mirror_response =
-                    top_dropdown_item(ui, menu_width, &mirror_label, mirror_enabled, false);
-                let mirror_clicked = mirror_response.clicked();
-                let mirror_tooltip = if let Err(error) = mirror_mapping.as_ref() {
-                    self.layer_operation_error_message(error.clone())
-                } else {
-                    crate::i18n::tr_catalog(language, "layer_actions.mirror_tooltip").to_owned()
-                };
-                mirror_response.on_hover_text(mirror_tooltip);
-                if mirror_clicked {
-                    requested_action = mirror_mapping
-                        .as_ref()
-                        .ok()
-                        .map(|mapping| LayerUiAction::Mirror(mapping.clone()));
-                }
-
-                ui.separator();
-
-                let none_response =
-                    top_dropdown_item(ui, menu_width, &fill_none_label, true, false);
-                let none_clicked = none_response.clicked();
-                none_response.on_hover_text(crate::i18n::tr_catalog(
-                    language,
-                    "layer_actions.fill_none_tooltip",
-                ));
-                if none_clicked {
-                    requested_action = Some(LayerUiAction::FillNone);
-                }
-
-                let inherit_response =
-                    top_dropdown_item(ui, menu_width, &fill_inherit_label, true, false);
-                let inherit_clicked = inherit_response.clicked();
-                inherit_response.on_hover_text(crate::i18n::tr_catalog(
-                    language,
-                    "layer_actions.fill_inherit_tooltip",
-                ));
-                if inherit_clicked {
-                    requested_action = Some(LayerUiAction::FillInherit);
-                }
-
-                if requested_action.is_some() {
-                    ui.memory_mut(|memory| memory.close_popup());
-                }
-            },
+            menu_width,
+            &fill_none_label,
+            layer_mutation_available,
+            false,
         );
+        let none_clicked = none_response.clicked();
+        none_response.on_hover_text(crate::i18n::tr_catalog(
+            language,
+            "layer_actions.fill_none_tooltip",
+        ));
+        if none_clicked {
+            requested_action = Some(LayerUiAction::FillNone);
+        }
 
+        let inherit_response = top_dropdown_item(
+            ui,
+            menu_width,
+            &fill_inherit_label,
+            layer_mutation_available,
+            false,
+        );
+        let inherit_clicked = inherit_response.clicked();
+        inherit_response.on_hover_text(crate::i18n::tr_catalog(
+            language,
+            "layer_actions.fill_inherit_tooltip",
+        ));
+        if inherit_clicked {
+            requested_action = Some(LayerUiAction::FillInherit);
+        }
+
+        let action_requested = requested_action.is_some();
         match requested_action {
             Some(LayerUiAction::Copy) => self.copy_selected_layer(),
             Some(LayerUiAction::Paste(desired)) => self.paste_selected_layer(desired),
@@ -718,6 +717,7 @@ impl EntropyApp {
             Some(LayerUiAction::FillInherit) => self.fill_selected_layer(0x0001),
             None => {}
         }
+        action_requested
     }
 
     fn report_layer_operation_error(&mut self, error: LayerOperationError) {
@@ -796,7 +796,18 @@ impl EntropyApp {
         action_key: &'static str,
         undo_behavior: LayerUndoBehavior,
     ) {
-        if self.layer_write_task.is_some() {
+        if self.vial_hid_background_layer_active() {
+            self.pending_layer_write = Some(PendingLayerWrite {
+                layer,
+                desired,
+                action_key,
+                undo_behavior,
+            });
+            self.deferred_device_load.defer_background_for_user_input();
+            return;
+        }
+
+        if self.hid_write_task_active() {
             if let LayerUndoBehavior::RetryDesired { requires_firmware } = undo_behavior {
                 self.undo_stack.push(UndoAction::Layer {
                     layer,
@@ -882,15 +893,16 @@ impl EntropyApp {
         }
 
         let Some(hid_device) = self.hid_device.take() else {
-            for (key_idx, _, _, keycode) in key_changes {
-                if let Some(layout) = &mut self.layout {
-                    layout.set_keycode(layer, key_idx, keycode);
-                }
-            }
-            for (encoder_idx, _, _, keycode) in encoder_changes {
-                if let Some(layout) = &mut self.layout {
-                    layout.set_encoder_keycode(layer, encoder_idx, keycode);
-                }
+            let key_updates = key_changes
+                .iter()
+                .map(|(key_idx, _, _, keycode)| (*key_idx, *keycode))
+                .collect::<Vec<_>>();
+            let encoder_updates = encoder_changes
+                .iter()
+                .map(|(encoder_idx, _, _, keycode)| (*encoder_idx, *keycode))
+                .collect::<Vec<_>>();
+            if let Some(layout) = &mut self.layout {
+                apply_layer_updates(layout, layer, &key_updates, &encoder_updates);
             }
             if matches!(undo_behavior, LayerUndoBehavior::RecordOld) {
                 self.undo_stack.push(UndoAction::Layer {
@@ -944,15 +956,23 @@ impl EntropyApp {
             let progress = run_layer_writes(
                 &key_changes,
                 &encoder_changes,
-                |row, col, keycode| match hid_device.set_keycode(layer_u8, row, col, keycode) {
-                    Ok(()) => KeyWriteOutcome::Saved,
-                    Err(error) => match crate::hid::keycode_writeback_readback(&error) {
-                        Some(readback) => KeyWriteOutcome::Mismatch {
-                            readback,
-                            error: error.to_string(),
-                        },
-                        None => KeyWriteOutcome::Failed(error.to_string()),
-                    },
+                |row, col, binding| match binding {
+                    crate::keyboard::KeyBinding::Vial(keycode) => {
+                        match hid_device.set_keycode(layer_u8, row, col, keycode) {
+                            Ok(()) => KeyWriteOutcome::Saved,
+                            Err(error) => match crate::hid::keycode_writeback_readback(&error) {
+                                Some(readback) => KeyWriteOutcome::Mismatch {
+                                    readback: readback.into(),
+                                    error: error.to_string(),
+                                },
+                                None => KeyWriteOutcome::Failed(error.to_string()),
+                            },
+                        }
+                    }
+                    crate::keyboard::KeyBinding::Rmk(action) => hid_device
+                        .set_rmk_key_action(layer_u8, row, col, action)
+                        .map(|()| KeyWriteOutcome::Saved)
+                        .unwrap_or_else(|error| KeyWriteOutcome::Failed(error.to_string())),
                 },
                 |device_idx, direction, keycode| {
                     hid_device
@@ -976,6 +996,27 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn maybe_start_pending_layer_write(&mut self) {
+        if self.pending_layer_write.is_none()
+            || self.vial_hid_background_layer_active()
+            || self.hid_user_action_busy()
+        {
+            return;
+        }
+
+        let pending = self
+            .pending_layer_write
+            .take()
+            .expect("pending layer write checked above");
+        self.apply_layer_snapshot_with_behavior(
+            pending.layer,
+            pending.desired,
+            pending.action_key,
+            pending.undo_behavior,
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn poll_layer_write(&mut self, ctx: &egui::Context) {
         let result = match self.layer_write_task.as_ref() {
             Some(task) => task.receiver.try_recv(),
@@ -986,6 +1027,8 @@ impl EntropyApp {
             Ok(result) => {
                 self.layer_write_task = None;
                 self.finish_layer_write(result);
+                self.continue_pending_settings_writes(ctx);
+                self.resume_pending_device_connect();
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 ctx.request_repaint_after(std::time::Duration::from_millis(16));
@@ -1013,6 +1056,8 @@ impl EntropyApp {
                         ("layer", &task.fallback.layer.to_string()),
                     ],
                 );
+                self.continue_pending_settings_writes(ctx);
+                self.resume_pending_device_connect();
             }
         }
     }
@@ -1020,15 +1065,13 @@ impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn finish_layer_write(&mut self, result: LayerWriteResult) {
         self.hid_device = result.hid_device;
-        for &(key_idx, keycode) in &result.progress.key_updates {
-            if let Some(layout) = &mut self.layout {
-                layout.set_keycode(result.context.layer, key_idx, keycode);
-            }
-        }
-        for &(encoder_idx, keycode) in &result.progress.encoder_updates {
-            if let Some(layout) = &mut self.layout {
-                layout.set_encoder_keycode(result.context.layer, encoder_idx, keycode);
-            }
+        if let Some(layout) = &mut self.layout {
+            apply_layer_updates(
+                layout,
+                result.context.layer,
+                &result.progress.key_updates,
+                &result.progress.encoder_updates,
+            );
         }
 
         let touched =
@@ -1117,8 +1160,8 @@ impl EntropyApp {
             return;
         }
         if let Some(layout) = &mut self.layout {
-            for (key_idx, keycode) in desired.keycodes.into_iter().enumerate() {
-                layout.set_keycode(layer, key_idx, keycode);
+            for (key_idx, binding) in desired.keycodes.into_iter().enumerate() {
+                layout.set_key_binding(layer, key_idx, binding);
             }
             for (encoder_idx, keycode) in desired.encoder_keycodes.into_iter().enumerate() {
                 layout.set_encoder_keycode(layer, encoder_idx, keycode);
@@ -1147,6 +1190,11 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keyboard::KeyBinding;
+
+    fn bindings(keycodes: &[u16]) -> Vec<KeyBinding> {
+        keycodes.iter().copied().map(Into::into).collect()
+    }
 
     fn physical_key(index: usize, x: f32, y: f32) -> PhysicalKey {
         PhysicalKey {
@@ -1199,7 +1247,7 @@ mod tests {
                 .enumerate()
                 .map(|(idx, _)| physical_encoder(idx, idx as f32, 0.0))
                 .collect(),
-            layers: vec![keycodes.to_vec()],
+            layers: vec![bindings(keycodes)],
             encoder_layers: vec![encoder_keycodes.to_vec()],
             layer_names: vec![],
             custom_keycodes: vec![],
@@ -1227,7 +1275,7 @@ mod tests {
         let copied = capture_clipboard(&source, 0).expect("source layer");
         let pasted = layer_snapshot_for_paste(&copied, &target, 0).expect("compatible layer");
 
-        assert_eq!(pasted.keycodes, vec![10, 11, 12, 13]);
+        assert_eq!(pasted.keycodes, bindings(&[10, 11, 12, 13]));
         assert_eq!(pasted.encoder_keycodes, vec![20, 21]);
     }
 
@@ -1247,7 +1295,7 @@ mod tests {
         let copied = capture_clipboard(&source, 0).expect("source layer");
         let pasted = layer_snapshot_for_paste(&copied, &target, 0).expect("compatible geometry");
 
-        assert_eq!(pasted.keycodes, vec![13, 10, 12, 11]);
+        assert_eq!(pasted.keycodes, bindings(&[13, 10, 12, 11]));
     }
 
     #[test]
@@ -1287,7 +1335,7 @@ mod tests {
 
         let pasted = layer_snapshot_for_paste(&copied, &target, 0).expect("same key count");
 
-        assert_eq!(pasted.keycodes, vec![10, 11, 12, 13]);
+        assert_eq!(pasted.keycodes, bindings(&[10, 11, 12, 13]));
         assert_eq!(pasted.encoder_keycodes, vec![30, 31]);
 
         let different_target = layout(
@@ -1322,10 +1370,33 @@ mod tests {
         let none = filled_layer_snapshot(&target, 0, 0x0000).expect("layer");
         let inherit = filled_layer_snapshot(&target, 0, 0x0001).expect("layer");
 
-        assert_eq!(none.keycodes, vec![0x0000; 4]);
-        assert_eq!(inherit.keycodes, vec![0x0001; 4]);
+        assert_eq!(none.keycodes, bindings(&[0x0000; 4]));
+        assert_eq!(inherit.keycodes, bindings(&[0x0001; 4]));
         assert_eq!(none.encoder_keycodes, vec![20, 21]);
         assert_eq!(inherit.encoder_keycodes, vec![20, 21]);
+    }
+
+    #[test]
+    fn fill_updates_stay_on_the_selected_raw_layer() {
+        let mut target = layout(&[(0.0, 0.0), (1.0, 0.0)], &[10, 11], &[20]);
+        target.layers = vec![
+            bindings(&[10, 11]),
+            bindings(&[12, 13]),
+            bindings(&[14, 15]),
+        ];
+        target.encoder_layers = vec![vec![20], vec![21], vec![22]];
+
+        apply_layer_updates(
+            &mut target,
+            1,
+            &[(0, 0x0001.into()), (1, 0x0001.into())],
+            &[],
+        );
+
+        assert_eq!(target.layers[0], bindings(&[10, 11]));
+        assert_eq!(target.layers[1], bindings(&[0x0001, 0x0001]));
+        assert_eq!(target.layers[2], bindings(&[14, 15]));
+        assert_eq!(target.encoder_layers, vec![vec![20], vec![21], vec![22]]);
     }
 
     #[test]
@@ -1349,7 +1420,7 @@ mod tests {
 
         assert_eq!(
             mirrored.keycodes,
-            vec![0x00E2, 12, 11, 0x00E4, 23, 22, 21, 20]
+            bindings(&[0x00E2, 12, 11, 0x00E4, 23, 22, 21, 20])
         );
         assert_eq!(mirrored.encoder_keycodes, vec![30]);
     }
@@ -1410,7 +1481,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn layer_write_runner_records_successful_keys_and_encoders() {
-        let keys = vec![(0, 0, 0, 10), (1, 0, 1, 11)];
+        let keys = vec![(0, 0, 0, 10.into()), (1, 0, 1, 11.into())];
         let encoders = vec![(0, 0, 1, 20)];
 
         let progress = run_layer_writes(
@@ -1423,7 +1494,7 @@ mod tests {
         assert_eq!(
             progress,
             LayerWriteProgress {
-                key_updates: vec![(0, 10), (1, 11)],
+                key_updates: vec![(0, 10.into()), (1, 11.into())],
                 encoder_updates: vec![(0, 20)],
                 written: 3,
                 error: None,
@@ -1435,7 +1506,11 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn layer_write_runner_stops_after_disconnect_and_skips_encoders() {
-        let keys = vec![(0, 0, 0, 10), (1, 0, 1, 11), (2, 0, 2, 12)];
+        let keys = vec![
+            (0, 0, 0, 10.into()),
+            (1, 0, 1, 11.into()),
+            (2, 0, 2, 12.into()),
+        ];
         let encoders = vec![(0, 0, 1, 20)];
         let mut encoder_calls = 0;
 
@@ -1443,7 +1518,7 @@ mod tests {
             &keys,
             &encoders,
             |_, _, keycode| {
-                if keycode == 11 {
+                if keycode == 11.into() {
                     KeyWriteOutcome::Failed("device disconnected".into())
                 } else {
                     KeyWriteOutcome::Saved
@@ -1455,7 +1530,7 @@ mod tests {
             },
         );
 
-        assert_eq!(progress.key_updates, vec![(0, 10)]);
+        assert_eq!(progress.key_updates, vec![(0, 10.into())]);
         assert!(progress.encoder_updates.is_empty());
         assert_eq!(progress.written, 1);
         assert_eq!(progress.error.as_deref(), Some("device disconnected"));
@@ -1466,19 +1541,19 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn layer_write_runner_reconciles_readback_mismatch_without_disconnect() {
-        let keys = vec![(0, 0, 0, 10)];
+        let keys = vec![(0, 0, 0, 10.into())];
 
         let progress = run_layer_writes(
             &keys,
             &[],
             |_, _, _| KeyWriteOutcome::Mismatch {
-                readback: 99,
+                readback: 99.into(),
                 error: "writeback mismatch".into(),
             },
             |_, _, _| Ok(()),
         );
 
-        assert_eq!(progress.key_updates, vec![(0, 99)]);
+        assert_eq!(progress.key_updates, vec![(0, 99.into())]);
         assert_eq!(progress.written, 0);
         assert_eq!(progress.error.as_deref(), Some("writeback mismatch"));
         assert!(!progress.disconnect);
@@ -1512,11 +1587,11 @@ mod tests {
     #[test]
     fn failed_layer_undo_requeues_desired_snapshot() {
         let old = LayerSnapshot {
-            keycodes: vec![1, 2],
+            keycodes: bindings(&[1, 2]),
             encoder_keycodes: vec![],
         };
         let desired = LayerSnapshot {
-            keycodes: vec![3, 4],
+            keycodes: bindings(&[3, 4]),
             encoder_keycodes: vec![],
         };
         let context = LayerWriteContext {
@@ -1541,14 +1616,14 @@ mod tests {
     #[test]
     fn partial_normal_write_records_old_snapshot_for_undo() {
         let old = LayerSnapshot {
-            keycodes: vec![1, 2],
+            keycodes: bindings(&[1, 2]),
             encoder_keycodes: vec![],
         };
         let context = LayerWriteContext {
             layer: 0,
             old: old.clone(),
             desired: LayerSnapshot {
-                keycodes: vec![3, 4],
+                keycodes: bindings(&[3, 4]),
                 encoder_keycodes: vec![],
             },
             action: "Paste".into(),

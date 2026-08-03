@@ -1,11 +1,11 @@
-use crate::device::{Device, DeviceManager};
+use crate::device::{Device, DeviceIdentity, DeviceManager};
 use crate::firmware::FirmwareProtocol;
 
 use crate::keyboard::{KeyboardLayout, LayoutOption, PhysicalEncoder, PhysicalKey};
 use crate::keycode::{
     key_label_font_sizes, keycode_label_with_names_and_layout, keycode_tooltip, KeyLegendLayout,
 };
-use crate::keycode_picker::{KeycodePicker, KeycodeTab};
+use crate::keycode_picker::{DeferredPickerDataState, KeycodePicker, KeycodeTab};
 use egui::{Color32, FontId, RichText, Sense, Stroke, Vec2};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc;
@@ -30,6 +30,10 @@ use app_storage::*;
 #[path = "app_update.rs"]
 mod app_update;
 use app_update::*;
+#[path = "app_repaint.rs"]
+mod app_repaint;
+#[cfg(not(target_arch = "wasm32"))]
+use app_repaint::*;
 #[path = "entlayout.rs"]
 mod entlayout;
 #[path = "entsettings.rs"]
@@ -56,6 +60,10 @@ mod app_settings_ui;
 mod auto_shift_settings_ui;
 #[path = "ui/bluetooth_settings.rs"]
 mod bluetooth_settings_ui;
+#[path = "ui/combo_write.rs"]
+mod combo_write;
+#[cfg(not(target_arch = "wasm32"))]
+use combo_write::ComboWriteTask;
 #[path = "ui/combo_settings.rs"]
 mod combo_settings_ui;
 #[path = "ui/device_connect_apply.rs"]
@@ -64,21 +72,25 @@ mod device_connect_apply;
 mod device_connect_task;
 #[path = "ui/device_connection.rs"]
 mod device_connection;
+#[path = "ui/device_deferred_load.rs"]
+mod device_deferred_load;
 #[path = "ui/device_scan.rs"]
 mod device_scan;
 #[path = "ui/device_settings_helpers.rs"]
 mod device_settings_helpers;
 #[path = "ui/encoder_visibility_settings.rs"]
 mod encoder_visibility_settings_ui;
+#[path = "ui/file_dialog.rs"]
+mod file_dialog;
 #[path = "ui/grave_escape_settings.rs"]
 mod grave_escape_settings_ui;
 #[path = "ui/key_assignment.rs"]
 mod key_assignment;
 #[path = "ui/layer_operations.rs"]
 mod layer_operations;
-#[cfg(not(target_arch = "wasm32"))]
-use layer_operations::LayerWriteTask;
 use layer_operations::{LayerClipboard, LayerSnapshot};
+#[cfg(not(target_arch = "wasm32"))]
+use layer_operations::{LayerWriteTask, PendingLayerWrite};
 #[path = "ui/key_override_settings.rs"]
 mod key_override_settings_ui;
 #[path = "ui/layer_led_settings.rs"]
@@ -131,10 +143,18 @@ mod module_settings_ui;
 mod mouse_keys_settings_ui;
 #[path = "ui/onboarding_tour.rs"]
 mod onboarding_tour;
+#[path = "ui/qmk_settings_write_queue.rs"]
+mod qmk_settings_write_queue;
+use qmk_settings_write_queue::QmkSettingsWriteQueue;
 #[path = "ui/rgb_settings.rs"]
 mod rgb_settings_ui;
 #[path = "ui/settings_shell.rs"]
 mod settings_shell;
+#[path = "ui/settings_write_queue.rs"]
+mod settings_write_queue;
+use settings_write_queue::SettingsWriteQueueState;
+#[cfg(not(target_arch = "wasm32"))]
+use settings_write_queue::SettingsWriteTask;
 #[path = "ui/tap_hold_settings.rs"]
 mod tap_hold_settings_ui;
 #[path = "ui/text_expander_editor.rs"]
@@ -143,14 +163,18 @@ mod text_expander_editor;
 mod text_expander_runtime;
 #[path = "ui/text_expander_settings.rs"]
 mod text_expander_settings_ui;
+#[path = "ui/universal_symbols_setup.rs"]
+mod text_expander_setup;
 #[path = "ui/touchpad_settings.rs"]
 mod touchpad_settings_ui;
 #[path = "ui/typing_trainer.rs"]
 mod typing_trainer_ui;
 #[path = "ui/ui_scale.rs"]
 mod ui_scale;
-#[path = "ui/universal_symbols_setup.rs"]
-mod universal_symbols_setup;
+#[path = "ui/vial_hid_task.rs"]
+mod vial_hid_task;
+#[cfg(not(target_arch = "wasm32"))]
+use vial_hid_task::VialHidTask;
 #[path = "vial/unlock.rs"]
 mod vial_unlock;
 #[path = "ui/window_lifecycle.rs"]

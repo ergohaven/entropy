@@ -1,5 +1,36 @@
 use super::*;
 
+fn take_ctrl_wheel_delta(events: &mut [egui::Event]) -> f32 {
+    let mut wheel_delta = 0.0;
+    for event in events {
+        if let egui::Event::MouseWheel {
+            delta, modifiers, ..
+        } = event
+        {
+            if modifiers.ctrl {
+                wheel_delta += delta.y;
+                // Ctrl+wheel belongs to global UI scaling, not page-local
+                // wheel handlers such as the layer switcher.
+                delta.y = 0.0;
+            }
+        }
+    }
+    wheel_delta
+}
+
+fn ui_scale_control_text_color(
+    normal: Color32,
+    quiet: Color32,
+    controls_hovered: bool,
+    enabled: bool,
+) -> Color32 {
+    if controls_hovered && enabled {
+        normal
+    } else {
+        quiet
+    }
+}
+
 impl EntropyApp {
     pub(super) fn ui_scale_percent(&self) -> i32 {
         (clamp_ui_scale(self.app_settings.ui_scale) * 100.0).round() as i32
@@ -38,14 +69,15 @@ impl EntropyApp {
 
     pub(super) fn handle_ui_scale_shortcuts(&mut self, ctx: &egui::Context) {
         let action = ctx.input_mut(|i| {
+            // egui 0.34 turns Ctrl+wheel into zoom_delta and leaves
+            // smooth_scroll_delta empty. Read the raw wheel event once so the
+            // app's persisted, clamped scale remains the single zoom owner.
+            let wheel_delta = take_ctrl_wheel_delta(&mut i.raw.events);
+            if wheel_delta.abs() > 0.0 {
+                return Some(if wheel_delta > 0.0 { 1 } else { -1 });
+            }
             if !i.modifiers.ctrl {
                 return None;
-            }
-            let wheel_delta = i.raw_scroll_delta.y;
-            if wheel_delta.abs() > 0.0 {
-                i.raw_scroll_delta = Vec2::ZERO;
-                i.smooth_scroll_delta = Vec2::ZERO;
-                return Some(if wheel_delta > 0.0 { 1 } else { -1 });
             }
             if i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals) {
                 Some(1)
@@ -78,9 +110,11 @@ impl EntropyApp {
         let gap = 4.0;
         let total_w = minus_w + label_w + plus_w + gap * 2.0;
         let text_color = ui.visuals().widgets.inactive.fg_stroke.color;
-        let muted = app_muted_text(ui.visuals().dark_mode);
+        let quiet_text = app_top_bar_quiet_text(ui.visuals().dark_mode);
         let hover_fill = app_hover_fill(ui.visuals().dark_mode);
         let font = FontId::proportional(14.0);
+        let controls_rect = egui::Rect::from_min_size(left_top, Vec2::new(total_w, height));
+        let controls_hovered = ui.rect_contains_pointer(controls_rect);
 
         let draw_control =
             |ui: &mut egui::Ui, rect: egui::Rect, label: &str, enabled: bool| -> egui::Response {
@@ -94,7 +128,7 @@ impl EntropyApp {
                     egui::Align2::CENTER_CENTER,
                     label,
                     font.clone(),
-                    if enabled { text_color } else { muted },
+                    ui_scale_control_text_color(text_color, quiet_text, controls_hovered, enabled),
                 );
                 response
             };
@@ -128,7 +162,7 @@ impl EntropyApp {
             egui::Align2::CENTER_CENTER,
             format!("{}%", self.ui_scale_percent()),
             FontId::proportional(13.0),
-            text_color,
+            ui_scale_control_text_color(text_color, quiet_text, controls_hovered, true),
         );
 
         if draw_control(ui, plus_rect, "+", can_increase).clicked() && can_increase {
@@ -136,5 +170,61 @@ impl EntropyApp {
         }
 
         total_w
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{take_ctrl_wheel_delta, ui_scale_control_text_color};
+    use egui::{Color32, Event, Modifiers, MouseWheelUnit, TouchPhase, Vec2};
+
+    fn wheel_event(delta_y: f32, modifiers: Modifiers) -> Event {
+        Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, delta_y),
+            phase: TouchPhase::Move,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn ctrl_wheel_is_consumed_for_ui_scaling() {
+        let mut events = [wheel_event(120.0, Modifiers::CTRL)];
+
+        assert_eq!(take_ctrl_wheel_delta(&mut events), 120.0);
+        assert!(matches!(
+            events[0],
+            Event::MouseWheel { delta, .. } if delta.y == 0.0
+        ));
+    }
+
+    #[test]
+    fn plain_wheel_remains_available_to_page_controls() {
+        let mut events = [wheel_event(-120.0, Modifiers::NONE)];
+
+        assert_eq!(take_ctrl_wheel_delta(&mut events), 0.0);
+        assert!(matches!(
+            events[0],
+            Event::MouseWheel { delta, .. } if delta.y == -120.0
+        ));
+    }
+
+    #[test]
+    fn ui_scale_controls_are_quiet_until_the_group_is_hovered() {
+        let normal = Color32::from_gray(220);
+        let quiet = Color32::from_gray(58);
+
+        assert_eq!(
+            ui_scale_control_text_color(normal, quiet, false, true),
+            quiet
+        );
+        assert_eq!(
+            ui_scale_control_text_color(normal, quiet, true, true),
+            normal
+        );
+        assert_eq!(
+            ui_scale_control_text_color(normal, quiet, true, false),
+            quiet
+        );
     }
 }

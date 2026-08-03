@@ -35,15 +35,7 @@ impl EntropyApp {
                     ui.set_clip_rect(list.viewport);
                     ui.set_min_size(list.content_rect.size());
                     ui.spacing_mut().item_spacing.y = 0.0;
-                    self.draw_app_settings_editor_content(
-                        ui,
-                        list.first_visible_row..list.last_visible_row,
-                        list.row_content_width,
-                        list.row_height,
-                        metrics,
-                        dark,
-                        list.suppress_tooltips,
-                    );
+                    self.draw_app_settings_editor_content(ui, &list, metrics, dark);
                 });
 
                 if list.has_scrollbar {
@@ -80,7 +72,7 @@ impl EntropyApp {
                             )
                             .clicked()
                             {
-                                self.import_entsettings_dialog(ui.ctx());
+                                self.import_entsettings_dialog();
                             }
                             if crate::ui_style::modern_button(
                                 ui,
@@ -102,15 +94,16 @@ impl EntropyApp {
     fn draw_app_settings_editor_content(
         &mut self,
         ui: &mut egui::Ui,
-        row_range: std::ops::Range<usize>,
-        content_width: f32,
-        row_height: f32,
+        list: &AdaptiveSettingsListViewport,
         metrics: crate::ui_style::ResponsiveMetrics,
         dark: bool,
-        suppress_tooltips: bool,
     ) {
         use crate::i18n::Key as TrKey;
 
+        let row_range = list.first_visible_row..list.last_visible_row;
+        let content_width = list.row_content_width;
+        let row_height = list.row_height;
+        let suppress_tooltips = list.suppress_tooltips;
         let lang = self.app_settings.language;
         let switch_width = metrics.value(46.0);
         let switch_size = metrics.size(46.0, 24.0);
@@ -118,7 +111,7 @@ impl EntropyApp {
 
         for row_idx in row_range {
             #[cfg(target_os = "linux")]
-            if row_idx == 4 {
+            if row_idx == 5 {
                 self.draw_linux_vial_udev_rules_row(
                     ui,
                     content_width,
@@ -153,7 +146,7 @@ impl EntropyApp {
                                 metrics.settings_control_height(),
                                 metrics.settings_control_font_size(),
                             );
-                            egui::popup_below_widget(
+                            crate::ui_style::popup_below_widget(
                                 ui,
                                 dropdown_id,
                                 &dropdown_resp,
@@ -199,7 +192,7 @@ impl EntropyApp {
                                         );
                                         if option_resp.clicked() {
                                             selected_language = language;
-                                            ui.memory_mut(|m| m.close_popup());
+                                            egui::Popup::close_all(ui.ctx());
                                         }
                                     }
                                 },
@@ -235,7 +228,7 @@ impl EntropyApp {
                                 metrics.settings_control_height(),
                                 metrics.settings_control_font_size(),
                             );
-                            egui::popup_below_widget(
+                            crate::ui_style::popup_below_widget(
                                 ui,
                                 dropdown_id,
                                 &dropdown_resp,
@@ -285,7 +278,7 @@ impl EntropyApp {
                                         );
                                         if option_resp.clicked() {
                                             selected_key_legend_layout = key_legend_layout;
-                                            ui.memory_mut(|m| m.close_popup());
+                                            egui::Popup::close_all(ui.ctx());
                                         }
                                     }
                                 },
@@ -367,7 +360,10 @@ impl EntropyApp {
                         },
                     );
                     if launch_at_startup != self.app_settings.launch_at_startup {
-                        if self.set_launch_at_startup(launch_at_startup) {
+                        if self.set_launch_at_startup(
+                            launch_at_startup,
+                            self.app_settings.launch_minimized,
+                        ) {
                             self.app_settings.launch_at_startup = launch_at_startup;
                             save_app_settings(&self.app_settings);
                         } else {
@@ -376,6 +372,36 @@ impl EntropyApp {
                     }
                 }
                 4 => {
+                    let mut launch_minimized = self.app_settings.launch_minimized;
+                    crate::ui_style::settings_list_row_with_tooltip(
+                        ui,
+                        content_width,
+                        row_height,
+                        crate::i18n::tr(lang, TrKey::LaunchMinimizedLabel),
+                        true,
+                        tooltip(crate::i18n::tr(lang, TrKey::LaunchMinimizedTooltip)),
+                        switch_width,
+                        |ui| {
+                            let _ = crate::ui_style::settings_switch_sized_stable(
+                                ui,
+                                "app_settings_launch_minimized",
+                                &mut launch_minimized,
+                                switch_size,
+                            );
+                        },
+                    );
+                    if launch_minimized != self.app_settings.launch_minimized {
+                        let registration_updated = !self.app_settings.launch_at_startup
+                            || self.set_launch_at_startup(true, launch_minimized);
+                        if registration_updated {
+                            self.app_settings.launch_minimized = launch_minimized;
+                            save_app_settings(&self.app_settings);
+                        } else {
+                            self.status_msg = "Failed to update startup setting".into();
+                        }
+                    }
+                }
+                5 => {
                     let mut show_shifted_symbols = self.app_settings.show_shifted_number_symbols;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -399,7 +425,7 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
-                5 => {
+                6 => {
                     let mut layer_hover_preview = self.app_settings.layer_hover_preview;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -426,7 +452,7 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
-                6 => {
+                7 => {
                     let mut encoder_hover_enlarge = self.app_settings.encoder_hover_enlarge;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -450,7 +476,7 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
-                7 => {
+                8 => {
                     let mut selected_accent = self.app_settings.accent_color;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -477,7 +503,7 @@ impl EntropyApp {
                                         selected_accent = accent;
                                     }
                                     let stroke = if selected {
-                                        Stroke::new(2.0, color)
+                                        Stroke::new(2.0_f32, color)
                                     } else {
                                         crate::ui_style::modal_outline_stroke(dark)
                                     };
@@ -503,7 +529,7 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
-                8 => {
+                9 => {
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
                         content_width,
@@ -529,7 +555,7 @@ impl EntropyApp {
                         },
                     );
                 }
-                9 => {
+                10 => {
                     let mut diagnostics_enabled = self.app_settings.diagnostics_enabled;
                     let diagnostics_log_path = crate::diagnostics::active_log_path_display();
                     let diagnostics_tooltip = crate::i18n::tr_catalog_format(
@@ -565,7 +591,7 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
-                10 => {
+                11 => {
                     let mut show_signature = self.app_settings.show_made_by_signature;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -670,7 +696,7 @@ impl EntropyApp {
 }
 
 fn total_app_settings_rows() -> usize {
-    let rows = 11;
+    let rows = 12;
     #[cfg(target_os = "linux")]
     {
         rows + 1
@@ -684,7 +710,7 @@ fn total_app_settings_rows() -> usize {
 fn app_settings_base_row_index(row_idx: usize) -> usize {
     #[cfg(target_os = "linux")]
     {
-        if row_idx > 4 {
+        if row_idx > 5 {
             return row_idx - 1;
         }
     }
@@ -715,7 +741,6 @@ fn draw_app_settings_value(
 
 #[cfg(target_os = "linux")]
 pub(super) fn linux_vial_udev_rules_installed() -> bool {
-    const RULE_MARKER: &str = r#"ATTRS{serial}=="*vial:f64c2b3c*""#;
     const RULE_PATHS: [&str; 4] = [
         "/etc/udev/rules.d/59-vial.rules",
         "/run/udev/rules.d/59-vial.rules",
@@ -725,11 +750,21 @@ pub(super) fn linux_vial_udev_rules_installed() -> bool {
 
     RULE_PATHS.iter().any(|path| {
         std::fs::read_to_string(path)
-            .map(|contents| {
-                contents.contains(RULE_MARKER) && contents.contains("SUBSYSTEM==\"hidraw\"")
-            })
+            .map(|contents| vial_udev_rule_is_current(&contents))
             .unwrap_or(false)
     })
+}
+
+#[cfg(target_os = "linux")]
+fn vial_udev_rule_is_current(contents: &str) -> bool {
+    const VERSION_MARKER: &str = "# Entropy Vial hidraw access v2";
+    const USB_RULE_MARKER: &str = r#"ATTRS{serial}=="*vial:f64c2b3c*""#;
+    const ERGOHAVEN_BLUETOOTH_RULE_MARKER: &str = r#"KERNELS=="0005:E126:*""#;
+
+    contents.contains(VERSION_MARKER)
+        && contents.contains(USB_RULE_MARKER)
+        && contents.contains(ERGOHAVEN_BLUETOOTH_RULE_MARKER)
+        && contents.contains("SUBSYSTEM==\"hidraw\"")
 }
 
 #[cfg(target_os = "linux")]
@@ -750,4 +785,32 @@ fn command_output_summary(primary: &[u8], fallback: &[u8]) -> String {
         .rev()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_udev_tests {
+    use super::vial_udev_rule_is_current;
+
+    const OLD_RULE: &str = r#"KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{serial}=="*vial:f64c2b3c*", MODE="0660", GROUP="1000", TAG+="uaccess""#;
+    const CURRENT_RULE: &str = r#"# Entropy Vial hidraw access v2
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{serial}=="*vial:f64c2b3c*", MODE="0660", GROUP="1000", TAG+="uaccess"
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", KERNELS=="0005:E126:*", MODE="0660", GROUP="1000", TAG+="uaccess""#;
+
+    #[test]
+    fn old_usb_only_rule_requires_upgrade() {
+        assert!(!vial_udev_rule_is_current(OLD_RULE));
+    }
+
+    #[test]
+    fn current_rule_covers_usb_and_ergohaven_bluetooth() {
+        assert!(vial_udev_rule_is_current(CURRENT_RULE));
+    }
+
+    #[test]
+    fn bundled_installer_writes_the_current_rule() {
+        let installer = include_str!("../../linux/udev/install-vial-rules.sh");
+
+        assert!(installer.contains("# Entropy Vial hidraw access v2"));
+        assert!(installer.contains(r#"KERNELS==\"0005:E126:*\""#));
+    }
 }

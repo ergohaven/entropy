@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 const ENTLAYOUT_FORMAT: &str = "entropy.layout";
-const ENTLAYOUT_VERSION: u16 = 3;
+const ENTLAYOUT_VERSION: u16 = 4;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct EntLayoutFile {
@@ -35,6 +35,8 @@ struct EntLayoutData {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_layout: Option<EntLayoutSourceLayout>,
     keymap: Vec<Vec<u16>>,
+    #[serde(default, skip_serializing_if = "native_keymap_is_empty")]
+    native_keymap: Vec<Vec<Option<String>>>,
     encoder_keymap: Vec<Vec<u16>>,
     encoder_visibility: Vec<bool>,
     layout_options: Option<u32>,
@@ -45,6 +47,39 @@ struct EntLayoutData {
     tap_dance: EntTapDanceData,
     key_overrides: EntKeyOverrideData,
     alt_repeat: EntAltRepeatData,
+}
+
+fn native_keymap_is_empty(keymap: &[Vec<Option<String>>]) -> bool {
+    keymap.iter().all(|layer| layer.iter().all(Option::is_none))
+}
+
+fn encode_native_key_action(action: rmk_types::action::KeyAction) -> Option<String> {
+    let mut encoded = [0u8; 24];
+    postcard::to_slice(&action, &mut encoded)
+        .ok()
+        .map(|bytes| BASE64_STANDARD.encode(bytes))
+}
+
+fn decode_native_key_action(encoded: &str) -> Result<rmk_types::action::KeyAction> {
+    let bytes = BASE64_STANDARD
+        .decode(encoded)
+        .context("invalid base64 RMK key action")?;
+    postcard::from_bytes(&bytes).context("invalid RMK key action payload")
+}
+
+fn entlayout_native_key_action(
+    bundle: &EntLayoutFile,
+    layer: usize,
+    key: usize,
+) -> Result<Option<rmk_types::action::KeyAction>> {
+    bundle
+        .data
+        .native_keymap
+        .get(layer)
+        .and_then(|layer| layer.get(key))
+        .and_then(Option::as_deref)
+        .map(decode_native_key_action)
+        .transpose()
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -324,14 +359,29 @@ impl EntropyApp {
             return;
         };
         let file_name = format!("{}.entlayout", device_id_slug(&bundle.keyboard.name));
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("Entropy layout", &["entlayout"])
-            .set_file_name(&file_name)
-            .save_file()
-        else {
+        // The picker runs on a worker thread; the actual write happens in
+        // write_entlayout_export once a path comes back. Snapshotting again then
+        // keeps the export current even if the dialog was open for a while.
+        self.spawn_file_dialog(
+            crate::app::file_dialog::FileDialogAction::ExportEntlayout,
+            rfd::FileDialog::new()
+                .add_filter("Entropy layout", &["entlayout"])
+                .set_file_name(&file_name),
+            true,
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn write_entlayout_export(&mut self, path: &Path) {
+        let Some(bundle) = self.entlayout_snapshot() else {
+            self.status_msg = crate::i18n::tr_catalog(
+                self.app_settings.language,
+                "entlayout.connect_keyboard_before_exporting_layout",
+            )
+            .into();
             return;
         };
-        match write_entlayout_file(&path, &bundle, self.app_settings.language) {
+        match write_entlayout_file(path, &bundle, self.app_settings.language) {
             Ok(()) => {
                 self.status_msg = crate::i18n::tr_catalog_format(
                     self.app_settings.language,
@@ -351,13 +401,18 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn import_entlayout_dialog(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("Entropy layout", &["entlayout"])
-            .pick_file()
-        else {
-            return;
-        };
-        self.pending_entlayout_import_path = Some(path);
+        self.spawn_file_dialog(
+            crate::app::file_dialog::FileDialogAction::ImportEntlayout,
+            rfd::FileDialog::new().add_filter("Entropy layout", &["entlayout"]),
+            false,
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn begin_entlayout_import(&mut self, path: std::path::PathBuf) {
+        // Remember which connection this import belongs to; the deferred write
+        // in handle_pending_imports re-checks it before touching the device.
+        self.pending_entlayout_import_path = Some((path, self.connection_generation));
         self.import_progress_started_at = None;
         self.import_progress_title =
             crate::i18n::tr_catalog(self.app_settings.language, "entlayout.importing_layout")
@@ -409,7 +464,21 @@ impl EntropyApp {
             keyboard,
             data: EntLayoutData {
                 source_layout: Some(entlayout_source_layout(layout)),
-                keymap: layout.layers.clone(),
+                keymap: layout
+                    .layers
+                    .iter()
+                    .map(|layer| layer.iter().map(|binding| binding.vial_keycode()).collect())
+                    .collect(),
+                native_keymap: layout
+                    .layers
+                    .iter()
+                    .map(|layer| {
+                        layer
+                            .iter()
+                            .map(|binding| binding.rmk_action().and_then(encode_native_key_action))
+                            .collect()
+                    })
+                    .collect(),
                 encoder_keymap: layout.encoder_layers.clone(),
                 encoder_visibility: self.encoder_visibility.clone(),
                 layout_options: self.layout_options_value,
@@ -595,6 +664,21 @@ impl EntropyApp {
                 )
             );
         }
+        if !bundle.data.native_keymap.is_empty()
+            && (bundle.data.native_keymap.len() != bundle.data.keymap.len()
+                || bundle
+                    .data
+                    .native_keymap
+                    .iter()
+                    .any(|layer| layer.len() != source_key_count))
+        {
+            bail!("inconsistent native RMK key-action counts");
+        }
+        for layer in &bundle.data.native_keymap {
+            for encoded in layer.iter().flatten() {
+                decode_native_key_action(encoded)?;
+            }
+        }
         let source_encoder_count = bundle_source_encoder_count(bundle);
         if bundle
             .data
@@ -644,9 +728,39 @@ impl EntropyApp {
         bundle: &EntLayoutFile,
     ) -> Result<(Vec<String>, EntLayoutImportMapping)> {
         let mapping = self.entlayout_import_mapping(bundle)?;
-        let firmware_failures = self.apply_entlayout_firmware_state(bundle, &mapping)?;
+        let mut firmware_failures = self.apply_entlayout_firmware_state(bundle, &mapping)?;
         self.apply_entlayout_local_state(bundle, &mapping)?;
         self.refresh_layer_picker_content_flags();
+
+        // Persist the imported layer names into firmware now that self.layer_names
+        // holds the final target values. The shared writer continues past a
+        // failing layer and reports which ones failed, so stale firmware slots
+        // aren't left to win over the local names on the next reconnect.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let names = self.layer_names.clone();
+            let failed = self.write_layer_names_to_firmware(&names);
+            if !failed.is_empty() {
+                let lang = self.app_settings.language;
+                let layers = failed
+                    .iter()
+                    .map(|layer| layer.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                firmware_failures.push(crate::i18n::tr_catalog_format(
+                    lang,
+                    "entlayout.firmware_failure",
+                    &[
+                        (
+                            "section",
+                            crate::i18n::tr_catalog(lang, "entlayout.layer_names"),
+                        ),
+                        ("error", &format!("layers {layers}")),
+                    ],
+                ));
+            }
+        }
+
         Ok((firmware_failures, mapping))
     }
 
@@ -968,6 +1082,7 @@ impl EntropyApp {
             ))?
             .clone();
         let limits = self.entlayout_keycode_import_limits();
+        let supports_rmk_native_key_actions = self.keycode_picker.supports_rmk_native_key_actions;
         let mut failures = Vec::new();
 
         if let Err(err) = (|| -> Result<()> {
@@ -982,18 +1097,42 @@ impl EntropyApp {
                     else {
                         continue;
                     };
-                    let keycode = map_entlayout_keycode(keycode, bundle, &layout, limits);
+                    let binding = match entlayout_native_key_action(
+                        bundle,
+                        source_layer_idx,
+                        source_key_idx,
+                    )? {
+                        Some(action) => {
+                            if !supports_rmk_native_key_actions {
+                                bail!("target firmware does not support lossless RMK key actions");
+                            }
+                            crate::keyboard::KeyBinding::Rmk(action)
+                        }
+                        None => map_entlayout_keycode(keycode, bundle, &layout, limits).into(),
+                    };
                     if layout
                         .layers
                         .get(target_layer_idx)
                         .and_then(|layer| layer.get(target_key_idx))
                         .copied()
-                        == Some(keycode)
+                        == Some(binding)
                     {
                         continue;
                     }
                     let key = &layout.keys[target_key_idx];
-                    hid.set_keycode(target_layer_idx as u8, key.row, key.col, keycode)?;
+                    match binding {
+                        crate::keyboard::KeyBinding::Vial(keycode) => {
+                            hid.set_keycode(target_layer_idx as u8, key.row, key.col, keycode)?;
+                        }
+                        crate::keyboard::KeyBinding::Rmk(action) => {
+                            hid.set_rmk_key_action(
+                                target_layer_idx as u8,
+                                key.row,
+                                key.col,
+                                action,
+                            )?;
+                        }
+                    }
                 }
             }
             Ok(())
@@ -1007,6 +1146,10 @@ impl EntropyApp {
                 ],
             ));
         }
+
+        // Layer names are written after local state sets self.layer_names, via
+        // the shared write_layer_names_to_firmware writer (see apply_entlayout),
+        // so a single failing layer no longer aborts the rest.
 
         if let Err(err) = (|| -> Result<()> {
             for (source_layer_idx, layer_codes) in bundle.data.encoder_keymap.iter().enumerate() {
@@ -1249,6 +1392,7 @@ impl EntropyApp {
         mapping: &EntLayoutImportMapping,
     ) -> Result<()> {
         let limits = self.entlayout_keycode_import_limits();
+        let supports_rmk_native_key_actions = self.keycode_picker.supports_rmk_native_key_actions;
         if let Some(layout) = &mut self.layout {
             let mut target_layers = layout.layers.clone();
             for (source_layer_idx, layer_codes) in bundle.data.keymap.iter().enumerate() {
@@ -1266,7 +1410,17 @@ impl EntropyApp {
                         .get_mut(target_layer_idx)
                         .and_then(|layer| layer.get_mut(target_key_idx))
                     {
-                        *slot = map_entlayout_keycode(keycode, bundle, layout, limits);
+                        match entlayout_native_key_action(bundle, source_layer_idx, source_key_idx)?
+                        {
+                            Some(action) if supports_rmk_native_key_actions => {
+                                *slot = action.into();
+                            }
+                            Some(_) => {}
+                            None => {
+                                *slot =
+                                    map_entlayout_keycode(keycode, bundle, layout, limits).into();
+                            }
+                        }
                     }
                 }
             }
@@ -1298,7 +1452,16 @@ impl EntropyApp {
             }
             layout.encoder_layers = target_encoder_layers;
         }
-
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.deferred_device_load.is_staged() {
+            for source_layer_idx in 0..bundle.data.keymap.len() {
+                if let Some(target_layer_idx) = map_layer_index(source_layer_idx, self.layer_count)
+                {
+                    self.deferred_device_load
+                        .set_layer_status(target_layer_idx, DeferredLoadStatus::NotLoaded);
+                }
+            }
+        }
         let mut encoder_visibility = self.encoder_visibility.clone();
         encoder_visibility.resize(
             self.layout
@@ -1496,7 +1659,10 @@ impl EntropyApp {
         self.combo_term = bundle.data.combos.term.or(self.combo_term);
         save_combo_names(&self.combo_names, &self.current_device_name);
         save_combo_colors(&self.combo_colors, &self.current_device_name);
+        self.combo_synced_entries = self.combo_entries.clone();
         self.combo_dirty = false;
+        self.combo_edit_revision = self.combo_edit_revision.wrapping_add(1);
+        self.combo_attempted_revision = None;
         self.combo_names_dirty = false;
         self.combo_colors_dirty = false;
         self.combo_term_dirty = false;
@@ -1520,6 +1686,22 @@ impl EntropyApp {
         self.alt_repeat_names =
             normalized_strings(&bundle.data.alt_repeat.names, self.alt_repeat_entries.len());
         save_alt_repeat_names(&self.alt_repeat_names, &self.current_device_name);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.deferred_device_load.is_staged() {
+            for section in [
+                DeferredLoadSection::Macros,
+                DeferredLoadSection::Combos,
+                DeferredLoadSection::TapDance,
+                DeferredLoadSection::KeyOverrides,
+                DeferredLoadSection::AltRepeat,
+            ] {
+                if self.deferred_device_load.section_supported(section) {
+                    self.deferred_device_load
+                        .set_section_status(section, DeferredLoadStatus::NotLoaded);
+                }
+            }
+        }
 
         Ok(())
     }
@@ -2246,5 +2428,21 @@ mod tests {
                 "last".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn native_key_action_round_trips_through_entlayout_encoding() {
+        use rmk_types::action::{Action, KeyAction};
+        use rmk_types::keycode::HidKeyCode;
+        use rmk_types::modifier::ModifierCombination;
+
+        let action = KeyAction::TapHold(
+            Action::KeyWithModifier(HidKeyCode::Kc0, ModifierCombination::LSHIFT),
+            Action::Modifier(ModifierCombination::LCTRL),
+            Default::default(),
+        );
+        let encoded = encode_native_key_action(action).expect("native action should fit");
+
+        assert_eq!(decode_native_key_action(&encoded).unwrap(), action);
     }
 }

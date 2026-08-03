@@ -17,6 +17,13 @@ struct LayoutTopTabMetrics {
     total_width: f32,
 }
 
+fn top_tab_direct_navigation_target(tab: MainMenuTab) -> Option<MainMenuTab> {
+    match tab {
+        MainMenuTab::Keyboard => Some(MainMenuTab::Keyboard),
+        MainMenuTab::Advanced | MainMenuTab::Settings => None,
+    }
+}
+
 fn layout_top_tab_metrics(
     ui: &egui::Ui,
     labels: [&str; 3],
@@ -84,7 +91,7 @@ impl EntropyApp {
         let tab_labels = tabs.map(|(_, label, _)| label);
         let undo_label = crate::i18n::tr_catalog(lang, "alt_repeat_editor.undo_curved");
         let undo_font = FontId::proportional(14.0);
-        let undo_text_w = ui.fonts(|f| {
+        let undo_text_w = ui.fonts_mut(|f| {
             f.layout_no_wrap(
                 undo_label.to_owned(),
                 undo_font.clone(),
@@ -151,19 +158,8 @@ impl EntropyApp {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
             if resp.clicked() {
-                match tab {
-                    MainMenuTab::Keyboard => {
-                        self.main_menu_tab = MainMenuTab::Keyboard;
-                    }
-                    MainMenuTab::Advanced => {}
-                    MainMenuTab::Settings => {
-                        if self.main_menu_tab != MainMenuTab::Settings {
-                            self.reset_matrix_tester_state();
-                        }
-                        self.matrix_tester_unlock_prompted = false;
-                        self.matrix_tester_lock_checked = false;
-                        self.main_menu_tab = MainMenuTab::Settings;
-                    }
+                if let Some(target) = top_tab_direct_navigation_target(*tab) {
+                    self.main_menu_tab = target;
                 }
             }
 
@@ -205,7 +201,9 @@ impl EntropyApp {
         self.draw_ui_scale_controls(ui, zoom_left_top);
 
         #[cfg(not(target_arch = "wasm32"))]
-        let undo_enabled = !self.undo_stack.is_empty() && self.layer_write_task.is_none();
+        let undo_enabled = !self.undo_stack.is_empty()
+            && !self.pending_layout_undo
+            && !self.hid_user_action_busy();
         #[cfg(target_arch = "wasm32")]
         let undo_enabled = !self.undo_stack.is_empty();
         let undo_resp = ui.allocate_rect(undo_rect, Sense::CLICK);
@@ -219,15 +217,11 @@ impl EntropyApp {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
         if undo_resp.clicked() && undo_enabled {
-            self.undo();
+            self.undo(ctx);
             ctx.request_repaint();
         }
         let undo_color = if !undo_enabled {
-            if ui.visuals().dark_mode {
-                Color32::from_gray(58)
-            } else {
-                Color32::from_gray(178)
-            }
+            app_top_bar_quiet_text(ui.visuals().dark_mode)
         } else if undo_resp.hovered() {
             app_accent()
         } else {
@@ -242,11 +236,7 @@ impl EntropyApp {
             undo_color,
         );
 
-        let divider_color = if ui.visuals().dark_mode {
-            Color32::from_gray(105)
-        } else {
-            Color32::from_gray(170)
-        };
+        let divider_stroke = top_menu_divider_stroke(ui.visuals().dark_mode);
         let divider_top = tabs_y + 4.0;
         let divider_bottom = tabs_y + tab_height - 4.0;
         let mut divider_x = start_x;
@@ -255,7 +245,7 @@ impl EntropyApp {
             let x = divider_x + tab_gap / 2.0;
             ui.painter().line_segment(
                 [egui::pos2(x, divider_top), egui::pos2(x, divider_bottom)],
-                egui::Stroke::new(1.5, divider_color),
+                divider_stroke,
             );
             divider_x += tab_gap;
         }
@@ -269,5 +259,20 @@ impl EntropyApp {
             settings_tab_rect,
             settings_tab_hovered,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dropdown_tabs_do_not_navigate_until_an_item_is_selected() {
+        assert!(matches!(
+            top_tab_direct_navigation_target(MainMenuTab::Keyboard),
+            Some(MainMenuTab::Keyboard)
+        ));
+        assert!(top_tab_direct_navigation_target(MainMenuTab::Advanced).is_none());
+        assert!(top_tab_direct_navigation_target(MainMenuTab::Settings).is_none());
     }
 }

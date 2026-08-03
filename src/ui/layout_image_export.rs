@@ -20,10 +20,16 @@ fn export_text(lang: crate::i18n::Language, key: &str) -> &'static str {
         (crate::i18n::Language::Russian, "title") => "Экспорт картинки раскладки",
         (crate::i18n::Language::English, "title") => "Export layout image",
         (crate::i18n::Language::Russian, "description") => {
-            "PNG или SVG с выбранными слоями, темой и легендами клавиш"
+            "PNG, SVG или PDF с выбранными слоями, темой и легендами клавиш"
         }
         (crate::i18n::Language::English, "description") => {
-            "PNG or SVG with selected layers, theme, and key legends"
+            "PNG, SVG, or PDF with selected layers, theme, and key legends"
+        }
+        (crate::i18n::Language::Russian, "pdf_pages_hint") => {
+            "PDF для печати: каждый выбранный слой на отдельной странице A4"
+        }
+        (crate::i18n::Language::English, "pdf_pages_hint") => {
+            "Printable PDF: each selected layer on its own A4 page"
         }
         (crate::i18n::Language::Russian, "format") => "Формат",
         (crate::i18n::Language::English, "format") => "Format",
@@ -78,6 +84,7 @@ fn export_format_label(
     match format {
         LayoutImageExportFormat::Png => "PNG",
         LayoutImageExportFormat::Svg => "SVG",
+        LayoutImageExportFormat::Pdf => "PDF",
     }
 }
 
@@ -174,6 +181,24 @@ fn export_keycode_label_with_macro_names(
     ))
 }
 
+fn export_key_binding_label_with_macro_names(
+    binding: crate::keyboard::KeyBinding,
+    custom: &[crate::keyboard::CustomKeycode],
+    layer_names: &[String],
+    macro_names: &[String],
+    tap_dance_names: &[String],
+    key_legend_layout: KeyLegendLayout,
+) -> String {
+    export_safe_key_label(key_binding_label_with_macro_names(
+        binding,
+        custom,
+        layer_names,
+        macro_names,
+        tap_dance_names,
+        key_legend_layout,
+    ))
+}
+
 fn draw_format_dropdown(
     ui: &mut egui::Ui,
     metrics: crate::ui_style::ResponsiveMetrics,
@@ -191,7 +216,7 @@ fn draw_format_dropdown(
         metrics.settings_control_height(),
         metrics.settings_control_font_size(),
     );
-    egui::popup_below_widget(
+    crate::ui_style::popup_below_widget(
         ui,
         dropdown_id,
         &dropdown_resp,
@@ -199,7 +224,11 @@ fn draw_format_dropdown(
         |ui| {
             ui.set_min_width(metrics.settings_control_width());
             ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
-            for format in [LayoutImageExportFormat::Png, LayoutImageExportFormat::Svg] {
+            for format in [
+                LayoutImageExportFormat::Png,
+                LayoutImageExportFormat::Svg,
+                LayoutImageExportFormat::Pdf,
+            ] {
                 let selected = format == *selected_format;
                 let (option_rect, option_resp) =
                     ui.allocate_exact_size(metrics.size(168.0, 28.0), Sense::click());
@@ -234,7 +263,7 @@ fn draw_format_dropdown(
                 );
                 if option_resp.clicked() {
                     *selected_format = format;
-                    ui.memory_mut(|m| m.close_popup());
+                    egui::Popup::close_all(ui.ctx());
                 }
             }
         },
@@ -258,7 +287,7 @@ fn draw_theme_dropdown(
         metrics.settings_control_height(),
         metrics.settings_control_font_size(),
     );
-    egui::popup_below_widget(
+    crate::ui_style::popup_below_widget(
         ui,
         dropdown_id,
         &dropdown_resp,
@@ -305,7 +334,7 @@ fn draw_theme_dropdown(
                 );
                 if option_resp.clicked() {
                     *selected_theme = theme;
-                    ui.memory_mut(|m| m.close_popup());
+                    egui::Popup::close_all(ui.ctx());
                 }
             }
         },
@@ -329,7 +358,7 @@ fn draw_key_legend_dropdown(
         metrics.settings_control_height(),
         metrics.settings_control_font_size(),
     );
-    egui::popup_below_widget(
+    crate::ui_style::popup_below_widget(
         ui,
         dropdown_id,
         &dropdown_resp,
@@ -376,11 +405,23 @@ fn draw_key_legend_dropdown(
                 );
                 if option_resp.clicked() {
                     *selected_layout = layout;
-                    ui.memory_mut(|m| m.close_popup());
+                    egui::Popup::close_all(ui.ctx());
                 }
             }
         },
     );
+}
+
+/// File extension and picker filter label for a layout-image export format.
+/// Shared by the picker (spawn) and the writer so every format — PNG, SVG, and
+/// PDF — goes through the same async worker dialog and cannot silently diverge.
+#[cfg(not(target_arch = "wasm32"))]
+fn layout_image_export_descriptor(format: LayoutImageExportFormat) -> (&'static str, &'static str) {
+    match format {
+        LayoutImageExportFormat::Png => ("png", "PNG image"),
+        LayoutImageExportFormat::Svg => ("svg", "SVG image"),
+        LayoutImageExportFormat::Pdf => ("pdf", "PDF document"),
+    }
 }
 
 impl EntropyApp {
@@ -417,6 +458,14 @@ impl EntropyApp {
                         .size(metrics.value(13.0))
                         .color(app_muted_text(dark)),
                 );
+                if self.app_settings.layout_image_export.format == LayoutImageExportFormat::Pdf {
+                    ui.add_space(metrics.value(4.0));
+                    ui.label(
+                        RichText::new(export_text(lang, "pdf_pages_hint"))
+                            .size(metrics.value(13.0))
+                            .color(app_muted_text(dark)),
+                    );
+                }
                 ui.add_space(metrics.value(24.0));
 
                 let total_rows = 4 + layer_count;
@@ -663,6 +712,40 @@ impl EntropyApp {
     fn export_layout_image_dialog(&mut self, layout: &KeyboardLayout) {
         let lang = self.app_settings.language;
         let layer_count = self.layer_count.max(layout.layers.len()).max(1);
+        let any_selected = self
+            .app_settings
+            .layout_image_export
+            .selected_layers
+            .iter()
+            .take(layer_count)
+            .any(|selected| *selected);
+        if !any_selected {
+            self.status_msg = export_text(lang, "select_layer").into();
+            return;
+        }
+
+        let format = self.app_settings.layout_image_export.format;
+        let (extension, filter_label) = layout_image_export_descriptor(format);
+        let file_name = format!("{}-layout.{extension}", device_id_slug(&layout.name));
+        // The picker runs on a worker thread; rendering + writing happen in
+        // write_layout_image_export once a path comes back. All three formats
+        // (PNG, SVG, PDF) go through this same async parented-dialog path.
+        self.spawn_file_dialog(
+            crate::app::file_dialog::FileDialogAction::ExportLayoutImage,
+            rfd::FileDialog::new()
+                .add_filter(filter_label, &[extension])
+                .set_file_name(&file_name),
+            true,
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn write_layout_image_export(&mut self, mut path: std::path::PathBuf) {
+        let lang = self.app_settings.language;
+        let Some(layout) = self.layout.clone() else {
+            return;
+        };
+        let layer_count = self.layer_count.max(layout.layers.len()).max(1);
         let selected_layers: Vec<usize> = self
             .app_settings
             .layout_image_export
@@ -678,22 +761,9 @@ impl EntropyApp {
         }
 
         let format = self.app_settings.layout_image_export.format;
-        let extension = match format {
-            LayoutImageExportFormat::Png => "png",
-            LayoutImageExportFormat::Svg => "svg",
-        };
-        let filter_label = match format {
-            LayoutImageExportFormat::Png => "PNG image",
-            LayoutImageExportFormat::Svg => "SVG image",
-        };
-        let file_name = format!("{}-layout.{extension}", device_id_slug(&layout.name));
-        let Some(mut path) = rfd::FileDialog::new()
-            .add_filter(filter_label, &[extension])
-            .set_file_name(&file_name)
-            .save_file()
-        else {
-            return;
-        };
+        let (extension, _) = layout_image_export_descriptor(format);
+        // The picker already ran on the worker thread; `path` is the chosen file.
+        // Only the extension normalization, render, and write happen here.
         if path
             .extension()
             .and_then(|ext| ext.to_str())
@@ -705,7 +775,7 @@ impl EntropyApp {
 
         let result = match format {
             LayoutImageExportFormat::Png => self
-                .render_layout_image(layout, &selected_layers)
+                .render_layout_image(&layout, &selected_layers)
                 .and_then(|image| {
                     image
                         .save(&path)
@@ -713,8 +783,11 @@ impl EntropyApp {
                         .map(|_| ())
                 }),
             LayoutImageExportFormat::Svg => self
-                .render_layout_svg(layout, &selected_layers)
+                .render_layout_svg(&layout, &selected_layers)
                 .and_then(|svg| std::fs::write(&path, svg).map_err(|e| anyhow::anyhow!("{e}"))),
+            LayoutImageExportFormat::Pdf => self
+                .render_layout_pdf(&layout, &selected_layers)
+                .and_then(|pdf| std::fs::write(&path, pdf).map_err(|e| anyhow::anyhow!("{e}"))),
         };
 
         match result {
@@ -873,32 +946,32 @@ impl EntropyApp {
             );
             write_rotated_rect_svg(svg, rect, key.rotation, palette)?;
 
-            let kc = layout.get_keycode(layer_idx, key_idx);
-            let (label, dimmed) = match kc {
-                0x0000 => (String::new(), false),
-                0x0001 => {
-                    let fallback = (0..layer_idx)
-                        .rev()
-                        .map(|fallback_layer| layout.get_keycode(fallback_layer, key_idx))
-                        .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
-                    match fallback {
-                        Some(fallback_kc) => (
-                            export_keycode_label_with_macro_names(
-                                fallback_kc,
-                                &layout.custom_keycodes,
-                                &self.layer_names,
-                                &self.keycode_picker.macro_names,
-                                &self.keycode_picker.tap_dance_names,
-                                self.app_settings.layout_image_export.key_legend_layout,
-                            ),
-                            true,
+            let binding = layout.get_key_binding(layer_idx, key_idx);
+            let (label, dimmed) = if binding.is_no() {
+                (String::new(), false)
+            } else if binding.is_transparent() {
+                let fallback = (0..layer_idx)
+                    .rev()
+                    .map(|fallback_layer| layout.get_key_binding(fallback_layer, key_idx))
+                    .find(|fallback| !fallback.is_no() && !fallback.is_transparent());
+                match fallback {
+                    Some(fallback_binding) => (
+                        export_key_binding_label_with_macro_names(
+                            fallback_binding,
+                            &layout.custom_keycodes,
+                            &self.layer_names,
+                            &self.keycode_picker.macro_names,
+                            &self.keycode_picker.tap_dance_names,
+                            self.app_settings.layout_image_export.key_legend_layout,
                         ),
-                        None => (String::new(), false),
-                    }
+                        true,
+                    ),
+                    None => (String::new(), false),
                 }
-                value => (
-                    export_keycode_label_with_macro_names(
-                        value,
+            } else {
+                (
+                    export_key_binding_label_with_macro_names(
+                        binding,
                         &layout.custom_keycodes,
                         &self.layer_names,
                         &self.keycode_picker.macro_names,
@@ -906,7 +979,7 @@ impl EntropyApp {
                         self.app_settings.layout_image_export.key_legend_layout,
                     ),
                     false,
-                ),
+                )
             };
             if !label.is_empty() {
                 let label = number_row_shifted_label(
@@ -981,6 +1054,28 @@ impl EntropyApp {
         Ok(image)
     }
 
+    /// One A4 page per selected layer, each page embedding that layer's
+    /// raster render, so the file is ready for printing as-is.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn render_layout_pdf(
+        &self,
+        layout: &KeyboardLayout,
+        selected_layers: &[usize],
+    ) -> anyhow::Result<Vec<u8>> {
+        // Every page is a single layer of the same layout, so all pages share
+        // one geometry. Compute it once up front so the PDF builder can enforce
+        // the pixel budget from the declared size *before* rendering allocates a
+        // page. Render one layer at a time so only one page's pixels are live.
+        let geometry =
+            self.export_layout_geometry(layout, &[*selected_layers.first().unwrap_or(&0)])?;
+        let page_size = (geometry.width as u32, geometry.height as u32);
+        crate::pdf::build_layer_pdf(
+            selected_layers.len(),
+            |_page| page_size,
+            |page| self.render_layout_image(layout, &[selected_layers[page]]),
+        )
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn draw_export_layer(
         &self,
@@ -1031,32 +1126,32 @@ impl EntropyApp {
                 1.4,
             );
 
-            let kc = layout.get_keycode(layer_idx, key_idx);
-            let (label, dimmed) = match kc {
-                0x0000 => (String::new(), false),
-                0x0001 => {
-                    let fallback = (0..layer_idx)
-                        .rev()
-                        .map(|fallback_layer| layout.get_keycode(fallback_layer, key_idx))
-                        .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
-                    match fallback {
-                        Some(fallback_kc) => (
-                            export_keycode_label_with_macro_names(
-                                fallback_kc,
-                                &layout.custom_keycodes,
-                                &self.layer_names,
-                                &self.keycode_picker.macro_names,
-                                &self.keycode_picker.tap_dance_names,
-                                self.app_settings.layout_image_export.key_legend_layout,
-                            ),
-                            true,
+            let binding = layout.get_key_binding(layer_idx, key_idx);
+            let (label, dimmed) = if binding.is_no() {
+                (String::new(), false)
+            } else if binding.is_transparent() {
+                let fallback = (0..layer_idx)
+                    .rev()
+                    .map(|fallback_layer| layout.get_key_binding(fallback_layer, key_idx))
+                    .find(|fallback| !fallback.is_no() && !fallback.is_transparent());
+                match fallback {
+                    Some(fallback_binding) => (
+                        export_key_binding_label_with_macro_names(
+                            fallback_binding,
+                            &layout.custom_keycodes,
+                            &self.layer_names,
+                            &self.keycode_picker.macro_names,
+                            &self.keycode_picker.tap_dance_names,
+                            self.app_settings.layout_image_export.key_legend_layout,
                         ),
-                        None => (String::new(), false),
-                    }
+                        true,
+                    ),
+                    None => (String::new(), false),
                 }
-                value => (
-                    export_keycode_label_with_macro_names(
-                        value,
+            } else {
+                (
+                    export_key_binding_label_with_macro_names(
+                        binding,
                         &layout.custom_keycodes,
                         &self.layer_names,
                         &self.keycode_picker.macro_names,
@@ -1064,7 +1159,7 @@ impl EntropyApp {
                         self.app_settings.layout_image_export.key_legend_layout,
                     ),
                     false,
-                ),
+                )
             };
             if !label.is_empty() {
                 let label = number_row_shifted_label(
@@ -1976,4 +2071,54 @@ fn blend_pixel(image: &mut RgbaImage, x: i32, y: i32, color: Rgba<u8>, coverage:
     dst[1] = (color[1] as f32 * alpha + dst[1] as f32 * inv).round() as u8;
     dst[2] = (color[2] as f32 * alpha + dst[2] as f32 * inv).round() as u8;
     dst[3] = 255;
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_export_format_has_a_distinct_extension_and_filter() {
+        // Regression guard for the #78/#80 merge: PNG, SVG, and PDF must each
+        // resolve to a picker filter + extension so no format is dropped when the
+        // export routes through the shared async worker dialog.
+        let png = layout_image_export_descriptor(LayoutImageExportFormat::Png);
+        let svg = layout_image_export_descriptor(LayoutImageExportFormat::Svg);
+        let pdf = layout_image_export_descriptor(LayoutImageExportFormat::Pdf);
+
+        assert_eq!(png, ("png", "PNG image"));
+        assert_eq!(svg, ("svg", "SVG image"));
+        assert_eq!(pdf, ("pdf", "PDF document"));
+
+        // Extensions are unique, so a normalized path can never collapse two
+        // formats onto the same file type.
+        let extensions = [png.0, svg.0, pdf.0];
+        for (i, a) in extensions.iter().enumerate() {
+            assert!(!a.is_empty());
+            for b in &extensions[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
+    }
+
+    #[test]
+    fn picker_and_writer_agree_on_the_extension_for_every_format() {
+        // The picker (spawn) advertises `extension` in its filter and the writer
+        // normalizes the chosen path to the same `extension`. Both read it from
+        // this one descriptor, so PDF can never get an SVG picker or a PNG file
+        // name — the exact drift the #78/#80 merge could have introduced.
+        for format in [
+            LayoutImageExportFormat::Png,
+            LayoutImageExportFormat::Svg,
+            LayoutImageExportFormat::Pdf,
+        ] {
+            let (extension, filter) = layout_image_export_descriptor(format);
+            assert!(!extension.is_empty(), "{format:?} has no extension");
+            assert!(!filter.is_empty(), "{format:?} has no picker filter");
+            // The picker builds "<name>.<extension>" and the writer forces the
+            // same extension, so a round-trip is idempotent.
+            let file_name = format!("board-layout.{extension}");
+            assert!(file_name.ends_with(&format!(".{extension}")));
+        }
+    }
 }

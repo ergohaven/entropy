@@ -1,6 +1,52 @@
 use super::*;
 
 impl EntropyApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn draw_bluetooth_reconnect_status(&mut self, ctx: &egui::Context) {
+        let Some(device_name) = self.bluetooth_reconnect_display_name().map(str::to_owned) else {
+            return;
+        };
+        let lang = self.app_settings.language;
+        let text = crate::i18n::tr_catalog_format(
+            lang,
+            "connection.reconnecting",
+            &[("device", &device_name)],
+        );
+
+        egui::Area::new(egui::Id::new("bluetooth_reconnect_status"))
+            .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -22.0])
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                top_dropdown_frame(self.dark_mode).show(ui, |ui| {
+                    ui.horizontal_centered(|ui| {
+                        ui.add(
+                            egui::Spinner::new()
+                                .size(16.0)
+                                .color(app_muted_text(self.dark_mode)),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(text)
+                                .size(13.0)
+                                .color(app_muted_text(self.dark_mode)),
+                        );
+                        ui.add_space(8.0);
+                        if crate::ui_style::modern_button(
+                            ui,
+                            crate::i18n::tr_catalog(lang, "connection.choose_another_device"),
+                            egui::vec2(132.0, 30.0),
+                            true,
+                        )
+                        .clicked()
+                        {
+                            self.cancel_bluetooth_reconnect_for_device_selection();
+                            ctx.request_repaint();
+                        }
+                    });
+                });
+            });
+    }
+
     pub(super) fn draw_layout(
         &mut self,
         ui: &mut egui::Ui,
@@ -9,12 +55,18 @@ impl EntropyApp {
     ) {
         let viewport = ui.max_rect();
         let avail = viewport.size();
+        let layout_top_reserved_h = LAYOUT_TOP_RESERVED_H
+            + if self.main_menu_reserves_battery_status_space() {
+                layout_layer_switcher::MAIN_MENU_BATTERY_RESERVED_H
+            } else {
+                0.0
+            };
         let geometry = layout_geometry_with_reserved_and_filter(
             ui.ctx(),
             layout,
             viewport,
             clamp_ui_scale(self.app_settings.ui_scale),
-            LAYOUT_TOP_RESERVED_H,
+            layout_top_reserved_h,
             LAYOUT_BOTTOM_RESERVED_H,
             LAYOUT_FIT_MARGIN,
             None,
@@ -104,7 +156,7 @@ impl EntropyApp {
                 *rect,
                 6.0,
                 bg,
-                Stroke::new(1.0, Color32::from_gray(80)),
+                Stroke::new(1.0_f32, Color32::from_gray(80)),
                 egui::StrokeKind::Inside,
             );
             painter.text(

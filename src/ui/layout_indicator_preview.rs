@@ -78,7 +78,10 @@ fn draw_sticky_encoder_arrow(
             center.y + rad.sin() * r,
         ));
     }
-    painter.add(egui::Shape::line(points.clone(), Stroke::new(1.7, color)));
+    painter.add(egui::Shape::line(
+        points.clone(),
+        Stroke::new(1.7_f32, color),
+    ));
     if points.len() >= 2 {
         let end = points[points.len() - 1];
         let prev = points[points.len() - 2];
@@ -349,38 +352,11 @@ impl EntropyApp {
             }
         }
 
-        let mut encoder_press_rects: Vec<(usize, egui::Rect)> = Vec::new();
-        for (_, group_rect, _, _) in &encoder_groups {
-            let center = group_rect.center();
-            let radius = group_rect.width().min(group_rect.height()) * 0.5;
-            let mut best_key: Option<(usize, f32)> = None;
-            for (ki, key_rect) in &key_rects {
-                if encoder_press_rects
-                    .iter()
-                    .any(|(assigned_ki, _)| assigned_ki == ki)
-                {
-                    continue;
-                }
-                let dist = key_rect.center().distance(center);
-                if dist > radius * 0.38 {
-                    continue;
-                }
-                match best_key {
-                    Some((_, best_dist)) if dist >= best_dist => {}
-                    _ => best_key = Some((*ki, dist)),
-                }
-            }
-            if let Some((ki, _)) = best_key {
-                let press_rect = egui::Rect::from_center_size(
-                    center,
-                    Vec2::new(
-                        (radius * 0.88).min(group_rect.width() * 0.44),
-                        (radius * 0.48).min(group_rect.height() * 0.22),
-                    ),
-                );
-                encoder_press_rects.push((ki, press_rect));
-            }
-        }
+        let encoder_group_rects: Vec<(u8, egui::Rect)> = encoder_groups
+            .iter()
+            .map(|(encoder_idx, rect, _, _)| (*encoder_idx, *rect))
+            .collect();
+        let encoder_press_rects = encoder_press_key_rects(layout, &key_rects, &encoder_group_rects);
 
         for (ki, key_rect) in &key_rects {
             if encoder_press_rects
@@ -405,8 +381,8 @@ impl EntropyApp {
             } else {
                 layer
             };
-            let kc = layout.get_keycode(key_layer, *ki);
-            let is_transparent = kc == 0x0001;
+            let binding = layout.get_key_binding(key_layer, *ki);
+            let is_transparent = binding.is_transparent();
             let fill = if is_pressed {
                 app_hover_fill(dark)
             } else {
@@ -418,28 +394,28 @@ impl EntropyApp {
                 *key_rect,
                 key.rotation,
                 fill,
-                Stroke::new(1.0, stroke),
+                Stroke::new(1.0_f32, stroke),
             );
 
-            if kc == 0x0000 {
+            if binding.is_no() {
                 continue;
             }
 
-            let label_kc = if is_transparent {
+            let label_binding = if is_transparent {
                 (0..key_layer)
                     .rev()
-                    .map(|fallback_layer| layout.get_keycode(fallback_layer, *ki))
-                    .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001))
-                    .unwrap_or(0x0000)
+                    .map(|fallback_layer| layout.get_key_binding(fallback_layer, *ki))
+                    .find(|fallback| !fallback.is_no() && !fallback.is_transparent())
+                    .unwrap_or_default()
             } else {
-                kc
+                binding
             };
-            if label_kc == 0x0000 {
+            if label_binding.is_no() {
                 continue;
             }
             let label = number_row_shifted_label(
-                keycode_label_with_macro_names(
-                    label_kc,
+                key_binding_label_with_macro_names(
+                    label_binding,
                     &layout.custom_keycodes,
                     layer_names,
                     macro_names,
@@ -572,7 +548,7 @@ impl EntropyApp {
             painter
                 .with_clip_rect(bottom_rect)
                 .circle_filled(center, fill_radius, key_fill);
-            painter.circle_stroke(center, radius, Stroke::new(1.0, outline));
+            painter.circle_stroke(center, radius, Stroke::new(1.0_f32, outline));
 
             let has_press_button = press_slot.is_some();
             let (top_label, top_dimmed) = label_for(cw);
@@ -642,14 +618,14 @@ impl EntropyApp {
                         egui::pos2(center.x - top_divider_half_width, top_divider_y),
                         egui::pos2(center.x + top_divider_half_width, top_divider_y),
                     ],
-                    Stroke::new(1.0, outline),
+                    Stroke::new(1.0_f32, outline),
                 );
                 painter.line_segment(
                     [
                         egui::pos2(center.x - bottom_divider_half_width, bottom_divider_y),
                         egui::pos2(center.x + bottom_divider_half_width, bottom_divider_y),
                     ],
-                    Stroke::new(1.0, outline),
+                    Stroke::new(1.0_f32, outline),
                 );
 
                 let (press_label, press_dimmed) = {
@@ -660,19 +636,19 @@ impl EntropyApp {
                         .and_then(|source_layer| *source_layer)
                         .filter(|source_layer| *source_layer < layout.layers.len())
                         .unwrap_or(layer);
-                    let kc = layout.get_keycode(press_layer, press_ki);
-                    if kc == 0x0001 {
-                        let fallback_kc = (0..press_layer)
+                    let binding = layout.get_key_binding(press_layer, press_ki);
+                    if binding.is_transparent() {
+                        let fallback_binding = (0..press_layer)
                             .rev()
-                            .map(|fallback_layer| layout.get_keycode(fallback_layer, press_ki))
-                            .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001))
-                            .unwrap_or(0x0000);
-                        if fallback_kc == 0x0000 {
+                            .map(|fallback_layer| layout.get_key_binding(fallback_layer, press_ki))
+                            .find(|fallback| !fallback.is_no() && !fallback.is_transparent())
+                            .unwrap_or_default();
+                        if fallback_binding.is_no() {
                             ("▽".to_string(), false)
                         } else {
                             (
-                                keycode_label_with_macro_names(
-                                    fallback_kc,
+                                key_binding_label_with_macro_names(
+                                    fallback_binding,
                                     &layout.custom_keycodes,
                                     layer_names,
                                     macro_names,
@@ -682,12 +658,12 @@ impl EntropyApp {
                                 true,
                             )
                         }
-                    } else if kc == 0x0000 {
+                    } else if binding.is_no() {
                         (String::new(), false)
                     } else {
                         (
-                            keycode_label_with_macro_names(
-                                kc,
+                            key_binding_label_with_macro_names(
+                                binding,
                                 &layout.custom_keycodes,
                                 layer_names,
                                 macro_names,
@@ -721,7 +697,7 @@ impl EntropyApp {
                         egui::pos2(center.x - divider_half_width, center.y),
                         egui::pos2(center.x + divider_half_width, center.y),
                     ],
-                    Stroke::new(1.0, outline),
+                    Stroke::new(1.0_f32, outline),
                 );
             }
         }

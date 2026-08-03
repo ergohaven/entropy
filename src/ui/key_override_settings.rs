@@ -64,10 +64,12 @@ impl EntropyApp {
         }
     }
 
-    fn write_all_key_overrides(&mut self) {
+    fn write_all_key_overrides(&mut self) -> bool {
+        let mut saved = true;
         for idx in 0..self.key_override_entries.len() {
-            self.write_key_override(idx);
+            saved &= self.write_key_override(idx);
         }
+        saved
     }
 
     fn key_override_entry_exists(entry: &KeyOverrideEntry) -> bool {
@@ -89,14 +91,19 @@ impl EntropyApp {
         entry.options.enabled = Self::key_override_entry_exists(entry);
     }
 
-    pub(super) fn write_key_override(&mut self, idx: usize) {
+    pub(super) fn write_key_override(&mut self, idx: usize) -> bool {
         let Some(entry) = self.key_override_entries.get_mut(idx) else {
-            return;
+            return true;
         };
         Self::normalize_key_override_entry(entry);
         let entry = entry.clone();
+        if self.hid_write_task_active() {
+            self.key_override_dirty = true;
+            return false;
+        }
         let Some(hid) = &self.hid_device else {
-            return;
+            self.key_override_dirty = true;
+            return false;
         };
         if let Err(e) = hid.set_key_override(
             idx as u8,
@@ -110,6 +117,19 @@ impl EntropyApp {
         ) {
             self.status_msg = format!("Failed to save Key Override {}: {}", idx + 1, e);
             log::warn!("set_key_override({idx}) failed: {e}");
+            self.key_override_dirty = true;
+            false
+        } else {
+            true
+        }
+    }
+
+    pub(super) fn flush_pending_key_override_writes(&mut self) {
+        if self.key_override_dirty
+            && !self.hid_write_task_active()
+            && self.write_all_key_overrides()
+        {
+            self.key_override_dirty = false;
         }
     }
 
@@ -495,7 +515,7 @@ impl EntropyApp {
                                                     ui.style_mut().visuals.window_stroke =
                                                         crate::ui_style::modal_outline_stroke(dark);
                                                     ui.style_mut().visuals.window_fill = app_surface_fill(dark);
-                                                    egui::popup_below_widget(
+                                                    crate::ui_style::popup_below_widget(
                                                         ui,
                                                         dropdown_id,
                                                         &dropdown_resp,
@@ -550,7 +570,7 @@ impl EntropyApp {
                                                                         );
                                                                         if option_resp.clicked() {
                                                                             self.selected_key_override = entry_idx;
-                                                                            ui.memory_mut(|m| m.close_popup());
+                                                                            egui::Popup::close_all(ui.ctx());
                                                                         }
                                                                     }
                                                                 });
@@ -639,10 +659,10 @@ impl EntropyApp {
                                                     let popup_id = ui.make_persistent_id(("ko_suppressed_mods_popup", idx));
                                                     let summary = Self::key_override_mod_mask_summary(self.app_settings.language, edited.suppressed_mods);
                                                     let resp = crate::ui_style::modern_button_with_font(ui, summary.as_str(), Vec2::new(control_width, control_height), control_font_size, true);
-                                                    if resp.clicked() { ui.memory_mut(|m| m.toggle_popup(popup_id)); }
+                                                    if resp.clicked() { egui::Popup::toggle_id(ui.ctx(), popup_id); }
                                                     ui.style_mut().visuals.window_stroke = crate::ui_style::modal_outline_stroke(dark);
                                                     ui.style_mut().visuals.window_fill = app_surface_fill(dark);
-                                                    egui::popup_below_widget(ui, popup_id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+                                                    crate::ui_style::popup_below_widget(ui, popup_id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
                                                         Self::draw_key_override_mod_mask_modern(ui, &mut edited.suppressed_mods, self.app_settings.language);
                                                     });
                                                 },
@@ -661,10 +681,10 @@ impl EntropyApp {
                                                     let popup_id = ui.make_persistent_id(("ko_trigger_mods_popup", idx));
                                                     let summary = Self::key_override_mod_mask_summary(self.app_settings.language, edited.trigger_mods);
                                                     let resp = crate::ui_style::modern_button_with_font(ui, summary.as_str(), Vec2::new(control_width, control_height), control_font_size, true);
-                                                    if resp.clicked() { ui.memory_mut(|m| m.toggle_popup(popup_id)); }
+                                                    if resp.clicked() { egui::Popup::toggle_id(ui.ctx(), popup_id); }
                                                     ui.style_mut().visuals.window_stroke = crate::ui_style::modal_outline_stroke(dark);
                                                     ui.style_mut().visuals.window_fill = app_surface_fill(dark);
-                                                    egui::popup_below_widget(ui, popup_id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+                                                    crate::ui_style::popup_below_widget(ui, popup_id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
                                                         Self::draw_key_override_mod_mask_modern(ui, &mut edited.trigger_mods, self.app_settings.language);
                                                     });
                                                 },
@@ -683,10 +703,10 @@ impl EntropyApp {
                                                     let popup_id = ui.make_persistent_id(("ko_negative_mods_popup", idx));
                                                     let summary = Self::key_override_mod_mask_summary(self.app_settings.language, edited.negative_mod_mask);
                                                     let resp = crate::ui_style::modern_button_with_font(ui, summary.as_str(), Vec2::new(control_width, control_height), control_font_size, true);
-                                                    if resp.clicked() { ui.memory_mut(|m| m.toggle_popup(popup_id)); }
+                                                    if resp.clicked() { egui::Popup::toggle_id(ui.ctx(), popup_id); }
                                                     ui.style_mut().visuals.window_stroke = crate::ui_style::modal_outline_stroke(dark);
                                                     ui.style_mut().visuals.window_fill = app_surface_fill(dark);
-                                                    egui::popup_below_widget(ui, popup_id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+                                                    crate::ui_style::popup_below_widget(ui, popup_id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
                                                         Self::draw_key_override_mod_mask_modern(ui, &mut edited.negative_mod_mask, self.app_settings.language);
                                                     });
                                                 },
@@ -705,10 +725,10 @@ impl EntropyApp {
                                                     let popup_id = ui.make_persistent_id(("ko_layers_popup", idx));
                                                     let summary = Self::key_override_layers_summary(self.app_settings.language, edited.layers);
                                                     let resp = crate::ui_style::modern_button_with_font(ui, summary.as_str(), Vec2::new(control_width, control_height), control_font_size, true);
-                                                    if resp.clicked() { ui.memory_mut(|m| m.toggle_popup(popup_id)); }
+                                                    if resp.clicked() { egui::Popup::toggle_id(ui.ctx(), popup_id); }
                                                     ui.style_mut().visuals.window_stroke = crate::ui_style::modal_outline_stroke(dark);
                                                     ui.style_mut().visuals.window_fill = app_surface_fill(dark);
-                                                    egui::popup_below_widget(ui, popup_id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+                                                    crate::ui_style::popup_below_widget(ui, popup_id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
                                                         Self::draw_key_override_layers_modern(ui, &mut edited.layers, self.app_settings.language);
                                                     });
                                                 },

@@ -4,7 +4,6 @@ mod app;
 pub(crate) mod app_icon;
 mod device;
 mod diagnostics;
-mod emoji_catalog;
 mod firmware;
 #[cfg(not(target_arch = "wasm32"))]
 mod hid;
@@ -12,21 +11,29 @@ mod i18n;
 mod keyboard;
 mod keycode;
 mod keycode_picker;
+#[cfg(test)]
 mod layouts;
 #[cfg(target_os = "linux")]
+mod linux_ble;
+#[cfg(target_os = "linux")]
 mod linux_setup;
+#[cfg(not(target_arch = "wasm32"))]
+mod pdf;
 mod popup_state;
 #[cfg(not(target_arch = "wasm32"))]
 mod qmk_hid_host;
+mod rmk_native;
 mod smart_input;
 mod text_expander;
 mod ui_style;
+mod universal_symbols;
 
 use app::EntropyApp;
 
 const APP_TITLE: &str = "Entropy";
 const APP_ID: &str = "entropy";
 const SINGLE_INSTANCE_ENV: &str = "ENTROPY_SINGLE_INSTANCE";
+const LAUNCH_MINIMIZED_ARG: &str = "--minimized";
 
 #[cfg(target_os = "windows")]
 struct SingleInstanceGuard(*mut core::ffi::c_void);
@@ -106,6 +113,15 @@ fn single_instance_enabled_from_env(value: Option<&str>) -> bool {
 fn single_instance_enabled() -> bool {
     let value = std::env::var(SINGLE_INSTANCE_ENV).ok();
     single_instance_enabled_from_env(value.as_deref())
+}
+
+fn launch_minimized_from_args<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    args.into_iter()
+        .any(|arg| arg.as_ref() == std::ffi::OsStr::new(LAUNCH_MINIMIZED_ARG))
 }
 
 #[cfg(target_os = "windows")]
@@ -269,14 +285,17 @@ fn main() -> eframe::Result<()> {
     }
 
     diagnostics::init(diagnostics::settings_file_enabled());
+    let launch_minimized = launch_minimized_from_args(std::env::args_os());
 
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     {
         if single_instance_enabled() {
             if !try_acquire_single_instance() {
-                notify_existing_instance();
-                #[cfg(target_os = "windows")]
-                restore_existing_instance_window();
+                if !launch_minimized {
+                    notify_existing_instance();
+                    #[cfg(target_os = "windows")]
+                    restore_existing_instance_window();
+                }
                 return Ok(());
             }
         } else {
@@ -305,7 +324,7 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         APP_TITLE,
         options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             // Roboto as primary UI font, with Unicode/symbol fallbacks.
             let mut fonts = egui::FontDefinitions::default();
             fonts.font_data.insert(
@@ -325,7 +344,7 @@ fn main() -> eframe::Result<()> {
             );
             fonts.font_data.insert(
                 "noto_emoji".to_owned(),
-                egui::FontData::from_static(include_bytes!("../assets/NotoEmoji-Regular.ttf"))
+                egui::FontData::from_static(include_bytes!("../assets/NotoEmoji-subset.ttf"))
                     .into(),
             );
             let prop = fonts
@@ -343,16 +362,13 @@ fn main() -> eframe::Result<()> {
             mono.push("dejavu".to_owned());
             mono.push("noto_symbols".to_owned());
             mono.push("noto_emoji".to_owned());
-            fonts.families.insert(
-                egui::FontFamily::Name("emoji_preview".into()),
-                vec![
-                    "noto_emoji".to_owned(),
-                    "noto_symbols".to_owned(),
-                    "dejavu".to_owned(),
-                ],
-            );
             cc.egui_ctx.set_fonts(fonts);
-            Ok(Box::new(EntropyApp::new(cc)))
+            let app = EntropyApp::new(cc);
+            if launch_minimized {
+                cc.egui_ctx
+                    .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            }
+            Ok(Box::new(app))
         }),
     )
 }
@@ -378,5 +394,12 @@ mod tests {
         for value in ["1", "true", "yes", "anything"] {
             assert!(single_instance_enabled_from_env(Some(value)));
         }
+    }
+
+    #[test]
+    fn minimized_launch_argument_is_explicit() {
+        assert!(launch_minimized_from_args(["entropy", "--minimized"]));
+        assert!(!launch_minimized_from_args(["entropy"]));
+        assert!(!launch_minimized_from_args(["entropy", "--minimize"]));
     }
 }

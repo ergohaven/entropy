@@ -1,67 +1,172 @@
 use super::*;
 
+fn module_setting_catalog_keys(title: &str) -> Option<(&'static str, &'static str)> {
+    match title.to_ascii_lowercase().as_str() {
+        "module" => Some(("modules_settings.module", "modules_settings.module_tooltip")),
+        "mode" => Some(("modules_settings.mode", "modules_settings.mode_tooltip")),
+        "ball axis" => Some((
+            "modules_settings.ball_axis",
+            "modules_settings.ball_axis_tooltip",
+        )),
+        "touch axis" => Some((
+            "modules_settings.touch_axis",
+            "modules_settings.touch_axis_tooltip",
+        )),
+        "ball dpi" => Some((
+            "modules_settings.ball_dpi",
+            "modules_settings.ball_dpi_tooltip",
+        )),
+        "touch dpi" => Some((
+            "modules_settings.touch_dpi",
+            "modules_settings.touch_dpi_tooltip",
+        )),
+        "encoder interval" => Some((
+            "modules_settings.encoder_interval",
+            "modules_settings.encoder_interval_tooltip",
+        )),
+        "encoder steps" => Some((
+            "modules_settings.encoder_steps",
+            "modules_settings.encoder_steps_tooltip",
+        )),
+        "scroll sens" => Some((
+            "modules_settings.scroll_sens",
+            "modules_settings.scroll_sens_tooltip",
+        )),
+        "sniper sens" => Some((
+            "modules_settings.sniper_sens",
+            "modules_settings.sniper_sens_tooltip",
+        )),
+        "text sens" => Some((
+            "modules_settings.text_sens",
+            "modules_settings.text_sens_tooltip",
+        )),
+        "touch gestures" => Some((
+            "modules_settings.touch_gestures",
+            "modules_settings.touch_gestures_tooltip",
+        )),
+        "invert scroll" => Some((
+            "modules_settings.invert_scroll",
+            "modules_settings.invert_scroll_tooltip",
+        )),
+        "invert scroll vertical" => Some((
+            "modules_settings.invert_scroll_vertical",
+            "modules_settings.invert_scroll_vertical_tooltip",
+        )),
+        "invert scroll horizontal" => Some((
+            "modules_settings.invert_scroll_horizontal",
+            "modules_settings.invert_scroll_horizontal_tooltip",
+        )),
+        "invert text" => Some((
+            "modules_settings.invert_text",
+            "modules_settings.invert_text_tooltip",
+        )),
+        "invert text vertical" => Some((
+            "modules_settings.invert_text_vertical",
+            "modules_settings.invert_text_vertical_tooltip",
+        )),
+        "invert text horizontal" => Some((
+            "modules_settings.invert_text_horizontal",
+            "modules_settings.invert_text_horizontal_tooltip",
+        )),
+        "acceleration" => Some((
+            "modules_settings.acceleration",
+            "modules_settings.acceleration_tooltip",
+        )),
+        "sticky mode" => Some((
+            "modules_settings.sticky_mode",
+            "modules_settings.sticky_mode_tooltip",
+        )),
+        "led blinks" => Some((
+            "modules_settings.led_blinks",
+            "modules_settings.led_blinks_tooltip",
+        )),
+        "auto layer in normal" => Some((
+            "modules_settings.auto_layer_in_normal",
+            "modules_settings.auto_layer_normal_tooltip",
+        )),
+        "auto layer" => Some((
+            "modules_settings.auto_layer",
+            "modules_settings.auto_layer_tooltip",
+        )),
+        "auto layer in sniper" => Some((
+            "modules_settings.auto_layer_in_sniper",
+            "modules_settings.auto_layer_sniper_tooltip",
+        )),
+        "auto layer in scroll" => Some((
+            "modules_settings.auto_layer_in_scroll",
+            "modules_settings.auto_layer_scroll_tooltip",
+        )),
+        "auto layer in text" => Some((
+            "modules_settings.auto_layer_in_text",
+            "modules_settings.auto_layer_text_tooltip",
+        )),
+        "auto layer timeout" => Some((
+            "modules_settings.auto_layer_timeout",
+            "modules_settings.auto_layer_timeout_tooltip",
+        )),
+        "trackball enabled" => Some((
+            "modules_settings.trackball_enabled",
+            "modules_settings.trackball_enabled_tooltip",
+        )),
+        _ => None,
+    }
+}
+
+fn module_setting_variant_label(language: crate::i18n::Language, variant: &str) -> String {
+    let key = match variant.to_ascii_lowercase().as_str() {
+        "none" => Some("modules_settings.none"),
+        "normal" => Some("modules_settings.normal"),
+        "sniper" => Some("modules_settings.sniper"),
+        "scroll" => Some("modules_settings.scroll"),
+        "text" => Some("modules_settings.text"),
+        "trackball" => Some("modules_settings.trackball"),
+        "touchpad" => Some("modules_settings.touchpad"),
+        "ball" => Some("modules_settings.ball"),
+        "touch" => Some("modules_settings.touch"),
+        "encoder" => Some("modules_settings.encoder"),
+        _ => None,
+    };
+    key.map(|key| crate::i18n::tr_catalog(language, key).to_owned())
+        .unwrap_or_else(|| crate::i18n::tr_text(language, variant))
+}
+
 #[derive(Clone, Copy)]
 enum ModuleSettingsRow {
     SideSelector,
     Section(usize),
-    Field { group_idx: usize, field_idx: usize },
+    Field {
+        group_idx: usize,
+        field_idx: usize,
+    },
+    EncoderVisibility {
+        encoder_idx: usize,
+        option_idx: usize,
+    },
 }
 
-const MODULE_SETTING_WRITEBACK_DELAYS: [std::time::Duration; MODULE_SETTING_READBACK_ATTEMPTS] = [
-    std::time::Duration::from_millis(20),
-    std::time::Duration::from_millis(80),
-    std::time::Duration::from_millis(200),
-];
-
 impl EntropyApp {
-    fn module_setting_display_title<'a>(
-        &self,
-        group_kind: ModuleSettingsGroupKind,
-        title: &'a str,
-    ) -> &'a str {
-        if !matches!(
-            group_kind,
-            ModuleSettingsGroupKind::Left | ModuleSettingsGroupKind::Right
-        ) {
-            return title;
+    pub(super) fn module_settings_title_key(&self) -> &'static str {
+        if self.module_settings.is_trackball_page() {
+            "modules_settings.trackball_title"
+        } else {
+            "modules_settings.title"
         }
-        title
-            .strip_prefix("Left ")
-            .or_else(|| title.strip_prefix("Right "))
-            .unwrap_or(title)
+    }
+
+    fn module_settings_description_key(&self) -> &'static str {
+        if self.module_settings.is_trackball_page() {
+            "modules_settings.trackball_description"
+        } else {
+            "modules_settings.description"
+        }
     }
 
     fn module_setting_label(&self, group_kind: ModuleSettingsGroupKind, title: &str) -> String {
         let lang = self.app_settings.language;
-        let display_title = self.module_setting_display_title(group_kind, title);
-        match display_title.to_ascii_lowercase().as_str() {
-            "module" => crate::i18n::tr_catalog(lang, "modules_settings.module").to_owned(),
-            "mode" => crate::i18n::tr_catalog(lang, "modules_settings.mode").to_owned(),
-            "ball axis" => crate::i18n::tr_catalog(lang, "modules_settings.ball_axis").to_owned(),
-            "touch axis" => crate::i18n::tr_catalog(lang, "modules_settings.touch_axis").to_owned(),
-            "ball dpi" => crate::i18n::tr_catalog(lang, "modules_settings.ball_dpi").to_owned(),
-            "touch dpi" => crate::i18n::tr_catalog(lang, "modules_settings.touch_dpi").to_owned(),
-            "scroll sens" => {
-                crate::i18n::tr_catalog(lang, "modules_settings.scroll_sens").to_owned()
-            }
-            "sniper sens" => {
-                crate::i18n::tr_catalog(lang, "modules_settings.sniper_sens").to_owned()
-            }
-            "text sens" => crate::i18n::tr_catalog(lang, "modules_settings.text_sens").to_owned(),
-            "touch gestures" => {
-                crate::i18n::tr_catalog(lang, "modules_settings.touch_gestures").to_owned()
-            }
-            "invert scroll" => {
-                crate::i18n::tr_catalog(lang, "modules_settings.invert_scroll").to_owned()
-            }
-            "invert text" => {
-                crate::i18n::tr_catalog(lang, "modules_settings.invert_text").to_owned()
-            }
-            "acceleration" => {
-                crate::i18n::tr_catalog(lang, "modules_settings.acceleration").to_owned()
-            }
-            title => crate::i18n::tr_text(lang, title),
-        }
+        let display_title = group_kind.field_base_title(title);
+        module_setting_catalog_keys(display_title)
+            .map(|(label_key, _)| crate::i18n::tr_catalog(lang, label_key).to_owned())
+            .unwrap_or_else(|| crate::i18n::tr_text(lang, display_title))
     }
 
     fn module_setting_tooltip(
@@ -70,31 +175,10 @@ impl EntropyApp {
         field: &ModuleSettingField,
     ) -> String {
         let lang = self.app_settings.language;
-        let display_title = self.module_setting_display_title(group_kind, &field.title);
-        let key = match display_title.to_ascii_lowercase().as_str() {
-            "module" => "modules_settings.module_tooltip",
-            "mode" => "modules_settings.mode_tooltip",
-            "ball axis" => "modules_settings.ball_axis_tooltip",
-            "touch axis" => "modules_settings.touch_axis_tooltip",
-            "ball dpi" => "modules_settings.ball_dpi_tooltip",
-            "touch dpi" => "modules_settings.touch_dpi_tooltip",
-            "scroll sens" => "modules_settings.scroll_sens_tooltip",
-            "sniper sens" => "modules_settings.sniper_sens_tooltip",
-            "text sens" => "modules_settings.text_sens_tooltip",
-            "touch gestures" => "modules_settings.touch_gestures_tooltip",
-            "invert scroll" => "modules_settings.invert_scroll_tooltip",
-            "invert text" => "modules_settings.invert_text_tooltip",
-            "acceleration" => "modules_settings.acceleration_tooltip",
-            "sticky mode" => "modules_settings.sticky_mode_tooltip",
-            "led blinks" => "modules_settings.led_blinks_tooltip",
-            "auto layer in normal" => "modules_settings.auto_layer_normal_tooltip",
-            "auto layer" => "modules_settings.auto_layer_tooltip",
-            "auto layer in sniper" => "modules_settings.auto_layer_sniper_tooltip",
-            "auto layer in scroll" => "modules_settings.auto_layer_scroll_tooltip",
-            "auto layer in text" => "modules_settings.auto_layer_text_tooltip",
-            "auto layer timeout" => "modules_settings.auto_layer_timeout_tooltip",
-            _ => "modules_settings.generic_tooltip",
-        };
+        let display_title = group_kind.field_base_title(&field.title);
+        let key = module_setting_catalog_keys(display_title)
+            .map(|(_, tooltip_key)| tooltip_key)
+            .unwrap_or("modules_settings.generic_tooltip");
         let field_label = self.module_setting_label(group_kind, &field.title);
         crate::i18n::tr_catalog_format(lang, key, &[("field", field_label.as_str())])
     }
@@ -107,81 +191,60 @@ impl EntropyApp {
         }
     }
 
+    fn module_setting_select_variant_indices(
+        group: &ModuleSettingsGroup,
+        field: &ModuleSettingField,
+    ) -> Vec<usize> {
+        let all_indices = (0..field.variants.len()).collect::<Vec<_>>();
+        let is_module_selector = group
+            .module_selector_field()
+            .is_some_and(|selector| selector.qsid == field.qsid);
+        if !is_module_selector {
+            return all_indices;
+        }
+
+        let configurable_indices = all_indices
+            .iter()
+            .copied()
+            .filter(|idx| {
+                ModuleDeviceKind::from_variant(&field.variants[*idx]) != ModuleDeviceKind::None
+            })
+            .collect::<Vec<_>>();
+        if configurable_indices.is_empty() {
+            all_indices
+        } else {
+            configurable_indices
+        }
+    }
+
     fn write_module_setting_value(
         &mut self,
         group_idx: usize,
         field: &ModuleSettingField,
         value: u16,
     ) {
-        let group_title = self
-            .module_settings
-            .groups
-            .get(group_idx)
+        let group = self.module_settings.groups.get(group_idx);
+        let group_title = group
             .map(|group| group.title.clone())
             .unwrap_or_else(|| "Modules".to_owned());
+        let group_kind = group
+            .map(|group| group.kind)
+            .unwrap_or(ModuleSettingsGroupKind::Other);
         let field_title = field.title.clone();
+        let display_label = self.module_setting_label(group_kind, &field_title);
         let old_value = self.module_settings.value(field.qsid);
         let requested = Self::module_setting_transport_value(field, value);
 
-        let Some(hid) = self.hid_device.as_ref() else {
-            self.status_msg = format!(
-                "Failed to save module setting (qsid {}): device is not connected",
-                field.qsid
-            );
-            log::warn!(
-                "module setting write skipped: group={group_title:?} field={field_title:?} qsid={} old={} requested={} readback=unavailable error=device not connected",
-                field.qsid,
-                old_value,
-                requested,
-            );
-            return;
-        };
-
-        let mut readback_attempt = 0;
-        let result = self.module_settings.write_verified_value(
+        self.queue_module_setting_write(
+            group_title,
+            field_title,
+            display_label,
             field.qsid,
+            field.width,
+            old_value,
             requested,
-            || {
-                if field.width > 1 {
-                    hid.set_qmk_setting_u16(field.qsid, requested)
-                } else {
-                    hid.set_qmk_setting_u8(field.qsid, requested as u8)
-                }
-                .map_err(|error| error.to_string())
-            },
-            || {
-                let delay = MODULE_SETTING_WRITEBACK_DELAYS
-                    [readback_attempt.min(MODULE_SETTING_WRITEBACK_DELAYS.len() - 1)];
-                readback_attempt += 1;
-                std::thread::sleep(delay);
-                if field.width > 1 {
-                    hid.get_qmk_setting_u16(field.qsid)
-                } else {
-                    hid.get_qmk_setting_u8(field.qsid)
-                        .map(|readback| readback as u16)
-                }
-                .map_err(|error| error.to_string())
-            },
         );
-
-        if let Err(error) = result {
-            let readback = match &error {
-                ModuleSettingWritebackError::ReadbackMismatch { actual, .. } => actual.to_string(),
-                _ => "unavailable".to_owned(),
-            };
-            self.status_msg = format!(
-                "Failed to save module setting {} (qsid {}): {}",
-                field_title, field.qsid, error
-            );
-            log::warn!(
-                "module setting writeback failed: group={group_title:?} field={field_title:?} qsid={} old={} requested={} readback={} error={}",
-                field.qsid,
-                old_value,
-                requested,
-                readback,
-                error,
-            );
-        }
+        self.sync_firmware_managed_layout_options();
     }
 
     fn draw_module_settings_field_row(
@@ -208,7 +271,9 @@ impl EntropyApp {
         } else {
             Some(self.module_setting_tooltip(group_kind, &field))
         };
-        let raw_value = self.module_settings.value(field.qsid);
+        let raw_value = self
+            .pending_settings_write_value(field.qsid)
+            .unwrap_or_else(|| self.module_settings.value(field.qsid));
         match field.kind {
             ModuleSettingKind::Boolean => {
                 let switch_width = metrics.value(46.0);
@@ -293,11 +358,17 @@ impl EntropyApp {
             }
             ModuleSettingKind::Select => {
                 let dropdown_width = metrics.value(120.0);
-                let selected_idx = (raw_value as usize).min(field.variants.len().saturating_sub(1));
-                let variants = field
-                    .variants
+                let variant_indices = Self::module_setting_select_variant_indices(group, &field);
+                let selected_idx = variant_indices
                     .iter()
-                    .map(|variant| crate::i18n::tr_text(self.app_settings.language, variant))
+                    .position(|idx| *idx == raw_value as usize)
+                    .unwrap_or(0);
+                let variants = variant_indices
+                    .iter()
+                    .filter_map(|idx| field.variants.get(*idx))
+                    .map(|variant| {
+                        module_setting_variant_label(self.app_settings.language, variant)
+                    })
                     .collect::<Vec<_>>();
                 crate::ui_style::settings_list_row_with_tooltip(
                     ui,
@@ -321,8 +392,10 @@ impl EntropyApp {
                             &variants,
                             dropdown_width,
                         );
-                        if let Some(picked) = picked {
-                            self.write_module_setting_value(group_idx, &field, picked as u16);
+                        if let Some(raw_index) =
+                            picked.and_then(|idx| variant_indices.get(idx).copied())
+                        {
+                            self.write_module_setting_value(group_idx, &field, raw_index as u16);
                         }
                     },
                 );
@@ -334,11 +407,25 @@ impl EntropyApp {
         let mut rows = Vec::new();
         let side_groups = self.module_settings_side_group_indices();
         let selected_side_group = self.module_settings.selected_module_group();
+        let selected_module =
+            selected_side_group.and_then(|group_idx| self.selected_module_kind(group_idx));
+        let selected_mode =
+            selected_side_group.and_then(|group_idx| self.selected_pointer_mode(group_idx));
         if side_groups.len() > 1 {
             rows.push(ModuleSettingsRow::SideSelector);
         }
         if let Some(group_idx) = selected_side_group {
-            rows.extend(self.module_settings_field_rows(group_idx));
+            rows.extend(self.module_settings_field_rows(group_idx, selected_module, selected_mode));
+            if selected_module == Some(ModuleDeviceKind::Encoder) {
+                if let Some((encoder_idx, option_idx)) =
+                    self.module_encoder_visibility_entry(group_idx)
+                {
+                    rows.push(ModuleSettingsRow::EncoderVisibility {
+                        encoder_idx,
+                        option_idx,
+                    });
+                }
+            }
         }
         for (group_idx, group) in self.module_settings.groups.iter().enumerate() {
             if matches!(
@@ -347,22 +434,57 @@ impl EntropyApp {
             ) {
                 continue;
             }
+            if group.kind == ModuleSettingsGroupKind::AutoLayer
+                && matches!(
+                    selected_module,
+                    Some(ModuleDeviceKind::None | ModuleDeviceKind::Encoder)
+                )
+            {
+                continue;
+            }
             rows.push(ModuleSettingsRow::Section(group_idx));
-            rows.extend(self.module_settings_field_rows(group_idx));
+            rows.extend(self.module_settings_field_rows(group_idx, selected_module, selected_mode));
         }
         rows
     }
 
-    fn module_settings_field_rows(&self, group_idx: usize) -> Vec<ModuleSettingsRow> {
-        self.module_settings
-            .groups
-            .get(group_idx)
-            .into_iter()
-            .flat_map(move |group| {
-                (0..group.fields.len()).map(move |field_idx| ModuleSettingsRow::Field {
-                    group_idx,
-                    field_idx,
-                })
+    fn selected_module_kind(&self, group_idx: usize) -> Option<ModuleDeviceKind> {
+        let group = self.module_settings.groups.get(group_idx)?;
+        let field = group.module_selector_field()?;
+        let value = self
+            .pending_settings_write_value(field.qsid)
+            .unwrap_or_else(|| self.module_settings.value(field.qsid));
+        group.selected_module_kind(value)
+    }
+
+    fn selected_pointer_mode(&self, group_idx: usize) -> Option<PointerModeKind> {
+        let group = self.module_settings.groups.get(group_idx)?;
+        let field = group.mode_selector_field()?;
+        let value = self
+            .pending_settings_write_value(field.qsid)
+            .unwrap_or_else(|| self.module_settings.value(field.qsid));
+        group.selected_pointer_mode(value)
+    }
+
+    fn module_settings_field_rows(
+        &self,
+        group_idx: usize,
+        selected_module: Option<ModuleDeviceKind>,
+        selected_mode: Option<PointerModeKind>,
+    ) -> Vec<ModuleSettingsRow> {
+        let Some(group) = self.module_settings.groups.get(group_idx) else {
+            return Vec::new();
+        };
+        group
+            .fields
+            .iter()
+            .enumerate()
+            .filter(|(_, field)| {
+                group.field_visible_for_selection(field, selected_module, selected_mode)
+            })
+            .map(|(field_idx, _)| ModuleSettingsRow::Field {
+                group_idx,
+                field_idx,
             })
             .collect()
     }
@@ -380,6 +502,50 @@ impl EntropyApp {
                 .then_some(idx)
             })
             .collect()
+    }
+
+    fn module_encoder_visibility_entry(&self, group_idx: usize) -> Option<(usize, usize)> {
+        let layout = self.layout.as_ref()?;
+        let group = self.module_settings.groups.get(group_idx)?;
+        group
+            .supports_module_kind(ModuleDeviceKind::Encoder)
+            .then(|| Self::encoder_visibility_entry_for_module_group(layout, group.kind))
+            .flatten()
+    }
+
+    pub(super) fn module_settings_include_encoder_visibility(
+        &self,
+        layout: &KeyboardLayout,
+    ) -> bool {
+        self.module_settings.supported
+            && self
+                .module_settings_side_group_indices()
+                .into_iter()
+                .any(|group_idx| {
+                    let Some(group) = self.module_settings.groups.get(group_idx) else {
+                        return false;
+                    };
+                    group.supports_module_kind(ModuleDeviceKind::Encoder)
+                        && Self::encoder_visibility_entry_for_module_group(layout, group.kind)
+                            .is_some()
+                })
+    }
+
+    pub(super) fn module_encoder_selectors_loaded(&self, layout: &KeyboardLayout) -> bool {
+        self.module_settings
+            .groups
+            .iter()
+            .filter(|group| {
+                group.supports_module_kind(ModuleDeviceKind::Encoder)
+                    && Self::encoder_visibility_entry_for_module_group(layout, group.kind).is_some()
+            })
+            .filter_map(ModuleSettingsGroup::module_selector_field)
+            .all(|field| self.module_settings.values.contains_key(&field.qsid))
+    }
+
+    pub(super) fn hide_modular_encoders_by_default(&self, layout: &KeyboardLayout) -> bool {
+        self.module_settings_include_encoder_visibility(layout)
+            && !self.module_encoder_selectors_loaded(layout)
     }
 
     fn module_settings_group_label(&self, group: &ModuleSettingsGroup) -> String {
@@ -416,7 +582,7 @@ impl EntropyApp {
             crate::ui_style::border_color(dark).gamma_multiply(if dark { 0.72 } else { 0.9 });
         ui.painter().line_segment(
             [row_rect.left_bottom(), row_rect.right_bottom()],
-            egui::Stroke::new(1.0, separator),
+            egui::Stroke::new(1.0_f32, separator),
         );
         ui.painter().text(
             row_rect.center(),
@@ -512,6 +678,17 @@ impl EntropyApp {
                 row_height,
                 suppress_tooltips,
             ),
+            ModuleSettingsRow::EncoderVisibility {
+                encoder_idx,
+                option_idx,
+            } => self.draw_module_encoder_visibility_setting_row(
+                ui,
+                content_width,
+                row_height,
+                suppress_tooltips,
+                encoder_idx,
+                option_idx,
+            ),
         }
     }
 
@@ -527,15 +704,18 @@ impl EntropyApp {
             ui.vertical_centered(|ui| {
                 ui.add_space(18.0);
                 ui.label(
-                    RichText::new(crate::i18n::tr_catalog(lang, "modules_settings.title"))
-                        .size(18.0)
-                        .strong(),
+                    RichText::new(crate::i18n::tr_catalog(
+                        lang,
+                        self.module_settings_title_key(),
+                    ))
+                    .size(18.0)
+                    .strong(),
                 );
                 ui.add_space(6.0);
                 ui.label(
                     RichText::new(crate::i18n::tr_catalog(
                         lang,
-                        "modules_settings.description",
+                        self.module_settings_description_key(),
                     ))
                     .size(13.0)
                     .color(app_muted_text(dark)),
@@ -590,5 +770,674 @@ impl EntropyApp {
                 }
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_app() -> EntropyApp {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        EntropyApp::new(&creation_context)
+    }
+
+    fn test_module_field() -> ModuleSettingField {
+        ModuleSettingField {
+            title: "Mode".to_owned(),
+            qsid: 134,
+            kind: ModuleSettingKind::Select,
+            bit: 0,
+            layout_option: None,
+            width: 1,
+            min: 0,
+            max: 3,
+            variants: vec![
+                "Normal".to_owned(),
+                "Sniper".to_owned(),
+                "Scroll".to_owned(),
+                "Text".to_owned(),
+            ],
+        }
+    }
+
+    fn add_test_module_group(app: &mut EntropyApp, field: &ModuleSettingField) {
+        app.module_settings.groups.push(ModuleSettingsGroup {
+            title: "Left Modules".to_owned(),
+            kind: ModuleSettingsGroupKind::Left,
+            fields: vec![field.clone()],
+        });
+    }
+
+    fn module_filter_field(title: &str, qsid: u16) -> ModuleSettingField {
+        ModuleSettingField {
+            title: title.to_owned(),
+            qsid,
+            kind: ModuleSettingKind::Select,
+            bit: 0,
+            layout_option: None,
+            width: 1,
+            min: 0,
+            max: 3,
+            variants: vec!["Off".to_owned(), "On".to_owned()],
+        }
+    }
+
+    fn add_filterable_module_groups(app: &mut EntropyApp) {
+        let mut selector = module_filter_field("Module", 149);
+        selector.variants = vec![
+            "None".to_owned(),
+            "Encoder".to_owned(),
+            "Trackball".to_owned(),
+            "Touchpad".to_owned(),
+        ];
+        let mut mode = module_filter_field("Mode", 134);
+        mode.variants = vec![
+            "Normal".to_owned(),
+            "Sniper".to_owned(),
+            "Scroll".to_owned(),
+            "Text".to_owned(),
+            "Experimental".to_owned(),
+        ];
+        mode.max = 4;
+        app.module_settings.groups = vec![
+            ModuleSettingsGroup {
+                title: "Left Modules".to_owned(),
+                kind: ModuleSettingsGroupKind::Left,
+                fields: vec![
+                    selector,
+                    module_filter_field("Encoder interval", 325),
+                    module_filter_field("Encoder steps", 332),
+                    mode,
+                    module_filter_field("Ball axis", 130),
+                    module_filter_field("Touch axis", 132),
+                    module_filter_field("Ball DPI", 120),
+                    module_filter_field("Touch DPI", 122),
+                    module_filter_field("Scroll sens", 125),
+                    module_filter_field("Sniper sens", 124),
+                    module_filter_field("Text sens", 126),
+                    module_filter_field("Touch gestures", 151),
+                    module_filter_field("Invert scroll vertical", 136),
+                    module_filter_field("Invert scroll horizontal", 327),
+                    module_filter_field("Invert text vertical", 147),
+                    module_filter_field("Invert text horizontal", 329),
+                    module_filter_field("Acceleration", 137),
+                    module_filter_field("Sticky mode", 140),
+                ],
+            },
+            ModuleSettingsGroup {
+                title: "Auto Layer".to_owned(),
+                kind: ModuleSettingsGroupKind::AutoLayer,
+                fields: vec![
+                    module_filter_field("Auto layer", 143),
+                    module_filter_field("Auto layer in Normal", 142),
+                    module_filter_field("Auto layer in Sniper", 144),
+                    module_filter_field("Auto layer in Scroll", 145),
+                    module_filter_field("Auto layer in Text", 146),
+                    module_filter_field("Auto layer timeout", 324),
+                ],
+            },
+        ];
+        app.module_settings.values.insert(149, 0);
+        app.module_settings.values.insert(134, 0);
+    }
+
+    fn encoder_visibility_layout(left_label: &str, right_label: &str) -> KeyboardLayout {
+        KeyboardLayout {
+            name: "Modular keyboard".to_owned(),
+            rows: 1,
+            cols: 1,
+            keys: Vec::new(),
+            encoders: [0, 1]
+                .into_iter()
+                .map(|encoder_idx| PhysicalEncoder {
+                    x: encoder_idx as f32,
+                    y: 0.0,
+                    w: 1.0,
+                    h: 1.0,
+                    label: String::new(),
+                    encoder_idx,
+                    direction: 0,
+                    rotation: 0.0,
+                    rotation_x: 0.0,
+                    rotation_y: 0.0,
+                    layout_condition: None,
+                })
+                .collect(),
+            layers: Vec::new(),
+            encoder_layers: Vec::new(),
+            layer_names: Vec::new(),
+            custom_keycodes: Vec::new(),
+            layout_options: vec![
+                LayoutOption {
+                    label: left_label.to_owned(),
+                    choices: Vec::new(),
+                },
+                LayoutOption {
+                    label: right_label.to_owned(),
+                    choices: Vec::new(),
+                },
+            ],
+            live_features: Default::default(),
+            supports_rgb: false,
+            lighting_mode: None,
+            firmware: FirmwareProtocol::Vial,
+        }
+    }
+
+    fn add_encoder_module_groups(app: &mut EntropyApp) {
+        let mut left_selector = module_filter_field("Module", 149);
+        left_selector.variants = vec!["Encoder".to_owned(), "Trackball".to_owned()];
+        let mut right_selector = module_filter_field("Module", 150);
+        right_selector.variants = left_selector.variants.clone();
+        app.module_settings.groups = vec![
+            ModuleSettingsGroup {
+                title: "Left Modules".to_owned(),
+                kind: ModuleSettingsGroupKind::Left,
+                fields: vec![left_selector],
+            },
+            ModuleSettingsGroup {
+                title: "Right Modules".to_owned(),
+                kind: ModuleSettingsGroupKind::Right,
+                fields: vec![right_selector],
+            },
+        ];
+        app.module_settings.values.insert(149, 0);
+        app.module_settings.values.insert(150, 0);
+        app.module_settings.supported = true;
+    }
+
+    fn encoder_module_settings_json() -> serde_json::Value {
+        serde_json::json!({
+            "settings": [
+                {
+                    "name": "Left modules",
+                    "fields": [{
+                        "type": "select",
+                        "title": "Module",
+                        "qsid": 149,
+                        "variants": ["None", "Encoder", "Trackball", "Touchpad"]
+                    }]
+                },
+                {
+                    "name": "Right modules",
+                    "fields": [{
+                        "type": "select",
+                        "title": "Module",
+                        "qsid": 150,
+                        "variants": ["None", "Encoder", "Trackball", "Touchpad"]
+                    }]
+                }
+            ]
+        })
+    }
+
+    fn visible_module_qsids(app: &EntropyApp) -> Vec<u16> {
+        app.module_settings_rows()
+            .into_iter()
+            .filter_map(|row| match row {
+                ModuleSettingsRow::Field {
+                    group_idx,
+                    field_idx,
+                } => app
+                    .module_settings
+                    .groups
+                    .get(group_idx)
+                    .and_then(|group| group.fields.get(field_idx))
+                    .map(|field| field.qsid),
+                ModuleSettingsRow::SideSelector
+                | ModuleSettingsRow::Section(_)
+                | ModuleSettingsRow::EncoderVisibility { .. } => None,
+            })
+            .collect()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn drain_hid_writes(app: &mut EntropyApp, ctx: &egui::Context) {
+        for _ in 0..200 {
+            app.poll_combo_write(ctx);
+            app.poll_settings_write(ctx);
+            if !app.hid_write_task_active() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("HID writes did not drain");
+    }
+
+    #[test]
+    fn modular_encoder_visibility_moves_into_selected_side_settings() {
+        let mut app = test_app();
+        add_encoder_module_groups(&mut app);
+        app.layout = Some(encoder_visibility_layout(
+            "Hide left encoder module",
+            "Hide right encoder module",
+        ));
+
+        assert!(
+            app.module_settings_include_encoder_visibility(app.layout.as_ref().expect("layout"))
+        );
+        assert!(
+            !app.show_separate_encoder_visibility_settings(app.layout.as_ref().expect("layout"))
+        );
+        assert!(app.module_settings_rows().iter().any(|row| matches!(
+            row,
+            ModuleSettingsRow::EncoderVisibility {
+                encoder_idx: 0,
+                option_idx: 0
+            }
+        )));
+
+        app.module_settings.set_selected_module_group(1);
+        assert!(app.module_settings_rows().iter().any(|row| matches!(
+            row,
+            ModuleSettingsRow::EncoderVisibility {
+                encoder_idx: 1,
+                option_idx: 1
+            }
+        )));
+    }
+
+    #[test]
+    fn deferred_module_definition_owns_encoder_visibility_before_values_load() {
+        let json = encoder_module_settings_json();
+        let mut app = test_app();
+        app.module_settings = EntropyApp::module_settings_from_definition(&json, &[149, 150]);
+        app.layout = Some(encoder_visibility_layout(
+            "Hide left encoder module",
+            "Hide right encoder module",
+        ));
+
+        assert!(app.module_settings.supported);
+        assert!(app.module_settings.values.is_empty());
+        assert!(
+            app.module_settings_include_encoder_visibility(app.layout.as_ref().expect("layout"))
+        );
+        assert!(
+            !app.show_separate_encoder_visibility_settings(app.layout.as_ref().expect("layout"))
+        );
+        assert!(
+            app.hide_modular_encoders_by_default(app.layout.as_ref().expect("layout")),
+            "unknown module selectors must not guess that an encoder is installed"
+        );
+    }
+
+    #[test]
+    fn loaded_module_selectors_show_installed_encoders_by_default() {
+        let mut app = test_app();
+        add_encoder_module_groups(&mut app);
+        let layout =
+            encoder_visibility_layout("Hide left encoder module", "Hide right encoder module");
+
+        assert!(app.module_encoder_selectors_loaded(&layout));
+        assert!(!app.hide_modular_encoders_by_default(&layout));
+        assert_eq!(
+            EntropyApp::resolve_initial_encoder_visibility(
+                &layout,
+                Some(0),
+                None,
+                app.hide_modular_encoders_by_default(&layout),
+            ),
+            vec![true, true]
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn staged_module_selector_reader_preloads_layout_critical_values() {
+        let json = encoder_module_settings_json();
+        let (hid, _) = crate::hid::HidDevice::test_device();
+        hid.set_qmk_setting_u8(149, 1).unwrap();
+        hid.set_qmk_setting_u8(150, 2).unwrap();
+        let mut settings = EntropyApp::module_settings_from_definition(&json, &[149, 150]);
+
+        EntropyApp::read_initial_module_values(&mut settings, &hid);
+
+        assert_eq!(settings.values.get(&149), Some(&1));
+        assert_eq!(settings.values.get(&150), Some(&2));
+    }
+
+    #[test]
+    fn phenom_encoder_labels_are_owned_by_module_settings() {
+        let mut app = test_app();
+        add_encoder_module_groups(&mut app);
+        app.layout = Some(encoder_visibility_layout(
+            "Hide left encoder",
+            "Hide right encoder",
+        ));
+
+        assert!(
+            app.module_settings_include_encoder_visibility(app.layout.as_ref().expect("layout"))
+        );
+    }
+
+    #[test]
+    fn encoder_visibility_row_is_hidden_for_selected_pointing_module() {
+        let mut app = test_app();
+        add_encoder_module_groups(&mut app);
+        app.layout = Some(encoder_visibility_layout(
+            "Hide left encoder",
+            "Hide right encoder",
+        ));
+        app.module_settings.values.insert(149, 1);
+
+        assert!(!app
+            .module_settings_rows()
+            .iter()
+            .any(|row| matches!(row, ModuleSettingsRow::EncoderVisibility { .. })));
+    }
+
+    #[test]
+    fn keyboards_without_module_settings_keep_separate_encoder_page() {
+        let mut app = test_app();
+        app.layout = Some(encoder_visibility_layout(
+            "Hide left encoder",
+            "Hide right encoder",
+        ));
+
+        assert!(
+            !app.module_settings_include_encoder_visibility(app.layout.as_ref().expect("layout"))
+        );
+        assert!(app.show_separate_encoder_visibility_settings(app.layout.as_ref().expect("layout")));
+    }
+
+    #[test]
+    fn all_firmware_module_fields_have_catalog_entries_case_insensitively() {
+        for title in [
+            "Module",
+            "Encoder interval",
+            "Encoder steps",
+            "Sticky mode",
+            "Invert scroll vertical",
+            "invert scroll horizontal",
+            "Invert text vertical",
+            "invert text horizontal",
+            "Auto layer in Normal",
+            "auto layer in sniper",
+            "Auto layer in Scroll",
+            "auto layer in text",
+            "Auto layer timeout",
+        ] {
+            assert!(
+                module_setting_catalog_keys(title).is_some(),
+                "missing module translation for {title}"
+            );
+        }
+    }
+
+    #[test]
+    fn lowercase_module_variants_are_localized_and_capitalized() {
+        assert_eq!(
+            module_setting_variant_label(crate::i18n::Language::Russian, "trackball"),
+            "Трекбол"
+        );
+        assert_eq!(
+            module_setting_variant_label(crate::i18n::Language::Russian, "normal"),
+            "Обычный"
+        );
+        assert_eq!(
+            module_setting_variant_label(crate::i18n::Language::Russian, "none"),
+            "Нет"
+        );
+    }
+
+    #[test]
+    fn module_selector_hides_none_without_shifting_transport_values() {
+        let mut app = test_app();
+        add_filterable_module_groups(&mut app);
+        let group = &app.module_settings.groups[0];
+        let field = &group.fields[0];
+
+        assert_eq!(
+            EntropyApp::module_setting_select_variant_indices(group, field),
+            vec![1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn stored_none_falls_back_to_first_configurable_module() {
+        let mut app = test_app();
+        add_filterable_module_groups(&mut app);
+        let group = &app.module_settings.groups[0];
+
+        assert_eq!(
+            group.selected_module_kind(0),
+            Some(ModuleDeviceKind::Encoder)
+        );
+    }
+
+    #[test]
+    fn selected_module_filters_rows_to_relevant_settings() {
+        let mut app = test_app();
+        add_filterable_module_groups(&mut app);
+
+        assert_eq!(visible_module_qsids(&app), vec![149, 325, 332]);
+
+        app.module_settings.set_value(149, 1);
+        assert_eq!(visible_module_qsids(&app), vec![149, 325, 332]);
+
+        app.module_settings.set_value(149, 2);
+        assert_eq!(
+            visible_module_qsids(&app),
+            vec![149, 134, 130, 120, 137, 140, 143, 142, 324]
+        );
+
+        app.module_settings.set_value(149, 3);
+        assert_eq!(
+            visible_module_qsids(&app),
+            vec![149, 134, 132, 122, 151, 137, 140, 143, 142, 324]
+        );
+    }
+
+    #[test]
+    fn selected_pointer_mode_filters_rows_to_relevant_settings() {
+        let mut app = test_app();
+        add_filterable_module_groups(&mut app);
+        app.module_settings.set_value(149, 2);
+
+        assert_eq!(
+            visible_module_qsids(&app),
+            vec![149, 134, 130, 120, 137, 140, 143, 142, 324]
+        );
+
+        app.module_settings.set_value(134, 1);
+        assert_eq!(
+            visible_module_qsids(&app),
+            vec![149, 134, 130, 120, 124, 137, 140, 143, 144, 324]
+        );
+
+        app.module_settings.set_value(134, 2);
+        assert_eq!(
+            visible_module_qsids(&app),
+            vec![149, 134, 130, 120, 125, 136, 327, 137, 140, 143, 145, 324]
+        );
+
+        app.module_settings.set_value(134, 3);
+        assert_eq!(
+            visible_module_qsids(&app),
+            vec![149, 134, 130, 120, 126, 147, 329, 137, 140, 143, 146, 324]
+        );
+    }
+
+    #[test]
+    fn unknown_pointer_mode_keeps_all_mode_fields_visible() {
+        let mut app = test_app();
+        add_filterable_module_groups(&mut app);
+        app.module_settings.set_value(149, 2);
+        app.module_settings.set_value(134, 4);
+
+        assert_eq!(
+            visible_module_qsids(&app),
+            vec![
+                149, 134, 130, 120, 125, 124, 126, 136, 327, 147, 329, 137, 140, 143, 142, 144,
+                145, 146, 324
+            ]
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn pending_module_selection_updates_visible_rows_immediately() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        let (hid_device, _) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        add_filterable_module_groups(&mut app);
+        let selector = app.module_settings.groups[0].fields[0].clone();
+
+        app.write_module_setting_value(0, &selector, 2);
+
+        assert_eq!(
+            visible_module_qsids(&app),
+            vec![149, 134, 130, 120, 137, 140, 143, 142, 324]
+        );
+
+        drain_hid_writes(&mut app, &ctx);
+        assert_eq!(app.module_settings.value(149), 2);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn pending_pointer_mode_updates_visible_rows_immediately() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        let (hid_device, _) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        add_filterable_module_groups(&mut app);
+        app.module_settings.set_value(149, 3);
+        let mode = app.module_settings.groups[0].fields[3].clone();
+
+        app.write_module_setting_value(0, &mode, 2);
+
+        assert_eq!(
+            visible_module_qsids(&app),
+            vec![149, 134, 132, 122, 125, 151, 136, 327, 137, 140, 143, 145, 324]
+        );
+
+        drain_hid_writes(&mut app, &ctx);
+        assert_eq!(app.module_settings.value(134), 2);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn module_setting_write_matches_vial_set_without_readback_or_debounce() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        let (hid_device, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        let field = test_module_field();
+        add_test_module_group(&mut app, &field);
+        app.status_msg = "unchanged".to_owned();
+
+        app.write_module_setting_value(0, &field, 2);
+
+        assert!(app.settings_write_task.is_some());
+        assert_eq!(app.pending_settings_write_value(field.qsid), Some(2));
+        assert_eq!(app.pending_qmk_settings_write_value(field.qsid), None);
+        assert_eq!(app.status_msg, "unchanged");
+
+        drain_hid_writes(&mut app, &ctx);
+
+        assert_eq!(app.module_settings.value(field.qsid), 2);
+        assert!(!app.qmk_settings_write_busy());
+        assert_eq!(app.status_msg, "unchanged");
+        assert_eq!(
+            recorder
+                .requests()
+                .iter()
+                .filter(|request| {
+                    request[2] == field.qsid as u8 && request[3] == (field.qsid >> 8) as u8
+                })
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn module_setting_write_waits_for_busy_hid_owner() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid_device, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        app.combo_entries = vec![ComboEntry {
+            keys: [0x0004, 0x0005, 0, 0],
+            output: 0x0006,
+        }];
+        app.combo_synced_entries = vec![ComboEntry::default()];
+        app.mark_combo_dirty();
+        app.maybe_start_combo_write(&ctx);
+        assert!(app.combo_write_task.is_some());
+        assert!(app.hid_device.is_none());
+
+        let field = test_module_field();
+        add_test_module_group(&mut app, &field);
+        app.write_module_setting_value(0, &field, 3);
+
+        assert!(app.settings_write_task.is_none());
+        assert_eq!(app.pending_settings_write_value(field.qsid), Some(3));
+        assert_eq!(app.pending_qmk_settings_write_value(field.qsid), None);
+
+        drain_hid_writes(&mut app, &ctx);
+
+        assert_eq!(app.module_settings.value(field.qsid), 3);
+        assert!(!app.qmk_settings_write_busy());
+        assert_eq!(
+            recorder
+                .requests()
+                .iter()
+                .filter(|request| {
+                    request[2] == field.qsid as u8 && request[3] == (field.qsid >> 8) as u8
+                })
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn dedicated_trackball_groups_use_trackball_page_title() {
+        let mut app = test_app();
+        app.module_settings.groups = vec![
+            ModuleSettingsGroup {
+                title: "Trackball".to_owned(),
+                kind: ModuleSettingsGroupKind::Other,
+                fields: vec![test_module_field()],
+            },
+            ModuleSettingsGroup {
+                title: "Auto layer".to_owned(),
+                kind: ModuleSettingsGroupKind::AutoLayer,
+                fields: vec![module_filter_field("Auto layer timeout", 324)],
+            },
+        ];
+
+        assert!(app.module_settings.is_trackball_page());
+        assert_eq!(
+            app.module_settings_title_key(),
+            "modules_settings.trackball_title"
+        );
+    }
+
+    #[test]
+    fn russian_inversion_labels_use_direction_words_without_arrows() {
+        let mut app = test_app();
+        app.app_settings.language = crate::i18n::Language::Russian;
+
+        for (title, direction) in [
+            ("Invert scroll vertical", "вертикали"),
+            ("Invert scroll horizontal", "горизонтали"),
+            ("Invert text vertical", "вертикали"),
+            ("Invert text horizontal", "горизонтали"),
+        ] {
+            let label = app.module_setting_label(ModuleSettingsGroupKind::Left, title);
+            assert!(label.contains(direction), "{label}");
+            assert!(
+                !label
+                    .chars()
+                    .any(|character| matches!(character, '↑' | '↓' | '←' | '→')),
+                "{label}"
+            );
+        }
     }
 }
