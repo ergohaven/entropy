@@ -9,10 +9,8 @@
 #     NixOS `i18n.inputMethod` wrapper overwrites with --set. On NixOS use the
 #     NixOS module for the engine; this path is for standalone home-manager.
 #
-# The app's own setup screen will keep reporting the engine as "not installed"
-# either way — it only looks at $XDG_DATA_HOME/entropy/ibus/entropy-ibus-engine.
-# The input method works regardless; pressing the install button just drops an
-# unmanaged copy next to this one.
+# Entropy detects the engine registered this way and drops the install action
+# from its setup screen, so there is nothing left to press by mistake.
 #
 # Usage: imports = [ entropy.homeManagerModules.default ];
 #        programs.entropy.enable = true;
@@ -38,12 +36,16 @@ in
     ibus = {
       enable = lib.mkOption {
         type = lib.types.bool;
-        default = true;
+        default = false;
+        example = true;
         description = ''
           Register the Entropy IBus engine, which backs the Text Expander
-          feature on Wayland, by pointing IBUS_COMPONENT_PATH at it. Has no
-          effect if IBus comes from the NixOS `i18n.inputMethod` module — use
-          programs.entropy.ibus there instead.
+          feature on Wayland, by pointing IBUS_COMPONENT_PATH at it.
+
+          Opt-in: enabling Entropy alone neither installs nor selects an input
+          method. Has no effect if IBus comes from the NixOS
+          `i18n.inputMethod` module, which pins IBUS_COMPONENT_PATH with
+          `--set` — use programs.entropy.ibus in the NixOS module there.
         '';
       };
 

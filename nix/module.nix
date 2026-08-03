@@ -70,12 +70,18 @@ in
     ibus = {
       enable = lib.mkOption {
         type = lib.types.bool;
-        default = true;
+        default = false;
+        example = true;
         description = ''
           Register the Entropy IBus engine, which backs the Text Expander
           feature on Wayland. Universal Symbols do not need it on firmware
-          that exposes native RMK key actions. Enables IBus as the system
-          input method if nothing else has claimed that slot.
+          that exposes native RMK key actions.
+
+          Opt-in: enabling Entropy alone never selects an input method. IBus
+          has to be the chosen one already, so set
+          {option}`i18n.inputMethod.enable` and
+          {option}`i18n.inputMethod.type` = `"ibus"` alongside this option — a
+          warning is emitted when it is anything else.
         '';
       };
 
@@ -99,17 +105,25 @@ in
         # ibus-with-plugins hardcodes IBUS_COMPONENT_PATH to its own store path,
         # so an engine is only ever found if it is joined into that package —
         # dropping the component XML into XDG_DATA_DIRS does nothing.
-        i18n.inputMethod = {
-          enable = lib.mkDefault true;
-          type = lib.mkDefault "ibus";
-          ibus.engines = [ cfg.ibus.package ];
-        };
+        #
+        # Only the engine list is touched. Whether IBus runs at all stays the
+        # system owner's decision; claiming the input-method slot from a
+        # keyboard configurator would override whatever else the machine uses.
+        i18n.inputMethod.ibus.engines = [ cfg.ibus.package ];
 
-        warnings = lib.optional (config.i18n.inputMethod.type or null != "ibus") ''
-          programs.entropy.ibus.enable is on, but i18n.inputMethod.type is
-          "${toString config.i18n.inputMethod.type}" — the Entropy engine will not
-          be loaded. Set i18n.inputMethod.type = "ibus" or turn the option off.
-        '';
+        warnings =
+          lib.optional (!config.i18n.inputMethod.enable || config.i18n.inputMethod.type != "ibus")
+            ''
+              programs.entropy.ibus.enable is on, but the active input method is
+              ${
+                if config.i18n.inputMethod.enable then
+                  ''"${toString config.i18n.inputMethod.type}"''
+                else
+                  "disabled"
+              } — the Entropy engine will not be loaded. Set
+              i18n.inputMethod.enable = true and i18n.inputMethod.type = "ibus",
+              or turn programs.entropy.ibus.enable off.
+            '';
       })
     ]
   );
