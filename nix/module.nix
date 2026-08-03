@@ -18,10 +18,29 @@
 {
   config,
   lib,
+  pkgs,
   ...
 }:
 let
   cfg = config.programs.entropy;
+
+  # Mirrors linux/udev/install-vial-rules.sh: match Vial's magic serial and the
+  # Ergohaven Bluetooth HID id, then hand the node to the local session.
+  #
+  # Shipped as a package rather than through services.udev.extraRules because
+  # the app looks for a file named exactly 59-vial.rules under /etc, /run,
+  # /usr/lib or /lib (src/ui/app_settings.rs: linux_vial_udev_rules_installed).
+  # extraRules is merged into 99-local.rules, which would leave Entropy claiming
+  # the rule is missing even though hidraw access works.
+  vialUdevRules = pkgs.writeTextFile {
+    name = "entropy-vial-udev-rules";
+    destination = "/lib/udev/rules.d/59-vial.rules";
+    text = ''
+      # Entropy Vial hidraw access v2
+      KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{serial}=="*vial:f64c2b3c*", MODE="0660", GROUP="${cfg.group}", TAG+="uaccess", TAG+="udev-acl"
+      KERNEL=="hidraw*", SUBSYSTEM=="hidraw", KERNELS=="0005:E126:*", MODE="0660", GROUP="${cfg.group}", TAG+="uaccess", TAG+="udev-acl"
+    '';
+  };
 in
 {
   # nixpkgs carries its own programs/ergohaven-entropy.nix declaring the same
@@ -73,13 +92,7 @@ in
       {
         environment.systemPackages = [ cfg.package ];
 
-        # Mirrors linux/udev/install-vial-rules.sh: match Vial's magic serial and
-        # the Ergohaven Bluetooth HID id, then hand the node to the local session.
-        services.udev.extraRules = ''
-          # Entropy Vial hidraw access v2
-          KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{serial}=="*vial:f64c2b3c*", MODE="0660", GROUP="${cfg.group}", TAG+="uaccess", TAG+="udev-acl"
-          KERNEL=="hidraw*", SUBSYSTEM=="hidraw", KERNELS=="0005:E126:*", MODE="0660", GROUP="${cfg.group}", TAG+="uaccess", TAG+="udev-acl"
-        '';
+        services.udev.packages = [ vialUdevRules ];
       }
 
       (lib.mkIf cfg.ibus.enable {
