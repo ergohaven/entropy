@@ -616,15 +616,15 @@ impl EntropyApp {
             });
             ui.add_space(metrics.value(2.0));
 
+            let registration = self.linux_ibus_registration();
+
             // A distribution package or a declarative setup (the NixOS module)
-            // owns the engine; the user-scoped scripts cannot touch it, so offer
-            // no buttons that would only add an unmanaged copy beside it. What
-            // is still useful there is reloading the daemon: right after a
-            // rebuild it serves the registry it started with, without the
+            // owns a system registration; the user-scoped scripts cannot touch
+            // it, so installing there would only add an unmanaged copy beside
+            // it. Reloading the daemon is what helps instead: right after a
+            // rebuild it still serves the registry it started with, without the
             // freshly registered layouts.
-            if crate::linux_setup::ibus_component_state()
-                == crate::linux_setup::IbusComponentState::System
-            {
+            if registration.system {
                 ui.vertical_centered(|ui| {
                     ui.label(
                         RichText::new(crate::i18n::tr_catalog(
@@ -638,7 +638,15 @@ impl EntropyApp {
                 ui.add_space(metrics.value(6.0));
 
                 if draw_universal_symbols_action_row(ui, row, RELOAD_IBUS_ACTION) {
-                    self.reload_linux_ibus_registry();
+                    self.start_linux_ibus_reload();
+                }
+
+                // A leftover user copy can shadow the managed one, so keep the
+                // action that removes it — it is the only one that can.
+                if registration.user
+                    && draw_universal_symbols_action_row(ui, row, REMOVE_IBUS_ACTION)
+                {
+                    self.run_linux_universal_symbols_setup("linux/ibus/uninstall-user.sh", "IBus");
                 }
             } else {
                 let ibus_clicked = draw_universal_symbols_action_row(ui, row, SETUP_IBUS_ACTION);
@@ -668,16 +676,66 @@ impl EntropyApp {
         }
     }
 
+    /// Scanning the component directories touches the filesystem, so the result
+    /// is cached for as long as nothing this app does can change it.
     #[cfg(target_os = "linux")]
-    fn reload_linux_ibus_registry(&mut self) {
-        self.status_msg = match crate::smart_input::reload_ibus_registry() {
-            Ok(()) => crate::i18n::tr_catalog(
-                self.app_settings.language,
-                "universal_symbols_setup.ibus_reloaded_status",
-            )
-            .to_owned(),
-            Err(details) => format!("IBus reload failed: {details}"),
+    fn linux_ibus_registration(&mut self) -> crate::linux_setup::IbusRegistration {
+        *self
+            .ibus_registration
+            .get_or_insert_with(crate::linux_setup::ibus_registration)
+    }
+
+    /// Restarting the daemon can take a moment and can hang, so it runs on a
+    /// worker thread; `poll_ibus_reload` picks the result up.
+    #[cfg(target_os = "linux")]
+    fn start_linux_ibus_reload(&mut self) {
+        if self.pending_ibus_reload.is_some() {
+            return;
+        }
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(crate::smart_input::reload_ibus_registry());
+        });
+        self.pending_ibus_reload = Some(receiver);
+        self.status_msg = crate::i18n::tr_catalog(
+            self.app_settings.language,
+            "universal_symbols_setup.ibus_reloading_status",
+        )
+        .to_owned();
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn poll_ibus_reload(&mut self, ctx: &egui::Context) {
+        let result = match self.pending_ibus_reload.as_ref() {
+            Some(receiver) => receiver.try_recv(),
+            None => return,
         };
+
+        match result {
+            Ok(outcome) => {
+                self.pending_ibus_reload = None;
+                // The reload can only have changed what the daemon serves, but
+                // an install or removal may have raced it — rescan either way.
+                self.ibus_registration = None;
+                self.status_msg = match outcome {
+                    Ok(()) => crate::i18n::tr_catalog(
+                        self.app_settings.language,
+                        "universal_symbols_setup.ibus_reloaded_status",
+                    )
+                    .to_owned(),
+                    Err(details) => format!("IBus reload failed: {details}"),
+                };
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                log::error!("IBus reload worker disconnected before returning a result");
+                self.pending_ibus_reload = None;
+                self.ibus_registration = None;
+                self.status_msg = "IBus reload failed: worker stopped".to_owned();
+            }
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -685,6 +743,14 @@ impl EntropyApp {
         if self.linux_setup_task.is_some() {
             return;
         }
+
+        self.run_linux_setup_script(script, backend);
+        // install-user.sh / uninstall-user.sh add or remove the user copy.
+        self.ibus_registration = None;
+    }
+
+    #[cfg(target_os = "linux")]
+    fn run_linux_setup_script(&mut self, script: &str, backend: &str) {
         let Some(script_path) = crate::linux_setup::setup_script_path(script) else {
             self.status_msg = format!("Could not find {script}; run it from the Entropy folder");
             return;

@@ -3861,6 +3861,15 @@ pub struct EntropyApp {
     pub(crate) pending_entlayout_import_path: Option<(std::path::PathBuf, u64)>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) pending_entsettings_import_path: Option<std::path::PathBuf>,
+    /// Cached result of scanning the IBus component directories, which the Text
+    /// Expander setup page would otherwise redo on every frame. Cleared after
+    /// any action that can change it.
+    #[cfg(target_os = "linux")]
+    pub(crate) ibus_registration: Option<crate::linux_setup::IbusRegistration>,
+    /// In-flight `ibus write-cache` + `ibus restart`, run off the UI thread so
+    /// a slow or wedged daemon cannot freeze the window.
+    #[cfg(target_os = "linux")]
+    pub(crate) pending_ibus_reload: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) import_progress_started_at: Option<f64>,
     #[cfg(not(target_arch = "wasm32"))]

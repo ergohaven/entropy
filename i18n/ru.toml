@@ -334,6 +334,7 @@ ibus_system_managed = "Движок Entropy IBus уже зарегистриро
 reload_ibus = "Перезагрузить реестр IBus"
 reload_ibus_tooltip = "Перечитывает реестр и перезапускает IBus, чтобы появился только что зарегистрированный движок"
 reload_ibus_button = "Перезагрузить"
+ibus_reloading_status = "Перезагрузка IBus..."
 ibus_reloaded_status = "IBus перезагружен. Откройте Настройки -> Клавиатура -> Источники ввода, нажмите + и добавьте раскладки Entropy Text Expander. Если их всё ещё нет — перезайдите в сессию."
 ibus_installed_status = "IBus установлен. Откройте Настройки -> Клавиатура -> Источники ввода, нажмите + и добавьте нужные раскладки Entropy."
 ibus_installing_status = "Установка источников ввода IBus…"

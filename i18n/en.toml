@@ -334,6 +334,7 @@ ibus_system_managed = "The Entropy IBus engine is already registered system-wide
 reload_ibus = "Reload IBus registry"
 reload_ibus_tooltip = "Rereads the registry and restarts IBus so a newly registered engine shows up"
 reload_ibus_button = "Reload"
+ibus_reloading_status = "Reloading IBus..."
 ibus_reloaded_status = "IBus reloaded. Open Settings -> Keyboard -> Input Sources, press +, then add the Entropy Text Expander layouts. Log out and back in if they are still missing."
 ibus_installed_status = "IBus installed. Open Settings -> Keyboard -> Input Sources, press +, then add the Entropy layouts you use."
 ibus_installing_status = "Installing IBus input sources…"

@@ -90,6 +90,10 @@ impl EntropyApp {
             parent_window_handle: None,
             parent_display_handle: None,
             pending_entsettings_import_path: None,
+            #[cfg(target_os = "linux")]
+            ibus_registration: None,
+            #[cfg(target_os = "linux")]
+            pending_ibus_reload: None,
             import_progress_started_at: None,
             import_progress_title: String::new(),
             import_progress_body: String::new(),
