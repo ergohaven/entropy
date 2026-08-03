@@ -33,11 +33,14 @@ overrides:
     recommends:
       - xdg-desktop-portal
   rpm:
+    # Зависимости по soname, а не по именам пакетов: имена разъезжаются между
+    # дистрибутивами (libX11 в Fedora против libX11-6 в openSUSE), а провайды
+    # вида libX11.so.6()(64bit) есть в любом rpm-дистрибутиве.
     depends:
-      - libxkbcommon
-      - libX11
-      - libxcb
-      - mesa-libGL
+      - "libxkbcommon.so.0()(64bit)"
+      - "libX11.so.6()(64bit)"
+      - "libxcb.so.1()(64bit)"
+      - "libGL.so.1()(64bit)"
     recommends:
       - xdg-desktop-portal
   archlinux:
