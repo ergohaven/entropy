@@ -151,7 +151,7 @@ impl EntropyApp {
                 let (sender, receiver) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
                     #[cfg(target_os = "macos")]
-                    let _hid_lock = crate::hid::macos_hid_operation_lock();
+                    let _hid_lock = hid_device.macos_hid_operation_lock();
 
                     let write_result =
                         hid_device.set_combo(index as u8, task_entry.keys, task_entry.output);

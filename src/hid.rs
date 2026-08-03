@@ -316,6 +316,16 @@ impl HidDevice {
             HidBackend::Test { .. } => false,
         }
     }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn macos_hid_operation_lock(&self) -> Option<std::sync::MutexGuard<'static, ()>> {
+        #[cfg(test)]
+        if matches!(&self.backend, HidBackend::Test { .. }) {
+            return None;
+        }
+
+        Some(macos_hid_operation_lock())
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -2283,5 +2293,13 @@ mod tests {
         command[2] = 0x02;
 
         assert!(response_matches_command(&command, &command));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_hid_skips_macos_operation_lock() {
+        let (hid, _) = HidDevice::test_device();
+
+        assert!(hid.macos_hid_operation_lock().is_none());
     }
 }
