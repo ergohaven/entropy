@@ -338,6 +338,33 @@ fn has_firmware_layer_names(names: &[String]) -> bool {
         .any(|(index, name)| !is_default_layer_name(index, name))
 }
 
+fn rmk_native_capabilities(
+    dev_conn: &crate::hid::HidDevice,
+) -> anyhow::Result<crate::rmk_native::RmkNativeCapabilities> {
+    match dev_conn.get_rmk_native_capabilities() {
+        Ok(capabilities) => Ok(capabilities),
+        Err(error) if crate::hid::is_transport_disconnect_error(&error) => Err(error),
+        Err(error) => {
+            log::debug!("RMK native capabilities unavailable: {error:#}");
+            Ok(crate::rmk_native::RmkNativeCapabilities::default())
+        }
+    }
+}
+
+fn firmware_layer_name(
+    dev_conn: &crate::hid::HidDevice,
+    qsid: u16,
+) -> anyhow::Result<Option<String>> {
+    match dev_conn.get_qmk_setting_string(qsid) {
+        Ok(name) => Ok(Some(name)),
+        Err(error) if crate::hid::is_transport_disconnect_error(&error) => Err(error),
+        Err(error) => {
+            log::warn!("get_qmk_setting_string(layer name qsid {qsid}): {error}");
+            Ok(None)
+        }
+    }
+}
+
 fn layer_name_sync_updates(
     names: &[String],
     current_names: &[Option<String>],
@@ -918,12 +945,10 @@ impl EntropyApp {
                     }
                 }
 
-                let rmk_native_capabilities = dev_conn
-                    .get_rmk_native_capabilities()
-                    .unwrap_or_else(|error| {
-                        log::debug!("RMK native key-action capability unavailable: {error:#}");
-                        crate::rmk_native::RmkNativeCapabilities::default()
-                    });
+                let rmk_native_capabilities =
+                    rmk_native_capabilities(&dev_conn).map_err(|error| {
+                        format!("RMK native key-action capability read failed: {error:#}")
+                    })?;
                 let supports_rmk_native_key_actions = rmk_native_capabilities.key_actions;
                 let supports_universal_symbols = rmk_native_capabilities.universal_symbols;
                 let supports_universal_russian_letters = rmk_native_capabilities.russian_letters;
@@ -961,16 +986,15 @@ impl EntropyApp {
                         if !has_qmk_setting(qsid) {
                             continue;
                         }
-                        match dev_conn.get_qmk_setting_string(qsid) {
-                            Ok(name) => {
-                                *current_firmware_name = Some(name.clone());
-                                if !name.is_empty() {
-                                    layout.layer_names[layer] = name;
-                                    layer_names_from_firmware[layer] = true;
-                                }
-                            }
-                            Err(e) => {
-                                log::warn!("get_qmk_setting_string(layer name qsid {qsid}): {e}")
+                        if let Some(name) =
+                            firmware_layer_name(&dev_conn, qsid).map_err(|error| {
+                                format!("Layer name read failed for qsid {qsid}: {error:#}")
+                            })?
+                        {
+                            *current_firmware_name = Some(name.clone());
+                            if !name.is_empty() {
+                                layout.layer_names[layer] = name;
+                                layer_names_from_firmware[layer] = true;
                             }
                         }
                     }
@@ -1398,6 +1422,65 @@ mod tests {
     fn reported_layer_count_is_never_zero() {
         assert_eq!(normalize_reported_layer_count(0), 1);
         assert_eq!(normalize_reported_layer_count(4), 4);
+    }
+
+    #[test]
+    fn disconnect_after_initial_keymap_read_fails_rmk_capability_probe() {
+        let (device, _) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+            1,
+            crate::hid::TestHidFault::Disconnect,
+        )));
+
+        device.get_keymap_buffer(1, 1, 1).unwrap();
+        let error = rmk_native_capabilities(&device).unwrap_err();
+
+        assert!(
+            crate::hid::is_transport_disconnect_error(&error),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn disconnect_after_initial_keymap_read_fails_layer_name_probe() {
+        let (device, _) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+            1,
+            crate::hid::TestHidFault::Disconnect,
+        )));
+
+        device.get_keymap_buffer(1, 1, 1).unwrap();
+        let error = firmware_layer_name(&device, 200).unwrap_err();
+
+        assert!(
+            crate::hid::is_transport_disconnect_error(&error),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn timeout_after_initial_keymap_read_keeps_rmk_capability_probe_optional() {
+        let (device, _) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+            1,
+            crate::hid::TestHidFault::Timeout,
+        )));
+
+        device.get_keymap_buffer(1, 1, 1).unwrap();
+
+        assert_eq!(
+            rmk_native_capabilities(&device).unwrap(),
+            crate::rmk_native::RmkNativeCapabilities::default()
+        );
+    }
+
+    #[test]
+    fn timeout_after_initial_keymap_read_keeps_layer_name_probe_optional() {
+        let (device, _) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+            1,
+            crate::hid::TestHidFault::Timeout,
+        )));
+
+        device.get_keymap_buffer(1, 1, 1).unwrap();
+
+        assert_eq!(firmware_layer_name(&device, 200).unwrap(), None);
     }
 
     #[test]
