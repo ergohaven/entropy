@@ -1,0 +1,48 @@
+name: Nix
+
+# The Build workflow compiles with cargo and apt dependencies, which says
+# nothing about whether the flake still evaluates or builds. This one covers
+# the Nix side: both packages, the NixOS module evaluation, and flake check.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: nix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  flake:
+    name: Flake
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Check formatting
+        run: nix fmt -- --ci
+
+      # Cheap and the most likely thing to break: option collisions with the
+      # Entropy module in nixpkgs, or the module quietly claiming the system
+      # input method again.
+      - name: Evaluate the NixOS module
+        run: nix build --print-build-logs .#checks.x86_64-linux.module-eval
+
+      - name: Build packages
+        run: nix build --print-build-logs .#entropy .#entropy-ibus-engine
+
+      - name: Check the IBus engine dependencies
+        run: ./result-1/libexec/entropy-ibus-engine --entropy-check
+
+      - name: Flake check
+        run: nix flake check --print-build-logs
