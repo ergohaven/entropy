@@ -1,5 +1,6 @@
 const GITHUB_LATEST_RELEASE_API: &str =
     "https://api.github.com/repos/ergohaven/entropy/releases/latest";
+const GITHUB_LATEST_RELEASE_PAGE: &str = "https://github.com/ergohaven/entropy/releases/latest";
 
 #[derive(Clone, Debug)]
 pub(crate) struct UpdateAsset {
@@ -184,14 +185,7 @@ fn is_trusted_release_url(url: &str) -> bool {
     let Ok(url) = url::Url::parse(url) else {
         return false;
     };
-    if url.scheme() != "https"
-        || url.host_str() != Some("github.com")
-        || url.port().is_some()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
+    if !is_trusted_github_release_url(&url) {
         return false;
     }
 
@@ -207,8 +201,37 @@ fn is_trusted_release_url(url: &str) -> bool {
     }
 }
 
+fn is_trusted_github_release_url(url: &url::Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str() == Some("github.com")
+        && url.port().is_none()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn fetch_latest_release() -> Result<GitHubRelease, String> {
+    fetch_latest_release_with_fallback(
+        fetch_latest_release_from_api,
+        fetch_latest_release_from_redirect,
+    )
+}
+
+fn fetch_latest_release_with_fallback(
+    fetch_from_api: impl FnOnce() -> Result<GitHubRelease, String>,
+    fetch_from_redirect: impl FnOnce() -> Result<GitHubRelease, String>,
+) -> Result<GitHubRelease, String> {
+    fetch_from_api().or_else(|api_error| {
+        fetch_from_redirect().map_err(|redirect_error| {
+            format!("{api_error}; GitHub Releases fallback failed: {redirect_error}")
+        })
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fetch_latest_release_from_api() -> Result<GitHubRelease, String> {
     ureq::get(GITHUB_LATEST_RELEASE_API)
         .set("User-Agent", concat!("Entropy/", env!("CARGO_PKG_VERSION")))
         .set("Accept", "application/vnd.github+json")
@@ -216,6 +239,42 @@ fn fetch_latest_release() -> Result<GitHubRelease, String> {
         .map_err(|error| format!("GitHub request failed: {error}"))?
         .into_json::<GitHubRelease>()
         .map_err(|error| format!("GitHub response parse failed: {error}"))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fetch_latest_release_from_redirect() -> Result<GitHubRelease, String> {
+    let response = ureq::get(GITHUB_LATEST_RELEASE_PAGE)
+        .set("User-Agent", concat!("Entropy/", env!("CARGO_PKG_VERSION")))
+        .call()
+        .map_err(|error| format!("GitHub Releases request failed: {error}"))?;
+
+    release_from_latest_release_redirect(response.get_url())
+}
+
+fn release_from_latest_release_redirect(url: &str) -> Result<GitHubRelease, String> {
+    let parsed = url::Url::parse(url)
+        .map_err(|error| format!("GitHub Releases redirect URL was invalid: {error}"))?;
+
+    if !is_trusted_github_release_url(&parsed) {
+        return Err("GitHub Releases redirect URL was not trusted".to_owned());
+    }
+
+    let Some(segments) = parsed.path_segments() else {
+        return Err("GitHub Releases redirect URL had no path".to_owned());
+    };
+    let segments = segments.collect::<Vec<_>>();
+    let ["ergohaven", "entropy", "releases", "tag", tag] = segments.as_slice() else {
+        return Err("GitHub Releases redirect URL was not an Entropy release tag".to_owned());
+    };
+    if tag.is_empty() {
+        return Err("GitHub Releases redirect URL had an empty tag".to_owned());
+    }
+
+    Ok(GitHubRelease {
+        tag_name: (*tag).to_owned(),
+        html_url: url.to_owned(),
+        assets: Vec::new(),
+    })
 }
 
 fn build_update_result(release: GitHubRelease) -> UpdateCheckResult {
@@ -308,6 +367,100 @@ mod tests {
         assert!(is_trusted_release_url(
             "https://github.com/ergohaven/entropy/releases/tag/release%2Fv0.3.0"
         ));
+    }
+
+    #[test]
+    fn builds_release_from_latest_release_redirect() {
+        let release = release_from_latest_release_redirect(
+            "https://github.com/ergohaven/entropy/releases/tag/v0.3.1",
+        )
+        .unwrap();
+
+        assert_eq!(release.tag_name, "v0.3.1");
+        assert_eq!(
+            release.html_url,
+            "https://github.com/ergohaven/entropy/releases/tag/v0.3.1"
+        );
+        assert!(release.assets.is_empty());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn uses_api_release_without_requesting_fallback() {
+        let mut fallback_requested = false;
+        let release = fetch_latest_release_with_fallback(
+            || {
+                Ok(GitHubRelease {
+                    tag_name: "v0.3.1".to_owned(),
+                    html_url: "https://github.com/ergohaven/entropy/releases/tag/v0.3.1".to_owned(),
+                    assets: Vec::new(),
+                })
+            },
+            || {
+                fallback_requested = true;
+                Err("fallback should not be requested".to_owned())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(release.tag_name, "v0.3.1");
+        assert!(!fallback_requested);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn uses_redirect_release_after_api_failure() {
+        let release = fetch_latest_release_with_fallback(
+            || Err("GitHub request failed: rate limited".to_owned()),
+            || {
+                release_from_latest_release_redirect(
+                    "https://github.com/ergohaven/entropy/releases/tag/v999.0.0",
+                )
+            },
+        )
+        .unwrap();
+        let result = build_update_result(release);
+
+        assert_eq!(result.latest_version, "v999.0.0");
+        assert_eq!(
+            result.release_url,
+            "https://github.com/ergohaven/entropy/releases/tag/v999.0.0"
+        );
+        assert!(result.asset.is_none());
+        assert_eq!(result.relation, VersionRelation::UpdateAvailable);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn reports_both_failures_when_fallback_fails() {
+        let result = fetch_latest_release_with_fallback(
+            || Err("GitHub request failed: rate limited".to_owned()),
+            || Err("GitHub Releases request failed: unavailable".to_owned()),
+        );
+        let Err(error) = result else {
+            panic!("fallback should have failed");
+        };
+
+        assert_eq!(
+            error,
+            "GitHub request failed: rate limited; GitHub Releases fallback failed: GitHub Releases request failed: unavailable"
+        );
+    }
+
+    #[test]
+    fn rejects_untrusted_latest_release_redirect() {
+        assert!(release_from_latest_release_redirect(
+            "https://github.com/ergohaven/another-repo/releases/tag/v0.3.1",
+        )
+        .is_err());
+        assert!(release_from_latest_release_redirect(
+            "https://github.com/ergohaven/entropy/releases/tag/v0.3.1?source=update",
+        )
+        .is_err());
+        assert!(release_from_latest_release_redirect(
+            "https://github.com/ergohaven/entropy/releases/tag/",
+        )
+        .is_err());
     }
 
     #[test]
