@@ -61,6 +61,13 @@ jobs:
             libssl-dev \
             libgtk-3-dev
 
+      - name: Test AppImage tool integrity verification
+        if: matrix.kind == 'linux'
+        run: |
+          bash scripts/test_verify_sha256.sh
+          bash scripts/test_build_linux_appimage.sh
+          bash scripts/test_update_appimagetool_pin.sh
+
       - name: Build
         if: matrix.kind != 'macos'
         run: cargo build --release

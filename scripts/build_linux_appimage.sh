@@ -10,9 +10,13 @@ fi
 OUT="${2:-$ROOT/dist/release/entropy-${VERSION}-x86_64.AppImage}"
 APPDIR="${APPDIR:-$ROOT/target/appimage/Entropy.AppDir}"
 APPIMAGETOOL="${APPIMAGETOOL:-$ROOT/target/tools/appimagetool-x86_64.AppImage}"
-APPIMAGETOOL_URL="${APPIMAGETOOL_URL:-https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage}"
 
 cd "$ROOT"
+# shellcheck disable=SC1091
+source scripts/appimagetool_pin.sh
+APPIMAGETOOL_URL="${APPIMAGETOOL_URL:-$APPIMAGETOOL_PINNED_URL}"
+APPIMAGETOOL_SHA256="${APPIMAGETOOL_SHA256:-$APPIMAGETOOL_PINNED_SHA256}"
+
 cargo build --release --locked
 
 rm -rf "$APPDIR" "$OUT"
@@ -60,8 +64,15 @@ cat > "$APPDIR/entropy.svg" <<'EOF'
 EOF
 
 if [[ ! -x "$APPIMAGETOOL" ]]; then
-  curl -fsSL "$APPIMAGETOOL_URL" -o "$APPIMAGETOOL"
-  chmod 0755 "$APPIMAGETOOL"
+  APPIMAGETOOL_DOWNLOAD="$(mktemp "${APPIMAGETOOL}.download.XXXXXX")"
+  trap 'rm -f "$APPIMAGETOOL_DOWNLOAD"' EXIT
+  curl -fsSL "$APPIMAGETOOL_URL" -o "$APPIMAGETOOL_DOWNLOAD"
+  "$ROOT/scripts/verify_sha256.sh" "$APPIMAGETOOL_DOWNLOAD" "$APPIMAGETOOL_SHA256"
+  chmod 0755 "$APPIMAGETOOL_DOWNLOAD"
+  mv "$APPIMAGETOOL_DOWNLOAD" "$APPIMAGETOOL"
+  trap - EXIT
+else
+  "$ROOT/scripts/verify_sha256.sh" "$APPIMAGETOOL" "$APPIMAGETOOL_SHA256"
 fi
 
 ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGETOOL" "$APPDIR" "$OUT"
