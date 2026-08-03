@@ -51,6 +51,11 @@ let
     programs.entropy.ibus.enable = true;
   };
 
+  customGroup = evalWith {
+    programs.entropy.enable = true;
+    programs.entropy.group = "plugdev";
+  };
+
   hasPackage = pname: packages: lib.any (drv: drv.pname or drv.name == pname) packages;
 
   engineNames = config: map (drv: drv.pname or drv.name) config.i18n.inputMethod.ibus.engines;
@@ -59,6 +64,16 @@ let
     # The app and the Vial rule are what `enable` is for.
     (lib.assertMsg (hasPackage "entropy" bare.environment.systemPackages) "programs.entropy.enable does not install the entropy package")
     (lib.assertMsg (hasPackage "entropy-vial-udev-rules" bare.services.udev.packages) "the Vial udev rule is missing from services.udev.packages")
+
+    # The rule names a group; that group has to exist, including the default
+    # "input" (which NixOS declares itself) and any custom one.
+    (lib.assertMsg (bare.users.groups ? "input") "the default hidraw group is not declared")
+    (lib.assertMsg (
+      customGroup.users.groups ? "plugdev"
+    ) "a custom programs.entropy.group is not created")
+    (lib.assertMsg (
+      bare.users.groups.input.gid == 174
+    ) "redeclaring the input group dropped its well-known gid")
 
     # Enabling Entropy must not drag in an input method.
     (lib.assertMsg (

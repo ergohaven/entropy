@@ -60,10 +60,15 @@ in
     group = lib.mkOption {
       type = lib.types.str;
       default = "input";
+      example = "plugdev";
       description = ''
         Group granted read/write access to Vial hidraw devices. Members can
         talk to the keyboard even where uaccess does not apply (over SSH, or
         from a session that does not own the seat).
+
+        The group is created if it does not exist yet, so that the rule can
+        never end up pointing at a group nothing can join. Add the users that
+        need it to {option}`users.users.<name>.extraGroups`.
       '';
     };
 
@@ -99,6 +104,11 @@ in
         environment.systemPackages = [ cfg.package ];
 
         services.udev.packages = [ vialUdevRules ];
+
+        # A rule naming a group that does not exist evaluates and installs
+        # happily, and then leaves the device unreachable. Declaring it here is
+        # a no-op for groups NixOS already ships, such as the default "input".
+        users.groups.${cfg.group} = { };
       }
 
       (lib.mkIf cfg.ibus.enable {
