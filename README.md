@@ -141,10 +141,10 @@ A flake is included. Run without installing:
 nix run github:ergohaven/entropy
 ```
 
-The **Install Vial udev rules** and **Install IBus** actions do not work on
-NixOS — they write to `/etc/udev/rules.d` and `~/.local/share`, and IBus only
-loads engines from its own store path. Use the NixOS module instead, which
-covers both:
+The in-app setup actions cannot work on NixOS: **Install Vial udev rules**
+writes to `/etc/udev/rules.d`, and IBus loads engines only from its own store
+path, so a copy under `~/.local/share` is never picked up. Use the NixOS module
+instead, which covers both declaratively:
 
 ```nix
 {
@@ -161,16 +161,40 @@ covers both:
 }
 ```
 
-This installs the app, the Vial hidraw udev rule, and the Entropy IBus engine
-(`programs.entropy.ibus.enable`, on by default), which backs Text Expander on
-Wayland. Add **Entropy Symbols** — or the layout-specific variant, e.g.
-**Entropy EN** — as an input source after rebuilding. Entropy's settings screen
-will still report the engine as not installed — it only looks in
-`$XDG_DATA_HOME`; leave the install button alone.
+This installs the app and the Vial hidraw udev rule. Nothing else is touched:
+no input method is enabled or selected on your behalf.
 
-Universal Symbols need no input method on firmware that exposes native RMK key
-actions, so `programs.entropy.ibus.enable = false;` is enough if Text Expander
-is not used.
+Text Expander needs the Entropy IBus engine, which is opt-in and expects IBus
+to be the input method you already run:
+
+```nix
+{
+  programs.entropy = {
+    enable = true;
+    ibus.enable = true;
+  };
+
+  i18n.inputMethod = {
+    enable = true;
+    type = "ibus";
+  };
+}
+```
+
+Enabling `programs.entropy.ibus` while some other input method is active only
+produces a warning — the engine is never loaded in that case. Universal Symbols
+need no input method at all on firmware that exposes native RMK key actions.
+
+After rebuilding, add **Entropy Text Expander** — or a layout-specific variant,
+e.g. **Entropy Text Expander EN** — as an input source. Entropy detects an
+engine registered this way and drops the **Install IBus** action from its setup
+screen, so there is nothing left to press.
+
+nixpkgs ships its own `programs.entropy` module around `pkgs.ergohaven-entropy`.
+Both declare the same option, so this module disables the nixpkgs one
+(`disabledModules`) and takes over: it follows the version in this repository
+and exposes `package`, `group` and the `ibus` options. Use one or the other,
+not both — importing this module is what makes the choice.
 
 A `homeManagerModules.default` is also available, but the udev rule needs root,
 so it only covers the app and the IBus engine, and its IBus registration works
