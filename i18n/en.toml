@@ -505,6 +505,7 @@ failed_to_create_backup_dir = "failed to create backup dir {path}"
 failed_to_serialize_rules = "failed to serialize text expander rules"
 failed_to_serialize = "failed to serialize .entsettings"
 failed_to_write = "failed to write {path}"
+failed_to_restore = "failed to fully restore settings after the import error ({error}): {errors}"
 
 [app_chrome]
 light = "Light"
