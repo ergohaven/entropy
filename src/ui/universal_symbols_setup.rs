@@ -124,6 +124,13 @@ const REMOVE_IBUS_ACTION: UniversalSymbolsAction = UniversalSymbolsAction {
     button_key: "universal_symbols_setup.remove_ibus",
 };
 
+#[cfg(target_os = "linux")]
+const RELOAD_IBUS_ACTION: UniversalSymbolsAction = UniversalSymbolsAction {
+    label_key: "universal_symbols_setup.reload_ibus",
+    tooltip_key: "universal_symbols_setup.reload_ibus_tooltip",
+    button_key: "universal_symbols_setup.reload_ibus_button",
+};
+
 fn universal_symbols_finish_step_2() -> UniversalSymbolsFinishStep {
     UniversalSymbolsFinishStep {
         label_key: "universal_symbols_setup.finish_step_2",
@@ -611,7 +618,10 @@ impl EntropyApp {
 
             // A distribution package or a declarative setup (the NixOS module)
             // owns the engine; the user-scoped scripts cannot touch it, so offer
-            // no buttons that would only add an unmanaged copy beside it.
+            // no buttons that would only add an unmanaged copy beside it. What
+            // is still useful there is reloading the daemon: right after a
+            // rebuild it serves the registry it started with, without the
+            // freshly registered layouts.
             if crate::linux_setup::ibus_component_state()
                 == crate::linux_setup::IbusComponentState::System
             {
@@ -625,6 +635,11 @@ impl EntropyApp {
                         .color(app_muted_text(ui.visuals().dark_mode)),
                     );
                 });
+                ui.add_space(metrics.value(6.0));
+
+                if draw_universal_symbols_action_row(ui, row, RELOAD_IBUS_ACTION) {
+                    self.reload_linux_ibus_registry();
+                }
             } else {
                 let ibus_clicked = draw_universal_symbols_action_row(ui, row, SETUP_IBUS_ACTION);
                 if ibus_clicked {
@@ -651,6 +666,18 @@ impl EntropyApp {
                 );
             });
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn reload_linux_ibus_registry(&mut self) {
+        self.status_msg = match crate::smart_input::reload_ibus_registry() {
+            Ok(()) => crate::i18n::tr_catalog(
+                self.app_settings.language,
+                "universal_symbols_setup.ibus_reloaded_status",
+            )
+            .to_owned(),
+            Err(details) => format!("IBus reload failed: {details}"),
+        };
     }
 
     #[cfg(target_os = "linux")]
