@@ -187,8 +187,14 @@ need no input method at all on firmware that exposes native RMK key actions.
 
 After rebuilding, add **Entropy Text Expander** — or a layout-specific variant,
 e.g. **Entropy Text Expander EN** — as an input source. Entropy detects an
-engine registered this way and drops the **Install IBus** action from its setup
-screen, so there is nothing left to press.
+engine registered this way and replaces the **Install IBus** action with
+**Reload IBus registry**: a daemon started before the rebuild still serves its
+old registry, so the new layouts show up only after it reloads (or after you
+log out and back in).
+
+`programs.entropy.group` (default `input`) is the group the udev rule grants
+access to; it is created if it does not exist, and the users that need direct
+hidraw access have to be members of it.
 
 nixpkgs ships its own `programs.entropy` module around `pkgs.ergohaven-entropy`.
 Both declare the same option, so this module disables the nixpkgs one

@@ -72,8 +72,11 @@ in
           "${pkgs.ibus}/share/ibus/component"
         ];
 
-        # IBus caches the registry — after switching generations run
-        # `ibus write-cache && ibus restart`, or just log out and back in.
+        # IBus caches the registry, so a daemon started before this generation
+        # keeps serving the old one and the layouts stay missing. Entropy's
+        # setup screen offers "Reload IBus registry" for exactly this; the
+        # equivalent by hand is `ibus write-cache && ibus restart`, or logging
+        # out and back in.
       })
     ]
   );
