@@ -39,10 +39,12 @@ jobs:
         run: nix build --print-build-logs .#checks.x86_64-linux.module-eval
 
       - name: Build packages
-        run: nix build --print-build-logs .#entropy .#entropy-ibus-engine
+        run: |
+          nix build --print-build-logs --out-link result-entropy .#entropy
+          nix build --print-build-logs --out-link result-engine .#entropy-ibus-engine
 
       - name: Check the IBus engine dependencies
-        run: ./result-1/libexec/entropy-ibus-engine --entropy-check
+        run: ./result-engine/libexec/entropy-ibus-engine --entropy-check
 
       - name: Flake check
         run: nix flake check --print-build-logs

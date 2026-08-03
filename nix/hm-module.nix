@@ -9,8 +9,8 @@
 #     NixOS `i18n.inputMethod` wrapper overwrites with --set. On NixOS use the
 #     NixOS module for the engine; this path is for standalone home-manager.
 #
-# Entropy detects the engine registered this way and drops the install action
-# from its setup screen, so there is nothing left to press by mistake.
+# Entropy detects the engine registered this way and replaces the install
+# action with "Reload IBus registry", which is all that is left to do here.
 #
 # Usage: imports = [ entropy.homeManagerModules.default ];
 #        programs.entropy.enable = true;

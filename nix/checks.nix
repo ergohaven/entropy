@@ -24,11 +24,9 @@ let
         self.nixosModules.default
         {
           nixpkgs.hostPlatform = system;
-          boot.loader.grub.devices = [ "/dev/sda" ];
-          fileSystems."/" = {
-            device = "/dev/sda1";
-            fsType = "ext4";
-          };
+          # Nothing here builds system.build.toplevel, so no bootloader or
+          # filesystem definitions are needed; stateVersion only silences the
+          # eval warning about its default.
           system.stateVersion = "25.11";
         }
         module
@@ -72,7 +70,7 @@ let
       customGroup.users.groups ? "plugdev"
     ) "a custom programs.entropy.group is not created")
     (lib.assertMsg (
-      bare.users.groups.input.gid == 174
+      bare.users.groups.input.gid == bare.ids.gids.input
     ) "redeclaring the input group dropped its well-known gid")
 
     # Enabling Entropy must not drag in an input method.
