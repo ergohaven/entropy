@@ -7,5 +7,5 @@ Exec=entropy
 Icon=entropy
 Terminal=false
 Categories=Settings;HardwareSettings;
-Keywords=keyboard;vial;qmk;rmk;hid;keymap;macropad;
+Keywords=keyboard;vial;qmk;rmk;hid;keymap;macropad;ergohaven;
 StartupWMClass=entropy
