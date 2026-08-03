@@ -609,14 +609,32 @@ impl EntropyApp {
             });
             ui.add_space(metrics.value(2.0));
 
-            let ibus_clicked = draw_universal_symbols_action_row(ui, row, SETUP_IBUS_ACTION);
-            if ibus_clicked {
-                self.run_linux_universal_symbols_setup("linux/ibus/install-user.sh", "IBus");
-            }
+            // A distribution package or a declarative setup (the NixOS module)
+            // owns the engine; the user-scoped scripts cannot touch it, so offer
+            // no buttons that would only add an unmanaged copy beside it.
+            if crate::linux_setup::ibus_component_state()
+                == crate::linux_setup::IbusComponentState::System
+            {
+                ui.vertical_centered(|ui| {
+                    ui.label(
+                        RichText::new(crate::i18n::tr_catalog(
+                            lang,
+                            "universal_symbols_setup.ibus_system_managed",
+                        ))
+                        .size(metrics.value(11.5))
+                        .color(app_muted_text(ui.visuals().dark_mode)),
+                    );
+                });
+            } else {
+                let ibus_clicked = draw_universal_symbols_action_row(ui, row, SETUP_IBUS_ACTION);
+                if ibus_clicked {
+                    self.run_linux_universal_symbols_setup("linux/ibus/install-user.sh", "IBus");
+                }
 
-            let remove_clicked = draw_universal_symbols_action_row(ui, row, REMOVE_IBUS_ACTION);
-            if remove_clicked {
-                self.run_linux_universal_symbols_setup("linux/ibus/uninstall-user.sh", "IBus");
+                let remove_clicked = draw_universal_symbols_action_row(ui, row, REMOVE_IBUS_ACTION);
+                if remove_clicked {
+                    self.run_linux_universal_symbols_setup("linux/ibus/uninstall-user.sh", "IBus");
+                }
             }
         }
 
