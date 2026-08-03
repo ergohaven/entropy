@@ -17,6 +17,7 @@ const DATA_LAYOUT: u8 = 0xAC;
 const DATA_MEDIA_ARTIST: u8 = 0xAD;
 const DATA_MEDIA_TITLE: u8 = 0xAE;
 const DEFAULT_LAYOUT_CODES: [&str; 2] = ["en", "ru"];
+const LAYOUT_RESEND_INTERVAL: Duration = Duration::from_secs(10);
 #[cfg(target_os = "linux")]
 const KDE_LAYOUT_DESTINATION: &str = "org.kde.keyboard";
 #[cfg(target_os = "linux")]
@@ -327,6 +328,7 @@ fn run_bridge(
     let mut last_layout_poll = Instant::now() - Duration::from_secs(60);
     let mut last_media_poll = Instant::now() - Duration::from_secs(60);
     let mut last_media_full_send = Instant::now() - Duration::from_secs(60);
+    let mut last_layout_full_send = Instant::now();
     let mut last_layout_tracker_attempt = Instant::now() - Duration::from_secs(60);
     let mut layout_tracker = mode.layout.then(LayoutTracker::new).flatten();
 
@@ -337,6 +339,7 @@ fn run_bridge(
                 .map_err(|e| log::warn!("qmk-hid-host open failed: {e}"))
                 .ok();
             if device.is_some() {
+                reset_layout_sync_state(&mut last_layout, &mut last_layout_full_send);
                 log::info!(
                     "qmk-hid-host bridge started ({})",
                     if device.as_ref().is_some_and(HostDataHid::uses_shared_output) {
@@ -360,6 +363,7 @@ fn run_bridge(
         if !target.uses_bluez_gatt_transport() && !std::path::Path::new(&target.path).exists() {
             log::warn!("qmk-hid-host device path disappeared; reconnecting");
             device = None;
+            reset_layout_sync_state(&mut last_layout, &mut last_layout_full_send);
             thread::sleep(Duration::from_millis(250));
             continue;
         }
@@ -399,9 +403,13 @@ fn run_bridge(
                 .as_mut()
                 .and_then(LayoutTracker::current_layout_index)
             {
-                if last_layout != Some(layout) {
+                if layout_needs_send(last_layout, last_layout_full_send.elapsed(), layout) {
                     last_layout = Some(layout);
-                    write_failed |= write_payload(dev, &[DATA_LAYOUT, layout]).is_err();
+                    let layout_write = write_payload(dev, &[DATA_LAYOUT, layout]);
+                    write_failed |= layout_write.is_err();
+                    if layout_write.is_ok() {
+                        last_layout_full_send = Instant::now();
+                    }
                     pause_between_packets();
                 }
             }
@@ -434,7 +442,7 @@ fn run_bridge(
             device = None;
             last_time = None;
             last_volume = None;
-            last_layout = None;
+            reset_layout_sync_state(&mut last_layout, &mut last_layout_full_send);
             last_artist.clear();
             last_title.clear();
             last_media_full_send = Instant::now() - Duration::from_secs(60);
@@ -444,6 +452,19 @@ fn run_bridge(
     }
 
     log::info!("qmk-hid-host bridge stopped");
+}
+
+fn reset_layout_sync_state(last_layout: &mut Option<u8>, last_layout_full_send: &mut Instant) {
+    *last_layout = None;
+    *last_layout_full_send = Instant::now();
+}
+
+fn layout_needs_send(
+    last_layout: Option<u8>,
+    elapsed_since_last_send: Duration,
+    layout: u8,
+) -> bool {
+    last_layout != Some(layout) || elapsed_since_last_send >= LAYOUT_RESEND_INTERVAL
 }
 
 fn send_shutdown_payloads(
@@ -820,6 +841,33 @@ mod tests {
         assert_eq!(layout_code_index("ru"), Some(1));
         assert_eq!(layout_code_index("com.apple.keylayout.RussianWin"), Some(1));
         assert_eq!(layout_code_index("de"), None);
+    }
+
+    #[test]
+    fn layout_resend_is_due_when_the_layout_does_not_change() {
+        let layout = 1;
+
+        assert!(!layout_needs_send(Some(layout), Duration::ZERO, layout));
+        assert!(layout_needs_send(
+            Some(layout),
+            LAYOUT_RESEND_INTERVAL,
+            layout
+        ));
+    }
+
+    #[test]
+    fn reset_layout_sync_state_forces_the_next_layout_write() {
+        let layout = 1;
+        let mut last_layout = Some(layout);
+        let mut last_layout_full_send = Instant::now();
+
+        reset_layout_sync_state(&mut last_layout, &mut last_layout_full_send);
+
+        assert!(layout_needs_send(
+            last_layout,
+            last_layout_full_send.elapsed(),
+            layout
+        ));
     }
 
     #[cfg(target_os = "linux")]
