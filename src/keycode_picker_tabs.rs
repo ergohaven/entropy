@@ -8,6 +8,85 @@ struct OneShotModifierChoice {
     mod_name: String,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct ModTapChoice {
+    label: String,
+    left_value: u16,
+    right_value: Option<u16>,
+    mod_name: String,
+}
+
+fn mod_tap_choices(lgui: &str) -> Vec<ModTapChoice> {
+    vec![
+        ModTapChoice {
+            label: picker_mod_tap_label(0x2100),
+            left_value: 0x2100,
+            right_value: Some(0x3100),
+            mod_name: "Ctrl".into(),
+        },
+        ModTapChoice {
+            label: picker_mod_tap_label(0x2200),
+            left_value: 0x2200,
+            right_value: Some(0x3200),
+            mod_name: "Shift".into(),
+        },
+        ModTapChoice {
+            label: picker_mod_tap_label(0x2400),
+            left_value: 0x2400,
+            right_value: Some(0x3400),
+            mod_name: "Alt".into(),
+        },
+        ModTapChoice {
+            label: picker_mod_tap_label(0x2800),
+            left_value: 0x2800,
+            right_value: Some(0x3800),
+            mod_name: lgui.to_string(),
+        },
+        ModTapChoice {
+            label: picker_mod_tap_label(0x2300),
+            left_value: 0x2300,
+            right_value: None,
+            mod_name: "Ctrl+Shift".into(),
+        },
+        ModTapChoice {
+            label: picker_mod_tap_label(0x2500),
+            left_value: 0x2500,
+            right_value: None,
+            mod_name: "Ctrl+Alt".into(),
+        },
+        ModTapChoice {
+            label: picker_mod_tap_label(0x2900),
+            left_value: 0x2900,
+            right_value: None,
+            mod_name: format!("Ctrl+{lgui}"),
+        },
+        ModTapChoice {
+            label: picker_mod_tap_label(0x2600),
+            left_value: 0x2600,
+            right_value: None,
+            mod_name: "Shift+Alt (LSA)".into(),
+        },
+        ModTapChoice {
+            label: picker_mod_tap_label(0x2700),
+            left_value: 0x2700,
+            right_value: None,
+            mod_name: "Meh (Ctrl+Shift+Alt)".into(),
+        },
+        ModTapChoice {
+            label: picker_mod_tap_label(0x2A00),
+            left_value: 0x2A00,
+            right_value: None,
+            mod_name: format!("Shift+{lgui}"),
+        },
+        ModTapChoice {
+            label: picker_mod_tap_label(0x2F00),
+            left_value: 0x2F00,
+            right_value: None,
+            mod_name: format!("Hyper (Ctrl+Shift+Alt+{})", gui_mod_name()),
+        },
+    ]
+}
+
 fn one_shot_modifier_choices(gui_label: &str, gui_mod_name: &str) -> Vec<OneShotModifierChoice> {
     vec![
         OneShotModifierChoice {
@@ -373,95 +452,28 @@ impl KeycodePicker {
                 .color(Color32::from_gray(150)),
         );
         ui.add_space(4.0);
-        let mt: Vec<(String, u16, Option<u16>, String)> = vec![
-            (
-                picker_mod_tap_label(0x2100),
-                0x2100,
-                Some(0x3100),
-                "Ctrl".into(),
-            ),
-            (
-                picker_mod_tap_label(0x2200),
-                0x2200,
-                Some(0x3200),
-                "Shift".into(),
-            ),
-            (
-                picker_mod_tap_label(0x2400),
-                0x2400,
-                Some(0x3400),
-                "Alt".into(),
-            ),
-            (
-                picker_mod_tap_label(0x2800),
-                0x2800,
-                Some(0x3800),
-                lgui.to_string(),
-            ),
-            (
-                picker_mod_tap_label(0x2300),
-                0x2300,
-                None,
-                "Ctrl+Shift".into(),
-            ),
-            (
-                picker_mod_tap_label(0x2500),
-                0x2500,
-                None,
-                "Ctrl+Alt".into(),
-            ),
-            (
-                picker_mod_tap_label(0x2900),
-                0x2900,
-                None,
-                format!("Ctrl+{lgui}"),
-            ),
-            (
-                picker_mod_tap_label(0x2600),
-                0x2600,
-                None,
-                "Shift+Alt (LSA)".into(),
-            ),
-            (
-                picker_mod_tap_label(0x2A00),
-                0x2A00,
-                None,
-                format!("Shift+{lgui}"),
-            ),
-            (
-                picker_mod_tap_label(0x2700),
-                0x2700,
-                None,
-                "Meh (Ctrl+Shift+Alt)".into(),
-            ),
-            (
-                picker_mod_tap_label(0x2F00),
-                0x2F00,
-                None,
-                format!("Hyper (Ctrl+Shift+Alt+{})", gui_mod_name()),
-            ),
-        ];
+        let mt = mod_tap_choices(lgui);
         ui.horizontal_wrapped(|ui| {
-            for (label, left_value, right_value, mod_name) in &mt {
+            for choice in &mt {
                 let resp = ui
                     .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
-                Self::paint_compact_picker_label(ui, &resp, label);
+                Self::paint_compact_picker_label(ui, &resp, &choice.label);
                 if resp.clicked_by(egui::PointerButton::Primary) {
-                    self.vial_quantum_pending_mt = Some(*left_value);
+                    self.vial_quantum_pending_mt = Some(choice.left_value);
                 }
-                if let Some(right_value) = right_value {
+                if let Some(right_value) = choice.right_value {
                     if resp.clicked_by(egui::PointerButton::Secondary) {
-                        self.vial_quantum_pending_mt = Some(*right_value);
+                        self.vial_quantum_pending_mt = Some(right_value);
                     }
                     resp.on_hover_text(crate::i18n::tr_text(
                         self.language,
-                        &mod_tap_tooltip(mod_name, true),
+                        &mod_tap_tooltip(&choice.mod_name, true),
                     ));
                 } else {
                     resp.on_hover_text(crate::i18n::tr_text(
                         self.language,
-                        &mod_tap_tooltip(mod_name, false),
+                        &mod_tap_tooltip(&choice.mod_name, false),
                     ));
                 }
             }
@@ -522,10 +534,21 @@ mod tests {
 
     #[test]
     fn mod_tap_choices_include_gui_chords() {
-        for (base, modifier) in [(0x2900, "Ctrl"), (0x2A00, "Shift")] {
+        let choices = mod_tap_choices(crate::keycode::gui_label(false));
+        for (value, modifier) in [(0x2900, "Ctrl"), (0x2A00, "Shift")] {
+            let choice = choices
+                .iter()
+                .find(|choice| choice.left_value == value)
+                .expect("GUI Mod-Tap chord should be exposed in the picker");
+
+            assert_eq!(choice.right_value, None);
             assert_eq!(
-                picker_mod_tap_label(base),
+                choice.label,
                 format!("Hold {modifier}+{}/key", crate::keycode::gui_sym())
+            );
+            assert_eq!(
+                choice.mod_name,
+                format!("{modifier}+{}", crate::keycode::gui_label(false))
             );
         }
     }

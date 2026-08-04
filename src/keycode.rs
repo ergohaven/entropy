@@ -95,24 +95,28 @@ fn osm_mod_short_name(bits: u16) -> String {
 fn osm_mod_full_name(bits: u16) -> String {
     let right = bits & 0x10 != 0;
     let side = if right { "Right" } else { "Left" };
+    format!("{side} {}", modifier_name_from_bits(bits))
+}
+
+pub fn modifier_name_from_bits(mods: u16) -> String {
     let gui = gui_mod_name();
-    match bits & 0x0F {
-        0x01 => format!("{side} Ctrl"),
-        0x02 => format!("{side} Shift"),
-        0x04 => format!("{side} Alt"),
-        0x08 => format!("{side} {gui}"),
-        0x03 => format!("{side} Ctrl+Shift"),
-        0x05 => format!("{side} Ctrl+Alt"),
-        0x09 => format!("{side} Ctrl+{gui}"),
-        0x0B => format!("{side} Ctrl+Shift+{gui}"),
-        0x06 => format!("{side} Shift+Alt"),
-        0x0A => format!("{side} Shift+{gui}"),
-        0x0E => format!("{side} Shift+Alt+{gui}"),
-        0x0D => format!("{side} Ctrl+Alt+{gui}"),
-        0x0C => format!("{side} Alt+{gui}"),
-        0x07 => format!("{side} Meh (Ctrl+Shift+Alt)"),
-        0x0F => format!("{side} Hyper (Ctrl+Shift+Alt+{gui})"),
-        _ => "modifier".to_string(),
+    match mods & 0x0F {
+        0x01 => "Ctrl".into(),
+        0x02 => "Shift".into(),
+        0x04 => "Alt".into(),
+        0x08 => gui.into(),
+        0x03 => "Ctrl+Shift".into(),
+        0x05 => "Ctrl+Alt".into(),
+        0x06 => "Shift+Alt".into(),
+        0x07 => "Meh (Ctrl+Shift+Alt)".into(),
+        0x09 => format!("Ctrl+{gui}"),
+        0x0A => format!("Shift+{gui}"),
+        0x0B => format!("Ctrl+Shift+{gui}"),
+        0x0C => format!("Alt+{gui}"),
+        0x0D => format!("Ctrl+Alt+{gui}"),
+        0x0E => format!("Shift+Alt+{gui}"),
+        0x0F => format!("Hyper (Ctrl+Shift+Alt+{gui})"),
+        _ => "modifier".into(),
     }
 }
 
@@ -954,20 +958,6 @@ pub fn keycode_tooltip(value: u16, custom: &[CustomKeycode], layer_names: &[Stri
             _ => format!("layer {}", n),
         }
     };
-    let mod_name = |m: u16, _right: bool| -> String {
-        match m & 0x0F {
-            0x01 => "Ctrl".into(),
-            0x02 => "Shift".into(),
-            0x04 => "Alt".into(),
-            0x08 => gui_mod_name().into(),
-            0x07 => "Meh (Ctrl+Shift+Alt)".into(),
-            0x0F => format!("Hyper (Ctrl+Shift+Alt+{})", gui_mod_name()),
-            0x03 => "Ctrl+Shift".into(),
-            0x05 => "Ctrl+Alt".into(),
-            0x06 => "Shift+Alt".into(),
-            _ => "modifier".into(),
-        }
-    };
     let side = |v: u16| if v & 0x10 != 0 { "Right " } else { "Left " };
 
     // ── KC_NO / KC_TRNS ──────────────────────────────────────────────────────
@@ -996,7 +986,7 @@ pub fn keycode_tooltip(value: u16, custom: &[CustomKeycode], layer_names: &[Stri
             3 => format!("TG({}) — toggle {} on/off", sub & 0x1F, layer_display(sub & 0x1F)),
             4 => format!("OSL({}) — activate {} for next keypress only", sub & 0x1F, layer_display(sub & 0x1F)),
             5 => {
-                let m = mod_name(sub & 0x1F, sub >= 0x10);
+                let m = modifier_name_from_bits(sub);
                 format!("One-Shot {} — activates {} for the very next keypress only", m, m)
             }
             6 => format!("TT({}) — tap to toggle {}, hold to activate while held", sub & 0x1F, layer_display(sub & 0x1F)),
@@ -1009,7 +999,7 @@ pub fn keycode_tooltip(value: u16, custom: &[CustomKeycode], layer_names: &[Stri
     if (0x5000..0x5200).contains(&value) {
         let layer = (value >> 4) & 0xF;
         let mods = value & 0xF;
-        let m = mod_name(mods, false);
+        let m = modifier_name_from_bits(mods);
         return format!("LM({}, {}) — activate {} with {} held while key is pressed", layer, m, layer_display(layer), m);
     }
 
@@ -1027,11 +1017,10 @@ pub fn keycode_tooltip(value: u16, custom: &[CustomKeycode], layer_names: &[Stri
     if value & 0xE000 == 0x2000 {
         let kc = value & 0xFF;
         let mods = (value >> 8) & 0x1F;
-        let right = (value >> 12) & 0x1 != 0;
         let kc_str = find_keycode(kc)
             .map(simple_key_name)
             .unwrap_or_else(|| format!("0x{:02X}", kc));
-        let m = mod_name(mods, right);
+        let m = modifier_name_from_bits(mods);
         let side_str = side(mods);
         return format!("Mod Tap — tap for {}, hold for {}{}", kc_str, side_str, m);
     }
@@ -1300,5 +1289,18 @@ mod tests {
     #[test]
     fn macos_gui_legends_use_cmd_text() {
         assert_eq!(gui_name_for_target_os("macos"), "Cmd");
+    }
+
+    #[test]
+    fn mod_tap_tooltips_decode_gui_chords() {
+        for (value, modifier) in [(0x2904, "Ctrl"), (0x2A04, "Shift")] {
+            let tooltip = keycode_tooltip(value, &[], &[]);
+
+            assert!(tooltip.contains("tap for A"), "{tooltip}");
+            assert!(
+                tooltip.contains(&format!("hold for Left {modifier}+{}", gui_mod_name())),
+                "{tooltip}"
+            );
+        }
     }
 }
