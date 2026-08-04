@@ -3,7 +3,11 @@ name: Release
 on:
   push:
     tags:
-      - 'v0.*'
+      # Один фильтр на весь workflow: стабильные v1.2.3 и предрелизные
+      # v1.2.3-rc.1. Привязки к мажорной версии нет — иначе первый же тег
+      # следующей мажорной версии тихо не запустил бы релиз.
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
 
 permissions:
   contents: write
@@ -11,11 +15,10 @@ permissions:
 jobs:
   # Linux (deb/rpm/arch + AppImage) and Windows (portable exe + MSI) are built in
   # the pinned toolchain container, so CI runs the exact same path as local `task`.
-  # Stable tags such as v0.1.2 publish as latest releases; suffix tags such as
-  # v0.1.2-rc.1 publish as prereleases.
+  # Stable tags publish as latest releases; suffix tags such as v1.2.3-rc.1
+  # publish as prereleases.
   linux:
     name: Linux + Windows packages
-    if: ${{ startsWith(github.ref_name, 'v0.') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +43,6 @@ jobs:
   # ships a single universal .dmg instead of one download per architecture.
   macos:
     name: macOS (universal)
-    if: ${{ startsWith(github.ref_name, 'v0.') }}
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -72,7 +74,6 @@ jobs:
   release:
     name: Create Release
     needs: [linux, macos]
-    if: ${{ startsWith(github.ref_name, 'v0.') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
