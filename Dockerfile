@@ -62,23 +62,6 @@ RUN set -eux; \
 	dpkg -i /tmp/task.deb; \
 	rm /tmp/task.deb
 
-# AppImage tooling: appimagetool baked in and pinned so the container needs no
-# network at packaging time. build_linux_appimage.sh picks it up via APPIMAGETOOL;
-# APPIMAGE_EXTRACT_AND_RUN lets it run without FUSE inside a plain container.
-# Runtime тоже кладём в образ: без --runtime-file appimagetool тянет его с
-# GitHub на каждой сборке и на оборванном соединении висит без таймаута.
-ARG APPIMAGETOOL_VERSION=1.9.1
-ARG APPIMAGE_RUNTIME_VERSION=20251108
-RUN set -eux; \
-	case "$(uname -m)" in x86_64) aia=x86_64 ;; aarch64) aia=aarch64 ;; *) aia="$(uname -m)" ;; esac; \
-	curl -fsSL "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-${aia}.AppImage" -o /usr/local/bin/appimagetool; \
-	chmod +x /usr/local/bin/appimagetool; \
-	curl -fsSL "https://github.com/AppImage/type2-runtime/releases/download/${APPIMAGE_RUNTIME_VERSION}/runtime-${aia}" -o /usr/local/lib/appimage-runtime; \
-	test -s /usr/local/lib/appimage-runtime
-ENV APPIMAGETOOL=/usr/local/bin/appimagetool
-ENV APPIMAGE_RUNTIME=/usr/local/lib/appimage-runtime
-ENV APPIMAGE_EXTRACT_AND_RUN=1
-
 # macOS-cross tooling (EXPERIMENTAL path): quill (Mach-O signing from Linux),
 # konoui lipo (universal binaries) and libdmg-hfsplus (.dmg from Linux).
 ARG QUILL_VERSION=0.7.1
@@ -110,5 +93,22 @@ RUN set -eux; \
 		x86_64-apple-darwin \
 		aarch64-apple-darwin; \
 	cargo install cargo-zigbuild --version "${CARGO_ZIGBUILD_VERSION}" --locked
+
+# AppImage tooling: appimagetool baked in so the container needs no network at
+# packaging time. Версия и контрольная сумма берутся из того же
+# scripts/appimagetool_pin.sh, что и у локальной сборки, — иначе в образе
+# оказался бы другой инструмент, чем проверяют тесты. Слой идёт последним:
+# обновление пина не должно инвалидировать сборку cargo-zigbuild выше.
+# APPIMAGE_EXTRACT_AND_RUN lets it run without FUSE inside a plain container.
+COPY scripts/appimagetool_pin.sh scripts/verify_sha256.sh /tmp/appimage-pin/
+RUN set -eux; \
+	. /tmp/appimage-pin/appimagetool_pin.sh; \
+	curl -fsSL --retry 3 --connect-timeout 15 --max-time 300 \
+		"$APPIMAGETOOL_PINNED_URL" -o /usr/local/bin/appimagetool; \
+	bash /tmp/appimage-pin/verify_sha256.sh /usr/local/bin/appimagetool "$APPIMAGETOOL_PINNED_SHA256"; \
+	chmod +x /usr/local/bin/appimagetool; \
+	rm -rf /tmp/appimage-pin
+ENV APPIMAGETOOL=/usr/local/bin/appimagetool
+ENV APPIMAGE_EXTRACT_AND_RUN=1
 
 WORKDIR /work

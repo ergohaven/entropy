@@ -78,9 +78,12 @@ impl EntropyApp {
             return;
         };
         let value = value.min(u8::MAX as u16) as u8;
-        if let Err(e) = hid.set_qmk_setting_u8(qsid, value) {
-            self.status_msg = format!("Failed to save Mouse keys setting (qsid {qsid}): {}", e);
-            log::warn!("set_qmk_setting_u8(mouse_keys qsid {qsid}) failed: {e}");
+        match hid.set_qmk_setting_u8(qsid, value) {
+            Ok(()) => self.mouse_keys_settings.loaded_qsids.mark(qsid),
+            Err(e) => {
+                self.status_msg = format!("Failed to save Mouse keys setting (qsid {qsid}): {}", e);
+                log::warn!("set_qmk_setting_u8(mouse_keys qsid {qsid}) failed: {e}");
+            }
         }
     }
 

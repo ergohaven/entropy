@@ -208,6 +208,7 @@ impl TestHidRecorder {
 #[derive(Clone, Copy)]
 pub(crate) enum TestHidFault {
     Disconnect,
+    Timeout,
     WorkerPanic,
 }
 
@@ -397,19 +398,33 @@ impl Drop for HidProxy {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn is_disconnect_error_message(message: &str) -> bool {
+pub fn is_transport_disconnect_error_message(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     message.contains("disconnected")
-        || message.contains("device did not respond")
-        || message.contains("hid helper timed out")
-        || message.contains("failed to write hid helper request")
-        || message.contains("failed to flush hid helper request")
-        || message.contains("hid write failed")
-        || message.contains("hid read failed")
         || message.contains("broken pipe")
         || message.contains("pipe is being closed")
         || message.contains("the device is not connected")
         || message.contains("org.bluez.error.notconnected")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn is_transport_disconnect_error(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| is_transport_disconnect_error_message(&cause.to_string()))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn is_disconnect_error_message(message: &str) -> bool {
+    is_transport_disconnect_error_message(message) || {
+        let message = message.to_ascii_lowercase();
+        message.contains("device did not respond")
+            || message.contains("hid helper timed out")
+            || message.contains("failed to write hid helper request")
+            || message.contains("failed to flush hid helper request")
+            || message.contains("hid write failed")
+            || message.contains("hid read failed")
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -809,6 +824,7 @@ impl HidDevice {
                 if let Some((_, fault)) = fault {
                     match fault {
                         TestHidFault::Disconnect => bail!("HID device disconnected"),
+                        TestHidFault::Timeout => bail!("HID timeout — device did not respond"),
                         TestHidFault::WorkerPanic => panic!("test HID worker stopped"),
                     }
                 }
@@ -943,6 +959,22 @@ fn write_output_report_local(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn is_optional_firmware_version_request(data: &[u8]) -> bool {
+    data.starts_with(&[CMD_VIA_GET_KEYBOARD_VALUE, VIA_FIRMWARE_VERSION])
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn usb_send_max_attempts(transport: HidTransport, data: &[u8]) -> usize {
+    // Runtime firmware metadata has a Vial-definition fallback, so an
+    // unsupported probe must not hold up the whole connection retry budget.
+    if transport.is_bluetooth() || is_optional_firmware_version_request(data) {
+        1
+    } else {
+        VIAL_GUI_USB_RETRIES
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn usb_send_local(
     device: &hidapi::HidDevice,
     transport: HidTransport,
@@ -971,11 +1003,7 @@ fn usb_send_local(
         VIAL_GUI_READ_TIMEOUT_MS
     };
 
-    let max_retries = if transport.is_bluetooth() {
-        1
-    } else {
-        VIAL_GUI_USB_RETRIES
-    };
+    let max_retries = usb_send_max_attempts(transport, data);
 
     let mut last_error: Option<anyhow::Error> = None;
     for attempt in 0..max_retries {
@@ -1462,9 +1490,14 @@ fn response_matches_command(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
                 command.len() >= 3 && resp[0] == cmd && resp[1..3] == command[1..3]
             })
         }
-        CMD_VIA_GET_KEYBOARD_VALUE | CMD_VIA_LIGHTING_GET_VALUE => {
-            command.len() >= 2 && resp[0] == cmd && resp[1] == command[1]
+        CMD_VIA_GET_KEYBOARD_VALUE => {
+            command.len() >= 2
+                && ((resp[0] == cmd && resp[1] == command[1])
+                    || (is_optional_firmware_version_request(command)
+                        && resp[0] == u8::MAX
+                        && resp[1] == VIA_FIRMWARE_VERSION))
         }
+        CMD_VIA_LIGHTING_GET_VALUE => command.len() >= 2 && resp[0] == cmd && resp[1] == command[1],
         CMD_VIA_GET_KEYCODE => command.len() >= 4 && resp[0] == cmd && resp[1..4] == command[1..4],
         CMD_VIA_SET_KEYBOARD_VALUE
         | CMD_VIA_SET_KEYCODE
@@ -2054,6 +2087,59 @@ mod tests {
             HidWriteFraming::LinuxBluetoothUnnumbered,
         )
         .is_err());
+    }
+
+    #[test]
+    fn optional_firmware_version_probe_uses_one_usb_attempt() {
+        let command = [CMD_VIA_GET_KEYBOARD_VALUE, VIA_FIRMWARE_VERSION];
+
+        assert_eq!(usb_send_max_attempts(HidTransport::Usb, &command), 1);
+    }
+
+    #[test]
+    fn mandatory_usb_request_keeps_full_retry_budget() {
+        let command = [CMD_VIA_GET_PROTOCOL_VERSION];
+
+        assert_eq!(
+            usb_send_max_attempts(HidTransport::Usb, &command),
+            VIAL_GUI_USB_RETRIES
+        );
+    }
+
+    #[test]
+    fn firmware_version_probe_accepts_successful_response() {
+        let command = [CMD_VIA_GET_KEYBOARD_VALUE, VIA_FIRMWARE_VERSION];
+        let mut response = [0u8; MSG_LEN];
+        response[..6].copy_from_slice(&[
+            CMD_VIA_GET_KEYBOARD_VALUE,
+            VIA_FIRMWARE_VERSION,
+            0,
+            4,
+            0,
+            5,
+        ]);
+
+        assert!(response_matches_command(&command, &response));
+    }
+
+    #[test]
+    fn firmware_version_probe_accepts_matching_unhandled_response() {
+        let command = [CMD_VIA_GET_KEYBOARD_VALUE, VIA_FIRMWARE_VERSION];
+        let mut response = [0u8; MSG_LEN];
+        response[0] = u8::MAX;
+        response[1] = VIA_FIRMWARE_VERSION;
+
+        assert!(response_matches_command(&command, &response));
+    }
+
+    #[test]
+    fn firmware_version_probe_rejects_unhandled_response_for_another_value() {
+        let command = [CMD_VIA_GET_KEYBOARD_VALUE, VIA_FIRMWARE_VERSION];
+        let mut response = [0u8; MSG_LEN];
+        response[0] = u8::MAX;
+        response[1] = VIA_SWITCH_MATRIX_STATE;
+
+        assert!(!response_matches_command(&command, &response));
     }
 
     fn qmk_settings_command(subcommand: u8, qsid: u16) -> [u8; MSG_LEN] {

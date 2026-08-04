@@ -85,10 +85,10 @@ Not packaged by any distro, so `prepare` downloads them into `.cache/tools/`:
 [nfpm](https://github.com/goreleaser/nfpm) (deb/rpm/archlinux),
 [quill](https://github.com/anchore/quill) (Mach-O signing from Linux) and
 [libdmg-hfsplus](https://github.com/fanquake/libdmg-hfsplus) (builds the `.dmg`;
-compiled from source). `appimagetool` and the AppImage runtime it embeds land in
-the same place on first use — the runtime is pinned and passed with
-`--runtime-file`, because otherwise appimagetool re-downloads it on every build
-and hangs with no timeout when that download stalls.
+compiled from source). `appimagetool` lands in the same place on first use; its
+release and SHA-256 are pinned in `scripts/appimagetool_pin.sh` and verified on
+every build, whether the tool was just downloaded or came from the cache. Update
+the pin with `bash scripts/update_appimagetool_pin.sh <release-tag>`.
 
 On macOS the native build only needs the Xcode command line tools — `codesign`,
 `hdiutil`, `lipo` and `plutil` ship with them.

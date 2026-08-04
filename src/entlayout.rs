@@ -1,3 +1,8 @@
+use super::portable_settings::{
+    ent_portable_setting_contracts_match, ent_portable_setting_is_known,
+    ent_portable_setting_is_valid, ent_portable_setting_spec, write_entlayout_portable_setting,
+    EntPortableSetting, EntPortableSettingWidth, ENT_PORTABLE_QSIDS,
+};
 use super::*;
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -5,7 +10,11 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 const ENTLAYOUT_FORMAT: &str = "entropy.layout";
-const ENTLAYOUT_VERSION: u16 = 4;
+const ENTLAYOUT_VERSION: u16 = 5;
+
+fn entlayout_version_supported(version: u16) -> bool {
+    (1..=ENTLAYOUT_VERSION).contains(&version)
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 struct EntLayoutFile {
@@ -47,6 +56,123 @@ struct EntLayoutData {
     tap_dance: EntTapDanceData,
     key_overrides: EntKeyOverrideData,
     alt_repeat: EntAltRepeatData,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    portable_settings: Vec<EntPortableSetting>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct EntPortableSettingsImportReport {
+    imported: usize,
+    unsupported: usize,
+    incompatible: usize,
+    failed: usize,
+}
+
+impl EntPortableSettingsImportReport {
+    fn total(self) -> usize {
+        self.imported + self.unsupported + self.incompatible + self.failed
+    }
+
+    fn record_imported(&mut self) {
+        self.imported += 1;
+    }
+
+    fn record_unsupported(&mut self) {
+        self.unsupported += 1;
+    }
+
+    fn record_incompatible(&mut self) {
+        self.incompatible += 1;
+    }
+
+    fn record_failed(&mut self) {
+        self.failed += 1;
+    }
+
+    fn summary(&self, language: crate::i18n::Language) -> String {
+        if self.total() == 0 {
+            return crate::i18n::tr_catalog(language, "entlayout.none").to_owned();
+        }
+
+        let imported = self.imported.to_string();
+        let total = self.total().to_string();
+        if self.imported == self.total() {
+            return crate::i18n::tr_catalog_format(
+                language,
+                "entlayout.portable_summary_full",
+                &[("imported", &imported), ("total", &total)],
+            );
+        }
+
+        let mut reasons = Vec::new();
+        for (count, key) in [
+            (self.unsupported, "entlayout.portable_unsupported"),
+            (self.incompatible, "entlayout.portable_incompatible"),
+            (self.failed, "entlayout.portable_failed"),
+        ] {
+            if count > 0 {
+                reasons.push(crate::i18n::tr_catalog_format(
+                    language,
+                    key,
+                    &[("count", &count.to_string())],
+                ));
+            }
+        }
+        crate::i18n::tr_catalog_format(
+            language,
+            "entlayout.portable_summary_skipped",
+            &[
+                ("imported", &imported),
+                ("total", &total),
+                ("reasons", &reasons.join(", ")),
+            ],
+        )
+    }
+}
+
+struct EntPortableSettingsImportPlan<'a> {
+    compatible: Vec<&'a EntPortableSetting>,
+    report: EntPortableSettingsImportReport,
+}
+
+fn plan_entlayout_portable_settings_import<'a>(
+    settings: &'a [EntPortableSetting],
+    target_settings: &[EntPortableSetting],
+) -> EntPortableSettingsImportPlan<'a> {
+    let mut compatible = Vec::new();
+    let mut report = EntPortableSettingsImportReport::default();
+    let mut seen = std::collections::BTreeSet::new();
+
+    for setting in settings {
+        if !ent_portable_setting_is_known(setting.qsid) {
+            report.record_incompatible();
+            continue;
+        }
+        if !seen.insert(setting.qsid) || !ent_portable_setting_is_valid(setting) {
+            report.record_incompatible();
+            continue;
+        }
+        let Some(target) = target_settings
+            .iter()
+            .find(|target| target.qsid == setting.qsid)
+        else {
+            report.record_unsupported();
+            continue;
+        };
+        if !ent_portable_setting_contracts_match(setting, target) {
+            report.record_incompatible();
+            continue;
+        }
+        if setting.value == target.value {
+            // Already matching values are successful imports without another
+            // flash write or BLE round trip.
+            report.record_imported();
+            continue;
+        }
+        compatible.push(setting);
+    }
+
+    EntPortableSettingsImportPlan { compatible, report }
 }
 
 fn native_keymap_is_empty(keymap: &[Vec<Option<String>>]) -> bool {
@@ -439,8 +565,14 @@ impl EntropyApp {
         )?;
         self.validate_entlayout_file(&bundle)?;
         let backup_path = self.write_entlayout_auto_backup()?;
-        let (firmware_failures, mapping) = self.apply_entlayout(&bundle)?;
-        Ok(self.entlayout_import_report(&bundle, &backup_path, &firmware_failures, &mapping))
+        let (firmware_failures, mapping, portable_settings) = self.apply_entlayout(&bundle)?;
+        Ok(self.entlayout_import_report(
+            &bundle,
+            &backup_path,
+            &firmware_failures,
+            &mapping,
+            &portable_settings,
+        ))
     }
 
     fn entlayout_snapshot(&self) -> Option<EntLayoutFile> {
@@ -554,6 +686,7 @@ impl EntropyApp {
                         .collect(),
                     names: self.alt_repeat_names.clone(),
                 },
+                portable_settings: self.entlayout_portable_settings_snapshot(),
             },
         })
     }
@@ -623,7 +756,7 @@ impl EntropyApp {
                 )
             );
         }
-        if bundle.version == 0 || bundle.version > ENTLAYOUT_VERSION {
+        if !entlayout_version_supported(bundle.version) {
             bail!(
                 "{}",
                 crate::i18n::tr_catalog_format(
@@ -726,9 +859,14 @@ impl EntropyApp {
     fn apply_entlayout(
         &mut self,
         bundle: &EntLayoutFile,
-    ) -> Result<(Vec<String>, EntLayoutImportMapping)> {
+    ) -> Result<(
+        Vec<String>,
+        EntLayoutImportMapping,
+        EntPortableSettingsImportReport,
+    )> {
         let mapping = self.entlayout_import_mapping(bundle)?;
-        let mut firmware_failures = self.apply_entlayout_firmware_state(bundle, &mapping)?;
+        let (mut firmware_failures, portable_settings) =
+            self.apply_entlayout_firmware_state(bundle, &mapping)?;
         self.apply_entlayout_local_state(bundle, &mapping)?;
         self.refresh_layer_picker_content_flags();
 
@@ -761,7 +899,7 @@ impl EntropyApp {
             }
         }
 
-        Ok((firmware_failures, mapping))
+        Ok((firmware_failures, mapping, portable_settings))
     }
 
     fn entlayout_keycode_import_limits(&self) -> EntLayoutKeycodeImportLimits {
@@ -869,6 +1007,7 @@ impl EntropyApp {
         backup_path: &Path,
         firmware_failures: &[String],
         mapping: &EntLayoutImportMapping,
+        portable_settings: &EntPortableSettingsImportReport,
     ) -> String {
         let lang = self.app_settings.language;
         let tr = |key| crate::i18n::tr_catalog(lang, key).to_owned();
@@ -1015,6 +1154,15 @@ impl EntropyApp {
                 "
 ",
             );
+        let portable_settings = portable_settings
+            .summary(lang)
+            .split("; ")
+            .map(|section| format!("• {section}"))
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            );
         format!(
             "{complete}
 
@@ -1029,6 +1177,9 @@ impl EntropyApp {
 
 {dynamic_sections}:
 {dynamic_report}
+
+{portable_settings_label}:
+{portable_settings}
 
 {skipped_label}:
 {skipped}
@@ -1045,6 +1196,7 @@ impl EntropyApp {
             encoder_slots = crate::i18n::tr_catalog(lang, "entlayout.encoder_slots"),
             imported_sections = crate::i18n::tr_catalog(lang, "entlayout.imported_sections"),
             dynamic_sections = crate::i18n::tr_catalog(lang, "entlayout.dynamic_sections"),
+            portable_settings_label = crate::i18n::tr_catalog(lang, "entlayout.portable_settings"),
             skipped_label = crate::i18n::tr_catalog(lang, "entlayout.skipped"),
             firmware_issues = crate::i18n::tr_catalog(lang, "entlayout.firmware_issues"),
             auto_backup = crate::i18n::tr_catalog(lang, "entlayout.auto_backup"),
@@ -1054,6 +1206,7 @@ impl EntropyApp {
             total_encoders = mapping.encoder_mapping.len(),
             imported = imported,
             dynamic_report = dynamic_report,
+            portable_settings = portable_settings,
             skipped = skipped,
             firmware_failures = firmware_failures,
             backup_path = backup_path.display()
@@ -1065,7 +1218,7 @@ impl EntropyApp {
         &mut self,
         bundle: &EntLayoutFile,
         mapping: &EntLayoutImportMapping,
-    ) -> Result<Vec<String>> {
+    ) -> Result<(Vec<String>, EntPortableSettingsImportReport)> {
         let lang = self.app_settings.language;
         let Some(hid) = &self.hid_device else {
             bail!(
@@ -1084,6 +1237,15 @@ impl EntropyApp {
         let limits = self.entlayout_keycode_import_limits();
         let supports_rmk_native_key_actions = self.keycode_picker.supports_rmk_native_key_actions;
         let mut failures = Vec::new();
+        let target_portable_settings = self.entlayout_portable_settings_snapshot();
+        let EntPortableSettingsImportPlan {
+            compatible: portable_settings,
+            report: mut portable_settings_report,
+        } = plan_entlayout_portable_settings_import(
+            &bundle.data.portable_settings,
+            &target_portable_settings,
+        );
+        let mut verified_portable_settings = Vec::new();
 
         if let Err(err) = (|| -> Result<()> {
             for (source_layer_idx, layer_codes) in bundle.data.keymap.iter().enumerate() {
@@ -1221,8 +1383,33 @@ impl EntropyApp {
             }
         }
 
+        for setting in portable_settings {
+            let result = write_entlayout_portable_setting(hid, setting);
+            match result {
+                Ok(()) => {
+                    portable_settings_report.record_imported();
+                    verified_portable_settings.push(setting.clone());
+                }
+                Err(error) => {
+                    portable_settings_report.record_failed();
+                    failures.push(crate::i18n::tr_catalog_format(
+                        lang,
+                        "entlayout.portable_setting_failure",
+                        &[
+                            ("setting", &setting.id),
+                            ("qsid", &setting.qsid.to_string()),
+                            ("error", &error.to_string()),
+                        ],
+                    ));
+                }
+            }
+        }
+
         if self.current_device_is_likely_rmk() {
-            return Ok(failures);
+            for setting in &verified_portable_settings {
+                self.apply_entlayout_portable_setting_local(setting);
+            }
+            return Ok((failures, portable_settings_report));
         }
 
         if entmacro_count(&bundle.data.macros) > 0 && self.keycode_picker.macro_count > 0 {
@@ -1383,7 +1570,10 @@ impl EntropyApp {
         })() {
             failures.push(format!("alt repeat ({err})"));
         }
-        Ok(failures)
+        for setting in &verified_portable_settings {
+            self.apply_entlayout_portable_setting_local(setting);
+        }
+        Ok((failures, portable_settings_report))
     }
 
     fn apply_entlayout_local_state(
@@ -2371,6 +2561,174 @@ fn entlayout_hash(layout: &KeyboardLayout) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn portable_setting(
+        id: &str,
+        qsid: u16,
+        width: EntPortableSettingWidth,
+        value: u16,
+    ) -> EntPortableSetting {
+        EntPortableSetting {
+            id: id.to_owned(),
+            qsid,
+            width,
+            value,
+            variants: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn legacy_entlayout_data_defaults_portable_settings() {
+        let data: EntLayoutData = serde_json::from_value(serde_json::json!({
+            "keymap": [[0]],
+            "encoder_keymap": [[]],
+            "encoder_visibility": [],
+            "layout_options": null,
+            "layer_names": ["0"],
+            "text_expander": {
+                "enabled": false,
+                "app_blacklist": "",
+                "rule_files": [],
+                "primary_rules": [],
+                "extra_files": []
+            },
+            "macros": {
+                "texts": [],
+                "names": [],
+                "descriptions": []
+            },
+            "combos": {
+                "entries": [],
+                "names": [],
+                "term": null
+            },
+            "tap_dance": {
+                "entries": [],
+                "names": []
+            },
+            "key_overrides": {
+                "entries": [],
+                "names": []
+            },
+            "alt_repeat": {
+                "entries": [],
+                "names": []
+            }
+        }))
+        .expect("legacy layout data");
+
+        assert!(data.portable_settings.is_empty());
+    }
+
+    #[test]
+    fn portable_setting_registry_has_unique_qsids_and_excludes_existing_combo_term() {
+        let qsids = ENT_PORTABLE_QSIDS
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(qsids.len(), ENT_PORTABLE_QSIDS.len());
+        assert!(!qsids.contains(&2));
+        assert_eq!(
+            ent_portable_setting_spec(9).unwrap().width,
+            EntPortableSettingWidth::U8
+        );
+        assert_eq!(ent_portable_setting_spec(21).unwrap().max, 0x03ff);
+    }
+
+    #[test]
+    fn portable_setting_import_plan_skips_unsupported_incompatible_and_duplicate_values() {
+        let settings = vec![
+            portable_setting("tapping_term", 7, EntPortableSettingWidth::U16, 200),
+            portable_setting("auto_shift_flags", 3, EntPortableSettingWidth::U8, 1),
+            portable_setting("quick_tap_term", 25, EntPortableSettingWidth::U16, 1001),
+            portable_setting("unknown", 999, EntPortableSettingWidth::U16, 1),
+            portable_setting("tapping_term", 7, EntPortableSettingWidth::U16, 250),
+        ];
+
+        let target_settings = vec![
+            portable_setting("tapping_term", 7, EntPortableSettingWidth::U16, 180),
+            portable_setting("quick_tap_term", 25, EntPortableSettingWidth::U16, 200),
+        ];
+        let plan = plan_entlayout_portable_settings_import(&settings, &target_settings);
+
+        assert_eq!(plan.compatible.len(), 1);
+        assert_eq!(plan.compatible[0].qsid, 7);
+        assert_eq!(
+            plan.report,
+            EntPortableSettingsImportReport {
+                imported: 0,
+                unsupported: 1,
+                incompatible: 3,
+                failed: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn current_version_is_v5_and_v4_files_remain_supported() {
+        assert_eq!(ENTLAYOUT_VERSION, 5);
+        assert!(entlayout_version_supported(4));
+        assert!(entlayout_version_supported(5));
+        assert!(!entlayout_version_supported(0));
+        assert!(!entlayout_version_supported(6));
+    }
+
+    #[test]
+    fn portable_setting_import_plan_skips_unchanged_firmware_writes() {
+        let source = portable_setting("tapping_term", 7, EntPortableSettingWidth::U16, 200);
+        let target = source.clone();
+        let sources = [source];
+        let targets = [target];
+
+        let plan = plan_entlayout_portable_settings_import(&sources, &targets);
+
+        assert!(plan.compatible.is_empty());
+        assert_eq!(plan.report.imported, 1);
+        assert_eq!(plan.report.total(), 1);
+    }
+
+    #[test]
+    fn portable_touchpad_select_requires_the_same_ordered_variants() {
+        let source = EntPortableSetting {
+            id: "touchpad_auto_layer".to_owned(),
+            qsid: 143,
+            width: EntPortableSettingWidth::U8,
+            value: 1,
+            variants: vec!["Layer 1".to_owned(), "Layer 2".to_owned()],
+        };
+        let mut compatible_target = source.clone();
+        compatible_target.value = 0;
+        let mut incompatible_target = compatible_target.clone();
+        incompatible_target.variants.reverse();
+
+        let compatible = plan_entlayout_portable_settings_import(
+            std::slice::from_ref(&source),
+            &[compatible_target],
+        );
+        assert_eq!(compatible.compatible.len(), 1);
+
+        let incompatible = plan_entlayout_portable_settings_import(
+            std::slice::from_ref(&source),
+            &[incompatible_target],
+        );
+        assert!(incompatible.compatible.is_empty());
+        assert_eq!(incompatible.report.incompatible, 1);
+    }
+
+    #[test]
+    fn portable_setting_report_distinguishes_imported_and_skipped_results() {
+        let mut report = EntPortableSettingsImportReport::default();
+        report.record_imported();
+        report.record_unsupported();
+        report.record_failed();
+
+        let summary = report.summary(crate::i18n::Language::English);
+
+        assert!(summary.contains("1/3 imported"));
+        assert!(summary.contains("1 unsupported by target"));
+        assert!(summary.contains("1 failed"));
+    }
 
     #[test]
     fn entmacro_bytecode_prefers_base64() {

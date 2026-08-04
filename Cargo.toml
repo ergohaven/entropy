@@ -48,6 +48,7 @@ ab_glyph = "0.2"
 image = { version = "0.25", default-features = false, features = ["png"] }
 postcard = "1"
 rmk-types = { git = "https://github.com/ergohaven/rmk.git", rev = "99cdcd542600eb1a439675455997fe7cf3928600", default-features = false }
+url = "2"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = "0.15"
@@ -61,7 +62,7 @@ hidapi = "2.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 tray-icon = "0.22"
-windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Globalization", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Globalization", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 windows = { version = "0.56", features = ["Foundation", "Media_Control", "Win32_Media_Audio_Endpoints", "Win32_System_Com_StructuredStorage"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

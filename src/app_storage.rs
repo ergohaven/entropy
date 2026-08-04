@@ -266,6 +266,33 @@ pub(super) fn open_path_in_system_editor(path: &std::path::Path) -> bool {
     }
 }
 
+fn parse_app_settings_fields(
+    settings_data: Option<&str>,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    settings_data.and_then(|data| {
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(data).ok()
+    })
+}
+
+fn apply_app_settings_migrations(settings: &mut AppSettings, settings_data: Option<&str>) {
+    let settings_fields = parse_app_settings_fields(settings_data);
+    let has_close_behavior = settings_fields
+        .as_ref()
+        .is_some_and(|fields| fields.contains_key("close_to_tray_behavior"));
+    if !has_close_behavior && settings.minimize_to_tray_on_close {
+        settings.close_to_tray_behavior = CloseToTrayBehavior::Tray;
+    }
+    settings.minimize_to_tray_on_close =
+        matches!(settings.close_to_tray_behavior, CloseToTrayBehavior::Tray);
+
+    let has_layout_image_export = settings_fields
+        .as_ref()
+        .is_some_and(|fields| fields.contains_key("layout_image_export"));
+    if !has_layout_image_export {
+        settings.layout_image_export.key_legend_layout = settings.key_legend_layout;
+    }
+}
+
 pub(super) fn load_app_settings() -> AppSettings {
     migrate_legacy_text_expander_rules_file();
     let path = app_settings_path();
@@ -288,21 +315,7 @@ pub(super) fn load_app_settings() -> AppSettings {
     settings.text_expander_rule_files =
         normalize_text_expander_rule_files(&settings.text_expander_rule_files);
 
-    let has_close_behavior = settings_data
-        .as_deref()
-        .is_some_and(|data| data.contains("close_to_tray_behavior"));
-    if !has_close_behavior && settings.minimize_to_tray_on_close {
-        settings.close_to_tray_behavior = CloseToTrayBehavior::Tray;
-    }
-    settings.minimize_to_tray_on_close =
-        matches!(settings.close_to_tray_behavior, CloseToTrayBehavior::Tray);
-
-    let has_layout_image_export = settings_data
-        .as_deref()
-        .is_some_and(|data| data.contains("layout_image_export"));
-    if !has_layout_image_export {
-        settings.layout_image_export.key_legend_layout = settings.key_legend_layout;
-    }
+    apply_app_settings_migrations(&mut settings, settings_data.as_deref());
     settings.typing_trainer = settings.typing_trainer.normalized();
     normalize_typing_trainer_history(&mut settings.typing_trainer_history);
 
@@ -688,6 +701,63 @@ mod tests {
             std::process::id(),
             nonce
         ))
+    }
+
+    #[test]
+    fn app_settings_migrations_use_top_level_json_keys() {
+        let mut settings = AppSettings {
+            minimize_to_tray_on_close: true,
+            ..AppSettings::default()
+        };
+        apply_app_settings_migrations(
+            &mut settings,
+            Some(r#"{"nested":{"close_to_tray_behavior":"ask"}}"#),
+        );
+        assert_eq!(settings.close_to_tray_behavior, CloseToTrayBehavior::Tray);
+        assert!(settings.minimize_to_tray_on_close);
+
+        let mut settings = AppSettings {
+            minimize_to_tray_on_close: true,
+            ..AppSettings::default()
+        };
+        apply_app_settings_migrations(&mut settings, Some(r#"{"close_to_tray_behavior":"ask"}"#));
+        assert_eq!(settings.close_to_tray_behavior, CloseToTrayBehavior::Ask);
+        assert!(!settings.minimize_to_tray_on_close);
+
+        let mut settings = AppSettings {
+            key_legend_layout: KeyLegendLayout::Russian,
+            ..AppSettings::default()
+        };
+        apply_app_settings_migrations(
+            &mut settings,
+            Some(r#"{"text_expansion_rules":[{"replacement":"layout_image_export"}]}"#),
+        );
+        assert_eq!(
+            settings.layout_image_export.key_legend_layout,
+            KeyLegendLayout::Russian
+        );
+
+        let mut settings = AppSettings {
+            key_legend_layout: KeyLegendLayout::Russian,
+            ..AppSettings::default()
+        };
+        apply_app_settings_migrations(&mut settings, Some(r#"{"layout_image_export":{}}"#));
+        assert_eq!(
+            settings.layout_image_export.key_legend_layout,
+            KeyLegendLayout::English
+        );
+
+        let mut settings = AppSettings {
+            minimize_to_tray_on_close: true,
+            key_legend_layout: KeyLegendLayout::Russian,
+            ..AppSettings::default()
+        };
+        apply_app_settings_migrations(&mut settings, Some("not json"));
+        assert_eq!(settings.close_to_tray_behavior, CloseToTrayBehavior::Tray);
+        assert_eq!(
+            settings.layout_image_export.key_legend_layout,
+            KeyLegendLayout::Russian
+        );
     }
 
     #[test]

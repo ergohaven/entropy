@@ -7,6 +7,22 @@ const SETTINGS_WRITEBACK_DELAYS: [std::time::Duration; MODULE_SETTING_READBACK_A
 ];
 const SETTINGS_WRITE_STATUS_WIDTH: f32 = 22.0;
 
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum QmkSettingWritePolicy {
+    SetOnly,
+    VerifiedReadback,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn qmk_setting_write_policy(qsid: u16) -> QmkSettingWritePolicy {
+    if matches!(qsid, 120..=124 | 142 | 143) {
+        QmkSettingWritePolicy::VerifiedReadback
+    } else {
+        QmkSettingWritePolicy::SetOnly
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum SettingsWriteStatus {
     Pending,
@@ -91,34 +107,44 @@ impl SettingsWriteTarget {
     ) {
         match self {
             Self::Module { .. } => module_settings.set_value(qsid, readback),
-            Self::Touchpad { .. } => match qsid {
-                120 => touchpad_settings.dpi = readback,
-                121 => touchpad_settings.sniper_sens = readback.min(u8::MAX as u16) as u8,
-                122 => touchpad_settings.scroll_sens = readback.min(u8::MAX as u16) as u8,
-                123 => touchpad_settings.text_sens = readback.min(u8::MAX as u16) as u8,
-                124 => touchpad_settings.bits = readback.min(u8::MAX as u16) as u8,
-                142 => touchpad_settings.auto_layer_enable = readback != 0,
-                143 => touchpad_settings.auto_layer = readback.min(u8::MAX as u16) as u8,
-                _ => {}
-            },
-            Self::TapHold { .. } => match qsid {
-                7 => tap_hold_settings.tapping_term = readback,
-                18 => tap_hold_settings.tap_code_delay = readback,
-                19 => tap_hold_settings.tap_hold_caps_delay = readback,
-                20 => tap_hold_settings.tapping_toggle = readback,
-                22 => tap_hold_settings.permissive_hold = readback != 0,
-                23 => tap_hold_settings.hold_on_other_key_press = readback != 0,
-                24 => tap_hold_settings.retro_tapping = readback != 0,
-                25 => tap_hold_settings.quick_tap_term = readback,
-                26 => tap_hold_settings.chordal_hold = readback != 0,
-                27 => tap_hold_settings.flow_tap = readback,
-                _ => {}
-            },
-            Self::OneShot { .. } => match qsid {
-                5 => one_shot_settings.tap_toggle = readback.min(u8::MAX as u16) as u8,
-                6 => one_shot_settings.timeout = readback,
-                _ => {}
-            },
+            Self::Touchpad { .. } => {
+                match qsid {
+                    120 => touchpad_settings.dpi = readback,
+                    121 => touchpad_settings.sniper_sens = readback.min(u8::MAX as u16) as u8,
+                    122 => touchpad_settings.scroll_sens = readback.min(u8::MAX as u16) as u8,
+                    123 => touchpad_settings.text_sens = readback.min(u8::MAX as u16) as u8,
+                    124 => touchpad_settings.bits = readback.min(u8::MAX as u16) as u8,
+                    142 => touchpad_settings.auto_layer_enable = readback != 0,
+                    143 => touchpad_settings.auto_layer = readback.min(u8::MAX as u16) as u8,
+                    _ => return,
+                }
+                touchpad_settings.loaded_qsids.mark(qsid);
+            }
+            Self::TapHold { .. } => {
+                match qsid {
+                    7 => tap_hold_settings.tapping_term = readback,
+                    18 => tap_hold_settings.tap_code_delay = readback,
+                    19 => tap_hold_settings.tap_hold_caps_delay = readback,
+                    20 => tap_hold_settings.tapping_toggle = readback,
+                    22 => tap_hold_settings.permissive_hold = readback != 0,
+                    23 => tap_hold_settings.hold_on_other_key_press = readback != 0,
+                    24 => tap_hold_settings.retro_tapping = readback != 0,
+                    25 => tap_hold_settings.quick_tap_term = readback,
+                    26 => tap_hold_settings.chordal_hold = readback != 0,
+                    27 => tap_hold_settings.flow_tap = readback,
+                    _ => return,
+                }
+                tap_hold_settings.set_qsid_loaded(qsid);
+            }
+            Self::OneShot { .. } => {
+                match qsid {
+                    5 => one_shot_settings.tap_toggle = readback.min(u8::MAX as u16) as u8,
+                    6 => one_shot_settings.timeout = readback,
+                    _ => return,
+                }
+                one_shot_settings.set_qsid_supported(qsid);
+                one_shot_settings.supported = true;
+            }
             Self::LayerLed { .. } => {
                 layer_led_settings.set_value(qsid, readback);
             }
@@ -231,31 +257,46 @@ fn run_settings_write(
     hid: &crate::hid::HidDevice,
     request: &SettingsWriteRequest,
 ) -> (Result<u16, ModuleSettingWritebackError>, bool) {
+    let policy = if request.target.verifies_readback() {
+        QmkSettingWritePolicy::VerifiedReadback
+    } else {
+        QmkSettingWritePolicy::SetOnly
+    };
+    write_qmk_setting_value(hid, request.qsid, request.width, request.requested, policy)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn write_qmk_setting_value(
+    hid: &crate::hid::HidDevice,
+    qsid: u16,
+    width: u8,
+    requested: u16,
+    policy: QmkSettingWritePolicy,
+) -> (Result<u16, ModuleSettingWritebackError>, bool) {
     let disconnected = std::cell::Cell::new(false);
     let write = || {
-        let result = if request.width > 1 {
-            hid.set_qmk_setting_u16(request.qsid, request.requested)
+        let result = if width > 1 {
+            hid.set_qmk_setting_u16(qsid, requested)
         } else {
-            hid.set_qmk_setting_u8(request.qsid, request.requested as u8)
+            hid.set_qmk_setting_u8(qsid, requested as u8)
         };
         result.map_err(|error| {
             disconnected.set(crate::hid::is_disconnect_error(&error));
             error.to_string()
         })
     };
-    let result = if request.target.verifies_readback() {
+    let result = if policy == QmkSettingWritePolicy::VerifiedReadback {
         let mut readback_attempt = 0;
         let mut state = ModuleSettingsState::default();
-        state.write_verified_value(request.qsid, request.requested, write, || {
+        state.write_verified_value(qsid, requested, write, || {
             let delay = SETTINGS_WRITEBACK_DELAYS
                 [readback_attempt.min(SETTINGS_WRITEBACK_DELAYS.len() - 1)];
             readback_attempt += 1;
             std::thread::sleep(delay);
-            let result = if request.width > 1 {
-                hid.get_qmk_setting_u16(request.qsid)
+            let result = if width > 1 {
+                hid.get_qmk_setting_u16(qsid)
             } else {
-                hid.get_qmk_setting_u8(request.qsid)
-                    .map(|readback| readback as u16)
+                hid.get_qmk_setting_u8(qsid).map(|readback| readback as u16)
             };
             result.map_err(|error| {
                 disconnected.set(crate::hid::is_disconnect_error(&error));
@@ -264,7 +305,7 @@ fn run_settings_write(
         })
     } else {
         write()
-            .map(|()| request.requested)
+            .map(|()| requested)
             .map_err(ModuleSettingWritebackError::SetFailed)
     };
     (result, disconnected.get())
