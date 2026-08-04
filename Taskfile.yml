@@ -9,8 +9,8 @@
 #             runnable from any host with Docker. Entry point: `task docker:dist`.
 #
 # What each host can produce (see README for the full matrix):
-#   Linux   : deb/rpm/arch, AppImage, Windows exe+MSI, (macOS only via docker:macos-cross)
-#   macOS   : macOS .app/.dmg/.zip natively; Linux/Windows only via Docker
+#   Linux   : deb/rpm/arch, AppImage, Windows exe+MSI, universal macOS .app/.dmg
+#   macOS   : macOS .app/.dmg natively; Linux/Windows only via Docker
 #   Windows : native exe; everything else via Docker
 version: '3'
 
@@ -21,6 +21,15 @@ vars:
   DIST: dist
   WIN_TARGET: x86_64-pc-windows-gnu
   IMAGE: entropy-build:local
+  # Загружаемые инструменты (nfpm, quill, dmg, appimagetool) живут в кэше
+  # проекта, а не в системе: PATH дополняется только на время команды, и то,
+  # что уже стоит у разработчика, имеет приоритет.
+  TOOLS: '{{.ROOT_DIR}}/.cache/tools'
+  # asdf/mise кладут в PATH shim'ы: если версия инструмента не выбрана, `zig`
+  # печатает подсказку вместо номера версии, и cargo-zigbuild падает на разборе
+  # semver. Поэтому берём первый zig, который реально отвечает версией.
+  ZIG:
+    sh: 'for z in zig /usr/bin/zig /usr/local/bin/zig; do if command -v "$z" >/dev/null 2>&1 && "$z" version 2>/dev/null | grep -qE "^[0-9]+\.[0-9]+"; then command -v "$z"; break; fi; done || true'
 
 tasks:
   default:
@@ -33,6 +42,33 @@ tasks:
     cmds:
       - echo "{{.VERSION}}"
     silent: true
+
+  # ---- environment --------------------------------------------------------
+  prepare:
+    desc: Install the build & packaging prerequisites for this host
+    cmds:
+      - task: 'prepare:{{OS}}'
+
+  prepare:cross:
+    desc: Same as prepare, plus the Windows/macOS cross-build toolchain
+    cmds:
+      - task: 'prepare:{{OS}}'
+        vars: {PREPARE_ARGS: '--cross'}
+
+  prepare:linux:
+    internal: true
+    cmds:
+      - scripts/prepare_env.sh {{.PREPARE_ARGS}} {{.CLI_ARGS}}
+
+  prepare:darwin:
+    internal: true
+    cmds:
+      - scripts/prepare_env.sh {{.PREPARE_ARGS}} {{.CLI_ARGS}}
+
+  prepare:windows:
+    internal: true
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare_env.ps1 {{.CLI_ARGS}}
 
   clean:
     desc: Remove build/packaging artifacts
@@ -49,6 +85,7 @@ tasks:
     generates:
       - assets/icons/hicolor/256x256/apps/entropy.png
       - assets/entropy.ico
+      - assets/entropy.icns
     cmds:
       - |
         set -e
@@ -80,6 +117,9 @@ tasks:
           assets/icons/hicolor/128x128/apps/entropy.png \
           assets/icons/hicolor/256x256/apps/entropy.png \
           assets/entropy.ico
+        # .icns нужен обеим macOS-сборкам: без него бандл уезжает с пустой
+        # иконкой в Finder. На Linux его делает png2icns, на macOS — штатный
+        # iconutil, которому нужен каталог .iconset со строгими именами файлов.
         if command -v png2icns >/dev/null 2>&1; then
           png2icns assets/entropy.icns \
             assets/icons/hicolor/16x16/apps/entropy.png \
@@ -87,8 +127,17 @@ tasks:
             assets/icons/hicolor/128x128/apps/entropy.png \
             assets/icons/hicolor/256x256/apps/entropy.png \
             assets/icons/hicolor/512x512/apps/entropy.png
+        elif command -v iconutil >/dev/null 2>&1; then
+          rm -rf assets/entropy.iconset
+          mkdir -p assets/entropy.iconset
+          for s in 16 32 128 256 512; do
+            cp "assets/icons/hicolor/${s}x${s}/apps/entropy.png" "assets/entropy.iconset/icon_${s}x${s}.png"
+          done
+          iconutil -c icns assets/entropy.iconset -o assets/entropy.icns
+          rm -rf assets/entropy.iconset
         else
-          echo "png2icns not found (icnsutils on Debian/Ubuntu, icns-utils on openSUSE, libicns-utils on Fedora); skipping .icns (build it on macOS or in the container)" >&2
+          echo "need png2icns (icnsutils on Debian/Ubuntu, icns-utils on openSUSE, libicns-utils on Fedora, libicns on Homebrew) or macOS iconutil to build the .icns" >&2
+          exit 1
         fi
 
   # ---- native build & package (current host) ------------------------------
@@ -128,7 +177,7 @@ tasks:
       - mkdir -p {{.DIST}}/linux
       - envsubst '$PKG_ARCH $VERSION $ENTROPY_BIN' < packaging/nfpm/nfpm.yaml.tpl > {{.DIST}}/linux/nfpm.generated.yaml
       - for: {var: FORMATS}
-        cmd: nfpm package -f {{.DIST}}/linux/nfpm.generated.yaml -p {{.ITEM}} -t {{.DIST}}/linux/
+        cmd: PATH="$PATH:{{.TOOLS}}" nfpm package -f {{.DIST}}/linux/nfpm.generated.yaml -p {{.ITEM}} -t {{.DIST}}/linux/
 
   linux:deb:
     desc: Build the .deb package with nfpm
@@ -170,6 +219,8 @@ tasks:
   windows:build:
     desc: Cross-build entropy.exe (x86_64-gnu) via cargo-zigbuild
     deps: [icons]
+    env:
+      CARGO_ZIGBUILD_ZIG_PATH: '{{default "zig" .ZIG}}'
     cmds:
       - cargo zigbuild --release --locked --target {{.WIN_TARGET}}
 
@@ -198,9 +249,10 @@ tasks:
       - task: windows:msi
 
   # ---- macOS targets ------------------------------------------------------
-  # Native path (real signing + .dmg): run on a Mac. TARGET selects the arch.
+  # Native path (real signing + .dmg): run on a Mac. Both slices are merged with
+  # lipo, so the result is one universal bundle.
   macos:app:
-    desc: "macOS .app + .dmg + .zip (run on macOS)"
+    desc: "Universal macOS .app + .dmg (run on macOS)"
     cmds:
       - scripts/build_macos_app.sh
 
@@ -210,8 +262,10 @@ tasks:
       - task: macos:app
 
   macos:cross:
-    desc: "EXPERIMENTAL: universal macOS .app + .dmg cross-built from Linux (zig+SDK+quill)"
+    desc: "Universal macOS .app + .dmg cross-built from Linux (zig+SDK+quill)"
     deps: [icons]
+    env:
+      CARGO_ZIGBUILD_ZIG_PATH: '{{default "zig" .ZIG}}'
     cmds:
       - scripts/build_macos_cross.sh
 
@@ -231,12 +285,18 @@ tasks:
     vars:
       UID: {sh: id -u}
       GID: {sh: id -g}
+      # На SELinux-системах (openSUSE, Fedora) каталог репозитория помечен
+      # user_home_t, и контейнеру в домене container_t чтение запрещено. Метка
+      # снимается только на время запуска: ':z' вместо этого рекурсивно
+      # перемаркировал бы всё дерево, включая target и .git.
+      SELINUX:
+        sh: 'command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" != Disabled ] && echo --security-opt label=disable || true'
     cmds:
       - >
-        docker run --rm
+        docker run --rm {{.SELINUX}}
         -e HOST_UID={{.UID}} -e HOST_GID={{.GID}}
         -v "$PWD":/work -w /work {{.IMAGE}}
-        sh -c 'task {{.TASKS}} && chown -R "$HOST_UID:$HOST_GID" {{.DIST}} target .task 2>/dev/null || true'
+        sh -c 'task {{.TASKS}}; rc=$?; chown -R "$HOST_UID:$HOST_GID" {{.DIST}} target .task .intentionally-empty-file.o 2>/dev/null || true; exit $rc'
 
   docker:linux:
     desc: Linux artifacts (deb/rpm/arch + AppImage) from the toolchain container
@@ -260,7 +320,7 @@ tasks:
         vars: {TASKS: linux:all windows:all}
 
   docker:macos-cross:
-    desc: "EXPERIMENTAL: cross-build the macOS .app + .dmg inside the container"
+    desc: "Cross-build the macOS .app + .dmg inside the container"
     deps: [docker:image]
     cmds:
       - task: docker:run

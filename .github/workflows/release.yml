@@ -35,30 +35,21 @@ jobs:
           name: release-linux-windows
           path: dist/**/*
 
-  # macOS artifacts are built natively on Mac runners for real code signing and a
-  # native .dmg (the Linux cross-build path exists for local use but stays unsigned).
+  # macOS artifacts are built natively on a Mac runner for real code signing and a
+  # native .dmg. Both slices are built here and merged with lipo, so the release
+  # ships a single universal .dmg instead of one download per architecture.
   macos:
-    name: macOS (${{ matrix.arch }})
+    name: macOS (universal)
     if: ${{ startsWith(github.ref_name, 'v0.') }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-26
-            arch: arm64
-            target: aarch64-apple-darwin
-          - os: macos-26-intel
-            arch: x86_64
-            target: x86_64-apple-darwin
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Rust target
-        run: rustup target add ${{ matrix.target }}
+      - name: Install Rust targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
@@ -69,13 +60,13 @@ jobs:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build macOS .app + .dmg
-        run: TARGET=${{ matrix.target }} task macos:all
+      - name: Build macOS .app + universal .dmg
+        run: task macos:all
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: release-macos-${{ matrix.arch }}
+          name: release-macos-universal
           path: dist/macos/*
 
   release:
@@ -106,7 +97,7 @@ jobs:
           printf '\n## Downloads\n\n' >> RELEASE_NOTES.md
           printf '%s\n' '- Linux: install the `.deb`, `.rpm` or Arch `.pkg.tar.zst` for your distro, or download the `.AppImage`, make it executable, and run it.' >> RELEASE_NOTES.md
           printf '%s\n' '- Windows: run the `.msi` installer, or download and run the portable `.exe`.' >> RELEASE_NOTES.md
-          printf '%s\n' '- macOS: download the unsigned `.dmg` for your Mac (`arm64` for Apple Silicon, `x86_64` for Intel), drag Entropy to Applications, then remove quarantine if macOS blocks the app.' >> RELEASE_NOTES.md
+          printf '%s\n' '- macOS: download the universal `.dmg` (runs on both Apple Silicon and Intel), drag Entropy to Applications, then remove quarantine if macOS blocks the app.' >> RELEASE_NOTES.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

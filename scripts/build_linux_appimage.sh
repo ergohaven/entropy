@@ -9,7 +9,7 @@ fi
 
 OUT="${2:-$ROOT/dist/release/entropy-${VERSION}-x86_64.AppImage}"
 APPDIR="${APPDIR:-$ROOT/target/appimage/Entropy.AppDir}"
-APPIMAGETOOL="${APPIMAGETOOL:-$ROOT/target/tools/appimagetool-x86_64.AppImage}"
+APPIMAGETOOL="${APPIMAGETOOL:-$ROOT/.cache/tools/appimagetool-x86_64.AppImage}"
 APPIMAGETOOL_VERSION="${APPIMAGETOOL_VERSION:-1.9.1}"
 APPIMAGETOOL_URL="${APPIMAGETOOL_URL:-https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-x86_64.AppImage}"
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# EXPERIMENTAL: cross-build the macOS app from Linux with cargo-zigbuild + an
+# Cross-build the macOS app from Linux with cargo-zigbuild + an
 # external macOS SDK, then bundle a universal .app, ad-hoc sign it with quill,
 # and pack a .dmg (libdmg-hfsplus) — no Mac required.
 #
@@ -11,6 +11,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# quill и dmg ставит `task prepare:cross` в кэш проекта, а не в систему.
+PATH="$PATH:$ROOT/.cache/tools"
+export PATH
+
 APP_NAME="${APP_NAME:-Entropy}"
 BUNDLE_ID="${BUNDLE_ID:-com.ergohaven.entropy}"
 DEPLOY_TARGET="${MACOSX_DEPLOYMENT_TARGET:-11.0}"
@@ -20,7 +24,6 @@ VERSION="$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)"
 DIST="$ROOT/dist/macos"
 APP="$DIST/$APP_NAME.app"
 DMG="$DIST/entropy-v$VERSION-macos-universal.dmg"
-ZIP="$DIST/entropy-v$VERSION-macos-universal.app.zip"
 
 log() { printf '\033[1;36m==>\033[0m %s\n' "$*" >&2; }
 
@@ -40,15 +43,17 @@ file "$BIN" >&2 || true
 
 # 3. .app bundle
 log "Assembling $APP"
-rm -rf "$APP" "$DMG" "$ZIP"
+rm -rf "$APP" "$DMG"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 install -m 0755 "$BIN" "$APP/Contents/MacOS/entropy"
 
-ICON_PLIST=""
-if [[ -f "$ROOT/assets/entropy.icns" ]]; then
-	cp "$ROOT/assets/entropy.icns" "$APP/Contents/Resources/entropy.icns"
-	ICON_PLIST=$'\n    <key>CFBundleIconFile</key>\n    <string>entropy</string>'
+if [[ ! -f "$ROOT/assets/entropy.icns" ]]; then
+	echo "assets/entropy.icns is missing — the bundle would ship with a blank Finder icon" >&2
+	echo "generate it first: task icons" >&2
+	exit 1
 fi
+cp "$ROOT/assets/entropy.icns" "$APP/Contents/Resources/entropy.icns"
+ICON_PLIST=$'\n    <key>CFBundleIconFile</key>\n    <string>entropy</string>'
 
 cat >"$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -92,23 +97,33 @@ else
 	echo "quill not found; shipping an unsigned bundle" >&2
 fi
 
-# 5a. Always produce a zip of the .app (guaranteed-portable artifact)
-log "Packing $ZIP"
-( cd "$DIST" && zip -qry "$(basename "$ZIP")" "$APP_NAME.app" )
+# 5. .dmg from Linux (HFS hybrid ISO -> compressed UDIF)
+# genisoimage (Debian/Fedora) и mkisofs (openSUSE/Arch) — одна и та же утилита
+# schily-происхождения; нужен именно её флаг -apple, иначе HFS-гибрида не будет
+# и macOS такой образ не смонтирует. xorrisofs здесь не подходит: -apple нет.
+ISOGEN=""
+for candidate in genisoimage mkisofs; do
+	if command -v "$candidate" >/dev/null 2>&1; then
+		ISOGEN="$candidate"
+		break
+	fi
+done
 
-# 5b. Best-effort .dmg from Linux (genisoimage HFS hybrid -> compressed UDIF)
-if command -v genisoimage >/dev/null 2>&1 && command -v dmg >/dev/null 2>&1; then
-	log "Packing $DMG"
-	stage="$(mktemp -d)"
-	cp -a "$APP" "$stage/"
-	ln -s /Applications "$stage/Applications"
-	raw="$(mktemp -u).dmg"
-	genisoimage -quiet -V "$APP_NAME" -D -R -apple -no-pad -o "$raw" "$stage"
-	dmg dmg "$raw" "$DMG"
-	rm -rf "$raw" "$stage"
-	log "Built $DMG"
-else
-	echo "genisoimage or libdmg-hfsplus 'dmg' not found; skipped .dmg (zip is available)" >&2
+if [[ -z "$ISOGEN" ]] || ! command -v dmg >/dev/null 2>&1; then
+	echo "need genisoimage or mkisofs plus the 'dmg' tool from libdmg-hfsplus to build the .dmg" >&2
+	echo "the ISO generator comes from 'task prepare', but libdmg-hfsplus has no distro package" >&2
+	echo "and is built from source — the container already has it: task docker:macos-cross" >&2
+	exit 1
 fi
+
+log "Packing $DMG"
+stage="$(mktemp -d)"
+cp -a "$APP" "$stage/"
+ln -s /Applications "$stage/Applications"
+raw="$(mktemp -u).dmg"
+"$ISOGEN" -quiet -V "$APP_NAME" -D -R -apple -no-pad -o "$raw" "$stage"
+dmg "$raw" "$DMG"
+rm -rf "$raw" "$stage"
+log "Built $DMG"
 
 log "Done: $APP"

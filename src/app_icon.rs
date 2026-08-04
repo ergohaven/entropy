@@ -19,112 +19,47 @@ fn sd_round_box(px: f32, py: f32, hx: f32, hy: f32, radius: f32) -> f32 {
     (ox * ox + oy * oy).sqrt() + qx.max(qy).min(0.0) - radius
 }
 
-fn sd_capsule(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32, radius: f32) -> f32 {
-    let pax = px - ax;
-    let pay = py - ay;
-    let bax = bx - ax;
-    let bay = by - ay;
-    let h = ((pax * bax + pay * bay) / (bax * bax + bay * bay)).clamp(0.0, 1.0);
-    let dx = pax - bax * h;
-    let dy = pay - bay * h;
-    (dx * dx + dy * dy).sqrt() - radius
+fn sd_box(px: f32, py: f32, hx: f32, hy: f32) -> f32 {
+    sd_round_box(px, py, hx, hy, 0.0)
 }
 
-fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
-    let t = t.clamp(0.0, 1.0);
-    [
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-    ]
+// Геометрия и палитра повторяют assets/entropy.svg, из которого растут .icns,
+// .ico и иконки hicolor: логотип должен быть один во всех местах. Координаты
+// viewBox 0..256 переведены в нормализованные -1..1 по формуле svg / 128 - 1.
+const NAVY: [f32; 3] = [0.063, 0.094, 0.157];
+const TEAL: [f32; 3] = [0.369, 0.918, 0.831];
+const ORANGE: [f32; 3] = [0.976, 0.451, 0.086];
+
+// Бирюзовая фигура — объединение трёх прямоугольников, поэтому расстояния
+// берутся через min: раздельная отрисовка оставила бы швы на стыках.
+fn teal_distance(x: f32, y: f32) -> f32 {
+    sd_box(x, y + 0.3359375, 0.5078125, 0.1328125)
+        .min(sd_box(x + 0.3515625, y + 0.15625, 0.15625, 0.3125))
+        .min(sd_box(x - 0.1171875, y - 0.203125, 0.3125, 0.1328125))
 }
 
-fn keycap_color(x: f32, y: f32) -> [f32; 3] {
-    let rose = [0.95, 0.39, 0.53];
-    let violet = [0.66, 0.42, 0.88];
-    let blue = [0.34, 0.63, 0.95];
-    let t = ((x + 0.68) * 0.68 + (0.66 - y) * 0.32).clamp(0.0, 1.0);
-    if t < 0.55 {
-        mix(rose, violet, t / 0.55)
-    } else {
-        mix(violet, blue, (t - 0.55) / 0.45)
-    }
-}
+fn draw_logo(pixel: &mut [f32; 4], x: f32, y: f32, softness: f32) {
+    let paint = |pixel: &mut [f32; 4], distance: f32, color: [f32; 3]| {
+        let alpha = smooth_alpha(distance, softness);
+        if alpha > 0.0 {
+            blend(pixel, [color[0], color[1], color[2], alpha]);
+        }
+    };
 
-fn draw_capsule(
-    pixel: &mut [f32; 4],
-    x: f32,
-    y: f32,
-    ax: f32,
-    ay: f32,
-    bx: f32,
-    by: f32,
-    radius: f32,
-    color: [f32; 4],
-) {
-    let distance = sd_capsule(x, y, ax, ay, bx, by, radius);
-    let alpha = smooth_alpha(distance, 0.020) * color[3];
-    if alpha > 0.0 {
-        blend(pixel, [color[0], color[1], color[2], alpha]);
-    }
-}
-
-fn draw_keycap(pixel: &mut [f32; 4], x: f32, y: f32) {
-    let shadow = sd_round_box(x - 0.045, y - 0.060, 0.68, 0.68, 0.185);
-    blend(pixel, [0.0, 0.0, 0.0, smooth_alpha(shadow, 0.034) * 0.26]);
-
-    let rim = sd_round_box(x, y, 0.70, 0.70, 0.195);
-    let rim_alpha = smooth_alpha(rim, 0.026);
-    if rim_alpha > 0.0 {
-        blend(pixel, [0.93, 0.88, 0.81, rim_alpha]);
-    }
-
-    let face = sd_round_box(x, y, 0.595, 0.595, 0.155);
-    let face_alpha = smooth_alpha(face, 0.022);
-    if face_alpha > 0.0 {
-        let c = keycap_color(x, y);
-        blend(pixel, [c[0], c[1], c[2], face_alpha]);
-    }
-
-    let top_highlight = sd_round_box(x + 0.030, y + 0.070, 0.505, 0.430, 0.125);
-    let top_highlight_alpha = smooth_alpha(top_highlight, 0.020) * face_alpha * 0.14;
-    if top_highlight_alpha > 0.0 {
-        blend(pixel, [1.0, 1.0, 1.0, top_highlight_alpha]);
-    }
-}
-
-fn draw_letter_e(pixel: &mut [f32; 4], x: f32, y: f32) {
-    let shadow = [0.0, 0.0, 0.0, 0.18];
-    let cream = [0.99, 0.96, 0.90, 1.0];
-    let strokes = [
-        (-0.245, -0.340, -0.245, 0.340, 0.060),
-        (-0.225, -0.330, 0.285, -0.330, 0.060),
-        (-0.225, 0.000, 0.230, 0.000, 0.054),
-        (-0.225, 0.330, 0.285, 0.330, 0.060),
-    ];
-
-    for (ax, ay, bx, by, radius) in strokes {
-        draw_capsule(
-            pixel,
-            x,
-            y,
-            ax + 0.030,
-            ay + 0.030,
-            bx + 0.030,
-            by + 0.030,
-            radius,
-            shadow,
-        );
-    }
-
-    for (ax, ay, bx, by, radius) in strokes {
-        draw_capsule(pixel, x, y, ax, ay, bx, by, radius, cream);
-    }
+    paint(pixel, sd_round_box(x, y, 1.0, 1.0, 0.375), NAVY);
+    paint(pixel, teal_distance(x, y), TEAL);
+    paint(
+        pixel,
+        sd_box(x, y - 0.3359375, 0.5078125, 0.1328125),
+        ORANGE,
+    );
 }
 
 pub(crate) fn rgba_icon(size: u32) -> Vec<u8> {
     let size = size.max(1);
     let mut rgba = Vec::with_capacity((size * size * 4) as usize);
+    // Сглаживание шириной в пиксель: иначе трей-иконка 32x32 идёт лесенкой.
+    let softness = 2.0 / size as f32;
 
     for y in 0..size {
         for x in 0..size {
@@ -132,8 +67,7 @@ pub(crate) fn rgba_icon(size: u32) -> Vec<u8> {
             let ny = ((y as f32 + 0.5) / size as f32) * 2.0 - 1.0;
             let mut pixel = [0.0, 0.0, 0.0, 0.0];
 
-            draw_keycap(&mut pixel, nx, ny);
-            draw_letter_e(&mut pixel, nx, ny);
+            draw_logo(&mut pixel, nx, ny, softness);
 
             rgba.push((pixel[0].clamp(0.0, 1.0) * 255.0).round() as u8);
             rgba.push((pixel[1].clamp(0.0, 1.0) * 255.0).round() as u8);

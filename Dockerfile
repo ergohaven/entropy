@@ -33,7 +33,7 @@ RUN set -eux; \
 		cmake \
 		zlib1g-dev \
 		fakeroot \
-		zip \
+		gettext-base \
 		xz-utils \
 		ca-certificates \
 		curl \
@@ -87,7 +87,7 @@ RUN set -eux; \
 RUN set -eux; \
 	git clone --depth 1 https://github.com/fanquake/libdmg-hfsplus /tmp/libdmg; \
 	cmake -S /tmp/libdmg -B /tmp/libdmg/build -DCMAKE_BUILD_TYPE=Release; \
-	make -C /tmp/libdmg/build/dmg dmg; \
+	make -C /tmp/libdmg/build/dmg dmg-bin; \
 	install -m 0755 /tmp/libdmg/build/dmg/dmg /usr/local/bin/dmg; \
 	rm -rf /tmp/libdmg
 

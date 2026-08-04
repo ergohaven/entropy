@@ -25,14 +25,8 @@ jobs:
             binary: target/release/entropy.exe
           - os: macos-15
             kind: macos
-            artifact: entropy-macos-arm64
-            binary: dist/macos/*.app.zip
-            target: aarch64-apple-darwin
-          - os: macos-15-intel
-            kind: macos
-            artifact: entropy-macos-x86_64
-            binary: dist/macos/*.app.zip
-            target: x86_64-apple-darwin
+            artifact: entropy-macos-universal
+            binary: dist/macos/*.dmg
 
     steps:
       - uses: actions/checkout@v4
@@ -43,9 +37,9 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
-      - name: Install macOS Rust target
+      - name: Install macOS Rust targets
         if: matrix.kind == 'macos'
-        run: rustup target add ${{ matrix.target }}
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
@@ -67,7 +61,7 @@ jobs:
 
       - name: Build macOS app bundle
         if: matrix.kind == 'macos'
-        run: TARGET="${{ matrix.target }}" scripts/build_macos_app.sh
+        run: scripts/build_macos_app.sh
 
       - name: Test
         if: matrix.kind == 'linux'

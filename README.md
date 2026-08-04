@@ -65,8 +65,7 @@ Release builds are published on the
 
 - `entropy-v0.3.1-x86_64.AppImage`
 - `entropy-v0.3.1-windows-x86_64.exe`
-- `entropy-v0.3.1-macos-arm64.dmg`
-- `entropy-v0.3.1-macos-x86_64.dmg`
+- `entropy-v0.3.1-macos-universal.dmg`
 
 Stable tags such as `v0.3.1` publish a regular GitHub release and mark it as
 latest. Tags with a suffix, such as `v0.3.1-rc.1`, publish the same artifacts as
@@ -75,9 +74,8 @@ a GitHub prerelease.
 Windows builds are unsigned for now, so Windows SmartScreen may warn before
 launching the app.
 
-macOS DMG builds are unsigned and not notarized for now. On Apple Silicon,
-use the `macos-arm64` build; the `macos-x86_64` build is for Intel Macs. To run
-a downloaded DMG on macOS:
+The macOS DMG is universal — the same download runs natively on Apple Silicon
+and Intel Macs. It is unsigned and not notarized for now, so run it like this:
 
 1. Open the `.dmg`
 2. Drag `Entropy.app` to `/Applications`
@@ -167,60 +165,21 @@ Not in scope for this release:
 
 ## Development
 
-Install a stable Rust toolchain, then build the desktop app:
+Rust and zig versions are pinned in `.tool-versions` and installed with
+[asdf](https://asdf-vm.com). Install [go-task](https://taskfile.dev), then let it
+set up the rest of the toolchain for your OS:
 
 ```sh
-cargo run
-cargo build --release
+task prepare        # build & packaging prerequisites for this host
+task build          # release binary
+task package        # native package(s) for this OS
 ```
 
-Linux builds require native GUI/HID dependencies. On Debian/Ubuntu-like systems:
+For day-to-day work `cargo run` is enough once `task prepare` has run.
 
-```sh
-sudo apt-get install \
-  libhidapi-dev \
-  libudev-dev \
-  libxcb-render0-dev \
-  libxcb-shape0-dev \
-  libxcb-xfixes0-dev \
-  libxkbcommon-dev \
-  libssl-dev \
-  libgtk-3-dev
-```
-
-### Packaging
-
-Builds and packages are driven by [go-task](https://taskfile.dev); `task --list`
-shows every target. The two entry points are:
-
-```sh
-task package      # native package(s) for the current host OS
-task docker:dist  # Linux + Windows artifacts in the pinned toolchain container
-```
-
-`task docker:dist` is what CI runs and needs nothing on the host but Docker.
-Individual targets are available too: `task linux:deb`, `task linux:rpm`,
-`task linux:arch`, `task linux:appimage`, `task windows:portable`,
-`task windows:msi`, and `task macos:all` (macOS host only).
-
-Native packaging on Linux needs these host tools:
-
-| Tool | Needed for | Debian/Ubuntu | openSUSE | Fedora | Arch |
-| --- | --- | --- | --- | --- | --- |
-| `rsvg-convert` (or `inkscape`) | rasterizing `assets/entropy.svg` | `librsvg2-bin` | `rsvg-convert` | `librsvg2-tools` | `librsvg` |
-| `magick` / `convert` | `assets/entropy.ico` | `imagemagick` | `ImageMagick` | `ImageMagick` | `imagemagick` |
-| `envsubst` | nfpm config templating | `gettext-base` | `envsubst` | `gettext-envsubst` | `gettext` |
-| `wixl` | Windows MSI | `wixl` | `msitools` | `msitools` | `msitools` |
-| `png2icns` | macOS `.icns`, optional elsewhere | `icnsutils` | `icns-utils` | `libicns-utils` | AUR `libicns` |
-
-Tools that are not packaged by distros: [nfpm](https://github.com/goreleaser/nfpm)
-(deb/rpm/archlinux) and [go-task](https://taskfile.dev/installation/) come from
-upstream releases, `appimagetool` is downloaded into `target/tools` on first use,
-and the Windows cross-build additionally needs `zig` plus `cargo-zigbuild`.
-
-Building macOS artifacts requires a Mac (real signing and a native `.dmg`);
-`task macos:cross` cross-builds them from Linux, but stays experimental and
-unsigned.
+Packaging, cross-builds and the reproducible Docker path are documented in
+[BUILD.md](BUILD.md), including the full task reference, the per-distro package
+table and troubleshooting.
 
 ## Changelog
 

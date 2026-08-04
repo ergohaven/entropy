@@ -2,6 +2,8 @@
 /dist
 /.cache
 /.task
+# cargo-zigbuild оставляет его в корне при линковке macOS-таргетов
+/.intentionally-empty-file.o
 /assets/icons
 /assets/entropy.icns
 *.swp
