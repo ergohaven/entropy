@@ -48,6 +48,11 @@ rust 1.97.0
 zig 0.16.0
 ```
 
+The same versions are baked into the `Dockerfile`, together with the matching
+`cargo-zigbuild` line (`~0.23`) — each `cargo-zigbuild` release targets a
+specific zig, so those three move together or the local and container builds
+drift apart.
+
 `task prepare` adds the `rust` and `zig` plugins if missing and installs those
 versions. Without asdf it falls back to the distro package for zig and asks you
 to install Rust via [rustup](https://rustup.rs).
@@ -80,7 +85,10 @@ Not packaged by any distro, so `prepare` downloads them into `.cache/tools/`:
 [nfpm](https://github.com/goreleaser/nfpm) (deb/rpm/archlinux),
 [quill](https://github.com/anchore/quill) (Mach-O signing from Linux) and
 [libdmg-hfsplus](https://github.com/fanquake/libdmg-hfsplus) (builds the `.dmg`;
-compiled from source). `appimagetool` lands in the same place on first use.
+compiled from source). `appimagetool` and the AppImage runtime it embeds land in
+the same place on first use — the runtime is pinned and passed with
+`--runtime-file`, because otherwise appimagetool re-downloads it on every build
+and hangs with no timeout when that download stalls.
 
 On macOS the native build only needs the Xcode command line tools — `codesign`,
 `hdiutil`, `lipo` and `plutil` ship with them.
@@ -95,10 +103,12 @@ On macOS the native build only needs the Xcode command line tools — `codesign`
 | `task version` | print the version parsed from `Cargo.toml` |
 | `task prepare` | install build and packaging prerequisites for this host |
 | `task prepare:cross` | the same plus the Windows/macOS cross toolchain |
-| `task clean` | remove `dist`, `target/appimage`, `assets/icons`, `assets/entropy.icns` |
+| `task clean` | remove `dist`, `target/appimage`, `assets/icons` |
 
-`clean` deliberately keeps `assets/entropy.ico`: it is committed because
-`build.rs` needs it for Windows builds.
+`clean` deliberately keeps `assets/entropy.ico` and `assets/entropy.icns`: both
+are committed. `build.rs` needs the `.ico` for Windows builds, and the `.icns` is
+needed by the macOS runners, which have nothing installed to rasterize the SVG.
+`task icons` regenerates both — commit the result when the logo changes.
 
 ### Assets
 
@@ -134,6 +144,11 @@ another architecture, override them:
 ```sh
 task linux:deb PKG_ARCH=arm64 ENTROPY_BIN=path/to/arm64/entropy
 ```
+
+`VERSION` defaults to the version in `Cargo.toml` and can be overridden the same
+way. The release workflow passes the tag, so a `v1.2.3-rc.1` prerelease produces
+`entropy-v1.2.3-rc.1-*` files instead of files named after the future stable
+release; nfpm turns the prerelease suffix into a proper deb/rpm version.
 
 The rpm dependencies are declared as soname provides (`libX11.so.6()(64bit)`)
 rather than package names, because those names differ between rpm distros.
@@ -176,23 +191,31 @@ Apple's SDK.
 
 All of them build the image first if needed. The container mounts the repository
 at `/work`, runs as root, and restores ownership of `dist/`, `target/` and
-`.task/` to you afterwards.
+`.task/` to you afterwards. Setting `DOCKER_IMAGE_READY=1` skips the image build
+— CI uses it because it builds the image in a separate, layer-cached step.
 
 ## CI
 
 - `.github/workflows/build.yml` — builds and tests on pull requests and on
-  manual runs. A new push to a PR cancels the previous run.
+  manual runs. A new push to a PR cancels the previous run. Each macOS
+  architecture gets its own runner here: the universal bundle is a release
+  concern, and building both slices on one runner would only slow the gate down.
 - `.github/workflows/release.yml` — runs on semver tags (`v1.2.3`, and
   `v1.2.3-rc.1` for prereleases): `task docker:dist` for the Linux and Windows
   artifacts, `task macos:all` on a macOS runner for the signed universal `.dmg`,
-  then publishes a GitHub Release. Release notes are extracted from the matching
-  `CHANGELOG.md` section, so the tag must have one.
+  then publishes a GitHub Release.
+
+Everything that can be checked before building is checked in the `validate` job —
+the tag format, that `CHANGELOG.md` has a matching `## <tag>` section to use as
+release notes, and that the tag agrees with the version in `Cargo.toml`. The
+builds take tens of minutes, so failing on a missing changelog entry afterwards
+would throw all of that away.
 
 The release workflow can also be started manually from the Actions tab, passing
 an existing tag to publish — useful for re-running a release whose artifacts
-failed to upload. The tag is validated first, every job checks out that tag
-rather than the branch, and the release is published against it. Releases never
-cancel each other: an interrupted run would leave a partially uploaded release.
+failed to upload. Every job checks out that tag rather than the branch, and the
+release is published against it. Releases never cancel each other: an interrupted
+run would leave a partially uploaded release.
 
 ## Troubleshooting
 
@@ -203,9 +226,13 @@ domain cannot read. The Taskfile adds `--security-opt label=disable` when
 it yourself.
 
 **`Failed to find zig` / `empty string, expected a semver version`.** An asdf or
-mise shim is first in `PATH` but no version is selected, so `zig` prints a hint
-instead of a version. Fix the shim with `asdf install zig`, or let the Taskfile
-fall back — it picks the first `zig` that actually reports a version.
+mise shim is first in `PATH`, and shims resolve the version from
+`.tool-versions` found upwards from the *current* directory. Cargo runs build
+scripts from the crate's directory inside the registry, where there is no
+`.tool-versions`, so the shim prints a hint instead of a version. The Taskfile
+resolves zig to the real binary (`asdf which zig`, then candidates that still
+report a version when run from an unrelated directory) and passes it through
+`CARGO_ZIGBUILD_ZIG_PATH`. If it still fails, check `asdf which zig` by hand.
 
 **`zlib-devel conflicts with zlib-ng-compat-devel`.** Tumbleweed and Fedora ship
 zlib-ng by default. `prepare` asks for the `pkgconfig(zlib)` capability instead

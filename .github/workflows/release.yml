@@ -31,9 +31,14 @@ env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
+  # Всё, что можно проверить до сборки, проверяется здесь: сборка Linux,
+  # Windows и macOS занимает десятки минут, и ронять релиз на разборе
+  # CHANGELOG уже после неё — значит терять их впустую.
   validate:
     name: Validate tag
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Check the tag looks like a release
         run: |
@@ -44,6 +49,36 @@ jobs:
             exit 1
             ;;
           esac
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      # Версия артефактов берётся из тега, а не из Cargo.toml: иначе предрелиз
+      # v1.2.3-rc.1 выложил бы файлы с именами будущего стабильного v1.2.3.
+      # Базовая часть при этом обязана совпасть с Cargo.toml — расхождение
+      # значит, что «Prepare release» забыли или тег поставили не на тот коммит.
+      - name: Derive and check the version
+        id: version
+        run: |
+          version="${RELEASE_TAG#v}"
+          base="${version%%-*}"
+          crate="$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)"
+          if [ "$base" != "$crate" ]; then
+            echo "::error::tag $RELEASE_TAG does not match Cargo.toml version $crate"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check CHANGELOG has a section for the tag
+        run: |
+          awk -v version="$RELEASE_TAG" '
+            /^## / && $2 == version { found = 1 }
+            END { exit !found }
+          ' CHANGELOG.md || {
+            echo "::error::CHANGELOG.md has no '## $RELEASE_TAG' section to use as release notes"
+            exit 1
+          }
 
   # Linux (deb/rpm/arch + AppImage) and Windows (portable exe + MSI) are built in
   # the pinned toolchain container, so CI runs the exact same path as local `task`.
@@ -64,14 +99,40 @@ jobs:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: docker/setup-buildx-action@v3
+
+      # Образ собирается отдельным шагом только ради кэша слоёв: внутри него
+      # компилируются cargo-zigbuild и libdmg-hfsplus, и без кэша каждый релиз
+      # платил бы за это заново. DOCKER_IMAGE_READY говорит Taskfile, что
+      # образ уже готов и docker:image пересобирать его не должен.
+      - name: Build the toolchain image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          tags: entropy-build:local
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Build Linux + Windows artifacts
-        run: task docker:dist
+        env:
+          DOCKER_IMAGE_READY: '1'
+        run: task docker:dist VERSION=${{ needs.validate.outputs.version }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: release-linux-windows
-          path: dist/**/*
+          # Только сами пакеты: в dist/ лежит ещё и сгенерированный конфиг nfpm,
+          # а всё, что попадёт сюда, окажется файлом в GitHub Release.
+          path: |
+            dist/linux/*.deb
+            dist/linux/*.rpm
+            dist/linux/*.pkg.tar.zst
+            dist/linux/*.AppImage
+            dist/windows/*.exe
+            dist/windows/*.msi
+          if-no-files-found: error
 
   # macOS artifacts are built natively on a Mac runner for real code signing and a
   # native .dmg. Both slices are built here and merged with lipo, so the release
@@ -85,11 +146,17 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      # Релизные сборки идут на той же версии Rust, что и контейнер: иначе
+      # macOS-артефакт собран другим компилятором, чем Linux и Windows.
+      - name: Read the pinned Rust version
+        id: rust
+        run: echo "version=$(awk '/^rust / { print $2 }' .tool-versions)" >> "$GITHUB_OUTPUT"
 
-      - name: Install Rust targets
-        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.rust.outputs.version }}
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
@@ -101,17 +168,19 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build macOS .app + universal .dmg
-        run: task macos:all
+        run: task macos:all VERSION=${{ needs.validate.outputs.version }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: release-macos-universal
-          path: dist/macos/*
+          # Рядом с .dmg лежит распакованный Entropy.app — в релиз он не нужен.
+          path: dist/macos/*.dmg
+          if-no-files-found: error
 
   release:
     name: Create Release
-    needs: [linux, macos]
+    needs: [validate, linux, macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

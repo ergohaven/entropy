@@ -16,8 +16,15 @@ version: '3'
 
 vars:
   APP: entropy
+  # По умолчанию версия берётся из Cargo.toml, но её можно задать снаружи
+  # (`task linux:all VERSION=0.3.2-rc.1`): релизный workflow передаёт туда имя
+  # тега, чтобы имена артефактов и версии пакетов совпадали с релизом, а не с
+  # ещё не поднятой версией крейта.
   VERSION:
     sh: awk -F '"' '/^version = / { print $2; exit }' Cargo.toml
+  # MSI ProductVersion и CFBundleVersion принимают только числовые компоненты,
+  # поэтому предрелизный суффикс туда не попадает — его несут имена файлов.
+  NUMERIC_VERSION: '{{ (splitList "-" .VERSION) | first }}'
   DIST: dist
   WIN_TARGET: x86_64-pc-windows-gnu
   IMAGE: entropy-build:local
@@ -25,11 +32,25 @@ vars:
   # проекта, а не в системе: PATH дополняется только на время команды, и то,
   # что уже стоит у разработчика, имеет приоритет.
   TOOLS: '{{.ROOT_DIR}}/.cache/tools'
-  # asdf/mise кладут в PATH shim'ы: если версия инструмента не выбрана, `zig`
-  # печатает подсказку вместо номера версии, и cargo-zigbuild падает на разборе
-  # semver. Поэтому берём первый zig, который реально отвечает версией.
+  # asdf/mise кладут в PATH shim'ы, а версию инструмента ищут по .tool-versions
+  # от текущего каталога вверх. Build script крейта cargo запускает из каталога
+  # реестра (~/.asdf/installs/rust/...), где .tool-versions уже не найдётся:
+  # shim печатает подсказку вместо версии, и cargo-zigbuild падает на разборе
+  # semver. Поэтому нужен путь к настоящему бинарнику, а не к shim'у, и
+  # кандидаты проверяются из постороннего каталога, где shim заведомо не
+  # резолвится.
   ZIG:
-    sh: 'for z in zig /usr/bin/zig /usr/local/bin/zig; do if command -v "$z" >/dev/null 2>&1 && "$z" version 2>/dev/null | grep -qE "^[0-9]+\.[0-9]+"; then command -v "$z"; break; fi; done || true'
+    sh: |
+      # `asdf which` при неудаче печатает свою ошибку в stdout, поэтому
+      # результат проверяется как путь, а не по коду возврата.
+      p="$(asdf which zig 2>/dev/null)" && [ -x "$p" ] && { printf '%s\n' "$p"; exit 0; }
+      for z in zig /usr/bin/zig /usr/local/bin/zig; do
+        p="$(command -v "$z" 2>/dev/null)" || continue
+        (cd / && "$p" version) 2>/dev/null | grep -qE '^[0-9]+\.[0-9]+' || continue
+        printf '%s\n' "$p"
+        exit 0
+      done
+      true
 
 tasks:
   default:
@@ -72,10 +93,11 @@ tasks:
 
   clean:
     desc: Remove build/packaging artifacts
-    # assets/entropy.ico is committed (build.rs needs it for Windows builds); the
-    # icons task regenerates it, but clean must not delete a tracked file.
+    # assets/entropy.ico и assets/entropy.icns закоммичены: .ico нужен build.rs
+    # для Windows, .icns — сборке macOS на раннере, где нет чем его отрисовать.
+    # Задача icons их пересоздаёт, но clean не трогает файлы под контролем git.
     cmds:
-      - rm -rf {{.DIST}} target/appimage assets/icons assets/entropy.icns
+      - rm -rf {{.DIST}} target/appimage assets/icons
 
   # ---- assets -------------------------------------------------------------
   icons:
@@ -207,6 +229,7 @@ tasks:
     desc: Build a Linux AppImage
     deps: [build, icons]
     cmds:
+      - mkdir -p {{.DIST}}/linux
       - scripts/build_linux_appimage.sh "v{{.VERSION}}" "{{.DIST}}/linux/{{.APP}}-v{{.VERSION}}-x86_64.AppImage"
 
   linux:all:
@@ -240,7 +263,7 @@ tasks:
       EXE: target/{{.WIN_TARGET}}/release/entropy.exe
     cmds:
       - mkdir -p {{.DIST}}/windows
-      - wixl -a x64 -D Version={{.VERSION}} -D ExeSource={{.EXE}} -o {{.DIST}}/windows/{{.APP}}-v{{.VERSION}}-x64.msi packaging/windows/entropy.wxs
+      - wixl -a x64 -D Version={{.NUMERIC_VERSION}} -D ExeSource={{.EXE}} -o {{.DIST}}/windows/{{.APP}}-v{{.VERSION}}-x64.msi packaging/windows/entropy.wxs
 
   windows:all:
     desc: Portable exe + MSI installer
@@ -253,6 +276,8 @@ tasks:
   # lipo, so the result is one universal bundle.
   macos:app:
     desc: "Universal macOS .app + .dmg (run on macOS)"
+    env:
+      VERSION: '{{.VERSION}}'
     cmds:
       - scripts/build_macos_app.sh
 
@@ -266,6 +291,7 @@ tasks:
     deps: [icons]
     env:
       CARGO_ZIGBUILD_ZIG_PATH: '{{default "zig" .ZIG}}'
+      VERSION: '{{.VERSION}}'
     cmds:
       - scripts/build_macos_cross.sh
 
@@ -277,6 +303,11 @@ tasks:
   # ---- reproducible cross-build via Docker --------------------------------
   docker:image:
     desc: Build the local cross-build toolchain image
+    # В CI образ собирается отдельным шагом ради кэша слоёв (внутри него
+    # компилируются cargo-zigbuild и libdmg-hfsplus), и повторная сборка здесь
+    # его бы только продублировала: DOCKER_IMAGE_READY=1 её выключает.
+    status:
+      - test -n "$DOCKER_IMAGE_READY"
     cmds:
       - docker build -t {{.IMAGE}} .
 
@@ -296,7 +327,7 @@ tasks:
         docker run --rm {{.SELINUX}}
         -e HOST_UID={{.UID}} -e HOST_GID={{.GID}}
         -v "$PWD":/work -w /work {{.IMAGE}}
-        sh -c 'task {{.TASKS}}; rc=$?; chown -R "$HOST_UID:$HOST_GID" {{.DIST}} target .task .intentionally-empty-file.o 2>/dev/null || true; exit $rc'
+        sh -c 'task {{.TASKS}} VERSION={{.VERSION}}; rc=$?; chown -R "$HOST_UID:$HOST_GID" {{.DIST}} target .task .intentionally-empty-file.o 2>/dev/null || true; exit $rc'
 
   docker:linux:
     desc: Linux artifacts (deb/rpm/arch + AppImage) from the toolchain container

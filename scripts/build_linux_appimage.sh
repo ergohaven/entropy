@@ -13,6 +13,13 @@ APPIMAGETOOL="${APPIMAGETOOL:-$ROOT/.cache/tools/appimagetool-x86_64.AppImage}"
 APPIMAGETOOL_VERSION="${APPIMAGETOOL_VERSION:-1.9.1}"
 APPIMAGETOOL_URL="${APPIMAGETOOL_URL:-https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-x86_64.AppImage}"
 
+# Без --runtime-file appimagetool на каждой сборке качает runtime с GitHub, и на
+# закрытом соединении висит без таймаута — в CI это тихий простой job'а до его
+# лимита. Поэтому runtime скачивается сам, пиннутой версией и с таймаутом.
+APPIMAGE_RUNTIME="${APPIMAGE_RUNTIME:-$ROOT/.cache/tools/appimage-runtime-x86_64}"
+APPIMAGE_RUNTIME_VERSION="${APPIMAGE_RUNTIME_VERSION:-20251108}"
+APPIMAGE_RUNTIME_URL="${APPIMAGE_RUNTIME_URL:-https://github.com/AppImage/type2-runtime/releases/download/${APPIMAGE_RUNTIME_VERSION}/runtime-x86_64}"
+
 cd "$ROOT"
 cargo build --release --locked
 
@@ -46,10 +53,17 @@ if [[ -d "$ROOT/assets/icons/hicolor" ]]; then
 fi
 
 if [[ ! -x "$APPIMAGETOOL" ]]; then
-  curl -fsSL "$APPIMAGETOOL_URL" -o "$APPIMAGETOOL"
+  curl -fsSL --retry 3 --connect-timeout 15 --max-time 300 "$APPIMAGETOOL_URL" -o "$APPIMAGETOOL"
   chmod 0755 "$APPIMAGETOOL"
 fi
 
-ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGETOOL" "$APPDIR" "$OUT"
+if [[ ! -s "$APPIMAGE_RUNTIME" ]]; then
+  mkdir -p "$(dirname "$APPIMAGE_RUNTIME")"
+  curl -fsSL --retry 3 --connect-timeout 15 --max-time 300 "$APPIMAGE_RUNTIME_URL" -o "$APPIMAGE_RUNTIME"
+fi
+
+ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGETOOL" \
+  --runtime-file "$APPIMAGE_RUNTIME" \
+  "$APPDIR" "$OUT"
 chmod 0755 "$OUT"
 echo "Built $OUT"

@@ -5,7 +5,8 @@
 #   ENTROPY_BIN  path to the already-built entropy binary for PKG_ARCH
 # Depends declared by hand: auto-detection (ldd/find-requires) is unreliable under
 # cross-compilation, and the binary link-loads its GUI stack (libGL, xkbcommon,
-# X11/xcb) via dlopen, so those must be listed explicitly rather than derived.
+# X11/xcb, wayland) via dlopen, so those must be listed explicitly rather than
+# derived.
 # Only libc is a real ELF dependency; hidapi uses the pure-Rust hidraw backend
 # (no libudev) and file dialogs go through xdg-desktop-portal, not GTK.
 name: ergohaven-entropy
@@ -30,6 +31,7 @@ overrides:
       - libx11-6
       - libxcb1
       - libgl1
+      - libwayland-client0
     recommends:
       - xdg-desktop-portal
   rpm:
@@ -41,6 +43,7 @@ overrides:
       - "libX11.so.6()(64bit)"
       - "libxcb.so.1()(64bit)"
       - "libGL.so.1()(64bit)"
+      - "libwayland-client.so.0()(64bit)"
     recommends:
       - xdg-desktop-portal
   archlinux:
@@ -49,6 +52,7 @@ overrides:
       - libx11
       - libxcb
       - libglvnd
+      - wayland
 
 contents:
   - src: ${ENTROPY_BIN}

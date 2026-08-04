@@ -1,4 +1,8 @@
 # Vial-compatible HID devices: grant access to the active local user.
 # TAG+="uaccess" hands the device to the logged-in session via systemd-logind,
 # so no static group membership is required.
+# Второе правило — для Bluetooth: у подключённых по BLE устройств серийный номер
+# Vial в hidraw не виден, остаётся только идентификатор шины HID (0005 = BLUETOOTH).
+# Оно должно совпадать с тем, что ставит linux/udev/install-vial-rules.sh.
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{serial}=="*vial:f64c2b3c*", MODE="0660", TAG+="uaccess", TAG+="udev-acl"
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", KERNELS=="0005:E126:*", MODE="0660", TAG+="uaccess", TAG+="udev-acl"

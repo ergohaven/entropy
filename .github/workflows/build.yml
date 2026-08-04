@@ -29,10 +29,18 @@ jobs:
             kind: windows
             artifact: entropy-windows
             binary: target/release/entropy.exe
+          # На PR каждая арка проверяется своим раннером: универсальный бандл
+          # нужен только релизу, а здесь он лишь удвоил бы время гейта.
           - os: macos-15
             kind: macos
-            artifact: entropy-macos-universal
+            artifact: entropy-macos-arm64
             binary: dist/macos/*.dmg
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            kind: macos
+            artifact: entropy-macos-x86_64
+            binary: dist/macos/*.dmg
+            target: x86_64-apple-darwin
 
     steps:
       - uses: actions/checkout@v4
@@ -43,9 +51,9 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
-      - name: Install macOS Rust targets
+      - name: Install macOS Rust target
         if: matrix.kind == 'macos'
-        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+        run: rustup target add ${{ matrix.target }}
 
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
@@ -67,7 +75,7 @@ jobs:
 
       - name: Build macOS app bundle
         if: matrix.kind == 'macos'
-        run: scripts/build_macos_app.sh
+        run: TARGET="${{ matrix.target }}" scripts/build_macos_app.sh
 
       - name: Test
         if: matrix.kind == 'linux'

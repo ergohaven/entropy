@@ -6,7 +6,7 @@
 ARG RUST_VERSION=1.97
 FROM rust:${RUST_VERSION}-bookworm
 
-ARG ZIG_VERSION=0.13.0
+ARG ZIG_VERSION=0.16.0
 ARG NFPM_VERSION=2.47.0
 ARG TASK_VERSION=3.44.0
 ARG DEBIAN_FRONTEND=noninteractive
@@ -41,9 +41,11 @@ RUN set -eux; \
 	rm -rf /var/lib/apt/lists/*
 
 # Zig (used by cargo-zigbuild as the cross linker / C compiler).
+# Имя архива — zig-<arch>-<os>-<version>: с 0.15 порядок arch и os в нём
+# обратный прежнему, поэтому старая схема zig-linux-<arch> отдаёт 404.
 RUN set -eux; \
 	arch="$(uname -m)"; \
-	curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-${arch}-${ZIG_VERSION}.tar.xz" -o /tmp/zig.tar.xz; \
+	curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${arch}-linux-${ZIG_VERSION}.tar.xz" -o /tmp/zig.tar.xz; \
 	mkdir -p /opt/zig; \
 	tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1; \
 	ln -s /opt/zig/zig /usr/local/bin/zig; \
@@ -63,12 +65,18 @@ RUN set -eux; \
 # AppImage tooling: appimagetool baked in and pinned so the container needs no
 # network at packaging time. build_linux_appimage.sh picks it up via APPIMAGETOOL;
 # APPIMAGE_EXTRACT_AND_RUN lets it run without FUSE inside a plain container.
+# Runtime тоже кладём в образ: без --runtime-file appimagetool тянет его с
+# GitHub на каждой сборке и на оборванном соединении висит без таймаута.
 ARG APPIMAGETOOL_VERSION=1.9.1
+ARG APPIMAGE_RUNTIME_VERSION=20251108
 RUN set -eux; \
 	case "$(uname -m)" in x86_64) aia=x86_64 ;; aarch64) aia=aarch64 ;; *) aia="$(uname -m)" ;; esac; \
 	curl -fsSL "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-${aia}.AppImage" -o /usr/local/bin/appimagetool; \
-	chmod +x /usr/local/bin/appimagetool
+	chmod +x /usr/local/bin/appimagetool; \
+	curl -fsSL "https://github.com/AppImage/type2-runtime/releases/download/${APPIMAGE_RUNTIME_VERSION}/runtime-${aia}" -o /usr/local/lib/appimage-runtime; \
+	test -s /usr/local/lib/appimage-runtime
 ENV APPIMAGETOOL=/usr/local/bin/appimagetool
+ENV APPIMAGE_RUNTIME=/usr/local/lib/appimage-runtime
 ENV APPIMAGE_EXTRACT_AND_RUN=1
 
 # macOS-cross tooling (EXPERIMENTAL path): quill (Mach-O signing from Linux),
@@ -91,9 +99,11 @@ RUN set -eux; \
 	install -m 0755 /tmp/libdmg/build/dmg/dmg /usr/local/bin/dmg; \
 	rm -rf /tmp/libdmg
 
-# Rust cross targets + cargo-zigbuild. Pinned to the 0.19 line, which matches the
-# pinned Zig 0.13; newer cargo-zigbuild tracks newer Zig releases.
-ARG CARGO_ZIGBUILD_VERSION=~0.19
+# Rust cross targets + cargo-zigbuild. Каждая линия cargo-zigbuild рассчитана на
+# свою версию zig, поэтому 0.23 и ZIG_VERSION выше меняются только вместе — и
+# должны совпадать с .tool-versions, иначе локальная и контейнерная сборки
+# разъедутся по тулчейну.
+ARG CARGO_ZIGBUILD_VERSION=~0.23
 RUN set -eux; \
 	rustup target add \
 		x86_64-pc-windows-gnu \

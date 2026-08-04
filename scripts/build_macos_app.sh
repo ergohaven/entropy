@@ -8,9 +8,14 @@ CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-10.15}"
 export MACOSX_DEPLOYMENT_TARGET
 
-VERSION="$(
+# Версию можно задать снаружи: релиз передаёт сюда имя тега, чтобы предрелизный
+# v1.2.3-rc.1 не выложил .dmg с именем будущего стабильного v1.2.3.
+VERSION="${VERSION:-$(
 	awk -F '"' '/^version = / { print $2; exit }' "$ROOT/Cargo.toml"
-)"
+)}"
+# CFBundleVersion — только числовые компоненты, поэтому предрелизный суффикс
+# остаётся в CFBundleShortVersionString и в имени .dmg.
+NUMERIC_VERSION="${VERSION%%-*}"
 
 target_arch_label() {
 	case "$1" in
@@ -26,8 +31,9 @@ target_root() {
 
 # Обе арки в одном бандле: так пользователю не нужно выбирать сборку под свой
 # Mac, а Rosetta перестаёт влиять на результат — арка выбирается явно, а не по
-# тому, под какой архитектурой запущен шелл.
-TARGETS="${TARGETS:-aarch64-apple-darwin x86_64-apple-darwin}"
+# тому, под какой архитектурой запущен шелл. TARGET (одна арка) поддержан ради
+# вызывающих, которые ещё передают его: PR-гейт собирает по одной арке на раннер.
+TARGETS="${TARGETS:-${TARGET:-aarch64-apple-darwin x86_64-apple-darwin}}"
 read -r -a BUILD_TARGETS <<<"$TARGETS"
 
 if ((${#BUILD_TARGETS[@]} > 1)); then
@@ -177,7 +183,7 @@ cat >"$CONTENTS_DIR/Info.plist" <<PLIST
     <key>CFBundleShortVersionString</key>
     <string>$VERSION</string>
     <key>CFBundleVersion</key>
-    <string>$VERSION</string>
+    <string>$NUMERIC_VERSION</string>
     <key>LSMinimumSystemVersion</key>
     <string>$MACOSX_DEPLOYMENT_TARGET</string>
     <key>NSHighResolutionCapable</key>

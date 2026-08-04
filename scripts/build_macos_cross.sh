@@ -19,7 +19,10 @@ APP_NAME="${APP_NAME:-Entropy}"
 BUNDLE_ID="${BUNDLE_ID:-com.ergohaven.entropy}"
 DEPLOY_TARGET="${MACOSX_DEPLOYMENT_TARGET:-11.0}"
 TARGET="${MACOS_TARGET:-universal2-apple-darwin}"
-VERSION="$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)"
+VERSION="${VERSION:-$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)}"
+# CFBundleVersion — только числовые компоненты, поэтому предрелизный суффикс
+# остаётся в CFBundleShortVersionString и в имени .dmg.
+NUMERIC_VERSION="${VERSION%%-*}"
 
 DIST="$ROOT/dist/macos"
 APP="$DIST/$APP_NAME.app"
@@ -77,13 +80,15 @@ cat >"$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleShortVersionString</key>
     <string>$VERSION</string>
     <key>CFBundleVersion</key>
-    <string>$VERSION</string>
+    <string>$NUMERIC_VERSION</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.utilities</string>
     <key>LSMinimumSystemVersion</key>
     <string>$DEPLOY_TARGET</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSInputMonitoringUsageDescription</key>
+    <string>Entropy needs Input Monitoring access to configure Bluetooth keyboards through HID.</string>
 </dict>
 </plist>
 PLIST

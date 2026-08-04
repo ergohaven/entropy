@@ -12,6 +12,8 @@ cd "$ROOT"
 
 NFPM_VERSION="${NFPM_VERSION:-2.47.0}"
 QUILL_VERSION="${QUILL_VERSION:-0.7.1}"
+# Держим ту же линию, что и Dockerfile: она рассчитана на zig из .tool-versions.
+CARGO_ZIGBUILD_VERSION="${CARGO_ZIGBUILD_VERSION:-~0.23}"
 LIBDMG_REPO="${LIBDMG_REPO:-https://github.com/fanquake/libdmg-hfsplus}"
 # Скачиваемые инструменты кладём в кэш проекта, а не в систему: их подхватывают
 # Taskfile и скрипты сборки, дополняя PATH только на время запуска.
@@ -243,7 +245,7 @@ install_cross_tooling() {
 		log "cargo-zigbuild already installed"
 	else
 		log "Installing cargo-zigbuild (this compiles from source and takes a few minutes)"
-		run cargo install cargo-zigbuild --locked
+		run cargo install cargo-zigbuild --version "$CARGO_ZIGBUILD_VERSION" --locked
 	fi
 
 	# Версия проверяется, а не только наличие: shim от asdf/mise без выбранной
@@ -257,6 +259,32 @@ install_cross_tooling() {
 
 	install_quill
 	install_libdmg
+}
+
+# Набор пакетов покрывает не все дистрибутивы одинаково (в alpine, например, нет
+# msitools и icnsutils), поэтому после установки проверяем не имена пакетов, а
+# сами инструменты: иначе нехватка всплывёт только на середине сборки.
+report_missing_tools() {
+	local -a missing=()
+	have rsvg-convert || have inkscape || missing+=("rsvg-convert/inkscape (icons)")
+	have magick || have convert || missing+=("ImageMagick (.ico)")
+	have envsubst || missing+=("envsubst (deb/rpm/arch)")
+	have_tool nfpm || missing+=("nfpm (deb/rpm/arch)")
+	if [[ "$(uname -s)" == Darwin ]]; then
+		have iconutil || missing+=("iconutil (.icns)")
+	else
+		have png2icns || missing+=("png2icns (.icns)")
+	fi
+	((WITH_CROSS)) && {
+		have wixl || missing+=("wixl (Windows MSI)")
+		have genisoimage || have mkisofs || missing+=("genisoimage/mkisofs (.dmg)")
+		have_tool dmg || missing+=("libdmg-hfsplus (.dmg)")
+	}
+
+	((${#missing[@]})) || return 0
+	warn "not installed on this system — the matching targets will fail:"
+	printf '     - %s\n' "${missing[@]}" >&2
+	warn "see BUILD.md > Prerequisites by distro for the package names"
 }
 
 prepare_linux() {
@@ -320,5 +348,6 @@ Darwin) prepare_darwin ;;
 	;;
 esac
 
+((DRY_RUN)) || report_missing_tools
 ((DRY_RUN)) && log "dry run — nothing was installed"
 log "Done. Next: 'task build', 'task package', or 'task docker:dist'."
