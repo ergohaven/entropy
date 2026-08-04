@@ -1,17 +1,5 @@
 use super::*;
 
-fn vial_retarget_pending_base(kc: u16) -> Option<(u16, bool)> {
-    if vial_layer_target(kc).is_some() {
-        None
-    } else if (0x2000..0x4000).contains(&kc) {
-        Some((kc & 0xFF00, true))
-    } else if (0x0100..0x2000).contains(&kc) && (kc & 0xFF) != 0 {
-        Some((kc & 0xFF00, false))
-    } else {
-        None
-    }
-}
-
 impl EntropyApp {
     pub(super) fn apply_picker_results(&mut self, ctx: &egui::Context) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -326,9 +314,19 @@ impl EntropyApp {
             self.secondary_click_handled = true;
             return;
         }
-        if let Some((base, is_mt)) = vial_retarget_pending_base(kc) {
+        let is_layer_key = vial_layer_target(kc).is_some();
+        let pending_base: Option<u16> = if is_layer_key {
+            None
+        } else if (0x2000..0x4000).contains(&kc)
+            || ((0x0100..0x2000).contains(&kc) && (kc & 0xFF) != 0)
+        {
+            Some(kc & 0xFF00)
+        } else {
+            None
+        };
+        if let Some(base) = pending_base {
             self.open_picker_for_target(key_target, encoder_target);
-            if is_mt {
+            if kc >= 0x2000 {
                 self.keycode_picker.vial_quantum_pending_mt = Some(base);
                 self.keycode_picker.vial_quantum_pending_mod = None;
             } else {
