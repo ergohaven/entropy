@@ -48,12 +48,11 @@ and firmware settings from one coherent interface.
 
 ## Platforms
 
-| Platform | Status | Package |
+| Platform | Status | Packages |
 | --- | --- | --- |
-| Linux x86_64 | Primary target | AppImage |
-| Windows x86_64 | Release target | Portable EXE |
-| macOS arm64 (Apple Silicon) | Release target | Unsigned DMG |
-| macOS x86_64 (Intel) | Release target | Unsigned DMG |
+| Linux x86_64 | Primary target | `.deb`, `.rpm`, Arch `.pkg.tar.zst`, AppImage |
+| Windows x86_64 | Release target | MSI installer, portable EXE |
+| macOS (Apple Silicon + Intel) | Release target | Unsigned universal DMG |
 
 Public builds are published for Linux, Windows, and macOS. macOS builds are
 unsigned and not notarized for now.
@@ -63,7 +62,11 @@ unsigned and not notarized for now.
 Release builds are published on the
 [GitHub Releases](https://github.com/ergohaven/entropy/releases) page:
 
+- `ergohaven-entropy_0.3.1_amd64.deb`
+- `ergohaven-entropy-0.3.1-1.x86_64.rpm`
+- `ergohaven-entropy-0.3.1-1-x86_64.pkg.tar.zst`
 - `entropy-v0.3.1-x86_64.AppImage`
+- `entropy-v0.3.1-x64.msi`
 - `entropy-v0.3.1-windows-x86_64.exe`
 - `entropy-v0.3.1-macos-universal.dmg`
 
@@ -71,8 +74,9 @@ Stable tags such as `v0.3.1` publish a regular GitHub release and mark it as
 latest. Tags with a suffix, such as `v0.3.1-rc.1`, publish the same artifacts as
 a GitHub prerelease.
 
-Windows builds are unsigned for now, so Windows SmartScreen may warn before
-launching the app.
+On Linux, install the package for your distro or make the AppImage executable
+and run it. On Windows, use the MSI installer or the portable EXE; both are
+unsigned for now, so Windows SmartScreen may warn before launching the app.
 
 The macOS DMG is universal — the same download runs natively on Apple Silicon
 and Intel Macs. It is unsigned and not notarized for now, so run it like this:
