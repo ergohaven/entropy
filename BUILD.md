@@ -180,11 +180,19 @@ at `/work`, runs as root, and restores ownership of `dist/`, `target/` and
 
 ## CI
 
-- `.github/workflows/build.yml` — per-push builds and tests.
-- `.github/workflows/release.yml` — runs on `v0.*` tags: `task docker:dist` for
-  the Linux and Windows artifacts, `task macos:all` on a macOS runner for the
-  signed universal `.dmg`, then publishes a GitHub Release. Release notes are extracted from
-  the matching `CHANGELOG.md` section, so the tag must have one.
+- `.github/workflows/build.yml` — builds and tests on pull requests and on
+  manual runs. A new push to a PR cancels the previous run.
+- `.github/workflows/release.yml` — runs on semver tags (`v1.2.3`, and
+  `v1.2.3-rc.1` for prereleases): `task docker:dist` for the Linux and Windows
+  artifacts, `task macos:all` on a macOS runner for the signed universal `.dmg`,
+  then publishes a GitHub Release. Release notes are extracted from the matching
+  `CHANGELOG.md` section, so the tag must have one.
+
+The release workflow can also be started manually from the Actions tab, passing
+an existing tag to publish — useful for re-running a release whose artifacts
+failed to upload. The tag is validated first, every job checks out that tag
+rather than the branch, and the release is published against it. Releases never
+cancel each other: an interrupted run would leave a partially uploaded release.
 
 ## Troubleshooting
 

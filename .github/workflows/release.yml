@@ -8,20 +8,55 @@ on:
       # следующей мажорной версии тихо не запустил бы релиз.
       - 'v[0-9]+.[0-9]+.[0-9]+'
       - 'v[0-9]+.[0-9]+.[0-9]+-*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to publish, e.g. v0.3.2
+        required: true
+        type: string
+
+# Два тега подряд иначе гонятся за один и тот же GitHub Release. Прерывать
+# начатую публикацию нельзя: часть артефактов уже была бы загружена.
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
+# Единственный источник истины про версию. При push это имя тега, при ручном
+# запуске — введённый тег: github.ref_name там указывал бы на ветку, и релиз
+# собрался бы не из того кода и опубликовался бы поверх ветки.
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
 jobs:
+  validate:
+    name: Validate tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the tag looks like a release
+        run: |
+          case "$RELEASE_TAG" in
+          v[0-9]*.[0-9]*.[0-9]*) echo "Releasing $RELEASE_TAG" ;;
+          *)
+            echo "::error::'$RELEASE_TAG' is not a release tag (expected vMAJOR.MINOR.PATCH[-suffix])"
+            exit 1
+            ;;
+          esac
+
   # Linux (deb/rpm/arch + AppImage) and Windows (portable exe + MSI) are built in
   # the pinned toolchain container, so CI runs the exact same path as local `task`.
   # Stable tags publish as latest releases; suffix tags such as v1.2.3-rc.1
   # publish as prereleases.
   linux:
     name: Linux + Windows packages
+    needs: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Install go-task
         uses: arduino/setup-task@v2
@@ -43,9 +78,12 @@ jobs:
   # ships a single universal .dmg instead of one download per architecture.
   macos:
     name: macOS (universal)
+    needs: validate
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -77,6 +115,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -86,7 +126,7 @@ jobs:
       - name: Write release notes
         shell: bash
         run: |
-          awk -v version="${GITHUB_REF_NAME}" '
+          awk -v version="${RELEASE_TAG}" '
             /^## / {
               if (capturing) exit
               if ($2 == version) capturing = 1
@@ -95,17 +135,20 @@ jobs:
             END { if (!capturing) exit 1 }
           ' CHANGELOG.md > RELEASE_NOTES.md
 
-          printf '\n## Downloads\n\n' >> RELEASE_NOTES.md
-          printf '%s\n' '- Linux: install the `.deb`, `.rpm` or Arch `.pkg.tar.zst` for your distro, or download the `.AppImage`, make it executable, and run it.' >> RELEASE_NOTES.md
-          printf '%s\n' '- Windows: run the `.msi` installer, or download and run the portable `.exe`.' >> RELEASE_NOTES.md
-          printf '%s\n' '- macOS: download the universal `.dmg` (runs on both Apple Silicon and Intel), drag Entropy to Applications, then remove quarantine if macOS blocks the app.' >> RELEASE_NOTES.md
+          {
+            printf '\n## Downloads\n\n'
+            printf '%s\n' '- Linux: install the `.deb`, `.rpm` or Arch `.pkg.tar.zst` for your distro, or download the `.AppImage`, make it executable, and run it.'
+            printf '%s\n' '- Windows: run the `.msi` installer, or download and run the portable `.exe`.'
+            printf '%s\n' '- macOS: download the universal `.dmg` (runs on both Apple Silicon and Intel), drag Entropy to Applications, then remove quarantine if macOS blocks the app.'
+          } >> RELEASE_NOTES.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Entropy ${{ github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Entropy ${{ env.RELEASE_TAG }}
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
+          prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
+          make_latest: ${{ contains(env.RELEASE_TAG, '-') && 'false' || 'true' }}
           body_path: RELEASE_NOTES.md
           files: artifacts/**/*
