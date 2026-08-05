@@ -21,8 +21,10 @@ concurrency:
   group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
+# Право записи есть только у публикующего job'а: сборочные прогоняют сторонний
+# тулчейн, и токен с доступом к релизам и содержимому репозитория им не нужен.
 permissions:
-  contents: write
+  contents: read
 
 # Единственный источник истины про версию. При push это имя тега, при ручном
 # запуске — введённый тег: github.ref_name там указывал бы на ветку, и релиз
@@ -40,17 +42,22 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
+      # Строгий semver, а не глоб: имя тега попадает в shell-команды сборки, а
+      # ref-имена допускают '$', ';' и подстановки. Фильтр on.push.tags ловит
+      # это только для push — workflow_dispatch принимает произвольную строку.
+      # Сопоставление целиком, а не построчно: workflow_dispatch принимает и
+      # многострочный ввод, и `grep -qx` увидел бы только первую строку.
       - name: Check the tag looks like a release
+        shell: bash
         run: |
-          case "$RELEASE_TAG" in
-          v[0-9]*.[0-9]*.[0-9]*) echo "Releasing $RELEASE_TAG" ;;
-          *)
-            echo "::error::'$RELEASE_TAG' is not a release tag (expected vMAJOR.MINOR.PATCH[-suffix])"
+          if [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "Releasing $RELEASE_TAG"
+          else
+            echo "::error::'$RELEASE_TAG' is not a release tag (expected vMAJOR.MINOR.PATCH[-PRERELEASE])"
             exit 1
-            ;;
-          esac
+          fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           ref: ${{ env.RELEASE_TAG }}
 
@@ -89,24 +96,24 @@ jobs:
     needs: validate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Install go-task
-        uses: arduino/setup-task@v2
+        uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611  # v2.0.0
         with:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.9.0
 
       # Образ собирается отдельным шагом только ради кэша слоёв: внутри него
       # компилируются cargo-zigbuild и libdmg-hfsplus, и без кэша каждый релиз
       # платил бы за это заново. DOCKER_IMAGE_READY говорит Taskfile, что
       # образ уже готов и docker:image пересобирать его не должен.
       - name: Build the toolchain image (cached)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.9.0
         with:
           context: .
           tags: entropy-build:local
@@ -114,13 +121,44 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Версия приходит переменной окружения, а не подстановкой в текст команды:
+      # ${{ }} раскрывается до запуска shell, и содержимое тега иначе попадало бы
+      # в командную строку как код.
       - name: Build Linux + Windows artifacts
         env:
           DOCKER_IMAGE_READY: '1'
-        run: task docker:dist VERSION=${{ needs.validate.outputs.version }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: task docker:dist "VERSION=$VERSION"
+
+      # if-no-files-found ловит только пустоту целиком: без этой проверки
+      # пропавший, например, .rpm уехал бы в релиз незамеченным.
+      # Формат, а не полное имя: nfpm сам переписывает предрелизную версию
+      # (0.3.2-rc.1 -> 0.3.2~rc.1 в deb/rpm, 0.3.2rc.1 в arch), и привязка к
+      # тегу здесь давала бы ложные падения.
+      - name: Check every package format was produced
+        run: |
+          status=0
+          for pattern in \
+            'dist/linux/*.deb' \
+            'dist/linux/*.rpm' \
+            'dist/linux/*.pkg.tar.zst' \
+            'dist/linux/*.AppImage' \
+            'dist/windows/*.exe' \
+            'dist/windows/*.msi'
+          do
+            # shellcheck disable=SC2086
+            set -- $pattern
+            if [ -e "$1" ]; then
+              echo "ok: $1"
+            else
+              echo "::error::no artifact matching $pattern"
+              status=1
+            fi
+          done
+          exit $status
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: release-linux-windows
           # Только сами пакеты: в dist/ лежит ещё и сгенерированный конфиг nfpm,
@@ -142,7 +180,7 @@ jobs:
     needs: validate
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           ref: ${{ env.RELEASE_TAG }}
 
@@ -153,25 +191,33 @@ jobs:
         run: echo "version=$(awk '/^rust / { print $2 }' .tool-versions)" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c  # stable branch @ 2026-08
         with:
           toolchain: ${{ steps.rust.outputs.version }}
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2.9.1
 
       - name: Install go-task
-        uses: arduino/setup-task@v2
+        uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611  # v2.0.0
         with:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build macOS .app + universal .dmg
-        run: task macos:all VERSION=${{ needs.validate.outputs.version }}
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: task macos:all "VERSION=$VERSION"
+
+      - name: Check the .dmg was produced
+        run: |
+          set -- dist/macos/*.dmg
+          [ -e "$1" ] || { echo "::error::no .dmg in dist/macos"; exit 1; }
+          echo "ok: $1"
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: release-macos-universal
           # Рядом с .dmg лежит распакованный Entropy.app — в релиз он не нужен.
@@ -182,13 +228,16 @@ jobs:
     name: Create Release
     needs: [validate, linux, macos]
     runs-on: ubuntu-latest
+    # Единственный job, которому нужна запись: он создаёт GitHub Release.
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           path: artifacts/
 
@@ -212,7 +261,7 @@ jobs:
           } >> RELEASE_NOTES.md
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           name: Entropy ${{ env.RELEASE_TAG }}

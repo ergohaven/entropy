@@ -1,0 +1,17 @@
+# Actions пиннуты коммитами, а базовый образ — дайджестом: без автообновления
+# такие пины тихо застывают вместе с их уязвимостями. Dependabot двигает их
+# пачкой раз в месяц и оставляет комментарий с версией рядом с SHA.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ['*']
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
