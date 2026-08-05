@@ -50,18 +50,28 @@ if [[ -d "$ROOT/assets/icons/hicolor" ]]; then
   cp -r "$ROOT/assets/icons/hicolor/." "$APPDIR/usr/share/icons/hicolor/"
 fi
 
-if [[ ! -x "$APPIMAGETOOL" ]]; then
+fetch_appimagetool() {
   APPIMAGETOOL_DOWNLOAD="$(mktemp "${APPIMAGETOOL}.download.XXXXXX")"
   trap 'rm -f "$APPIMAGETOOL_DOWNLOAD"' EXIT
-  curl -fsSL --retry 3 --connect-timeout 15 --max-time 300 "$APPIMAGETOOL_URL" -o "$APPIMAGETOOL_DOWNLOAD"
+  curl -fsSL --retry 3 --retry-all-errors --connect-timeout 15 --max-time 300 \
+    "$APPIMAGETOOL_URL" -o "$APPIMAGETOOL_DOWNLOAD"
   "$ROOT/scripts/verify_sha256.sh" "$APPIMAGETOOL_DOWNLOAD" "$APPIMAGETOOL_SHA256"
   chmod 0755 "$APPIMAGETOOL_DOWNLOAD"
   mv "$APPIMAGETOOL_DOWNLOAD" "$APPIMAGETOOL"
   trap - EXIT
-else
-  "$ROOT/scripts/verify_sha256.sh" "$APPIMAGETOOL" "$APPIMAGETOOL_SHA256"
+}
+
+# Кэш сверяется с пином на каждой сборке. Расхождение почти всегда значит бамп
+# пина, а не подмену, поэтому инструмент перекачивается — но свежая загрузка
+# проверяется так же строго, и непроверенный бинарник не запускается никогда.
+if [[ ! -x "$APPIMAGETOOL" ]]; then
+  fetch_appimagetool
+elif ! "$ROOT/scripts/verify_sha256.sh" "$APPIMAGETOOL" "$APPIMAGETOOL_SHA256" >/dev/null 2>&1; then
+  echo "cached appimagetool does not match the pin — refetching" >&2
+  rm -f "$APPIMAGETOOL"
+  fetch_appimagetool
 fi
 
-ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGETOOL" "$APPDIR" "$OUT"
+ARCH="${ARCH:-x86_64}" APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGETOOL" "$APPDIR" "$OUT"
 chmod 0755 "$OUT"
 echo "Built $OUT"

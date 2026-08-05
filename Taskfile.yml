@@ -20,11 +20,30 @@ vars:
   # (`task linux:all VERSION=0.3.2-rc.1`): релизный workflow передаёт туда имя
   # тега, чтобы имена артефактов и версии пакетов совпадали с релизом, а не с
   # ещё не поднятой версией крейта.
+  # Разбор без awk/sed: на Windows их нет, а встроенный интерпретатор go-task
+  # понимает только сам shell — с внешней утилитой Taskfile не читался бы там
+  # вообще, включая `task build`.
   VERSION:
-    sh: awk -F '"' '/^version = / { print $2; exit }' Cargo.toml
+    sh: |
+      while read -r line; do
+        case "$line" in
+        version\ =\ *)
+          v="${line#*\"}"
+          printf '%s\n' "${v%%\"*}"
+          break
+          ;;
+        esac
+      done < Cargo.toml
   # MSI ProductVersion и CFBundleVersion принимают только числовые компоненты,
   # поэтому предрелизный суффикс туда не попадает — его несут имена файлов.
   NUMERIC_VERSION: '{{ (splitList "-" .VERSION) | first }}'
+  # Арка берётся у хоста, а не считается равной amd64: Docker Desktop на Apple
+  # Silicon поднимает arm64-контейнер, и пакет с меткой amd64 уехал бы с
+  # arm64-бинарником внутри — такой ставится и не запускается.
+  HOST_ARCH:
+    sh: uname -m 2>/dev/null || echo x86_64
+  PKG_ARCH: '{{if or (eq .HOST_ARCH "aarch64") (eq .HOST_ARCH "arm64")}}arm64{{else}}amd64{{end}}'
+  APPIMAGE_ARCH: '{{if or (eq .HOST_ARCH "aarch64") (eq .HOST_ARCH "arm64")}}aarch64{{else}}x86_64{{end}}'
   DIST: dist
   WIN_TARGET: x86_64-pc-windows-gnu
   IMAGE: entropy-build:local
@@ -104,8 +123,17 @@ tasks:
     desc: Generate PNG (hicolor), .ico and .icns from assets/entropy.svg
     sources:
       - assets/entropy.svg
+    # Перечислены все размеры, а не только 256: иначе удаление любого другого
+    # png не сбрасывает up-to-date, и сборка бандла падает уже на png2icns,
+    # которому нужен 512.
     generates:
+      - assets/icons/hicolor/16x16/apps/entropy.png
+      - assets/icons/hicolor/32x32/apps/entropy.png
+      - assets/icons/hicolor/48x48/apps/entropy.png
+      - assets/icons/hicolor/64x64/apps/entropy.png
+      - assets/icons/hicolor/128x128/apps/entropy.png
       - assets/icons/hicolor/256x256/apps/entropy.png
+      - assets/icons/hicolor/512x512/apps/entropy.png
       - assets/entropy.ico
       - assets/entropy.icns
     cmds:
@@ -181,14 +209,35 @@ tasks:
       - task: macos:all
   package:windows:
     cmds:
-      - task: windows:all
+      - task: windows:native
 
   # ---- Linux targets ------------------------------------------------------
+  # Метка архитектуры в пакете — обещание пользователю, а бинарник может
+  # приехать снаружи через ENTROPY_BIN, поэтому обещание сверяется с файлом.
+  linux:check-arch:
+    internal: true
+    vars:
+      ENTROPY_BIN: '{{default "target/release/entropy" .ENTROPY_BIN}}'
+    cmds:
+      - |
+        set -e
+        command -v readelf >/dev/null 2>&1 || exit 0
+        machine="$(readelf -h "{{.ENTROPY_BIN}}" | sed -n 's/^ *Machine: *//p')"
+        case "$machine" in
+        "Advanced Micro Devices X86-64") actual=amd64 ;;
+        AArch64) actual=arm64 ;;
+        *) actual="$machine" ;;
+        esac
+        if [ "$actual" != "{{.PKG_ARCH}}" ]; then
+          echo "packaging as {{.PKG_ARCH}}, but {{.ENTROPY_BIN}} is $actual ($machine)" >&2
+          echo "pass a matching binary: task linux:pkg PKG_ARCH=$actual ENTROPY_BIN=..." >&2
+          exit 1
+        fi
+
   linux:nfpm:
     internal: true
     deps: [build, icons]
     vars:
-      PKG_ARCH: '{{default "amd64" .PKG_ARCH}}'
       ENTROPY_BIN: '{{default "target/release/entropy" .ENTROPY_BIN}}'
       FORMATS: '{{.FORMATS}}'
     env:
@@ -196,6 +245,8 @@ tasks:
       VERSION: '{{.VERSION}}'
       ENTROPY_BIN: '{{.ENTROPY_BIN}}'
     cmds:
+      - task: linux:check-arch
+        vars: {ENTROPY_BIN: '{{.ENTROPY_BIN}}'}
       - mkdir -p {{.DIST}}/linux
       - envsubst '$PKG_ARCH $VERSION $ENTROPY_BIN' < packaging/nfpm/nfpm.yaml.tpl > {{.DIST}}/linux/nfpm.generated.yaml
       - for: {var: FORMATS}
@@ -228,9 +279,21 @@ tasks:
   linux:appimage:
     desc: Build a Linux AppImage
     deps: [build, icons]
+    env:
+      ARCH: '{{.APPIMAGE_ARCH}}'
     cmds:
+      - task: linux:check-arch
+      # Пин в appimagetool_pin.sh — x86_64-сборка самого инструмента, на другой
+      # арке он просто не запустится. Пакеты nfpm при этом собираются нормально,
+      # поэтому падаем только здесь и с объяснением.
+      - |
+        if [ "{{.APPIMAGE_ARCH}}" != x86_64 ]; then
+          echo "AppImage packaging is pinned to the x86_64 appimagetool; {{.HOST_ARCH}} is not supported yet" >&2
+          echo "deb/rpm/arch packages for this host: task linux:pkg" >&2
+          exit 1
+        fi
       - mkdir -p {{.DIST}}/linux
-      - scripts/build_linux_appimage.sh "v{{.VERSION}}" "{{.DIST}}/linux/{{.APP}}-v{{.VERSION}}-x86_64.AppImage"
+      - scripts/build_linux_appimage.sh "v{{.VERSION}}" "{{.DIST}}/linux/{{.APP}}-v{{.VERSION}}-{{.APPIMAGE_ARCH}}.AppImage"
 
   linux:all:
     desc: All Linux artifacts (deb/rpm/arch + AppImage)
@@ -238,7 +301,21 @@ tasks:
       - task: linux:pkg
       - task: linux:appimage
 
-  # ---- Windows targets (cross-built with cargo-zigbuild) ------------------
+  # ---- Windows targets ----------------------------------------------------
+  # На самом Windows собирается только портативный .exe: cargo-zigbuild там ни к
+  # чему (компилятор и так нативный), а wixl из msitools под Windows не
+  # существует, поэтому MSI и всё остальное — через контейнер.
+  windows:native:
+    desc: "Portable entropy.exe on a Windows host (MSI: task docker:windows)"
+    deps: [build]
+    cmds:
+      # Внешних утилит нет: mkdir/cp на Windows не существуют, а встроенный
+      # интерпретатор go-task их не подменяет.
+      - powershell -NoProfile -Command "New-Item -ItemType Directory -Force -Path '{{.DIST}}/windows' > $null; Copy-Item -Force 'target/release/entropy.exe' '{{.DIST}}/windows/{{.APP}}-v{{.VERSION}}-windows-x86_64.exe'"
+      - cmd: 'echo "MSI installer needs the toolchain container: task docker:windows"'
+        silent: true
+
+  # ---- Windows targets cross-built from Linux (cargo-zigbuild) ------------
   windows:build:
     desc: Cross-build entropy.exe (x86_64-gnu) via cargo-zigbuild
     deps: [icons]
@@ -314,8 +391,13 @@ tasks:
   docker:run:
     internal: true
     vars:
-      UID: {sh: id -u}
-      GID: {sh: id -g}
+      # Сборка идёт от хозяина каталога, а не от root: иначе всё созданное в
+      # контейнере (dist, target, .task и сгенерированные assets/icons вместе с
+      # закоммиченными .ico/.icns) остаётся root:root, и следующая локальная
+      # задача падает на правах. На Windows id нет — там bind-mount и так
+      # отдаётся текущему пользователю, поэтому флаг просто не добавляется.
+      USER_ARGS:
+        sh: 'id -u >/dev/null 2>&1 && echo "--user $(id -u):$(id -g)" || true'
       # На SELinux-системах (openSUSE, Fedora) каталог репозитория помечен
       # user_home_t, и контейнеру в домене container_t чтение запрещено. Метка
       # снимается только на время запуска: ':z' вместо этого рекурсивно
@@ -323,11 +405,12 @@ tasks:
       SELINUX:
         sh: 'command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" != Disabled ] && echo --security-opt label=disable || true'
     cmds:
+      # HOME задаётся явно: у переданного UID нет записи в /etc/passwd, и без
+      # него инструменты уходят писать в корень.
       - >
-        docker run --rm {{.SELINUX}}
-        -e HOST_UID={{.UID}} -e HOST_GID={{.GID}}
+        docker run --rm {{.SELINUX}} {{.USER_ARGS}} -e HOME=/tmp
         -v "$PWD":/work -w /work {{.IMAGE}}
-        sh -c 'task {{.TASKS}} VERSION={{.VERSION}}; rc=$?; chown -R "$HOST_UID:$HOST_GID" {{.DIST}} target .task .intentionally-empty-file.o 2>/dev/null || true; exit $rc'
+        task {{.TASKS}} VERSION={{.VERSION}}
 
   docker:linux:
     desc: Linux artifacts (deb/rpm/arch + AppImage) from the toolchain container

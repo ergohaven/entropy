@@ -120,16 +120,33 @@ run_build "$CACHED_VALID" "$CORRUPT_TOOL"
 [[ -f "$CACHED_VALID/tool-ran" ]]
 [[ -f "$CACHED_VALID/entropy.AppImage" ]]
 
+# A cached tool that no longer matches the pin is refetched: that is what a pin
+# bump looks like locally. The replacement is verified like any other download.
+CACHED_REFETCH="$TMP_DIR/cached-refetch"
+mkdir -p "$CACHED_REFETCH"
+cp "$CORRUPT_TOOL" "$CACHED_REFETCH/appimagetool"
+chmod 0755 "$CACHED_REFETCH/appimagetool"
+run_build "$CACHED_REFETCH" "$TRUSTED_TOOL"
+[[ -f "$CACHED_REFETCH/curl-called" ]]
+[[ "$(hash_file "$CACHED_REFETCH/appimagetool")" == "$TRUSTED_SHA256" ]]
+[[ -f "$CACHED_REFETCH/tool-ran" ]]
+[[ -f "$CACHED_REFETCH/entropy.AppImage" ]]
+
+# ...but the refetch is not an escape hatch: if the source is corrupt too, the
+# build fails and the unverified tool is never executed.
 CACHED_CORRUPT="$TMP_DIR/cached-corrupt"
 mkdir -p "$CACHED_CORRUPT"
 cp "$CORRUPT_TOOL" "$CACHED_CORRUPT/appimagetool"
 chmod 0755 "$CACHED_CORRUPT/appimagetool"
-if run_build "$CACHED_CORRUPT" "$TRUSTED_TOOL" 2> "$CACHED_CORRUPT/stderr"; then
-  echo "Expected a corrupt cached tool to fail" >&2
+if run_build "$CACHED_CORRUPT" "$CORRUPT_TOOL" 2> "$CACHED_CORRUPT/stderr"; then
+  echo "Expected a corrupt cached tool with a corrupt source to fail" >&2
   exit 1
 fi
 [[ "$(<"$CACHED_CORRUPT/stderr")" == *"SHA-256 mismatch"* ]]
-[[ ! -e "$CACHED_CORRUPT/curl-called" ]]
 [[ ! -e "$CACHED_CORRUPT/tool-ran" ]]
+if compgen -G "$CACHED_CORRUPT/appimagetool.download.*" >/dev/null; then
+  echo "Corrupt refetch temporary file was not cleaned up" >&2
+  exit 1
+fi
 
 echo "AppImage tool integration tests passed"

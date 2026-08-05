@@ -12,7 +12,23 @@
              Manufacturer="Ergohaven" InstallerVersion="200" Languages="1033"
              Compressed="yes" SummaryCodepage="1252" InstallScope="perMachine"/>
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of Entropy is already installed."/>
+    <!-- Развёрнутый MajorUpgrade: предрелиз и стабильный релиз имеют одинаковый
+         ProductVersion (0.3.2-rc.1 -> 0.3.2, суффикс MSI не принимает), поэтому
+         апгрейд обязан захватывать и равную версию. AllowSameVersionUpgrades
+         для этого не годится: wixl 0.101 из bookworm молча игнорирует атрибут,
+         а верхнюю границу с лишним компонентом ("0.3.2" < "0.3.2.1") одинаково
+         понимают все версии. -->
+    <Upgrade Id="F1E55C49-6BE0-4E42-A918-4F2A689E2B5B">
+      <UpgradeVersion Minimum="0.0.0" IncludeMinimum="yes" Maximum="$(var.Version).1"
+                      Property="ENTROPY_UPGRADE_DETECTED"/>
+      <UpgradeVersion Minimum="$(var.Version)" IncludeMinimum="no" OnlyDetect="yes"
+                      Property="ENTROPY_DOWNGRADE_DETECTED"/>
+    </Upgrade>
+    <Condition Message="A newer version of Entropy is already installed.">NOT ENTROPY_DOWNGRADE_DETECTED</Condition>
+    <InstallExecuteSequence>
+      <RemoveExistingProducts After="InstallValidate"/>
+    </InstallExecuteSequence>
+
     <Media Id="1" Cabinet="entropy.cab" EmbedCab="yes"/>
 
     <Icon Id="entropy.ico" SourceFile="assets/entropy.ico"/>
