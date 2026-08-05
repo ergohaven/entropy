@@ -35,7 +35,9 @@ task prepare:cross
 ```
 
 Both accept flags after `--`; `task prepare -- --dry-run` prints what would be
-installed without touching anything.
+installed without touching anything. `prepare` exits non-zero when a tool it
+needs is still missing afterwards, so it works as a gate in scripts; pass
+`-- --no-strict` to install what is available and ignore the rest.
 
 ## Toolchain versions
 
@@ -48,10 +50,17 @@ rust 1.97.0
 zig 0.16.0
 ```
 
-The same versions are baked into the `Dockerfile`, together with the matching
-`cargo-zigbuild` line (`~0.23`) — each `cargo-zigbuild` release targets a
-specific zig, so those three move together or the local and container builds
-drift apart.
+The versions of everything that gets downloaded — zig, nfpm, go-task, quill,
+lipo, libdmg-hfsplus and the macOS SDK — live in `scripts/tool_pins.sh` together
+with their SHA-256 digests, and both the `Dockerfile` and `scripts/prepare_env.sh`
+read that one file. Every download is verified against it before use, and an
+unknown platform is an error rather than an unchecked download. The
+`cargo-zigbuild` line (`~0.23`) is pinned there too: each release targets a
+specific zig, so it and `.tool-versions` move together or the local and container
+builds drift apart. The base image is pinned by digest for the same reason.
+
+On Windows `prepare` reads `.tool-versions` as well and selects that Rust
+toolchain with `rustup override`, since there is no asdf to do it.
 
 `task prepare` adds the `rust` and `zig` plugins if missing and installs those
 versions. Without asdf it falls back to the distro package for zig and asks you
@@ -85,10 +94,12 @@ Not packaged by any distro, so `prepare` downloads them into `.cache/tools/`:
 [nfpm](https://github.com/goreleaser/nfpm) (deb/rpm/archlinux),
 [quill](https://github.com/anchore/quill) (Mach-O signing from Linux) and
 [libdmg-hfsplus](https://github.com/fanquake/libdmg-hfsplus) (builds the `.dmg`;
-compiled from source). `appimagetool` lands in the same place on first use; its
-release and SHA-256 are pinned in `scripts/appimagetool_pin.sh` and verified on
-every build, whether the tool was just downloaded or came from the cache. Update
-the pin with `bash scripts/update_appimagetool_pin.sh <release-tag>`.
+compiled from the revision pinned in `scripts/tool_pins.sh`). `appimagetool`
+lands in the same place on first use; its release and SHA-256 are pinned in
+`scripts/appimagetool_pin.sh` and verified on every build, whether the tool was
+just downloaded or came from the cache — a cached copy that no longer matches the
+pin is refetched and verified again. Update the pin with
+`bash scripts/update_appimagetool_pin.sh <release-tag>`.
 
 On macOS the native build only needs the Xcode command line tools — `codesign`,
 `hdiutil`, `lipo` and `plutil` ship with them.
@@ -124,7 +135,7 @@ file goes missing.
 | Task | What it does |
 | --- | --- |
 | `task build` | `cargo build --release --locked` for this host |
-| `task package` | native package(s): Linux → `linux:all`, macOS → `macos:all`, Windows → `windows:all` |
+| `task package` | native package(s): Linux → `linux:all`, macOS → `macos:all`, Windows → `windows:native` |
 
 ### Linux
 
@@ -138,12 +149,20 @@ file goes missing.
 | `task linux:all` | packages + AppImage |
 
 Packages are built by nfpm from `packaging/nfpm/nfpm.yaml.tpl`, with `PKG_ARCH`,
-`VERSION` and `ENTROPY_BIN` substituted by `envsubst`. To package a binary for
-another architecture, override them:
+`VERSION` and `ENTROPY_BIN` substituted by `envsubst`. `PKG_ARCH` follows the
+host (`amd64` or `arm64`) instead of assuming x86_64 — Docker Desktop on Apple
+Silicon runs an arm64 container, and a package labelled `amd64` with an arm64
+binary inside installs and then fails to start. To package a binary for another
+architecture, override both:
 
 ```sh
 task linux:deb PKG_ARCH=arm64 ENTROPY_BIN=path/to/arm64/entropy
 ```
+
+The label is checked against the binary before packaging, so a mismatch fails
+the build instead of shipping. `task linux:appimage` is still x86_64-only: the
+pinned `appimagetool` is an x86_64 build, and it says so rather than producing a
+mislabelled AppImage.
 
 `VERSION` defaults to the version in `Cargo.toml` and can be overridden the same
 way. The release workflow passes the tag, so a `v1.2.3-rc.1` prerelease produces
@@ -155,15 +174,22 @@ rather than package names, because those names differ between rpm distros.
 
 ### Windows
 
-Cross-built from Linux with cargo-zigbuild — these targets do not run on Windows
-itself, where `wixl` is unavailable.
+| Task | Where to run | Output |
+| --- | --- | --- |
+| `task windows:native` | **on Windows** | portable `.exe` in `dist/windows/`, built with the native toolchain |
+| `task windows:build` | on Linux | `target/x86_64-pc-windows-gnu/release/entropy.exe` (cargo-zigbuild) |
+| `task windows:portable` | on Linux | portable `.exe` in `dist/windows/` |
+| `task windows:msi` | on Linux | `.msi` installer built by wixl from `packaging/windows/entropy.wxs` |
+| `task windows:all` | on Linux | portable exe + MSI |
 
-| Task | Output |
-| --- | --- |
-| `task windows:build` | `target/x86_64-pc-windows-gnu/release/entropy.exe` |
-| `task windows:portable` | portable `.exe` in `dist/windows/` |
-| `task windows:msi` | `.msi` installer built by wixl from `packaging/windows/entropy.wxs` |
-| `task windows:all` | portable exe + MSI |
+`task package` on Windows runs `windows:native`. The MSI cannot be produced
+there: `wixl` comes from msitools and has no Windows build, and cargo-zigbuild
+is pointless when the host compiler is already the target one. Use
+`task docker:windows` for the installer.
+
+The MSI upgrade range deliberately includes the version being installed, so the
+stable release replaces an installed release candidate — both carry the same
+`ProductVersion`, because MSI does not accept the `-rc.1` suffix.
 
 ### macOS
 
@@ -179,6 +205,12 @@ notarization still requires a Mac with Apple credentials — releases therefore 
 the native path on macOS runners, which is also the licensing-safe way to use
 Apple's SDK.
 
+The cross-build fails if signing fails or `quill` is missing, rather than
+quietly producing a bundle macOS will refuse to open. `ALLOW_UNSIGNED=1 task
+macos:cross` opts out on purpose and names the result `-unsigned.dmg`. The SDK
+download is always checksummed against `scripts/tool_pins.sh`; overriding
+`MACOS_SDK_URL` or `MACOS_SDK_VERSION` requires passing `MACOS_SDK_SHA256`.
+
 ### Docker
 
 | Task | What it does |
@@ -190,16 +222,17 @@ Apple's SDK.
 | `task docker:macos-cross` | macOS `.app` + `.dmg` cross-built in the container |
 
 All of them build the image first if needed. The container mounts the repository
-at `/work`, runs as root, and restores ownership of `dist/`, `target/` and
-`.task/` to you afterwards. Setting `DOCKER_IMAGE_READY=1` skips the image build
+at `/work` and runs as your own user, so everything it writes — `dist/`,
+`target/`, `.task/` and the generated icons — belongs to you and needs no
+ownership fixup afterwards. Setting `DOCKER_IMAGE_READY=1` skips the image build
 — CI uses it because it builds the image in a separate, layer-cached step.
 
 ## CI
 
 - `.github/workflows/build.yml` — builds and tests on pull requests and on
-  manual runs. A new push to a PR cancels the previous run. Each macOS
-  architecture gets its own runner here: the universal bundle is a release
-  concern, and building both slices on one runner would only slow the gate down.
+  manual runs. A new push to a PR cancels the previous run. The macOS job builds
+  the same universal bundle as the release and asserts both slices are present,
+  so the `lipo` path is exercised before a tag depends on it.
 - `.github/workflows/release.yml` — runs on semver tags (`v1.2.3`, and
   `v1.2.3-rc.1` for prereleases): `task docker:dist` for the Linux and Windows
   artifacts, `task macos:all` on a macOS runner for the signed universal `.dmg`,
@@ -238,12 +271,13 @@ report a version when run from an unrelated directory) and passes it through
 zlib-ng by default. `prepare` asks for the `pkgconfig(zlib)` capability instead
 of the package name, which the installed zlib-ng already satisfies.
 
-**Files in `target/` owned by root.** A `docker:*` task was interrupted before it
-could restore ownership. Fix it without sudo:
+**Files in `target/` owned by root.** Left over from an older `docker:*` run:
+the container now runs as your own user and no longer creates them. Fix the old
+ones without sudo:
 
 ```sh
-docker run --rm --security-opt label=disable -v "$PWD":/work -w /work \
-  entropy-build:local sh -c 'chown -R "$(id -u)":"$(id -g)" target dist .task'
+docker run --rm --security-opt label=disable --user 0:0 -v "$PWD":/work -w /work \
+  entropy-build:local sh -c 'chown -R "'"$(id -u)"'":"'"$(id -g)"'" target dist .task assets'
 ```
 
 **`need genisoimage or mkisofs plus the 'dmg' tool`.** The ISO generator comes
