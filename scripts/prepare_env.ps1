@@ -53,6 +53,26 @@ foreach ($pkg in $packages) {
     Invoke-Step 'winget' @('install', '--exact', '--id', $pkg.Id, '--accept-package-agreements', '--accept-source-agreements')
 }
 
+# Версия Rust берётся из .tool-versions, как на Linux и macOS: там её выбирает
+# asdf, а здесь без явного выбора `cargo` собирал бы чем угодно — и «собралось
+# локально» ничего не говорило бы о сборке релиза.
+$toolVersions = Join-Path $PSScriptRoot '..\.tool-versions'
+$rustLine = Select-String -Path $toolVersions -Pattern '^rust\s+(\S+)' -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($rustLine) {
+    $rustVersion = $rustLine.Matches[0].Groups[1].Value
+    Write-Step "Pinned Rust toolchain: $rustVersion"
+    if (Test-Command rustup) {
+        Invoke-Step 'rustup' @('toolchain', 'install', $rustVersion)
+        Invoke-Step 'rustup' @('override', 'set', $rustVersion, '--path', (Resolve-Path (Join-Path $PSScriptRoot '..')).Path)
+    }
+    else {
+        Write-Warn "rustup is not on PATH yet — reopen the shell and rerun this script to select Rust $rustVersion"
+    }
+}
+else {
+    Write-Warn "no rust entry in .tool-versions; leaving the default toolchain in place"
+}
+
 if ($DryRun) { Write-Step 'dry run — nothing was installed' }
 
 Write-Step 'Done. Native build: task build. Packages: task docker:dist (needs Docker running).'

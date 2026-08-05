@@ -5,27 +5,28 @@
 #
 #   --cross     also install the Windows/macOS cross-build toolchain
 #   --dry-run   print the commands instead of running them
+#   --no-strict exit 0 even if some tools are still missing
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-NFPM_VERSION="${NFPM_VERSION:-2.47.0}"
-QUILL_VERSION="${QUILL_VERSION:-0.7.1}"
-# Держим ту же линию, что и Dockerfile: она рассчитана на zig из .tool-versions.
-CARGO_ZIGBUILD_VERSION="${CARGO_ZIGBUILD_VERSION:-~0.23}"
-LIBDMG_REPO="${LIBDMG_REPO:-https://github.com/fanquake/libdmg-hfsplus}"
+# Версии и суммы общие с Dockerfile: разъехавшиеся тулчейны дают разные пакеты
+# у разработчика и в релизе.
+# shellcheck disable=SC1091
+source scripts/tool_pins.sh
 # Скачиваемые инструменты кладём в кэш проекта, а не в систему: их подхватывают
 # Taskfile и скрипты сборки, дополняя PATH только на время запуска.
 TOOLS_DIR="$ROOT/.cache/tools"
 WITH_CROSS=0
 DRY_RUN=0
+STRICT=1
 
 log() { printf '\033[1;36m==>\033[0m %s\n' "$*" >&2; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
 
 usage() {
-	sed -n '2,7p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+	sed -n '2,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 	exit "${1:-0}"
 }
 
@@ -33,6 +34,7 @@ while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--cross) WITH_CROSS=1 ;;
 	--dry-run | -n) DRY_RUN=1 ;;
+	--no-strict) STRICT=0 ;;
 	-h | --help) usage 0 ;;
 	*)
 		warn "unknown option: $1"
@@ -61,6 +63,16 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # Загружаемые инструменты ищем и в кэше проекта: он не в PATH, но сборка берёт
 # их именно оттуда, так что повторно качать не нужно.
 have_tool() { have "$1" || [[ -x "$TOOLS_DIR/$1" ]]; }
+
+# Сумма сверяется до распаковки, поэтому качаем в файл, а не в pipe. Таймауты
+# обязательны: без --max-time оборванное соединение висит без ограничения.
+fetch_verified() { # url pin-key destination
+	local url="$1" pin="$2" dest="$3" sha
+	sha="$(tool_sha256 "$pin")"
+	rm -f "$dest"
+	curl -fsSL --retry 3 --retry-all-errors --connect-timeout 15 --max-time 300 "$url" -o "$dest"
+	"$ROOT/scripts/verify_sha256.sh" "$dest" "$sha"
+}
 
 detect_linux_family() {
 	local id="" like=""
@@ -172,10 +184,13 @@ install_nfpm() {
 	log "Installing nfpm ${NFPM_VERSION} into .cache/tools"
 	run mkdir -p "$TOOLS_DIR"
 	if ((DRY_RUN)); then
-		printf '  curl -fsSL %s | tar -xz -C .cache/tools nfpm\n' "$url"
+		printf '  curl -fsSL %s -o .cache/tools/nfpm.tar.gz (sha256-verified) && tar -xz nfpm\n' "$url"
 		return 0
 	fi
-	curl -fsSL "$url" | tar -xz -C "$TOOLS_DIR" nfpm
+	local archive="$TOOLS_DIR/nfpm.tar.gz"
+	fetch_verified "$url" "nfpm-tar:${os}_${arch}" "$archive"
+	tar -xzf "$archive" -C "$TOOLS_DIR" nfpm
+	rm -f "$archive"
 	chmod 0755 "$TOOLS_DIR/nfpm"
 }
 
@@ -196,10 +211,13 @@ install_quill() {
 	log "Installing quill ${QUILL_VERSION} into .cache/tools (ad-hoc Mach-O signing from Linux)"
 	run mkdir -p "$TOOLS_DIR"
 	if ((DRY_RUN)); then
-		printf '  curl -fsSL %s | tar -xz -C .cache/tools quill\n' "$url"
+		printf '  curl -fsSL %s -o .cache/tools/quill.tar.gz (sha256-verified) && tar -xz quill\n' "$url"
 		return 0
 	fi
-	curl -fsSL "$url" | tar -xz -C "$TOOLS_DIR" quill
+	local archive="$TOOLS_DIR/quill.tar.gz"
+	fetch_verified "$url" "quill:${arch}" "$archive"
+	tar -xzf "$archive" -C "$TOOLS_DIR" quill
+	rm -f "$archive"
 	chmod 0755 "$TOOLS_DIR/quill"
 }
 
@@ -214,15 +232,19 @@ install_libdmg() {
 		return 0
 	fi
 
-	log "Building libdmg-hfsplus into .cache/tools (no distro package exists)"
+	log "Building libdmg-hfsplus ${LIBDMG_REV:0:12} into .cache/tools (no distro package exists)"
 	if ((DRY_RUN)); then
-		printf '  git clone --depth 1 %s && cmake && make dmg-bin -> .cache/tools/dmg\n' "$LIBDMG_REPO"
+		printf '  git fetch %s %s && cmake && make dmg-bin -> .cache/tools/dmg\n' "$LIBDMG_REPO" "$LIBDMG_REV"
 		return 0
 	fi
 
+	# Пиннутая ревизия, а не HEAD: исходники компилируются и запускаются, и в
+	# образе должен оказаться ровно тот же dmg, что у разработчика.
 	local src
 	src="$(mktemp -d)"
-	git clone --depth 1 --quiet "$LIBDMG_REPO" "$src"
+	git init -q "$src"
+	git -C "$src" fetch --depth 1 -q "$LIBDMG_REPO" "$LIBDMG_REV"
+	git -C "$src" checkout -q FETCH_HEAD
 	cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release >/dev/null
 	make -C "$src/build/dmg" dmg-bin >/dev/null
 	mkdir -p "$TOOLS_DIR"
@@ -285,6 +307,7 @@ report_missing_tools() {
 	warn "not installed on this system — the matching targets will fail:"
 	printf '     - %s\n' "${missing[@]}" >&2
 	warn "see BUILD.md > Prerequisites by distro for the package names"
+	return 1
 }
 
 prepare_linux() {
@@ -348,6 +371,15 @@ Darwin) prepare_darwin ;;
 	;;
 esac
 
-((DRY_RUN)) || report_missing_tools
+MISSING=0
+((DRY_RUN)) || report_missing_tools || MISSING=1
 ((DRY_RUN)) && log "dry run — nothing was installed"
 log "Done. Next: 'task build', 'task package', or 'task docker:dist'."
+
+# Молчаливый успех при недостающих инструментах делает prepare бесполезным как
+# гейт: нехватка всплывала бы уже на середине сборки. --no-strict оставлен для
+# «поставь что можешь» на дистрибутивах, где части пакетов просто нет.
+if ((MISSING)) && ((STRICT)); then
+	warn "some tools are still missing; pass --no-strict to ignore"
+	exit 1
+fi
