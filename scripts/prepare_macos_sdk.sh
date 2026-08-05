@@ -8,10 +8,15 @@
 # use on Apple-branded hardware; using it to cross-compile from Linux is a legal
 # grey area, which is why releases are built on Mac runners and the cross path
 # stays opt-in for local use.
-# Set MACOS_SDK_SHA256 to verify the download (checksums are on the SDK release page).
+#
+# The download is always checksummed: the pinned version's digest lives in
+# scripts/tool_pins.sh, and any URL or version override must bring its own
+# MACOS_SDK_SHA256 (checksums are on the SDK release page).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+source "$ROOT/scripts/tool_pins.sh"
 
 SDK_VERSION="${MACOS_SDK_VERSION:-15.5}"
 CACHE_DIR="${MACOS_SDK_CACHE:-$ROOT/.cache/macos-sdk}"
@@ -30,17 +35,31 @@ fi
 command -v curl >/dev/null 2>&1 || { log "curl is required"; exit 1; }
 command -v tar >/dev/null 2>&1 || { log "tar is required"; exit 1; }
 
+# Своё зеркало — своя ответственность: пиннутая сумма относится к пиннутому
+# URL, поэтому переопределение без явного дайджеста отклоняется, а не
+# «проверяется» несуществующей суммой.
+if [[ -n "${MACOS_SDK_URL:-}" && -z "${MACOS_SDK_SHA256:-}" ]]; then
+	log "MACOS_SDK_URL overrides the pinned mirror — set MACOS_SDK_SHA256 as well"
+	exit 1
+fi
+
+if [[ -n "${MACOS_SDK_SHA256:-}" ]]; then
+	EXPECTED_SHA256="$MACOS_SDK_SHA256"
+elif ! EXPECTED_SHA256="$(tool_sha256 "macos-sdk:${SDK_VERSION}" 2>/dev/null)"; then
+	log "no pinned checksum for macOS SDK $SDK_VERSION"
+	log "add it to scripts/tool_pins.sh or pass MACOS_SDK_SHA256=<sha256>"
+	exit 1
+fi
+
 mkdir -p "$CACHE_DIR"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 log "Downloading macOS SDK $SDK_VERSION from $URL"
-curl -fsSL "$URL" -o "$tmp/$ARCHIVE"
+curl -fsSL --retry 3 --retry-all-errors --connect-timeout 15 --max-time 1800 "$URL" -o "$tmp/$ARCHIVE"
 
-if [[ -n "${MACOS_SDK_SHA256:-}" ]]; then
-	log "Verifying SHA-256"
-	echo "${MACOS_SDK_SHA256}  $tmp/$ARCHIVE" | sha256sum -c - >&2
-fi
+log "Verifying SHA-256"
+"$ROOT/scripts/verify_sha256.sh" "$tmp/$ARCHIVE" "$EXPECTED_SHA256"
 
 log "Unpacking into $CACHE_DIR"
 tar -xJf "$tmp/$ARCHIVE" -C "$CACHE_DIR"
