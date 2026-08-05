@@ -26,7 +26,9 @@ NUMERIC_VERSION="${VERSION%%-*}"
 
 DIST="$ROOT/dist/macos"
 APP="$DIST/$APP_NAME.app"
-DMG="$DIST/entropy-v$VERSION-macos-universal.dmg"
+# Имя .dmg дособирается после подписи: неподписанный образ обязан отличаться от
+# подписанного именем, иначе его невозможно отличить в dist/.
+DMG_BASE="$DIST/entropy-v$VERSION-macos-universal"
 
 log() { printf '\033[1;36m==>\033[0m %s\n' "$*" >&2; }
 
@@ -46,7 +48,7 @@ file "$BIN" >&2 || true
 
 # 3. .app bundle
 log "Assembling $APP"
-rm -rf "$APP" "$DMG"
+rm -rf "$APP" "$DMG_BASE.dmg" "$DMG_BASE-unsigned.dmg"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 install -m 0755 "$BIN" "$APP/Contents/MacOS/entropy"
 
@@ -95,11 +97,18 @@ PLIST
 
 # 4. Ad-hoc code signing with quill (Linux-native). Set QUILL_SIGN_P12 +
 #    QUILL_SIGN_PASSWORD to sign with a real Developer ID instead.
-if command -v quill >/dev/null 2>&1; then
-	log "Signing with quill"
-	quill sign "$APP/Contents/MacOS/entropy" >&2 || echo "quill sign failed (continuing unsigned)" >&2
+# Отсутствующий quill или упавшая подпись — это ошибка сборки: иначе в dist/
+# незаметно оказывается .dmg, который на Mac не запустится.
+if command -v quill >/dev/null 2>&1 && quill sign "$APP/Contents/MacOS/entropy" >&2; then
+	log "Signed with quill"
+	DMG="$DMG_BASE.dmg"
+elif [[ "${ALLOW_UNSIGNED:-0}" == 1 ]]; then
+	log "WARNING: building an UNSIGNED bundle (ALLOW_UNSIGNED=1) — macOS will refuse to run it as is"
+	DMG="$DMG_BASE-unsigned.dmg"
 else
-	echo "quill not found; shipping an unsigned bundle" >&2
+	echo "signing failed or quill is missing — install it with 'task prepare:cross'" >&2
+	echo "to build an unsigned bundle on purpose: ALLOW_UNSIGNED=1 task macos:cross" >&2
+	exit 1
 fi
 
 # 5. .dmg from Linux (HFS hybrid ISO -> compressed UDIF)
