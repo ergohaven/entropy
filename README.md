@@ -62,16 +62,16 @@ unsigned and not notarized for now.
 Release builds are published on the
 [GitHub Releases](https://github.com/ergohaven/entropy/releases) page:
 
-- `ergohaven-entropy_0.3.1_amd64.deb`
-- `ergohaven-entropy-0.3.1-1.x86_64.rpm`
-- `ergohaven-entropy-0.3.1-1-x86_64.pkg.tar.zst`
-- `entropy-v0.3.1-x86_64.AppImage`
-- `entropy-v0.3.1-x64.msi`
-- `entropy-v0.3.1-windows-x86_64.exe`
-- `entropy-v0.3.1-macos-universal.dmg`
+- `ergohaven-entropy_0.3.5_amd64.deb`
+- `ergohaven-entropy-0.3.5-1.x86_64.rpm`
+- `ergohaven-entropy-0.3.5-1-x86_64.pkg.tar.zst`
+- `entropy-v0.3.5-x86_64.AppImage`
+- `entropy-v0.3.5-x64.msi`
+- `entropy-v0.3.5-windows-x86_64.exe`
+- `entropy-v0.3.5-macos-universal.dmg`
 
-Stable tags such as `v0.3.4` publish a regular GitHub release and mark it as
-latest. Tags with a suffix, such as `v0.3.4-rc.1`, publish the same artifacts as
+Stable tags such as `v0.3.5` publish a regular GitHub release and mark it as
+latest. Tags with a suffix, such as `v0.3.5-rc.1`, publish the same artifacts as
 a GitHub prerelease.
 
 On Linux, install the package for your distro or make the AppImage executable
