@@ -1671,20 +1671,10 @@ impl ModuleSettingsGroup {
 
     pub(crate) fn selected_module_kind(&self, value: u16) -> Option<ModuleDeviceKind> {
         let field = self.module_selector_field()?;
-        let selected = field
-            .variants
-            .get(value as usize)
-            .map(|variant| ModuleDeviceKind::from_variant(variant))?;
-        if selected != ModuleDeviceKind::None {
-            return Some(selected);
-        }
-
         field
             .variants
-            .iter()
+            .get(value as usize)
             .map(|variant| ModuleDeviceKind::from_variant(variant))
-            .find(|kind| *kind != ModuleDeviceKind::None)
-            .or(Some(selected))
     }
 
     pub(crate) fn selected_pointer_mode(&self, value: u16) -> Option<PointerModeKind> {

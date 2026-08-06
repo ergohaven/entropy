@@ -5,6 +5,24 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.4 - Public Beta
+
+### Main Features
+
+- Added portable firmware settings to `.entlayout` files so supported device configuration can be exported and restored together with layouts
+- Restored explicit per-side K:04 module selection for None, Encoder, Trackball, and Touchpad instead of automatic module detection
+
+### Improvements
+
+- Made settings imports atomic, with structural legacy-field migration and rollback when applying imported application settings fails
+- Pinned and verified the Linux AppImage packaging tool and hardened update-download URL validation
+
+### Fixes
+
+- Kept left and right K:04 module readback aligned over Linux Bluetooth after reconnecting or reopening Entropy
+- Prevented optional firmware-version probes and disconnect handling from stalling device connections
+- Resent layout state after HID reconnect so the device view stays synchronized
+
 ## v0.3.2-rc.1 - Public Beta
 
 ### Main Features

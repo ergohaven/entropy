@@ -3,7 +3,7 @@
 Modern app for programmable keyboards and input devices, built by Ergohaven.
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
-[![Latest release](https://img.shields.io/badge/latest-v0.3.1-lightgrey.svg)](https://github.com/ergohaven/entropy/releases)
+[![Latest release](https://img.shields.io/badge/latest-v0.3.4-lightgrey.svg)](https://github.com/ergohaven/entropy/releases)
 [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey.svg)](#platforms)
 [![Firmware](https://img.shields.io/badge/firmware-Vial--QMK%20%7C%20Vial--RMK-lightgrey.svg)](#compatibility)
 
@@ -70,8 +70,8 @@ Release builds are published on the
 - `entropy-v0.3.1-windows-x86_64.exe`
 - `entropy-v0.3.1-macos-universal.dmg`
 
-Stable tags such as `v0.3.1` publish a regular GitHub release and mark it as
-latest. Tags with a suffix, such as `v0.3.1-rc.1`, publish the same artifacts as
+Stable tags such as `v0.3.4` publish a regular GitHub release and mark it as
+latest. Tags with a suffix, such as `v0.3.4-rc.1`, publish the same artifacts as
 a GitHub prerelease.
 
 On Linux, install the package for your distro or make the AppImage executable

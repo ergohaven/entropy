@@ -102,6 +102,8 @@ const WINDOWS_BLE_READ_SLICE_MS: i32 = 250;
 const WINDOWS_BLE_SETTLE_DELAY: Duration = Duration::from_millis(12);
 #[cfg(target_os = "linux")]
 const LINUX_BLE_NOTIFICATION_PROBE_TIMEOUT_MS: i32 = 80;
+#[cfg(target_os = "linux")]
+const LINUX_BLE_UNCORRELATED_REPLY_SETTLE: Duration = Duration::from_millis(32);
 #[cfg(target_os = "windows")]
 const WINDOWS_HID_HELPER_USB_COMMAND_TIMEOUT: Duration = Duration::from_millis(1_500);
 #[cfg(target_os = "windows")]
@@ -1439,9 +1441,11 @@ fn read_response_via_input_report(
 ) -> Result<[u8; MSG_LEN]> {
     let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms.max(1) as u64);
 
-    // Give RMK one BLE connection interval to process the output report before
-    // reading the input characteristic through BlueZ's UHID GET_REPORT path.
-    std::thread::sleep(WINDOWS_BLE_SETTLE_DELAY);
+    // QMK_SETTINGS_GET and GET_ENCODER replies do not identify their request.
+    // A single interval can therefore return the preceding value and shift a
+    // sequence of settings (for example left module -> right module). Give
+    // those commands the same four-interval freshness window as direct GATT.
+    std::thread::sleep(linux_ble_input_report_settle(command));
 
     loop {
         let mut read_buf = [0u8; MSG_LEN + 1];
@@ -1464,6 +1468,15 @@ fn read_response_via_input_report(
             return Err(stale_error);
         }
         std::thread::sleep(WINDOWS_BLE_SETTLE_DELAY);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_ble_input_report_settle(command: &[u8]) -> Duration {
+    if vial_reply_is_uncorrelated(command) {
+        LINUX_BLE_UNCORRELATED_REPLY_SETTLE
+    } else {
+        WINDOWS_BLE_SETTLE_DELAY
     }
 }
 
@@ -2103,6 +2116,25 @@ mod tests {
         assert_eq!(
             usb_send_max_attempts(HidTransport::Usb, &command),
             VIAL_GUI_USB_RETRIES
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn uncorrelated_linux_ble_gets_wait_for_a_fresh_input_report() {
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_VIAL_PREFIX;
+        command[1] = CMD_VIAL_QMK_SETTINGS_GET;
+
+        assert_eq!(
+            linux_ble_input_report_settle(&command),
+            LINUX_BLE_UNCORRELATED_REPLY_SETTLE
+        );
+
+        command[1] = CMD_VIAL_GET_DEFINITION;
+        assert_eq!(
+            linux_ble_input_report_settle(&command),
+            WINDOWS_BLE_SETTLE_DELAY
         );
     }
 
