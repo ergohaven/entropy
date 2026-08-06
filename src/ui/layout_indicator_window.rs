@@ -61,7 +61,7 @@ fn set_windows_window_opacity_by_title(title: &str, opacity: f32) {
 }
 
 #[cfg(target_os = "macos")]
-fn set_macos_window_opacity_by_title(title: &str, opacity: f32) {
+fn update_macos_sticky_layout_window_by_title(title: &str, opacity: f32, keep_visible: bool) {
     use objc::{msg_send, sel, sel_impl};
 
     let opacity = clamp_sticky_layout_opacity(opacity) as f64;
@@ -97,6 +97,10 @@ fn set_macos_window_opacity_by_title(title: &str, opacity: f32) {
                 .unwrap_or(false);
             if matches {
                 let _: () = msg_send![window, setAlphaValue: opacity];
+                if keep_visible {
+                    let _: () = msg_send![window, setHidesOnDeactivate: false];
+                    let _: () = msg_send![window, orderFrontRegardless];
+                }
                 break;
             }
         }
@@ -330,6 +334,39 @@ fn sticky_layout_saved_window_size(settings: &AppSettings) -> Vec2 {
         .unwrap_or_else(sticky_layout_default_window_size)
 }
 
+fn sticky_layout_window_level(always_on_top: bool) -> egui::WindowLevel {
+    if always_on_top {
+        egui::WindowLevel::AlwaysOnTop
+    } else {
+        egui::WindowLevel::Normal
+    }
+}
+
+fn sticky_layout_window_resizable(always_on_top: bool) -> bool {
+    !always_on_top
+}
+
+fn sticky_layout_viewport_builder(
+    window_title: String,
+    always_on_top: bool,
+) -> egui::ViewportBuilder {
+    egui::ViewportBuilder::default()
+        .with_title(window_title)
+        .with_min_inner_size(sticky_layout_default_window_size())
+        .with_resizable(sticky_layout_window_resizable(always_on_top))
+        .with_decorations(false)
+        .with_taskbar(false)
+        .with_window_type(egui::X11WindowType::Utility)
+        .with_window_level(sticky_layout_window_level(always_on_top))
+}
+
+fn sticky_layout_pin_viewport_commands(always_on_top: bool) -> [egui::ViewportCommand; 2] {
+    [
+        egui::ViewportCommand::WindowLevel(sticky_layout_window_level(always_on_top)),
+        egui::ViewportCommand::Resizable(sticky_layout_window_resizable(always_on_top)),
+    ]
+}
+
 impl EntropyApp {
     pub(super) fn draw_sticky_layout_window(&mut self, ctx: &egui::Context) {
         if !self.app_settings.sticky_layout_window {
@@ -418,19 +455,12 @@ impl EntropyApp {
         let mut resize_opacity_hold_frames = self.sticky_layout_resize_opacity_hold_frames;
         let mut should_close = false;
         let mut should_save_settings = false;
+        #[cfg(target_os = "macos")]
+        let configure_macos_visibility =
+            self.sticky_layout_last_size.is_none() && sticky_always_on_top;
 
-        let mut viewport_builder = egui::ViewportBuilder::default()
-            .with_title(window_title.clone())
-            .with_min_inner_size(sticky_layout_default_window_size())
-            .with_resizable(true)
-            .with_decorations(false)
-            .with_taskbar(false)
-            .with_window_type(egui::X11WindowType::Utility)
-            .with_window_level(if sticky_always_on_top {
-                egui::WindowLevel::AlwaysOnTop
-            } else {
-                egui::WindowLevel::Normal
-            });
+        let mut viewport_builder =
+            sticky_layout_viewport_builder(window_title.clone(), sticky_always_on_top);
         if self.sticky_layout_last_size.is_none() {
             viewport_builder = viewport_builder.with_inner_size(sticky_window_size);
         }
@@ -476,7 +506,11 @@ impl EntropyApp {
                     #[cfg(target_os = "windows")]
                     set_windows_window_opacity_by_title(&window_title, effective_sticky_opacity);
                     #[cfg(target_os = "macos")]
-                    set_macos_window_opacity_by_title(&window_title, effective_sticky_opacity);
+                    update_macos_sticky_layout_window_by_title(
+                        &window_title,
+                        effective_sticky_opacity,
+                        configure_macos_visibility,
+                    );
                     #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
                     ui.set_opacity(effective_sticky_opacity);
                     let panel_bg = app_panel_fill(dark);
@@ -579,15 +613,19 @@ impl EntropyApp {
                                     {
                                         sticky_always_on_top = !sticky_always_on_top;
                                         should_save_settings = true;
-                                        viewport_ctx.send_viewport_cmd(
-                                            egui::ViewportCommand::WindowLevel(
-                                                if sticky_always_on_top {
-                                                    egui::WindowLevel::AlwaysOnTop
-                                                } else {
-                                                    egui::WindowLevel::Normal
-                                                },
-                                            ),
-                                        );
+                                        for command in sticky_layout_pin_viewport_commands(
+                                            sticky_always_on_top,
+                                        ) {
+                                            viewport_ctx.send_viewport_cmd(command);
+                                        }
+                                        #[cfg(target_os = "macos")]
+                                        if sticky_always_on_top {
+                                            update_macos_sticky_layout_window_by_title(
+                                                &window_title,
+                                                sticky_opacity,
+                                                true,
+                                            );
+                                        }
                                     }
                                 },
                             );
@@ -693,39 +731,47 @@ impl EntropyApp {
                         });
                     });
 
-                    let resize_rect = egui::Rect::from_min_size(
-                        egui::pos2(footer_rect.right() - 26.0, footer_rect.bottom() - 26.0),
-                        egui::vec2(26.0, 26.0),
-                    );
-                    let resize_resp = ui.interact(
-                        resize_rect,
-                        ui.id().with("sticky_layout_resize_grip"),
-                        Sense::click_and_drag(),
-                    );
-                    if resize_resp.hovered() || resize_resp.dragged() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeSouthEast);
-                    }
-                    if resize_resp.drag_started() {
-                        resize_opacity_hold_frames = 8;
-                        viewport_ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(
-                            egui::ResizeDirection::SouthEast,
-                        ));
-                    }
-                    if resize_resp.dragged() {
-                        resize_opacity_hold_frames = 8;
-                    }
-                    if resize_resp.drag_stopped() {
-                        should_save_settings = true;
-                    }
-                    let grip_color = app_muted_text(dark);
-                    for offset in [7.0, 12.0, 17.0] {
-                        ui.painter().line_segment(
-                            [
-                                egui::pos2(full_rect.right() - offset, full_rect.bottom() - 5.0),
-                                egui::pos2(full_rect.right() - 5.0, full_rect.bottom() - offset),
-                            ],
-                            Stroke::new(1.0_f32, grip_color),
+                    if sticky_layout_window_resizable(sticky_always_on_top) {
+                        let resize_rect = egui::Rect::from_min_size(
+                            egui::pos2(footer_rect.right() - 26.0, footer_rect.bottom() - 26.0),
+                            egui::vec2(26.0, 26.0),
                         );
+                        let resize_resp = ui.interact(
+                            resize_rect,
+                            ui.id().with("sticky_layout_resize_grip"),
+                            Sense::click_and_drag(),
+                        );
+                        if resize_resp.hovered() || resize_resp.dragged() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeSouthEast);
+                        }
+                        if resize_resp.drag_started() {
+                            resize_opacity_hold_frames = 8;
+                            viewport_ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(
+                                egui::ResizeDirection::SouthEast,
+                            ));
+                        }
+                        if resize_resp.dragged() {
+                            resize_opacity_hold_frames = 8;
+                        }
+                        if resize_resp.drag_stopped() {
+                            should_save_settings = true;
+                        }
+                        let grip_color = app_muted_text(dark);
+                        for offset in [7.0, 12.0, 17.0] {
+                            ui.painter().line_segment(
+                                [
+                                    egui::pos2(
+                                        full_rect.right() - offset,
+                                        full_rect.bottom() - 5.0,
+                                    ),
+                                    egui::pos2(
+                                        full_rect.right() - 5.0,
+                                        full_rect.bottom() - offset,
+                                    ),
+                                ],
+                                Stroke::new(1.0_f32, grip_color),
+                            );
+                        }
                     }
                 };
 
@@ -780,5 +826,40 @@ impl EntropyApp {
         if should_save_settings {
             save_app_settings(&self.app_settings);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pinned_layout_indicator_is_always_on_top_and_not_resizable() {
+        let builder = sticky_layout_viewport_builder("Pinned".into(), true);
+        assert_eq!(builder.window_level, Some(egui::WindowLevel::AlwaysOnTop));
+        assert_eq!(builder.resizable, Some(false));
+
+        let [egui::ViewportCommand::WindowLevel(level), egui::ViewportCommand::Resizable(resizable)] =
+            sticky_layout_pin_viewport_commands(true)
+        else {
+            panic!("pin transition must update window level and resizability");
+        };
+        assert_eq!(level, egui::WindowLevel::AlwaysOnTop);
+        assert!(!resizable);
+    }
+
+    #[test]
+    fn unpinned_layout_indicator_is_normal_and_resizable() {
+        let builder = sticky_layout_viewport_builder("Unpinned".into(), false);
+        assert_eq!(builder.window_level, Some(egui::WindowLevel::Normal));
+        assert_eq!(builder.resizable, Some(true));
+
+        let [egui::ViewportCommand::WindowLevel(level), egui::ViewportCommand::Resizable(resizable)] =
+            sticky_layout_pin_viewport_commands(false)
+        else {
+            panic!("unpin transition must update window level and resizability");
+        };
+        assert_eq!(level, egui::WindowLevel::Normal);
+        assert!(resizable);
     }
 }
