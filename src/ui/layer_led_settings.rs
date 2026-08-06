@@ -236,15 +236,22 @@ impl EntropyApp {
                         },
                         slider_control_width,
                         |ui| {
-                            let value_text = if value.round() as u16 == 0 {
-                                crate::i18n::tr_catalog(
-                                    self.app_settings.language,
-                                    "advanced_settings.off",
-                                )
-                                .to_string()
-                            } else {
-                                format!("{}{}", value.round() as u16, suffix)
-                            };
+                            let raw_value = value.round() as u16;
+                            let value_text = setting
+                                .variants
+                                .get(raw_value as usize)
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    if raw_value == 0 {
+                                        crate::i18n::tr_catalog(
+                                            self.app_settings.language,
+                                            "advanced_settings.off",
+                                        )
+                                        .to_string()
+                                    } else {
+                                        format!("{raw_value}{suffix}")
+                                    }
+                                });
                             if self.draw_layer_led_slider_control(
                                 ui,
                                 scale,

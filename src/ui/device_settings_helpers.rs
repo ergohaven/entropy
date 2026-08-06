@@ -1065,15 +1065,41 @@ impl EntropyApp {
     }
 
     fn layer_led_field_max(field: &serde_json::Value, width: u8) -> u16 {
-        field
+        if let Some(max) = field
             .get("max")
             .and_then(|value| value.as_u64())
-            .unwrap_or(if width > 1 {
-                u16::MAX as u64
-            } else {
-                u8::MAX as u64
-            })
-            .min(u16::MAX as u64) as u16
+            .map(|max| max.min(u16::MAX as u64) as u16)
+        {
+            return max;
+        }
+        if field.get("type").and_then(|value| value.as_str()) == Some("select") {
+            if let Some(max) = field
+                .get("variants")
+                .and_then(|value| value.as_array())
+                .map(|variants| variants.len().saturating_sub(1))
+                .and_then(|max| u16::try_from(max).ok())
+            {
+                return max;
+            }
+        }
+        if width > 1 {
+            u16::MAX
+        } else {
+            u8::MAX as u16
+        }
+    }
+
+    fn layer_led_field_variants(field: &serde_json::Value) -> Vec<String> {
+        field
+            .get("variants")
+            .and_then(|value| value.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect()
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1082,6 +1108,7 @@ impl EntropyApp {
         qsid: u16,
         width: u8,
         max: u16,
+        variants: Vec<String>,
         label: &str,
     ) -> LayerLedNumericSetting {
         let value = if width > 1 {
@@ -1100,6 +1127,7 @@ impl EntropyApp {
             width,
             value,
             max,
+            variants,
         }
     }
 
@@ -1195,6 +1223,7 @@ impl EntropyApp {
                         qsid,
                         width,
                         max.min(255),
+                        Vec::new(),
                         "layer_led brightness",
                     ));
                 } else if lower_title.contains("led timeout") {
@@ -1219,6 +1248,7 @@ impl EntropyApp {
                         qsid,
                         width,
                         max,
+                        Self::layer_led_field_variants(field),
                         "layer_led timeout",
                     ));
                 } else if lower_title.contains("bt profile") && lower_title.contains("color") {
@@ -1327,6 +1357,7 @@ impl EntropyApp {
                     316,
                     2,
                     255,
+                    Vec::new(),
                     "layer_led brightness",
                 ));
             }
@@ -1336,6 +1367,7 @@ impl EntropyApp {
                     317,
                     1,
                     255,
+                    Vec::new(),
                     "layer_led timeout",
                 ));
             }
@@ -2006,6 +2038,22 @@ mod tests {
         );
 
         assert_eq!(groups, vec![(0, vec![300]), (1, vec![301])]);
+    }
+
+    #[test]
+    fn layer_led_select_max_comes_from_variants() {
+        let field = serde_json::json!({
+            "type": "select",
+            "title": "LED timeout",
+            "qsid": 317,
+            "variants": ["Never", "1 min", "2 min", "5 min", "10 min", "15 min", "30 min", "60 min"]
+        });
+
+        assert_eq!(EntropyApp::layer_led_field_max(&field, 1), 7);
+        assert_eq!(
+            EntropyApp::layer_led_field_variants(&field),
+            vec!["Never", "1 min", "2 min", "5 min", "10 min", "15 min", "30 min", "60 min"]
+        );
     }
 
     #[test]

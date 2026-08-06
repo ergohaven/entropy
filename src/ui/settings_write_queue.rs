@@ -883,6 +883,7 @@ mod tests {
                 width: 2,
                 value: 32,
                 max: 255,
+                variants: Vec::new(),
             }),
             ..LayerLedSettingsState::default()
         };
