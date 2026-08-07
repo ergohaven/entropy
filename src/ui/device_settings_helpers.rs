@@ -807,7 +807,6 @@ impl EntropyApp {
         dev_conn: &crate::hid::HidDevice,
     ) -> BluetoothSettingsState {
         let has_qmk_setting = |qsid: u16| supported_qmk_settings.contains(&qsid);
-        let mut sleep_timeout = None;
         let mut charge_indicator = None;
         let mut profile_colors = Vec::<(usize, BluetoothSelectSetting)>::new();
 
@@ -839,14 +838,7 @@ impl EntropyApp {
                     .unwrap_or("");
                 let lower_title = title.to_ascii_lowercase();
 
-                if lower_title.contains("sleep") && lower_title.contains("timeout") {
-                    sleep_timeout = Self::read_bluetooth_select_setting(
-                        dev_conn,
-                        field,
-                        qsid,
-                        "bluetooth sleep timeout",
-                    );
-                } else if lower_title.contains("charge") && lower_title.contains("indicator") {
+                if lower_title.contains("charge") && lower_title.contains("indicator") {
                     charge_indicator = Self::read_bluetooth_boolean_setting(
                         dev_conn,
                         field,
@@ -876,11 +868,9 @@ impl EntropyApp {
             .filter(|(profile, _)| *profile <= 4)
             .map(|(profile, setting)| BluetoothProfileColorSetting { profile, setting })
             .collect::<Vec<_>>();
-        let supported =
-            sleep_timeout.is_some() || charge_indicator.is_some() || !profile_colors.is_empty();
+        let supported = charge_indicator.is_some() || !profile_colors.is_empty();
 
         BluetoothSettingsState {
-            sleep_timeout,
             charge_indicator,
             profile_colors,
             supported,
@@ -919,12 +909,9 @@ impl EntropyApp {
                     .and_then(|value| value.as_str())
                     .unwrap_or("")
                     .to_ascii_lowercase();
-                (title.contains("sleep")
-                    && title.contains("timeout")
-                    && !Self::bluetooth_setting_variants(field).is_empty())
-                    || (title.contains("charge")
-                        && title.contains("indicator")
-                        && field.get("type").and_then(|value| value.as_str()) == Some("boolean"))
+                (title.contains("charge")
+                    && title.contains("indicator")
+                    && field.get("type").and_then(|value| value.as_str()) == Some("boolean"))
                     || (title.contains("bt profile")
                         && title.contains("color")
                         && !Self::bluetooth_setting_variants(field).is_empty())
@@ -1895,6 +1882,31 @@ mod tests {
         );
 
         assert_eq!(groups, vec![(0, vec![300, 400]), (1, vec![301, 401])]);
+    }
+
+    #[test]
+    fn bluetooth_settings_ignore_removed_deep_sleep_timeout() {
+        let json = serde_json::json!({
+            "settings": [{
+                "name": "Bluetooth settings",
+                "fields": [
+                    {
+                        "type": "select",
+                        "title": "Sleep timeout",
+                        "qsid": 323,
+                        "variants": ["Never", "10 minutes"]
+                    },
+                    {
+                        "type": "boolean",
+                        "title": "Charge indicator",
+                        "qsid": 331
+                    }
+                ]
+            }]
+        });
+
+        assert!(!EntropyApp::bluetooth_settings_supported(&json, &[323]));
+        assert!(EntropyApp::bluetooth_settings_supported(&json, &[323, 331]));
     }
 
     #[test]

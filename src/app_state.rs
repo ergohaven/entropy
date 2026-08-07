@@ -1512,8 +1512,6 @@ pub(crate) struct BluetoothProfileColorSetting {
 /// RMK wireless settings exposed by the Bluetooth settings tab in Vial.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct BluetoothSettingsState {
-    /// Sleep timeout before the keyboard enters Bluetooth sleep mode
-    pub(crate) sleep_timeout: Option<BluetoothSelectSetting>,
     /// Whether the halves show yellow/green battery charging status on their LEDs
     pub(crate) charge_indicator: Option<BluetoothBooleanSetting>,
     /// Palette color index for each firmware-supported Bluetooth profile
@@ -1524,9 +1522,7 @@ pub(crate) struct BluetoothSettingsState {
 
 impl BluetoothSettingsState {
     pub(crate) fn row_count(&self) -> usize {
-        self.sleep_timeout.is_some() as usize
-            + self.charge_indicator.is_some() as usize
-            + self.profile_colors.len()
+        self.charge_indicator.is_some() as usize + self.profile_colors.len()
     }
 }
 

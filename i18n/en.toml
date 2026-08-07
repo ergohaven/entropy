@@ -1159,20 +1159,11 @@ layer_selected_automatically_while_the_touchpad_is_active = "Layer selected auto
 
 [bluetooth_settings]
 title = "Bluetooth Settings"
-description = "Sleep timer, charging indicator, and Bluetooth profile LED colors"
+description = "Charging indicator and Bluetooth profile LED colors"
 unavailable = "Bluetooth settings are not available on this firmware"
 connect = "Connect a Vial device to edit Bluetooth settings"
-sleep_timeout = "Sleep timeout"
-sleep_timeout_tooltip = "Idle time before the keyboard enters Bluetooth sleep mode"
 charge_indicator = "Charging indicator"
 charge_indicator_tooltip = "Show yellow while charging and green from 95% on the connected half"
-timeout_never = "Never"
-timeout_minutes_one = "{value} minute"
-timeout_minutes_few = "{value} minutes"
-timeout_minutes_many = "{value} minutes"
-timeout_hours_one = "{value} hour"
-timeout_hours_few = "{value} hours"
-timeout_hours_many = "{value} hours"
 profile_color = "BT profile {profile} color"
 profile_color_tooltip = "LED color used when Bluetooth profile {profile} is active"
 
