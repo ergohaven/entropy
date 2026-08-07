@@ -196,6 +196,45 @@ fn tr_picker(language: crate::i18n::Language, key: &'static str) -> &'static str
 mod tests {
     use super::*;
 
+    fn macro_picker(selected: u8) -> KeycodePicker {
+        KeycodePicker {
+            selected_tab: KeycodeTab::Macro,
+            macro_count: 32,
+            macro_inline_selected: Some(selected),
+            macro_texts: vec![Vec::new(); 32],
+            macro_actions: vec![Vec::new(); 32],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn assigning_unchanged_macro_does_not_rewrite_macro_buffer() {
+        let mut picker = macro_picker(4);
+
+        picker.finalize_vial_special_tab_close();
+
+        assert_eq!(
+            picker.result.map(|binding| binding.vial_keycode()),
+            Some(0x7704)
+        );
+        assert!(!picker.macros_dirty);
+    }
+
+    #[test]
+    fn assigning_edited_macro_keeps_macro_buffer_dirty() {
+        let mut picker = macro_picker(4);
+        picker.macro_actions[4].push(MacroAction::Tap(0x0006));
+
+        picker.finalize_vial_special_tab_close();
+
+        assert_eq!(
+            picker.result.map(|binding| binding.vial_keycode()),
+            Some(0x7704)
+        );
+        assert!(picker.macros_dirty);
+        assert_eq!(picker.macro_texts[4], [0x01, 0x01, 0x06]);
+    }
+
     fn collect_text(shape: &egui::Shape, text: &mut Vec<String>) {
         match shape {
             egui::Shape::Text(text_shape) => {
@@ -864,9 +903,9 @@ impl KeycodePicker {
         if self.selected_tab == KeycodeTab::Macro {
             if let Some(raw_n) = self.macro_inline_selected {
                 if (raw_n as usize) < self.macro_count {
-                    self.encode_macro(raw_n as usize);
+                    let serialized_changed = self.encode_macro(raw_n as usize);
                     self.result = Some((0x7700 + raw_n as u16).into());
-                    self.macros_dirty = true;
+                    self.macros_dirty |= serialized_changed;
                 }
             }
         }

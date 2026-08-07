@@ -778,9 +778,9 @@ impl KeycodePicker {
                 )
                 .clicked()
                 {
-                    self.encode_macro(n);
+                    let serialized_changed = self.encode_macro(n);
                     self.result = Some((0x7700 + n as u16).into());
-                    self.macros_dirty = true;
+                    self.macros_dirty |= serialized_changed;
                     self.open = false;
                 }
             });
@@ -838,14 +838,19 @@ impl KeycodePicker {
             .filter(|s| !s.is_empty())
     }
 
-    pub(super) fn encode_macro(&mut self, n: usize) {
+    pub(super) fn encode_macro(&mut self, n: usize) -> bool {
         while self.macro_texts.len() <= n {
             self.macro_texts.push(Vec::new());
         }
         while self.macro_actions.len() <= n {
             self.macro_actions.push(vec![]);
         }
-        self.macro_texts[n] = encode_macro_actions(&self.macro_actions[n]);
+        let encoded = encode_macro_actions(&self.macro_actions[n]);
+        let changed = self.macro_texts[n] != encoded;
+        if changed {
+            self.macro_texts[n] = encoded;
+        }
+        changed
     }
 
     pub(super) fn show_vial_macros(&mut self, ui: &mut egui::Ui) {
@@ -858,8 +863,8 @@ impl KeycodePicker {
             "Saved to device when you close the keycode picker",
         );
         if selected != previous && (previous as usize) < self.macro_count {
-            self.encode_macro(previous as usize);
-            self.macros_dirty = true;
+            let serialized_changed = self.encode_macro(previous as usize);
+            self.macros_dirty |= serialized_changed;
         }
         self.macro_inline_selected = Some(selected);
     }
