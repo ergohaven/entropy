@@ -778,11 +778,7 @@ impl KeycodePicker {
                 )
                 .clicked()
                 {
-                    let serialized_changed = self.encode_macro(n);
                     self.result = Some((0x7700 + n as u16).into());
-                    if serialized_changed {
-                        self.mark_macros_dirty();
-                    }
                     self.open = false;
                 }
             });
@@ -864,12 +860,6 @@ impl KeycodePicker {
             "add_action_inline",
             "Saved to device when you close the keycode picker",
         );
-        if selected != previous && (previous as usize) < self.macro_count {
-            let serialized_changed = self.encode_macro(previous as usize);
-            if serialized_changed {
-                self.mark_macros_dirty();
-            }
-        }
         self.macro_inline_selected = Some(selected);
     }
 }

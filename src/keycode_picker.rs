@@ -229,6 +229,8 @@ mod tests {
     fn assigning_edited_macro_keeps_macro_buffer_dirty() {
         let mut picker = macro_picker(4);
         picker.macro_actions[4].push(MacroAction::Tap(0x0006));
+        assert!(picker.encode_macro(4));
+        picker.mark_macros_dirty();
 
         picker.finalize_vial_special_tab_close();
 
@@ -238,6 +240,22 @@ mod tests {
         );
         assert!(picker.macros_dirty);
         assert_eq!(picker.macro_texts[4], [0x01, 0x01, 0x06]);
+    }
+
+    #[test]
+    fn assigning_macro_never_reserializes_legacy_contents() {
+        let mut picker = macro_picker(4);
+        picker.macro_texts[4] = vec![0xAA, 0xBB];
+        picker.macro_actions[4] = vec![MacroAction::Text("different".to_owned())];
+
+        picker.finalize_vial_special_tab_close();
+
+        assert_eq!(
+            picker.result.map(|binding| binding.vial_keycode()),
+            Some(0x7704)
+        );
+        assert_eq!(picker.macro_texts[4], [0xAA, 0xBB]);
+        assert!(!picker.macros_dirty);
     }
 
     fn collect_text(shape: &egui::Shape, text: &mut Vec<String>) {
@@ -921,11 +939,7 @@ impl KeycodePicker {
         if self.selected_tab == KeycodeTab::Macro {
             if let Some(raw_n) = self.macro_inline_selected {
                 if (raw_n as usize) < self.macro_count {
-                    let serialized_changed = self.encode_macro(raw_n as usize);
                     self.result = Some((0x7700 + raw_n as u16).into());
-                    if serialized_changed {
-                        self.mark_macros_dirty();
-                    }
                 }
             }
         }
