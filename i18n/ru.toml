@@ -374,6 +374,7 @@ unknown = "Неизвестно"
 
 [status_messages]
 macros_saved = "Макросы сохранены"
+macros_saving = "Сохранение макросов…"
 combos_saved = "Комбо сохранены"
 combos_saving = "Сохранение комбо…"
 combo_incomplete = "Комбо C{index} не сохранено: выберите 2–4 входные клавиши и выходную клавишу"

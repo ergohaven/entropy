@@ -833,6 +833,9 @@ impl HidDevice {
 
                 let mut response = [0; MSG_LEN];
                 match (request[0], request[1], request[2]) {
+                    (CMD_VIA_MACRO_GET_BUFFER_SIZE, _, _) => {
+                        response[1..3].copy_from_slice(&64u16.to_be_bytes());
+                    }
                     (CMD_VIA_VIAL_PREFIX, CMD_VIAL_DYNAMIC_ENTRY_OP, DYNAMIC_VIAL_COMBO_SET) => {
                         let mut keys = [0; 4];
                         for (index, key) in keys.iter_mut().enumerate() {

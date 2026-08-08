@@ -49,6 +49,9 @@ pub(super) enum VialHidOperation {
         keycode: u16,
         is_undo: bool,
     },
+    MacroWrite {
+        macros: Vec<Vec<u8>>,
+    },
     Deferred(super::device_deferred_load::DeferredLoadRequest),
 }
 
@@ -68,6 +71,7 @@ enum VialHidOutcome {
     Battery(Option<crate::hid::BatteryHalves>),
     KeyWritten,
     EncoderWritten,
+    MacrosWritten,
     Deferred(super::device_deferred_load::DeferredLoadPayload),
 }
 
@@ -152,6 +156,12 @@ fn run_vial_hid_operation(
         } => hid
             .set_encoder(layer as u8, encoder_index, direction, keycode)
             .map(|()| VialHidOutcome::EncoderWritten),
+        VialHidOperation::MacroWrite { macros } => {
+            let size = hid.get_macro_buffer_size()?;
+            let buffer = crate::hid::HidDevice::encode_macros(&macros, size);
+            hid.set_macro_buffer(&buffer)?;
+            Ok(VialHidOutcome::MacrosWritten)
+        }
         VialHidOperation::Deferred(request) => {
             super::device_deferred_load::run_deferred_load(hid, &request)
                 .map(VialHidOutcome::Deferred)
@@ -329,6 +339,52 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn maybe_start_macro_write(&mut self, ctx: &egui::Context) {
+        if !self.keycode_picker.macros_dirty
+            || self.keycode_picker.open
+            || self.hid_write_task_active()
+        {
+            return;
+        }
+        if self.unlock_open || self.vial_unlock_polling {
+            return;
+        }
+        if self.is_vial_locked() {
+            self.unlock_open = true;
+            self.status_msg = crate::i18n::tr_catalog(
+                self.app_settings.language,
+                "connection.keyboard_locked_edit_macros",
+            )
+            .into();
+            return;
+        }
+
+        let operation = VialHidOperation::MacroWrite {
+            macros: self.keycode_picker.macro_texts.clone(),
+        };
+        match self.start_vial_hid_operation(ctx, operation) {
+            VialHidTaskStart::Started => {
+                // A later edit can set this again while the snapshot is being
+                // written; completion must not clear that newer dirty state.
+                self.keycode_picker.macros_dirty = false;
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "status_messages.macros_saving",
+                )
+                .into();
+            }
+            VialHidTaskStart::Busy => {}
+            VialHidTaskStart::NoDevice => {
+                self.status_msg = crate::i18n::tr_catalog_format(
+                    self.app_settings.language,
+                    "status_messages.macro_write_error",
+                    &[("error", "device handle is not available")],
+                );
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn poll_vial_hid_task(&mut self, ctx: &egui::Context) {
         let received = match self.vial_hid_task.as_ref() {
             Some(task) => task.receiver.try_recv(),
@@ -426,6 +482,13 @@ impl EntropyApp {
                         is_undo,
                     );
                 }
+            }
+            Ok(VialHidOutcome::MacrosWritten) => {
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "status_messages.macros_saved",
+                )
+                .into();
             }
             Ok(VialHidOutcome::Deferred(payload)) => {
                 if matches!(
@@ -576,6 +639,15 @@ impl EntropyApp {
         error: String,
         disconnected: bool,
     ) {
+        if matches!(&operation, VialHidOperation::MacroWrite { .. }) {
+            self.keycode_picker.macros_dirty = true;
+            self.status_msg = crate::i18n::tr_catalog_format(
+                self.app_settings.language,
+                "status_messages.macro_write_error",
+                &[("error", &error)],
+            );
+        }
+
         if matches!(
             &operation,
             VialHidOperation::KeyWrite { .. } | VialHidOperation::EncoderWrite { .. }
@@ -618,6 +690,9 @@ impl EntropyApp {
             }
             VialHidOperation::KeyWrite { .. } | VialHidOperation::EncoderWrite { .. } => {
                 unreachable!("single writes are handled before disconnect processing")
+            }
+            VialHidOperation::MacroWrite { .. } => {
+                // The localized error and retryable dirty state were set above.
             }
             VialHidOperation::Deferred(request) => {
                 log::warn!("Deferred Bluetooth device load failed: {error}");
@@ -841,6 +916,55 @@ mod tests {
         assert_eq!(&requests[0][..6], &[0x05, 0, 2, 3, 0, 0]);
         assert_eq!(&requests[1][..4], &[0x04, 0, 2, 3]);
         assert_eq!(&requests[2][..7], &[0xFE, 0x04, 1, 2, 1, 0, 5]);
+    }
+
+    #[test]
+    fn macro_write_uses_the_serialized_background_transport() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        let mut macros = vec![Vec::new(); 32];
+        macros[0] = vec![b'x'; 30];
+        app.hid_device = Some(hid);
+        app.keycode_picker.macro_texts = macros;
+        app.keycode_picker.macros_dirty = true;
+
+        app.maybe_start_macro_write(&ctx);
+
+        assert!(app.vial_hid_task_active());
+        assert!(app.hid_device.is_none());
+        assert!(!app.keycode_picker.macros_dirty);
+
+        poll_until_vial_hid_idle(&mut app, &ctx);
+
+        assert!(app.hid_device.is_some());
+        assert!(!app.keycode_picker.macros_dirty);
+        let requests = recorder.requests();
+        assert_eq!(requests.len(), 4);
+        assert_eq!(requests[0][0], 0x0D);
+        assert_eq!(&requests[1][..4], &[0x0F, 0, 0, 28]);
+        assert_eq!(&requests[2][..4], &[0x0F, 0, 28, 28]);
+        assert_eq!(&requests[3][..4], &[0x0F, 0, 56, 6]);
+    }
+
+    #[test]
+    fn failed_background_macro_write_keeps_the_snapshot_dirty() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid, _) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+            1,
+            crate::hid::TestHidFault::Timeout,
+        )));
+        app.hid_device = Some(hid);
+        app.keycode_picker.macro_texts = vec![Vec::new(); 32];
+        app.keycode_picker.macros_dirty = true;
+
+        app.maybe_start_macro_write(&ctx);
+        poll_until_vial_hid_idle(&mut app, &ctx);
+
+        assert!(app.keycode_picker.macros_dirty);
     }
 
     #[test]

@@ -374,6 +374,7 @@ unknown = "Unknown"
 
 [status_messages]
 macros_saved = "Macros saved"
+macros_saving = "Saving macros…"
 combos_saved = "Combos saved"
 combos_saving = "Saving combo…"
 combo_incomplete = "Combo C{index} not saved: choose 2–4 input keys and an output key"
