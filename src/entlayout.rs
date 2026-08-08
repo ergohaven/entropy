@@ -1752,7 +1752,7 @@ impl EntropyApp {
             &self.current_device_name,
         );
         self.keycode_picker.macro_metadata_dirty = false;
-        self.keycode_picker.macros_dirty = false;
+        self.keycode_picker.mark_macros_clean();
 
         if let Some(layout) = &self.layout {
             let mut combo_entries = self.combo_entries.clone();

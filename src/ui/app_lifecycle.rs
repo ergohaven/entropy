@@ -548,7 +548,7 @@ mod tests {
         assert!(app.settings_write_task.is_some());
 
         app.keycode_picker.macro_texts = vec![vec![1, 2, 3]];
-        app.keycode_picker.macros_dirty = true;
+        app.keycode_picker.mark_macros_dirty();
         app.combo_entries = vec![combo([0x0004, 0x0005, 0, 0], 0x0006)];
         app.combo_synced_entries = vec![ComboEntry::default()];
         app.combo_dirty = true;
@@ -938,7 +938,7 @@ mod tests {
         app.combo_edit_revision = 1;
         app.maybe_start_combo_write(&ctx);
         app.queue_touchpad_setting_write("Sniper sensitivity".to_owned(), 121, 1, 1, 2);
-        app.keycode_picker.macros_dirty = true;
+        app.keycode_picker.mark_macros_dirty();
         app.exit_after_hid_write = true;
 
         let mut close_count = 0;

@@ -51,6 +51,7 @@ pub(super) enum VialHidOperation {
     },
     MacroWrite {
         macros: Vec<Vec<u8>>,
+        revision: u64,
     },
     Deferred(super::device_deferred_load::DeferredLoadRequest),
 }
@@ -156,7 +157,7 @@ fn run_vial_hid_operation(
         } => hid
             .set_encoder(layer as u8, encoder_index, direction, keycode)
             .map(|()| VialHidOutcome::EncoderWritten),
-        VialHidOperation::MacroWrite { macros } => {
+        VialHidOperation::MacroWrite { macros, .. } => {
             let size = hid.get_macro_buffer_size()?;
             let buffer = crate::hid::HidDevice::encode_macros(&macros, size);
             hid.set_macro_buffer(&buffer)?;
@@ -343,6 +344,8 @@ impl EntropyApp {
         if !self.keycode_picker.macros_dirty
             || self.keycode_picker.open
             || self.hid_write_task_active()
+            || self.keycode_picker.macro_attempted_revision
+                == Some(self.keycode_picker.macro_edit_revision)
         {
             return;
         }
@@ -359,14 +362,17 @@ impl EntropyApp {
             return;
         }
 
+        let revision = self.keycode_picker.macro_edit_revision;
         let operation = VialHidOperation::MacroWrite {
             macros: self.keycode_picker.macro_texts.clone(),
+            revision,
         };
         match self.start_vial_hid_operation(ctx, operation) {
             VialHidTaskStart::Started => {
                 // A later edit can set this again while the snapshot is being
                 // written; completion must not clear that newer dirty state.
                 self.keycode_picker.macros_dirty = false;
+                self.keycode_picker.macro_attempted_revision = Some(revision);
                 self.status_msg = crate::i18n::tr_catalog(
                     self.app_settings.language,
                     "status_messages.macros_saving",
@@ -375,6 +381,7 @@ impl EntropyApp {
             }
             VialHidTaskStart::Busy => {}
             VialHidTaskStart::NoDevice => {
+                self.keycode_picker.macro_attempted_revision = Some(revision);
                 self.status_msg = crate::i18n::tr_catalog_format(
                     self.app_settings.language,
                     "status_messages.macro_write_error",
@@ -484,6 +491,12 @@ impl EntropyApp {
                 }
             }
             Ok(VialHidOutcome::MacrosWritten) => {
+                let VialHidOperation::MacroWrite { revision, .. } = &result.operation else {
+                    unreachable!("macro outcome must come from a macro write operation");
+                };
+                if self.keycode_picker.macro_edit_revision == *revision {
+                    self.keycode_picker.mark_macros_clean();
+                }
                 self.status_msg = crate::i18n::tr_catalog(
                     self.app_settings.language,
                     "status_messages.macros_saved",
@@ -639,8 +652,10 @@ impl EntropyApp {
         error: String,
         disconnected: bool,
     ) {
-        if matches!(&operation, VialHidOperation::MacroWrite { .. }) {
+        if let VialHidOperation::MacroWrite { revision, .. } = &operation {
             self.keycode_picker.macros_dirty = true;
+            self.keycode_picker.macro_attempted_revision =
+                (self.keycode_picker.macro_edit_revision == *revision).then_some(*revision);
             self.status_msg = crate::i18n::tr_catalog_format(
                 self.app_settings.language,
                 "status_messages.macro_write_error",
@@ -692,7 +707,7 @@ impl EntropyApp {
                 unreachable!("single writes are handled before disconnect processing")
             }
             VialHidOperation::MacroWrite { .. } => {
-                // The localized error and retryable dirty state were set above.
+                // The localized error and edit-gated dirty state were set above.
             }
             VialHidOperation::Deferred(request) => {
                 log::warn!("Deferred Bluetooth device load failed: {error}");
@@ -928,7 +943,7 @@ mod tests {
         macros[0] = vec![b'x'; 30];
         app.hid_device = Some(hid);
         app.keycode_picker.macro_texts = macros;
-        app.keycode_picker.macros_dirty = true;
+        app.keycode_picker.mark_macros_dirty();
 
         app.maybe_start_macro_write(&ctx);
 
@@ -949,22 +964,55 @@ mod tests {
     }
 
     #[test]
-    fn failed_background_macro_write_keeps_the_snapshot_dirty() {
+    fn failed_background_macro_write_waits_for_a_new_edit_before_retrying() {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
-        let (hid, _) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+        let (hid, recorder) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
             1,
             crate::hid::TestHidFault::Timeout,
         )));
         app.hid_device = Some(hid);
         app.keycode_picker.macro_texts = vec![Vec::new(); 32];
-        app.keycode_picker.macros_dirty = true;
+        app.keycode_picker.mark_macros_dirty();
+        let failed_revision = app.keycode_picker.macro_edit_revision;
 
         app.maybe_start_macro_write(&ctx);
         poll_until_vial_hid_idle(&mut app, &ctx);
 
         assert!(app.keycode_picker.macros_dirty);
+        assert_eq!(
+            app.keycode_picker.macro_attempted_revision,
+            Some(failed_revision)
+        );
+        let request_count = recorder.requests().len();
+        app.maybe_start_macro_write(&ctx);
+        assert!(!app.vial_hid_task_active());
+        assert_eq!(recorder.requests().len(), request_count);
+    }
+
+    #[test]
+    fn a_new_macro_edit_after_failure_can_start_another_write() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid, _) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid);
+        app.keycode_picker.macro_texts = vec![Vec::new(); 32];
+        app.keycode_picker.mark_macros_dirty();
+        let failed_revision = app.keycode_picker.macro_edit_revision;
+        app.keycode_picker.macro_attempted_revision = Some(failed_revision);
+
+        app.maybe_start_macro_write(&ctx);
+        assert!(!app.vial_hid_task_active());
+
+        app.keycode_picker.macro_texts[0].push(b'x');
+        app.keycode_picker.mark_macros_dirty();
+        assert_ne!(app.keycode_picker.macro_edit_revision, failed_revision);
+        app.maybe_start_macro_write(&ctx);
+        assert!(app.vial_hid_task_active());
+        poll_until_vial_hid_idle(&mut app, &ctx);
+        assert!(!app.keycode_picker.macros_dirty);
     }
 
     #[test]

@@ -177,6 +177,11 @@ pub struct KeycodePicker {
     pub macro_actions: Vec<Vec<MacroAction>>,
     /// Flag: macro texts changed, need to write to device
     pub macros_dirty: bool,
+    /// Revision of the macro snapshot currently represented by `macro_texts`.
+    pub macro_edit_revision: u64,
+    /// Last revision attempted by the HID worker. A failed revision is not
+    /// retried until another edit creates a new snapshot.
+    pub macro_attempted_revision: Option<u64>,
     /// Undo stack for macro editor: (macro_idx, previous_actions)
     macro_undo_stack: Vec<(usize, Vec<MacroAction>)>,
     /// Macro key picker: (macro_idx, action_idx) being edited
@@ -733,6 +738,8 @@ impl Default for KeycodePicker {
             macro_undo_stack: Vec::new(),
             macro_key_pick: None,
             macros_dirty: false,
+            macro_edit_revision: 0,
+            macro_attempted_revision: None,
             popup_state: PopupState::default(),
             language: crate::i18n::default_language(),
             key_legend_layout: KeyLegendLayout::default(),
@@ -743,6 +750,17 @@ impl Default for KeycodePicker {
 }
 
 impl KeycodePicker {
+    pub(crate) fn mark_macros_dirty(&mut self) {
+        self.macros_dirty = true;
+        self.macro_edit_revision = self.macro_edit_revision.wrapping_add(1);
+        self.macro_attempted_revision = None;
+    }
+
+    pub(crate) fn mark_macros_clean(&mut self) {
+        self.macros_dirty = false;
+        self.macro_attempted_revision = None;
+    }
+
     fn universal_symbols_available(&self) -> bool {
         self.supports_universal_symbols
             && self.supports_rmk_native_key_actions
@@ -792,7 +810,7 @@ impl KeycodePicker {
         }
         if changed {
             self.encode_macro(macro_idx);
-            self.macros_dirty = true;
+            self.mark_macros_dirty();
         }
         self.macro_key_pick = None;
     }
@@ -905,7 +923,9 @@ impl KeycodePicker {
                 if (raw_n as usize) < self.macro_count {
                     let serialized_changed = self.encode_macro(raw_n as usize);
                     self.result = Some((0x7700 + raw_n as u16).into());
-                    self.macros_dirty |= serialized_changed;
+                    if serialized_changed {
+                        self.mark_macros_dirty();
+                    }
                 }
             }
         }

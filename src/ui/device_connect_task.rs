@@ -693,7 +693,7 @@ impl EntropyApp {
             self.keycode_picker.macro_names.clear();
             self.keycode_picker.macro_descriptions.clear();
             self.keycode_picker.macro_actions.clear();
-            self.keycode_picker.macros_dirty = false;
+            self.keycode_picker.mark_macros_clean();
             self.key_override_entries.clear();
             self.key_override_names.clear();
             self.key_override_visible_count = 1;

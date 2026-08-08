@@ -766,7 +766,7 @@ impl EntropyApp {
                     .iter()
                     .map(|bytes| crate::keycode_picker::decode_macro_actions(bytes))
                     .collect();
-                self.keycode_picker.macros_dirty = false;
+                self.keycode_picker.mark_macros_clean();
                 self.deferred_device_load
                     .set_section_status(DeferredLoadSection::Macros, DeferredLoadStatus::Loaded);
             }

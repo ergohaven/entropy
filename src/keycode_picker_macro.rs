@@ -763,7 +763,7 @@ impl KeycodePicker {
                             macro_changed = true;
                         } else {
                             self.encode_macro(idx);
-                            self.macros_dirty = true;
+                            self.mark_macros_dirty();
                         }
                     }
                 }
@@ -780,7 +780,9 @@ impl KeycodePicker {
                 {
                     let serialized_changed = self.encode_macro(n);
                     self.result = Some((0x7700 + n as u16).into());
-                    self.macros_dirty |= serialized_changed;
+                    if serialized_changed {
+                        self.mark_macros_dirty();
+                    }
                     self.open = false;
                 }
             });
@@ -788,7 +790,7 @@ impl KeycodePicker {
 
         if macro_changed {
             self.encode_macro(n);
-            self.macros_dirty = true;
+            self.mark_macros_dirty();
         }
         if macro_metadata_changed {
             self.macro_metadata_dirty = true;
@@ -864,7 +866,9 @@ impl KeycodePicker {
         );
         if selected != previous && (previous as usize) < self.macro_count {
             let serialized_changed = self.encode_macro(previous as usize);
-            self.macros_dirty |= serialized_changed;
+            if serialized_changed {
+                self.mark_macros_dirty();
+            }
         }
         self.macro_inline_selected = Some(selected);
     }
