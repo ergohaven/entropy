@@ -25,6 +25,10 @@ impl EntropyApp {
                     layout,
                     key.layout_condition,
                     self.layout_options_value,
+                ) || Self::module_settings_owns_encoder_press_key(
+                    &self.module_settings,
+                    layout,
+                    key,
                 ) {
                     return None;
                 }
@@ -44,14 +48,18 @@ impl EntropyApp {
             .iter()
             .enumerate()
             .filter_map(|(ei, encoder)| {
-                if !Self::layout_condition_visible(
+                if !Self::encoder_layout_condition_visible(
                     layout,
-                    encoder.layout_condition,
+                    encoder,
                     self.layout_options_value,
                 ) || !Self::module_settings_encoder_visible(
                     &self.module_settings,
                     layout,
                     encoder.encoder_idx,
+                ) || !Self::encoder_visibility_allows(
+                    layout,
+                    encoder.encoder_idx,
+                    &self.encoder_visibility,
                 ) {
                     return None;
                 }
@@ -84,18 +92,6 @@ impl EntropyApp {
         let mut encoder_groups: Vec<EncoderGroup> = Vec::new();
         for (ei, rect) in &encoder_rects {
             let encoder = &layout.encoders[*ei];
-            if !Self::module_settings_encoder_visible(
-                &self.module_settings,
-                layout,
-                encoder.encoder_idx,
-            ) || !self
-                .encoder_visibility
-                .get(encoder.encoder_idx as usize)
-                .copied()
-                .unwrap_or(true)
-            {
-                continue;
-            }
             let kc = layout.get_encoder_keycode(self.selected_layer, *ei);
             if let Some((_, group_rect, ccw, cw)) = encoder_groups
                 .iter_mut()

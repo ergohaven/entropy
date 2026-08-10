@@ -147,14 +147,15 @@ impl EntropyApp {
             .flatten()
     }
 
-    fn module_settings_encoder_visible_for_position(
+    fn module_settings_encoder_group_for_position(
         module_settings: &ModuleSettingsState,
         encoder_position: usize,
-    ) -> bool {
+    ) -> Option<&ModuleSettingsGroup> {
         if !module_settings.supported {
-            return true;
+            return None;
         }
-        let module_groups = module_settings
+
+        module_settings
             .groups
             .iter()
             .filter(|group| {
@@ -163,8 +164,16 @@ impl EntropyApp {
                     ModuleSettingsGroupKind::Left | ModuleSettingsGroupKind::Right
                 ) && Self::module_group_encoder_field(group).is_some()
             })
-            .collect::<Vec<_>>();
-        let Some(group) = module_groups.get(encoder_position) else {
+            .nth(encoder_position)
+    }
+
+    fn module_settings_encoder_visible_for_position(
+        module_settings: &ModuleSettingsState,
+        encoder_position: usize,
+    ) -> bool {
+        let Some(group) =
+            Self::module_settings_encoder_group_for_position(module_settings, encoder_position)
+        else {
             return true;
         };
         let Some(field) = Self::module_group_encoder_field(group) else {
@@ -198,6 +207,43 @@ impl EntropyApp {
             return true;
         };
         Self::module_settings_encoder_visible_for_position(module_settings, encoder_position)
+    }
+
+    pub(super) fn module_settings_owns_encoder_press_key(
+        module_settings: &ModuleSettingsState,
+        layout: &KeyboardLayout,
+        key: &PhysicalKey,
+    ) -> bool {
+        let Some(key_condition) = key.layout_condition else {
+            return false;
+        };
+        let encoder_indices = layout
+            .encoders
+            .iter()
+            .map(|encoder| encoder.encoder_idx)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        encoder_indices
+            .into_iter()
+            .enumerate()
+            .any(|(encoder_position, encoder_idx)| {
+                Self::module_settings_encoder_group_for_position(module_settings, encoder_position)
+                    .is_some()
+                    && encoder_group_layout_condition(layout, encoder_idx) == Some(key_condition)
+            })
+    }
+
+    pub(super) fn encoder_layout_condition_visible(
+        layout: &KeyboardLayout,
+        encoder: &PhysicalEncoder,
+        packed: Option<u32>,
+    ) -> bool {
+        let managed_by_automatic_visibility = encoder
+            .layout_condition
+            .and_then(|condition| layout.layout_options.get(condition.option_idx))
+            .is_some_and(Self::is_encoder_layout_option);
+        managed_by_automatic_visibility
+            || Self::layout_condition_visible(layout, encoder.layout_condition, packed)
     }
 
     pub(super) fn display_preset_choice_label(
@@ -2400,6 +2446,78 @@ mod tests {
         ));
         assert!(EntropyApp::module_settings_encoder_visible(
             &settings, &layout, 1
+        ));
+    }
+
+    #[test]
+    fn module_settings_own_the_conditional_encoder_press_key() {
+        let module_condition = crate::keyboard::LayoutCondition {
+            option_idx: 0,
+            value: 0,
+        };
+        let mut layout = test_layout_with_encoders(&[0]);
+        layout.layout_options = vec![LayoutOption {
+            label: "Hide left encoder module".to_owned(),
+            choices: Vec::new(),
+        }];
+        layout.encoders[0].layout_condition = Some(module_condition);
+        layout.keys = vec![PhysicalKey {
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+            row: 0,
+            col: 0,
+            label: "0,0".to_owned(),
+            rotation: 0.0,
+            rotation_x: 0.0,
+            rotation_y: 0.0,
+            layout_condition: Some(module_condition),
+        }];
+        let settings = ModuleSettingsState {
+            groups: vec![ModuleSettingsGroup {
+                title: "Left Module".to_owned(),
+                kind: ModuleSettingsGroupKind::Left,
+                fields: vec![test_module_field("Left Module", 300)],
+            }],
+            values: std::collections::BTreeMap::from([(300, 0)]),
+            supported: true,
+            ..Default::default()
+        };
+
+        assert!(EntropyApp::module_settings_owns_encoder_press_key(
+            &settings,
+            &layout,
+            &layout.keys[0],
+        ));
+        assert!(EntropyApp::encoder_layout_condition_visible(
+            &layout,
+            &layout.encoders[0],
+            Some(1),
+        ));
+    }
+
+    #[test]
+    fn ordinary_keyboards_keep_keys_near_encoders() {
+        let mut layout = test_layout_with_encoders(&[0]);
+        layout.keys = vec![PhysicalKey {
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+            row: 0,
+            col: 0,
+            label: "0,0".to_owned(),
+            rotation: 0.0,
+            rotation_x: 0.0,
+            rotation_y: 0.0,
+            layout_condition: None,
+        }];
+
+        assert!(!EntropyApp::module_settings_owns_encoder_press_key(
+            &ModuleSettingsState::default(),
+            &layout,
+            &layout.keys[0],
         ));
     }
 

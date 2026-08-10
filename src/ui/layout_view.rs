@@ -70,13 +70,29 @@ impl EntropyApp {
             LAYOUT_BOTTOM_RESERVED_H,
             LAYOUT_FIT_MARGIN,
             None,
-            |_| true,
-            |encoder| {
-                Self::module_settings_encoder_visible(
+            |key| {
+                Self::layout_condition_visible(
+                    layout,
+                    key.layout_condition,
+                    self.layout_options_value,
+                ) && !Self::module_settings_owns_encoder_press_key(
                     &self.module_settings,
                     layout,
-                    encoder.encoder_idx,
+                    key,
                 )
+            },
+            |encoder| {
+                Self::encoder_layout_condition_visible(layout, encoder, self.layout_options_value)
+                    && Self::module_settings_encoder_visible(
+                        &self.module_settings,
+                        layout,
+                        encoder.encoder_idx,
+                    )
+                    && Self::encoder_visibility_allows(
+                        layout,
+                        encoder.encoder_idx,
+                        &self.encoder_visibility,
+                    )
             },
         );
         let offset_x = geometry.offset_x;

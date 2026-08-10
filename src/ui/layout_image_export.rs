@@ -930,7 +930,8 @@ impl EntropyApp {
                 layout,
                 key.layout_condition,
                 self.layout_options_value,
-            ) {
+            ) || Self::module_settings_owns_encoder_press_key(&self.module_settings, layout, key)
+            {
                 continue;
             }
             let rect = export_item_rect(
@@ -1101,7 +1102,8 @@ impl EntropyApp {
                 layout,
                 key.layout_condition,
                 self.layout_options_value,
-            ) {
+            ) || Self::module_settings_owns_encoder_press_key(&self.module_settings, layout, key)
+            {
                 continue;
             }
             let rect = export_item_rect(
@@ -1258,6 +1260,7 @@ fn export_layout_bounds(
     let mut rect: Option<egui::Rect> = None;
     for key in &layout.keys {
         if !EntropyApp::layout_condition_visible(layout, key.layout_condition, layout_options_value)
+            || EntropyApp::module_settings_owns_encoder_press_key(module_settings, layout, key)
         {
             continue;
         }
@@ -1273,18 +1276,17 @@ fn export_layout_bounds(
         rect = Some(rect.map(|rect| rect.union(item_rect)).unwrap_or(item_rect));
     }
     for encoder in &layout.encoders {
-        if !EntropyApp::layout_condition_visible(
-            layout,
-            encoder.layout_condition,
-            layout_options_value,
-        ) || !EntropyApp::module_settings_encoder_visible(
-            module_settings,
-            layout,
-            encoder.encoder_idx,
-        ) || !encoder_visibility
-            .get(encoder.encoder_idx as usize)
-            .copied()
-            .unwrap_or(true)
+        if !EntropyApp::encoder_layout_condition_visible(layout, encoder, layout_options_value)
+            || !EntropyApp::module_settings_encoder_visible(
+                module_settings,
+                layout,
+                encoder.encoder_idx,
+            )
+            || !EntropyApp::encoder_visibility_allows(
+                layout,
+                encoder.encoder_idx,
+                encoder_visibility,
+            )
         {
             continue;
         }
@@ -1354,18 +1356,17 @@ fn export_encoder_groups(
 ) -> Vec<ExportEncoderGroup> {
     let mut groups: Vec<(u8, ExportEncoderGroup)> = Vec::new();
     for (encoder_idx, encoder) in layout.encoders.iter().enumerate() {
-        if !EntropyApp::layout_condition_visible(
-            layout,
-            encoder.layout_condition,
-            layout_options_value,
-        ) || !EntropyApp::module_settings_encoder_visible(
-            module_settings,
-            layout,
-            encoder.encoder_idx,
-        ) || !encoder_visibility
-            .get(encoder.encoder_idx as usize)
-            .copied()
-            .unwrap_or(true)
+        if !EntropyApp::encoder_layout_condition_visible(layout, encoder, layout_options_value)
+            || !EntropyApp::module_settings_encoder_visible(
+                module_settings,
+                layout,
+                encoder.encoder_idx,
+            )
+            || !EntropyApp::encoder_visibility_allows(
+                layout,
+                encoder.encoder_idx,
+                encoder_visibility,
+            )
         {
             continue;
         }

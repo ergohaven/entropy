@@ -268,6 +268,10 @@ pub(crate) fn encoder_press_key_rects(
     key_rects: &[(usize, egui::Rect)],
     encoder_group_rects: &[(u8, egui::Rect)],
 ) -> Vec<(usize, egui::Rect)> {
+    if !layout_uses_combined_encoder_press(layout) {
+        return Vec::new();
+    }
+
     let mut press_rects = Vec::new();
 
     for (encoder_idx, group_rect) in encoder_group_rects {
@@ -319,7 +323,21 @@ pub(crate) fn encoder_press_key_rects(
     press_rects
 }
 
-fn encoder_group_layout_condition(
+fn normalized_keyboard_name(name: &str) -> String {
+    name.chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+pub(crate) fn layout_uses_combined_encoder_press(layout: &KeyboardLayout) -> bool {
+    matches!(
+        normalized_keyboard_name(&layout.name).as_str(),
+        "ergohavenk03" | "k03" | "ergohavenimperial44" | "imperial44"
+    )
+}
+
+pub(crate) fn encoder_group_layout_condition(
     layout: &KeyboardLayout,
     encoder_idx: u8,
 ) -> Option<LayoutCondition> {
@@ -763,7 +781,9 @@ mod tests {
             option_idx: 0,
             value: 0,
         };
-        let layout = encoder_test_layout(&[None, Some(module_condition)], Some(module_condition));
+        let mut layout =
+            encoder_test_layout(&[None, Some(module_condition)], Some(module_condition));
+        layout.name = "Ergohaven K:03".to_owned();
         let group_rect =
             egui::Rect::from_center_size(egui::pos2(50.0, 50.0), egui::vec2(80.0, 80.0));
         let key_rects = vec![
@@ -786,7 +806,8 @@ mod tests {
 
     #[test]
     fn encoder_press_keeps_geometric_macro_pad_matching() {
-        let layout = encoder_test_layout(&[None], None);
+        let mut layout = encoder_test_layout(&[None], None);
+        layout.name = "Ergohaven Imperial44".to_owned();
         let group_rect =
             egui::Rect::from_center_size(egui::pos2(50.0, 50.0), egui::vec2(80.0, 80.0));
         let key_rects = vec![(
@@ -802,12 +823,32 @@ mod tests {
 
     #[test]
     fn encoder_press_leaves_unrelated_distant_key_separate() {
-        let layout = encoder_test_layout(&[None], None);
+        let mut layout = encoder_test_layout(&[None], None);
+        layout.name = "Ergohaven K:03".to_owned();
         let group_rect =
             egui::Rect::from_center_size(egui::pos2(50.0, 50.0), egui::vec2(80.0, 80.0));
         let key_rects = vec![(
             0,
             egui::Rect::from_center_size(egui::pos2(180.0, 50.0), egui::vec2(20.0, 20.0)),
+        )];
+
+        let press_rects = encoder_press_key_rects(&layout, &key_rects, &[(0, group_rect)]);
+
+        assert!(press_rects.is_empty());
+    }
+
+    #[test]
+    fn encoder_press_is_not_combined_for_other_keyboards() {
+        let module_condition = LayoutCondition {
+            option_idx: 0,
+            value: 0,
+        };
+        let layout = encoder_test_layout(&[Some(module_condition)], Some(module_condition));
+        let group_rect =
+            egui::Rect::from_center_size(egui::pos2(50.0, 50.0), egui::vec2(80.0, 80.0));
+        let key_rects = vec![(
+            0,
+            egui::Rect::from_center_size(egui::pos2(50.0, 50.0), egui::vec2(20.0, 20.0)),
         )];
 
         let press_rects = encoder_press_key_rects(&layout, &key_rects, &[(0, group_rect)]);

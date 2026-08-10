@@ -252,8 +252,11 @@ fn preview_layout_geometry(
     layout: &KeyboardLayout,
     viewport: egui::Rect,
     ui_scale: f32,
+    layout_options_value: Option<u32>,
+    encoder_visibility: &[bool],
+    module_settings: &ModuleSettingsState,
 ) -> LayoutGeometry {
-    layout_geometry_with_reserved(
+    layout_geometry_with_reserved_and_filter(
         ctx,
         layout,
         viewport,
@@ -262,6 +265,23 @@ fn preview_layout_geometry(
         2.0,
         6.0,
         Some(f32::INFINITY),
+        |key| {
+            EntropyApp::layout_condition_visible(layout, key.layout_condition, layout_options_value)
+                && !EntropyApp::module_settings_owns_encoder_press_key(module_settings, layout, key)
+        },
+        |encoder| {
+            EntropyApp::encoder_layout_condition_visible(layout, encoder, layout_options_value)
+                && EntropyApp::module_settings_encoder_visible(
+                    module_settings,
+                    layout,
+                    encoder.encoder_idx,
+                )
+                && EntropyApp::encoder_visibility_allows(
+                    layout,
+                    encoder.encoder_idx,
+                    encoder_visibility,
+                )
+        },
     )
 }
 
@@ -288,7 +308,15 @@ impl EntropyApp {
     ) {
         let painter = ui.painter_at(rect);
         let keyboard_rect = rect.shrink(STICKY_LAYOUT_KEYBOARD_MARGIN);
-        let geometry = preview_layout_geometry(ui.ctx(), layout, keyboard_rect, ui_scale);
+        let geometry = preview_layout_geometry(
+            ui.ctx(),
+            layout,
+            keyboard_rect,
+            ui_scale,
+            layout_options_value,
+            encoder_visibility,
+            module_settings,
+        );
         let outline = if dark {
             Color32::from_rgb(58, 58, 62)
         } else {
@@ -305,31 +333,23 @@ impl EntropyApp {
             .enumerate()
             .filter(|&(_ki, key)| {
                 Self::layout_condition_visible(layout, key.layout_condition, layout_options_value)
+                    && !Self::module_settings_owns_encoder_press_key(module_settings, layout, key)
             })
             .map(|(ki, key)| (ki, layout_physical_key_rect(key, geometry)))
             .collect();
 
         let mut encoder_groups: Vec<EncoderGroup> = Vec::new();
         for (encoder_idx, encoder) in layout.encoders.iter().enumerate() {
-            if !Self::layout_condition_visible(
-                layout,
-                encoder.layout_condition,
-                layout_options_value,
-            ) || !Self::module_settings_encoder_visible(
-                module_settings,
-                layout,
-                encoder.encoder_idx,
-            ) {
-                continue;
-            }
-            if !encoder_visibility
-                .get(encoder.encoder_idx as usize)
-                .copied()
-                .unwrap_or(true)
+            if !Self::encoder_layout_condition_visible(layout, encoder, layout_options_value)
+                || !Self::module_settings_encoder_visible(
+                    module_settings,
+                    layout,
+                    encoder.encoder_idx,
+                )
+                || !Self::encoder_visibility_allows(layout, encoder.encoder_idx, encoder_visibility)
             {
                 continue;
             }
-
             let encoder_rect = layout_physical_encoder_rect(encoder, geometry);
             let kc = layout.get_encoder_keycode(layer, encoder_idx);
             if let Some((_, group_rect, ccw, cw)) = encoder_groups
