@@ -209,14 +209,12 @@ impl EntropyApp {
         Self::module_settings_encoder_visible_for_position(module_settings, encoder_position)
     }
 
-    pub(super) fn module_settings_owns_encoder_press_key(
+    pub(super) fn module_settings_encoder_press_key_encoder_idx(
         module_settings: &ModuleSettingsState,
         layout: &KeyboardLayout,
         key: &PhysicalKey,
-    ) -> bool {
-        let Some(key_condition) = key.layout_condition else {
-            return false;
-        };
+    ) -> Option<u8> {
+        let key_condition = key.layout_condition?;
         let encoder_indices = layout
             .encoders
             .iter()
@@ -226,11 +224,56 @@ impl EntropyApp {
         encoder_indices
             .into_iter()
             .enumerate()
-            .any(|(encoder_position, encoder_idx)| {
-                Self::module_settings_encoder_group_for_position(module_settings, encoder_position)
-                    .is_some()
-                    && encoder_group_layout_condition(layout, encoder_idx) == Some(key_condition)
+            .find_map(|(encoder_position, encoder_idx)| {
+                (Self::module_settings_encoder_group_for_position(
+                    module_settings,
+                    encoder_position,
+                )
+                .is_some()
+                    && encoder_group_layout_condition(layout, encoder_idx) == Some(key_condition))
+                .then_some(encoder_idx)
             })
+    }
+
+    pub(super) fn module_settings_encoder_press_keys(
+        module_settings: &ModuleSettingsState,
+        layout: &KeyboardLayout,
+    ) -> Vec<(usize, u8)> {
+        layout
+            .keys
+            .iter()
+            .enumerate()
+            .filter_map(|(key_idx, key)| {
+                Self::module_settings_encoder_press_key_encoder_idx(module_settings, layout, key)
+                    .map(|encoder_idx| (key_idx, encoder_idx))
+            })
+            .collect()
+    }
+
+    pub(super) fn module_settings_encoder_has_press_key(
+        module_settings: &ModuleSettingsState,
+        layout: &KeyboardLayout,
+        encoder_idx: u8,
+    ) -> bool {
+        layout.keys.iter().any(|key| {
+            Self::module_settings_encoder_press_key_encoder_idx(module_settings, layout, key)
+                == Some(encoder_idx)
+        })
+    }
+
+    pub(super) fn layout_key_visible(
+        module_settings: &ModuleSettingsState,
+        layout: &KeyboardLayout,
+        key: &PhysicalKey,
+        packed: Option<u32>,
+    ) -> bool {
+        if let Some(encoder_idx) =
+            Self::module_settings_encoder_press_key_encoder_idx(module_settings, layout, key)
+        {
+            return Self::module_settings_encoder_visible(module_settings, layout, encoder_idx);
+        }
+
+        Self::layout_condition_visible(layout, key.layout_condition, packed)
     }
 
     pub(super) fn encoder_layout_condition_visible(
@@ -2485,10 +2528,27 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(EntropyApp::module_settings_owns_encoder_press_key(
+        assert_eq!(
+            EntropyApp::module_settings_encoder_press_key_encoder_idx(
+                &settings,
+                &layout,
+                &layout.keys[0],
+            ),
+            Some(0),
+        );
+        assert!(!EntropyApp::layout_key_visible(
             &settings,
             &layout,
             &layout.keys[0],
+            Some(1),
+        ));
+        let mut encoder_settings = settings.clone();
+        encoder_settings.set_value(300, 2);
+        assert!(EntropyApp::layout_key_visible(
+            &encoder_settings,
+            &layout,
+            &layout.keys[0],
+            Some(1),
         ));
         assert!(EntropyApp::encoder_layout_condition_visible(
             &layout,
@@ -2514,11 +2574,14 @@ mod tests {
             layout_condition: None,
         }];
 
-        assert!(!EntropyApp::module_settings_owns_encoder_press_key(
-            &ModuleSettingsState::default(),
-            &layout,
-            &layout.keys[0],
-        ));
+        assert_eq!(
+            EntropyApp::module_settings_encoder_press_key_encoder_idx(
+                &ModuleSettingsState::default(),
+                &layout,
+                &layout.keys[0],
+            ),
+            None,
+        );
     }
 
     #[test]

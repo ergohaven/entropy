@@ -265,10 +265,7 @@ fn preview_layout_geometry(
         2.0,
         6.0,
         Some(f32::INFINITY),
-        |key| {
-            EntropyApp::layout_condition_visible(layout, key.layout_condition, layout_options_value)
-                && !EntropyApp::module_settings_owns_encoder_press_key(module_settings, layout, key)
-        },
+        |key| EntropyApp::layout_key_visible(module_settings, layout, key, layout_options_value),
         |encoder| {
             EntropyApp::encoder_layout_condition_visible(layout, encoder, layout_options_value)
                 && EntropyApp::module_settings_encoder_visible(
@@ -280,6 +277,11 @@ fn preview_layout_geometry(
                     layout,
                     encoder.encoder_idx,
                     encoder_visibility,
+                )
+                && !EntropyApp::module_settings_encoder_has_press_key(
+                    module_settings,
+                    layout,
+                    encoder.encoder_idx,
                 )
         },
     )
@@ -332,8 +334,7 @@ impl EntropyApp {
             .iter()
             .enumerate()
             .filter(|&(_ki, key)| {
-                Self::layout_condition_visible(layout, key.layout_condition, layout_options_value)
-                    && !Self::module_settings_owns_encoder_press_key(module_settings, layout, key)
+                Self::layout_key_visible(module_settings, layout, key, layout_options_value)
             })
             .map(|(ki, key)| (ki, layout_physical_key_rect(key, geometry)))
             .collect();
@@ -376,13 +377,19 @@ impl EntropyApp {
             .iter()
             .map(|(encoder_idx, rect, _, _)| (*encoder_idx, *rect))
             .collect();
-        let encoder_press_rects = encoder_press_key_rects(layout, &key_rects, &encoder_group_rects);
+        let explicit_press_keys = Self::module_settings_encoder_press_keys(module_settings, layout);
+        let encoder_press_rects = encoder_press_key_rects(
+            layout,
+            &key_rects,
+            &encoder_group_rects,
+            &explicit_press_keys,
+        );
+        for (encoder_idx, rect, _, _) in &mut encoder_groups {
+            *rect = encoder_group_rect_with_press(*encoder_idx, *rect, &encoder_press_rects);
+        }
 
         for (ki, key_rect) in &key_rects {
-            if encoder_press_rects
-                .iter()
-                .any(|(press_ki, _)| press_ki == ki)
-            {
+            if encoder_press_rects.iter().any(|press| press.key_idx == *ki) {
                 continue;
             }
 
@@ -499,7 +506,7 @@ impl EntropyApp {
             Color32::from_rgb(200, 200, 208)
         };
 
-        for (_, group_rect, ccw, cw) in encoder_groups {
+        for (encoder_idx, group_rect, ccw, cw) in encoder_groups {
             let center = group_rect.center();
             let radius = (group_rect.width().min(group_rect.height())
                 * LAYOUT_ENCODER_RADIUS_FACTOR)
@@ -507,8 +514,8 @@ impl EntropyApp {
             let fill_radius = radius + LAYOUT_ENCODER_FILL_EXTRA;
             let press_slot = encoder_press_rects
                 .iter()
-                .find(|(_, press_rect)| press_rect.center().distance(center) < 1.0)
-                .map(|(press_ki, press_rect)| (*press_ki, *press_rect));
+                .find(|press| press.encoder_idx == encoder_idx)
+                .map(|press| (press.key_idx, press.press_rect));
             let press_is_pressed = press_slot
                 .map(|(press_ki, _)| {
                     let key = &layout.keys[press_ki];

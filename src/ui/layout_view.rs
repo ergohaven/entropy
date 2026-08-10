@@ -71,14 +71,11 @@ impl EntropyApp {
             LAYOUT_FIT_MARGIN,
             None,
             |key| {
-                Self::layout_condition_visible(
-                    layout,
-                    key.layout_condition,
-                    self.layout_options_value,
-                ) && !Self::module_settings_owns_encoder_press_key(
+                Self::layout_key_visible(
                     &self.module_settings,
                     layout,
                     key,
+                    self.layout_options_value,
                 )
             },
             |encoder| {
@@ -92,6 +89,11 @@ impl EntropyApp {
                         layout,
                         encoder.encoder_idx,
                         &self.encoder_visibility,
+                    )
+                    && !Self::module_settings_encoder_has_press_key(
+                        &self.module_settings,
+                        layout,
+                        encoder.encoder_idx,
                     )
             },
         );
