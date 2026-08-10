@@ -952,6 +952,9 @@ impl EntropyApp {
                 let supports_rmk_native_key_actions = rmk_native_capabilities.key_actions;
                 let supports_universal_symbols = rmk_native_capabilities.universal_symbols;
                 let supports_universal_russian_letters = rmk_native_capabilities.russian_letters;
+                let supports_rmk_native_combo_output = rmk_native_capabilities.combo_output;
+                let supports_rmk_native_tap_dance_actions =
+                    rmk_native_capabilities.tap_dance_actions;
                 layout.live_features.layout |=
                     crate::rmk_native::supports_layout_sync(rmk_native_capabilities);
                 if supports_rmk_native_key_actions {
@@ -1130,7 +1133,7 @@ impl EntropyApp {
                 };
 
                 progress("Reading combos…");
-                let combo_entries = if staged_bluetooth_load {
+                let mut combo_entries = if staged_bluetooth_load {
                     vec![ComboEntry::default(); combo_count as usize]
                 } else {
                     let count = combo_count;
@@ -1138,7 +1141,10 @@ impl EntropyApp {
                     let mut entries = Vec::new();
                     for i in 0..count {
                         match dev_conn.get_combo(i) {
-                            Ok((keys, output)) => entries.push(ComboEntry { keys, output }),
+                            Ok((keys, output)) => entries.push(ComboEntry {
+                                keys,
+                                output: output.into(),
+                            }),
                             Err(e) => {
                                 log::warn!("get_combo({i}): {e}");
                                 entries.push(Default::default());
@@ -1203,7 +1209,7 @@ impl EntropyApp {
                 };
 
                 progress("Reading tap dance entries…");
-                let tap_dance_entries = if staged_bluetooth_load {
+                let mut tap_dance_entries = if staged_bluetooth_load {
                     vec![crate::keycode_picker::TapDanceEntry::default(); tap_dance_count as usize]
                 } else {
                     let count = tap_dance_count;
@@ -1213,10 +1219,10 @@ impl EntropyApp {
                         match dev_conn.get_tap_dance(i) {
                             Ok((tap, hold, dtap, taphold, term)) => {
                                 entries.push(crate::keycode_picker::TapDanceEntry {
-                                    on_tap: tap,
-                                    on_hold: hold,
-                                    on_double_tap: dtap,
-                                    on_tap_hold: taphold,
+                                    on_tap: tap.into(),
+                                    on_hold: hold.into(),
+                                    on_double_tap: dtap.into(),
+                                    on_tap_hold: taphold.into(),
                                     tapping_term: term,
                                 });
                             }
@@ -1228,6 +1234,26 @@ impl EntropyApp {
                     }
                     entries
                 };
+
+                if !staged_bluetooth_load
+                    && (supports_rmk_native_combo_output || supports_rmk_native_tap_dance_actions)
+                {
+                    let native_actions = dev_conn
+                        .get_rmk_native_dynamic_actions(
+                            combo_entries.len(),
+                            tap_dance_entries.len(),
+                        )
+                        .map_err(|error| {
+                            format!("RMK native dynamic-action scan failed: {error:#}")
+                        })?;
+                    let loaded = crate::rmk_native::apply_rmk_native_dynamic_actions(
+                        &mut combo_entries,
+                        &mut tap_dance_entries,
+                        combo_count as usize,
+                        &native_actions,
+                    );
+                    log::info!("Loaded {loaded} lossless RMK dynamic action(s)");
+                }
 
                 progress("Reading key overrides…");
                 let key_override_entries = if staged_bluetooth_load {
@@ -1329,6 +1355,8 @@ impl EntropyApp {
                         supports_rmk_native_key_actions,
                         supports_universal_symbols,
                         supports_universal_russian_letters,
+                        supports_rmk_native_combo_output,
+                        supports_rmk_native_tap_dance_actions,
                     })
                 } else {
                     DeferredDeviceLoadState::complete(layer_count)
@@ -1373,6 +1401,8 @@ impl EntropyApp {
                     supports_rmk_native_key_actions,
                     supports_universal_symbols,
                     supports_universal_russian_letters,
+                    supports_rmk_native_combo_output,
+                    supports_rmk_native_tap_dance_actions,
                     macro_ext_keycodes_disabled_reason,
                     tap_dance_entries,
                     combo_entries,

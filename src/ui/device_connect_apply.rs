@@ -537,7 +537,7 @@ impl EntropyApp {
                     .iter()
                     .enumerate()
                     .filter(|(i, combo)| {
-                        combo.output != 0
+                        !combo.output.is_no()
                             || combo.keys.iter().any(|&k| k != 0)
                             || self
                                 .combo_names
@@ -565,6 +565,10 @@ impl EntropyApp {
                 self.keycode_picker.supports_universal_symbols = r.supports_universal_symbols;
                 self.keycode_picker.supports_universal_russian_letters =
                     r.supports_universal_russian_letters;
+                self.keycode_picker.supports_rmk_native_combo_output =
+                    r.supports_rmk_native_combo_output;
+                self.keycode_picker.supports_rmk_native_tap_dance_actions =
+                    r.supports_rmk_native_tap_dance_actions;
                 self.keycode_picker.macro_ext_keycodes_disabled_reason =
                     r.macro_ext_keycodes_disabled_reason;
                 // Parse macro texts into actions (Vial protocol v2+ bytecode).

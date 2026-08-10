@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 const ENTLAYOUT_FORMAT: &str = "entropy.layout";
-const ENTLAYOUT_VERSION: u16 = 5;
+const ENTLAYOUT_VERSION: u16 = 6;
 
 fn entlayout_version_supported(version: u16) -> bool {
     (1..=ENTLAYOUT_VERSION).contains(&version)
@@ -191,6 +191,20 @@ fn decode_native_key_action(encoded: &str) -> Result<rmk_types::action::KeyActio
         .decode(encoded)
         .context("invalid base64 RMK key action")?;
     postcard::from_bytes(&bytes).context("invalid RMK key action payload")
+}
+
+fn entlayout_dynamic_binding(
+    keycode: u16,
+    native_action: Option<&str>,
+) -> Result<crate::keyboard::KeyBinding> {
+    native_action
+        .map(decode_native_key_action)
+        .transpose()
+        .map(|action| {
+            action
+                .map(crate::keyboard::KeyBinding::Rmk)
+                .unwrap_or_else(|| crate::keyboard::KeyBinding::Vial(keycode))
+        })
 }
 
 fn entlayout_native_key_action(
@@ -425,6 +439,8 @@ struct EntComboData {
 struct EntComboEntry {
     keys: [u16; 4],
     output: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_output: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -436,9 +452,17 @@ struct EntTapDanceData {
 #[derive(Clone, Serialize, Deserialize)]
 struct EntTapDanceEntry {
     on_tap: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_on_tap: Option<String>,
     on_hold: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_on_hold: Option<String>,
     on_double_tap: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_on_double_tap: Option<String>,
     on_tap_hold: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_on_tap_hold: Option<String>,
     tapping_term: u16,
 }
 
@@ -635,7 +659,11 @@ impl EntropyApp {
                         .iter()
                         .map(|entry| EntComboEntry {
                             keys: entry.keys,
-                            output: entry.output,
+                            output: entry.output.vial_keycode(),
+                            native_output: entry
+                                .output
+                                .rmk_action()
+                                .and_then(encode_native_key_action),
                         })
                         .collect(),
                     names: self.combo_names.clone(),
@@ -648,10 +676,26 @@ impl EntropyApp {
                         .tap_dance_entries
                         .iter()
                         .map(|entry| EntTapDanceEntry {
-                            on_tap: entry.on_tap,
-                            on_hold: entry.on_hold,
-                            on_double_tap: entry.on_double_tap,
-                            on_tap_hold: entry.on_tap_hold,
+                            on_tap: entry.on_tap.vial_keycode(),
+                            native_on_tap: entry
+                                .on_tap
+                                .rmk_action()
+                                .and_then(encode_native_key_action),
+                            on_hold: entry.on_hold.vial_keycode(),
+                            native_on_hold: entry
+                                .on_hold
+                                .rmk_action()
+                                .and_then(encode_native_key_action),
+                            on_double_tap: entry.on_double_tap.vial_keycode(),
+                            native_on_double_tap: entry
+                                .on_double_tap
+                                .rmk_action()
+                                .and_then(encode_native_key_action),
+                            on_tap_hold: entry.on_tap_hold.vial_keycode(),
+                            native_on_tap_hold: entry
+                                .on_tap_hold
+                                .rmk_action()
+                                .and_then(encode_native_key_action),
                             tapping_term: entry.tapping_term,
                         })
                         .collect(),
@@ -809,6 +853,24 @@ impl EntropyApp {
         }
         for layer in &bundle.data.native_keymap {
             for encoded in layer.iter().flatten() {
+                decode_native_key_action(encoded)?;
+            }
+        }
+        for combo in &bundle.data.combos.entries {
+            if let Some(encoded) = combo.native_output.as_deref() {
+                decode_native_key_action(encoded)?;
+            }
+        }
+        for tap_dance in &bundle.data.tap_dance.entries {
+            for encoded in [
+                tap_dance.native_on_tap.as_deref(),
+                tap_dance.native_on_hold.as_deref(),
+                tap_dance.native_on_double_tap.as_deref(),
+                tap_dance.native_on_tap_hold.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
                 decode_native_key_action(encoded)?;
             }
         }
@@ -1236,6 +1298,9 @@ impl EntropyApp {
             .clone();
         let limits = self.entlayout_keycode_import_limits();
         let supports_rmk_native_key_actions = self.keycode_picker.supports_rmk_native_key_actions;
+        let supports_rmk_native_combo_output = self.keycode_picker.supports_rmk_native_combo_output;
+        let supports_rmk_native_tap_dance_actions =
+            self.keycode_picker.supports_rmk_native_tap_dance_actions;
         let mut failures = Vec::new();
         let target_portable_settings = self.entlayout_portable_settings_snapshot();
         let EntPortableSettingsImportPlan {
@@ -1446,11 +1511,16 @@ impl EntropyApp {
                 let Some(combo) = remap_entcombo_entry(combo, bundle, &layout, limits) else {
                     continue;
                 };
+                let output =
+                    entlayout_dynamic_binding(combo.output, combo.native_output.as_deref())?;
+                if output.rmk_action().is_some() && !supports_rmk_native_combo_output {
+                    bail!("target firmware does not support native RMK Combo outputs");
+                }
                 let current = &self.combo_entries[idx];
-                if current.keys == combo.keys && current.output == combo.output {
+                if current.keys == combo.keys && current.output == output {
                     continue;
                 }
-                hid.set_combo(idx as u8, combo.keys, combo.output)?;
+                hid.set_combo_binding(idx as u8, combo.keys, output)?;
             }
             Ok(())
         })() {
@@ -1476,23 +1546,30 @@ impl EntropyApp {
                 let Some(td) = remap_enttap_dance_entry(td, bundle, &layout, limits) else {
                     continue;
                 };
+                let actions = [
+                    entlayout_dynamic_binding(td.on_tap, td.native_on_tap.as_deref())?,
+                    entlayout_dynamic_binding(td.on_hold, td.native_on_hold.as_deref())?,
+                    entlayout_dynamic_binding(
+                        td.on_double_tap,
+                        td.native_on_double_tap.as_deref(),
+                    )?,
+                    entlayout_dynamic_binding(td.on_tap_hold, td.native_on_tap_hold.as_deref())?,
+                ];
+                if actions.iter().any(|binding| binding.rmk_action().is_some())
+                    && !supports_rmk_native_tap_dance_actions
+                {
+                    bail!("target firmware does not support native RMK Tap Dance actions");
+                }
                 let current = &self.keycode_picker.tap_dance_entries[idx];
-                if current.on_tap == td.on_tap
-                    && current.on_hold == td.on_hold
-                    && current.on_double_tap == td.on_double_tap
-                    && current.on_tap_hold == td.on_tap_hold
+                if current.on_tap == actions[0]
+                    && current.on_hold == actions[1]
+                    && current.on_double_tap == actions[2]
+                    && current.on_tap_hold == actions[3]
                     && current.tapping_term == td.tapping_term
                 {
                     continue;
                 }
-                hid.set_tap_dance(
-                    idx as u8,
-                    td.on_tap,
-                    td.on_hold,
-                    td.on_double_tap,
-                    td.on_tap_hold,
-                    td.tapping_term,
-                )?;
+                hid.set_tap_dance_bindings(idx as u8, actions, td.tapping_term)?;
             }
             Ok(())
         })() {
@@ -1767,7 +1844,10 @@ impl EntropyApp {
                 if let Some(entry) = remap_entcombo_entry(entry, bundle, layout, limits) {
                     combo_entries[idx] = ComboEntry {
                         keys: entry.keys,
-                        output: entry.output,
+                        output: entlayout_dynamic_binding(
+                            entry.output,
+                            entry.native_output.as_deref(),
+                        )?,
                     };
                 }
             }
@@ -1784,10 +1864,22 @@ impl EntropyApp {
             {
                 if let Some(entry) = remap_enttap_dance_entry(entry, bundle, layout, limits) {
                     tap_dance_entries[idx] = crate::keycode_picker::TapDanceEntry {
-                        on_tap: entry.on_tap,
-                        on_hold: entry.on_hold,
-                        on_double_tap: entry.on_double_tap,
-                        on_tap_hold: entry.on_tap_hold,
+                        on_tap: entlayout_dynamic_binding(
+                            entry.on_tap,
+                            entry.native_on_tap.as_deref(),
+                        )?,
+                        on_hold: entlayout_dynamic_binding(
+                            entry.on_hold,
+                            entry.native_on_hold.as_deref(),
+                        )?,
+                        on_double_tap: entlayout_dynamic_binding(
+                            entry.on_double_tap,
+                            entry.native_on_double_tap.as_deref(),
+                        )?,
+                        on_tap_hold: entlayout_dynamic_binding(
+                            entry.on_tap_hold,
+                            entry.native_on_tap_hold.as_deref(),
+                        )?,
                         tapping_term: entry.tapping_term,
                     };
                 }
@@ -2269,6 +2361,7 @@ fn remap_entcombo_entry(
     Some(EntComboEntry {
         keys,
         output: try_map_entlayout_keycode(entry.output, bundle, layout, limits)?,
+        native_output: entry.native_output.clone(),
     })
 }
 
@@ -2280,9 +2373,13 @@ fn remap_enttap_dance_entry(
 ) -> Option<EntTapDanceEntry> {
     Some(EntTapDanceEntry {
         on_tap: try_map_entlayout_keycode(entry.on_tap, bundle, layout, limits)?,
+        native_on_tap: entry.native_on_tap.clone(),
         on_hold: try_map_entlayout_keycode(entry.on_hold, bundle, layout, limits)?,
+        native_on_hold: entry.native_on_hold.clone(),
         on_double_tap: try_map_entlayout_keycode(entry.on_double_tap, bundle, layout, limits)?,
+        native_on_double_tap: entry.native_on_double_tap.clone(),
         on_tap_hold: try_map_entlayout_keycode(entry.on_tap_hold, bundle, layout, limits)?,
+        native_on_tap_hold: entry.native_on_tap_hold.clone(),
         tapping_term: entry.tapping_term,
     })
 }
@@ -2666,12 +2763,13 @@ mod tests {
     }
 
     #[test]
-    fn current_version_is_v5_and_v4_files_remain_supported() {
-        assert_eq!(ENTLAYOUT_VERSION, 5);
+    fn current_version_is_v6_and_v5_files_remain_supported() {
+        assert_eq!(ENTLAYOUT_VERSION, 6);
         assert!(entlayout_version_supported(4));
         assert!(entlayout_version_supported(5));
+        assert!(entlayout_version_supported(6));
         assert!(!entlayout_version_supported(0));
-        assert!(!entlayout_version_supported(6));
+        assert!(!entlayout_version_supported(7));
     }
 
     #[test]
@@ -2802,5 +2900,41 @@ mod tests {
         let encoded = encode_native_key_action(action).expect("native action should fit");
 
         assert_eq!(decode_native_key_action(&encoded).unwrap(), action);
+    }
+
+    #[test]
+    fn native_dynamic_binding_round_trips_without_losing_legacy_compatibility() {
+        let binding =
+            crate::universal_symbols::binding(crate::universal_symbols::USER_SYMBOL_START);
+        let encoded = binding
+            .rmk_action()
+            .and_then(encode_native_key_action)
+            .expect("universal symbol should fit");
+
+        assert_eq!(
+            entlayout_dynamic_binding(0, Some(&encoded)).unwrap(),
+            binding
+        );
+        assert_eq!(
+            entlayout_dynamic_binding(0x0004, None).unwrap(),
+            crate::keyboard::KeyBinding::Vial(0x0004)
+        );
+
+        let legacy_combo: EntComboEntry = serde_json::from_value(serde_json::json!({
+            "keys": [4, 5, 0, 0],
+            "output": 6
+        }))
+        .unwrap();
+        assert!(legacy_combo.native_output.is_none());
+
+        let legacy_tap_dance: EntTapDanceEntry = serde_json::from_value(serde_json::json!({
+            "on_tap": 4,
+            "on_hold": 0,
+            "on_double_tap": 0,
+            "on_tap_hold": 0,
+            "tapping_term": 200
+        }))
+        .unwrap();
+        assert!(legacy_tap_dance.native_on_tap.is_none());
     }
 }

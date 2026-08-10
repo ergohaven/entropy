@@ -96,6 +96,19 @@ impl HidDevice {
         verify_combo_writeback(idx, requested, readback)
     }
 
+    pub fn set_combo_binding(
+        &self,
+        idx: u8,
+        keys: [u16; 4],
+        output: crate::keyboard::KeyBinding,
+    ) -> Result<()> {
+        self.set_combo(idx, keys, output.vial_keycode())?;
+        if let Some(action) = output.rmk_action() {
+            self.set_rmk_combo_output(idx, action)?;
+        }
+        Ok(())
+    }
+
     /// Get number of key override entries available
     pub fn get_key_override_count(&self) -> Result<u8> {
         let (_, _, key_override, _, _) = self.get_dynamic_entry_counts()?;
@@ -232,6 +245,28 @@ impl HidDevice {
         }
         let readback = self.get_tap_dance(idx)?;
         verify_tap_dance_writeback(idx, requested, readback)
+    }
+
+    pub fn set_tap_dance_bindings(
+        &self,
+        idx: u8,
+        actions: [crate::keyboard::KeyBinding; 4],
+        tapping_term: u16,
+    ) -> Result<()> {
+        self.set_tap_dance(
+            idx,
+            actions[0].vial_keycode(),
+            actions[1].vial_keycode(),
+            actions[2].vial_keycode(),
+            actions[3].vial_keycode(),
+            tapping_term,
+        )?;
+        for (field, binding) in actions.into_iter().enumerate() {
+            if let Some(action) = binding.rmk_action() {
+                self.set_rmk_tap_dance_action(idx, field as u8, action)?;
+            }
+        }
+        Ok(())
     }
 }
 

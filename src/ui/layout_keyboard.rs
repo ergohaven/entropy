@@ -886,7 +886,7 @@ fn combo_key_colors_for_layer(
     let mut key_colors = vec![Vec::new(); layout.keys.len()];
     for (combo_idx, combo) in combos.iter().enumerate() {
         let triggers: Vec<u16> = combo.keys.iter().copied().filter(|&key| key != 0).collect();
-        if triggers.is_empty() || combo.output == 0 {
+        if triggers.is_empty() || combo.output.is_no() {
             continue;
         }
         let color_value = colors.get(combo_idx).copied().unwrap_or(COMBO_NO_COLOR);

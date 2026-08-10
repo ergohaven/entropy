@@ -71,7 +71,7 @@ fn sticky_combo_is_active(combo: &ComboEntry, pressed_keycodes: &[u16]) -> bool 
         used[idx] = true;
     }
 
-    trigger_count > 0 && combo.output != 0
+    trigger_count > 0 && !combo.output.is_no()
 }
 
 fn sticky_pressed_keycodes(
@@ -120,7 +120,7 @@ fn sticky_tap_dance_tap_action(
     entries: &[crate::keycode_picker::TapDanceEntry],
     entry: usize,
 ) -> Option<u16> {
-    entries.get(entry).map(|entry| entry.on_tap)
+    entries.get(entry).map(|entry| entry.on_tap.vial_keycode())
 }
 
 fn sticky_tap_dance_hold_action(
@@ -130,9 +130,9 @@ fn sticky_tap_dance_hold_action(
 ) -> Option<u16> {
     entries.get(entry).map(|entry| {
         if tap_count >= 2 {
-            entry.on_tap_hold
+            entry.on_tap_hold.vial_keycode()
         } else {
-            entry.on_hold
+            entry.on_hold.vial_keycode()
         }
     })
 }
@@ -210,7 +210,7 @@ fn sticky_update_tap_dance_state(
                     StickyLayoutTapDanceState::Idle
                 } else if tap_count >= 2 {
                     if let Some(entry) = entries.get(entry) {
-                        actions.push(entry.on_double_tap);
+                        actions.push(entry.on_double_tap.vial_keycode());
                     }
                     StickyLayoutTapDanceState::Idle
                 } else {
@@ -269,7 +269,10 @@ fn sticky_virtual_layer_keycodes(
     active_combos
         .iter()
         .zip(combos)
-        .filter_map(|(active, combo)| (*active && combo.output != 0).then_some(combo.output))
+        .filter_map(|(active, combo)| {
+            let output = combo.output.vial_keycode();
+            (*active && output != 0).then_some(output)
+        })
         .chain(
             tap_dance_states
                 .iter()
@@ -459,7 +462,7 @@ impl EntropyApp {
                 .unwrap_or(false);
             if active && !was_active {
                 sticky_apply_persistent_layer_action(
-                    combo_entries[idx].output,
+                    combo_entries[idx].output.vial_keycode(),
                     layer_count,
                     &mut self.sticky_layout_toggled_layers,
                     &mut self.sticky_layout_base_layer,
@@ -565,7 +568,7 @@ mod tests {
         let pressed_keycodes = sticky_pressed_keycodes(&layout, &pressed, &pressed_key_layers, 0);
         let combo = ComboEntry {
             keys: [0x0004, 0x0005, 0, 0],
-            output: mo(2),
+            output: mo(2).into(),
         };
 
         assert!(sticky_combo_is_active(&combo, &pressed_keycodes));
@@ -576,7 +579,7 @@ mod tests {
                 &pressed_key_layers,
                 &[false; 3],
                 0,
-                &[combo.output],
+                &[combo.output.vial_keycode()],
             ),
             2
         );
@@ -585,7 +588,7 @@ mod tests {
     #[test]
     fn tap_dance_hold_exposes_its_layer_action_after_tapping_term() {
         let entries = vec![crate::keycode_picker::TapDanceEntry {
-            on_hold: mo(2),
+            on_hold: mo(2).into(),
             tapping_term: 150,
             ..Default::default()
         }];
@@ -621,7 +624,7 @@ mod tests {
     #[test]
     fn tap_dance_tap_emits_persistent_layer_action_after_tapping_term() {
         let entries = vec![crate::keycode_picker::TapDanceEntry {
-            on_tap: tg(2),
+            on_tap: tg(2).into(),
             tapping_term: 150,
             ..Default::default()
         }];

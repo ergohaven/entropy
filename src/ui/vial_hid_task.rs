@@ -791,6 +791,8 @@ mod tests {
             supports_rmk_native_key_actions: false,
             supports_universal_symbols: false,
             supports_universal_russian_letters: false,
+            supports_rmk_native_combo_output: false,
+            supports_rmk_native_tap_dance_actions: false,
         })
     }
 

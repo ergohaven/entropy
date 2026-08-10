@@ -236,9 +236,12 @@ pub(super) fn run_deferred_load(
                     Ok(DeferredLoadPayload::Macros(texts))
                 }
                 DeferredLoadSection::Combos => {
-                    let entries = (0..context.combo_count)
+                    let mut entries = (0..context.combo_count)
                         .map(|index| match hid.get_combo(index) {
-                            Ok((keys, output)) => Ok(ComboEntry { keys, output }),
+                            Ok((keys, output)) => Ok(ComboEntry {
+                                keys,
+                                output: output.into(),
+                            }),
                             Err(error) if crate::hid::is_disconnect_error(&error) => Err(error),
                             Err(error) => {
                                 log::warn!("get_combo({index}) during staged load: {error}");
@@ -246,17 +249,30 @@ pub(super) fn run_deferred_load(
                             }
                         })
                         .collect::<anyhow::Result<Vec<_>>>()?;
+                    if context.supports_rmk_native_combo_output {
+                        let native_actions = hid.get_rmk_native_dynamic_actions(
+                            context.combo_count as usize,
+                            context.tap_dance_count as usize,
+                        )?;
+                        let mut tap_dances = Vec::new();
+                        crate::rmk_native::apply_rmk_native_dynamic_actions(
+                            &mut entries,
+                            &mut tap_dances,
+                            context.combo_count as usize,
+                            &native_actions,
+                        );
+                    }
                     Ok(DeferredLoadPayload::Combos(entries))
                 }
                 DeferredLoadSection::TapDance => {
-                    let entries = (0..context.tap_dance_count)
+                    let mut entries = (0..context.tap_dance_count)
                         .map(|index| match hid.get_tap_dance(index) {
                             Ok((on_tap, on_hold, on_double_tap, on_tap_hold, tapping_term)) => {
                                 Ok(crate::keycode_picker::TapDanceEntry {
-                                    on_tap,
-                                    on_hold,
-                                    on_double_tap,
-                                    on_tap_hold,
+                                    on_tap: on_tap.into(),
+                                    on_hold: on_hold.into(),
+                                    on_double_tap: on_double_tap.into(),
+                                    on_tap_hold: on_tap_hold.into(),
                                     tapping_term,
                                 })
                             }
@@ -267,6 +283,19 @@ pub(super) fn run_deferred_load(
                             }
                         })
                         .collect::<anyhow::Result<Vec<_>>>()?;
+                    if context.supports_rmk_native_tap_dance_actions {
+                        let native_actions = hid.get_rmk_native_dynamic_actions(
+                            context.combo_count as usize,
+                            context.tap_dance_count as usize,
+                        )?;
+                        let mut combos = Vec::new();
+                        crate::rmk_native::apply_rmk_native_dynamic_actions(
+                            &mut combos,
+                            &mut entries,
+                            context.combo_count as usize,
+                            &native_actions,
+                        );
+                    }
                     Ok(DeferredLoadPayload::TapDance(entries))
                 }
                 DeferredLoadSection::KeyOverrides => {
@@ -784,7 +813,7 @@ impl EntropyApp {
                     .iter()
                     .enumerate()
                     .filter(|(index, combo)| {
-                        combo.output != 0
+                        !combo.output.is_no()
                             || combo.keys.iter().any(|keycode| *keycode != 0)
                             || self
                                 .combo_names
@@ -1375,6 +1404,8 @@ mod tests {
             supports_rmk_native_key_actions: false,
             supports_universal_symbols: false,
             supports_universal_russian_letters: false,
+            supports_rmk_native_combo_output: false,
+            supports_rmk_native_tap_dance_actions: false,
         }
     }
 

@@ -9,8 +9,8 @@ pub(super) enum ComboWritePlan {
 
 fn combo_entry_is_writable(entry: &ComboEntry) -> bool {
     let trigger_count = entry.keys.iter().filter(|&&keycode| keycode != 0).count();
-    let is_empty = trigger_count == 0 && entry.output == 0;
-    is_empty || ((2..=4).contains(&trigger_count) && entry.output != 0)
+    let is_empty = trigger_count == 0 && entry.output.is_no();
+    is_empty || ((2..=4).contains(&trigger_count) && !entry.output.is_no())
 }
 
 pub(super) fn next_combo_write(
@@ -153,8 +153,11 @@ impl EntropyApp {
                     #[cfg(target_os = "macos")]
                     let _hid_lock = crate::hid::macos_hid_operation_lock();
 
-                    let write_result =
-                        hid_device.set_combo(index as u8, task_entry.keys, task_entry.output);
+                    let write_result = hid_device.set_combo_binding(
+                        index as u8,
+                        task_entry.keys,
+                        task_entry.output,
+                    );
                     let disconnected = write_result
                         .as_ref()
                         .err()
@@ -263,7 +266,10 @@ mod tests {
     use super::*;
 
     fn combo(keys: [u16; 4], output: u16) -> ComboEntry {
-        ComboEntry { keys, output }
+        ComboEntry {
+            keys,
+            output: output.into(),
+        }
     }
 
     #[test]

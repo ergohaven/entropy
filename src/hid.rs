@@ -2311,6 +2311,22 @@ mod tests {
     }
 
     #[test]
+    fn native_dynamic_action_scan_rejects_a_stale_flat_index() {
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_CUSTOM_GET_VALUE;
+        command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
+        command[2] = 0x06;
+        command[3] = 0x01;
+        command[4..6].copy_from_slice(&17u16.to_le_bytes());
+
+        let mut stale_response = command;
+        stale_response[4] = 0;
+        stale_response[5..7].copy_from_slice(&16u16.to_le_bytes());
+
+        assert!(!response_matches_command(&command, &stale_response));
+    }
+
+    #[test]
     fn native_capabilities_accepts_exact_qmk_echo_as_unsupported() {
         let mut command = [0u8; MSG_LEN];
         command[0] = CMD_VIA_CUSTOM_GET_VALUE;

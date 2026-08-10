@@ -522,6 +522,8 @@ pub(crate) struct DeferredDeviceLoadContext {
     pub(crate) supports_rmk_native_key_actions: bool,
     pub(crate) supports_universal_symbols: bool,
     pub(crate) supports_universal_russian_letters: bool,
+    pub(crate) supports_rmk_native_combo_output: bool,
+    pub(crate) supports_rmk_native_tap_dance_actions: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -567,6 +569,9 @@ impl DeferredDeviceLoadContext {
             && self.supports_rmk_native_key_actions == other.supports_rmk_native_key_actions
             && self.supports_universal_symbols == other.supports_universal_symbols
             && self.supports_universal_russian_letters == other.supports_universal_russian_letters
+            && self.supports_rmk_native_combo_output == other.supports_rmk_native_combo_output
+            && self.supports_rmk_native_tap_dance_actions
+                == other.supports_rmk_native_tap_dance_actions
     }
 }
 
@@ -956,6 +961,10 @@ pub(crate) struct ConnectResult {
     pub(crate) supports_universal_symbols: bool,
     /// Firmware implements native Russian-letter Universal Symbols actions.
     pub(crate) supports_universal_russian_letters: bool,
+    /// Firmware accepts native RMK actions as Combo outputs.
+    pub(crate) supports_rmk_native_combo_output: bool,
+    /// Firmware accepts native RMK actions in Tap Dance fields.
+    pub(crate) supports_rmk_native_tap_dance_actions: bool,
     pub(crate) macro_ext_keycodes_disabled_reason: Option<MacroExtKeycodesDisabledReason>,
     /// Tap dance entries
     pub(crate) tap_dance_entries: Vec<crate::keycode_picker::TapDanceEntry>,
@@ -1140,7 +1149,7 @@ pub(crate) fn vial_layer_retarget_base(kc: u16) -> Option<u16> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ComboEntry {
     pub(crate) keys: [u16; 4],
-    pub(crate) output: u16,
+    pub(crate) output: crate::keyboard::KeyBinding,
 }
 
 #[derive(Clone, Debug, Default)]

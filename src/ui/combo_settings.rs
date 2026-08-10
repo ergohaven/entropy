@@ -1,5 +1,9 @@
 use super::*;
 
+fn combo_picker_allows_native_actions(field: ComboPickField, capability: bool) -> bool {
+    capability && matches!(field, ComboPickField::Output)
+}
+
 impl EntropyApp {
     pub(super) fn draw_combo_settings_page(
         &mut self,
@@ -49,10 +53,21 @@ impl EntropyApp {
     }
 
     fn open_combo_key_picker(&mut self, combo_idx: usize, field: ComboPickField) {
+        let current_output = matches!(field, ComboPickField::Output)
+            .then(|| self.combo_entries.get(combo_idx).map(|entry| entry.output))
+            .flatten();
         self.combo_pick_target = Some((combo_idx, field));
         self.keycode_picker.layer_names = self.layer_names.clone();
         self.keycode_picker
             .open_full_key_picker(crate::keycode_picker::KeycodeTab::Basic);
+        self.keycode_picker
+            .rmk_native_key_actions_allowed_for_target = combo_picker_allows_native_actions(
+            field,
+            self.keycode_picker.supports_rmk_native_combo_output,
+        );
+        if let Some(binding) = current_output {
+            self.keycode_picker.select_tab_for_binding(binding);
+        }
     }
 
     fn handle_combo_editor_input(&mut self, ctx: &egui::Context, allow_close: bool) -> bool {
@@ -135,7 +150,7 @@ impl EntropyApp {
         let selected_combo_empty = self
             .combo_entries
             .get(combo_idx)
-            .map(|entry| entry.keys.iter().all(|&k| k == 0) && entry.output == 0)
+            .map(|entry| entry.keys.iter().all(|&k| k == 0) && entry.output.is_no())
             .unwrap_or(true)
             && self
                 .combo_names
@@ -200,7 +215,7 @@ impl EntropyApp {
                                                 .get(entry_idx)
                                                 .map(|entry| {
                                                     entry.keys.iter().all(|&k| k == 0)
-                                                        && entry.output == 0
+                                                        && entry.output.is_no()
                                                 })
                                                 .unwrap_or(true)
                                                 && self
@@ -528,10 +543,10 @@ impl EntropyApp {
                     input_key_size.x,
                     |ui| {
                         let value = self.combo_entries[combo_idx].output;
-                        let button_label = if value == 0 {
+                        let button_label = if value.is_no() {
                             String::new()
                         } else {
-                            keycode_label_with_macro_names(
+                            key_binding_label_with_macro_names(
                                 value,
                                 custom,
                                 &self.layer_names,
@@ -548,7 +563,18 @@ impl EntropyApp {
                             true,
                         );
                         if !hover_label.is_empty() {
-                            resp.clone().on_hover_text(hover_label.as_str());
+                            let tooltip = key_binding_tooltip_with_macro_names(
+                                value,
+                                custom,
+                                &self.layer_names,
+                                &self.keycode_picker.macro_names,
+                                &self.keycode_picker.macro_descriptions,
+                                &self.keycode_picker.tap_dance_names,
+                            );
+                            resp.clone().on_hover_text(crate::i18n::tr_text(
+                                self.app_settings.language,
+                                &tooltip,
+                            ));
                         }
                         combo_keycap_hovered |= resp.hovered();
                         if resp.clicked_by(egui::PointerButton::Primary) {
@@ -556,9 +582,9 @@ impl EntropyApp {
                         }
                         if resp.clicked_by(egui::PointerButton::Secondary) {
                             self.secondary_click_handled = true;
-                            if value != 0 {
+                            if !value.is_no() {
                                 self.push_combo_undo();
-                                self.combo_entries[combo_idx].output = 0;
+                                self.combo_entries[combo_idx].output = Default::default();
                                 self.mark_combo_dirty();
                             }
                         }
@@ -665,7 +691,7 @@ impl EntropyApp {
                 ui.spacing_mut().item_spacing.x = 8.0 * scale;
                 let clear_enabled = combo_idx < self.combo_entries.len()
                     && (self.combo_entries[combo_idx].keys.iter().any(|&k| k != 0)
-                        || self.combo_entries[combo_idx].output != 0
+                        || !self.combo_entries[combo_idx].output.is_no()
                         || self
                             .combo_names
                             .get(combo_idx)
@@ -840,4 +866,25 @@ fn paint_combo_color_chip(
     }
     ui.painter()
         .rect(rect, 5.0, color, stroke, egui::StrokeKind::Inside);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_actions_are_available_only_for_combo_output() {
+        assert!(combo_picker_allows_native_actions(
+            ComboPickField::Output,
+            true
+        ));
+        assert!(!combo_picker_allows_native_actions(
+            ComboPickField::Trigger(0),
+            true
+        ));
+        assert!(!combo_picker_allows_native_actions(
+            ComboPickField::Output,
+            false
+        ));
+    }
 }

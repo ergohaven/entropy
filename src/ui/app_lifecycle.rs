@@ -556,7 +556,7 @@ mod tests {
         app.combo_term = Some(150);
         app.combo_term_dirty = true;
         app.keycode_picker.tap_dance_entries = vec![crate::keycode_picker::TapDanceEntry {
-            on_tap: 0x0004,
+            on_tap: 0x0004.into(),
             tapping_term: 175,
             ..Default::default()
         }];
@@ -607,7 +607,10 @@ mod tests {
     }
 
     fn combo(keys: [u16; 4], output: u16) -> ComboEntry {
-        ComboEntry { keys, output }
+        ComboEntry {
+            keys,
+            output: output.into(),
+        }
     }
 
     #[test]
@@ -644,12 +647,12 @@ mod tests {
     #[test]
     fn tap_dance_writeback_targets_only_changed_entries() {
         let unchanged = crate::keycode_picker::TapDanceEntry {
-            on_tap: 0x002c,
+            on_tap: 0x002c.into(),
             tapping_term: 150,
             ..Default::default()
         };
         let changed = crate::keycode_picker::TapDanceEntry {
-            on_hold: 0x0202,
+            on_hold: 0x0202.into(),
             ..unchanged.clone()
         };
 
@@ -1749,12 +1752,9 @@ impl eframe::App for EntropyApp {
                     let Some(td) = self.keycode_picker.tap_dance_entries.get(i).cloned() else {
                         continue;
                     };
-                    match hid.set_tap_dance(
+                    match hid.set_tap_dance_bindings(
                         i as u8,
-                        td.on_tap,
-                        td.on_hold,
-                        td.on_double_tap,
-                        td.on_tap_hold,
+                        [td.on_tap, td.on_hold, td.on_double_tap, td.on_tap_hold],
                         td.tapping_term,
                     ) {
                         Ok(()) => {

@@ -1298,7 +1298,7 @@ mod tests {
         app.hid_device = Some(hid_device);
         app.combo_entries = vec![ComboEntry {
             keys: [0x0004, 0x0005, 0, 0],
-            output: 0x0006,
+            output: 0x0006.into(),
         }];
         app.combo_synced_entries = vec![ComboEntry::default()];
         app.mark_combo_dirty();

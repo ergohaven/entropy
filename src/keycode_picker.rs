@@ -84,10 +84,10 @@ fn picker_ok_label(language: crate::i18n::Language) -> &'static str {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TapDanceEntry {
-    pub on_tap: u16,
-    pub on_hold: u16,
-    pub on_double_tap: u16,
-    pub on_tap_hold: u16,
+    pub on_tap: crate::keyboard::KeyBinding,
+    pub on_hold: crate::keyboard::KeyBinding,
+    pub on_double_tap: crate::keyboard::KeyBinding,
+    pub on_tap_hold: crate::keyboard::KeyBinding,
     pub tapping_term: u16,
 }
 
@@ -140,6 +140,8 @@ pub struct KeycodePicker {
     pub supports_rmk_native_key_actions: bool,
     pub supports_universal_symbols: bool,
     pub supports_universal_russian_letters: bool,
+    pub supports_rmk_native_combo_output: bool,
+    pub supports_rmk_native_tap_dance_actions: bool,
     pub rmk_native_key_actions_allowed_for_target: bool,
     pub macro_ext_keycodes_disabled_reason: Option<MacroExtKeycodesDisabledReason>,
     pub layer_names: Vec<String>,
@@ -567,6 +569,48 @@ fn show_universal_symbol_section(
     picked
 }
 
+fn show_universal_russian_letter_section(
+    ui: &mut egui::Ui,
+    language: crate::i18n::Language,
+) -> Option<crate::keyboard::KeyBinding> {
+    let mut picked = None;
+    ui.add_space(crate::ui_style::modal_space_sm());
+    ui.label(
+        RichText::new(crate::i18n::tr_catalog(
+            language,
+            "key_picker_text.international",
+        ))
+        .size(11.0)
+        .color(Color32::from_gray(150)),
+    );
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        for letter in crate::universal_symbols::RUSSIAN_LETTERS {
+            let binding = crate::universal_symbols::binding(letter.user_id);
+            let label = crate::universal_symbols::label_for_user_id(letter.user_id)
+                .expect("universal Russian letter should have a display label");
+            let resp = ui
+                .add_sized(
+                    KeycodePicker::picker_key_size(ui.ctx()),
+                    egui::Button::new(""),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            KeycodePicker::paint_compact_picker_label(ui, &resp, &label);
+            if resp.clicked() {
+                picked = Some(binding);
+            }
+            resp.on_hover_text(crate::i18n::tr_text(
+                language,
+                &binding
+                    .rmk_action()
+                    .and_then(crate::universal_symbols::tooltip)
+                    .unwrap_or_default(),
+            ));
+        }
+    });
+    picked
+}
+
 fn picker_tab_label(language: crate::i18n::Language, tab: KeycodeTab) -> &'static str {
     tr_picker(language, tab.i18n_key())
 }
@@ -727,6 +771,8 @@ impl Default for KeycodePicker {
             supports_rmk_native_key_actions: false,
             supports_universal_symbols: false,
             supports_universal_russian_letters: false,
+            supports_rmk_native_combo_output: false,
+            supports_rmk_native_tap_dance_actions: false,
             rmk_native_key_actions_allowed_for_target: false,
             macro_ext_keycodes_disabled_reason: None,
             layer_names: (0..16).map(|i| i.to_string()).collect(),

@@ -180,6 +180,7 @@ impl KeycodePicker {
                             }
                         }
                     }
+                    self.show_tap_dance_universal_sections(ui, td_idx, field);
                 });
         });
         if !still_open {
@@ -375,11 +376,43 @@ impl KeycodePicker {
         matches!(field, 0 | 2)
     }
 
+    fn show_tap_dance_universal_sections(&mut self, ui: &mut egui::Ui, td_idx: usize, field: u8) {
+        if !self.tap_dance_native_actions_available() {
+            return;
+        }
+        if self.supports_universal_symbols {
+            ui.add_space(crate::ui_style::modal_space_sm());
+            if let Some(binding) = show_universal_symbol_section(ui, self.language) {
+                self.set_tap_dance_binding(td_idx, field, binding);
+                self.td_key_pick = None;
+            }
+        }
+        if self.supports_universal_russian_letters {
+            if let Some(binding) = show_universal_russian_letter_section(ui, self.language) {
+                self.set_tap_dance_binding(td_idx, field, binding);
+                self.td_key_pick = None;
+            }
+        }
+    }
+
+    fn tap_dance_native_actions_available(&self) -> bool {
+        self.supports_rmk_native_key_actions && self.supports_rmk_native_tap_dance_actions
+    }
+
     fn set_tap_dance_field(&mut self, n: usize, field: u8, value: u16) {
+        self.set_tap_dance_binding(
+            n,
+            field,
+            crate::keyboard::KeyBinding::Vial(crate::keycode::normalize_output_symbol_keycode(
+                value,
+            )),
+        );
+    }
+
+    fn set_tap_dance_binding(&mut self, n: usize, field: u8, value: crate::keyboard::KeyBinding) {
         if n >= self.tap_dance_entries.len() {
             return;
         }
-        let value = crate::keycode::normalize_output_symbol_keycode(value);
         let current = match self.tap_dance_entries.get(n) {
             Some(td) => match field {
                 0 => td.on_tap,
@@ -427,5 +460,51 @@ mod tests {
         assert!(!KeycodePicker::tap_dance_macros_allowed_in_field(1));
         assert!(KeycodePicker::tap_dance_macros_allowed_in_field(2));
         assert!(!KeycodePicker::tap_dance_macros_allowed_in_field(3));
+    }
+
+    #[test]
+    fn tap_dance_native_actions_require_the_target_capability() {
+        let available = KeycodePicker {
+            supports_rmk_native_key_actions: true,
+            supports_rmk_native_tap_dance_actions: true,
+            supports_universal_symbols: true,
+            ..Default::default()
+        };
+        assert!(available.tap_dance_native_actions_available());
+
+        for unavailable in [
+            KeycodePicker {
+                supports_rmk_native_key_actions: false,
+                supports_rmk_native_tap_dance_actions: true,
+                ..Default::default()
+            },
+            KeycodePicker {
+                supports_rmk_native_key_actions: true,
+                supports_rmk_native_tap_dance_actions: false,
+                ..Default::default()
+            },
+        ] {
+            assert!(!unavailable.tap_dance_native_actions_available());
+        }
+    }
+
+    #[test]
+    fn universal_symbols_can_be_assigned_to_all_tap_dance_fields() {
+        let binding =
+            crate::universal_symbols::binding(crate::universal_symbols::USER_SYMBOL_START);
+        let mut picker = KeycodePicker {
+            tap_dance_entries: vec![TapDanceEntry::default()],
+            ..Default::default()
+        };
+
+        for field in 0..=3 {
+            picker.set_tap_dance_binding(0, field, binding);
+        }
+
+        let entry = &picker.tap_dance_entries[0];
+        assert_eq!(entry.on_tap, binding);
+        assert_eq!(entry.on_hold, binding);
+        assert_eq!(entry.on_double_tap, binding);
+        assert_eq!(entry.on_tap_hold, binding);
     }
 }
