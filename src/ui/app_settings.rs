@@ -373,13 +373,23 @@ impl EntropyApp {
                 }
                 4 => {
                     let mut launch_minimized = self.app_settings.launch_minimized;
+                    #[cfg(target_os = "windows")]
+                    let (launch_background_label, launch_background_tooltip) = (
+                        crate::i18n::tr(lang, TrKey::LaunchInTrayLabel),
+                        crate::i18n::tr(lang, TrKey::LaunchInTrayTooltip),
+                    );
+                    #[cfg(not(target_os = "windows"))]
+                    let (launch_background_label, launch_background_tooltip) = (
+                        crate::i18n::tr(lang, TrKey::LaunchMinimizedLabel),
+                        crate::i18n::tr(lang, TrKey::LaunchMinimizedTooltip),
+                    );
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
                         content_width,
                         row_height,
-                        crate::i18n::tr(lang, TrKey::LaunchMinimizedLabel),
+                        launch_background_label,
                         true,
-                        tooltip(crate::i18n::tr(lang, TrKey::LaunchMinimizedTooltip)),
+                        tooltip(launch_background_tooltip),
                         switch_width,
                         |ui| {
                             let _ = crate::ui_style::settings_switch_sized_stable(

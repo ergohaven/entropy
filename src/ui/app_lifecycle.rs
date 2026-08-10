@@ -1091,6 +1091,8 @@ impl eframe::App for EntropyApp {
         {
             #[cfg(target_os = "windows")]
             self.cache_windows_hwnd(frame);
+            #[cfg(target_os = "windows")]
+            self.handle_windows_start_hidden_to_tray(ctx);
             #[cfg(target_os = "macos")]
             self.cache_macos_ns_window(frame);
             // Cache the winit window/display handles so native file dialogs can be

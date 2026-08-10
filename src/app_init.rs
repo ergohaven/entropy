@@ -105,6 +105,8 @@ impl EntropyApp {
             windows_hwnd: None,
             #[cfg(target_os = "windows")]
             windows_window_hidden_to_tray: false,
+            #[cfg(target_os = "windows")]
+            windows_start_hidden_to_tray_pending: false,
             #[cfg(target_os = "macos")]
             macos_ns_window: None,
             #[cfg(target_os = "macos")]

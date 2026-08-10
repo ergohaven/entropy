@@ -10,6 +10,12 @@ fn should_keep_vial_unlock_visible(unlock_open: bool, unlock_polling: bool) -> b
 }
 
 impl EntropyApp {
+    #[cfg(target_os = "windows")]
+    pub(crate) fn with_start_hidden_to_tray(mut self) -> Self {
+        self.windows_start_hidden_to_tray_pending = true;
+        self
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn deferred_exit_has_pending_hid_writes(&self) -> bool {
         self.keycode_picker.macros_dirty
@@ -159,6 +165,16 @@ impl EntropyApp {
         }
     }
 
+    #[cfg(target_os = "windows")]
+    pub(super) fn handle_windows_start_hidden_to_tray(&mut self, ctx: &egui::Context) {
+        if !self.windows_start_hidden_to_tray_pending || self.windows_hwnd.is_none() {
+            return;
+        }
+
+        self.windows_start_hidden_to_tray_pending = false;
+        self.minimize_window_to_tray(ctx);
+    }
+
     #[cfg(target_os = "macos")]
     pub(super) fn cache_macos_ns_window(&mut self, frame: &eframe::Frame) {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -252,6 +268,11 @@ impl EntropyApp {
 
         #[cfg(target_os = "windows")]
         {
+            if self.tray_icon.is_none() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                return;
+            }
             if let Some(hwnd) = self.windows_hwnd {
                 unsafe {
                     use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
