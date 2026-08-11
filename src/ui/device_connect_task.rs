@@ -270,55 +270,6 @@ fn save_cached_qmk_settings(cache_key: &str, context: &QmkSettingsCacheContext, 
     }
 }
 
-fn is_cached_vial_definition_for_device(file_name: &str, cache_key: &str) -> bool {
-    let Some(stem) = file_name.strip_suffix(".json") else {
-        return false;
-    };
-    let Some((device_prefix, definition_size)) = stem.rsplit_once('_') else {
-        return false;
-    };
-    let expected_prefix = format!("definition_v{VIAL_DEFINITION_CACHE_VERSION}_{cache_key}");
-
-    device_prefix == expected_prefix
-        && definition_size.len() == 8
-        && definition_size.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn clear_cached_device_data(cache_key: &str) -> Result<(), String> {
-    let cache_dir =
-        vial_cache_dir().ok_or_else(|| "device cache directory is unavailable".to_owned())?;
-    let mut paths = Vec::new();
-    for entry in std::fs::read_dir(&cache_dir)
-        .map_err(|error| format!("failed to read {}: {error}", cache_dir.display()))?
-    {
-        let entry = entry.map_err(|error| {
-            format!(
-                "failed to inspect cached device data in {}: {error}",
-                cache_dir.display()
-            )
-        })?;
-        if entry
-            .file_name()
-            .to_str()
-            .is_some_and(|name| is_cached_vial_definition_for_device(name, cache_key))
-        {
-            paths.push(entry.path());
-        }
-    }
-    paths.push(cache_dir.join(format!("qmk_settings_{cache_key}.json")));
-
-    for path in paths {
-        match std::fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(format!("failed to remove {}: {error}", path.display()));
-            }
-        }
-    }
-    Ok(())
-}
-
 fn normalize_reported_layer_count(reported_layer_count: usize) -> usize {
     reported_layer_count.max(1)
 }
@@ -522,53 +473,6 @@ fn supports_vial_macro_ext_keycodes(vial_protocol: u32, json: &serde_json::Value
 }
 
 impl EntropyApp {
-    pub(super) fn refresh_current_device_data(&mut self) {
-        let lang = self.app_settings.language;
-        if self.hid_write_lifecycle_busy() {
-            self.status_msg =
-                crate::i18n::tr_catalog(lang, "status_messages.refresh_device_data_pending_write")
-                    .to_owned();
-            return;
-        }
-        let Some(device_idx) = self.selected_device else {
-            self.status_msg =
-                crate::i18n::tr_catalog(lang, "status_messages.refresh_device_data_missing_device")
-                    .to_owned();
-            return;
-        };
-        let Some(device) = self.device_manager.devices().get(device_idx).cloned() else {
-            self.status_msg =
-                crate::i18n::tr_catalog(lang, "status_messages.refresh_device_data_missing_device")
-                    .to_owned();
-            return;
-        };
-        let Some(info) = self.device_about_info.as_ref() else {
-            self.status_msg =
-                crate::i18n::tr_catalog(lang, "status_messages.refresh_device_data_missing_info")
-                    .to_owned();
-            return;
-        };
-
-        let cache_keys = device_cache_keys(&device, info.keyboard_id);
-        for cache_key in &cache_keys {
-            if let Err(error) = clear_cached_device_data(cache_key) {
-                self.status_msg = crate::i18n::tr_catalog(
-                    lang,
-                    "status_messages.refresh_device_data_delete_failed",
-                )
-                .to_owned();
-                log::warn!("device cache refresh failed for key {cache_key}: {error}");
-                return;
-            }
-        }
-
-        log::info!(
-            "Cleared Vial definition and QMK settings cache for keys {}",
-            cache_keys.join(", ")
-        );
-        self.start_connect(device_idx);
-    }
-
     pub(super) fn start_connect(&mut self, device_idx: usize) {
         self.start_connect_with_reconnect(device_idx, None);
     }
@@ -1700,38 +1604,6 @@ mod tests {
             cached_vial_definition_file_name("keyboard", 0x1234),
             cached_vial_definition_file_name("keyboard", 0x1235)
         );
-    }
-
-    #[test]
-    fn device_cache_refresh_matches_all_definition_sizes_for_only_one_device() {
-        assert!(is_cached_vial_definition_for_device(
-            "definition_v4_keyboard_00001234.json",
-            "keyboard"
-        ));
-        assert!(is_cached_vial_definition_for_device(
-            "definition_v4_keyboard_00005678.json",
-            "keyboard"
-        ));
-        assert!(!is_cached_vial_definition_for_device(
-            "definition_v4_other-keyboard_00001234.json",
-            "keyboard"
-        ));
-        assert!(!is_cached_vial_definition_for_device(
-            "definition_v3_keyboard_00001234.json",
-            "keyboard"
-        ));
-        assert!(!is_cached_vial_definition_for_device(
-            "definition_v4_keyboard_pro_00001234.json",
-            "keyboard"
-        ));
-        assert!(!is_cached_vial_definition_for_device(
-            "definition_v4_keyboard_0000123.json",
-            "keyboard"
-        ));
-        assert!(!is_cached_vial_definition_for_device(
-            "definition_v4_keyboard_not-hex.json",
-            "keyboard"
-        ));
     }
 
     fn cache_context(json: &serde_json::Value) -> QmkSettingsCacheContext {

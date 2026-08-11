@@ -406,11 +406,6 @@ device_unlocked = "Device unlocked!"
 unlock_interrupted_disconnected = "Unlock interrupted — device disconnected or unavailable: {error}"
 unlock_poll_retry = "Unlock communication interrupted; retrying: {error}"
 finish_unlock_before_closing = "Finish device unlock or reconnect it before closing Entropy"
-refresh_device_data_pending_write = "Finish the pending layer write before refreshing device data"
-refresh_device_data_missing_device = "Failed to refresh device data: device not found"
-refresh_device_data_missing_info = "Failed to refresh device data: device information unavailable"
-refresh_device_data_delete_failed = "Failed to remove cached device data"
-
 [dynamic_status]
 device_not_found = "Device not found"
 connecting_to = "Connecting to {device}…"

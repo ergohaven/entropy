@@ -667,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn combo_task_defers_settings_changes_refresh_and_exit_writes_until_handle_returns() {
+    fn combo_task_defers_settings_changes_and_exit_writes_until_handle_returns() {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -709,14 +709,6 @@ mod tests {
         assert_eq!(app.keycode_picker.result, Some(0x0004.into()));
         assert_eq!(app.key_override_entries[0].trigger, 0);
 
-        app.refresh_current_device_data();
-        assert_eq!(
-            app.status_msg,
-            crate::i18n::tr_catalog(
-                app.app_settings.language,
-                "status_messages.refresh_device_data_pending_write"
-            )
-        );
         app.app_settings.minimize_to_tray_on_close = false;
         app.app_settings.close_to_tray_behavior = CloseToTrayBehavior::Close;
         let mut close_input = egui::RawInput::default();

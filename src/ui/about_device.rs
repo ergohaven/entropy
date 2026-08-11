@@ -61,31 +61,6 @@ fn device_about_description(lang: crate::i18n::Language) -> &'static str {
     }
 }
 
-fn refresh_device_data_label(lang: crate::i18n::Language) -> &'static str {
-    match lang {
-        crate::i18n::Language::Russian => "Обновить данные",
-        crate::i18n::Language::English => "Refresh device data",
-    }
-}
-
-fn refresh_device_button_label(lang: crate::i18n::Language) -> &'static str {
-    match lang {
-        crate::i18n::Language::Russian => "Обновить",
-        crate::i18n::Language::English => "Refresh",
-    }
-}
-
-fn refresh_device_data_tooltip(lang: crate::i18n::Language) -> &'static str {
-    match lang {
-        crate::i18n::Language::Russian => {
-            "Удалить сохраненные данные Vial и QMK, затем переподключить устройство"
-        }
-        crate::i18n::Language::English => {
-            "Discard the cached definition and QMK settings, then reconnect the device"
-        }
-    }
-}
-
 struct AboutRow {
     label: &'static str,
     tooltip: &'static str,
@@ -727,8 +702,16 @@ impl EntropyApp {
                         .color(app_muted_text(dark)),
                 );
                 ui.add_space(metrics.value(24.0));
+                let bottom_reserve = if firmware_update_supported {
+                    metrics.value(54.0)
+                } else {
+                    0.0
+                };
                 let list_viewport =
-                    draw_about_rows(ui, "about_device", metrics, &rows, metrics.value(54.0));
+                    draw_about_rows(ui, "about_device", metrics, &rows, bottom_reserve);
+                if !firmware_update_supported {
+                    return;
+                }
                 let firmware_checking = matches!(
                     self.firmware_update_check,
                     FirmwareUpdateCheckState::Checking { .. }
@@ -741,20 +724,9 @@ impl EntropyApp {
                     }
                     _ => None,
                 };
-                let button_size = egui::vec2(
-                    metrics.value(if firmware_update_supported {
-                        108.0
-                    } else {
-                        180.0
-                    }),
-                    metrics.value(32.0),
-                );
+                let button_size = egui::vec2(metrics.value(132.0), metrics.value(32.0));
                 let button_gap = metrics.value(8.0);
-                let button_count = if firmware_update_supported {
-                    2 + 2 * usize::from(firmware_ready.is_some())
-                } else {
-                    1
-                };
+                let button_count = 1 + 2 * usize::from(firmware_ready.is_some());
                 let actions_width = button_size.x * button_count as f32
                     + button_gap * button_count.saturating_sub(1) as f32;
                 let actions_rect = egui::Rect::from_center_size(
@@ -764,71 +736,47 @@ impl EntropyApp {
                     ),
                     egui::vec2(actions_width, button_size.y),
                 );
-                #[cfg(not(target_arch = "wasm32"))]
-                let refresh_enabled = !self.hid_write_lifecycle_busy();
-                #[cfg(target_arch = "wasm32")]
-                let refresh_enabled = true;
                 crate::ui_style::allocate_ui_at_rect(ui, actions_rect, |ui| {
                     ui.set_min_size(actions_rect.size());
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = button_gap;
-                        let refresh_label = if firmware_update_supported {
-                            refresh_device_button_label(lang)
-                        } else {
-                            refresh_device_data_label(lang)
-                        };
                         if crate::ui_style::modern_button(
                             ui,
-                            refresh_label,
+                            check_updates_label(lang, firmware_checking),
                             button_size,
-                            refresh_enabled,
+                            !firmware_checking,
                         )
-                        .on_hover_text(refresh_device_data_tooltip(lang))
                         .clicked()
                         {
-                            self.refresh_current_device_data();
+                            self.firmware_update_check = crate::app::retry_firmware_update_check(
+                                &self.firmware_update_check,
+                            );
                         }
 
-                        if firmware_update_supported {
+                        if let Some(result) = firmware_ready {
                             if crate::ui_style::modern_button(
                                 ui,
-                                check_updates_label(lang, firmware_checking),
+                                download_update_label(lang),
                                 button_size,
-                                !firmware_checking,
+                                true,
                             )
                             .clicked()
+                                && !crate::app::open_url_in_browser(&result.asset.url)
                             {
-                                self.firmware_update_check =
-                                    crate::app::retry_firmware_update_check(
-                                        &self.firmware_update_check,
-                                    );
+                                self.status_msg = browser_open_failed(lang).to_owned();
                             }
 
-                            if let Some(result) = firmware_ready {
-                                if crate::ui_style::modern_button(
-                                    ui,
-                                    download_update_label(lang),
-                                    button_size,
-                                    true,
-                                )
-                                .clicked()
-                                    && !crate::app::open_url_in_browser(&result.asset.url)
-                                {
-                                    self.status_msg = browser_open_failed(lang).to_owned();
-                                }
-
-                                if crate::ui_style::modern_button(
-                                    ui,
-                                    changelog_label(lang),
-                                    button_size,
-                                    true,
-                                )
-                                .on_hover_text(changelog_tooltip(lang))
-                                .clicked()
-                                    && !crate::app::open_url_in_browser(&result.release_url)
-                                {
-                                    self.status_msg = browser_open_failed(lang).to_owned();
-                                }
+                            if crate::ui_style::modern_button(
+                                ui,
+                                changelog_label(lang),
+                                button_size,
+                                true,
+                            )
+                            .on_hover_text(changelog_tooltip(lang))
+                            .clicked()
+                                && !crate::app::open_url_in_browser(&result.release_url)
+                            {
+                                self.status_msg = browser_open_failed(lang).to_owned();
                             }
                         }
                     });
