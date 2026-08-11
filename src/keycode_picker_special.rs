@@ -529,6 +529,40 @@ Repeat"
             }
         });
 
+        ui.add_space(10.0);
+        ui.label(
+            RichText::new(crate::i18n::tr_catalog(
+                self.language,
+                "key_picker_text.function_keys",
+            ))
+            .size(11.0)
+            .color(Color32::from_gray(150)),
+        );
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            for kc in crate::keycode::KEYCODES
+                .iter()
+                .filter(|kc| is_extended_function_key(kc.value))
+            {
+                if !self.picker_value_supported(kc.value) {
+                    continue;
+                }
+                let resp = ui
+                    .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                Self::paint_compact_picker_label(ui, &resp, kc.label);
+                if resp.clicked() {
+                    self.assign_keycode_value(kc.value);
+                }
+                if resp.hovered() {
+                    resp.on_hover_text(crate::i18n::tr_text(
+                        self.language,
+                        &self.picker_keycode_tooltip(kc.value, &[]),
+                    ));
+                }
+            }
+        });
+
         if !self.supports_mouse_keys {
             return;
         }

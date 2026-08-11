@@ -1,8 +1,9 @@
 /// Keycode picker modal for Vial/QMK keycodes.
 use crate::app::MacroExtKeycodesDisabledReason;
 use crate::keycode::{
-    gui_label, gui_mod_name, key_label_font_sizes, keycode_label_with_names_and_layout,
-    keycode_tooltip, modifier_label_from_bits, KeyLegendLayout, KeycodeCategory, KEYCODES,
+    gui_label, gui_mod_name, is_extended_function_key, key_label_font_sizes,
+    keycode_label_with_names_and_layout, keycode_tooltip, modifier_label_from_bits,
+    KeyLegendLayout, KeycodeCategory, KEYCODES,
 };
 use crate::popup_state::{PopupKey, PopupState};
 use egui::{Color32, Key, RichText, Vec2};

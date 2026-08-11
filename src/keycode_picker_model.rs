@@ -1,4 +1,4 @@
-use crate::keycode::KeycodeCategory;
+use crate::keycode::{is_extended_function_key, KeycodeCategory};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BasicPickerLayout {
@@ -269,6 +269,9 @@ impl KeycodeTab {
 
             return match kc.category {
                 KeycodeCategory::Basic if is_symbol(kc.value) => KeycodeTab::Symbols,
+                KeycodeCategory::Function if is_extended_function_key(kc.value) => {
+                    KeycodeTab::Special
+                }
                 KeycodeCategory::Basic
                 | KeycodeCategory::Function
                 | KeycodeCategory::Navigation => KeycodeTab::Basic,
@@ -317,6 +320,12 @@ mod tests {
             KeycodeTab::preferred_for_vial_keycode(0x002D, false),
             KeycodeTab::Symbols
         );
+        for value in 0x0068..=0x0073 {
+            assert_eq!(
+                KeycodeTab::preferred_for_vial_keycode(value, false),
+                KeycodeTab::Special
+            );
+        }
         assert_eq!(
             KeycodeTab::preferred_for_vial_keycode(0x00E0, false),
             KeycodeTab::Modifiers
