@@ -74,6 +74,19 @@ fn sticky_combo_is_active(combo: &ComboEntry, pressed_keycodes: &[u16]) -> bool 
     trigger_count > 0 && !combo.output.is_no()
 }
 
+fn sticky_combo_is_active_on_layer(
+    combo: &ComboEntry,
+    pressed_keycodes: &[u16],
+    active_layer: usize,
+    was_active: bool,
+) -> bool {
+    sticky_combo_is_active(combo, pressed_keycodes)
+        && (was_active
+            || combo
+                .layer
+                .is_none_or(|combo_layer| combo_layer as usize == active_layer))
+}
+
 fn sticky_pressed_keycodes(
     layout: &KeyboardLayout,
     matrix_pressed: &[bool],
@@ -452,7 +465,18 @@ impl EntropyApp {
         );
         let current_active_combos: Vec<bool> = combo_entries
             .iter()
-            .map(|combo| sticky_combo_is_active(combo, &pressed_keycodes))
+            .enumerate()
+            .map(|(idx, combo)| {
+                sticky_combo_is_active_on_layer(
+                    combo,
+                    &pressed_keycodes,
+                    layer_before,
+                    self.sticky_layout_active_combos
+                        .get(idx)
+                        .copied()
+                        .unwrap_or(false),
+                )
+            })
             .collect();
         for (idx, active) in current_active_combos.iter().copied().enumerate() {
             let was_active = self
@@ -569,6 +593,7 @@ mod tests {
         let combo = ComboEntry {
             keys: [0x0004, 0x0005, 0, 0],
             output: mo(2).into(),
+            layer: None,
         };
 
         assert!(sticky_combo_is_active(&combo, &pressed_keycodes));
@@ -583,6 +608,35 @@ mod tests {
             ),
             2
         );
+    }
+
+    #[test]
+    fn layer_specific_combo_activates_only_on_its_layer() {
+        let combo = ComboEntry {
+            keys: [0x0004, 0x0005, 0, 0],
+            output: 0x0006.into(),
+            layer: Some(1),
+        };
+        let pressed_keycodes = [0x0004, 0x0005];
+
+        assert!(!sticky_combo_is_active_on_layer(
+            &combo,
+            &pressed_keycodes,
+            0,
+            false,
+        ));
+        assert!(sticky_combo_is_active_on_layer(
+            &combo,
+            &pressed_keycodes,
+            1,
+            false,
+        ));
+        assert!(sticky_combo_is_active_on_layer(
+            &combo,
+            &pressed_keycodes,
+            2,
+            true,
+        ));
     }
 
     #[test]

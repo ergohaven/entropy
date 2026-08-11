@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 const ENTLAYOUT_FORMAT: &str = "entropy.layout";
-const ENTLAYOUT_VERSION: u16 = 6;
+const ENTLAYOUT_VERSION: u16 = 7;
 
 fn entlayout_version_supported(version: u16) -> bool {
     (1..=ENTLAYOUT_VERSION).contains(&version)
@@ -441,6 +441,8 @@ struct EntComboEntry {
     output: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     native_output: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    layer: Option<u8>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -664,6 +666,7 @@ impl EntropyApp {
                                 .output
                                 .rmk_action()
                                 .and_then(encode_native_key_action),
+                            layer: entry.layer,
                         })
                         .collect(),
                     names: self.combo_names.clone(),
@@ -859,6 +862,12 @@ impl EntropyApp {
         for combo in &bundle.data.combos.entries {
             if let Some(encoded) = combo.native_output.as_deref() {
                 decode_native_key_action(encoded)?;
+            }
+            if combo
+                .layer
+                .is_some_and(|layer| layer as usize >= bundle.keyboard.layers)
+            {
+                bail!("Combo layer is outside the source layout");
             }
         }
         for tap_dance in &bundle.data.tap_dance.entries {
@@ -1301,6 +1310,7 @@ impl EntropyApp {
         let supports_rmk_native_combo_output = self.keycode_picker.supports_rmk_native_combo_output;
         let supports_rmk_native_tap_dance_actions =
             self.keycode_picker.supports_rmk_native_tap_dance_actions;
+        let supports_rmk_combo_layers = self.supports_rmk_combo_layers;
         let mut failures = Vec::new();
         let target_portable_settings = self.entlayout_portable_settings_snapshot();
         let EntPortableSettingsImportPlan {
@@ -1516,11 +1526,16 @@ impl EntropyApp {
                 if output.rmk_action().is_some() && !supports_rmk_native_combo_output {
                     bail!("target firmware does not support native RMK Combo outputs");
                 }
-                let current = &self.combo_entries[idx];
-                if current.keys == combo.keys && current.output == output {
-                    continue;
+                if combo.layer.is_some() && !supports_rmk_combo_layers {
+                    bail!("target firmware does not support layer-specific Combos");
                 }
-                hid.set_combo_binding(idx as u8, combo.keys, output)?;
+                let current = &self.combo_entries[idx];
+                if current.keys != combo.keys || current.output != output {
+                    hid.set_combo_binding(idx as u8, combo.keys, output)?;
+                }
+                if supports_rmk_combo_layers && current.layer != combo.layer {
+                    hid.set_rmk_combo_layer(idx as u8, combo.layer)?;
+                }
             }
             Ok(())
         })() {
@@ -1842,12 +1857,18 @@ impl EntropyApp {
                 .enumerate()
             {
                 if let Some(entry) = remap_entcombo_entry(entry, bundle, layout, limits) {
+                    let layer = if self.supports_rmk_combo_layers {
+                        entry.layer
+                    } else {
+                        combo_entries[idx].layer
+                    };
                     combo_entries[idx] = ComboEntry {
                         keys: entry.keys,
                         output: entlayout_dynamic_binding(
                             entry.output,
                             entry.native_output.as_deref(),
                         )?,
+                        layer,
                     };
                 }
             }
@@ -2354,6 +2375,12 @@ fn remap_entcombo_entry(
     layout: &KeyboardLayout,
     limits: EntLayoutKeycodeImportLimits,
 ) -> Option<EntComboEntry> {
+    if entry
+        .layer
+        .is_some_and(|layer| layer as usize >= layout.layers.len())
+    {
+        return None;
+    }
     let mut keys = [0u16; 4];
     for (idx, keycode) in entry.keys.iter().copied().enumerate() {
         keys[idx] = try_map_entlayout_keycode(keycode, bundle, layout, limits)?;
@@ -2362,6 +2389,7 @@ fn remap_entcombo_entry(
         keys,
         output: try_map_entlayout_keycode(entry.output, bundle, layout, limits)?,
         native_output: entry.native_output.clone(),
+        layer: entry.layer,
     })
 }
 
@@ -2511,6 +2539,12 @@ fn check_entcombo_entry(
     layout: &KeyboardLayout,
     limits: EntLayoutKeycodeImportLimits,
 ) -> std::result::Result<(), EntLayoutSkipReason> {
+    if entry
+        .layer
+        .is_some_and(|layer| layer as usize >= layout.layers.len())
+    {
+        return Err(EntLayoutSkipReason::MissingLayer);
+    }
     for keycode in entry.keys {
         check_entlayout_keycode(keycode, bundle, layout, limits)?;
     }
@@ -2763,13 +2797,14 @@ mod tests {
     }
 
     #[test]
-    fn current_version_is_v6_and_v5_files_remain_supported() {
-        assert_eq!(ENTLAYOUT_VERSION, 6);
+    fn current_version_is_v7_and_v6_files_remain_supported() {
+        assert_eq!(ENTLAYOUT_VERSION, 7);
         assert!(entlayout_version_supported(4));
         assert!(entlayout_version_supported(5));
         assert!(entlayout_version_supported(6));
+        assert!(entlayout_version_supported(7));
         assert!(!entlayout_version_supported(0));
-        assert!(!entlayout_version_supported(7));
+        assert!(!entlayout_version_supported(8));
     }
 
     #[test]
@@ -2926,6 +2961,22 @@ mod tests {
         }))
         .unwrap();
         assert!(legacy_combo.native_output.is_none());
+        assert!(legacy_combo.layer.is_none());
+
+        let layered_combo = EntComboEntry {
+            keys: [4, 5, 0, 0],
+            output: 6,
+            native_output: None,
+            layer: Some(2),
+        };
+        let encoded_combo = serde_json::to_value(&layered_combo).unwrap();
+        assert_eq!(encoded_combo["layer"], 2);
+        assert_eq!(
+            serde_json::from_value::<EntComboEntry>(encoded_combo)
+                .unwrap()
+                .layer,
+            Some(2)
+        );
 
         let legacy_tap_dance: EntTapDanceEntry = serde_json::from_value(serde_json::json!({
             "on_tap": 4,

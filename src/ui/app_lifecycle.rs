@@ -610,6 +610,7 @@ mod tests {
         ComboEntry {
             keys,
             output: output.into(),
+            layer: None,
         }
     }
 

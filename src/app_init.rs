@@ -123,6 +123,7 @@ impl EntropyApp {
             main_menu_tab: MainMenuTab::Keyboard,
             combo_entries: vec![],
             combo_synced_entries: vec![],
+            supports_rmk_combo_layers: false,
             combo_names: vec![],
             combo_colors: vec![],
             selected_combo: 0,

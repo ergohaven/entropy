@@ -235,6 +235,7 @@ impl EntropyApp {
         self.combo_dirty = false;
         self.combo_edit_revision = self.combo_edit_revision.wrapping_add(1);
         self.combo_attempted_revision = None;
+        self.supports_rmk_combo_layers = false;
         self.mouse_keys_settings = MouseKeysSettingsState::default();
         self.touchpad_settings = TouchpadSettingsState::default();
         self.bluetooth_settings = BluetoothSettingsState::default();

@@ -148,16 +148,21 @@ impl EntropyApp {
                 };
 
                 let task_entry = entry.clone();
+                let supports_rmk_combo_layers = self.supports_rmk_combo_layers;
                 let (sender, receiver) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
                     #[cfg(target_os = "macos")]
                     let _hid_lock = crate::hid::macos_hid_operation_lock();
 
-                    let write_result = hid_device.set_combo_binding(
-                        index as u8,
-                        task_entry.keys,
-                        task_entry.output,
-                    );
+                    let write_result = hid_device
+                        .set_combo_binding(index as u8, task_entry.keys, task_entry.output)
+                        .and_then(|_| {
+                            if supports_rmk_combo_layers {
+                                hid_device.set_rmk_combo_layer(index as u8, task_entry.layer)
+                            } else {
+                                Ok(())
+                            }
+                        });
                     let disconnected = write_result
                         .as_ref()
                         .err()
@@ -269,6 +274,7 @@ mod tests {
         ComboEntry {
             keys,
             output: output.into(),
+            layer: None,
         }
     }
 
@@ -304,6 +310,21 @@ mod tests {
             ComboWritePlan::Write {
                 index: 0,
                 entry: ComboEntry::default(),
+            }
+        );
+    }
+
+    #[test]
+    fn layer_only_change_is_scheduled_for_device_write() {
+        let mut changed = combo([0x0004, 0x0005, 0, 0], 0x0006);
+        changed.layer = Some(2);
+        let synced = [combo([0x0004, 0x0005, 0, 0], 0x0006)];
+
+        assert_eq!(
+            next_combo_write(std::slice::from_ref(&changed), &synced),
+            ComboWritePlan::Write {
+                index: 0,
+                entry: changed,
             }
         );
     }

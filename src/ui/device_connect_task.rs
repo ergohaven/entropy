@@ -955,6 +955,7 @@ impl EntropyApp {
                 let supports_rmk_native_combo_output = rmk_native_capabilities.combo_output;
                 let supports_rmk_native_tap_dance_actions =
                     rmk_native_capabilities.tap_dance_actions;
+                let supports_rmk_combo_layers = rmk_native_capabilities.combo_layers;
                 layout.live_features.layout |=
                     crate::rmk_native::supports_layout_sync(rmk_native_capabilities);
                 if supports_rmk_native_key_actions {
@@ -1141,10 +1142,20 @@ impl EntropyApp {
                     let mut entries = Vec::new();
                     for i in 0..count {
                         match dev_conn.get_combo(i) {
-                            Ok((keys, output)) => entries.push(ComboEntry {
-                                keys,
-                                output: output.into(),
-                            }),
+                            Ok((keys, output)) => {
+                                let layer = if supports_rmk_combo_layers {
+                                    dev_conn.get_rmk_combo_layer(i).map_err(|error| {
+                                        format!("RMK Combo layer {i} read failed: {error:#}")
+                                    })?
+                                } else {
+                                    None
+                                };
+                                entries.push(ComboEntry {
+                                    keys,
+                                    output: output.into(),
+                                    layer,
+                                });
+                            }
                             Err(e) => {
                                 log::warn!("get_combo({i}): {e}");
                                 entries.push(Default::default());
@@ -1357,6 +1368,7 @@ impl EntropyApp {
                         supports_universal_russian_letters,
                         supports_rmk_native_combo_output,
                         supports_rmk_native_tap_dance_actions,
+                        supports_rmk_combo_layers,
                     })
                 } else {
                     DeferredDeviceLoadState::complete(layer_count)
@@ -1403,6 +1415,7 @@ impl EntropyApp {
                     supports_universal_russian_letters,
                     supports_rmk_native_combo_output,
                     supports_rmk_native_tap_dance_actions,
+                    supports_rmk_combo_layers,
                     macro_ext_keycodes_disabled_reason,
                     tap_dance_entries,
                     combo_entries,

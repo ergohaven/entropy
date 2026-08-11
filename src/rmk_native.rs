@@ -10,12 +10,14 @@ const ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION: u8 = 0x03;
 const ERGOHAVEN_CUSTOM_NEXT_NATIVE_KEY_ACTION: u8 = 0x04;
 const ERGOHAVEN_CUSTOM_NATIVE_DYNAMIC_ACTION: u8 = 0x05;
 const ERGOHAVEN_CUSTOM_NEXT_NATIVE_DYNAMIC_ACTION: u8 = 0x06;
+const ERGOHAVEN_CUSTOM_COMBO_LAYER: u8 = 0x07;
 const ERGOHAVEN_NATIVE_KEY_ACTION_VERSION: u8 = 0x01;
 const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_GET_SET: u16 = 0x0001;
 const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_UNIVERSAL_SYMBOLS: u16 = 0x0002;
 const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_RUSSIAN_LETTERS: u16 = 0x0004;
 const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_OUTPUT: u16 = 0x0008;
 const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_MORSE_ACTIONS: u16 = 0x0010;
+const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_LAYER: u16 = 0x0020;
 const NATIVE_DYNAMIC_ACTION_KIND_COMBO_OUTPUT: u8 = 0x00;
 const NATIVE_DYNAMIC_ACTION_KIND_MORSE: u8 = 0x01;
 const NATIVE_KEY_ACTION_STATUS_OK: u8 = 0x00;
@@ -35,6 +37,7 @@ pub(crate) struct RmkNativeCapabilities {
     pub(crate) russian_letters: bool,
     pub(crate) combo_output: bool,
     pub(crate) tap_dance_actions: bool,
+    pub(crate) combo_layers: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -194,12 +197,14 @@ fn native_response_header_matches(response: &[u8; MSG_LEN], subcommand: u8) -> b
         && response[2] == subcommand
 }
 
-pub(crate) fn matches_rmk_native_get_response(
+pub(crate) fn matches_rmk_native_response(
     command: &[u8],
     response: &[u8; MSG_LEN],
 ) -> Option<bool> {
-    if command.first() != Some(&CMD_VIA_CUSTOM_GET_VALUE)
-        || command.get(1) != Some(&ERGOHAVEN_CUSTOM_NAMESPACE)
+    if !matches!(
+        command.first(),
+        Some(&CMD_VIA_CUSTOM_GET_VALUE) | Some(&CMD_VIA_CUSTOM_SET_VALUE)
+    ) || command.get(1) != Some(&ERGOHAVEN_CUSTOM_NAMESPACE)
     {
         return None;
     }
@@ -211,6 +216,7 @@ pub(crate) fn matches_rmk_native_get_response(
             | ERGOHAVEN_CUSTOM_NEXT_NATIVE_KEY_ACTION
             | ERGOHAVEN_CUSTOM_NATIVE_DYNAMIC_ACTION
             | ERGOHAVEN_CUSTOM_NEXT_NATIVE_DYNAMIC_ACTION
+            | ERGOHAVEN_CUSTOM_COMBO_LAYER
     ) {
         return None;
     }
@@ -219,17 +225,22 @@ pub(crate) fn matches_rmk_native_get_response(
     // exact capabilities probe echo as a terminal "RMK unsupported" response;
     // the decoder below will return empty capabilities without transport retries.
     if subcommand == ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS
+        && command.first() == Some(&CMD_VIA_CUSTOM_GET_VALUE)
         && command.len() == response.len()
         && command == response
     {
         return Some(true);
     }
 
-    let header_matches = response[0] == CMD_VIA_CUSTOM_GET_VALUE
+    let header_matches = response[0] == command[0]
         && response[1] == ERGOHAVEN_CUSTOM_NAMESPACE
         && response[2] == subcommand
         && response[3] == ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
+    if subcommand == ERGOHAVEN_CUSTOM_COMBO_LAYER {
+        return Some(header_matches && response[7] == command.get(4).copied().unwrap_or(u8::MAX));
+    }
     if !header_matches
+        || command.first() == Some(&CMD_VIA_CUSTOM_SET_VALUE)
         || !matches!(
             subcommand,
             ERGOHAVEN_CUSTOM_NEXT_NATIVE_KEY_ACTION | ERGOHAVEN_CUSTOM_NEXT_NATIVE_DYNAMIC_ACTION
@@ -261,6 +272,7 @@ fn decode_native_capabilities(response: &[u8; MSG_LEN]) -> RmkNativeCapabilities
         russian_letters: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_RUSSIAN_LETTERS != 0,
         combo_output: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_OUTPUT != 0,
         tap_dance_actions: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_MORSE_ACTIONS != 0,
+        combo_layers: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_LAYER != 0,
     }
 }
 
@@ -497,6 +509,64 @@ impl crate::hid::HidDevice {
         )
     }
 
+    pub(crate) fn get_rmk_combo_layer(&self, index: u8) -> Result<Option<u8>> {
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_CUSTOM_GET_VALUE;
+        command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
+        command[2] = ERGOHAVEN_CUSTOM_COMBO_LAYER;
+        command[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
+        command[4] = index;
+        let response = self.usb_send(&command)?;
+        if !native_response_header_matches(&response, ERGOHAVEN_CUSTOM_COMBO_LAYER)
+            || response[3] != ERGOHAVEN_NATIVE_KEY_ACTION_VERSION
+            || response[7] != index
+        {
+            bail!("unexpected RMK Combo layer response");
+        }
+        if response[4] != NATIVE_KEY_ACTION_STATUS_OK {
+            bail!(
+                "RMK Combo layer read failed: {}",
+                native_status_error(response[4])
+            );
+        }
+        match response[5] {
+            0 => Ok(None),
+            1 => Ok(Some(response[6])),
+            marker => bail!("invalid RMK Combo layer marker: {marker}"),
+        }
+    }
+
+    pub(crate) fn set_rmk_combo_layer(&self, index: u8, layer: Option<u8>) -> Result<()> {
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_CUSTOM_SET_VALUE;
+        command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
+        command[2] = ERGOHAVEN_CUSTOM_COMBO_LAYER;
+        command[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
+        command[4] = index;
+        command[5] = u8::from(layer.is_some());
+        command[6] = layer.unwrap_or(0);
+        let response = self.usb_send(&command)?;
+        if !native_response_header_matches(&response, ERGOHAVEN_CUSTOM_COMBO_LAYER)
+            || response[3] != ERGOHAVEN_NATIVE_KEY_ACTION_VERSION
+            || response[7] != index
+        {
+            bail!("unexpected RMK Combo layer write response");
+        }
+        if response[4] != NATIVE_KEY_ACTION_STATUS_OK {
+            bail!(
+                "RMK Combo layer write failed: {}",
+                native_status_error(response[4])
+            );
+        }
+        let readback = self.get_rmk_combo_layer(index)?;
+        if readback != layer {
+            bail!(
+                "RMK Combo layer readback mismatch at index {index}: wrote {layer:?}, read back {readback:?}"
+            );
+        }
+        Ok(())
+    }
+
     pub(crate) fn set_rmk_tap_dance_action(
         &self,
         index: u8,
@@ -597,6 +667,7 @@ mod tests {
                 russian_letters: true,
                 combo_output: false,
                 tap_dance_actions: false,
+                combo_layers: false,
             }
         );
         response[4..6].copy_from_slice(
@@ -608,12 +679,14 @@ mod tests {
         response[4..6].copy_from_slice(
             &(ERGOHAVEN_NATIVE_KEY_ACTION_CAP_GET_SET
                 | ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_OUTPUT
-                | ERGOHAVEN_NATIVE_KEY_ACTION_CAP_MORSE_ACTIONS)
+                | ERGOHAVEN_NATIVE_KEY_ACTION_CAP_MORSE_ACTIONS
+                | ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_LAYER)
                 .to_le_bytes(),
         );
         let dynamic = decode_native_capabilities(&response);
         assert!(dynamic.combo_output);
         assert!(dynamic.tap_dance_actions);
+        assert!(dynamic.combo_layers);
         assert!(!dynamic.universal_symbols);
         response[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION + 1;
         assert_eq!(
@@ -630,6 +703,7 @@ mod tests {
             russian_letters: false,
             combo_output: false,
             tap_dance_actions: false,
+            combo_layers: false,
         }));
         assert!(!supports_layout_sync(RmkNativeCapabilities {
             key_actions: true,
@@ -637,6 +711,7 @@ mod tests {
             russian_letters: false,
             combo_output: false,
             tap_dance_actions: false,
+            combo_layers: false,
         }));
     }
 
@@ -653,15 +728,12 @@ mod tests {
         response[4] = NATIVE_KEY_ACTION_STATUS_OK;
         response[5..7].copy_from_slice(&58u16.to_le_bytes());
         assert_eq!(
-            matches_rmk_native_get_response(&command, &response),
+            matches_rmk_native_response(&command, &response),
             Some(false)
         );
 
         response[5..7].copy_from_slice(&59u16.to_le_bytes());
-        assert_eq!(
-            matches_rmk_native_get_response(&command, &response),
-            Some(true)
-        );
+        assert_eq!(matches_rmk_native_response(&command, &response), Some(true));
     }
 
     #[test]
@@ -677,15 +749,12 @@ mod tests {
         response[4] = NATIVE_KEY_ACTION_STATUS_OK;
         response[5..7].copy_from_slice(&11u16.to_le_bytes());
         assert_eq!(
-            matches_rmk_native_get_response(&command, &response),
+            matches_rmk_native_response(&command, &response),
             Some(false)
         );
 
         response[5..7].copy_from_slice(&12u16.to_le_bytes());
-        assert_eq!(
-            matches_rmk_native_get_response(&command, &response),
-            Some(true)
-        );
+        assert_eq!(matches_rmk_native_response(&command, &response), Some(true));
     }
 
     #[test]
@@ -722,16 +791,40 @@ mod tests {
     }
 
     #[test]
+    fn combo_layer_response_must_echo_the_requested_slot() {
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_CUSTOM_GET_VALUE;
+        command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
+        command[2] = ERGOHAVEN_CUSTOM_COMBO_LAYER;
+        command[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
+        command[4] = 3;
+
+        let mut response = command;
+        response[4] = NATIVE_KEY_ACTION_STATUS_OK;
+        response[5] = 1;
+        response[6] = 2;
+        response[7] = 2;
+        assert_eq!(
+            matches_rmk_native_response(&command, &response),
+            Some(false)
+        );
+
+        response[7] = 3;
+        assert_eq!(matches_rmk_native_response(&command, &response), Some(true));
+
+        command[0] = CMD_VIA_CUSTOM_SET_VALUE;
+        response[0] = CMD_VIA_CUSTOM_SET_VALUE;
+        assert_eq!(matches_rmk_native_response(&command, &response), Some(true));
+    }
+
+    #[test]
     fn native_capability_probe_accepts_exact_qmk_echo() {
         let mut command = [0u8; MSG_LEN];
         command[0] = CMD_VIA_CUSTOM_GET_VALUE;
         command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
         command[2] = ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS;
 
-        assert_eq!(
-            matches_rmk_native_get_response(&command, &command),
-            Some(true)
-        );
+        assert_eq!(matches_rmk_native_response(&command, &command), Some(true));
         assert_eq!(
             decode_native_capabilities(&command),
             RmkNativeCapabilities::default()

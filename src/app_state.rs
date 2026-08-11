@@ -524,6 +524,7 @@ pub(crate) struct DeferredDeviceLoadContext {
     pub(crate) supports_universal_russian_letters: bool,
     pub(crate) supports_rmk_native_combo_output: bool,
     pub(crate) supports_rmk_native_tap_dance_actions: bool,
+    pub(crate) supports_rmk_combo_layers: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -572,6 +573,7 @@ impl DeferredDeviceLoadContext {
             && self.supports_rmk_native_combo_output == other.supports_rmk_native_combo_output
             && self.supports_rmk_native_tap_dance_actions
                 == other.supports_rmk_native_tap_dance_actions
+            && self.supports_rmk_combo_layers == other.supports_rmk_combo_layers
     }
 }
 
@@ -965,6 +967,8 @@ pub(crate) struct ConnectResult {
     pub(crate) supports_rmk_native_combo_output: bool,
     /// Firmware accepts native RMK actions in Tap Dance fields.
     pub(crate) supports_rmk_native_tap_dance_actions: bool,
+    /// Firmware can restrict each Combo to one active layer.
+    pub(crate) supports_rmk_combo_layers: bool,
     pub(crate) macro_ext_keycodes_disabled_reason: Option<MacroExtKeycodesDisabledReason>,
     /// Tap dance entries
     pub(crate) tap_dance_entries: Vec<crate::keycode_picker::TapDanceEntry>,
@@ -1150,6 +1154,7 @@ pub(crate) fn vial_layer_retarget_base(kc: u16) -> Option<u16> {
 pub(crate) struct ComboEntry {
     pub(crate) keys: [u16; 4],
     pub(crate) output: crate::keyboard::KeyBinding,
+    pub(crate) layer: Option<u8>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -3945,6 +3950,7 @@ pub struct EntropyApp {
     pub(crate) main_menu_tab: MainMenuTab,
     pub(crate) combo_entries: Vec<ComboEntry>,
     pub(crate) combo_synced_entries: Vec<ComboEntry>,
+    pub(crate) supports_rmk_combo_layers: bool,
     pub(crate) combo_names: Vec<String>,
     pub(crate) combo_colors: Vec<u32>,
     pub(crate) selected_combo: usize,

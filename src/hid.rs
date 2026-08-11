@@ -1501,8 +1501,10 @@ fn response_matches_command(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
             command.len() >= 4 && resp[..4] == command[..4]
         }
         CMD_VIA_MACRO_GET_COUNT | CMD_VIA_MACRO_GET_BUFFER_SIZE => resp[0] == cmd,
-        CMD_VIA_CUSTOM_GET_VALUE if command.get(1) == Some(&ERGOHAVEN_CUSTOM_NAMESPACE) => {
-            crate::rmk_native::matches_rmk_native_get_response(command, resp).unwrap_or_else(|| {
+        CMD_VIA_CUSTOM_GET_VALUE | CMD_VIA_CUSTOM_SET_VALUE
+            if command.get(1) == Some(&ERGOHAVEN_CUSTOM_NAMESPACE) =>
+        {
+            crate::rmk_native::matches_rmk_native_response(command, resp).unwrap_or_else(|| {
                 command.len() >= 3 && resp[0] == cmd && resp[1..3] == command[1..3]
             })
         }

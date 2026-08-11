@@ -238,10 +238,18 @@ pub(super) fn run_deferred_load(
                 DeferredLoadSection::Combos => {
                     let mut entries = (0..context.combo_count)
                         .map(|index| match hid.get_combo(index) {
-                            Ok((keys, output)) => Ok(ComboEntry {
-                                keys,
-                                output: output.into(),
-                            }),
+                            Ok((keys, output)) => {
+                                let layer = if context.supports_rmk_combo_layers {
+                                    hid.get_rmk_combo_layer(index)?
+                                } else {
+                                    None
+                                };
+                                Ok(ComboEntry {
+                                    keys,
+                                    output: output.into(),
+                                    layer,
+                                })
+                            }
                             Err(error) if crate::hid::is_disconnect_error(&error) => Err(error),
                             Err(error) => {
                                 log::warn!("get_combo({index}) during staged load: {error}");
@@ -815,6 +823,7 @@ impl EntropyApp {
                     .filter(|(index, combo)| {
                         !combo.output.is_no()
                             || combo.keys.iter().any(|keycode| *keycode != 0)
+                            || combo.layer.is_some()
                             || self
                                 .combo_names
                                 .get(*index)
@@ -1406,6 +1415,7 @@ mod tests {
             supports_universal_russian_letters: false,
             supports_rmk_native_combo_output: false,
             supports_rmk_native_tap_dance_actions: false,
+            supports_rmk_combo_layers: false,
         }
     }
 

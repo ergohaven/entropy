@@ -885,6 +885,12 @@ fn combo_key_colors_for_layer(
 ) -> Vec<Vec<(usize, Option<Color32>)>> {
     let mut key_colors = vec![Vec::new(); layout.keys.len()];
     for (combo_idx, combo) in combos.iter().enumerate() {
+        if combo
+            .layer
+            .is_some_and(|combo_layer| combo_layer as usize != layer)
+        {
+            continue;
+        }
         let triggers: Vec<u16> = combo.keys.iter().copied().filter(|&key| key != 0).collect();
         if triggers.is_empty() || combo.output.is_no() {
             continue;

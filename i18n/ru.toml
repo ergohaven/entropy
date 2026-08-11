@@ -954,6 +954,10 @@ undo_last_tap_dance_change = "Отменить последнее изменен
 [combo_editor]
 input_keys = "Входные клавиши"
 output_key = "Выходная клавиша"
+layer = "Слой"
+all_layers = "Все слои"
+layer_number = "Слой {number}"
+layer_where_this_combo_can_activate = "Слой, на котором может сработать это Combo"
 keycap_mouse_hint = "ЛКМ по клавише Combo — выбрать, ПКМ — очистить"
 select_combo_slot = "Выберите слот Combo"
 local_name_for_this_combo_slot = "Локальное имя этого слота Combo"
