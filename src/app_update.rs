@@ -358,9 +358,6 @@ fn legacy_rmk_asset_prefix(product_id: u16, qube: bool) -> Option<&'static str> 
         (0x0071, _) => Some("k04-qube"),
         (0x0072, _) => Some("k04-mini-qube"),
         (0x0073, _) => Some("k04-micro-qube"),
-        (0x00C1, _) => Some("trackball-mini-v3.0"),
-        (0x00C2, _) => Some("trackball-mini-v3.1"),
-        (0x00C3, _) => Some("trackball-royale"),
         _ => None,
     }
 }
@@ -679,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_all_seventeen_production_profiles() {
+    fn maps_all_fourteen_production_profiles() {
         let profiles = [
             (0x0036, false, "op36"),
             (0x0044, false, "imperial44"),
@@ -695,9 +692,6 @@ mod tests {
             (0x0071, true, "k04-qube"),
             (0x0072, true, "k04-mini-qube"),
             (0x0073, true, "k04-micro-qube"),
-            (0x00C1, false, "trackball-mini-v3.0"),
-            (0x00C2, false, "trackball-mini-v3.1"),
-            (0x00C3, false, "trackball-royale"),
         ];
 
         for (product_id, qube, expected_asset) in profiles {
@@ -711,6 +705,21 @@ mod tests {
             )
             .unwrap();
             assert_eq!(target.asset_prefix, expected_asset);
+        }
+    }
+
+    #[test]
+    fn standalone_trackballs_are_not_rmk_release_targets() {
+        for product_id in [0x00C1, 0x00C2, 0x00C3] {
+            assert!(rmk_firmware_release_target(
+                ERGOHAVEN_VENDOR_ID,
+                product_id,
+                Some("0.1.6"),
+                &serde_json::json!({}),
+                false,
+                false,
+            )
+            .is_none());
         }
     }
 
@@ -787,7 +796,7 @@ mod tests {
     fn reports_no_firmware_package_when_no_release_contains_asset() {
         let target = FirmwareReleaseTarget {
             current_version: "0.1.6".to_owned(),
-            asset_prefix: "trackball-royale".to_owned(),
+            asset_prefix: "missing-package".to_owned(),
         };
 
         assert!(build_firmware_update_result(
@@ -853,7 +862,7 @@ mod tests {
     fn missing_firmware_asset_finishes_as_unavailable() {
         let target = FirmwareReleaseTarget {
             current_version: "0.1.6".to_owned(),
-            asset_prefix: "trackball-royale".to_owned(),
+            asset_prefix: "missing-package".to_owned(),
         };
         let (sender, receiver) = std::sync::mpsc::channel();
         sender
