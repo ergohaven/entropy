@@ -1374,6 +1374,20 @@ impl EntropyApp {
                     DeferredDeviceLoadState::complete(layer_count)
                 };
 
+                let native_rmk_marker = supports_rmk_native_key_actions
+                    || supports_rmk_native_combo_output
+                    || supports_rmk_native_tap_dance_actions
+                    || supports_rmk_combo_layers;
+                let legacy_qube = layout.live_features.time && layout.live_features.media;
+                let firmware_update_target = crate::app::rmk_firmware_release_target(
+                    dev.vendor_id,
+                    dev.product_id,
+                    firmware_version.as_deref(),
+                    &json,
+                    legacy_qube,
+                    native_rmk_marker,
+                );
+
                 let about_info = DeviceAboutInfo {
                     manufacturer,
                     product: dev.name.clone(),
@@ -1381,6 +1395,7 @@ impl EntropyApp {
                     product_id: dev.product_id,
                     path: dev.path.clone(),
                     firmware_version,
+                    firmware_update_target,
                     supports_battery_halves,
                     battery_halves,
                     via_protocol,

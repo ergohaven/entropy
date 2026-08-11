@@ -467,6 +467,10 @@ impl EntropyApp {
                         self.vial_unlock_keys.clear();
                     }
                 }
+                crate::app::ensure_firmware_update_check(
+                    &mut self.firmware_update_check,
+                    r.about_info.firmware_update_target.clone(),
+                );
                 self.device_about_info = Some(r.about_info.clone());
                 if staged_bluetooth_load {
                     self.schedule_initial_battery_refresh();

@@ -1113,6 +1113,7 @@ impl eframe::App for EntropyApp {
             self.handle_macos_dock_reopen(ctx);
 
             crate::app::poll_update_check(&mut self.update_check);
+            crate::app::poll_firmware_update_check(&mut self.firmware_update_check);
             let main_window_hidden_to_tray = self.main_window_hidden_to_tray();
             let selected_device_is_bluetooth = self
                 .selected_device
@@ -1130,7 +1131,8 @@ impl eframe::App for EntropyApp {
             );
             let connect_pending = matches!(self.connect_state, ConnectState::Loading { .. });
             let update_check_pending =
-                matches!(self.update_check, UpdateCheckState::Checking { .. });
+                matches!(self.update_check, UpdateCheckState::Checking { .. })
+                    || crate::app::firmware_update_check_pending(&self.firmware_update_check);
             ctx.request_repaint_after(native_repaint_interval(
                 main_window_hidden_to_tray,
                 bluetooth_visible_interval,
@@ -1148,6 +1150,7 @@ impl eframe::App for EntropyApp {
         #[cfg(target_arch = "wasm32")]
         {
             crate::app::poll_update_check(&mut self.update_check);
+            crate::app::poll_firmware_update_check(&mut self.firmware_update_check);
             let now = ctx.input(|i| i.time);
             self.poll_text_expander_deferred_save(now);
             self.auto_reload_text_expander_rules_file(now);

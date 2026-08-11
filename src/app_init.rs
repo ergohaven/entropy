@@ -201,6 +201,7 @@ impl EntropyApp {
             device_display_names: std::collections::HashMap::new(),
             device_about_info: None,
             update_check: start_update_check(),
+            firmware_update_check: FirmwareUpdateCheckState::Unsupported,
             tour_state: TourState::default(),
             tour_target_rects: Vec::new(),
             unlock_open: false,

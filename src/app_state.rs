@@ -371,6 +371,7 @@ pub(crate) struct DeviceAboutInfo {
     pub(crate) product_id: u16,
     pub(crate) path: String,
     pub(crate) firmware_version: Option<String>,
+    pub(crate) firmware_update_target: Option<FirmwareReleaseTarget>,
     pub(crate) supports_battery_halves: bool,
     pub(crate) battery_halves: Option<crate::hid::BatteryHalves>,
     pub(crate) via_protocol: u16,
@@ -4032,6 +4033,7 @@ pub struct EntropyApp {
     pub(crate) device_display_names: std::collections::HashMap<String, String>,
     pub(crate) device_about_info: Option<DeviceAboutInfo>,
     pub(crate) update_check: UpdateCheckState,
+    pub(crate) firmware_update_check: FirmwareUpdateCheckState,
     pub(crate) tour_state: TourState,
     pub(crate) tour_target_rects: Vec<(TourTarget, egui::Rect)>,
     /// Vial unlock dialog open
