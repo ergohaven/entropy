@@ -278,6 +278,10 @@ impl EntropyApp {
                     use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
                     ShowWindow(hwnd as windows_sys::Win32::Foundation::HWND, SW_HIDE);
                 }
+                // eframe reveals its native window after the first rendered frame.
+                // Queue the matching viewport command so startup-to-tray stays hidden
+                // when that post-render reveal runs after the direct Win32 hide.
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                 self.windows_window_hidden_to_tray = true;
                 self.status_msg = background_status.into();
                 return;
