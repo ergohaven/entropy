@@ -2623,6 +2623,8 @@ pub(crate) struct TypingTrainerSettings {
     pub(crate) duration_secs: u32,
     #[serde(default = "default_typing_trainer_word_count")]
     pub(crate) word_count: usize,
+    #[serde(default)]
+    pub(crate) symbols_enabled: bool,
 }
 
 impl Default for TypingTrainerSettings {
@@ -2634,12 +2636,17 @@ impl Default for TypingTrainerSettings {
             numbers_enabled: false,
             duration_secs: default_typing_trainer_duration_secs(),
             word_count: default_typing_trainer_word_count(),
+            symbols_enabled: false,
         }
     }
 }
 
 impl TypingTrainerSettings {
-    pub(crate) fn normalized(self) -> Self {
+    pub(crate) fn normalized(mut self) -> Self {
+        if self.mode == TypingTrainerMode::Symbols {
+            self.mode = TypingTrainerMode::Words;
+            self.symbols_enabled = true;
+        }
         Self {
             duration_secs: if TYPING_TRAINER_DURATIONS.contains(&self.duration_secs) {
                 self.duration_secs
@@ -2673,6 +2680,7 @@ pub(crate) struct TypingTrainerRunRecord {
     pub(crate) mode: TypingTrainerMode,
     pub(crate) duration_secs: u32,
     pub(crate) word_count: usize,
+    pub(crate) symbols_enabled: bool,
     pub(crate) punctuation_enabled: bool,
     pub(crate) numbers_enabled: bool,
     pub(crate) wpm: u32,
@@ -2703,6 +2711,7 @@ impl TypingTrainerRunRecord {
             mode: state.mode,
             duration_secs: state.duration_secs,
             word_count: state.word_count,
+            symbols_enabled: state.symbols_enabled,
             punctuation_enabled: state.punctuation_enabled,
             numbers_enabled: state.numbers_enabled,
             wpm: stats.wpm,
@@ -2716,6 +2725,7 @@ impl TypingTrainerRunRecord {
     fn matches_settings(&self, settings: TypingTrainerSettings) -> bool {
         self.language == settings.language
             && self.mode == settings.mode
+            && self.symbols_enabled == settings.symbols_enabled
             && self.punctuation_enabled == settings.punctuation_enabled
             && self.numbers_enabled == settings.numbers_enabled
             && match self.mode {
@@ -2777,6 +2787,12 @@ pub(crate) fn push_typing_trainer_history(
 }
 
 pub(crate) fn normalize_typing_trainer_history(history: &mut Vec<TypingTrainerRunRecord>) {
+    for record in history.iter_mut() {
+        if record.mode == TypingTrainerMode::Symbols {
+            record.mode = TypingTrainerMode::Words;
+            record.symbols_enabled = true;
+        }
+    }
     history.truncate(TYPING_TRAINER_HISTORY_LIMIT);
 }
 
@@ -2790,6 +2806,7 @@ pub(crate) struct TypingTrainerState {
     pub(crate) numbers_enabled: bool,
     pub(crate) duration_secs: u32,
     pub(crate) word_count: usize,
+    pub(crate) symbols_enabled: bool,
     pub(crate) symbol_pool: Vec<char>,
     pub(crate) symbol_stats: TypingTrainerCharacterStatsMap,
     pub(crate) started_at: Option<std::time::Instant>,
@@ -2823,21 +2840,25 @@ impl TypingTrainerState {
     pub(crate) fn from_settings(settings: TypingTrainerSettings) -> Self {
         let settings = settings.normalized();
         let text_seed = 0;
-        let target_text = match settings.mode {
-            TypingTrainerMode::Time => typing_trainer_text_for_language(
-                text_seed,
-                settings.language,
-                settings.punctuation_enabled,
-                settings.numbers_enabled,
-            ),
-            TypingTrainerMode::Words => typing_trainer_text_for_word_count(
-                text_seed,
-                settings.word_count,
-                settings.language,
-                settings.punctuation_enabled,
-                settings.numbers_enabled,
-            ),
-            TypingTrainerMode::Symbols => String::new(),
+        let target_text = if settings.symbols_enabled {
+            String::new()
+        } else {
+            match settings.mode {
+                TypingTrainerMode::Time => typing_trainer_text_for_language(
+                    text_seed,
+                    settings.language,
+                    settings.punctuation_enabled,
+                    settings.numbers_enabled,
+                ),
+                TypingTrainerMode::Words => typing_trainer_text_for_word_count(
+                    text_seed,
+                    settings.word_count,
+                    settings.language,
+                    settings.punctuation_enabled,
+                    settings.numbers_enabled,
+                ),
+                TypingTrainerMode::Symbols => String::new(),
+            }
         };
         Self {
             target_text,
@@ -2848,6 +2869,7 @@ impl TypingTrainerState {
             numbers_enabled: settings.numbers_enabled,
             duration_secs: settings.duration_secs,
             word_count: settings.word_count,
+            symbols_enabled: settings.symbols_enabled,
             symbol_pool: Vec::new(),
             symbol_stats: TypingTrainerCharacterStatsMap::new(),
             started_at: None,
@@ -2871,6 +2893,7 @@ impl TypingTrainerState {
             numbers_enabled: self.numbers_enabled,
             duration_secs: self.duration_secs,
             word_count: self.word_count,
+            symbols_enabled: self.symbols_enabled,
         }
     }
 
@@ -2944,6 +2967,17 @@ impl TypingTrainerState {
         }
     }
 
+    pub(crate) fn is_symbol_training(&self) -> bool {
+        self.symbols_enabled
+    }
+
+    pub(crate) fn set_symbols_enabled(&mut self, enabled: bool) {
+        if self.symbols_enabled != enabled {
+            self.symbols_enabled = enabled;
+            self.reset();
+        }
+    }
+
     pub(crate) fn set_symbol_training_data(
         &mut self,
         mut symbols: Vec<char>,
@@ -2954,7 +2988,7 @@ impl TypingTrainerState {
         let symbols_changed = self.symbol_pool != symbols;
         self.symbol_pool = symbols;
         self.symbol_stats = stats.clone();
-        if symbols_changed && self.mode == TypingTrainerMode::Symbols {
+        if symbols_changed && self.is_symbol_training() {
             self.start_run(self.text_seed);
         }
     }
@@ -3005,9 +3039,10 @@ impl TypingTrainerState {
             self.typed_chars.push(ch);
         }
         if self.typed_chars.len() >= self.target_text.chars().count() {
-            match self.mode {
-                TypingTrainerMode::Time => self.advance_to_next_text(),
-                TypingTrainerMode::Words | TypingTrainerMode::Symbols => self.finish(now),
+            if self.mode == TypingTrainerMode::Time {
+                self.advance_to_next_text();
+            } else {
+                self.finish(now);
             }
         }
     }
@@ -3031,10 +3066,7 @@ impl TypingTrainerState {
     }
 
     pub(crate) fn extend_target_text(&mut self) {
-        if matches!(
-            self.mode,
-            TypingTrainerMode::Words | TypingTrainerMode::Symbols
-        ) {
+        if self.mode == TypingTrainerMode::Words {
             return;
         }
         self.text_seed = self.text_seed.wrapping_add(17);
@@ -3065,10 +3097,7 @@ impl TypingTrainerState {
     }
 
     pub(crate) fn remaining_secs_at(&mut self, now: std::time::Instant) -> u32 {
-        if matches!(
-            self.mode,
-            TypingTrainerMode::Words | TypingTrainerMode::Symbols
-        ) {
+        if self.mode == TypingTrainerMode::Words {
             return self.duration_secs;
         }
         let elapsed = self.elapsed_secs_at(now);
@@ -3114,6 +3143,14 @@ impl TypingTrainerState {
     }
 
     fn new_target_text(&self) -> String {
+        if self.is_symbol_training() {
+            return weighted_symbol_text(
+                &self.symbol_pool,
+                self.word_count,
+                &self.symbol_stats,
+                self.text_seed,
+            );
+        }
         match self.mode {
             TypingTrainerMode::Time => typing_trainer_text_for_language(
                 self.text_seed,
@@ -3128,12 +3165,7 @@ impl TypingTrainerState {
                 self.punctuation_enabled,
                 self.numbers_enabled,
             ),
-            TypingTrainerMode::Symbols => weighted_symbol_text(
-                &self.symbol_pool,
-                self.word_count,
-                &self.symbol_stats,
-                self.text_seed,
-            ),
+            TypingTrainerMode::Symbols => String::new(),
         }
     }
 
@@ -3337,6 +3369,7 @@ mod typing_trainer_tests {
             numbers_enabled: true,
             duration_secs: 60,
             word_count: 50,
+            symbols_enabled: false,
         });
 
         assert_eq!(state.language, TypingTrainerLanguage::Russian);
@@ -3362,6 +3395,33 @@ mod typing_trainer_tests {
 
         assert_eq!(state.target_text.chars().count(), 25);
         assert!(state.target_text.chars().all(|ch| matches!(ch, 'a' | '!')));
+    }
+
+    #[test]
+    fn legacy_symbol_mode_normalizes_to_symbol_material_with_count_pacing() {
+        let settings = TypingTrainerSettings {
+            mode: TypingTrainerMode::Symbols,
+            ..TypingTrainerSettings::default()
+        }
+        .normalized();
+
+        assert_eq!(settings.mode, TypingTrainerMode::Words);
+        assert!(settings.symbols_enabled);
+    }
+
+    #[test]
+    fn disabling_symbols_restores_saved_text_options() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            punctuation_enabled: true,
+            numbers_enabled: true,
+            ..TypingTrainerSettings::default()
+        });
+
+        state.set_symbols_enabled(true);
+        state.set_symbols_enabled(false);
+
+        assert!(state.punctuation_enabled);
+        assert!(state.numbers_enabled);
     }
 
     #[test]
@@ -3456,6 +3516,7 @@ mod typing_trainer_tests {
                     mode: TypingTrainerMode::Time,
                     duration_secs: 30,
                     word_count: 25,
+                    symbols_enabled: false,
                     punctuation_enabled: false,
                     numbers_enabled: false,
                     wpm: idx as u32,
@@ -3487,6 +3548,7 @@ mod typing_trainer_tests {
             numbers_enabled: false,
             duration_secs: 30,
             word_count: 25,
+            symbols_enabled: false,
         };
         let history = vec![
             TypingTrainerRunRecord {
@@ -3495,6 +3557,7 @@ mod typing_trainer_tests {
                 mode: TypingTrainerMode::Time,
                 duration_secs: 30,
                 word_count: 25,
+                symbols_enabled: false,
                 punctuation_enabled: true,
                 numbers_enabled: false,
                 wpm: 42,
@@ -3509,6 +3572,7 @@ mod typing_trainer_tests {
                 mode: TypingTrainerMode::Time,
                 duration_secs: 30,
                 word_count: 25,
+                symbols_enabled: false,
                 punctuation_enabled: true,
                 numbers_enabled: false,
                 wpm: 50,
@@ -3523,6 +3587,7 @@ mod typing_trainer_tests {
                 mode: TypingTrainerMode::Time,
                 duration_secs: 60,
                 word_count: 25,
+                symbols_enabled: false,
                 punctuation_enabled: true,
                 numbers_enabled: false,
                 wpm: 80,

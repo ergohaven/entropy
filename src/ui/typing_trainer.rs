@@ -132,7 +132,7 @@ impl EntropyApp {
                         if typing_trainer_accepts_char(ch) && !self.typing_trainer.is_finished() {
                             typed_this_frame = true;
                         }
-                        if self.typing_trainer.mode == TypingTrainerMode::Symbols {
+                        if self.typing_trainer.is_symbol_training() {
                             if let Some(expected) = self.typing_trainer.expected_char() {
                                 crate::app::typing_trainer_symbols::record_symbol_attempt(
                                     &mut self.app_settings.typing_trainer_symbol_stats,
@@ -192,47 +192,54 @@ impl EntropyApp {
             .iter()
             .position(|language| *language == self.typing_trainer.language)
             .unwrap_or(0);
+        let symbol_training = self.typing_trainer.is_symbol_training();
         let mode_labels = [
             crate::i18n::tr_catalog(lang, "typing_trainer.time").to_owned(),
-            crate::i18n::tr_catalog(lang, "typing_trainer.words").to_owned(),
-            crate::i18n::tr_catalog(lang, "typing_trainer.symbols").to_owned(),
+            crate::i18n::tr_catalog(
+                lang,
+                if symbol_training {
+                    "typing_trainer.count"
+                } else {
+                    "typing_trainer.words"
+                },
+            )
+            .to_owned(),
         ];
         let selected_mode = match self.typing_trainer.mode {
             TypingTrainerMode::Time => 0,
-            TypingTrainerMode::Words => 1,
-            TypingTrainerMode::Symbols => 2,
+            TypingTrainerMode::Words | TypingTrainerMode::Symbols => 1,
         };
         let value_labels = match self.typing_trainer.mode {
             TypingTrainerMode::Time => TYPING_TRAINER_DURATIONS
                 .iter()
                 .map(|duration| duration.to_string())
                 .collect::<Vec<_>>(),
-            TypingTrainerMode::Words => TYPING_TRAINER_WORD_COUNTS
-                .iter()
-                .map(|word_count| word_count.to_string())
-                .collect::<Vec<_>>(),
-            TypingTrainerMode::Symbols => {
+            TypingTrainerMode::Words | TypingTrainerMode::Symbols if symbol_training => {
                 crate::app::typing_trainer_symbols::TYPING_TRAINER_SYMBOL_COUNTS
                     .iter()
                     .map(|symbol_count| symbol_count.to_string())
                     .collect::<Vec<_>>()
             }
+            TypingTrainerMode::Words | TypingTrainerMode::Symbols => TYPING_TRAINER_WORD_COUNTS
+                .iter()
+                .map(|word_count| word_count.to_string())
+                .collect::<Vec<_>>(),
         };
         let selected_value = match self.typing_trainer.mode {
             TypingTrainerMode::Time => TYPING_TRAINER_DURATIONS
                 .iter()
                 .position(|duration| *duration == self.typing_trainer.duration_secs)
                 .unwrap_or(1),
-            TypingTrainerMode::Words => TYPING_TRAINER_WORD_COUNTS
-                .iter()
-                .position(|word_count| *word_count == self.typing_trainer.word_count)
-                .unwrap_or(1),
-            TypingTrainerMode::Symbols => {
+            TypingTrainerMode::Words | TypingTrainerMode::Symbols if symbol_training => {
                 crate::app::typing_trainer_symbols::TYPING_TRAINER_SYMBOL_COUNTS
                     .iter()
                     .position(|symbol_count| *symbol_count == self.typing_trainer.word_count)
                     .unwrap_or(1)
             }
+            TypingTrainerMode::Words | TypingTrainerMode::Symbols => TYPING_TRAINER_WORD_COUNTS
+                .iter()
+                .position(|word_count| *word_count == self.typing_trainer.word_count)
+                .unwrap_or(1),
         };
         let language_size = metrics.size(96.0, 32.0);
         let mode_size = metrics.size(116.0, 32.0);
@@ -258,6 +265,7 @@ impl EntropyApp {
             total_size,
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
+                if !symbol_training {
                 let language_dropdown_id =
                     ui.make_persistent_id("typing_trainer_language_dropdown");
                 let (_, picked_language) = crate::ui_style::modern_dropdown_select_sized(
@@ -276,6 +284,7 @@ impl EntropyApp {
                 }
 
                 ui.add_space(gap);
+                }
 
                 let mode_dropdown_id = ui.make_persistent_id("typing_trainer_mode_dropdown");
                 let (_, picked_mode) = crate::ui_style::modern_dropdown_select_sized(
@@ -288,15 +297,12 @@ impl EntropyApp {
                     metrics.value(12.5),
                 );
                 if let Some(picked) = picked_mode {
-                    let mode = match picked {
-                        0 => TypingTrainerMode::Time,
-                        1 => TypingTrainerMode::Words,
-                        _ => TypingTrainerMode::Symbols,
-                    };
+                    let mode = if picked == 0 { TypingTrainerMode::Time } else { TypingTrainerMode::Words };
                     self.typing_trainer.set_mode(mode);
                     settings_changed = true;
                 }
 
+                if !symbol_training {
                 ui.add_space(gap);
 
                 let value_dropdown_id = ui.make_persistent_id("typing_trainer_value_dropdown");
@@ -314,13 +320,11 @@ impl EntropyApp {
                         TypingTrainerMode::Time => self
                             .typing_trainer
                             .set_duration(TYPING_TRAINER_DURATIONS[picked]),
-                        TypingTrainerMode::Words => self
-                            .typing_trainer
-                            .set_word_count(TYPING_TRAINER_WORD_COUNTS[picked]),
-                        TypingTrainerMode::Symbols => self.typing_trainer.set_word_count(
+                        TypingTrainerMode::Words | TypingTrainerMode::Symbols if symbol_training => self.typing_trainer.set_word_count(
                             crate::app::typing_trainer_symbols::TYPING_TRAINER_SYMBOL_COUNTS
                                 [picked],
                         ),
+                        TypingTrainerMode::Words | TypingTrainerMode::Symbols => self.typing_trainer.set_word_count(TYPING_TRAINER_WORD_COUNTS[picked]),
                     }
                     settings_changed = true;
                 }
@@ -359,6 +363,21 @@ impl EntropyApp {
                 {
                     self.typing_trainer
                         .set_numbers_enabled(!self.typing_trainer.numbers_enabled);
+                    settings_changed = true;
+                }
+                ui.add_space(gap);
+                }
+                if crate::ui_style::modern_toggle_pill(
+                    ui,
+                    "#?",
+                    crate::i18n::tr_catalog(lang, "typing_trainer.symbols"),
+                    crate::i18n::tr_catalog(lang, "typing_trainer.symbols"),
+                    metrics.size(116.0, 32.0),
+                    symbol_training,
+                )
+                .clicked()
+                {
+                    self.typing_trainer.set_symbols_enabled(!symbol_training);
                     settings_changed = true;
                 }
             },
@@ -412,6 +431,13 @@ impl EntropyApp {
     }
 
     fn typing_trainer_focus_status(&self, remaining_secs: u32) -> String {
+        if self.typing_trainer.is_symbol_training() {
+            return format!(
+                "{}/{}",
+                self.typing_trainer.typed_chars.len(),
+                self.typing_trainer.word_count
+            );
+        }
         match self.typing_trainer.mode {
             TypingTrainerMode::Time => {
                 let timer_secs = if self.typing_trainer.started_at.is_some() {
@@ -425,13 +451,7 @@ impl EntropyApp {
                 let (completed_words, target_words) = self.typing_trainer.word_progress();
                 format!("{completed_words}/{target_words}")
             }
-            TypingTrainerMode::Symbols => {
-                format!(
-                    "{}/{}",
-                    self.typing_trainer.typed_chars.len(),
-                    self.typing_trainer.word_count
-                )
-            }
+            TypingTrainerMode::Symbols => String::new(),
         }
     }
 
@@ -605,10 +625,7 @@ impl EntropyApp {
         max_line_chars: usize,
         max_visible_lines: usize,
     ) {
-        if matches!(
-            self.typing_trainer.mode,
-            TypingTrainerMode::Words | TypingTrainerMode::Symbols
-        ) {
+        if self.typing_trainer.mode == TypingTrainerMode::Words {
             return;
         }
         for _ in 0..4 {
@@ -1132,6 +1149,26 @@ fn typing_trainer_history_run_label(
     entry: &TypingTrainerRunRecord,
     lang: crate::i18n::Language,
 ) -> String {
+    if entry.symbols_enabled {
+        let pacing = if entry.mode == TypingTrainerMode::Time {
+            entry.duration_secs.to_string()
+        } else {
+            entry.word_count.to_string()
+        };
+        return format!(
+            "{} / {} {}",
+            crate::i18n::tr_catalog(lang, "typing_trainer.symbols"),
+            crate::i18n::tr_catalog(
+                lang,
+                if entry.mode == TypingTrainerMode::Time {
+                    "typing_trainer.time"
+                } else {
+                    "typing_trainer.count"
+                },
+            ),
+            pacing
+        );
+    }
     let mode = match entry.mode {
         TypingTrainerMode::Time => format!(
             "{} {}",
@@ -1143,11 +1180,7 @@ fn typing_trainer_history_run_label(
             crate::i18n::tr_catalog(lang, "typing_trainer.words"),
             entry.word_count
         ),
-        TypingTrainerMode::Symbols => format!(
-            "{} {}",
-            crate::i18n::tr_catalog(lang, "typing_trainer.symbols"),
-            entry.word_count
-        ),
+        TypingTrainerMode::Symbols => String::new(),
     };
     let mut modifiers = String::new();
     if entry.punctuation_enabled {
