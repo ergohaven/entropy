@@ -247,16 +247,22 @@ impl EntropyApp {
         let punctuation_size = metrics.size(112.0, 32.0);
         let numbers_size = metrics.size(104.0, 32.0);
         let gap = metrics.value(10.0);
+        let text_controls_width = language_size.x
+            + gap
+            + mode_size.x
+            + gap
+            + value_size.x
+            + gap
+            + punctuation_size.x
+            + gap
+            + numbers_size.x;
+        let symbol_controls_width = mode_size.x + gap + value_size.x + gap + metrics.value(116.0);
         let total_size = egui::vec2(
-            language_size.x
-                + gap
-                + mode_size.x
-                + gap
-                + value_size.x
-                + gap
-                + punctuation_size.x
-                + gap
-                + numbers_size.x,
+            if symbol_training {
+                symbol_controls_width
+            } else {
+                text_controls_width
+            },
             mode_size.y,
         );
         let mut settings_changed = false;
@@ -266,24 +272,24 @@ impl EntropyApp {
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
                 if !symbol_training {
-                let language_dropdown_id =
-                    ui.make_persistent_id("typing_trainer_language_dropdown");
-                let (_, picked_language) = crate::ui_style::modern_dropdown_select_sized(
-                    ui,
-                    language_dropdown_id,
-                    &language_labels,
-                    selected_language,
-                    language_size.x,
-                    language_size.y,
-                    metrics.value(12.5),
-                );
-                if let Some(picked) = picked_language {
-                    self.typing_trainer
-                        .set_language(TYPING_TRAINER_LANGUAGES[picked]);
-                    settings_changed = true;
-                }
+                    let language_dropdown_id =
+                        ui.make_persistent_id("typing_trainer_language_dropdown");
+                    let (_, picked_language) = crate::ui_style::modern_dropdown_select_sized(
+                        ui,
+                        language_dropdown_id,
+                        &language_labels,
+                        selected_language,
+                        language_size.x,
+                        language_size.y,
+                        metrics.value(12.5),
+                    );
+                    if let Some(picked) = picked_language {
+                        self.typing_trainer
+                            .set_language(TYPING_TRAINER_LANGUAGES[picked]);
+                        settings_changed = true;
+                    }
 
-                ui.add_space(gap);
+                    ui.add_space(gap);
                 }
 
                 let mode_dropdown_id = ui.make_persistent_id("typing_trainer_mode_dropdown");
@@ -297,12 +303,15 @@ impl EntropyApp {
                     metrics.value(12.5),
                 );
                 if let Some(picked) = picked_mode {
-                    let mode = if picked == 0 { TypingTrainerMode::Time } else { TypingTrainerMode::Words };
+                    let mode = if picked == 0 {
+                        TypingTrainerMode::Time
+                    } else {
+                        TypingTrainerMode::Words
+                    };
                     self.typing_trainer.set_mode(mode);
                     settings_changed = true;
                 }
 
-                if !symbol_training {
                 ui.add_space(gap);
 
                 let value_dropdown_id = ui.make_persistent_id("typing_trainer_value_dropdown");
@@ -320,52 +329,60 @@ impl EntropyApp {
                         TypingTrainerMode::Time => self
                             .typing_trainer
                             .set_duration(TYPING_TRAINER_DURATIONS[picked]),
-                        TypingTrainerMode::Words | TypingTrainerMode::Symbols if symbol_training => self.typing_trainer.set_word_count(
-                            crate::app::typing_trainer_symbols::TYPING_TRAINER_SYMBOL_COUNTS
-                                [picked],
-                        ),
-                        TypingTrainerMode::Words | TypingTrainerMode::Symbols => self.typing_trainer.set_word_count(TYPING_TRAINER_WORD_COUNTS[picked]),
+                        TypingTrainerMode::Words | TypingTrainerMode::Symbols
+                            if symbol_training =>
+                        {
+                            self.typing_trainer.set_word_count(
+                                crate::app::typing_trainer_symbols::TYPING_TRAINER_SYMBOL_COUNTS
+                                    [picked],
+                            )
+                        }
+                        TypingTrainerMode::Words | TypingTrainerMode::Symbols => self
+                            .typing_trainer
+                            .set_word_count(TYPING_TRAINER_WORD_COUNTS[picked]),
                     }
                     settings_changed = true;
                 }
 
-                ui.add_space(gap);
-                let punctuation_label = crate::i18n::tr_catalog(lang, "typing_trainer.punctuation");
-                let punctuation_short_label =
-                    crate::i18n::tr_catalog(lang, "typing_trainer.punctuation_short");
-                if crate::ui_style::modern_toggle_pill(
-                    ui,
-                    ".,?",
-                    punctuation_short_label,
-                    punctuation_label,
-                    punctuation_size,
-                    self.typing_trainer.punctuation_enabled,
-                )
-                .clicked()
-                {
-                    self.typing_trainer
-                        .set_punctuation_enabled(!self.typing_trainer.punctuation_enabled);
-                    settings_changed = true;
-                }
-                ui.add_space(gap);
-                let numbers_label = crate::i18n::tr_catalog(lang, "typing_trainer.numbers");
-                let numbers_short_label =
-                    crate::i18n::tr_catalog(lang, "typing_trainer.numbers_short");
-                if crate::ui_style::modern_toggle_pill(
-                    ui,
-                    "123",
-                    numbers_short_label,
-                    numbers_label,
-                    numbers_size,
-                    self.typing_trainer.numbers_enabled,
-                )
-                .clicked()
-                {
-                    self.typing_trainer
-                        .set_numbers_enabled(!self.typing_trainer.numbers_enabled);
-                    settings_changed = true;
-                }
-                ui.add_space(gap);
+                if !symbol_training {
+                    ui.add_space(gap);
+                    let punctuation_label =
+                        crate::i18n::tr_catalog(lang, "typing_trainer.punctuation");
+                    let punctuation_short_label =
+                        crate::i18n::tr_catalog(lang, "typing_trainer.punctuation_short");
+                    if crate::ui_style::modern_toggle_pill(
+                        ui,
+                        ".,?",
+                        punctuation_short_label,
+                        punctuation_label,
+                        punctuation_size,
+                        self.typing_trainer.punctuation_enabled,
+                    )
+                    .clicked()
+                    {
+                        self.typing_trainer
+                            .set_punctuation_enabled(!self.typing_trainer.punctuation_enabled);
+                        settings_changed = true;
+                    }
+                    ui.add_space(gap);
+                    let numbers_label = crate::i18n::tr_catalog(lang, "typing_trainer.numbers");
+                    let numbers_short_label =
+                        crate::i18n::tr_catalog(lang, "typing_trainer.numbers_short");
+                    if crate::ui_style::modern_toggle_pill(
+                        ui,
+                        "123",
+                        numbers_short_label,
+                        numbers_label,
+                        numbers_size,
+                        self.typing_trainer.numbers_enabled,
+                    )
+                    .clicked()
+                    {
+                        self.typing_trainer
+                            .set_numbers_enabled(!self.typing_trainer.numbers_enabled);
+                        settings_changed = true;
+                    }
+                    ui.add_space(gap);
                 }
                 if crate::ui_style::modern_toggle_pill(
                     ui,
