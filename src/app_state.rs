@@ -3033,7 +3033,10 @@ impl TypingTrainerState {
     }
 
     pub(crate) fn type_char(&mut self, ch: char, now: std::time::Instant) {
-        if self.is_finished() || !typing_trainer_accepts_char(ch) {
+        if self.is_finished()
+            || !typing_trainer_accepts_char(ch)
+            || (self.is_symbol_training() && self.symbol_pool.is_empty())
+        {
             return;
         }
         self.resume_if_paused(now);
@@ -3409,6 +3412,22 @@ mod typing_trainer_tests {
 
         assert_eq!(state.target_text.chars().count(), 25);
         assert!(state.target_text.chars().all(|ch| matches!(ch, 'a' | '!')));
+    }
+
+    #[test]
+    fn empty_symbol_pool_does_not_start_or_finish_a_run() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            mode: TypingTrainerMode::Words,
+            symbols_enabled: true,
+            ..TypingTrainerSettings::default()
+        });
+        state.set_symbol_training_data(Vec::new(), &TypingTrainerCharacterStatsMap::new());
+
+        state.type_char('a', std::time::Instant::now());
+
+        assert!(state.target_text.is_empty());
+        assert!(state.started_at.is_none());
+        assert!(!state.is_finished());
     }
 
     #[test]

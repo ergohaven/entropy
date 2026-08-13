@@ -505,6 +505,16 @@ impl EntropyApp {
             self.draw_typing_trainer_results(ui, text_rect, metrics, lang, now, dark);
             return;
         }
+        if self.typing_trainer.is_symbol_training() && self.typing_trainer.symbol_pool.is_empty() {
+            ui.painter().text(
+                text_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                crate::i18n::tr_catalog(lang, "typing_trainer.symbols_unavailable"),
+                FontId::proportional(metrics.value(16.0)),
+                app_muted_text(dark),
+            );
+            return;
+        }
         self.ensure_typing_trainer_visible_text(max_line_chars, max_visible_lines);
 
         let target_chars = self.typing_trainer.target_text.chars().collect::<Vec<_>>();
