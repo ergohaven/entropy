@@ -3071,6 +3071,15 @@ impl TypingTrainerState {
             return;
         }
         self.text_seed = self.text_seed.wrapping_add(17);
+        if self.is_symbol_training() {
+            self.target_text.push_str(&weighted_symbol_text(
+                &self.symbol_pool,
+                self.word_count,
+                &self.symbol_stats,
+                self.text_seed,
+            ));
+            return;
+        }
         if !self.target_text.is_empty() {
             self.target_text.push(' ');
         }
@@ -3423,6 +3432,20 @@ mod typing_trainer_tests {
 
         assert!(state.punctuation_enabled);
         assert!(state.numbers_enabled);
+    }
+
+    #[test]
+    fn time_based_symbol_training_extends_with_symbols_only() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            mode: TypingTrainerMode::Time,
+            symbols_enabled: true,
+            ..TypingTrainerSettings::default()
+        });
+        state.set_symbol_training_data(vec!['a', '!'], &TypingTrainerCharacterStatsMap::new());
+
+        state.extend_target_text();
+
+        assert!(state.target_text.chars().all(|ch| matches!(ch, 'a' | '!')));
     }
 
     #[test]
