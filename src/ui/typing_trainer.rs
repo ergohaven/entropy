@@ -28,7 +28,19 @@ impl EntropyApp {
             || self.settings_tab != SettingsTab::TypingTrainer
         {
             self.typing_trainer.pause_if_running(now);
+            self.flush_typing_trainer_symbol_stats();
         }
+    }
+
+    /// Persists adaptive statistics recorded since the last save. Called when
+    /// the trainer page is left and on exit, so an abandoned session still
+    /// teaches the trainer which characters are difficult.
+    pub(super) fn flush_typing_trainer_symbol_stats(&mut self) {
+        if !self.typing_trainer.symbol_stats_unsaved() {
+            return;
+        }
+        save_typing_trainer_symbol_stats(&self.typing_trainer.symbol_stats);
+        self.typing_trainer.mark_symbol_stats_saved();
     }
 
     /// Rebuilds the symbol pool only when the keymap or the selected trainer
@@ -257,24 +269,21 @@ impl EntropyApp {
         let value_size = metrics.size(88.0, 32.0);
         let punctuation_size = metrics.size(112.0, 32.0);
         let numbers_size = metrics.size(104.0, 32.0);
+        let material_size = metrics.size(116.0, 32.0);
         let gap = metrics.value(10.0);
-        let text_controls_width = language_size.x
-            + gap
-            + mode_size.x
-            + gap
-            + value_size.x
-            + gap
-            + punctuation_size.x
-            + gap
-            + numbers_size.x;
-        let symbol_controls_width =
-            language_size.x + gap + mode_size.x + gap + value_size.x + gap + metrics.value(116.0);
+        // Every control the current material shows, the material toggle
+        // included — a short total clips the trailing controls away.
+        let shared_controls_width = language_size.x + gap + mode_size.x + gap + value_size.x;
+        let text_options_width = gap + punctuation_size.x + gap + numbers_size.x;
         let total_size = egui::vec2(
-            if symbol_training {
-                symbol_controls_width
-            } else {
-                text_controls_width
-            },
+            shared_controls_width
+                + if symbol_training {
+                    0.0
+                } else {
+                    text_options_width
+                }
+                + gap
+                + material_size.x,
             mode_size.y,
         );
         let mut settings_changed = false;
@@ -394,14 +403,14 @@ impl EntropyApp {
                             .set_numbers_enabled(!self.typing_trainer.numbers_enabled);
                         settings_changed = true;
                     }
-                    ui.add_space(gap);
                 }
+                ui.add_space(gap);
                 if crate::ui_style::modern_toggle_pill(
                     ui,
                     "#?",
                     crate::i18n::tr_catalog(lang, "typing_trainer.symbols"),
                     crate::i18n::tr_catalog(lang, "typing_trainer.symbols_tooltip"),
-                    metrics.size(116.0, 32.0),
+                    material_size,
                     symbol_training,
                 )
                 .clicked()
@@ -1156,6 +1165,7 @@ impl EntropyApp {
         {
             push_typing_trainer_history(&mut self.app_settings.typing_trainer_history, record);
             save_typing_trainer_symbol_stats(&self.typing_trainer.symbol_stats);
+            self.typing_trainer.mark_symbol_stats_saved();
             save_app_settings(&self.app_settings);
         }
         self.typing_trainer.mark_history_recorded();

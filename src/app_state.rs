@@ -332,9 +332,6 @@ pub(crate) fn key_binding_printable_output(
             crate::keycode::printable_output(value, key_output_layout)
         }
         crate::keyboard::KeyBinding::Rmk(action) => {
-            if let Some(output) = crate::universal_symbols::printable_output(action) {
-                return Some(output);
-            }
             if let Some(parts) = crate::rmk_native::rmk_mod_tap_parts(action) {
                 return crate::keycode::printable_output(parts.tap_value(), key_output_layout);
             }
@@ -343,7 +340,8 @@ pub(crate) fn key_binding_printable_output(
     }
 }
 
-/// Decodes plain RMK key actions — a key press, optionally with modifiers held.
+/// Decodes RMK key actions by what they type when tapped: Universal Symbols,
+/// a key press, or a key press with modifiers held.
 fn rmk_action_printable_output(
     action: rmk_types::action::KeyAction,
     key_output_layout: crate::keycode::KeyOutputLayout,
@@ -351,12 +349,15 @@ fn rmk_action_printable_output(
     use rmk_types::action::{Action, KeyAction};
     use rmk_types::keycode::KeyCode;
 
-    let action = match action {
+    let tap = match action {
         KeyAction::Single(action) | KeyAction::Tap(action) => action,
         KeyAction::TapHold(tap, _, _) => tap,
         _ => return None,
     };
-    match action {
+    match tap {
+        Action::User(_) => {
+            crate::universal_symbols::printable_output(KeyAction::Single(tap), key_output_layout)
+        }
         Action::Key(KeyCode::Hid(key)) => {
             crate::keycode::printable_output(key as u16, key_output_layout)
         }
@@ -2729,6 +2730,25 @@ pub(crate) fn default_typing_trainer_word_count() -> usize {
     25
 }
 
+/// Nearest pacing count offered by the given material, so switching between
+/// words and symbols keeps the user's intent instead of silently running a
+/// count the dropdown cannot show.
+pub(crate) fn pacing_count_for_material(count: usize, symbols_enabled: bool) -> usize {
+    let presets: &[usize] = if symbols_enabled {
+        &TYPING_TRAINER_SYMBOL_COUNTS
+    } else {
+        &TYPING_TRAINER_WORD_COUNTS
+    };
+    if presets.contains(&count) {
+        return count;
+    }
+    presets
+        .iter()
+        .copied()
+        .min_by_key(|preset| preset.abs_diff(count))
+        .unwrap_or_else(default_typing_trainer_word_count)
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct TypingTrainerRunRecord {
     pub(crate) finished_at_unix_secs: i64,
@@ -2866,6 +2886,7 @@ pub(crate) struct TypingTrainerState {
     pub(crate) symbols_enabled: bool,
     pub(crate) symbol_pool: Vec<char>,
     pub(crate) symbol_stats: TypingTrainerCharacterStatsMap,
+    symbol_stats_dirty: bool,
     pub(crate) started_at: Option<std::time::Instant>,
     pub(crate) paused_at: Option<std::time::Instant>,
     pub(crate) finished_at: Option<std::time::Instant>,
@@ -2929,6 +2950,7 @@ impl TypingTrainerState {
             symbols_enabled: settings.symbols_enabled,
             symbol_pool: Vec::new(),
             symbol_stats: TypingTrainerCharacterStatsMap::new(),
+            symbol_stats_dirty: false,
             started_at: None,
             paused_at: None,
             finished_at: None,
@@ -3031,13 +3053,20 @@ impl TypingTrainerState {
     pub(crate) fn set_symbols_enabled(&mut self, enabled: bool) {
         if self.symbols_enabled != enabled {
             self.symbols_enabled = enabled;
+            // Words and symbols are paced by different count presets, so a count
+            // carried over from the other material would leave the dropdown
+            // showing a value the run does not use.
+            self.word_count = pacing_count_for_material(self.word_count, enabled);
             self.reset();
         }
     }
 
-    /// Replaces the pool of characters the loaded layout can type. Restarts a
-    /// symbol run when the pool actually changed, so the exercise never keeps
-    /// asking for characters the keyboard no longer types.
+    /// Replaces the pool of characters the loaded layout can type.
+    ///
+    /// A changed pool restarts the exercise so it never keeps asking for
+    /// characters the keyboard no longer types — but a run already in progress
+    /// is left alone, because layers keep arriving in the background right
+    /// after a device connects and would otherwise wipe the session.
     pub(crate) fn set_symbol_pool(&mut self, mut symbols: Vec<char>) {
         symbols.sort_unstable();
         symbols.dedup();
@@ -3045,7 +3074,7 @@ impl TypingTrainerState {
             return;
         }
         self.symbol_pool = symbols;
-        if self.is_symbol_training() {
+        if self.is_symbol_training() && self.started_at.is_none() {
             self.start_run(self.text_seed);
         }
     }
@@ -3053,10 +3082,23 @@ impl TypingTrainerState {
     /// Restores adaptive statistics persisted from earlier sessions.
     pub(crate) fn set_symbol_stats(&mut self, stats: TypingTrainerCharacterStatsMap) {
         self.symbol_stats = stats;
+        self.symbol_stats_dirty = false;
     }
 
     pub(crate) fn record_symbol_attempt(&mut self, expected: char, was_error: bool) {
         record_symbol_attempt(&mut self.symbol_stats, expected, was_error);
+        self.symbol_stats_dirty = true;
+    }
+
+    /// Whether attempts were recorded since the statistics were last persisted.
+    /// Sessions are abandoned far more often than they are finished, so the
+    /// adaptive weights have to survive without a completed run.
+    pub(crate) fn symbol_stats_unsaved(&self) -> bool {
+        self.symbol_stats_dirty
+    }
+
+    pub(crate) fn mark_symbol_stats_saved(&mut self) {
+        self.symbol_stats_dirty = false;
     }
 
     pub(crate) fn expected_char(&self) -> Option<char> {
@@ -3488,6 +3530,52 @@ mod typing_trainer_tests {
         assert!(state.target_text.is_empty());
         assert!(state.started_at.is_none());
         assert!(!state.is_finished());
+    }
+
+    #[test]
+    fn switching_material_moves_the_count_to_a_preset_the_material_offers() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            mode: TypingTrainerMode::Words,
+            word_count: 10,
+            ..TypingTrainerSettings::default()
+        });
+
+        state.set_symbols_enabled(true);
+        assert_eq!(state.word_count, 25);
+
+        state.set_word_count(100);
+        state.set_symbols_enabled(false);
+        assert_eq!(state.word_count, 100);
+    }
+
+    #[test]
+    fn a_late_arriving_layer_does_not_wipe_a_running_symbol_session() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            symbols_enabled: true,
+            ..TypingTrainerSettings::default()
+        });
+        state.set_symbol_pool(vec!['a', '!']);
+        let started_at = std::time::Instant::now();
+        state.type_char('a', started_at);
+        let text = state.target_text.clone();
+
+        state.set_symbol_pool(vec!['a', '!', '?']);
+
+        assert_eq!(state.target_text, text);
+        assert_eq!(state.typed_chars.len(), 1);
+        assert_eq!(state.started_at, Some(started_at));
+    }
+
+    #[test]
+    fn recorded_attempts_mark_statistics_as_unsaved_until_they_are_persisted() {
+        let mut state = TypingTrainerState::default();
+        assert!(!state.symbol_stats_unsaved());
+
+        state.record_symbol_attempt('!', true);
+        assert!(state.symbol_stats_unsaved());
+
+        state.mark_symbol_stats_saved();
+        assert!(!state.symbol_stats_unsaved());
     }
 
     #[test]
