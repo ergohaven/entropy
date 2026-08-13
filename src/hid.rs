@@ -212,6 +212,7 @@ pub(crate) enum TestHidFault {
     Disconnect,
     Timeout,
     WorkerPanic,
+    IgnoreQmkSettingSet,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -828,6 +829,14 @@ impl HidDevice {
                         TestHidFault::Disconnect => bail!("HID device disconnected"),
                         TestHidFault::Timeout => bail!("HID timeout — device did not respond"),
                         TestHidFault::WorkerPanic => panic!("test HID worker stopped"),
+                        TestHidFault::IgnoreQmkSettingSet => {
+                            if request[0] != CMD_VIA_VIAL_PREFIX
+                                || request[1] != CMD_VIAL_QMK_SETTINGS_SET
+                            {
+                                bail!("test fault expected a QMK Settings SET request");
+                            }
+                            return Ok([0; MSG_LEN]);
+                        }
                     }
                 }
 

@@ -1200,6 +1200,7 @@ mod tests {
                 width: 2,
                 value: 32,
                 max: 255,
+                variants: Vec::new(),
             }),
             supported: true,
             ..LayerLedSettingsState::default()
@@ -1271,17 +1272,17 @@ mod tests {
         assert_eq!(requests.first().map(|request| request[0]), Some(0x12));
         assert!(module_set.is_some_and(|index| index > 0));
         assert!(layer_led_set.is_some_and(|index| Some(index) > module_set));
-        assert_eq!(
-            requests
-                .iter()
-                .filter(|request| {
-                    request[0] == 0xFE
-                        && matches!(request[1], 0x0A | 0x0B)
-                        && u16::from_le_bytes([request[2], request[3]]) == 316
-                })
-                .count(),
-            1
-        );
+        let layer_led_requests = requests
+            .iter()
+            .filter(|request| {
+                request[0] == 0xFE
+                    && matches!(request[1], 0x0A | 0x0B)
+                    && u16::from_le_bytes([request[2], request[3]]) == 316
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(layer_led_requests.len(), 2);
+        assert_eq!(layer_led_requests[0][1], 0x0B);
+        assert_eq!(layer_led_requests[1][1], 0x0A);
     }
 
     #[test]

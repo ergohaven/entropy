@@ -2080,6 +2080,7 @@ pub(crate) struct LayerLedNumericSetting {
     pub(crate) width: u8,
     pub(crate) value: u16,
     pub(crate) max: u16,
+    pub(crate) variants: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
