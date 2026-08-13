@@ -17,6 +17,9 @@ use app_theme::*;
 #[path = "typing_trainer_words.rs"]
 mod typing_trainer_words;
 
+#[path = "typing_trainer_symbols.rs"]
+mod typing_trainer_symbols;
+
 #[path = "app_state.rs"]
 mod app_state;
 pub use app_state::*;
