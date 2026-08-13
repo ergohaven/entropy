@@ -20,6 +20,17 @@ impl TypingTrainerLanguage {
     }
 }
 
+/// The trainer language doubles as the input mapping of the exercise: it tells
+/// which OS layout the typed characters are expected to come from.
+impl From<TypingTrainerLanguage> for crate::keycode::KeyOutputLayout {
+    fn from(language: TypingTrainerLanguage) -> Self {
+        match language {
+            TypingTrainerLanguage::English => Self::English,
+            TypingTrainerLanguage::Russian => Self::Russian,
+        }
+    }
+}
+
 pub(crate) fn word_count(language: TypingTrainerLanguage) -> usize {
     words(language).split_whitespace().count()
 }

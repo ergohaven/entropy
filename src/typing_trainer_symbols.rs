@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::keyboard::{KeyBinding, KeyboardLayout};
+use crate::keyboard::KeyboardLayout;
+use crate::keycode::KeyOutputLayout;
 
 pub(crate) const TYPING_TRAINER_SYMBOL_COUNTS: [usize; 3] = [25, 50, 100];
 
@@ -88,14 +89,18 @@ impl SymbolRandom {
     }
 }
 
-pub(crate) fn printable_symbols_from_layout(layout: &KeyboardLayout) -> Vec<char> {
+/// Collects every character the loaded layout can type in the given input
+/// layout, across all layers and both direct and Shift outputs.
+pub(crate) fn printable_symbols_from_layout(
+    layout: &KeyboardLayout,
+    key_output_layout: KeyOutputLayout,
+) -> Vec<char> {
     let mut symbols = BTreeSet::new();
 
     for binding in layout.layers.iter().flatten() {
-        let KeyBinding::Vial(keycode) = binding else {
-            continue;
-        };
-        let Some((direct, shifted)) = direct_and_shifted_symbols(*keycode) else {
+        let Some((direct, shifted)) =
+            super::key_binding_printable_output(*binding, key_output_layout)
+        else {
             continue;
         };
         symbols.insert(direct);
@@ -107,50 +112,14 @@ pub(crate) fn printable_symbols_from_layout(layout: &KeyboardLayout) -> Vec<char
     symbols.into_iter().collect()
 }
 
-fn direct_and_shifted_symbols(keycode: u16) -> Option<(char, Option<char>)> {
-    let letter = (0x0004..=0x001d).contains(&keycode).then(|| {
-        let direct = char::from_u32(u32::from(b'a') + u32::from(keycode - 0x0004))
-            .expect("Vial letter keycode maps to ASCII");
-        (direct, Some(direct.to_ascii_uppercase()))
-    });
-    if letter.is_some() {
-        return letter;
-    }
-
-    match keycode {
-        0x001e => Some(('1', Some('!'))),
-        0x001f => Some(('2', Some('@'))),
-        0x0020 => Some(('3', Some('#'))),
-        0x0021 => Some(('4', Some('$'))),
-        0x0022 => Some(('5', Some('%'))),
-        0x0023 => Some(('6', Some('^'))),
-        0x0024 => Some(('7', Some('&'))),
-        0x0025 => Some(('8', Some('*'))),
-        0x0026 => Some(('9', Some('('))),
-        0x0027 => Some(('0', Some(')'))),
-        0x002d => Some(('-', Some('_'))),
-        0x002e => Some(('=', Some('+'))),
-        0x002f => Some(('[', Some('{'))),
-        0x0030 => Some((']', Some('}'))),
-        0x0031 => Some(('\\', Some('|'))),
-        0x0033 => Some((';', Some(':'))),
-        0x0034 => Some(('\'', Some('"'))),
-        0x0035 => Some(('`', Some('~'))),
-        0x0036 => Some((',', Some('<'))),
-        0x0037 => Some(('.', Some('>'))),
-        0x0038 => Some(('/', Some('?'))),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::firmware::FirmwareProtocol;
-    use crate::keyboard::{KeyboardLayout, PhysicalKey};
+    use crate::keyboard::{KeyBinding, KeyboardLayout, PhysicalKey};
     use std::collections::{BTreeMap, BTreeSet};
 
-    fn test_layout(layers: Vec<Vec<u16>>) -> KeyboardLayout {
+    fn test_layout(layers: Vec<Vec<KeyBinding>>) -> KeyboardLayout {
         let cols = layers.first().map(Vec::len).unwrap_or(0);
         KeyboardLayout {
             name: "test".to_owned(),
@@ -172,10 +141,7 @@ mod tests {
                 })
                 .collect(),
             encoders: vec![],
-            layers: layers
-                .into_iter()
-                .map(|layer| layer.into_iter().map(Into::into).collect())
-                .collect(),
+            layers,
             encoder_layers: vec![],
             layer_names: vec![],
             custom_keycodes: vec![],
@@ -187,24 +153,63 @@ mod tests {
         }
     }
 
+    fn vial_layers(layers: Vec<Vec<u16>>) -> Vec<Vec<KeyBinding>> {
+        layers
+            .into_iter()
+            .map(|layer| layer.into_iter().map(Into::into).collect())
+            .collect()
+    }
+
     #[test]
     fn printable_symbols_collect_direct_and_shifted_characters_from_all_layers() {
-        let layout = test_layout(vec![
+        let layout = test_layout(vial_layers(vec![
             vec![0x001e, 0x0004, 0x0038, 0x0000],
             vec![0x0001, 0x0028, 0x0004, 0x001e],
-        ]);
+        ]));
 
         assert_eq!(
-            printable_symbols_from_layout(&layout),
+            printable_symbols_from_layout(&layout, KeyOutputLayout::English),
             vec!['!', '/', '1', '?', 'A', 'a']
         );
     }
 
     #[test]
-    fn printable_symbols_deduplicates_keycodes_across_layers() {
-        let layout = test_layout(vec![vec![0x0004], vec![0x0004], vec![0x0004]]);
+    fn printable_symbols_follow_the_russian_input_mapping() {
+        let layout = test_layout(vial_layers(vec![
+            vec![0x0004, 0x0038],
+            vec![0x002f, 0x0220],
+        ]));
 
-        assert_eq!(printable_symbols_from_layout(&layout), vec!['A', 'a']);
+        assert_eq!(
+            printable_symbols_from_layout(&layout, KeyOutputLayout::Russian),
+            vec![',', '.', 'Ф', 'Х', 'ф', 'х', '№']
+        );
+    }
+
+    #[test]
+    fn printable_symbols_include_native_universal_symbols() {
+        let layout = test_layout(vec![vec![
+            crate::universal_symbols::binding(crate::universal_symbols::USER_SYMBOL_START),
+            crate::universal_symbols::binding(
+                crate::universal_symbols::USER_RUSSIAN_LETTER_START + 1,
+            ),
+            crate::universal_symbols::binding(crate::universal_symbols::USER_TOGGLE),
+        ]]);
+
+        assert_eq!(
+            printable_symbols_from_layout(&layout, KeyOutputLayout::English),
+            vec!['.', 'Б', 'б']
+        );
+    }
+
+    #[test]
+    fn printable_symbols_deduplicates_keycodes_across_layers() {
+        let layout = test_layout(vial_layers(vec![vec![0x0004], vec![0x0004], vec![0x0004]]));
+
+        assert_eq!(
+            printable_symbols_from_layout(&layout, KeyOutputLayout::English),
+            vec!['A', 'a']
+        );
     }
 
     #[test]

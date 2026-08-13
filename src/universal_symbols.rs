@@ -170,6 +170,25 @@ pub(crate) fn label(action: KeyAction) -> Option<String> {
     label_for_user_id(user_id(action)?)
 }
 
+/// Characters a Universal Symbols action types: the direct output and the Shift
+/// output, when the action produces one.
+///
+/// The firmware types these in both English and Russian layouts, so the result
+/// does not depend on the selected input mapping.
+pub(crate) fn printable_output(action: KeyAction) -> Option<(char, Option<char>)> {
+    let user_id = user_id(action)?;
+    if let Some(entry) = SYMBOLS.iter().find(|symbol| symbol.user_id == user_id) {
+        return Some((entry.symbol, None));
+    }
+    RUSSIAN_LETTERS
+        .iter()
+        .find(|letter| letter.user_id == user_id)
+        .map(|entry| {
+            let uppercase = entry.letter.to_uppercase().next().unwrap_or(entry.letter);
+            (entry.letter, Some(uppercase))
+        })
+}
+
 pub(crate) fn tooltip(action: KeyAction) -> Option<String> {
     let user_id = user_id(action)?;
     CONTROLS
@@ -248,6 +267,26 @@ mod tests {
             Some("Universal\nх")
         );
         assert!(label(KeyAction::Single(Action::User(0x70))).is_none());
+    }
+
+    #[test]
+    fn printable_output_covers_symbols_and_russian_letters_only() {
+        assert_eq!(
+            printable_output(binding(0x90).rmk_action().unwrap()),
+            Some(('.', None))
+        );
+        assert_eq!(
+            printable_output(binding(USER_RUSSIAN_LETTER_START).rmk_action().unwrap()),
+            Some(('х', Some('Х')))
+        );
+        assert_eq!(
+            printable_output(binding(USER_TOGGLE).rmk_action().unwrap()),
+            None
+        );
+        assert_eq!(
+            printable_output(KeyAction::Single(Action::User(0x70))),
+            None
+        );
     }
 
     #[test]

@@ -24,8 +24,8 @@ impl EntropyApp {
 
         let text_expander_rules_signature =
             text_expander_rules_signature(&app_settings.text_expander_rule_files);
-        let typing_trainer = TypingTrainerState::from_settings(app_settings.typing_trainer);
-        let typing_trainer_symbol_stats = load_typing_trainer_symbol_stats();
+        let mut typing_trainer = TypingTrainerState::from_settings(app_settings.typing_trainer);
+        typing_trainer.set_symbol_stats(load_typing_trainer_symbol_stats());
         let dark_mode = app_settings.dark_mode;
 
         Self {
@@ -169,7 +169,7 @@ impl EntropyApp {
             key_override_undo_stack: Vec::new(),
             text_expander_deleted_rules: Vec::new(),
             typing_trainer,
-            typing_trainer_symbol_stats,
+            typing_trainer_symbol_pool_source: None,
             typing_trainer_history_open: false,
             selected_key_override: 0,
             key_override_pick_target: None,

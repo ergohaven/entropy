@@ -946,6 +946,116 @@ fn russian_key_legend(value: u16, russian_primary: bool) -> Option<String> {
     }
 }
 
+/// Keyboard layout selected in the operating system, i.e. what the host
+/// actually types when the firmware sends a HID keycode.
+///
+/// Legends (`KeyLegendLayout`) describe what is printed on the keycap and may
+/// show several alphabets at once; this enum describes a single active input
+/// mapping and is therefore a separate type.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KeyOutputLayout {
+    #[default]
+    English,
+    Russian,
+}
+
+impl From<KeyLegendLayout> for KeyOutputLayout {
+    fn from(legend: KeyLegendLayout) -> Self {
+        match legend {
+            KeyLegendLayout::English => Self::English,
+            KeyLegendLayout::Russian | KeyLegendLayout::RussianPrimary => Self::Russian,
+        }
+    }
+}
+
+/// Characters a keycode types in the given input layout: the direct output and
+/// the Shift output, when the key produces one.
+///
+/// Accepts both plain HID keycodes and QMK modifier-wrapped ones (`LSFT(kc)`);
+/// keys that do not produce printable text return `None`.
+pub fn printable_output(value: u16, layout: KeyOutputLayout) -> Option<(char, Option<char>)> {
+    if let Some(base) = shift_wrapped_base_keycode(value) {
+        let (_, shifted) = printable_output_for_hid(base, layout)?;
+        return shifted.map(|shifted| (shifted, None));
+    }
+    printable_output_for_hid(value, layout)
+}
+
+/// Unwraps `LSFT(kc)`/`RSFT(kc)` QMK keycodes; other modifier combinations do
+/// not have a plain printable output and are rejected.
+fn shift_wrapped_base_keycode(value: u16) -> Option<u16> {
+    if !(0x0100..0x2000).contains(&value) {
+        return None;
+    }
+    let modifiers = (value >> 8) & 0x1F;
+    (modifiers & 0x0F == 0x02).then_some(value & 0x00FF)
+}
+
+fn printable_output_for_hid(keycode: u16, layout: KeyOutputLayout) -> Option<(char, Option<char>)> {
+    if let Some(index) = keycode.checked_sub(0x0004).filter(|index| *index < 26) {
+        let letter = match layout {
+            KeyOutputLayout::English => char::from(b'a' + index as u8),
+            KeyOutputLayout::Russian => RUSSIAN_LETTER_ROW[index as usize],
+        };
+        let uppercase = letter.to_uppercase().next().unwrap_or(letter);
+        return Some((letter, Some(uppercase)));
+    }
+
+    let english = |direct: char, shifted: char| Some((direct, Some(shifted)));
+    match (keycode, layout) {
+        (0x001e, KeyOutputLayout::English) => english('1', '!'),
+        (0x001f, KeyOutputLayout::English) => english('2', '@'),
+        (0x0020, KeyOutputLayout::English) => english('3', '#'),
+        (0x0021, KeyOutputLayout::English) => english('4', '$'),
+        (0x0022, KeyOutputLayout::English) => english('5', '%'),
+        (0x0023, KeyOutputLayout::English) => english('6', '^'),
+        (0x0024, KeyOutputLayout::English) => english('7', '&'),
+        (0x0025, KeyOutputLayout::English) => english('8', '*'),
+        (0x0026, KeyOutputLayout::English) => english('9', '('),
+        (0x0027, KeyOutputLayout::English) => english('0', ')'),
+        (0x002d, KeyOutputLayout::English) => english('-', '_'),
+        (0x002e, KeyOutputLayout::English) => english('=', '+'),
+        (0x002f, KeyOutputLayout::English) => english('[', '{'),
+        (0x0030, KeyOutputLayout::English) => english(']', '}'),
+        (0x0031, KeyOutputLayout::English) => english('\\', '|'),
+        (0x0033, KeyOutputLayout::English) => english(';', ':'),
+        (0x0034, KeyOutputLayout::English) => english('\'', '"'),
+        (0x0035, KeyOutputLayout::English) => english('`', '~'),
+        (0x0036, KeyOutputLayout::English) => english(',', '<'),
+        (0x0037, KeyOutputLayout::English) => english('.', '>'),
+        (0x0038, KeyOutputLayout::English) => english('/', '?'),
+
+        (0x001e, KeyOutputLayout::Russian) => english('1', '!'),
+        (0x001f, KeyOutputLayout::Russian) => english('2', '"'),
+        (0x0020, KeyOutputLayout::Russian) => english('3', '№'),
+        (0x0021, KeyOutputLayout::Russian) => english('4', ';'),
+        (0x0022, KeyOutputLayout::Russian) => english('5', '%'),
+        (0x0023, KeyOutputLayout::Russian) => english('6', ':'),
+        (0x0024, KeyOutputLayout::Russian) => english('7', '?'),
+        (0x0025, KeyOutputLayout::Russian) => english('8', '*'),
+        (0x0026, KeyOutputLayout::Russian) => english('9', '('),
+        (0x0027, KeyOutputLayout::Russian) => english('0', ')'),
+        (0x002d, KeyOutputLayout::Russian) => english('-', '_'),
+        (0x002e, KeyOutputLayout::Russian) => english('=', '+'),
+        (0x002f, KeyOutputLayout::Russian) => english('х', 'Х'),
+        (0x0030, KeyOutputLayout::Russian) => english('ъ', 'Ъ'),
+        (0x0031, KeyOutputLayout::Russian) => english('\\', '/'),
+        (0x0033, KeyOutputLayout::Russian) => english('ж', 'Ж'),
+        (0x0034, KeyOutputLayout::Russian) => english('э', 'Э'),
+        (0x0035, KeyOutputLayout::Russian) => english('ё', 'Ё'),
+        (0x0036, KeyOutputLayout::Russian) => english('б', 'Б'),
+        (0x0037, KeyOutputLayout::Russian) => english('ю', 'Ю'),
+        (0x0038, KeyOutputLayout::Russian) => english('.', ','),
+        _ => None,
+    }
+}
+
+/// Russian ЙЦУКЕН letters in HID keycode order, i.e. `KC_A`..`KC_Z`.
+const RUSSIAN_LETTER_ROW: [char; 26] = [
+    'ф', 'и', 'с', 'в', 'у', 'а', 'п', 'р', 'ш', 'о', 'л', 'д', 'ь', 'т', 'щ', 'з', 'й', 'к', 'ы',
+    'е', 'г', 'м', 'ц', 'ч', 'н', 'я',
+];
+
 /// Returns a human-readable tooltip for a keycode.
 pub fn keycode_tooltip(value: u16, custom: &[CustomKeycode], layer_names: &[String]) -> String {
     let layer_display = |n: u16| -> String {
@@ -1300,5 +1410,77 @@ mod tests {
     #[test]
     fn macos_gui_legends_use_cmd_text() {
         assert_eq!(gui_name_for_target_os("macos"), "Cmd");
+    }
+
+    #[test]
+    fn printable_output_follows_the_english_input_mapping() {
+        assert_eq!(
+            printable_output(0x0004, KeyOutputLayout::English),
+            Some(('a', Some('A')))
+        );
+        assert_eq!(
+            printable_output(0x001f, KeyOutputLayout::English),
+            Some(('2', Some('@')))
+        );
+        assert_eq!(
+            printable_output(0x0038, KeyOutputLayout::English),
+            Some(('/', Some('?')))
+        );
+    }
+
+    #[test]
+    fn printable_output_follows_the_russian_input_mapping() {
+        assert_eq!(
+            printable_output(0x0004, KeyOutputLayout::Russian),
+            Some(('ф', Some('Ф')))
+        );
+        assert_eq!(
+            printable_output(0x001f, KeyOutputLayout::Russian),
+            Some(('2', Some('"')))
+        );
+        assert_eq!(
+            printable_output(0x0038, KeyOutputLayout::Russian),
+            Some(('.', Some(',')))
+        );
+        assert_eq!(
+            printable_output(0x002f, KeyOutputLayout::Russian),
+            Some(('х', Some('Х')))
+        );
+    }
+
+    #[test]
+    fn printable_output_resolves_shift_wrapped_keycodes_to_the_shifted_character() {
+        assert_eq!(
+            printable_output(0x021e, KeyOutputLayout::English),
+            Some(('!', None))
+        );
+        assert_eq!(
+            printable_output(0x0220, KeyOutputLayout::Russian),
+            Some(('№', None))
+        );
+        assert_eq!(
+            printable_output(0x0204, KeyOutputLayout::Russian),
+            Some(('Ф', None))
+        );
+    }
+
+    #[test]
+    fn printable_output_rejects_non_typing_keys_and_other_modifiers() {
+        assert_eq!(printable_output(0x0000, KeyOutputLayout::English), None);
+        assert_eq!(printable_output(0x0029, KeyOutputLayout::English), None);
+        // LCTL(KC_A) types nothing on its own.
+        assert_eq!(printable_output(0x0104, KeyOutputLayout::English), None);
+    }
+
+    #[test]
+    fn key_output_layout_follows_the_selected_legend_family() {
+        assert_eq!(
+            KeyOutputLayout::from(KeyLegendLayout::English),
+            KeyOutputLayout::English
+        );
+        assert_eq!(
+            KeyOutputLayout::from(KeyLegendLayout::RussianPrimary),
+            KeyOutputLayout::Russian
+        );
     }
 }

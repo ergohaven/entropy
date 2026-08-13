@@ -23,7 +23,8 @@ pub(crate) const COMBO_COLOR_SEED_PALETTE: [u32; 16] = [
 ];
 
 use super::typing_trainer_symbols::{
-    weighted_symbol_text, TypingTrainerCharacterStatsMap, TYPING_TRAINER_SYMBOL_COUNTS,
+    record_symbol_attempt, weighted_symbol_text, TypingTrainerCharacterStatsMap,
+    TYPING_TRAINER_SYMBOL_COUNTS,
 };
 use super::*;
 
@@ -314,6 +315,57 @@ pub(crate) fn key_binding_label_with_macro_names(
             }
             "RMK\nAction".to_owned()
         }
+    }
+}
+
+/// Characters a key binding types in the given input layout: the direct output
+/// and the Shift output, when the binding produces one.
+///
+/// Mirrors [`key_binding_label_with_macro_names`] in how it decodes a binding,
+/// so both firmware protocols and RMK-native actions are handled in one place.
+pub(crate) fn key_binding_printable_output(
+    binding: crate::keyboard::KeyBinding,
+    key_output_layout: crate::keycode::KeyOutputLayout,
+) -> Option<(char, Option<char>)> {
+    match binding {
+        crate::keyboard::KeyBinding::Vial(value) => {
+            crate::keycode::printable_output(value, key_output_layout)
+        }
+        crate::keyboard::KeyBinding::Rmk(action) => {
+            if let Some(output) = crate::universal_symbols::printable_output(action) {
+                return Some(output);
+            }
+            if let Some(parts) = crate::rmk_native::rmk_mod_tap_parts(action) {
+                return crate::keycode::printable_output(parts.tap_value(), key_output_layout);
+            }
+            rmk_action_printable_output(action, key_output_layout)
+        }
+    }
+}
+
+/// Decodes plain RMK key actions — a key press, optionally with modifiers held.
+fn rmk_action_printable_output(
+    action: rmk_types::action::KeyAction,
+    key_output_layout: crate::keycode::KeyOutputLayout,
+) -> Option<(char, Option<char>)> {
+    use rmk_types::action::{Action, KeyAction};
+    use rmk_types::keycode::KeyCode;
+
+    let action = match action {
+        KeyAction::Single(action) | KeyAction::Tap(action) => action,
+        KeyAction::TapHold(tap, _, _) => tap,
+        _ => return None,
+    };
+    match action {
+        Action::Key(KeyCode::Hid(key)) => {
+            crate::keycode::printable_output(key as u16, key_output_layout)
+        }
+        Action::KeyWithModifier(key, modifiers) => {
+            let modifier_bits = u16::from(modifiers.into_packed_bits()) & 0x0F;
+            let keycode = (modifier_bits << 8) | key as u16;
+            crate::keycode::printable_output(keycode, key_output_layout)
+        }
+        _ => None,
     }
 }
 
@@ -2983,19 +3035,28 @@ impl TypingTrainerState {
         }
     }
 
-    pub(crate) fn set_symbol_training_data(
-        &mut self,
-        mut symbols: Vec<char>,
-        stats: &TypingTrainerCharacterStatsMap,
-    ) {
+    /// Replaces the pool of characters the loaded layout can type. Restarts a
+    /// symbol run when the pool actually changed, so the exercise never keeps
+    /// asking for characters the keyboard no longer types.
+    pub(crate) fn set_symbol_pool(&mut self, mut symbols: Vec<char>) {
         symbols.sort_unstable();
         symbols.dedup();
-        let symbols_changed = self.symbol_pool != symbols;
+        if self.symbol_pool == symbols {
+            return;
+        }
         self.symbol_pool = symbols;
-        self.symbol_stats = stats.clone();
-        if symbols_changed && self.is_symbol_training() {
+        if self.is_symbol_training() {
             self.start_run(self.text_seed);
         }
+    }
+
+    /// Restores adaptive statistics persisted from earlier sessions.
+    pub(crate) fn set_symbol_stats(&mut self, stats: TypingTrainerCharacterStatsMap) {
+        self.symbol_stats = stats;
+    }
+
+    pub(crate) fn record_symbol_attempt(&mut self, expected: char, was_error: bool) {
+        record_symbol_attempt(&mut self.symbol_stats, expected, was_error);
     }
 
     pub(crate) fn expected_char(&self) -> Option<char> {
@@ -3405,10 +3466,9 @@ mod typing_trainer_tests {
             word_count: 25,
             ..TypingTrainerSettings::default()
         };
-        let stats = TypingTrainerCharacterStatsMap::new();
         let mut state = TypingTrainerState::from_settings(settings);
 
-        state.set_symbol_training_data(vec!['a', '!'], &stats);
+        state.set_symbol_pool(vec!['a', '!']);
 
         assert_eq!(state.target_text.chars().count(), 25);
         assert!(state.target_text.chars().all(|ch| matches!(ch, 'a' | '!')));
@@ -3421,7 +3481,7 @@ mod typing_trainer_tests {
             symbols_enabled: true,
             ..TypingTrainerSettings::default()
         });
-        state.set_symbol_training_data(Vec::new(), &TypingTrainerCharacterStatsMap::new());
+        state.set_symbol_pool(Vec::new());
 
         state.type_char('a', std::time::Instant::now());
 
@@ -3464,7 +3524,7 @@ mod typing_trainer_tests {
             symbols_enabled: true,
             ..TypingTrainerSettings::default()
         });
-        state.set_symbol_training_data(vec!['a', '!'], &TypingTrainerCharacterStatsMap::new());
+        state.set_symbol_pool(vec!['a', '!']);
 
         state.extend_target_text();
 
@@ -4172,7 +4232,10 @@ pub struct EntropyApp {
     pub(crate) key_override_undo_stack: Vec<(Vec<KeyOverrideEntry>, Vec<String>, usize, usize)>,
     pub(crate) text_expander_deleted_rules: Vec<(usize, crate::text_expander::TextExpansionRule)>,
     pub(crate) typing_trainer: TypingTrainerState,
-    pub(crate) typing_trainer_symbol_stats: TypingTrainerCharacterStatsMap,
+    /// Layers and input layout the current symbol pool was derived from, so the
+    /// pool is rebuilt only when the keymap or the selected language changes.
+    pub(crate) typing_trainer_symbol_pool_source:
+        Option<(Vec<Vec<crate::keyboard::KeyBinding>>, KeyOutputLayout)>,
     pub(crate) typing_trainer_history_open: bool,
     pub(crate) selected_key_override: usize,
     pub(crate) key_override_pick_target: Option<KeyOverridePickField>,

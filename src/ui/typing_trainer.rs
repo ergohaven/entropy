@@ -31,6 +31,27 @@ impl EntropyApp {
         }
     }
 
+    /// Rebuilds the symbol pool only when the keymap or the selected trainer
+    /// language changed — deriving it walks every layer of the layout, which is
+    /// far too much work to repeat on every frame.
+    fn refresh_typing_trainer_symbol_pool(&mut self, layout: &KeyboardLayout) {
+        let key_output_layout = crate::keycode::KeyOutputLayout::from(self.typing_trainer.language);
+        let cached = self.typing_trainer_symbol_pool_source.as_ref().is_some_and(
+            |(layers, cached_layout)| {
+                *cached_layout == key_output_layout && *layers == layout.layers
+            },
+        );
+        if cached {
+            return;
+        }
+        let symbols = crate::app::typing_trainer_symbols::printable_symbols_from_layout(
+            layout,
+            key_output_layout,
+        );
+        self.typing_trainer_symbol_pool_source = Some((layout.layers.clone(), key_output_layout));
+        self.typing_trainer.set_symbol_pool(symbols);
+    }
+
     pub(super) fn draw_typing_trainer_page(
         &mut self,
         ui: &mut egui::Ui,
@@ -38,10 +59,7 @@ impl EntropyApp {
         ctx: &egui::Context,
         content_rect: egui::Rect,
     ) {
-        self.typing_trainer.set_symbol_training_data(
-            crate::app::typing_trainer_symbols::printable_symbols_from_layout(layout),
-            &self.typing_trainer_symbol_stats,
-        );
+        self.refresh_typing_trainer_symbol_pool(layout);
         let lang = self.app_settings.language;
         let dark = ui.visuals().dark_mode;
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
@@ -134,15 +152,8 @@ impl EntropyApp {
                         }
                         if self.typing_trainer.is_symbol_training() {
                             if let Some(expected) = self.typing_trainer.expected_char() {
-                                crate::app::typing_trainer_symbols::record_symbol_attempt(
-                                    &mut self.typing_trainer_symbol_stats,
-                                    expected,
-                                    expected != ch,
-                                );
-                                self.typing_trainer.set_symbol_training_data(
-                                    self.typing_trainer.symbol_pool.clone(),
-                                    &self.typing_trainer_symbol_stats,
-                                );
+                                self.typing_trainer
+                                    .record_symbol_attempt(expected, expected != ch);
                             }
                         }
                         self.typing_trainer.type_char(ch, now);
@@ -256,7 +267,8 @@ impl EntropyApp {
             + punctuation_size.x
             + gap
             + numbers_size.x;
-        let symbol_controls_width = mode_size.x + gap + value_size.x + gap + metrics.value(116.0);
+        let symbol_controls_width =
+            language_size.x + gap + mode_size.x + gap + value_size.x + gap + metrics.value(116.0);
         let total_size = egui::vec2(
             if symbol_training {
                 symbol_controls_width
@@ -271,26 +283,26 @@ impl EntropyApp {
             total_size,
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
-                if !symbol_training {
-                    let language_dropdown_id =
-                        ui.make_persistent_id("typing_trainer_language_dropdown");
-                    let (_, picked_language) = crate::ui_style::modern_dropdown_select_sized(
-                        ui,
-                        language_dropdown_id,
-                        &language_labels,
-                        selected_language,
-                        language_size.x,
-                        language_size.y,
-                        metrics.value(12.5),
-                    );
-                    if let Some(picked) = picked_language {
-                        self.typing_trainer
-                            .set_language(TYPING_TRAINER_LANGUAGES[picked]);
-                        settings_changed = true;
-                    }
-
-                    ui.add_space(gap);
+                // The language also selects the input mapping the symbol pool is
+                // derived from, so it stays available in symbol training too.
+                let language_dropdown_id =
+                    ui.make_persistent_id("typing_trainer_language_dropdown");
+                let (_, picked_language) = crate::ui_style::modern_dropdown_select_sized(
+                    ui,
+                    language_dropdown_id,
+                    &language_labels,
+                    selected_language,
+                    language_size.x,
+                    language_size.y,
+                    metrics.value(12.5),
+                );
+                if let Some(picked) = picked_language {
+                    self.typing_trainer
+                        .set_language(TYPING_TRAINER_LANGUAGES[picked]);
+                    settings_changed = true;
                 }
+
+                ui.add_space(gap);
 
                 let mode_dropdown_id = ui.make_persistent_id("typing_trainer_mode_dropdown");
                 let (_, picked_mode) = crate::ui_style::modern_dropdown_select_sized(
@@ -388,7 +400,7 @@ impl EntropyApp {
                     ui,
                     "#?",
                     crate::i18n::tr_catalog(lang, "typing_trainer.symbols"),
-                    crate::i18n::tr_catalog(lang, "typing_trainer.symbols"),
+                    crate::i18n::tr_catalog(lang, "typing_trainer.symbols_tooltip"),
                     metrics.size(116.0, 32.0),
                     symbol_training,
                 )
@@ -1143,7 +1155,7 @@ impl EntropyApp {
             TypingTrainerRunRecord::from_state(&self.typing_trainer, now, finished_at_unix_secs)
         {
             push_typing_trainer_history(&mut self.app_settings.typing_trainer_history, record);
-            save_typing_trainer_symbol_stats(&self.typing_trainer_symbol_stats);
+            save_typing_trainer_symbol_stats(&self.typing_trainer.symbol_stats);
             save_app_settings(&self.app_settings);
         }
         self.typing_trainer.mark_history_recorded();
