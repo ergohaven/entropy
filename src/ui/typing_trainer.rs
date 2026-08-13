@@ -481,32 +481,16 @@ impl EntropyApp {
             max_line_chars,
             max_visible_lines,
         );
+        let line_starts = typing_trainer_line_starts(&target_chars, max_line_chars);
+        let mut line_idx = line_starts
+            .partition_point(|start| *start <= idx)
+            .saturating_sub(1);
         let mut caret_pos = None;
         let target_len = target_chars.len();
         let mut visible_lines = 1;
 
         while idx < target_len && visible_lines <= max_visible_lines && y <= text_rect.bottom() {
-            let word_end = target_chars[idx..]
-                .iter()
-                .position(|ch| *ch == ' ')
-                .map(|offset| idx + offset)
-                .unwrap_or(target_len);
-            let visible_word_len = word_end.saturating_sub(idx).max(1);
-            let word_width = visible_word_len as f32 * char_width;
-            if x > text_rect.left() && x + word_width > text_rect.right() {
-                x = text_rect.left();
-                y += line_height;
-                visible_lines += 1;
-                if visible_lines > max_visible_lines || y > text_rect.bottom() {
-                    break;
-                }
-            }
-
-            let draw_end = if word_end < target_len {
-                word_end + 1
-            } else {
-                word_end
-            };
+            let draw_end = line_starts.get(line_idx + 1).copied().unwrap_or(target_len);
             while idx < draw_end && y <= text_rect.bottom() {
                 if idx == caret_idx {
                     caret_pos = Some(egui::pos2(x, y));
@@ -528,6 +512,12 @@ impl EntropyApp {
                 );
                 x += char_width;
                 idx += 1;
+            }
+            if idx < target_len {
+                x = text_rect.left();
+                y += line_height;
+                visible_lines += 1;
+                line_idx += 1;
             }
         }
 
