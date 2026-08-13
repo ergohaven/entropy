@@ -1213,6 +1213,9 @@ fn typing_trainer_line_starts(target_chars: &[char], max_line_chars: usize) -> V
     }
 
     let max_line_chars = max_line_chars.max(1);
+    if !target_chars.iter().any(|ch| ch.is_whitespace()) {
+        return (0..target_len).step_by(max_line_chars).collect();
+    }
     let mut line_starts = vec![0];
     let mut line_chars = 0;
     let mut idx = 0;
@@ -1304,5 +1307,12 @@ mod typing_trainer_ui_tests {
             typing_trainer_visible_start_index(&chars, seven_idx, 9, 2),
             "one two three ".chars().count()
         );
+    }
+
+    #[test]
+    fn typing_trainer_wraps_a_continuous_symbol_sequence() {
+        let chars = "abcdefghijklmnopqrstuvwxyz".chars().collect::<Vec<_>>();
+
+        assert_eq!(typing_trainer_line_starts(&chars, 10), vec![0, 10, 20]);
     }
 }
