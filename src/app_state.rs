@@ -2680,6 +2680,7 @@ pub(crate) struct TypingTrainerRunRecord {
     pub(crate) mode: TypingTrainerMode,
     pub(crate) duration_secs: u32,
     pub(crate) word_count: usize,
+    #[serde(default)]
     pub(crate) symbols_enabled: bool,
     pub(crate) punctuation_enabled: bool,
     pub(crate) numbers_enabled: bool,
