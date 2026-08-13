@@ -53,7 +53,7 @@ impl EntropyApp {
                 false
             }
             SettingsTab::TypingTrainer => {
-                self.draw_typing_trainer_page(ui, ctx, content_rect);
+                self.draw_typing_trainer_page(ui, layout, ctx, content_rect);
                 false
             }
             SettingsTab::AutoShift => {

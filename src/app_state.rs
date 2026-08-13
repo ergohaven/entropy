@@ -22,6 +22,9 @@ pub(crate) const COMBO_COLOR_SEED_PALETTE: [u32; 16] = [
     0x6F94B8, 0xB6A05F, 0x7DA986, 0xC18B74, 0x8F8BC0, 0xC2A078, 0x6FA4A0,
 ];
 
+use super::typing_trainer_symbols::{
+    weighted_symbol_text, TypingTrainerCharacterStatsMap, TYPING_TRAINER_SYMBOL_COUNTS,
+};
 use super::*;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -86,6 +89,8 @@ pub(crate) struct AppSettings {
     pub(crate) typing_trainer: TypingTrainerSettings,
     #[serde(default)]
     pub(crate) typing_trainer_history: Vec<TypingTrainerRunRecord>,
+    #[serde(default)]
+    pub(crate) typing_trainer_symbol_stats: TypingTrainerCharacterStatsMap,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -192,6 +197,7 @@ impl Default for AppSettings {
             layout_sync_enabled: default_layout_sync_enabled(),
             typing_trainer: TypingTrainerSettings::default(),
             typing_trainer_history: Vec::new(),
+            typing_trainer_symbol_stats: TypingTrainerCharacterStatsMap::new(),
         }
     }
 }
@@ -2594,6 +2600,7 @@ pub(crate) use super::typing_trainer_words::{TypingTrainerLanguage, TYPING_TRAIN
 pub(crate) enum TypingTrainerMode {
     Time,
     Words,
+    Symbols,
 }
 
 impl Default for TypingTrainerMode {
@@ -2639,7 +2646,9 @@ impl TypingTrainerSettings {
             } else {
                 default_typing_trainer_duration_secs()
             },
-            word_count: if TYPING_TRAINER_WORD_COUNTS.contains(&self.word_count) {
+            word_count: if TYPING_TRAINER_WORD_COUNTS.contains(&self.word_count)
+                || TYPING_TRAINER_SYMBOL_COUNTS.contains(&self.word_count)
+            {
                 self.word_count
             } else {
                 default_typing_trainer_word_count()
@@ -2711,7 +2720,9 @@ impl TypingTrainerRunRecord {
             && self.numbers_enabled == settings.numbers_enabled
             && match self.mode {
                 TypingTrainerMode::Time => self.duration_secs == settings.duration_secs,
-                TypingTrainerMode::Words => self.word_count == settings.word_count,
+                TypingTrainerMode::Words | TypingTrainerMode::Symbols => {
+                    self.word_count == settings.word_count
+                }
             }
     }
 }
@@ -2779,6 +2790,8 @@ pub(crate) struct TypingTrainerState {
     pub(crate) numbers_enabled: bool,
     pub(crate) duration_secs: u32,
     pub(crate) word_count: usize,
+    pub(crate) symbol_pool: Vec<char>,
+    pub(crate) symbol_stats: TypingTrainerCharacterStatsMap,
     pub(crate) started_at: Option<std::time::Instant>,
     pub(crate) paused_at: Option<std::time::Instant>,
     pub(crate) finished_at: Option<std::time::Instant>,
@@ -2824,6 +2837,7 @@ impl TypingTrainerState {
                 settings.punctuation_enabled,
                 settings.numbers_enabled,
             ),
+            TypingTrainerMode::Symbols => String::new(),
         };
         Self {
             target_text,
@@ -2834,6 +2848,8 @@ impl TypingTrainerState {
             numbers_enabled: settings.numbers_enabled,
             duration_secs: settings.duration_secs,
             word_count: settings.word_count,
+            symbol_pool: Vec::new(),
+            symbol_stats: TypingTrainerCharacterStatsMap::new(),
             started_at: None,
             paused_at: None,
             finished_at: None,
@@ -2928,6 +2944,25 @@ impl TypingTrainerState {
         }
     }
 
+    pub(crate) fn set_symbol_training_data(
+        &mut self,
+        mut symbols: Vec<char>,
+        stats: &TypingTrainerCharacterStatsMap,
+    ) {
+        symbols.sort_unstable();
+        symbols.dedup();
+        let symbols_changed = self.symbol_pool != symbols;
+        self.symbol_pool = symbols;
+        self.symbol_stats = stats.clone();
+        if symbols_changed && self.mode == TypingTrainerMode::Symbols {
+            self.start_run(self.text_seed);
+        }
+    }
+
+    pub(crate) fn expected_char(&self) -> Option<char> {
+        self.target_text.chars().nth(self.typed_chars.len())
+    }
+
     pub(crate) fn is_finished(&self) -> bool {
         self.finished_at.is_some()
     }
@@ -2972,7 +3007,7 @@ impl TypingTrainerState {
         if self.typed_chars.len() >= self.target_text.chars().count() {
             match self.mode {
                 TypingTrainerMode::Time => self.advance_to_next_text(),
-                TypingTrainerMode::Words => self.finish(now),
+                TypingTrainerMode::Words | TypingTrainerMode::Symbols => self.finish(now),
             }
         }
     }
@@ -2996,7 +3031,10 @@ impl TypingTrainerState {
     }
 
     pub(crate) fn extend_target_text(&mut self) {
-        if self.mode == TypingTrainerMode::Words {
+        if matches!(
+            self.mode,
+            TypingTrainerMode::Words | TypingTrainerMode::Symbols
+        ) {
             return;
         }
         self.text_seed = self.text_seed.wrapping_add(17);
@@ -3027,7 +3065,10 @@ impl TypingTrainerState {
     }
 
     pub(crate) fn remaining_secs_at(&mut self, now: std::time::Instant) -> u32 {
-        if self.mode == TypingTrainerMode::Words {
+        if matches!(
+            self.mode,
+            TypingTrainerMode::Words | TypingTrainerMode::Symbols
+        ) {
             return self.duration_secs;
         }
         let elapsed = self.elapsed_secs_at(now);
@@ -3086,6 +3127,12 @@ impl TypingTrainerState {
                 self.language,
                 self.punctuation_enabled,
                 self.numbers_enabled,
+            ),
+            TypingTrainerMode::Symbols => weighted_symbol_text(
+                &self.symbol_pool,
+                self.word_count,
+                &self.symbol_stats,
+                self.text_seed,
             ),
         }
     }
@@ -3299,6 +3346,22 @@ mod typing_trainer_tests {
         assert_eq!(state.duration_secs, 60);
         assert_eq!(state.word_count, 50);
         assert_eq!(state.target_text.split_whitespace().count(), 50);
+    }
+
+    #[test]
+    fn symbol_mode_generates_text_from_the_current_layout_symbols() {
+        let settings = TypingTrainerSettings {
+            mode: TypingTrainerMode::Symbols,
+            word_count: 25,
+            ..TypingTrainerSettings::default()
+        };
+        let stats = TypingTrainerCharacterStatsMap::new();
+        let mut state = TypingTrainerState::from_settings(settings);
+
+        state.set_symbol_training_data(vec!['a', '!'], &stats);
+
+        assert_eq!(state.target_text.chars().count(), 25);
+        assert!(state.target_text.chars().all(|ch| matches!(ch, 'a' | '!')));
     }
 
     #[test]
