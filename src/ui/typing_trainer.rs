@@ -469,13 +469,6 @@ impl EntropyApp {
     }
 
     fn typing_trainer_focus_status(&self, remaining_secs: u32) -> String {
-        if self.typing_trainer.is_symbol_training() {
-            return format!(
-                "{}/{}",
-                self.typing_trainer.typed_chars.len(),
-                self.typing_trainer.word_count
-            );
-        }
         match self.typing_trainer.mode {
             TypingTrainerMode::Time => {
                 let timer_secs = if self.typing_trainer.started_at.is_some() {
@@ -484,6 +477,15 @@ impl EntropyApp {
                     self.typing_trainer.duration_secs
                 };
                 timer_secs.to_string()
+            }
+            TypingTrainerMode::Words | TypingTrainerMode::Symbols
+                if self.typing_trainer.is_symbol_training() =>
+            {
+                format!(
+                    "{}/{}",
+                    self.typing_trainer.typed_chars.len(),
+                    self.typing_trainer.word_count
+                )
             }
             TypingTrainerMode::Words => {
                 let (completed_words, target_words) = self.typing_trainer.word_progress();
@@ -1348,6 +1350,35 @@ fn typing_trainer_color_with_opacity(color: Color32, opacity: f32) -> Color32 {
 #[cfg(test)]
 mod typing_trainer_ui_tests {
     use super::*;
+
+    fn test_app() -> EntropyApp {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        EntropyApp::new(&creation_context)
+    }
+
+    #[test]
+    fn time_based_symbol_training_focus_status_shows_remaining_seconds() {
+        let mut app = test_app();
+        app.typing_trainer.set_symbols_enabled(true);
+        app.typing_trainer.set_mode(TypingTrainerMode::Time);
+        app.typing_trainer.word_count = 25;
+        app.typing_trainer.typed_chars = vec!['!', '?'];
+        app.typing_trainer.started_at = Some(std::time::Instant::now());
+
+        assert_eq!(app.typing_trainer_focus_status(42), "42");
+    }
+
+    #[test]
+    fn fixed_count_symbol_training_focus_status_shows_character_progress() {
+        let mut app = test_app();
+        app.typing_trainer.set_symbols_enabled(true);
+        app.typing_trainer.set_mode(TypingTrainerMode::Words);
+        app.typing_trainer.word_count = 50;
+        app.typing_trainer.typed_chars = vec!['!', '?', '/'];
+
+        assert_eq!(app.typing_trainer_focus_status(42), "3/50");
+    }
 
     #[test]
     fn typing_trainer_visible_start_stays_at_first_line_near_start() {

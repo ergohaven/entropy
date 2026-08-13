@@ -1015,7 +1015,26 @@ fn printable_output_for_hid(keycode: u16, layout: KeyOutputLayout) -> Option<(ch
     }
 
     let typed = |direct: char, shifted: char| Some((direct, Some(shifted)));
+    let unshifted = |direct: char| Some((direct, None));
     match (keycode, layout) {
+        // ISO printable keys are present in the catalog but do not occupy the
+        // contiguous ANSI punctuation range below.
+        (0x0032, _) => typed('#', '~'),
+        (0x0064, KeyOutputLayout::English) => typed('\\', '|'),
+        (0x0064, KeyOutputLayout::Russian) => typed('\\', '/'),
+
+        // Numpad operators and digits are text output independent of the
+        // selected input layout. They do not have Shift variants of their own.
+        (0x0054, _) => unshifted('/'),
+        (0x0055, _) => unshifted('*'),
+        (0x0056, _) => unshifted('-'),
+        (0x0057, _) => unshifted('+'),
+        (0x0059..=0x0061, _) => unshifted(char::from(b'1' + (keycode - 0x0059) as u8)),
+        (0x0062, _) => unshifted('0'),
+        (0x0063, _) => unshifted('.'),
+        (0x0067, _) => unshifted('='),
+        (0x0085, _) => unshifted(','),
+
         (0x001e, KeyOutputLayout::English) => typed('1', '!'),
         (0x001f, KeyOutputLayout::English) => typed('2', '@'),
         (0x0020, KeyOutputLayout::English) => typed('3', '#'),
@@ -1459,6 +1478,54 @@ mod tests {
             printable_output(0x002f, KeyOutputLayout::Russian),
             Some(('х', Some('Х')))
         );
+    }
+
+    #[test]
+    fn printable_output_covers_non_us_and_keypad_operators() {
+        assert_eq!(
+            printable_output(0x0032, KeyOutputLayout::English),
+            Some(('#', Some('~')))
+        );
+        assert_eq!(
+            printable_output(0x0032, KeyOutputLayout::Russian),
+            Some(('#', Some('~')))
+        );
+        assert_eq!(
+            printable_output(0x0064, KeyOutputLayout::English),
+            Some(('\\', Some('|')))
+        );
+        assert_eq!(
+            printable_output(0x0064, KeyOutputLayout::Russian),
+            Some(('\\', Some('/')))
+        );
+        for (keycode, output) in [
+            (0x0054, '/'),
+            (0x0055, '*'),
+            (0x0056, '-'),
+            (0x0057, '+'),
+            (0x0059, '1'),
+            (0x005a, '2'),
+            (0x005b, '3'),
+            (0x005c, '4'),
+            (0x005d, '5'),
+            (0x005e, '6'),
+            (0x005f, '7'),
+            (0x0060, '8'),
+            (0x0061, '9'),
+            (0x0062, '0'),
+            (0x0063, '.'),
+            (0x0067, '='),
+            (0x0085, ','),
+        ] {
+            assert_eq!(
+                printable_output(keycode, KeyOutputLayout::English),
+                Some((output, None))
+            );
+            assert_eq!(
+                printable_output(keycode, KeyOutputLayout::Russian),
+                Some((output, None))
+            );
+        }
     }
 
     #[test]
