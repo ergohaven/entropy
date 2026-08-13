@@ -89,8 +89,6 @@ pub(crate) struct AppSettings {
     pub(crate) typing_trainer: TypingTrainerSettings,
     #[serde(default)]
     pub(crate) typing_trainer_history: Vec<TypingTrainerRunRecord>,
-    #[serde(default)]
-    pub(crate) typing_trainer_symbol_stats: TypingTrainerCharacterStatsMap,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -197,7 +195,6 @@ impl Default for AppSettings {
             layout_sync_enabled: default_layout_sync_enabled(),
             typing_trainer: TypingTrainerSettings::default(),
             typing_trainer_history: Vec::new(),
-            typing_trainer_symbol_stats: TypingTrainerCharacterStatsMap::new(),
         }
     }
 }
@@ -224,6 +221,13 @@ mod app_settings_tests {
 
         assert!(!settings.dark_mode);
         assert!(!settings.launch_minimized);
+    }
+
+    #[test]
+    fn app_settings_no_longer_embed_symbol_training_stats() {
+        let json = serde_json::to_value(AppSettings::default()).unwrap();
+
+        assert!(json.get("typing_trainer_symbol_stats").is_none());
     }
 }
 
@@ -4149,6 +4153,7 @@ pub struct EntropyApp {
     pub(crate) key_override_undo_stack: Vec<(Vec<KeyOverrideEntry>, Vec<String>, usize, usize)>,
     pub(crate) text_expander_deleted_rules: Vec<(usize, crate::text_expander::TextExpansionRule)>,
     pub(crate) typing_trainer: TypingTrainerState,
+    pub(crate) typing_trainer_symbol_stats: TypingTrainerCharacterStatsMap,
     pub(crate) typing_trainer_history_open: bool,
     pub(crate) selected_key_override: usize,
     pub(crate) key_override_pick_target: Option<KeyOverridePickField>,

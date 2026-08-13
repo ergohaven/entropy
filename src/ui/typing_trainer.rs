@@ -40,7 +40,7 @@ impl EntropyApp {
     ) {
         self.typing_trainer.set_symbol_training_data(
             crate::app::typing_trainer_symbols::printable_symbols_from_layout(layout),
-            &self.app_settings.typing_trainer_symbol_stats,
+            &self.typing_trainer_symbol_stats,
         );
         let lang = self.app_settings.language;
         let dark = ui.visuals().dark_mode;
@@ -135,13 +135,13 @@ impl EntropyApp {
                         if self.typing_trainer.is_symbol_training() {
                             if let Some(expected) = self.typing_trainer.expected_char() {
                                 crate::app::typing_trainer_symbols::record_symbol_attempt(
-                                    &mut self.app_settings.typing_trainer_symbol_stats,
+                                    &mut self.typing_trainer_symbol_stats,
                                     expected,
                                     expected != ch,
                                 );
                                 self.typing_trainer.set_symbol_training_data(
                                     self.typing_trainer.symbol_pool.clone(),
-                                    &self.app_settings.typing_trainer_symbol_stats,
+                                    &self.typing_trainer_symbol_stats,
                                 );
                             }
                         }
@@ -1133,6 +1133,7 @@ impl EntropyApp {
             TypingTrainerRunRecord::from_state(&self.typing_trainer, now, finished_at_unix_secs)
         {
             push_typing_trainer_history(&mut self.app_settings.typing_trainer_history, record);
+            save_typing_trainer_symbol_stats(&self.typing_trainer_symbol_stats);
             save_app_settings(&self.app_settings);
         }
         self.typing_trainer.mark_history_recorded();

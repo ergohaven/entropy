@@ -1,4 +1,13 @@
 use super::*;
+use crate::app::typing_trainer_symbols::TypingTrainerCharacterStatsMap;
+
+const TYPING_TRAINER_SYMBOL_STATS_VERSION: u8 = 1;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct TypingTrainerSymbolStatsFile {
+    version: u8,
+    stats: TypingTrainerCharacterStatsMap,
+}
 
 /// Sanitize a device name into a filesystem-safe slug.
 pub(super) fn device_id_slug(device_name: &str) -> String {
@@ -44,6 +53,65 @@ pub(super) fn app_settings_path() -> std::path::PathBuf {
         .join("entropy");
     std::fs::create_dir_all(&dir).ok();
     dir.join("app_settings.json")
+}
+
+pub(super) fn typing_trainer_symbol_stats_path() -> std::path::PathBuf {
+    text_expander_config_dir().join("typing_trainer_symbol_stats.json")
+}
+
+fn load_typing_trainer_symbol_stats_from_path(
+    path: &std::path::Path,
+) -> TypingTrainerCharacterStatsMap {
+    let data = match std::fs::read_to_string(path) {
+        Ok(data) => data,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return TypingTrainerCharacterStatsMap::new();
+        }
+        Err(error) => {
+            log::warn!("load_typing_trainer_symbol_stats failed: {error}");
+            return TypingTrainerCharacterStatsMap::new();
+        }
+    };
+    match serde_json::from_str::<TypingTrainerSymbolStatsFile>(&data) {
+        Ok(file) if file.version == TYPING_TRAINER_SYMBOL_STATS_VERSION => file.stats,
+        Ok(file) => {
+            log::warn!(
+                "load_typing_trainer_symbol_stats unsupported version: {}",
+                file.version
+            );
+            TypingTrainerCharacterStatsMap::new()
+        }
+        Err(error) => {
+            log::warn!("load_typing_trainer_symbol_stats parse failed: {error}");
+            TypingTrainerCharacterStatsMap::new()
+        }
+    }
+}
+
+fn save_typing_trainer_symbol_stats_to_path(
+    path: &std::path::Path,
+    stats: &TypingTrainerCharacterStatsMap,
+) {
+    let file = TypingTrainerSymbolStatsFile {
+        version: TYPING_TRAINER_SYMBOL_STATS_VERSION,
+        stats: stats.clone(),
+    };
+    match serde_json::to_string_pretty(&file) {
+        Ok(json) => {
+            if let Err(error) = std::fs::write(path, json) {
+                log::warn!("save_typing_trainer_symbol_stats failed: {error}");
+            }
+        }
+        Err(error) => log::warn!("save_typing_trainer_symbol_stats serialize failed: {error}"),
+    }
+}
+
+pub(super) fn load_typing_trainer_symbol_stats() -> TypingTrainerCharacterStatsMap {
+    load_typing_trainer_symbol_stats_from_path(&typing_trainer_symbol_stats_path())
+}
+
+pub(super) fn save_typing_trainer_symbol_stats(stats: &TypingTrainerCharacterStatsMap) {
+    save_typing_trainer_symbol_stats_to_path(&typing_trainer_symbol_stats_path(), stats);
 }
 
 const TEXT_EXPANDER_MAIN_RULES_FILE: &str = "text_expansion_rules.json";
@@ -701,6 +769,39 @@ mod tests {
             std::process::id(),
             nonce
         ))
+    }
+
+    use crate::app::typing_trainer_symbols::TypingTrainerCharacterStats;
+
+    #[test]
+    fn symbol_stats_file_round_trips_versioned_data() {
+        let path = temp_macro_metadata_path("symbol_stats_round_trip");
+        let stats = std::collections::BTreeMap::from([(
+            '!',
+            TypingTrainerCharacterStats {
+                attempts: 3,
+                errors: 1,
+            },
+        )]);
+
+        save_typing_trainer_symbol_stats_to_path(&path, &stats);
+
+        assert_eq!(load_typing_trainer_symbol_stats_from_path(&path), stats);
+        let json = std::fs::read_to_string(&path).unwrap();
+        assert!(json.contains("\"version\": 1"));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn invalid_symbol_stats_file_returns_an_empty_map() {
+        let path = temp_macro_metadata_path("symbol_stats_invalid");
+        assert!(load_typing_trainer_symbol_stats_from_path(&path).is_empty());
+
+        std::fs::write(&path, "not json").unwrap();
+
+        assert!(load_typing_trainer_symbol_stats_from_path(&path).is_empty());
+
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
