@@ -170,15 +170,21 @@ pub(crate) fn label(action: KeyAction) -> Option<String> {
     label_for_user_id(user_id(action)?)
 }
 
-/// Characters a Universal Symbols action types: the direct output and the Shift
-/// output, when the action produces one.
+/// Characters a Universal Symbols action types in the given input layout: the
+/// direct output and the Shift output, when the action produces one.
 ///
-/// The firmware types these in both English and Russian layouts, so the result
-/// does not depend on the selected input mapping.
-pub(crate) fn printable_output(action: KeyAction) -> Option<(char, Option<char>)> {
+/// Punctuation is typed in both layouts by design, while the Russian letter
+/// actions only produce their letter while the Russian layout is active.
+pub(crate) fn printable_output(
+    action: KeyAction,
+    key_output_layout: crate::keycode::KeyOutputLayout,
+) -> Option<(char, Option<char>)> {
     let user_id = user_id(action)?;
     if let Some(entry) = SYMBOLS.iter().find(|symbol| symbol.user_id == user_id) {
         return Some((entry.symbol, None));
+    }
+    if key_output_layout != crate::keycode::KeyOutputLayout::Russian {
+        return None;
     }
     RUSSIAN_LETTERS
         .iter()
@@ -271,22 +277,35 @@ mod tests {
 
     #[test]
     fn printable_output_covers_symbols_and_russian_letters_only() {
+        use crate::keycode::KeyOutputLayout;
+
+        for layout in [KeyOutputLayout::English, KeyOutputLayout::Russian] {
+            assert_eq!(
+                printable_output(binding(0x90).rmk_action().unwrap(), layout),
+                Some(('.', None))
+            );
+            assert_eq!(
+                printable_output(binding(USER_TOGGLE).rmk_action().unwrap(), layout),
+                None
+            );
+            assert_eq!(
+                printable_output(KeyAction::Single(Action::User(0x70)), layout),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn russian_letter_actions_only_type_in_the_russian_layout() {
+        use crate::keycode::KeyOutputLayout;
+
+        let action = binding(USER_RUSSIAN_LETTER_START).rmk_action().unwrap();
+
         assert_eq!(
-            printable_output(binding(0x90).rmk_action().unwrap()),
-            Some(('.', None))
-        );
-        assert_eq!(
-            printable_output(binding(USER_RUSSIAN_LETTER_START).rmk_action().unwrap()),
+            printable_output(action, KeyOutputLayout::Russian),
             Some(('х', Some('Х')))
         );
-        assert_eq!(
-            printable_output(binding(USER_TOGGLE).rmk_action().unwrap()),
-            None
-        );
-        assert_eq!(
-            printable_output(KeyAction::Single(Action::User(0x70))),
-            None
-        );
+        assert_eq!(printable_output(action, KeyOutputLayout::English), None);
     }
 
     #[test]

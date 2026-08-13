@@ -196,9 +196,39 @@ mod tests {
             crate::universal_symbols::binding(crate::universal_symbols::USER_TOGGLE),
         ]]);
 
+        // Punctuation is typed in both layouts; the Russian letter only while
+        // the Russian layout is active.
         assert_eq!(
             printable_symbols_from_layout(&layout, KeyOutputLayout::English),
+            vec!['.']
+        );
+        assert_eq!(
+            printable_symbols_from_layout(&layout, KeyOutputLayout::Russian),
             vec!['.', 'Б', 'б']
+        );
+    }
+
+    #[test]
+    fn printable_symbols_include_the_tap_side_of_tap_hold_keys() {
+        use rmk_types::action::{Action, KeyAction};
+        use rmk_types::keycode::{HidKeyCode, KeyCode};
+        use rmk_types::modifier::ModifierCombination;
+
+        let layout = test_layout(vec![vec![
+            // LCTL_T(KC_A) in Vial form.
+            KeyBinding::Vial(0x2104),
+            // Native tap-hold whose tap types a Universal Symbol.
+            KeyBinding::Rmk(KeyAction::TapHold(
+                Action::User(crate::universal_symbols::USER_SYMBOL_START + 4),
+                Action::Modifier(ModifierCombination::LSHIFT),
+                Default::default(),
+            )),
+            KeyBinding::Rmk(KeyAction::Tap(Action::Key(KeyCode::Hid(HidKeyCode::B)))),
+        ]]);
+
+        assert_eq!(
+            printable_symbols_from_layout(&layout, KeyOutputLayout::English),
+            vec!['!', 'A', 'B', 'a', 'b']
         );
     }
 

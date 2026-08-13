@@ -971,14 +971,15 @@ impl From<KeyLegendLayout> for KeyOutputLayout {
 /// Characters a keycode types in the given input layout: the direct output and
 /// the Shift output, when the key produces one.
 ///
-/// Accepts both plain HID keycodes and QMK modifier-wrapped ones (`LSFT(kc)`);
-/// keys that do not produce printable text return `None`.
+/// Accepts plain HID keycodes, QMK modifier-wrapped ones (`LSFT(kc)`) and the
+/// tap half of mod-tap / layer-tap keys; keys that do not produce printable
+/// text return `None`.
 pub fn printable_output(value: u16, layout: KeyOutputLayout) -> Option<(char, Option<char>)> {
     if let Some(base) = shift_wrapped_base_keycode(value) {
         let (_, shifted) = printable_output_for_hid(base, layout)?;
         return shifted.map(|shifted| (shifted, None));
     }
-    printable_output_for_hid(value, layout)
+    printable_output_for_hid(tap_base_keycode(value), layout)
 }
 
 /// Unwraps `LSFT(kc)`/`RSFT(kc)` QMK keycodes; other modifier combinations do
@@ -989,6 +990,18 @@ fn shift_wrapped_base_keycode(value: u16) -> Option<u16> {
     }
     let modifiers = (value >> 8) & 0x1F;
     (modifiers & 0x0F == 0x02).then_some(value & 0x00FF)
+}
+
+/// Keycode a mod-tap (`QK_MOD_TAP`) or layer-tap (`QK_LAYER_TAP`) key sends on
+/// tap; other keycodes are returned unchanged. Layer operations live in the
+/// `0x5000..0x6000` block and only look like layer-taps, so they stay excluded.
+fn tap_base_keycode(value: u16) -> u16 {
+    let is_layer_tap = value & 0xF000 == 0x4000;
+    let is_mod_tap = value & 0xE000 == 0x2000;
+    if is_layer_tap || is_mod_tap {
+        return value & 0x00FF;
+    }
+    value
 }
 
 fn printable_output_for_hid(keycode: u16, layout: KeyOutputLayout) -> Option<(char, Option<char>)> {
@@ -1462,6 +1475,22 @@ mod tests {
             printable_output(0x0204, KeyOutputLayout::Russian),
             Some(('Ф', None))
         );
+    }
+
+    #[test]
+    fn printable_output_uses_the_tap_half_of_mod_tap_and_layer_tap_keys() {
+        // LCTL_T(KC_A)
+        assert_eq!(
+            printable_output(0x2104, KeyOutputLayout::English),
+            Some(('a', Some('A')))
+        );
+        // LT(1, KC_A)
+        assert_eq!(
+            printable_output(0x4104, KeyOutputLayout::Russian),
+            Some(('ф', Some('Ф')))
+        );
+        // MO(1) is a layer operation, not a layer-tap — it types nothing.
+        assert_eq!(printable_output(0x5221, KeyOutputLayout::English), None);
     }
 
     #[test]
