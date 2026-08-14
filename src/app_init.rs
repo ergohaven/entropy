@@ -91,7 +91,7 @@ impl EntropyApp {
             parent_display_handle: None,
             pending_entsettings_import_path: None,
             #[cfg(target_os = "linux")]
-            ibus_registration: None,
+            ibus_registration: Default::default(),
             #[cfg(target_os = "linux")]
             pending_ibus_reload: None,
             import_progress_started_at: None,

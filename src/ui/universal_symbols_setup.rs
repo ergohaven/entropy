@@ -617,6 +617,11 @@ impl EntropyApp {
             ui.add_space(metrics.value(2.0));
 
             let registration = self.linux_ibus_registration();
+            // An external rebuild produces no input events, so ask for a frame
+            // once the cached scan goes stale; an idle page would otherwise
+            // keep showing the registration it saw when it was opened.
+            ui.ctx()
+                .request_repaint_after(crate::linux_setup::IBUS_REGISTRATION_MAX_AGE);
 
             // A distribution package or a declarative setup (the NixOS module)
             // owns a system registration; the user-scoped scripts cannot touch
@@ -677,12 +682,11 @@ impl EntropyApp {
     }
 
     /// Scanning the component directories touches the filesystem, so the result
-    /// is cached for as long as nothing this app does can change it.
+    /// is cached — briefly, because a rebuild can change the registration while
+    /// this page is open; see `IbusRegistrationCache`.
     #[cfg(target_os = "linux")]
     fn linux_ibus_registration(&mut self) -> crate::linux_setup::IbusRegistration {
-        *self
-            .ibus_registration
-            .get_or_insert_with(crate::linux_setup::ibus_registration)
+        self.ibus_registration.get()
     }
 
     /// Restarting the daemon can take a moment and can hang, so it runs on a
@@ -716,14 +720,18 @@ impl EntropyApp {
                 self.pending_ibus_reload = None;
                 // The reload can only have changed what the daemon serves, but
                 // an install or removal may have raced it — rescan either way.
-                self.ibus_registration = None;
+                self.ibus_registration.invalidate();
                 self.status_msg = match outcome {
                     Ok(()) => crate::i18n::tr_catalog(
                         self.app_settings.language,
                         "universal_symbols_setup.ibus_reloaded_status",
                     )
                     .to_owned(),
-                    Err(details) => format!("IBus reload failed: {details}"),
+                    Err(details) => crate::i18n::tr_catalog_format(
+                        self.app_settings.language,
+                        "universal_symbols_setup.ibus_reload_failed_status",
+                        &[("details", &details)],
+                    ),
                 };
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -732,8 +740,12 @@ impl EntropyApp {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 log::error!("IBus reload worker disconnected before returning a result");
                 self.pending_ibus_reload = None;
-                self.ibus_registration = None;
-                self.status_msg = "IBus reload failed: worker stopped".to_owned();
+                self.ibus_registration.invalidate();
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "universal_symbols_setup.ibus_reload_lost_status",
+                )
+                .to_owned();
             }
         }
     }
@@ -746,7 +758,7 @@ impl EntropyApp {
 
         self.run_linux_setup_script(script, backend);
         // install-user.sh / uninstall-user.sh add or remove the user copy.
-        self.ibus_registration = None;
+        self.ibus_registration.invalidate();
     }
 
     #[cfg(target_os = "linux")]

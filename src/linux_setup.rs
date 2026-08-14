@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 struct BundledLinuxFile {
     path: &'static str,
@@ -64,6 +65,50 @@ pub(crate) fn ibus_registration() -> IbusRegistration {
             user_dir.as_deref(),
         ),
     )
+}
+
+/// How long a scan result is reused before the directories are consulted
+/// again.
+///
+/// The registration is not ours alone to change: a `nixos-rebuild`, a
+/// `home-manager switch` or a package update can add or drop the system
+/// component while Entropy is running. Short enough that such a change shows
+/// up on the setup page without a restart, long enough that the page does not
+/// scan once per frame.
+pub(crate) const IBUS_REGISTRATION_MAX_AGE: Duration = Duration::from_secs(2);
+
+/// Caches [`ibus_registration`] for [`IBUS_REGISTRATION_MAX_AGE`].
+#[derive(Debug, Default)]
+pub(crate) struct IbusRegistrationCache {
+    scanned: Option<(Instant, IbusRegistration)>,
+}
+
+impl IbusRegistrationCache {
+    pub(crate) fn get(&mut self) -> IbusRegistration {
+        self.get_at(Instant::now(), ibus_registration)
+    }
+
+    /// Drops the cached value so the next [`get`](Self::get) rescans. Used for
+    /// the changes this app makes itself, which have to show up at once rather
+    /// than after the refresh window.
+    pub(crate) fn invalidate(&mut self) {
+        self.scanned = None;
+    }
+
+    fn get_at(
+        &mut self,
+        now: Instant,
+        scan: impl FnOnce() -> IbusRegistration,
+    ) -> IbusRegistration {
+        if let Some((scanned_at, registration)) = self.scanned {
+            if now.duration_since(scanned_at) < IBUS_REGISTRATION_MAX_AGE {
+                return registration;
+            }
+        }
+        let registration = scan();
+        self.scanned = Some((now, registration));
+        registration
+    }
 }
 
 fn ibus_registration_in(user_dir: Option<&Path>, system_dirs: &[PathBuf]) -> IbusRegistration {
@@ -411,6 +456,71 @@ mod tests {
             IbusRegistration::default()
         );
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    const SYSTEM_ONLY: IbusRegistration = IbusRegistration {
+        user: false,
+        system: true,
+    };
+
+    #[test]
+    fn a_scan_is_reused_within_the_refresh_window() {
+        let mut cache = IbusRegistrationCache::default();
+        let scans = std::cell::Cell::new(0);
+        let scan = || {
+            scans.set(scans.get() + 1);
+            IbusRegistration::default()
+        };
+
+        let start = Instant::now();
+        cache.get_at(start, scan);
+        cache.get_at(start + IBUS_REGISTRATION_MAX_AGE / 2, scan);
+
+        assert_eq!(scans.get(), 1);
+    }
+
+    // A rebuild can register or drop the system component behind Entropy's
+    // back, and the setup page has to notice: the reload action it offers only
+    // appears for a system registration.
+    #[test]
+    fn an_external_registration_change_is_picked_up_after_the_refresh_window() {
+        let mut cache = IbusRegistrationCache::default();
+        let start = Instant::now();
+
+        assert_eq!(
+            cache.get_at(start, IbusRegistration::default),
+            IbusRegistration::default()
+        );
+        // Still the cached answer, even though the component just appeared.
+        assert_eq!(
+            cache.get_at(start + IBUS_REGISTRATION_MAX_AGE / 2, || SYSTEM_ONLY),
+            IbusRegistration::default()
+        );
+
+        assert_eq!(
+            cache.get_at(start + IBUS_REGISTRATION_MAX_AGE, || SYSTEM_ONLY),
+            SYSTEM_ONLY
+        );
+        // And back again once it is removed.
+        assert_eq!(
+            cache.get_at(
+                start + IBUS_REGISTRATION_MAX_AGE * 2,
+                IbusRegistration::default
+            ),
+            IbusRegistration::default()
+        );
+    }
+
+    // Actions taken in the app cannot wait for the window to elapse.
+    #[test]
+    fn invalidating_the_cache_forces_a_rescan() {
+        let mut cache = IbusRegistrationCache::default();
+        let start = Instant::now();
+
+        cache.get_at(start, IbusRegistration::default);
+        cache.invalidate();
+
+        assert_eq!(cache.get_at(start, || SYSTEM_ONLY), SYSTEM_ONLY);
     }
 
     #[test]
