@@ -69,6 +69,7 @@ impl EntropyApp {
             prev_hovered_encoder_keycode: None,
             secondary_click_handled: false,
             pending_handed_swap: None,
+            pending_key_clears: Vec::new(),
             hover_layer_progress: 0.0,
             jump_back_stack: Vec::new(),
             device_manager: DeviceManager::new(),

@@ -7,6 +7,7 @@ key_legends_russian_first = "Legends: RU / EN"
 
 [key_hints]
 change_key = "Left click to change this key"
+clear_key = "Middle click to clear this key"
 go_to_layer = "Right click to go to layer {layer}: {name}"
 change_layer_number = "Ctrl + Right click to change layer number"
 esc_back = "Esc to go back"
@@ -1579,7 +1580,7 @@ device_body = "Open this menu to pick a connected device, unlock Vial devices, a
 layers_title = "Layers"
 layers_body = "Switch layers with the arrows, mouse wheel, or Left/Right keys. Click the layer name to rename it."
 keyboard_title = "Device map"
-keyboard_body = "Click any key to choose a new action. Right-click layer keys to jump to that layer, then use Esc or right-click to go back."
+keyboard_body = "Click any key to choose a new action. Middle-click clears a key. Right-click layer keys to jump to that layer, then use Esc or right-click to go back."
 settings_title = "Settings and firmware features"
 settings_body = "This menu contains RGB, Mouse Keys, Tap-Hold, Matrix Tester, encoders, and other features exposed by the firmware."
 hints_title = "Context hints and tooltips"

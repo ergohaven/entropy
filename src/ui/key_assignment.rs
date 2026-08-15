@@ -222,6 +222,7 @@ impl EntropyApp {
                 if ctrl_held {
                     if let Some(ki) = key_target {
                         let swapped = crate::rmk_native::toggle_handed_key_action(action);
+                        self.drop_queued_key_clear(self.selected_layer, ki);
                         self.pending_handed_swap = Some((
                             self.selected_layer,
                             ki,
@@ -269,6 +270,7 @@ impl EntropyApp {
                         layout.set_encoder_keycode(self.selected_layer, visual_idx, swapped);
                     }
                 } else if let Some(ki) = key_target {
+                    self.drop_queued_key_clear(self.selected_layer, ki);
                     self.pending_handed_swap = Some((
                         self.selected_layer,
                         ki,
@@ -426,6 +428,161 @@ impl EntropyApp {
         }
     }
 
+    /// Middle-click: clear a key on the selected layer to KC_NO without
+    /// opening the picker. If a HID write is already in flight, the clear is
+    /// queued so rapid clearing clicks are not lost.
+    pub(super) fn request_key_clear(&mut self, ctx: &egui::Context, ki: usize) {
+        let layer = self.selected_layer;
+        // The clear supersedes older deferred edits of this key: a picker
+        // result not yet applied and a handed swap waiting for Ctrl release.
+        if self.keycode_picker.result.is_some()
+            && self.combo_pick_target.is_none()
+            && self.key_override_pick_target.is_none()
+            && self.alt_repeat_pick_target.is_none()
+            && self.selected_encoder.is_none()
+            && self.selected_key == Some((layer, ki))
+        {
+            self.keycode_picker.result = None;
+            self.selected_key = None;
+        }
+        if self
+            .pending_handed_swap
+            .is_some_and(|(l, k, _)| l == layer && k == ki)
+        {
+            self.pending_handed_swap = None;
+        }
+        let already_empty = self
+            .layout
+            .as_ref()
+            .map(|l| l.get_key_binding(layer, ki).is_no())
+            .unwrap_or(true);
+        if already_empty {
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if !self.assign_key_binding(ctx, layer, ki, crate::keyboard::KeyBinding::default()) {
+            self.queue_pending_key_clear(PendingKeyClear::Key {
+                layer,
+                key_idx: ki,
+                generation: self.connection_generation,
+            });
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = ctx;
+            if let Some(layout) = &mut self.layout {
+                layout.set_key_binding(layer, ki, crate::keyboard::KeyBinding::default());
+            }
+        }
+    }
+
+    /// Middle-click: clear an encoder slot on the selected layer to KC_NO.
+    pub(super) fn request_encoder_clear(&mut self, ctx: &egui::Context, encoder_visual_idx: usize) {
+        let layer = self.selected_layer;
+        // The clear supersedes a picker result not yet applied to this slot.
+        if self.keycode_picker.result.is_some()
+            && self.combo_pick_target.is_none()
+            && self.key_override_pick_target.is_none()
+            && self.alt_repeat_pick_target.is_none()
+            && self.selected_encoder == Some((layer, encoder_visual_idx))
+        {
+            self.keycode_picker.result = None;
+            self.selected_encoder = None;
+        }
+        let already_empty = self
+            .layout
+            .as_ref()
+            .map(|l| l.get_encoder_keycode(layer, encoder_visual_idx) == 0)
+            .unwrap_or(true);
+        if already_empty {
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if !self.assign_encoder_keycode(ctx, layer, encoder_visual_idx, 0) {
+            self.queue_pending_key_clear(PendingKeyClear::Encoder {
+                layer,
+                encoder_visual_idx,
+                generation: self.connection_generation,
+            });
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = ctx;
+            if let Some(layout) = &mut self.layout {
+                layout.set_encoder_keycode(layer, encoder_visual_idx, 0);
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn queue_pending_key_clear(&mut self, clear: PendingKeyClear) {
+        if !self.pending_key_clears.contains(&clear) {
+            self.pending_key_clears.push(clear);
+        }
+    }
+
+    /// A newer deferred edit of this key supersedes an older queued clear.
+    fn drop_queued_key_clear(&mut self, layer: usize, key_idx: usize) {
+        self.pending_key_clears.retain(|clear| {
+            !matches!(
+                clear,
+                PendingKeyClear::Key { layer: l, key_idx: k, .. } if *l == layer && *k == key_idx
+            )
+        });
+    }
+
+    /// Apply queued middle-click clears once the HID handle is free again.
+    /// Clears from a previous connection are dropped; targets that became
+    /// empty in the meantime are skipped without a write.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn flush_pending_key_clears(&mut self, ctx: &egui::Context) {
+        if self.pending_key_clears.is_empty() {
+            return;
+        }
+        let generation = self.connection_generation;
+        self.pending_key_clears.retain(|clear| match clear {
+            PendingKeyClear::Key { generation: g, .. }
+            | PendingKeyClear::Encoder { generation: g, .. } => *g == generation,
+        });
+        while !self.pending_key_clears.is_empty() {
+            if self.hid_write_task_active() {
+                return;
+            }
+            let applied = match self.pending_key_clears[0] {
+                PendingKeyClear::Key { layer, key_idx, .. } => {
+                    let already_empty = self
+                        .layout
+                        .as_ref()
+                        .map(|l| l.get_key_binding(layer, key_idx).is_no())
+                        .unwrap_or(true);
+                    already_empty
+                        || self.assign_key_binding(
+                            ctx,
+                            layer,
+                            key_idx,
+                            crate::keyboard::KeyBinding::default(),
+                        )
+                }
+                PendingKeyClear::Encoder {
+                    layer,
+                    encoder_visual_idx,
+                    ..
+                } => {
+                    let already_empty = self
+                        .layout
+                        .as_ref()
+                        .map(|l| l.get_encoder_keycode(layer, encoder_visual_idx) == 0)
+                        .unwrap_or(true);
+                    already_empty || self.assign_encoder_keycode(ctx, layer, encoder_visual_idx, 0)
+                }
+            };
+            if !applied {
+                return;
+            }
+            self.pending_key_clears.remove(0);
+        }
+    }
+
     /// Reload all keycodes from device in background.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn load_from_device(&mut self) {
@@ -577,5 +734,215 @@ mod tests {
         assert_eq!(app.combo_entries[0].keys[0], 0);
         assert!(!app.combo_dirty);
         assert!(app.status_msg.contains("not supported"));
+    }
+
+    fn test_layout(keycodes: &[u16], encoder_keycodes: &[u16]) -> KeyboardLayout {
+        KeyboardLayout {
+            name: "Test".into(),
+            rows: 8,
+            cols: 8,
+            keys: keycodes
+                .iter()
+                .enumerate()
+                .map(|(idx, _)| PhysicalKey {
+                    x: idx as f32,
+                    y: 0.0,
+                    w: 1.0,
+                    h: 1.0,
+                    row: (idx / 8) as u8,
+                    col: (idx % 8) as u8,
+                    label: idx.to_string(),
+                    rotation: 0.0,
+                    rotation_x: 0.0,
+                    rotation_y: 0.0,
+                    layout_condition: None,
+                })
+                .collect(),
+            encoders: encoder_keycodes
+                .iter()
+                .enumerate()
+                .map(|(idx, _)| PhysicalEncoder {
+                    x: idx as f32,
+                    y: 2.0,
+                    w: 1.0,
+                    h: 1.0,
+                    label: idx.to_string(),
+                    encoder_idx: idx as u8,
+                    direction: 0,
+                    rotation: 0.0,
+                    rotation_x: 0.0,
+                    rotation_y: 0.0,
+                    layout_condition: None,
+                })
+                .collect(),
+            layers: vec![keycodes.iter().copied().map(Into::into).collect()],
+            encoder_layers: vec![encoder_keycodes.to_vec()],
+            layer_names: vec![],
+            custom_keycodes: vec![],
+            layout_options: vec![],
+            supports_rgb: false,
+            lighting_mode: None,
+            firmware: FirmwareProtocol::Vial,
+            live_features: Default::default(),
+        }
+    }
+
+    #[test]
+    fn middle_click_clear_writes_kc_no_and_records_undo() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        app.layout = Some(test_layout(&[0x0004, 0x0005], &[]));
+
+        app.request_key_clear(&ctx, 0);
+
+        assert_eq!(
+            app.layout.as_ref().unwrap().get_key_binding(0, 0),
+            crate::keyboard::KeyBinding::Vial(0)
+        );
+        assert!(matches!(
+            app.undo_stack.last(),
+            Some(UndoAction::Key {
+                layer: 0,
+                key_idx: 0,
+                old_binding: crate::keyboard::KeyBinding::Vial(0x0004),
+            })
+        ));
+        assert!(app.pending_key_clears.is_empty());
+    }
+
+    #[test]
+    fn middle_click_clear_skips_already_empty_key() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        app.layout = Some(test_layout(&[0x0000], &[]));
+
+        app.request_key_clear(&ctx, 0);
+
+        assert!(app.undo_stack.is_empty());
+        assert!(app.pending_key_clears.is_empty());
+    }
+
+    #[test]
+    fn middle_click_clears_encoder_slot_and_records_undo() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        app.layout = Some(test_layout(&[], &[0x00E9]));
+
+        app.request_encoder_clear(&ctx, 0);
+
+        assert_eq!(app.layout.as_ref().unwrap().get_encoder_keycode(0, 0), 0);
+        assert!(matches!(
+            app.undo_stack.last(),
+            Some(UndoAction::Encoder {
+                layer: 0,
+                encoder_visual_idx: 0,
+                old_kc: 0x00E9,
+            })
+        ));
+        assert!(app.pending_key_clears.is_empty());
+    }
+
+    #[test]
+    fn middle_click_clear_supersedes_parked_picker_result() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        app.layout = Some(test_layout(&[0x0004], &[]));
+        app.selected_key = Some((0, 0));
+        app.keycode_picker.result = Some(crate::keyboard::KeyBinding::Vial(0x0006));
+
+        app.request_key_clear(&ctx, 0);
+        app.apply_picker_results(&ctx);
+
+        assert!(app.keycode_picker.result.is_none());
+        assert_eq!(
+            app.layout.as_ref().unwrap().get_key_binding(0, 0),
+            crate::keyboard::KeyBinding::Vial(0)
+        );
+    }
+
+    #[test]
+    fn middle_click_clear_cancels_pending_handed_swap() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        app.layout = Some(test_layout(&[0x00E1], &[]));
+        app.pending_handed_swap = Some((0, 0, crate::keyboard::KeyBinding::Vial(0x00E5)));
+
+        app.request_key_clear(&ctx, 0);
+
+        assert!(app.pending_handed_swap.is_none());
+        assert_eq!(
+            app.layout.as_ref().unwrap().get_key_binding(0, 0),
+            crate::keyboard::KeyBinding::Vial(0)
+        );
+    }
+
+    #[test]
+    fn handed_swap_drops_queued_clear_for_same_key() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        app.layout = Some(test_layout(&[0x00E1], &[]));
+        app.pending_key_clears.push(PendingKeyClear::Key {
+            layer: 0,
+            key_idx: 0,
+            generation: app.connection_generation,
+        });
+
+        app.handle_secondary_target(
+            &ctx,
+            true,
+            crate::keyboard::KeyBinding::Vial(0x00E1),
+            Some(0),
+            None,
+        );
+
+        assert!(app.pending_key_clears.is_empty());
+        assert!(app.pending_handed_swap.is_some());
+    }
+
+    #[test]
+    fn busy_middle_click_clears_are_queued_deduped_and_flushed() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        app.layout = Some(test_layout(&[0x0004, 0x0005], &[]));
+        let (hid_device, _recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+
+        // First clear takes the HID handle for its write task.
+        app.request_key_clear(&ctx, 0);
+        assert!(app.hid_write_task_active());
+
+        // Clicks while the write is in flight queue once per target.
+        app.request_key_clear(&ctx, 1);
+        app.request_key_clear(&ctx, 1);
+        assert_eq!(app.pending_key_clears.len(), 1);
+
+        for _ in 0..400 {
+            app.poll_vial_hid_task(&ctx);
+            app.flush_pending_key_clears(&ctx);
+            if !app.hid_write_task_active() && app.pending_key_clears.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        assert!(app.pending_key_clears.is_empty());
+        assert!(!app.hid_write_task_active());
+        let layout = app.layout.as_ref().unwrap();
+        assert_eq!(
+            layout.get_key_binding(0, 0),
+            crate::keyboard::KeyBinding::Vial(0)
+        );
+        assert_eq!(
+            layout.get_key_binding(0, 1),
+            crate::keyboard::KeyBinding::Vial(0)
+        );
+        assert_eq!(app.undo_stack.len(), 2);
     }
 }
