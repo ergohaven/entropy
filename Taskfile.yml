@@ -1,0 +1,155 @@
+# https://taskfile.dev
+#
+# Linux build & packaging for Entropy: deb, rpm, archlinux and AppImage.
+# `task` with no arguments lists every target; BUILD.md explains them.
+version: '3'
+
+vars:
+  APP: entropy
+  # По умолчанию версия берётся из Cargo.toml, но её можно задать снаружи
+  # (`task linux:pkg VERSION=0.3.10-rc.1`), чтобы имена артефактов и версии
+  # пакетов совпадали с релизным тегом, а не с ещё не поднятой версией крейта.
+  # Разбор без awk/sed: встроенный интерпретатор go-task внешних утилит не
+  # подменяет, и на хосте без них не читался бы весь Taskfile, включая `task build`.
+  VERSION:
+    sh: |
+      while read -r line; do
+        case "$line" in
+        version\ =\ *)
+          v="${line#*\"}"
+          printf '%s\n' "${v%%\"*}"
+          break
+          ;;
+        esac
+      done < Cargo.toml
+  # Арка берётся у хоста, а не считается равной amd64: пакет с меткой amd64 и
+  # arm64-бинарником внутри ставится и не запускается.
+  HOST_ARCH:
+    sh: uname -m 2>/dev/null || echo x86_64
+  PKG_ARCH: '{{if or (eq .HOST_ARCH "aarch64") (eq .HOST_ARCH "arm64")}}arm64{{else}}amd64{{end}}'
+  APPIMAGE_ARCH: '{{if or (eq .HOST_ARCH "aarch64") (eq .HOST_ARCH "arm64")}}aarch64{{else}}x86_64{{end}}'
+  DIST: dist
+  # Загружаемые инструменты (nfpm, appimagetool) живут в кэше проекта, а не в
+  # системе: PATH дополняется только на время команды, и то, что уже стоит у
+  # разработчика, имеет приоритет.
+  TOOLS: '{{.ROOT_DIR}}/.cache/tools'
+
+tasks:
+  default:
+    cmds:
+      - task --list
+    silent: true
+
+  version:
+    desc: Print the version derived from Cargo.toml
+    cmds:
+      - echo "{{.VERSION}}"
+    silent: true
+
+  prepare:
+    desc: Install the Linux build & packaging prerequisites for this host
+    cmds:
+      - scripts/prepare_env.sh {{.CLI_ARGS}}
+
+  clean:
+    desc: Remove build/packaging artifacts
+    cmds:
+      - rm -rf {{.DIST}} target/appimage target/nfpm
+
+  icons:
+    desc: Regenerate the hicolor icon set from assets/entropy.ico (run when the logo changes)
+    cmds:
+      - scripts/generate_icons.sh
+
+  build:
+    desc: Release binary for this host
+    cmds:
+      - cargo build --release --locked
+
+  # Метка архитектуры в пакете — обещание пользователю, а бинарник может приехать
+  # снаружи через ENTROPY_BIN, поэтому обещание сверяется с файлом.
+  linux:check-arch:
+    internal: true
+    vars:
+      ENTROPY_BIN: '{{default "target/release/entropy" .ENTROPY_BIN}}'
+    cmds:
+      - |
+        set -e
+        command -v readelf >/dev/null 2>&1 || exit 0
+        machine="$(readelf -h "{{.ENTROPY_BIN}}" | sed -n 's/^ *Machine: *//p')"
+        case "$machine" in
+        "Advanced Micro Devices X86-64") actual=amd64 ;;
+        AArch64) actual=arm64 ;;
+        *) actual="$machine" ;;
+        esac
+        if [ "$actual" != "{{.PKG_ARCH}}" ]; then
+          echo "packaging as {{.PKG_ARCH}}, but {{.ENTROPY_BIN}} is $actual ($machine)" >&2
+          echo "pass a matching binary: task linux:pkg PKG_ARCH=$actual ENTROPY_BIN=..." >&2
+          exit 1
+        fi
+
+  linux:nfpm:
+    internal: true
+    deps: [build]
+    vars:
+      ENTROPY_BIN: '{{default "target/release/entropy" .ENTROPY_BIN}}'
+      FORMATS: '{{.FORMATS}}'
+    env:
+      PKG_ARCH: '{{.PKG_ARCH}}'
+      VERSION: '{{.VERSION}}'
+    cmds:
+      - task: linux:check-arch
+        vars: {ENTROPY_BIN: '{{.ENTROPY_BIN}}'}
+      - mkdir -p {{.DIST}}/linux
+      - install -D -m 0755 {{.ENTROPY_BIN}} target/nfpm/entropy
+      - for: {var: FORMATS}
+        cmd: PATH="$PATH:{{.TOOLS}}" nfpm package -f packaging/nfpm/nfpm.yaml -p {{.ITEM}} -t {{.DIST}}/linux/
+
+  linux:deb:
+    desc: Build the .deb package with nfpm
+    cmds:
+      - task: linux:nfpm
+        vars: {FORMATS: deb}
+
+  linux:rpm:
+    desc: Build the .rpm package with nfpm
+    cmds:
+      - task: linux:nfpm
+        vars: {FORMATS: rpm}
+
+  linux:arch:
+    desc: Build the archlinux package with nfpm
+    cmds:
+      - task: linux:nfpm
+        vars: {FORMATS: archlinux}
+
+  linux:pkg:
+    desc: Build deb, rpm and archlinux packages
+    cmds:
+      - task: linux:nfpm
+        vars: {FORMATS: deb rpm archlinux}
+
+  linux:appimage:
+    desc: Build a Linux AppImage
+    deps: [build]
+    env:
+      ARCH: '{{.APPIMAGE_ARCH}}'
+    cmds:
+      - task: linux:check-arch
+      # Пин в appimagetool_pin.sh — x86_64-сборка самого инструмента, на другой
+      # арке он просто не запустится. Пакеты nfpm при этом собираются нормально,
+      # поэтому падаем только здесь и с объяснением.
+      - |
+        if [ "{{.APPIMAGE_ARCH}}" != x86_64 ]; then
+          echo "AppImage packaging is pinned to the x86_64 appimagetool; {{.HOST_ARCH}} is not supported yet" >&2
+          echo "deb/rpm/arch packages for this host: task linux:pkg" >&2
+          exit 1
+        fi
+      - mkdir -p {{.DIST}}/linux
+      - scripts/build_linux_appimage.sh "v{{.VERSION}}" "{{.DIST}}/linux/{{.APP}}-v{{.VERSION}}-{{.APPIMAGE_ARCH}}.AppImage"
+
+  linux:all:
+    desc: All Linux artifacts (deb/rpm/arch + AppImage)
+    cmds:
+      - task: linux:pkg
+      - task: linux:appimage
