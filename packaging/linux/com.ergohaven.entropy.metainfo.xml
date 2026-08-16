@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.ergohaven.entropy</id>
+  <metadata_license>FSFAP</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>Entropy</name>
+  <summary>Configure Vial-QMK and Vial-RMK programmable keyboards</summary>
+
+  <description>
+    <p>
+      Entropy is a desktop app with a modern, minimalist interface for configuring
+      programmable input devices running Vial-QMK or Vial-RMK firmware: split
+      keyboards, macropads, trackballs, touchpad modules, and other hardware that
+      exposes keyboard-style firmware features through HID.
+    </p>
+    <p>
+      Connect a device, pick it from the device list, and work through layout,
+      keycodes, macros, lighting, pointing controls, and firmware settings from one
+      coherent interface.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">entropy.desktop</launchable>
+  <developer id="com.ergohaven">
+    <name>Ergohaven</name>
+  </developer>
+
+  <url type="homepage">https://github.com/ergohaven/entropy</url>
+  <url type="bugtracker">https://github.com/ergohaven/entropy/issues</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Layout editor</caption>
+      <image>https://raw.githubusercontent.com/ergohaven/entropy/main/assets/entropy-layout-screenshot.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Key picker</caption>
+      <image>https://raw.githubusercontent.com/ergohaven/entropy/main/assets/key-picker-dark.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Matrix tester</caption>
+      <image>https://raw.githubusercontent.com/ergohaven/entropy/main/assets/matrix-tester.png</image>
+    </screenshot>
+  </screenshots>
+
+  <content_rating type="oars-1.1" />
+
+  <categories>
+    <category>Settings</category>
+    <category>HardwareSettings</category>
+  </categories>
+</component>
