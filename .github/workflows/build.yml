@@ -80,6 +80,39 @@ jobs:
         if: matrix.kind == 'linux'
         run: cargo test --all-targets
 
+      - name: Install go-task
+        if: matrix.kind == 'linux'
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Linux packages
+        if: matrix.kind == 'linux'
+        run: |
+          sudo apt-get install -y --no-install-recommends libarchive-tools desktop-file-utils
+          scripts/prepare_env.sh --tools-only
+          task linux:all
+          scripts/test_linux_packages.sh
+          desktop-file-validate packaging/linux/entropy.desktop
+
+      # Настоящая установка, а не только распаковка: только она проверяет, что
+      # руками выписанные Depends действительно существуют в архиве Ubuntu.
+      - name: Install the .deb
+        if: matrix.kind == 'linux'
+        run: |
+          sudo apt-get install -y ./dist/linux/*.deb
+          test -x /usr/bin/entropy
+          dpkg -L ergohaven-entropy
+
+      - name: Upload Linux packages
+        if: matrix.kind == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: entropy-linux-packages
+          path: dist/linux/*
+          if-no-files-found: error
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
