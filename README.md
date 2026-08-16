@@ -188,6 +188,15 @@ sudo apt-get install \
   libgtk-3-dev
 ```
 
+Linux packages — `.deb`, `.rpm`, Arch `.pkg.tar.zst` and the AppImage — are built
+with [go-task](https://taskfile.dev). See [BUILD.md](BUILD.md) for the full
+reference:
+
+```sh
+task prepare
+task linux:all
+```
+
 Build a macOS app bundle and DMG on macOS:
 
 ```sh
