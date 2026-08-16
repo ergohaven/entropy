@@ -9,7 +9,9 @@ fi
 
 OUT="${2:-$ROOT/dist/release/entropy-${VERSION}-x86_64.AppImage}"
 APPDIR="${APPDIR:-$ROOT/target/appimage/Entropy.AppDir}"
-APPIMAGETOOL="${APPIMAGETOOL:-$ROOT/target/tools/appimagetool-x86_64.AppImage}"
+# Кэш инструментов общий с nfpm, который кладёт туда же scripts/prepare_env.sh,
+# и переживает `cargo clean`.
+APPIMAGETOOL="${APPIMAGETOOL:-$ROOT/.cache/tools/appimagetool-x86_64.AppImage}"
 
 cd "$ROOT"
 # shellcheck disable=SC1091
@@ -22,46 +24,37 @@ cargo build --release --locked
 rm -rf "$APPDIR" "$OUT"
 mkdir -p \
   "$APPDIR/usr/bin" \
-  "$APPDIR/usr/lib" \
   "$APPDIR/usr/share/applications" \
+  "$APPDIR/usr/share/metainfo" \
+  "$APPDIR/usr/share/icons" \
   "$(dirname "$OUT")" \
   "$(dirname "$APPIMAGETOOL")"
 
 install -m 0755 "$ROOT/target/release/entropy" "$APPDIR/usr/bin/entropy"
 
-if [[ -e /usr/lib/x86_64-linux-gnu/libudev.so.1 ]]; then
-  install -m 0755 /usr/lib/x86_64-linux-gnu/libudev.so.1 "$APPDIR/usr/lib/libudev.so.1"
-elif [[ -e /lib/x86_64-linux-gnu/libudev.so.1 ]]; then
-  install -m 0755 /lib/x86_64-linux-gnu/libudev.so.1 "$APPDIR/usr/lib/libudev.so.1"
-fi
-
+# Ничего не бандлим: единственные ELF-зависимости бинарника — libc/libm/libgcc,
+# весь GUI-стек (libGL, xkbcommon, X11/xcb, wayland) грузится через dlopen, а
+# hidapi собран с чисто растовым hidraw-бэкендом и libudev не требует. Подсовывать
+# хостовые библиотеки через LD_LIBRARY_PATH при этом опаснее, чем полезно: они
+# перебивали бы системные у всего, что подгрузится позже.
 cat > "$APPDIR/AppRun" <<'EOF'
 #!/bin/sh
 HERE="$(dirname "$(readlink -f "$0")")"
-export LD_LIBRARY_PATH="$HERE/usr/lib:${LD_LIBRARY_PATH:-}"
 exec "$HERE/usr/bin/entropy" "$@"
 EOF
 chmod 0755 "$APPDIR/AppRun"
 
-cat > "$APPDIR/entropy.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=Entropy
-Exec=entropy
-Icon=entropy
-Categories=Utility;
-Terminal=false
-X-AppImage-Version=${VERSION#v}
-EOF
-cp "$APPDIR/entropy.desktop" "$APPDIR/usr/share/applications/entropy.desktop"
+# Те же .desktop, metainfo и иконки, что уходят в deb/rpm/arch: описание
+# приложения должно быть одним во всех форматах.
+install -m 0644 "$ROOT/packaging/linux/entropy.desktop" "$APPDIR/usr/share/applications/entropy.desktop"
+install -m 0644 "$ROOT/packaging/linux/com.ergohaven.entropy.metainfo.xml" \
+  "$APPDIR/usr/share/metainfo/com.ergohaven.entropy.metainfo.xml"
+cp -r "$ROOT/assets/icons/hicolor" "$APPDIR/usr/share/icons/hicolor"
 
-cat > "$APPDIR/entropy.svg" <<'EOF'
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
-  <rect width="256" height="256" rx="48" fill="#101828"/>
-  <path d="M63 68h130v34H103v35h80v34h-80v-23H63V68z" fill="#5EEAD4"/>
-  <path d="M63 154h130v34H63z" fill="#F97316"/>
-</svg>
-EOF
+# appimagetool ищет .desktop и иконку с именем из Icon= в корне AppDir.
+install -m 0644 "$ROOT/packaging/linux/entropy.desktop" "$APPDIR/entropy.desktop"
+printf 'X-AppImage-Version=%s\n' "${VERSION#v}" >> "$APPDIR/entropy.desktop"
+install -m 0644 "$ROOT/assets/icons/hicolor/256x256/apps/entropy.png" "$APPDIR/entropy.png"
 
 if [[ ! -x "$APPIMAGETOOL" ]]; then
   APPIMAGETOOL_DOWNLOAD="$(mktemp "${APPIMAGETOOL}.download.XXXXXX")"
