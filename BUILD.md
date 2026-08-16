@@ -7,12 +7,29 @@ they do and when to reach for each one.
 Windows and macOS builds are still the plain `cargo` invocations described in
 [README > Development](README.md#development).
 
+## Two ways to build
+
+- **native** — build on the host, with the prerequisites installed there.
+  Entry points: `task build`, `task linux:all`.
+- **container** — the same artifacts from a pinned toolchain image, on any host
+  with Docker and nothing else installed. Entry point: `task docker:linux`.
+
+Both run the same tasks and produce the same files in `dist/linux/`; the
+container just fixes the toolchain, so a package built on Tumbleweed and one
+built in CI are the same package.
+
 ## Quick start
 
 ```sh
 task prepare        # install the prerequisites for this host
 task build          # release binary
 task linux:all      # deb, rpm, archlinux and AppImage in dist/linux/
+```
+
+Or, with nothing installed but Docker:
+
+```sh
+task docker:linux
 ```
 
 `task prepare` accepts flags after `--`; `task prepare -- --dry-run` prints what
@@ -63,6 +80,19 @@ an error rather than an unverified download.
 | `task linux:pkg` | all three |
 | `task linux:appimage` | `.AppImage` |
 | `task linux:all` | packages + AppImage |
+| `task docker:image` | build the `entropy-build:local` toolchain image |
+| `task docker:linux` | `linux:all` inside that image |
+
+`task docker:linux` builds the image first if needed. The container mounts the
+repository at `/work` and runs as your own user, so everything it writes —
+`dist/`, `target/`, `.task/` — belongs to you and needs no ownership fixup
+afterwards. Setting `DOCKER_IMAGE_READY=1` skips the image build, for CI setups
+that build it in a separate, layer-cached step.
+
+The image pins its base by digest, not by tag: `rust:1.97-bookworm` is rebuilt
+upstream, and without the digest the same `Dockerfile` would give a different
+toolchain on different days. `nfpm`, `go-task` and `appimagetool` come from the
+same pins the host path uses, so the two never drift apart.
 
 ## What ends up in a package
 
@@ -131,6 +161,15 @@ commit the result when the logo changes. The `.ico` carries hand-drawn 16, 32 an
 down from the 256 pixel frame.
 
 ## Troubleshooting
+
+**`file does not exist` when running `task docker:linux`.** SELinux (openSUSE,
+Fedora) labels the repository `user_home_t`, which the container's `container_t`
+domain cannot read. The Taskfile adds `--security-opt label=disable` when
+`getenforce` reports SELinux is active; if you invoke `docker run` by hand, add
+it yourself.
+
+**Local and container builds keep recompiling.** They share one `target/`
+directory. Set `CARGO_TARGET_DIR` to keep them apart.
 
 **`no matching files` from nfpm.** nfpm expands `${...}` in scalar fields but not
 in `contents[].src`, so the binary is staged to `target/nfpm/entropy` first. Run

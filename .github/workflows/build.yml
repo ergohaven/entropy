@@ -119,3 +119,28 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.binary }}
           if-no-files-found: error
+
+  # Тот же `task docker:linux`, что запускает разработчик: проверяется не только
+  # образ, но и утверждение, ради которого он существует — Linux-артефакты
+  # собираются одинаково у разработчика и в CI, независимо от того, что стоит на
+  # машине.
+  container:
+    name: Build (toolchain container)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install go-task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Linux artifacts in the container
+        run: task docker:linux
+
+      - name: Verify package contents
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libarchive-tools
+          scripts/test_linux_packages.sh

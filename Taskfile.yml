@@ -29,6 +29,7 @@ vars:
   PKG_ARCH: '{{if or (eq .HOST_ARCH "aarch64") (eq .HOST_ARCH "arm64")}}arm64{{else}}amd64{{end}}'
   APPIMAGE_ARCH: '{{if or (eq .HOST_ARCH "aarch64") (eq .HOST_ARCH "arm64")}}aarch64{{else}}x86_64{{end}}'
   DIST: dist
+  IMAGE: entropy-build:local
   # Загружаемые инструменты (nfpm, appimagetool) живут в кэше проекта, а не в
   # системе: PATH дополняется только на время команды, и то, что уже стоит у
   # разработчика, имеет приоритет.
@@ -153,3 +154,42 @@ tasks:
     cmds:
       - task: linux:pkg
       - task: linux:appimage
+
+  # ---- reproducible build via Docker --------------------------------------
+  docker:image:
+    desc: Build the local toolchain image
+    # В CI образ собирается отдельным шагом ради кэша слоёв, и повторная сборка
+    # здесь его бы только продублировала: DOCKER_IMAGE_READY=1 её выключает.
+    status:
+      - test -n "$DOCKER_IMAGE_READY"
+    cmds:
+      - docker build -t {{.IMAGE}} .
+
+  docker:run:
+    internal: true
+    vars:
+      # Сборка идёт от хозяина каталога, а не от root: иначе всё созданное в
+      # контейнере (dist, target, .task) остаётся root:root, и следующая
+      # локальная задача падает на правах.
+      USER_ARGS:
+        sh: 'id -u >/dev/null 2>&1 && echo "--user $(id -u):$(id -g)" || true'
+      # На SELinux-системах (openSUSE, Fedora) каталог репозитория помечен
+      # user_home_t, и контейнеру в домене container_t чтение запрещено. Метка
+      # снимается только на время запуска: ':z' вместо этого рекурсивно
+      # перемаркировал бы всё дерево, включая target и .git.
+      SELINUX:
+        sh: 'command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" != Disabled ] && echo --security-opt label=disable || true'
+    cmds:
+      # HOME задаётся явно: у переданного UID нет записи в /etc/passwd, и без
+      # него инструменты уходят писать в корень.
+      - >
+        docker run --rm {{.SELINUX}} {{.USER_ARGS}} -e HOME=/tmp
+        -v "$PWD":/work -w /work {{.IMAGE}}
+        task {{.TASKS}} VERSION={{.VERSION}}
+
+  docker:linux:
+    desc: All Linux artifacts from the toolchain container
+    deps: [docker:image]
+    cmds:
+      - task: docker:run
+        vars: {TASKS: linux:all}
