@@ -531,6 +531,16 @@ impl EntropyApp {
         });
     }
 
+    /// A whole-layer write (paste, fill, undo) supersedes queued clears of
+    /// keys and encoders on that layer.
+    pub(super) fn drop_queued_key_clears_for_layer(&mut self, layer: usize) {
+        self.pending_key_clears.retain(|clear| match clear {
+            PendingKeyClear::Key { layer: l, .. } | PendingKeyClear::Encoder { layer: l, .. } => {
+                *l != layer
+            }
+        });
+    }
+
     /// Apply queued middle-click clears once the HID handle is free again.
     /// Clears from a previous connection are dropped; targets that became
     /// empty in the meantime are skipped without a write.
@@ -903,6 +913,54 @@ mod tests {
 
         assert!(app.pending_key_clears.is_empty());
         assert!(app.pending_handed_swap.is_some());
+    }
+
+    #[test]
+    fn layer_snapshot_write_drops_queued_clears_for_that_layer() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        app.layout = Some(test_layout(&[0x0004, 0x0005], &[]));
+        let generation = app.connection_generation;
+        app.pending_key_clears = vec![
+            PendingKeyClear::Key {
+                layer: 0,
+                key_idx: 0,
+                generation,
+            },
+            PendingKeyClear::Encoder {
+                layer: 0,
+                encoder_visual_idx: 0,
+                generation,
+            },
+            PendingKeyClear::Key {
+                layer: 1,
+                key_idx: 0,
+                generation,
+            },
+        ];
+
+        app.apply_layer_snapshot(
+            0,
+            LayerSnapshot {
+                keycodes: vec![
+                    crate::keyboard::KeyBinding::Vial(0x0007),
+                    crate::keyboard::KeyBinding::Vial(0x0008),
+                ],
+                encoder_keycodes: vec![],
+            },
+            "layer_actions.paste",
+        );
+
+        // Only the pasted layer's clears are superseded.
+        assert_eq!(
+            app.pending_key_clears,
+            vec![PendingKeyClear::Key {
+                layer: 1,
+                key_idx: 0,
+                generation,
+            }]
+        );
     }
 
     #[test]

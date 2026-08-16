@@ -2533,7 +2533,7 @@ pub(super) enum UndoAction {
 /// Middle-click clear queued while another HID write is in flight, so rapid
 /// clearing clicks are applied in order instead of being lost. `generation`
 /// pins the clear to the connection it was requested on.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PendingKeyClear {
     Key {
         layer: usize,
