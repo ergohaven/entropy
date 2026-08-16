@@ -467,6 +467,10 @@ impl EntropyApp {
                         self.vial_unlock_keys.clear();
                     }
                 }
+                crate::app::ensure_firmware_update_check(
+                    &mut self.firmware_update_check,
+                    r.about_info.firmware_update_target.clone(),
+                );
                 self.device_about_info = Some(r.about_info.clone());
                 if staged_bluetooth_load {
                     self.schedule_initial_battery_refresh();
@@ -537,8 +541,9 @@ impl EntropyApp {
                     .iter()
                     .enumerate()
                     .filter(|(i, combo)| {
-                        combo.output != 0
+                        !combo.output.is_no()
                             || combo.keys.iter().any(|&k| k != 0)
+                            || combo.layer.is_some()
                             || self
                                 .combo_names
                                 .get(*i)
@@ -565,6 +570,11 @@ impl EntropyApp {
                 self.keycode_picker.supports_universal_symbols = r.supports_universal_symbols;
                 self.keycode_picker.supports_universal_russian_letters =
                     r.supports_universal_russian_letters;
+                self.keycode_picker.supports_rmk_native_combo_output =
+                    r.supports_rmk_native_combo_output;
+                self.keycode_picker.supports_rmk_native_tap_dance_actions =
+                    r.supports_rmk_native_tap_dance_actions;
+                self.supports_rmk_combo_layers = r.supports_rmk_combo_layers;
                 self.keycode_picker.macro_ext_keycodes_disabled_reason =
                     r.macro_ext_keycodes_disabled_reason;
                 // Parse macro texts into actions (Vial protocol v2+ bytecode).

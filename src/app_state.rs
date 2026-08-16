@@ -371,6 +371,7 @@ pub(crate) struct DeviceAboutInfo {
     pub(crate) product_id: u16,
     pub(crate) path: String,
     pub(crate) firmware_version: Option<String>,
+    pub(crate) firmware_update_target: Option<FirmwareReleaseTarget>,
     pub(crate) supports_battery_halves: bool,
     pub(crate) battery_halves: Option<crate::hid::BatteryHalves>,
     pub(crate) via_protocol: u16,
@@ -522,6 +523,9 @@ pub(crate) struct DeferredDeviceLoadContext {
     pub(crate) supports_rmk_native_key_actions: bool,
     pub(crate) supports_universal_symbols: bool,
     pub(crate) supports_universal_russian_letters: bool,
+    pub(crate) supports_rmk_native_combo_output: bool,
+    pub(crate) supports_rmk_native_tap_dance_actions: bool,
+    pub(crate) supports_rmk_combo_layers: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -567,6 +571,10 @@ impl DeferredDeviceLoadContext {
             && self.supports_rmk_native_key_actions == other.supports_rmk_native_key_actions
             && self.supports_universal_symbols == other.supports_universal_symbols
             && self.supports_universal_russian_letters == other.supports_universal_russian_letters
+            && self.supports_rmk_native_combo_output == other.supports_rmk_native_combo_output
+            && self.supports_rmk_native_tap_dance_actions
+                == other.supports_rmk_native_tap_dance_actions
+            && self.supports_rmk_combo_layers == other.supports_rmk_combo_layers
     }
 }
 
@@ -956,6 +964,12 @@ pub(crate) struct ConnectResult {
     pub(crate) supports_universal_symbols: bool,
     /// Firmware implements native Russian-letter Universal Symbols actions.
     pub(crate) supports_universal_russian_letters: bool,
+    /// Firmware accepts native RMK actions as Combo outputs.
+    pub(crate) supports_rmk_native_combo_output: bool,
+    /// Firmware accepts native RMK actions in Tap Dance fields.
+    pub(crate) supports_rmk_native_tap_dance_actions: bool,
+    /// Firmware can restrict each Combo to one active layer.
+    pub(crate) supports_rmk_combo_layers: bool,
     pub(crate) macro_ext_keycodes_disabled_reason: Option<MacroExtKeycodesDisabledReason>,
     /// Tap dance entries
     pub(crate) tap_dance_entries: Vec<crate::keycode_picker::TapDanceEntry>,
@@ -1140,7 +1154,8 @@ pub(crate) fn vial_layer_retarget_base(kc: u16) -> Option<u16> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ComboEntry {
     pub(crate) keys: [u16; 4],
-    pub(crate) output: u16,
+    pub(crate) output: crate::keyboard::KeyBinding,
+    pub(crate) layer: Option<u8>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1512,8 +1527,6 @@ pub(crate) struct BluetoothProfileColorSetting {
 /// RMK wireless settings exposed by the Bluetooth settings tab in Vial.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct BluetoothSettingsState {
-    /// Sleep timeout before the keyboard enters Bluetooth sleep mode
-    pub(crate) sleep_timeout: Option<BluetoothSelectSetting>,
     /// Whether the halves show yellow/green battery charging status on their LEDs
     pub(crate) charge_indicator: Option<BluetoothBooleanSetting>,
     /// Palette color index for each firmware-supported Bluetooth profile
@@ -1524,9 +1537,7 @@ pub(crate) struct BluetoothSettingsState {
 
 impl BluetoothSettingsState {
     pub(crate) fn row_count(&self) -> usize {
-        self.sleep_timeout.is_some() as usize
-            + self.charge_indicator.is_some() as usize
-            + self.profile_colors.len()
+        self.charge_indicator.is_some() as usize + self.profile_colors.len()
     }
 }
 
@@ -2069,6 +2080,7 @@ pub(crate) struct LayerLedNumericSetting {
     pub(crate) width: u8,
     pub(crate) value: u16,
     pub(crate) max: u16,
+    pub(crate) variants: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3922,6 +3934,8 @@ pub struct EntropyApp {
     pub(crate) windows_hwnd: Option<isize>,
     #[cfg(target_os = "windows")]
     pub(crate) windows_window_hidden_to_tray: bool,
+    #[cfg(target_os = "windows")]
+    pub(crate) windows_start_hidden_to_tray_pending: bool,
     #[cfg(target_os = "macos")]
     pub(crate) macos_ns_window: Option<usize>,
     #[cfg(target_os = "macos")]
@@ -3938,6 +3952,7 @@ pub struct EntropyApp {
     pub(crate) main_menu_tab: MainMenuTab,
     pub(crate) combo_entries: Vec<ComboEntry>,
     pub(crate) combo_synced_entries: Vec<ComboEntry>,
+    pub(crate) supports_rmk_combo_layers: bool,
     pub(crate) combo_names: Vec<String>,
     pub(crate) combo_colors: Vec<u32>,
     pub(crate) selected_combo: usize,
@@ -4019,6 +4034,7 @@ pub struct EntropyApp {
     pub(crate) device_display_names: std::collections::HashMap<String, String>,
     pub(crate) device_about_info: Option<DeviceAboutInfo>,
     pub(crate) update_check: UpdateCheckState,
+    pub(crate) firmware_update_check: FirmwareUpdateCheckState,
     pub(crate) tour_state: TourState,
     pub(crate) tour_target_rects: Vec<(TourTarget, egui::Rect)>,
     /// Vial unlock dialog open

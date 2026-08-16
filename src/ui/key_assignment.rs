@@ -9,9 +9,16 @@ impl EntropyApp {
 
         if let Some(binding) = self.keycode_picker.result.take() {
             let kc_value = binding.vial_keycode();
-            if binding.rmk_action().is_some() && self.selected_key.is_none() {
+            let native_target_supported = match self.combo_pick_target {
+                Some((_, ComboPickField::Output)) => {
+                    self.keycode_picker.supports_rmk_native_combo_output
+                }
+                Some((_, ComboPickField::Trigger(_))) => false,
+                None => self.selected_key.is_some(),
+            };
+            if binding.rmk_action().is_some() && !native_target_supported {
                 self.status_msg =
-                    "This lossless RMK action can only be assigned to a keyboard key".into();
+                    "This lossless RMK action is not supported for this target".into();
                 return;
             }
             if let Some((combo_idx, field)) = self.combo_pick_target.take() {
@@ -20,8 +27,14 @@ impl EntropyApp {
                     match field {
                         ComboPickField::Trigger(key_idx) => combo.keys[key_idx] = kc_value,
                         ComboPickField::Output => {
-                            combo.output =
-                                crate::keycode::normalize_output_symbol_keycode(kc_value);
+                            combo.output = match binding {
+                                crate::keyboard::KeyBinding::Vial(value) => {
+                                    crate::keyboard::KeyBinding::Vial(
+                                        crate::keycode::normalize_output_symbol_keycode(value),
+                                    )
+                                }
+                                crate::keyboard::KeyBinding::Rmk(_) => binding,
+                            };
                         }
                     }
                     self.mark_combo_dirty();
@@ -526,5 +539,43 @@ mod tests {
             Some(0x2000 | ((ModifierCombination::RCTRL.into_packed_bits() as u16) << 8))
         );
         assert!(app.keycode_picker.rmk_native_key_actions_allowed_for_target);
+    }
+
+    #[test]
+    fn universal_symbol_can_be_assigned_to_combo_output() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let binding =
+            crate::universal_symbols::binding(crate::universal_symbols::USER_SYMBOL_START);
+        app.combo_entries = vec![ComboEntry::default()];
+        app.combo_pick_target = Some((0, ComboPickField::Output));
+        app.keycode_picker.supports_rmk_native_combo_output = true;
+        app.keycode_picker.result = Some(binding);
+
+        app.apply_picker_results(&ctx);
+
+        assert_eq!(app.combo_entries[0].output, binding);
+        assert!(app.combo_dirty);
+    }
+
+    #[test]
+    fn native_action_is_rejected_for_combo_trigger_even_with_a_selected_key() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let binding =
+            crate::universal_symbols::binding(crate::universal_symbols::USER_SYMBOL_START);
+        app.combo_entries = vec![ComboEntry::default()];
+        app.combo_pick_target = Some((0, ComboPickField::Trigger(0)));
+        app.selected_key = Some((0, 0));
+        app.keycode_picker.supports_rmk_native_combo_output = true;
+        app.keycode_picker.result = Some(binding);
+
+        app.apply_picker_results(&ctx);
+
+        assert_eq!(app.combo_entries[0].keys[0], 0);
+        assert!(!app.combo_dirty);
+        assert!(app.status_msg.contains("not supported"));
     }
 }

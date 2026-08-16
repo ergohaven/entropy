@@ -383,13 +383,22 @@ impl EntropyApp {
                                     device_clicked = true;
                                 }
 
-                                if top_dropdown_item(
+                                if top_dropdown_item_with_indicator(
                                     ui,
                                     dropdown_size.x - 16.0,
                                     about_device_label(lang),
                                     self.layout.is_some(),
                                     self.main_menu_tab == MainMenuTab::Settings
                                         && self.settings_tab == SettingsTab::AboutDevice,
+                                    crate::app::firmware_update_available(
+                                        &self.firmware_update_check,
+                                    ) && self
+                                        .device_about_info
+                                        .as_ref()
+                                        .and_then(|info| info.firmware_update_target.as_ref())
+                                        == crate::app::firmware_update_target(
+                                            &self.firmware_update_check,
+                                        ),
                                 )
                                 .clicked()
                                 {

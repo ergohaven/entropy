@@ -49,10 +49,10 @@ impl KeycodePicker {
                                 let id_text = format!("TD{}", n);
                                 let has_content = {
                                     let td = &self.tap_dance_entries[n as usize];
-                                    td.on_tap != 0
-                                        || td.on_hold != 0
-                                        || td.on_double_tap != 0
-                                        || td.on_tap_hold != 0
+                                    !td.on_tap.is_no()
+                                        || !td.on_hold.is_no()
+                                        || !td.on_double_tap.is_no()
+                                        || !td.on_tap_hold.is_no()
                                         || td.tapping_term != 200
                                 };
                                 let mut resp = picker_slot_button(
@@ -144,21 +144,25 @@ impl KeycodePicker {
                         1 => self.tap_dance_entries[n].on_hold,
                         2 => self.tap_dance_entries[n].on_double_tap,
                         3 => self.tap_dance_entries[n].on_tap_hold,
-                        _ => 0,
+                        _ => Default::default(),
                     };
                     let kc_label = self.tap_dance_field_label(kc, &custom_pairs);
                     if picker_button(ui, &kc_label, Vec2::new(120.0, 30.0), true, false)
-                        .on_hover_text(if kc == 0 {
+                        .on_hover_text(if kc.is_no() {
                             crate::i18n::tr_catalog(
                                 self.language,
                                 "tap_dance_editor.click_to_assign_a_key",
                             )
                             .to_string()
                         } else {
-                            crate::i18n::tr_text(
-                                self.language,
-                                &keycode_tooltip(kc, &custom_pairs, &self.layer_names),
-                            )
+                            crate::i18n::tr_text(self.language, &crate::app::key_binding_tooltip_with_macro_names(
+                                kc,
+                                &custom_pairs,
+                                &self.layer_names,
+                                &self.macro_names,
+                                &self.macro_descriptions,
+                                &self.tap_dance_names,
+                            ))
                         })
                         .clicked()
                     {
@@ -222,10 +226,10 @@ impl KeycodePicker {
                 .tap_dance_entries
                 .get(n)
                 .map(|td| {
-                    td.on_tap != 0
-                        || td.on_hold != 0
-                        || td.on_double_tap != 0
-                        || td.on_tap_hold != 0
+                    !td.on_tap.is_no()
+                        || !td.on_hold.is_no()
+                        || !td.on_double_tap.is_no()
+                        || !td.on_tap_hold.is_no()
                         || td.tapping_term != 200
                 })
                 .unwrap_or(false)
@@ -249,10 +253,10 @@ impl KeycodePicker {
             {
                 self.push_tap_dance_undo(n);
                 if let Some(td) = self.tap_dance_entries.get_mut(n) {
-                    td.on_tap = 0;
-                    td.on_hold = 0;
-                    td.on_double_tap = 0;
-                    td.on_tap_hold = 0;
+                    td.on_tap = Default::default();
+                    td.on_hold = Default::default();
+                    td.on_double_tap = Default::default();
+                    td.on_tap_hold = Default::default();
                     td.tapping_term = 200;
                 }
                 if n < self.tap_dance_names.len() {
@@ -328,19 +332,18 @@ impl KeycodePicker {
 
     pub(super) fn tap_dance_field_label(
         &self,
-        value: u16,
+        value: crate::keyboard::KeyBinding,
         custom_pairs: &[crate::keyboard::CustomKeycode],
     ) -> String {
-        if value == 0 {
+        if value.is_no() {
             return "None".to_string();
         }
-        if (0x7700..=0x77FF).contains(&value) {
-            return self.macro_display_name((value - 0x7700) as usize);
-        }
-        crate::keycode::keycode_label_with_names_and_layout(
+        crate::app::key_binding_label_with_macro_names(
             value,
             custom_pairs,
             &self.layer_names,
+            &self.macro_names,
+            &self.tap_dance_names,
             self.key_legend_layout,
         )
     }

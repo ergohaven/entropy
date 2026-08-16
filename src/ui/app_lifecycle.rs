@@ -548,7 +548,7 @@ mod tests {
         assert!(app.settings_write_task.is_some());
 
         app.keycode_picker.macro_texts = vec![vec![1, 2, 3]];
-        app.keycode_picker.macros_dirty = true;
+        app.keycode_picker.mark_macros_dirty();
         app.combo_entries = vec![combo([0x0004, 0x0005, 0, 0], 0x0006)];
         app.combo_synced_entries = vec![ComboEntry::default()];
         app.combo_dirty = true;
@@ -556,7 +556,7 @@ mod tests {
         app.combo_term = Some(150);
         app.combo_term_dirty = true;
         app.keycode_picker.tap_dance_entries = vec![crate::keycode_picker::TapDanceEntry {
-            on_tap: 0x0004,
+            on_tap: 0x0004.into(),
             tapping_term: 175,
             ..Default::default()
         }];
@@ -607,7 +607,11 @@ mod tests {
     }
 
     fn combo(keys: [u16; 4], output: u16) -> ComboEntry {
-        ComboEntry { keys, output }
+        ComboEntry {
+            keys,
+            output: output.into(),
+            layer: None,
+        }
     }
 
     #[test]
@@ -644,12 +648,12 @@ mod tests {
     #[test]
     fn tap_dance_writeback_targets_only_changed_entries() {
         let unchanged = crate::keycode_picker::TapDanceEntry {
-            on_tap: 0x002c,
+            on_tap: 0x002c.into(),
             tapping_term: 150,
             ..Default::default()
         };
         let changed = crate::keycode_picker::TapDanceEntry {
-            on_hold: 0x0202,
+            on_hold: 0x0202.into(),
             ..unchanged.clone()
         };
 
@@ -663,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn combo_task_defers_settings_changes_refresh_and_exit_writes_until_handle_returns() {
+    fn combo_task_defers_settings_changes_and_exit_writes_until_handle_returns() {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -705,14 +709,6 @@ mod tests {
         assert_eq!(app.keycode_picker.result, Some(0x0004.into()));
         assert_eq!(app.key_override_entries[0].trigger, 0);
 
-        app.refresh_current_device_data();
-        assert_eq!(
-            app.status_msg,
-            crate::i18n::tr_catalog(
-                app.app_settings.language,
-                "status_messages.refresh_device_data_pending_write"
-            )
-        );
         app.app_settings.minimize_to_tray_on_close = false;
         app.app_settings.close_to_tray_behavior = CloseToTrayBehavior::Close;
         let mut close_input = egui::RawInput::default();
@@ -938,7 +934,7 @@ mod tests {
         app.combo_edit_revision = 1;
         app.maybe_start_combo_write(&ctx);
         app.queue_touchpad_setting_write("Sniper sensitivity".to_owned(), 121, 1, 1, 2);
-        app.keycode_picker.macros_dirty = true;
+        app.keycode_picker.mark_macros_dirty();
         app.exit_after_hid_write = true;
 
         let mut close_count = 0;
@@ -1091,6 +1087,8 @@ impl eframe::App for EntropyApp {
         {
             #[cfg(target_os = "windows")]
             self.cache_windows_hwnd(frame);
+            #[cfg(target_os = "windows")]
+            self.handle_windows_start_hidden_to_tray(ctx);
             #[cfg(target_os = "macos")]
             self.cache_macos_ns_window(frame);
             // Cache the winit window/display handles so native file dialogs can be
@@ -1107,6 +1105,7 @@ impl eframe::App for EntropyApp {
             self.handle_macos_dock_reopen(ctx);
 
             crate::app::poll_update_check(&mut self.update_check);
+            crate::app::poll_firmware_update_check(&mut self.firmware_update_check);
             let main_window_hidden_to_tray = self.main_window_hidden_to_tray();
             let selected_device_is_bluetooth = self
                 .selected_device
@@ -1124,7 +1123,8 @@ impl eframe::App for EntropyApp {
             );
             let connect_pending = matches!(self.connect_state, ConnectState::Loading { .. });
             let update_check_pending =
-                matches!(self.update_check, UpdateCheckState::Checking { .. });
+                matches!(self.update_check, UpdateCheckState::Checking { .. })
+                    || crate::app::firmware_update_check_pending(&self.firmware_update_check);
             ctx.request_repaint_after(native_repaint_interval(
                 main_window_hidden_to_tray,
                 bluetooth_visible_interval,
@@ -1142,6 +1142,7 @@ impl eframe::App for EntropyApp {
         #[cfg(target_arch = "wasm32")]
         {
             crate::app::poll_update_check(&mut self.update_check);
+            crate::app::poll_firmware_update_check(&mut self.firmware_update_check);
             let now = ctx.input(|i| i.time);
             self.poll_text_expander_deferred_save(now);
             self.auto_reload_text_expander_rules_file(now);
@@ -1665,66 +1666,16 @@ impl eframe::App for EntropyApp {
             .as_ref()
             .map(|hid| hid.is_bluetooth_transport())
             .unwrap_or(false);
+
+        self.flush_pending_key_override_writes();
+
+        #[cfg(not(target_arch = "wasm32"))]
+        self.maybe_start_macro_write(ctx);
+
         #[cfg(not(target_arch = "wasm32"))]
         let hid_write_task_active = self.hid_write_task_active();
         #[cfg(target_arch = "wasm32")]
         let hid_write_task_active = false;
-
-        self.flush_pending_key_override_writes();
-
-        if self.keycode_picker.macros_dirty && !self.keycode_picker.open && !hid_write_task_active {
-            if self.unlock_open || self.vial_unlock_polling {
-                // Defer macro write until unlock flow fully finishes.
-            } else if self.is_vial_locked() {
-                self.unlock_open = true;
-                self.status_msg = crate::i18n::tr_catalog(
-                    self.app_settings.language,
-                    "connection.keyboard_locked_edit_macros",
-                )
-                .into();
-            } else {
-                if let Some(hid) = &self.hid_device {
-                    match hid.get_macro_buffer_size() {
-                        Ok(size) => {
-                            let buf = crate::hid::HidDevice::encode_macros(
-                                &self.keycode_picker.macro_texts,
-                                size,
-                            );
-                            match hid.set_macro_buffer(&buf) {
-                                Ok(()) => {
-                                    self.keycode_picker.macros_dirty = false;
-                                    self.status_msg = crate::i18n::tr_catalog(
-                                        self.app_settings.language,
-                                        "status_messages.macros_saved",
-                                    )
-                                    .into()
-                                }
-                                Err(e) => {
-                                    self.status_msg = crate::i18n::tr_catalog_format(
-                                        self.app_settings.language,
-                                        "status_messages.macro_write_error",
-                                        &[("error", &e.to_string())],
-                                    )
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            self.status_msg = crate::i18n::tr_catalog_format(
-                                self.app_settings.language,
-                                "status_messages.macro_write_error",
-                                &[("error", &e.to_string())],
-                            )
-                        }
-                    }
-                } else {
-                    self.status_msg = crate::i18n::tr_catalog_format(
-                        self.app_settings.language,
-                        "status_messages.macro_write_error",
-                        &[("error", "device handle is not available")],
-                    )
-                }
-            }
-        }
 
         if self.combo_term_dirty
             && !self.keycode_picker.open
@@ -1797,12 +1748,9 @@ impl eframe::App for EntropyApp {
                     let Some(td) = self.keycode_picker.tap_dance_entries.get(i).cloned() else {
                         continue;
                     };
-                    match hid.set_tap_dance(
+                    match hid.set_tap_dance_bindings(
                         i as u8,
-                        td.on_tap,
-                        td.on_hold,
-                        td.on_double_tap,
-                        td.on_tap_hold,
+                        [td.on_tap, td.on_hold, td.on_double_tap, td.on_tap_hold],
                         td.tapping_term,
                     ) {
                         Ok(()) => {

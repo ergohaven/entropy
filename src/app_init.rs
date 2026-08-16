@@ -105,6 +105,8 @@ impl EntropyApp {
             windows_hwnd: None,
             #[cfg(target_os = "windows")]
             windows_window_hidden_to_tray: false,
+            #[cfg(target_os = "windows")]
+            windows_start_hidden_to_tray_pending: false,
             #[cfg(target_os = "macos")]
             macos_ns_window: None,
             #[cfg(target_os = "macos")]
@@ -121,6 +123,7 @@ impl EntropyApp {
             main_menu_tab: MainMenuTab::Keyboard,
             combo_entries: vec![],
             combo_synced_entries: vec![],
+            supports_rmk_combo_layers: false,
             combo_names: vec![],
             combo_colors: vec![],
             selected_combo: 0,
@@ -198,6 +201,7 @@ impl EntropyApp {
             device_display_names: std::collections::HashMap::new(),
             device_about_info: None,
             update_check: start_update_check(),
+            firmware_update_check: FirmwareUpdateCheckState::Unsupported,
             tour_state: TourState::default(),
             tour_target_rects: Vec::new(),
             unlock_open: false,

@@ -6,12 +6,6 @@ enum EncoderVisibilitySide {
     Right,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum EncoderVisibilitySwitchSemantics {
-    Show,
-    Hide,
-}
-
 #[derive(Clone, Copy)]
 struct EncoderVisibilityRowContext {
     content_width: f32,
@@ -34,15 +28,7 @@ fn encoder_visibility_copy(
     language: crate::i18n::Language,
     encoder_idx: usize,
     layout_option: Option<&LayoutOption>,
-    semantics: EncoderVisibilitySwitchSemantics,
 ) -> (String, String) {
-    if semantics == EncoderVisibilitySwitchSemantics::Hide {
-        return (
-            crate::i18n::tr_catalog(language, "encoder_settings.hide").to_owned(),
-            crate::i18n::tr_catalog(language, "encoder_settings.hide_tooltip").to_owned(),
-        );
-    }
-
     let (label_key, tooltip_key) = match layout_option.and_then(encoder_visibility_side) {
         Some(EncoderVisibilitySide::Left) => (
             "encoder_settings.left_encoder",
@@ -69,7 +55,19 @@ impl EntropyApp {
         &self,
         layout: &KeyboardLayout,
     ) -> bool {
-        layout.encoder_count() > 0 && !self.module_settings_include_encoder_visibility(layout)
+        layout.encoder_count() > 0 && layout_uses_combined_encoder_press(layout)
+    }
+
+    pub(super) fn encoder_visibility_allows(
+        layout: &KeyboardLayout,
+        encoder_idx: u8,
+        visibility: &[bool],
+    ) -> bool {
+        !layout_uses_combined_encoder_press(layout)
+            || visibility
+                .get(encoder_idx as usize)
+                .copied()
+                .unwrap_or(true)
     }
 
     fn encoder_visibility_entries(layout: &KeyboardLayout) -> Vec<(usize, Option<usize>)> {
@@ -199,7 +197,6 @@ impl EntropyApp {
         row: EncoderVisibilityRowContext,
         encoder_idx: usize,
         option_idx: Option<usize>,
-        semantics: EncoderVisibilitySwitchSemantics,
     ) {
         if self.encoder_visibility.len() <= encoder_idx {
             self.encoder_visibility.resize(encoder_idx + 1, true);
@@ -212,12 +209,8 @@ impl EntropyApp {
             self.app_settings.language,
             encoder_idx,
             layout_option.as_ref(),
-            semantics,
         );
-        let mut switch_enabled = match semantics {
-            EncoderVisibilitySwitchSemantics::Show => self.encoder_visibility[encoder_idx],
-            EncoderVisibilitySwitchSemantics::Hide => !self.encoder_visibility[encoder_idx],
-        };
+        let mut switch_enabled = self.encoder_visibility[encoder_idx];
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
             row.content_width,
@@ -229,45 +222,14 @@ impl EntropyApp {
             |ui| {
                 let resp = crate::ui_style::settings_switch_sized_stable(
                     ui,
-                    (
-                        "encoder_visibility",
-                        encoder_idx,
-                        semantics == EncoderVisibilitySwitchSemantics::Hide,
-                    ),
+                    ("encoder_visibility", encoder_idx),
                     &mut switch_enabled,
                     metrics.size(46.0, 24.0),
                 );
                 if resp.changed() {
-                    let visible = match semantics {
-                        EncoderVisibilitySwitchSemantics::Show => switch_enabled,
-                        EncoderVisibilitySwitchSemantics::Hide => !switch_enabled,
-                    };
-                    self.set_encoder_visibility(encoder_idx, option_idx, visible);
+                    self.set_encoder_visibility(encoder_idx, option_idx, switch_enabled);
                 }
             },
-        );
-    }
-
-    pub(super) fn draw_module_encoder_visibility_setting_row(
-        &mut self,
-        ui: &mut egui::Ui,
-        content_width: f32,
-        row_height: f32,
-        suppress_tooltips: bool,
-        encoder_idx: usize,
-        option_idx: usize,
-    ) {
-        let row = EncoderVisibilityRowContext {
-            content_width,
-            height: row_height,
-            suppress_tooltips,
-        };
-        self.draw_encoder_visibility_setting_row(
-            ui,
-            row,
-            encoder_idx,
-            Some(option_idx),
-            EncoderVisibilitySwitchSemantics::Hide,
         );
     }
 
@@ -336,7 +298,6 @@ impl EntropyApp {
                                 row,
                                 encoder_idx,
                                 option_idx,
-                                EncoderVisibilitySwitchSemantics::Show,
                             );
                         }
                     },
@@ -417,16 +378,16 @@ mod tests {
     }
 
     #[test]
-    fn hide_switch_uses_action_copy() {
-        assert_eq!(
-            encoder_visibility_copy(
-                crate::i18n::Language::Russian,
-                0,
-                None,
-                EncoderVisibilitySwitchSemantics::Hide,
-            )
-            .0,
-            "Скрыть"
-        );
+    fn manual_encoder_visibility_is_limited_to_k03_and_imperial44() {
+        for name in ["K:03", "Ergohaven K:03", "Imperial44"] {
+            let mut layout = layout_with_encoder_hide_option();
+            layout.name = name.to_owned();
+
+            assert!(EntropyApp::encoder_visibility_allows(&layout, 0, &[true]));
+            assert!(!EntropyApp::encoder_visibility_allows(&layout, 0, &[false]));
+        }
+
+        let layout = layout_with_encoder_hide_option();
+        assert!(EntropyApp::encoder_visibility_allows(&layout, 0, &[false]));
     }
 }

@@ -5,6 +5,34 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.10 - Public Beta
+
+### Fixes
+
+- Kept Windows automatic startup hidden in the system tray after eframe's first-frame window reveal
+
+## v0.3.9 - Public Beta
+
+### Main Features
+
+- Added firmware-native Universal Symbols and Russian letters to Combo outputs and all Tap Dance actions on compatible RMK firmware, with lossless `.entlayout` import and export
+- Added per-combo activation layers with `All layers` and individual layer choices on compatible RMK firmware
+- Added automatic firmware update checks in About Device with exact package downloads for all 14 supported Ergohaven RMK profiles
+- Restored F13–F24 as regular assignable keys in the main and secondary pickers
+
+### Improvements
+
+- Added direct Windows startup in the system tray without creating a taskbar window
+- Made K:04 encoder visibility follow the selected module and kept its three actions anchored to the replaced matrix key
+- Removed the manual device-data refresh action; firmware checks and device loading now update automatically
+- Removed the unsupported deep-sleep control and kept macro writes asynchronous and change-aware
+
+### Fixes
+
+- Prevented failed macro snapshots from retrying indefinitely or rewriting unchanged firmware buffers
+- Kept K:04 encoder placement consistent in the editor, indicator, and PNG, SVG, and PDF exports
+- Excluded unsupported standalone trackball firmware from RMK update discovery
+
 ## v0.3.4 - Public Beta
 
 ### Main Features

@@ -1,8 +1,9 @@
 /// Keycode picker modal for Vial/QMK keycodes.
 use crate::app::MacroExtKeycodesDisabledReason;
 use crate::keycode::{
-    gui_label, gui_mod_name, key_label_font_sizes, keycode_label_with_names_and_layout,
-    keycode_tooltip, modifier_label_from_bits, KeyLegendLayout, KeycodeCategory, KEYCODES,
+    gui_label, gui_mod_name, is_extended_function_key, key_label_font_sizes,
+    keycode_label_with_names_and_layout, keycode_tooltip, modifier_label_from_bits,
+    KeyLegendLayout, KeycodeCategory, KEYCODES,
 };
 use crate::popup_state::{PopupKey, PopupState};
 use egui::{Color32, Key, RichText, Vec2};
@@ -84,10 +85,10 @@ fn picker_ok_label(language: crate::i18n::Language) -> &'static str {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TapDanceEntry {
-    pub on_tap: u16,
-    pub on_hold: u16,
-    pub on_double_tap: u16,
-    pub on_tap_hold: u16,
+    pub on_tap: crate::keyboard::KeyBinding,
+    pub on_hold: crate::keyboard::KeyBinding,
+    pub on_double_tap: crate::keyboard::KeyBinding,
+    pub on_tap_hold: crate::keyboard::KeyBinding,
     pub tapping_term: u16,
 }
 
@@ -140,6 +141,8 @@ pub struct KeycodePicker {
     pub supports_rmk_native_key_actions: bool,
     pub supports_universal_symbols: bool,
     pub supports_universal_russian_letters: bool,
+    pub supports_rmk_native_combo_output: bool,
+    pub supports_rmk_native_tap_dance_actions: bool,
     pub rmk_native_key_actions_allowed_for_target: bool,
     pub macro_ext_keycodes_disabled_reason: Option<MacroExtKeycodesDisabledReason>,
     pub layer_names: Vec<String>,
@@ -177,6 +180,11 @@ pub struct KeycodePicker {
     pub macro_actions: Vec<Vec<MacroAction>>,
     /// Flag: macro texts changed, need to write to device
     pub macros_dirty: bool,
+    /// Revision of the macro snapshot currently represented by `macro_texts`.
+    pub macro_edit_revision: u64,
+    /// Last revision attempted by the HID worker. A failed revision is not
+    /// retried until another edit creates a new snapshot.
+    pub macro_attempted_revision: Option<u64>,
     /// Undo stack for macro editor: (macro_idx, previous_actions)
     macro_undo_stack: Vec<(usize, Vec<MacroAction>)>,
     /// Macro key picker: (macro_idx, action_idx) being edited
@@ -195,6 +203,63 @@ fn tr_picker(language: crate::i18n::Language, key: &'static str) -> &'static str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn macro_picker(selected: u8) -> KeycodePicker {
+        KeycodePicker {
+            selected_tab: KeycodeTab::Macro,
+            macro_count: 32,
+            macro_inline_selected: Some(selected),
+            macro_texts: vec![Vec::new(); 32],
+            macro_actions: vec![Vec::new(); 32],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn assigning_unchanged_macro_does_not_rewrite_macro_buffer() {
+        let mut picker = macro_picker(4);
+
+        picker.finalize_vial_special_tab_close();
+
+        assert_eq!(
+            picker.result.map(|binding| binding.vial_keycode()),
+            Some(0x7704)
+        );
+        assert!(!picker.macros_dirty);
+    }
+
+    #[test]
+    fn assigning_edited_macro_keeps_macro_buffer_dirty() {
+        let mut picker = macro_picker(4);
+        picker.macro_actions[4].push(MacroAction::Tap(0x0006));
+        assert!(picker.encode_macro(4));
+        picker.mark_macros_dirty();
+
+        picker.finalize_vial_special_tab_close();
+
+        assert_eq!(
+            picker.result.map(|binding| binding.vial_keycode()),
+            Some(0x7704)
+        );
+        assert!(picker.macros_dirty);
+        assert_eq!(picker.macro_texts[4], [0x01, 0x01, 0x06]);
+    }
+
+    #[test]
+    fn assigning_macro_never_reserializes_legacy_contents() {
+        let mut picker = macro_picker(4);
+        picker.macro_texts[4] = vec![0xAA, 0xBB];
+        picker.macro_actions[4] = vec![MacroAction::Text("different".to_owned())];
+
+        picker.finalize_vial_special_tab_close();
+
+        assert_eq!(
+            picker.result.map(|binding| binding.vial_keycode()),
+            Some(0x7704)
+        );
+        assert_eq!(picker.macro_texts[4], [0xAA, 0xBB]);
+        assert!(!picker.macros_dirty);
+    }
 
     fn collect_text(shape: &egui::Shape, text: &mut Vec<String>) {
         match shape {
@@ -505,6 +570,48 @@ fn show_universal_symbol_section(
     picked
 }
 
+fn show_universal_russian_letter_section(
+    ui: &mut egui::Ui,
+    language: crate::i18n::Language,
+) -> Option<crate::keyboard::KeyBinding> {
+    let mut picked = None;
+    ui.add_space(crate::ui_style::modal_space_sm());
+    ui.label(
+        RichText::new(crate::i18n::tr_catalog(
+            language,
+            "key_picker_text.international",
+        ))
+        .size(11.0)
+        .color(Color32::from_gray(150)),
+    );
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        for letter in crate::universal_symbols::RUSSIAN_LETTERS {
+            let binding = crate::universal_symbols::binding(letter.user_id);
+            let label = crate::universal_symbols::label_for_user_id(letter.user_id)
+                .expect("universal Russian letter should have a display label");
+            let resp = ui
+                .add_sized(
+                    KeycodePicker::picker_key_size(ui.ctx()),
+                    egui::Button::new(""),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            KeycodePicker::paint_compact_picker_label(ui, &resp, &label);
+            if resp.clicked() {
+                picked = Some(binding);
+            }
+            resp.on_hover_text(crate::i18n::tr_text(
+                language,
+                &binding
+                    .rmk_action()
+                    .and_then(crate::universal_symbols::tooltip)
+                    .unwrap_or_default(),
+            ));
+        }
+    });
+    picked
+}
+
 fn picker_tab_label(language: crate::i18n::Language, tab: KeycodeTab) -> &'static str {
     tr_picker(language, tab.i18n_key())
 }
@@ -665,6 +772,8 @@ impl Default for KeycodePicker {
             supports_rmk_native_key_actions: false,
             supports_universal_symbols: false,
             supports_universal_russian_letters: false,
+            supports_rmk_native_combo_output: false,
+            supports_rmk_native_tap_dance_actions: false,
             rmk_native_key_actions_allowed_for_target: false,
             macro_ext_keycodes_disabled_reason: None,
             layer_names: (0..16).map(|i| i.to_string()).collect(),
@@ -694,6 +803,8 @@ impl Default for KeycodePicker {
             macro_undo_stack: Vec::new(),
             macro_key_pick: None,
             macros_dirty: false,
+            macro_edit_revision: 0,
+            macro_attempted_revision: None,
             popup_state: PopupState::default(),
             language: crate::i18n::default_language(),
             key_legend_layout: KeyLegendLayout::default(),
@@ -704,6 +815,17 @@ impl Default for KeycodePicker {
 }
 
 impl KeycodePicker {
+    pub(crate) fn mark_macros_dirty(&mut self) {
+        self.macros_dirty = true;
+        self.macro_edit_revision = self.macro_edit_revision.wrapping_add(1);
+        self.macro_attempted_revision = None;
+    }
+
+    pub(crate) fn mark_macros_clean(&mut self) {
+        self.macros_dirty = false;
+        self.macro_attempted_revision = None;
+    }
+
     fn universal_symbols_available(&self) -> bool {
         self.supports_universal_symbols
             && self.supports_rmk_native_key_actions
@@ -753,7 +875,7 @@ impl KeycodePicker {
         }
         if changed {
             self.encode_macro(macro_idx);
-            self.macros_dirty = true;
+            self.mark_macros_dirty();
         }
         self.macro_key_pick = None;
     }
@@ -864,9 +986,7 @@ impl KeycodePicker {
         if self.selected_tab == KeycodeTab::Macro {
             if let Some(raw_n) = self.macro_inline_selected {
                 if (raw_n as usize) < self.macro_count {
-                    self.encode_macro(raw_n as usize);
                     self.result = Some((0x7700 + raw_n as u16).into());
-                    self.macros_dirty = true;
                 }
             }
         }

@@ -212,6 +212,7 @@ pub(crate) enum TestHidFault {
     Disconnect,
     Timeout,
     WorkerPanic,
+    IgnoreQmkSettingSet,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -828,11 +829,22 @@ impl HidDevice {
                         TestHidFault::Disconnect => bail!("HID device disconnected"),
                         TestHidFault::Timeout => bail!("HID timeout — device did not respond"),
                         TestHidFault::WorkerPanic => panic!("test HID worker stopped"),
+                        TestHidFault::IgnoreQmkSettingSet => {
+                            if request[0] != CMD_VIA_VIAL_PREFIX
+                                || request[1] != CMD_VIAL_QMK_SETTINGS_SET
+                            {
+                                bail!("test fault expected a QMK Settings SET request");
+                            }
+                            return Ok([0; MSG_LEN]);
+                        }
                     }
                 }
 
                 let mut response = [0; MSG_LEN];
                 match (request[0], request[1], request[2]) {
+                    (CMD_VIA_MACRO_GET_BUFFER_SIZE, _, _) => {
+                        response[1..3].copy_from_slice(&64u16.to_be_bytes());
+                    }
                     (CMD_VIA_VIAL_PREFIX, CMD_VIAL_DYNAMIC_ENTRY_OP, DYNAMIC_VIAL_COMBO_SET) => {
                         let mut keys = [0; 4];
                         for (index, key) in keys.iter_mut().enumerate() {
@@ -1498,8 +1510,10 @@ fn response_matches_command(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
             command.len() >= 4 && resp[..4] == command[..4]
         }
         CMD_VIA_MACRO_GET_COUNT | CMD_VIA_MACRO_GET_BUFFER_SIZE => resp[0] == cmd,
-        CMD_VIA_CUSTOM_GET_VALUE if command.get(1) == Some(&ERGOHAVEN_CUSTOM_NAMESPACE) => {
-            crate::rmk_native::matches_rmk_native_get_response(command, resp).unwrap_or_else(|| {
+        CMD_VIA_CUSTOM_GET_VALUE | CMD_VIA_CUSTOM_SET_VALUE
+            if command.get(1) == Some(&ERGOHAVEN_CUSTOM_NAMESPACE) =>
+        {
+            crate::rmk_native::matches_rmk_native_response(command, resp).unwrap_or_else(|| {
                 command.len() >= 3 && resp[0] == cmd && resp[1..3] == command[1..3]
             })
         }
@@ -2303,6 +2317,22 @@ mod tests {
         let mut stale_response = command;
         stale_response[4] = 0;
         stale_response[5..7].copy_from_slice(&58u16.to_le_bytes());
+
+        assert!(!response_matches_command(&command, &stale_response));
+    }
+
+    #[test]
+    fn native_dynamic_action_scan_rejects_a_stale_flat_index() {
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_CUSTOM_GET_VALUE;
+        command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
+        command[2] = 0x06;
+        command[3] = 0x01;
+        command[4..6].copy_from_slice(&17u16.to_le_bytes());
+
+        let mut stale_response = command;
+        stale_response[4] = 0;
+        stale_response[5..7].copy_from_slice(&16u16.to_le_bytes());
 
         assert!(!response_matches_command(&command, &stale_response));
     }

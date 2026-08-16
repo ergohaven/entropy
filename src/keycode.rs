@@ -207,6 +207,10 @@ pub enum KeycodeCategory {
     Special,
 }
 
+pub const fn is_extended_function_key(value: u16) -> bool {
+    matches!(value, 0x0068..=0x0073)
+}
+
 pub const KEYCODES: &[Keycode] = &[
     // ── Special ──────────────────────────────────────────────────────────────
     Keycode { value: 0x0000, name: "KC_NO",     label: "✕",   category: KeycodeCategory::Special },

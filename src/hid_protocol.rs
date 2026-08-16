@@ -9,6 +9,7 @@ pub(super) const CMD_VIA_GET_KEYCODE: u8 = 0x04;
 pub(super) const CMD_VIA_SET_KEYCODE: u8 = 0x05;
 pub(super) const CMD_VIA_LIGHTING_SET_VALUE: u8 = 0x07;
 pub(super) const CMD_VIA_LIGHTING_GET_VALUE: u8 = 0x08;
+pub(super) const CMD_VIA_CUSTOM_SET_VALUE: u8 = 0x07;
 pub(super) const CMD_VIA_CUSTOM_GET_VALUE: u8 = 0x08;
 pub(super) const CMD_VIA_LIGHTING_SAVE: u8 = 0x09;
 pub(super) const CMD_VIA_GET_LAYER_COUNT: u8 = 0x11;

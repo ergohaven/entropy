@@ -66,6 +66,18 @@ pub fn egui_key_to_qmk(key: Key, mods: egui::Modifiers) -> Option<u16> {
         Key::F10 => 0x43,
         Key::F11 => 0x44,
         Key::F12 => 0x45,
+        Key::F13 => 0x68,
+        Key::F14 => 0x69,
+        Key::F15 => 0x6A,
+        Key::F16 => 0x6B,
+        Key::F17 => 0x6C,
+        Key::F18 => 0x6D,
+        Key::F19 => 0x6E,
+        Key::F20 => 0x6F,
+        Key::F21 => 0x70,
+        Key::F22 => 0x71,
+        Key::F23 => 0x72,
+        Key::F24 => 0x73,
         Key::Insert => 0x49,
         Key::Home => 0x4A,
         Key::PageUp => 0x4B,
@@ -95,5 +107,35 @@ pub fn egui_key_to_qmk(key: Key, mods: egui::Modifiers) -> Option<u16> {
         Some(mod_mask | base)
     } else {
         Some(base)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extended_function_keys_map_to_standard_hid_usages() {
+        let keys = [
+            Key::F13,
+            Key::F14,
+            Key::F15,
+            Key::F16,
+            Key::F17,
+            Key::F18,
+            Key::F19,
+            Key::F20,
+            Key::F21,
+            Key::F22,
+            Key::F23,
+            Key::F24,
+        ];
+
+        for (offset, key) in keys.into_iter().enumerate() {
+            assert_eq!(
+                egui_key_to_qmk(key, egui::Modifiers::NONE),
+                Some(0x0068 + offset as u16)
+            );
+        }
     }
 }
