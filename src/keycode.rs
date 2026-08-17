@@ -1019,7 +1019,8 @@ fn printable_output_for_hid(keycode: u16, layout: KeyOutputLayout) -> Option<(ch
     match (keycode, layout) {
         // ISO printable keys are present in the catalog but do not occupy the
         // contiguous ANSI punctuation range below.
-        (0x0032, _) => typed('#', '~'),
+        (0x0032, KeyOutputLayout::English) => typed('#', '~'),
+        (0x0032, KeyOutputLayout::Russian) => typed('\\', '/'),
         (0x0064, KeyOutputLayout::English) => typed('\\', '|'),
         (0x0064, KeyOutputLayout::Russian) => typed('\\', '/'),
 
@@ -1488,7 +1489,7 @@ mod tests {
         );
         assert_eq!(
             printable_output(0x0032, KeyOutputLayout::Russian),
-            Some(('#', Some('~')))
+            Some(('\\', Some('/')))
         );
         assert_eq!(
             printable_output(0x0064, KeyOutputLayout::English),
