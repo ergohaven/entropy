@@ -162,12 +162,6 @@ impl EntropyApp {
                         if typing_trainer_accepts_char(ch) && !self.typing_trainer.is_finished() {
                             typed_this_frame = true;
                         }
-                        if self.typing_trainer.is_symbol_training() {
-                            if let Some(expected) = self.typing_trainer.expected_char() {
-                                self.typing_trainer
-                                    .record_symbol_attempt(expected, expected != ch);
-                            }
-                        }
                         self.typing_trainer.type_char(ch, now);
                     }
                 }

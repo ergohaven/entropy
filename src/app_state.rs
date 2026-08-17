@@ -3147,6 +3147,15 @@ impl TypingTrainerState {
             self.started_at = Some(now);
         }
         if self.typed_chars.len() < self.target_text.chars().count() {
+            // Adaptive weights may only count keystrokes the run actually
+            // consumes: recording ahead of the guards above would let rejected
+            // characters and post-timer input inflate one symbol's error rate
+            // and permanently over-sample it.
+            if self.is_symbol_training() {
+                if let Some(expected) = self.expected_char() {
+                    self.record_symbol_attempt(expected, expected != ch);
+                }
+            }
             self.typed_chars.push(ch);
         }
         if self.typed_chars.len() >= self.target_text.chars().count() {
@@ -3578,6 +3587,31 @@ mod typing_trainer_tests {
         assert!(state.symbol_stats_unsaved());
 
         state.mark_symbol_stats_saved();
+        assert!(!state.symbol_stats_unsaved());
+    }
+
+    #[test]
+    fn discarded_keystrokes_stay_out_of_the_adaptive_statistics() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            symbols_enabled: true,
+            ..TypingTrainerSettings::default()
+        });
+        state.set_symbol_pool(vec!['a', '!']);
+        let now = std::time::Instant::now();
+        let expected = state.expected_char().expect("symbol run has a target text");
+
+        // A character the trainer refuses never advances the run.
+        state.type_char('€', now);
+        assert!(!state.symbol_stats_unsaved());
+        assert!(state.typed_chars.is_empty());
+
+        state.type_char(expected, now);
+        assert!(state.symbol_stats_unsaved());
+        state.mark_symbol_stats_saved();
+
+        // Input landing after the run ended has no expected character left.
+        state.finish(now);
+        state.type_char('a', now);
         assert!(!state.symbol_stats_unsaved());
     }
 
