@@ -3393,7 +3393,10 @@ pub(crate) fn typing_trainer_accepts_char(ch: char) -> bool {
     ch == ' '
         || ch.is_alphanumeric()
         || ch.is_ascii_punctuation()
-        || matches!(ch, '«' | '»' | '—' | '–' | '…')
+        // Typographic characters of the word lists plus the non-ASCII symbols a
+        // layout can put into the symbol pool. Anything the pool may contain has
+        // to be accepted here, otherwise the exercise stalls on that character.
+        || matches!(ch, '«' | '»' | '—' | '–' | '…' | '№')
 }
 
 pub(crate) fn typing_trainer_stats(
@@ -3576,6 +3579,11 @@ mod typing_trainer_tests {
 
         state.mark_symbol_stats_saved();
         assert!(!state.symbol_stats_unsaved());
+    }
+
+    #[test]
+    fn typing_trainer_accepts_the_number_sign_of_the_russian_layout() {
+        assert!(typing_trainer_accepts_char('№'));
     }
 
     #[test]

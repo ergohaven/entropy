@@ -258,6 +258,34 @@ mod tests {
     }
 
     #[test]
+    fn every_symbol_a_layout_can_produce_is_accepted_by_the_trainer() {
+        let mut bindings: Vec<KeyBinding> = (0x0000_u16..=0x00ff).map(Into::into).collect();
+        bindings.extend((0..crate::universal_symbols::SYMBOLS.len()).map(|offset| {
+            crate::universal_symbols::binding(
+                crate::universal_symbols::USER_SYMBOL_START + offset as u8,
+            )
+        }));
+        bindings.extend(
+            (0..crate::universal_symbols::RUSSIAN_LETTERS.len()).map(|offset| {
+                crate::universal_symbols::binding(
+                    crate::universal_symbols::USER_RUSSIAN_LETTER_START + offset as u8,
+                )
+            }),
+        );
+        let layout = test_layout(vec![bindings]);
+
+        for key_output_layout in [KeyOutputLayout::English, KeyOutputLayout::Russian] {
+            for symbol in printable_symbols_from_layout(&layout, key_output_layout) {
+                assert!(
+                    crate::app::app_state::typing_trainer_accepts_char(symbol),
+                    "{symbol:?} ({key_output_layout:?}) can be drawn into the pool but the \
+                     trainer refuses it as input"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn weighted_symbol_text_prioritizes_characters_with_more_errors() {
         let mut stats = BTreeMap::new();
         for _ in 0..10 {
