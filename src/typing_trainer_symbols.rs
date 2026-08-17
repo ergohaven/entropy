@@ -62,13 +62,18 @@ pub(crate) fn weighted_symbol_text(
         text.push(symbols[index]);
     }
 
-    if symbols.len() > 1
-        && text
-            .chars()
-            .all(|symbol| symbol == text.chars().next().unwrap())
-    {
-        text.pop();
-        text.push(symbols[1]);
+    // A run of one repeated character trains nothing, so break it up. The
+    // replacement has to differ from the repeated character itself — swapping in
+    // a fixed pool entry leaves the text uniform whenever that entry is the one
+    // that repeated.
+    if count > 1 && symbols.len() > 1 {
+        let repeated = text.chars().next().expect("count is nonzero");
+        if text.chars().all(|symbol| symbol == repeated) {
+            if let Some(other) = symbols.iter().find(|symbol| **symbol != repeated) {
+                text.pop();
+                text.push(*other);
+            }
+        }
     }
 
     text
@@ -255,6 +260,19 @@ mod tests {
         let text = weighted_symbol_text(&['a', 'b', 'c'], 24, &BTreeMap::new(), 9);
 
         assert!(text.chars().collect::<BTreeSet<_>>().len() > 1);
+    }
+
+    #[test]
+    fn weighted_symbol_text_breaks_up_a_run_of_the_second_pool_symbol() {
+        // This seed makes the weighted draw produce `bbb`, i.e. a uniform text
+        // whose repeated character is the pool entry the fallback substitutes.
+        let text = weighted_symbol_text(&['a', 'b'], 3, &BTreeMap::new(), 22);
+
+        assert_eq!(text.chars().count(), 3);
+        assert!(
+            text.chars().collect::<BTreeSet<_>>().len() > 1,
+            "uniform text was not broken up: {text}"
+        );
     }
 
     #[test]
