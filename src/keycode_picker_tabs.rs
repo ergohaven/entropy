@@ -86,13 +86,29 @@ impl KeycodePicker {
     }
 
     pub(super) fn has_visible_custom_keycodes(&self) -> bool {
-        self.custom_keycodes
-            .iter()
-            .any(|(_, label, _, _)| !label.trim().is_empty())
+        self.custom_keycodes.iter().any(|(name, label, title, _)| {
+            !label.trim().is_empty() && !is_bluetooth_custom_keycode(name, label, title)
+        })
     }
 
-    pub(super) fn show_custom_keycode_choice_section(&self, ui: &mut egui::Ui) -> Option<u16> {
-        if !self.has_visible_custom_keycodes() {
+    pub(super) fn has_visible_bluetooth_keycodes(&self) -> bool {
+        self.custom_keycodes.iter().any(|(name, label, title, _)| {
+            !label.trim().is_empty() && is_bluetooth_custom_keycode(name, label, title)
+        })
+    }
+
+    fn show_custom_keycode_choice_section_filtered(
+        &self,
+        ui: &mut egui::Ui,
+        section_key: &'static str,
+        bluetooth: bool,
+    ) -> Option<u16> {
+        let visible = if bluetooth {
+            self.has_visible_bluetooth_keycodes()
+        } else {
+            self.has_visible_custom_keycodes()
+        };
+        if !visible {
             return None;
         }
 
@@ -100,17 +116,16 @@ impl KeycodePicker {
         let mut selected = None;
         ui.add_space(2.0);
         ui.label(
-            RichText::new(tr_picker(
-                self.language,
-                "key_picker.section_custom_keycodes",
-            ))
-            .size(11.0)
-            .color(Color32::from_gray(150)),
+            RichText::new(tr_picker(self.language, section_key))
+                .size(11.0)
+                .color(Color32::from_gray(150)),
         );
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
             for (name, label, title, value) in custom_keycodes {
-                if label.trim().is_empty() {
+                if label.trim().is_empty()
+                    || is_bluetooth_custom_keycode(&name, &label, &title) != bluetooth
+                {
                     continue;
                 }
                 let tip = if title.trim().is_empty() {
@@ -131,6 +146,22 @@ impl KeycodePicker {
         ui.add_space(8.0);
 
         selected
+    }
+
+    pub(super) fn show_custom_keycode_choice_section(&self, ui: &mut egui::Ui) -> Option<u16> {
+        self.show_custom_keycode_choice_section_filtered(
+            ui,
+            "key_picker.section_custom_keycodes",
+            false,
+        )
+    }
+
+    pub(super) fn show_bluetooth_keycode_choice_section(&self, ui: &mut egui::Ui) -> Option<u16> {
+        self.show_custom_keycode_choice_section_filtered(
+            ui,
+            "key_picker.section_bluetooth_keycodes",
+            true,
+        )
     }
 
     pub(super) fn show_vial_symbols(&mut self, ui: &mut egui::Ui) {
@@ -212,6 +243,12 @@ impl KeycodePicker {
 
     pub(super) fn show_vial_custom(&mut self, ui: &mut egui::Ui) {
         if let Some(value) = self.show_custom_keycode_choice_section(ui) {
+            self.assign_keycode_value(value);
+        }
+    }
+
+    pub(super) fn show_vial_bluetooth(&mut self, ui: &mut egui::Ui) {
+        if let Some(value) = self.show_bluetooth_keycode_choice_section(ui) {
             self.assign_keycode_value(value);
         }
     }

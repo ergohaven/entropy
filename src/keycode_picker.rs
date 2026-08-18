@@ -369,6 +369,59 @@ mod tests {
     }
 
     #[test]
+    fn bluetooth_classifier_matches_firmware_controls_without_catching_custom_actions() {
+        for (name, label, title) in [
+            ("BT0", "BT0", "Bluetooth Profile 0"),
+            ("BT_NEXT", "BT Next", "Next BT Profile"),
+            ("USB_OUT", "USB Out", "Use USB output"),
+            ("SWITCH", "Switch Output", "Switch USB/BLE output"),
+        ] {
+            assert!(
+                is_bluetooth_custom_keycode(name, label, title),
+                "{name} should be a Bluetooth control"
+            );
+        }
+        assert!(!is_bluetooth_custom_keycode(
+            "EH_SCR",
+            "Scroll mode",
+            "Set pointing devices to scroll mode"
+        ));
+    }
+
+    #[test]
+    fn bluetooth_tab_is_capability_gated_by_device_definition() {
+        let mut picker = KeycodePicker {
+            custom_keycodes: vec![
+                (
+                    "BT0".into(),
+                    "BT0".into(),
+                    "Bluetooth Profile 0".into(),
+                    0x7E00,
+                ),
+                (
+                    "EH_SCR".into(),
+                    "Scroll".into(),
+                    "Scroll mode".into(),
+                    0x7E01,
+                ),
+            ],
+            ..Default::default()
+        };
+
+        let tabs = picker.visible_vial_tabs();
+        assert!(tabs.contains(&KeycodeTab::Bluetooth));
+        assert!(tabs.contains(&KeycodeTab::Custom));
+
+        picker.select_tab_for_keycode(0x7E00);
+        assert_eq!(picker.selected_tab, KeycodeTab::Bluetooth);
+        picker.select_tab_for_keycode(0x7E01);
+        assert_eq!(picker.selected_tab, KeycodeTab::Custom);
+
+        picker.custom_keycodes.clear();
+        assert!(!picker.visible_vial_tabs().contains(&KeycodeTab::Bluetooth));
+    }
+
+    #[test]
     fn rmk_macro_ext_guard_hides_layer_macro_choices_and_explains_why() {
         let picker = KeycodePicker {
             supports_macro_ext_keycodes: false,
@@ -730,6 +783,22 @@ fn picker_modifier_label_from_bits(mods: u16) -> String {
         .replace("Sft", "Shift")
 }
 
+fn is_bluetooth_custom_keycode(name: &str, label: &str, title: &str) -> bool {
+    let name = name.trim().to_ascii_uppercase();
+    let description = format!("{label} {title}").to_ascii_lowercase();
+    let numbered_profile = name
+        .strip_prefix("BT")
+        .is_some_and(|suffix| !suffix.is_empty() && suffix.chars().all(|ch| ch.is_ascii_digit()));
+
+    numbered_profile
+        || name.starts_with("BT_")
+        || name.ends_with("_BT")
+        || matches!(name.as_str(), "USB_OUT" | "AUTO_OUT")
+        || (name == "SWITCH"
+            && description.contains("usb")
+            && (description.contains("bluetooth") || description.contains("ble")))
+}
+
 fn picker_action_label(label: &str) -> String {
     match label {
         "Brightness -" => "Bright\n-".to_string(),
@@ -1057,11 +1126,16 @@ impl KeycodePicker {
     }
 
     pub(crate) fn select_tab_for_keycode(&mut self, value: u16) {
-        let is_custom_keycode = self
+        let custom_keycode = self
             .custom_keycodes
             .iter()
-            .any(|(_, _, _, custom_value)| *custom_value == value);
-        let preferred_tab = KeycodeTab::preferred_for_vial_keycode(value, is_custom_keycode);
+            .find(|(_, _, _, custom_value)| *custom_value == value);
+        let preferred_tab = match custom_keycode {
+            Some((name, label, title, _)) if is_bluetooth_custom_keycode(name, label, title) => {
+                KeycodeTab::Bluetooth
+            }
+            _ => KeycodeTab::preferred_for_vial_keycode(value, custom_keycode.is_some()),
+        };
         self.selected_tab = if self.vial_tab_supported(preferred_tab) {
             preferred_tab
         } else {
@@ -1878,6 +1952,7 @@ impl KeycodePicker {
             KeycodeTab::Rgb => self.supports_rgb,
             KeycodeTab::Macro => self.supports_macro,
             KeycodeTab::TapDance => self.supports_tap_dance,
+            KeycodeTab::Bluetooth => self.has_visible_bluetooth_keycodes(),
             KeycodeTab::Custom => self.has_visible_custom_keycodes(),
             _ => true,
         }
@@ -1967,6 +2042,7 @@ impl KeycodePicker {
             KeycodeTab::Macro => self.show_vial_macros(ui),
             KeycodeTab::TapDance => self.show_vial_tap_dance(ui),
             KeycodeTab::Special => self.show_vial_special(ui),
+            KeycodeTab::Bluetooth => self.show_vial_bluetooth(ui),
             KeycodeTab::Custom => self.show_vial_custom(ui),
             _ => self.show_vial_generic(ui),
         }
