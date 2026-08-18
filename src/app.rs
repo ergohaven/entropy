@@ -161,6 +161,8 @@ use settings_write_queue::SettingsWriteTask;
 mod tap_hold_settings_ui;
 #[path = "ui/text_expander_editor.rs"]
 mod text_expander_editor;
+#[path = "ui/text_expander_emoji.rs"]
+mod text_expander_emoji;
 #[path = "ui/text_expander_runtime.rs"]
 mod text_expander_runtime;
 #[path = "ui/text_expander_settings.rs"]

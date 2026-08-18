@@ -19,10 +19,28 @@ pub fn accent() -> Color32 {
 }
 
 pub fn popup_below_widget<R>(
+    parent_ui: &Ui,
+    popup_id: egui::Id,
+    widget_response: &egui::Response,
+    close_behavior: egui::PopupCloseBehavior,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
+    popup_below_widget_with_width(
+        parent_ui,
+        popup_id,
+        widget_response,
+        close_behavior,
+        widget_response.rect.width(),
+        add_contents,
+    )
+}
+
+pub fn popup_below_widget_with_width<R>(
     _parent_ui: &Ui,
     popup_id: egui::Id,
     widget_response: &egui::Response,
     close_behavior: egui::PopupCloseBehavior,
+    width: f32,
     add_contents: impl FnOnce(&mut Ui) -> R,
 ) -> Option<R> {
     let response = egui::Popup::from_response(widget_response)
@@ -31,7 +49,7 @@ pub fn popup_below_widget<R>(
         .close_behavior(close_behavior)
         .id(popup_id)
         .align(egui::RectAlign::BOTTOM_START)
-        .width(widget_response.rect.width())
+        .width(width)
         .show(|ui| {
             ui.set_min_width(ui.available_width());
             add_contents(ui)

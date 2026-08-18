@@ -998,12 +998,15 @@ impl EntropyApp {
                     let switch_size = metrics.size(34.0, 20.0);
                     let trigger_width = metrics.value(82.0);
                     let delete_size = metrics.size(30.0, field_height);
+                    let emoji_size = metrics.size(30.0, field_height);
                     let gap = metrics.value(8.0);
                     let switch_gap = metrics.value(8.0);
                     let replacement_width = (control_width
                         - switch_size.x
                         - switch_gap
                         - trigger_width
+                        - gap
+                        - emoji_size.x
                         - gap
                         - delete_size.x
                         - gap)
@@ -1024,6 +1027,8 @@ impl EntropyApp {
                         egui::pos2(x, top),
                         egui::vec2(replacement_width, field_height),
                     );
+                    x += replacement_width + gap;
+                    let emoji_rect = egui::Rect::from_min_size(egui::pos2(x, top), emoji_size);
                     let delete_rect = egui::Rect::from_min_size(
                         egui::pos2(control_rect.right() - delete_size.x, top),
                         delete_size,
@@ -1072,12 +1077,13 @@ impl EntropyApp {
                         }
                     }
 
+                    let replacement_id = ui.make_persistent_id(("text_expander_replacement", idx));
                     let mut replacement_resp = None;
                     crate::ui_style::allocate_ui_at_rect(ui, replacement_rect, |ui| {
                         replacement_resp = Some(
                             crate::ui_style::modern_text_field_sized(
                                 ui,
-                                ui.make_persistent_id(("text_expander_replacement", idx)),
+                                replacement_id,
                                 &mut rule.replacement,
                                 replacement_width,
                                 field_height,
@@ -1096,6 +1102,84 @@ impl EntropyApp {
                             changed = true;
                         }
                         if resp.lost_focus() {
+                            should_flush_save = true;
+                        }
+                    }
+
+                    let popup_id = ui.make_persistent_id(("text_expander_emoji_popup", idx));
+                    let mut emoji_resp = None;
+                    crate::ui_style::allocate_ui_at_rect(ui, emoji_rect, |ui| {
+                        emoji_resp = Some(
+                            crate::ui_style::modern_button_with_font(
+                                ui,
+                                "☺",
+                                emoji_size,
+                                metrics.value(18.0),
+                                true,
+                            )
+                            .on_hover_text(crate::i18n::tr_catalog(
+                                lang,
+                                "text_expander.emoji_button_tooltip",
+                            )),
+                        );
+                    });
+                    if let Some(emoji_resp) = emoji_resp {
+                        if emoji_resp.clicked() {
+                            let char_count = rule.replacement.chars().count();
+                            let range = egui::widgets::text_edit::TextEditState::load(
+                                ui.ctx(),
+                                replacement_id,
+                            )
+                            .and_then(|state| state.cursor.char_range())
+                            .map(|range| range.as_sorted_char_range())
+                            .unwrap_or(char_count..char_count);
+                            self.text_expander_emoji_target = Some((idx, range.start, range.end));
+                            if !egui::Popup::is_id_open(ui.ctx(), popup_id) {
+                                self.text_expander_emoji_search.clear();
+                            }
+                            egui::Popup::toggle_id(ui.ctx(), popup_id);
+                        }
+
+                        if let Some(emoji) =
+                            super::text_expander_emoji::show_text_expander_emoji_popup(
+                                ui,
+                                popup_id,
+                                &emoji_resp,
+                                &mut self.text_expander_emoji_search,
+                                &mut self.text_expander_emoji_group,
+                                lang,
+                                metrics.scale,
+                            )
+                        {
+                            let (start, end) = self
+                                .text_expander_emoji_target
+                                .filter(|(rule_idx, _, _)| *rule_idx == idx)
+                                .map(|(_, start, end)| (start, end))
+                                .unwrap_or_else(|| {
+                                    let end = rule.replacement.chars().count();
+                                    (end, end)
+                                });
+                            let cursor = super::text_expander_emoji::insert_emoji_at_char_range(
+                                &mut rule.replacement,
+                                start,
+                                end,
+                                emoji,
+                            );
+                            if let Some(mut state) = egui::widgets::text_edit::TextEditState::load(
+                                ui.ctx(),
+                                replacement_id,
+                            ) {
+                                state
+                                    .cursor
+                                    .set_char_range(Some(egui::text::CCursorRange::one(
+                                        egui::text::CCursor::new(cursor),
+                                    )));
+                                state.store(ui.ctx(), replacement_id);
+                            }
+                            ui.ctx()
+                                .memory_mut(|memory| memory.request_focus(replacement_id));
+                            self.text_expander_emoji_target = None;
+                            changed = true;
                             should_flush_save = true;
                         }
                     }

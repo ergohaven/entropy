@@ -1,7 +1,7 @@
 # Bundled Fonts
 
-Entropy bundles a compact Noto Emoji subset as a fallback for symbols used by the application.
+Entropy bundles Noto Emoji as a fallback for the complete emoji picker and symbols used by the application.
 
-- File: `NotoEmoji-subset.ttf`
+- File: `NotoEmoji-Regular.ttf`
 - Source: https://github.com/googlefonts/noto-emoji
 - License: SIL Open Font License 1.1, copied in `OFL-NotoEmoji.txt`

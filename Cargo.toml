@@ -1,6 +1,6 @@
 [package]
 name = "ergohaven-entropy"
-version = "0.3.13"
+version = "0.3.14"
 edition = "2021"
 description = "Desktop app for configuring Vial-QMK and Vial-RMK programmable keyboards and input devices"
 authors = ["Ergohaven"]
@@ -36,6 +36,7 @@ eframe = { version = "0.34.3", default-features = false, features = ["accesskit"
 egui = "0.34.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+emojis = "0.9"
 log = "0.4"
 env_logger = "0.11"
 flate2 = "1"
