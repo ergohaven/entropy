@@ -2562,6 +2562,8 @@ pub(crate) enum SettingsTab {
     TextExpanderSetup,
     TextExpander,
     TypingTrainer,
+    Macros,
+    TapDance,
     AutoShift,
     Rgb,
     LayerLeds,

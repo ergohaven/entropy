@@ -254,6 +254,7 @@ timeout_field_tooltip = "Таймаут в миллисекундах"
 
 [connection]
 keyboard_locked_edit_macros = "Устройство заблокировано, разблокируйте его для редактирования макросов"
+keyboard_locked_edit_tap_dance = "Устройство заблокировано, разблокируйте его для редактирования Tap Dance"
 waiting_for_keyboard = "Ожидание устройства"
 connect_vial_device = "Подключите Vial-устройство"
 linux_vial_udev_required_title = "Доступ к Vial не настроен"
@@ -898,6 +899,10 @@ unswap_caps_lock_and_escape = "Вернуть Caps Lock и Escape"
 toggle_caps_lock_and_escape_swap = "Переключить обмен Caps Lock и Escape"
 
 [macro_editor]
+title = "Макросы"
+description = "Создание и редактирование макросов, сохранённых в подключённой клавиатуре"
+picker_intro = "Выберите Macro, затем номер слота"
+picker_item = "Macro"
 choose_macro = "Выбрать макрос"
 no_macro_slots_available_on_this_keyboard = "На этом устройстве нет слотов макросов"
 select_a_macro_above_to_edit = "Выберите макрос выше для редактирования"
@@ -934,6 +939,10 @@ plus_delay = "+ Задержка"
 pause_in_milliseconds = "Пауза в миллисекундах"
 
 [tap_dance_editor]
+title = "Tap Dance"
+description = "Создание и редактирование действий Tap Dance, сохранённых в подключённой клавиатуре"
+picker_intro = "Выберите Tap Dance, затем номер слота"
+picker_item = "Tap Dance"
 no_tap_dance_slots_available_on_this_keyboard = "На этом устройстве нет слотов Tap Dance"
 choose_tap_dance = "Выбрать Tap Dance"
 td_name = "Имя TD"

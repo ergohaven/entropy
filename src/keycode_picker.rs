@@ -76,13 +76,6 @@ fn one_shot_modifier_tooltip(mod_name: &str, has_right_side: bool) -> String {
     }
 }
 
-fn picker_ok_label(language: crate::i18n::Language) -> &'static str {
-    match language {
-        crate::i18n::Language::Russian => "Ок",
-        crate::i18n::Language::English => "OK",
-    }
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TapDanceEntry {
     pub on_tap: crate::keyboard::KeyBinding,
@@ -216,47 +209,14 @@ mod tests {
     }
 
     #[test]
-    fn assigning_unchanged_macro_does_not_rewrite_macro_buffer() {
-        let mut picker = macro_picker(4);
-
-        picker.finalize_vial_special_tab_close();
-
-        assert_eq!(
-            picker.result.map(|binding| binding.vial_keycode()),
-            Some(0x7704)
-        );
-        assert!(!picker.macros_dirty);
-    }
-
-    #[test]
-    fn assigning_edited_macro_keeps_macro_buffer_dirty() {
-        let mut picker = macro_picker(4);
-        picker.macro_actions[4].push(MacroAction::Tap(0x0006));
-        assert!(picker.encode_macro(4));
-        picker.mark_macros_dirty();
-
-        picker.finalize_vial_special_tab_close();
-
-        assert_eq!(
-            picker.result.map(|binding| binding.vial_keycode()),
-            Some(0x7704)
-        );
-        assert!(picker.macros_dirty);
-        assert_eq!(picker.macro_texts[4], [0x01, 0x01, 0x06]);
-    }
-
-    #[test]
-    fn assigning_macro_never_reserializes_legacy_contents() {
+    fn closing_macro_picker_does_not_assign_or_rewrite_macro_buffer() {
         let mut picker = macro_picker(4);
         picker.macro_texts[4] = vec![0xAA, 0xBB];
         picker.macro_actions[4] = vec![MacroAction::Text("different".to_owned())];
 
-        picker.finalize_vial_special_tab_close();
+        picker.close_from_backdrop();
 
-        assert_eq!(
-            picker.result.map(|binding| binding.vial_keycode()),
-            Some(0x7704)
-        );
+        assert!(picker.result.is_none());
         assert_eq!(picker.macro_texts[4], [0xAA, 0xBB]);
         assert!(!picker.macros_dirty);
     }
@@ -884,6 +844,13 @@ impl Default for KeycodePicker {
 }
 
 impl KeycodePicker {
+    pub(crate) fn has_open_modal(&self) -> bool {
+        self.open
+            || self.macro_key_pick.is_some()
+            || self.td_key_pick.is_some()
+            || self.td_mod_key_pick.is_some()
+    }
+
     pub(crate) fn mark_macros_dirty(&mut self) {
         self.macros_dirty = true;
         self.macro_edit_revision = self.macro_edit_revision.wrapping_add(1);
@@ -1051,37 +1018,7 @@ impl KeycodePicker {
                         && self.rmk_native_key_actions_allowed_for_target)))
     }
 
-    fn finalize_vial_special_tab_close(&mut self) {
-        if self.selected_tab == KeycodeTab::Macro {
-            if let Some(raw_n) = self.macro_inline_selected {
-                if (raw_n as usize) < self.macro_count {
-                    self.result = Some((0x7700 + raw_n as u16).into());
-                }
-            }
-        }
-        if self.selected_tab == KeycodeTab::TapDance {
-            let td_n = self.tap_dance_editor_open.unwrap_or(0);
-            if (td_n as usize) < self.tap_dance_entries.len() {
-                self.result = Some((0x5700 + td_n as u16).into());
-                self.tap_dance_dirty = true;
-            }
-        }
-    }
-
     pub(crate) fn close_from_backdrop(&mut self) {
-        let full_vial_picker = !self.regular_key_pick
-            && self.regular_mod_key_pick.is_none()
-            && self.vial_quantum_pending_mod.is_none()
-            && self.vial_quantum_pending_mt.is_none()
-            && self.vial_layer_pending.is_none()
-            && self.macro_key_pick.is_none()
-            && self.td_key_pick.is_none()
-            && self.td_mod_key_pick.is_none();
-
-        if full_vial_picker {
-            self.finalize_vial_special_tab_close();
-        }
-
         self.open = false;
         self.regular_key_pick = false;
         self.regular_key_pick_allow_mod_key = false;
@@ -1119,6 +1056,7 @@ impl KeycodePicker {
         self.vial_quantum_pending_mt = None;
         self.vial_layer_pending = None;
         self.rmk_native_key_actions_allowed_for_target = false;
+        self.macro_inline_selected = None;
         self.tap_dance_editor_open = None;
         self.td_key_pick = None;
         self.td_mod_key_pick = None;
@@ -1189,7 +1127,7 @@ impl KeycodePicker {
         self.popup_state
             .begin_frame(PopupKey::TdKeyPickWindow, td_key_pick_open);
 
-        if !self.open {
+        if !self.open && !macro_key_pick_open && !td_key_pick_open {
             return;
         }
 
@@ -1366,7 +1304,6 @@ impl KeycodePicker {
                 self.vial_quantum_pending_mod = None;
                 self.vial_quantum_pending_mt = None;
             } else {
-                self.finalize_vial_special_tab_close();
                 self.open = false;
             }
             return;
@@ -1454,6 +1391,14 @@ impl KeycodePicker {
                     let active = self.selected_tab == *tab;
                     let tab_label = picker_tab_label(self.language, *tab);
                     if picker_tab_button(ui, tab_label, active).clicked() {
+                        if self.selected_tab != *tab {
+                            if *tab == KeycodeTab::Macro {
+                                self.macro_inline_selected = None;
+                            }
+                            if *tab == KeycodeTab::TapDance {
+                                self.tap_dance_editor_open = None;
+                            }
+                        }
                         self.selected_tab = *tab;
                         self.vial_quantum_pending_mod = None;
                         self.vial_quantum_pending_mt = None;
@@ -1512,7 +1457,6 @@ impl KeycodePicker {
         });
 
         if !still_open {
-            self.finalize_vial_special_tab_close();
             self.open = false;
         }
     }

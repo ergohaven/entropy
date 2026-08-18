@@ -289,17 +289,15 @@ impl EntropyApp {
         }
         if (0x7700..=0x77FF).contains(&kc) {
             let macro_n = (kc - 0x7700) as u8;
-            self.open_picker_for_target(key_target, encoder_target);
-            self.keycode_picker.selected_tab = crate::keycode_picker::KeycodeTab::Macro;
             self.keycode_picker.macro_inline_selected = Some(macro_n);
+            self.open_macro_settings_page();
             self.secondary_click_handled = true;
             return;
         }
         if (0x5700..=0x57FF).contains(&kc) {
             let td_n = (kc - 0x5700) as u8;
-            self.open_picker_for_target(key_target, encoder_target);
-            self.keycode_picker.selected_tab = crate::keycode_picker::KeycodeTab::TapDance;
             self.keycode_picker.tap_dance_editor_open = Some(td_n);
+            self.open_tap_dance_settings_page();
             self.secondary_click_handled = true;
             return;
         }

@@ -133,6 +133,8 @@ mod layout_top_tabs;
 mod layout_view;
 #[path = "ui/live_features_settings.rs"]
 mod live_features_settings_ui;
+#[path = "ui/macro_tap_dance_settings.rs"]
+mod macro_tap_dance_settings_ui;
 #[path = "ui/magic_settings.rs"]
 mod magic_settings_ui;
 #[path = "ui/matrix_tester.rs"]

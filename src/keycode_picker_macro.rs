@@ -194,13 +194,82 @@ fn limit_chars(value: &mut String, limit: usize) {
 }
 
 impl KeycodePicker {
-    fn show_macro_editor_contents(
+    fn assign_macro_slot(&mut self, slot: u8) {
+        if (slot as usize) >= self.macro_count {
+            return;
+        }
+        self.result = Some((0x7700 + slot as u16).into());
+        self.macro_inline_selected = Some(slot);
+        self.open = false;
+    }
+
+    fn show_macro_slot_grid(
+        &mut self,
+        ui: &mut egui::Ui,
+        selected_macro: u8,
+        grid_id: &'static str,
+    ) -> Option<u8> {
+        let slot_count = self.macro_count.min(u8::MAX as usize + 1);
+        if slot_count == 0 {
+            return None;
+        }
+
+        let columns = ((ui.available_width() + 4.0) / 52.0)
+            .floor()
+            .clamp(4.0, 16.0) as usize;
+        let mut picked = None;
+        egui::Frame::NONE.show(ui, |ui| {
+            let rows = slot_count.div_ceil(columns);
+            let slot_scroll_height =
+                (rows.min(2) as f32 * 43.0 + 4.0) * responsive_picker_element_scale(ui.ctx());
+            ui.set_max_height(slot_scroll_height);
+            egui::ScrollArea::vertical()
+                .max_height(slot_scroll_height)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    egui::Grid::new(grid_id)
+                        .num_columns(columns)
+                        .spacing([4.0, 4.0])
+                        .show(ui, |ui| {
+                            for i in 0..slot_count {
+                                let i = i as u8;
+                                let is_active = i == selected_macro;
+                                let has_content = self.macro_has_content(i as usize);
+                                let display_name = self.macro_display_name(i as usize);
+                                let description = self.macro_description(i as usize);
+                                let id_text = format!("M{}", i);
+                                let mut resp = picker_slot_button(
+                                    ui,
+                                    &id_text,
+                                    &display_name,
+                                    is_active,
+                                    has_content,
+                                );
+                                if let Some(description) = description {
+                                    resp = resp
+                                        .on_hover_text(format!("{display_name}\n{description}"));
+                                } else if display_name != id_text {
+                                    resp = resp.on_hover_text(display_name.clone());
+                                }
+                                if resp.clicked() {
+                                    self.ensure_macro_meta_len(i as usize);
+                                    picked = Some(i);
+                                }
+                                if (i as usize + 1).is_multiple_of(columns) {
+                                    ui.end_row();
+                                }
+                            }
+                        });
+                });
+        });
+        picked
+    }
+
+    pub(crate) fn show_macro_settings_editor(
         &mut self,
         ui: &mut egui::Ui,
         raw_n: u8,
         grid_id: &'static str,
-        _add_action_id: &'static str,
-        _footer_text: &'static str,
     ) -> u8 {
         let slot_count = self.macro_count.min(u8::MAX as usize + 1);
         let mut selected_macro = if slot_count > 0 && (raw_n as usize) < slot_count {
@@ -236,48 +305,9 @@ impl KeycodePicker {
             );
             ui.add_space(4.0);
         }
-        egui::Frame::NONE.show(ui, |ui| {
-            let slot_scroll_height = 86.0 * responsive_picker_element_scale(ui.ctx());
-            ui.set_max_height(slot_scroll_height);
-            egui::ScrollArea::vertical()
-                .max_height(slot_scroll_height)
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    egui::Grid::new(grid_id)
-                        .num_columns(16)
-                        .spacing([4.0, 4.0])
-                        .show(ui, |ui| {
-                            for i in 0..slot_count {
-                                let i = i as u8;
-                                let is_active = i == selected_macro;
-                                let has_content = self.macro_has_content(i as usize);
-                                let display_name = self.macro_display_name(i as usize);
-                                let description = self.macro_description(i as usize);
-                                let id_text = format!("M{}", i);
-                                let mut resp = picker_slot_button(
-                                    ui,
-                                    &id_text,
-                                    &display_name,
-                                    is_active,
-                                    has_content,
-                                );
-                                if let Some(description) = description {
-                                    resp = resp
-                                        .on_hover_text(format!("{display_name}\n{description}"));
-                                } else if display_name != id_text {
-                                    resp = resp.on_hover_text(display_name.clone());
-                                }
-                                if resp.clicked() {
-                                    self.ensure_macro_meta_len(i as usize);
-                                    selected_macro = i;
-                                }
-                                if (i + 1).is_multiple_of(16) {
-                                    ui.end_row();
-                                }
-                            }
-                        });
-                });
-        });
+        if let Some(picked) = self.show_macro_slot_grid(ui, selected_macro, grid_id) {
+            selected_macro = picked;
+        }
         ui.add_space(crate::ui_style::modal_space_sm());
 
         if selected_macro == 254 {
@@ -768,20 +798,6 @@ impl KeycodePicker {
                     }
                 }
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if picker_button(
-                    ui,
-                    picker_ok_label(self.language),
-                    picker_scaled_size(ui.ctx(), 72.0, 30.0),
-                    true,
-                    false,
-                )
-                .clicked()
-                {
-                    self.result = Some((0x7700 + n as u16).into());
-                    self.open = false;
-                }
-            });
         });
 
         if macro_changed {
@@ -852,21 +868,80 @@ impl KeycodePicker {
     }
 
     pub(super) fn show_vial_macros(&mut self, ui: &mut egui::Ui) {
-        let previous = self.macro_inline_selected.unwrap_or(0);
-        let selected = self.show_macro_editor_contents(
-            ui,
-            previous,
-            "macro_grid_inline",
-            "add_action_inline",
-            "Saved to device when you close the keycode picker",
+        if self.macro_count == 0 {
+            self.macro_inline_selected = None;
+            ui.label(
+                RichText::new(crate::i18n::tr_catalog(
+                    self.language,
+                    "macro_editor.no_macro_slots_available_on_this_keyboard",
+                ))
+                .size(16.0)
+                .color(Color32::from_gray(140)),
+            );
+            return;
+        }
+
+        let Some(selected) = self.macro_inline_selected else {
+            ui.label(
+                RichText::new(crate::i18n::tr_catalog(
+                    self.language,
+                    "macro_editor.picker_intro",
+                ))
+                .size(11.0)
+                .color(Color32::from_gray(150)),
+            );
+            ui.add_space(4.0);
+            if picker_button(
+                ui,
+                crate::i18n::tr_catalog(self.language, "macro_editor.picker_item"),
+                Self::picker_key_size(ui.ctx()),
+                true,
+                false,
+            )
+            .clicked()
+            {
+                self.macro_inline_selected = Some(0);
+            }
+            return;
+        };
+
+        ui.label(
+            RichText::new(crate::i18n::tr_catalog(
+                self.language,
+                "macro_editor.choose_macro",
+            ))
+            .size(11.0)
+            .color(Color32::from_gray(150)),
         );
-        self.macro_inline_selected = Some(selected);
+        ui.add_space(4.0);
+        if let Some(picked) = self.show_macro_slot_grid(ui, selected, "macro_grid_picker") {
+            self.assign_macro_slot(picked);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_slot_pick_assigns_macro_without_marking_contents_dirty() {
+        let mut picker = KeycodePicker {
+            open: true,
+            macro_count: 8,
+            ..Default::default()
+        };
+
+        picker.assign_macro_slot(4);
+
+        assert_eq!(
+            picker.result.map(|binding| binding.vial_keycode()),
+            Some(0x7704)
+        );
+        assert_eq!(picker.macro_inline_selected, Some(4));
+        assert!(!picker.open);
+        assert!(!picker.macros_dirty);
+    }
 
     #[test]
     fn encodes_basic_macro_tap_as_vial_short_action() {

@@ -1242,7 +1242,9 @@ impl eframe::App for EntropyApp {
         }
 
         // Arrow keys Left/Right switch layers (when picker is closed and no text field is focused)
-        if !self.tour_state.active && !self.keycode_picker.open && !ctx.egui_wants_keyboard_input()
+        if !self.tour_state.active
+            && !self.keycode_picker.has_open_modal()
+            && !ctx.egui_wants_keyboard_input()
         {
             let layer_count = self.layer_count;
             ctx.input(|i| {
@@ -1602,7 +1604,7 @@ impl eframe::App for EntropyApp {
         // Keycode picker modal
         self.draw_vial_unlock_overlay(ctx);
 
-        if self.keycode_picker.open {
+        if self.keycode_picker.has_open_modal() {
             let screen_rect = ctx.content_rect();
             egui::Area::new("window_backdrop".into())
                 .order(egui::Order::Middle)

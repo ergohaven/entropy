@@ -254,6 +254,7 @@ timeout_field_tooltip = "Timeout is in milliseconds"
 
 [connection]
 keyboard_locked_edit_macros = "Device is locked, unlock it to edit macros"
+keyboard_locked_edit_tap_dance = "Device is locked, unlock it to edit Tap Dance"
 waiting_for_keyboard = "Waiting for a device"
 connect_vial_device = "Connect a Vial device"
 linux_vial_udev_required_title = "Vial device access is not configured"
@@ -898,6 +899,10 @@ unswap_caps_lock_and_escape = "Unswap Caps Lock and Escape"
 toggle_caps_lock_and_escape_swap = "Toggle Caps Lock and Escape swap"
 
 [macro_editor]
+title = "Macros"
+description = "Create and edit the macro slots stored on the connected keyboard"
+picker_intro = "Choose Macro, then select its slot number"
+picker_item = "Macro"
 choose_macro = "Choose macro"
 no_macro_slots_available_on_this_keyboard = "No macro slots available on this device"
 select_a_macro_above_to_edit = "Select a macro above to edit"
@@ -934,6 +939,10 @@ plus_delay = "+ Delay"
 pause_in_milliseconds = "Pause in milliseconds"
 
 [tap_dance_editor]
+title = "Tap Dance"
+description = "Create and edit Tap Dance actions stored on the connected keyboard"
+picker_intro = "Choose Tap Dance, then select its slot number"
+picker_item = "Tap Dance"
 no_tap_dance_slots_available_on_this_keyboard = "No Tap Dance slots available on this device"
 choose_tap_dance = "Choose tap dance"
 td_name = "TD name"

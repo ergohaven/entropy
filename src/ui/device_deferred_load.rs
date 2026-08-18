@@ -409,6 +409,8 @@ fn settings_tab_deferred_sections(tab: SettingsTab) -> &'static [DeferredLoadSec
             DeferredLoadSection::Combos,
             DeferredLoadSection::BehaviorSettings,
         ],
+        SettingsTab::Macros => &[DeferredLoadSection::Macros],
+        SettingsTab::TapDance => &[DeferredLoadSection::TapDance],
         SettingsTab::AutoShift
         | SettingsTab::Magic
         | SettingsTab::TapHold
