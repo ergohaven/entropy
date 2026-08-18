@@ -180,7 +180,13 @@ fn platform_layout_check() -> FeatureCheck {
 
 #[cfg(target_os = "linux")]
 fn platform_layout_check() -> FeatureCheck {
-    if kde_layout_available() {
+    if entropy_ibus_layout_available() {
+        FeatureCheck {
+            ok: true,
+            label: "Entropy Text Expander / IBus",
+            hint: "Uses the EN/RU layout exposed by the active Entropy input source",
+        }
+    } else if kde_layout_available() {
         FeatureCheck {
             ok: true,
             label: "KDE Plasma / D-Bus",
@@ -222,7 +228,22 @@ fn kde_layout_available() -> bool {
 #[cfg(target_os = "linux")]
 fn gnome_ibus_layout_available() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| GnomeIbusLayoutTracker::new().is_some())
+    *AVAILABLE.get_or_init(|| {
+        if !gnome_desktop_session() {
+            return false;
+        }
+        IbusLayoutTracker::new()
+            .and_then(|mut tracker| tracker.current_engine_state())
+            .and_then(|state| state.layout)
+            .is_some()
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn entropy_ibus_layout_available() -> bool {
+    IbusLayoutTracker::new()
+        .and_then(|mut tracker| tracker.current_engine_state())
+        .is_some_and(|state| state.entropy && state.layout.is_some())
 }
 
 #[cfg(target_os = "macos")]
@@ -908,10 +929,40 @@ mod tests {
             .try_into()
             .unwrap();
 
-        assert_eq!(ibus_engine_layout(&engine), Some("ru"));
         assert_eq!(
-            ibus_engine_layout(&engine).and_then(layout_code_index),
-            Some(1)
+            ibus_engine_state(&engine),
+            Some(IbusEngineState {
+                entropy: false,
+                layout: Some(1),
+            })
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn entropy_ibus_engine_name_recovers_its_base_layout() {
+        let engine: zbus::zvariant::OwnedValue = zbus::zvariant::StructureBuilder::new()
+            .add_field("IBusEngineDesc")
+            .add_field("")
+            .add_field("entropy-universal-symbols-ru")
+            .add_field("Entropy Text Expander RU")
+            .add_field("Text expansion")
+            .add_field("ru")
+            .add_field("GPL")
+            .add_field("Ergohaven")
+            .add_field("input-keyboard")
+            .add_field("default")
+            .build()
+            .unwrap()
+            .try_into()
+            .unwrap();
+
+        assert_eq!(
+            ibus_engine_state(&engine),
+            Some(IbusEngineState {
+                entropy: true,
+                layout: Some(1),
+            })
         );
     }
 
@@ -972,32 +1023,61 @@ mod tests {
 }
 
 #[cfg(target_os = "linux")]
-enum LayoutTracker {
+enum NativeLayoutTracker {
     Kde(KdeLayoutTracker),
-    GnomeIbus(GnomeIbusLayoutTracker),
+    Ibus,
     X11(X11LayoutTracker),
+}
+
+#[cfg(target_os = "linux")]
+struct LayoutTracker {
+    // Entropy Text Expander is an IBus input source even on desktops whose
+    // normal layout tracker is KDE or X11. Keep this connection alongside the
+    // native tracker so switching to the Entropy RU/EN source is noticed while
+    // the bridge is already running.
+    ibus: Option<IbusLayoutTracker>,
+    native: Option<NativeLayoutTracker>,
 }
 
 #[cfg(target_os = "linux")]
 impl LayoutTracker {
     fn new() -> Option<Self> {
-        if let Some(tracker) = KdeLayoutTracker::new() {
-            return Some(Self::Kde(tracker));
-        }
-        if let Some(tracker) = GnomeIbusLayoutTracker::new() {
-            return Some(Self::GnomeIbus(tracker));
-        }
-        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-            return None;
-        }
-        X11LayoutTracker::new().map(Self::X11)
+        let mut ibus = IbusLayoutTracker::new();
+        let native = if let Some(tracker) = KdeLayoutTracker::new() {
+            Some(NativeLayoutTracker::Kde(tracker))
+        } else if gnome_desktop_session()
+            && ibus
+                .as_mut()
+                .and_then(IbusLayoutTracker::current_engine_state)
+                .and_then(|state| state.layout)
+                .is_some()
+        {
+            Some(NativeLayoutTracker::Ibus)
+        } else if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            None
+        } else {
+            X11LayoutTracker::new().map(NativeLayoutTracker::X11)
+        };
+
+        (ibus.is_some() || native.is_some()).then_some(Self { ibus, native })
     }
 
     fn current_layout_index(&mut self) -> Option<u8> {
-        match self {
-            Self::Kde(tracker) => tracker.current_layout_index(),
-            Self::GnomeIbus(tracker) => tracker.current_layout_index(),
-            Self::X11(tracker) => tracker.current_layout_index(),
+        let ibus_state = self
+            .ibus
+            .as_mut()
+            .and_then(IbusLayoutTracker::current_engine_state);
+        if let Some(layout) = ibus_state
+            .filter(|state| state.entropy)
+            .and_then(|state| state.layout)
+        {
+            return Some(layout);
+        }
+
+        match self.native.as_mut()? {
+            NativeLayoutTracker::Kde(tracker) => tracker.current_layout_index(),
+            NativeLayoutTracker::Ibus => ibus_state.and_then(|state| state.layout),
+            NativeLayoutTracker::X11(tracker) => tracker.current_layout_index(),
         }
     }
 }
@@ -1056,26 +1136,21 @@ fn kde_layout_code_index(layout: u32, layout_codes: &[String]) -> Option<u8> {
 }
 
 #[cfg(target_os = "linux")]
-struct GnomeIbusLayoutTracker {
+struct IbusLayoutTracker {
     connection: zbus::blocking::Connection,
 }
 
 #[cfg(target_os = "linux")]
-impl GnomeIbusLayoutTracker {
+impl IbusLayoutTracker {
     fn new() -> Option<Self> {
-        if !gnome_desktop_session() {
-            return None;
-        }
         let connection = zbus::blocking::connection::Builder::ibus()
             .ok()?
             .build()
             .ok()?;
-        let mut tracker = Self { connection };
-        tracker.current_layout_index()?;
-        Some(tracker)
+        Some(Self { connection })
     }
 
-    fn current_layout_index(&mut self) -> Option<u8> {
+    fn current_engine_state(&mut self) -> Option<IbusEngineState> {
         let proxy = zbus::blocking::Proxy::new(
             &self.connection,
             IBUS_DESTINATION,
@@ -1086,14 +1161,42 @@ impl GnomeIbusLayoutTracker {
         let engine = proxy
             .call::<_, _, zbus::zvariant::OwnedValue>("GetGlobalEngine", &())
             .ok()?;
-        ibus_engine_layout(&engine).and_then(layout_code_index)
+        ibus_engine_state(&engine)
     }
 }
 
 #[cfg(target_os = "linux")]
-fn ibus_engine_layout(engine: &zbus::zvariant::OwnedValue) -> Option<&str> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct IbusEngineState {
+    entropy: bool,
+    layout: Option<u8>,
+}
+
+#[cfg(target_os = "linux")]
+fn ibus_engine_field(engine: &zbus::zvariant::OwnedValue, index: usize) -> Option<&str> {
     let descriptor: &zbus::zvariant::Structure<'_> = engine.try_into().ok()?;
-    descriptor.fields().get(9)?.try_into().ok()
+    descriptor.fields().get(index)?.try_into().ok()
+}
+
+#[cfg(target_os = "linux")]
+fn ibus_engine_state(engine: &zbus::zvariant::OwnedValue) -> Option<IbusEngineState> {
+    const ENTROPY_ENGINE_PREFIX: &str = "entropy-universal-symbols";
+
+    let name = ibus_engine_field(engine, 2)?;
+    let entropy = name == ENTROPY_ENGINE_PREFIX
+        || name
+            .strip_prefix(ENTROPY_ENGINE_PREFIX)
+            .is_some_and(|suffix| suffix.starts_with('-'));
+    let descriptor_layout = ibus_engine_field(engine, 9).and_then(layout_code_index);
+    let name_layout = entropy
+        .then(|| name.rsplit_once('-').map(|(_, suffix)| suffix))
+        .flatten()
+        .and_then(layout_code_index);
+
+    Some(IbusEngineState {
+        entropy,
+        layout: descriptor_layout.or(name_layout),
+    })
 }
 
 #[cfg(target_os = "linux")]

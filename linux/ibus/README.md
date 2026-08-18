@@ -22,6 +22,9 @@ Then add/select Entropy input sources in the system input-source/input-method se
 - **Entropy Text Expander RU** for the `ru` layout
 
 Switch between those system input sources to change language while keeping Entropy Text Expander active.
+Entropy also reads the selected source's base layout (`EN` or `RU`) for firmware-native
+Universal Symbols, including on KDE and X11 desktops where the normal layout tracker is
+not IBus.
 
 To remove the Entropy IBus sources:
 
