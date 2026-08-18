@@ -1147,6 +1147,13 @@ impl eframe::App for EntropyApp {
             self.poll_text_expander_deferred_save(now);
             self.auto_reload_text_expander_rules_file(now);
         }
+
+        // Secondary viewports must be submitted from `logic`: eframe keeps
+        // calling it while the root viewport is minimized or occluded, while
+        // `ui` can be skipped. Keeping the layout indicator here prevents its
+        // matrix polling and rendering from falling back to delayed catch-up
+        // frames after Entropy is minimized.
+        self.draw_sticky_layout_window(ctx);
     }
 
     fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -1464,8 +1471,6 @@ impl eframe::App for EntropyApp {
         if self.bluetooth_reconnect_active() && self.layout.is_none() {
             self.draw_bluetooth_reconnect_status(ctx);
         }
-
-        self.draw_sticky_layout_window(ctx);
 
         let chrome_opacity = self.typing_trainer_chrome_opacity(ctx);
         if chrome_opacity > 0.0 && chrome_opacity < 1.0 {
