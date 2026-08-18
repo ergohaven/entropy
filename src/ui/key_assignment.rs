@@ -45,6 +45,7 @@ impl EntropyApp {
                     .min(self.key_override_entries.len().saturating_sub(1));
                 self.push_key_override_undo();
                 if let Some(entry) = self.key_override_entries.get_mut(idx) {
+                    Self::initialize_key_override_entry(entry);
                     match field {
                         KeyOverridePickField::Trigger => entry.trigger = kc_value,
                         KeyOverridePickField::Replacement => entry.replacement = kc_value,

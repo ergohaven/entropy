@@ -73,18 +73,31 @@ impl EntropyApp {
     }
 
     fn key_override_entry_exists(entry: &KeyOverrideEntry) -> bool {
+        // Vial and RMK Fork both require a trigger. Keeping editor defaults or
+        // modifier masks without one must not turn an empty slot into an
+        // enabled rule.
         entry.trigger != 0
-            || entry.replacement != 0
-            || entry.layers != 0
-            || entry.trigger_mods != 0
-            || entry.negative_mod_mask != 0
-            || entry.suppressed_mods != 0
-            || entry.options.activation_trigger_down
-            || entry.options.activation_required_mod_down
-            || entry.options.activation_negative_mod_up
-            || entry.options.one_mod
-            || entry.options.no_reregister_trigger
-            || entry.options.no_unregister_on_other_key_down
+    }
+
+    pub(super) fn initialize_key_override_entry(entry: &mut KeyOverrideEntry) {
+        if entry.trigger != 0 {
+            return;
+        }
+
+        // Match QMK/Vial's usable defaults. RMK's Fork wire adapter preserves
+        // the same bits, so a newly picked trigger works immediately on both
+        // firmware families without requiring six extra manual toggles.
+        if entry.layers == 0 {
+            entry.layers = u16::MAX;
+        }
+        if !entry.options.activation_trigger_down
+            && !entry.options.activation_required_mod_down
+            && !entry.options.activation_negative_mod_up
+        {
+            entry.options.activation_trigger_down = true;
+            entry.options.activation_required_mod_down = true;
+            entry.options.activation_negative_mod_up = true;
+        }
     }
 
     pub(super) fn normalize_key_override_entry(entry: &mut KeyOverrideEntry) {
@@ -837,5 +850,37 @@ impl EntropyApp {
             self.key_override_entries[idx] = edited;
             self.write_key_override(idx);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_key_override_uses_vial_and_rmk_fork_defaults() {
+        let mut entry = KeyOverrideEntry::default();
+
+        EntropyApp::initialize_key_override_entry(&mut entry);
+        entry.trigger = 0x002a;
+        EntropyApp::normalize_key_override_entry(&mut entry);
+
+        assert_eq!(entry.layers, u16::MAX);
+        assert!(entry.options.activation_trigger_down);
+        assert!(entry.options.activation_required_mod_down);
+        assert!(entry.options.activation_negative_mod_up);
+        assert!(!entry.options.one_mod);
+        assert!(entry.options.enabled);
+        assert_eq!(entry.options.bits(), 0x87);
+    }
+
+    #[test]
+    fn editor_defaults_do_not_enable_a_slot_without_a_trigger() {
+        let mut entry = KeyOverrideEntry::default();
+
+        EntropyApp::initialize_key_override_entry(&mut entry);
+        EntropyApp::normalize_key_override_entry(&mut entry);
+
+        assert!(!entry.options.enabled);
     }
 }
