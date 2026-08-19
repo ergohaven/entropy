@@ -52,7 +52,24 @@ impl EntropyApp {
         let switch_width = metrics.value(46.0);
         let tooltip = |text: &'static str| (!suppress_tooltips).then_some(text);
 
-        for row_idx in row_range {
+        for visible_row_idx in row_range {
+            #[cfg(not(target_os = "windows"))]
+            if visible_row_idx == 0 {
+                self.draw_text_expander_backend_settings_row(
+                    ui,
+                    content_width,
+                    row_height,
+                    metrics,
+                    lang,
+                    suppress_tooltips,
+                );
+                continue;
+            }
+            #[cfg(not(target_os = "windows"))]
+            let row_idx = visible_row_idx - 1;
+            #[cfg(target_os = "windows")]
+            let row_idx = visible_row_idx;
+
             if row_idx == 0 {
                 let mut enabled = self.app_settings.text_expander_enabled;
                 crate::ui_style::settings_list_row_with_tooltip(

@@ -852,6 +852,26 @@ impl EntropyApp {
                             return Err(format!("Initial Bluetooth layer read failed: {e:#}"));
                         }
                         log::warn!("get_keymap_buffer failed: {e}");
+                        progress("Reading keymap (compatibility mode)…");
+                        let mut fallback_error = None;
+                        'layers: for layer in 0..initial_layer_count {
+                            for (key_index, key) in layout.keys.iter().enumerate() {
+                                match dev_conn.get_keycode(layer as u8, key.row, key.col) {
+                                    Ok(keycode) => {
+                                        layout.layers[layer][key_index] = keycode.into();
+                                    }
+                                    Err(error) => {
+                                        fallback_error = Some(error);
+                                        break 'layers;
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(error) = fallback_error {
+                            log::warn!("keymap compatibility read failed: {error:#}");
+                        } else {
+                            log::info!("Keymap loaded with per-key compatibility reads");
+                        }
                     }
                 }
 

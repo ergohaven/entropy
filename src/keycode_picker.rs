@@ -1298,7 +1298,15 @@ impl KeycodePicker {
             return;
         }
 
-        self.show_vial(ctx, macro_data_state, tap_dance_data_state);
+        let advanced_escape_consumed = self.close_advanced_slot_picker_on_escape(
+            advanced_slot_open && ctx.input(|input| input.key_pressed(Key::Escape)),
+        );
+        self.show_vial(
+            ctx,
+            macro_data_state,
+            tap_dance_data_state,
+            !advanced_escape_consumed,
+        );
         self.show_advanced_slot_picker(ctx);
     }
 
@@ -1309,6 +1317,7 @@ impl KeycodePicker {
         ctx: &egui::Context,
         macro_data_state: DeferredPickerDataState,
         tap_dance_data_state: DeferredPickerDataState,
+        allow_escape_close: bool,
     ) {
         if self.selected_tab == KeycodeTab::Layers {
             self.selected_tab = KeycodeTab::Modifiers;
@@ -1317,7 +1326,7 @@ impl KeycodePicker {
             self.selected_tab = KeycodeTab::Special;
         }
 
-        if ctx.input(|i| i.key_pressed(Key::Escape)) {
+        if allow_escape_close && ctx.input(|i| i.key_pressed(Key::Escape)) {
             if self.vial_quantum_pending_mod.is_some() || self.vial_quantum_pending_mt.is_some() {
                 self.vial_quantum_pending_mod = None;
                 self.vial_quantum_pending_mt = None;
@@ -1575,9 +1584,8 @@ impl KeycodePicker {
                                 }
                             }
                             PickerViewMode::List => {
-                                self.show_regular_plain_modifier_section(ui);
-
                                 if self.regular_key_pick_allow_mod_key {
+                                    self.show_regular_plain_modifier_section(ui);
                                     self.show_regular_mod_key_section(ui);
                                 }
 

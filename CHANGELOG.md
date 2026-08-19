@@ -5,6 +5,20 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.19-rc.1 - Test Candidate
+
+### Improvements
+
+- Rebuilt Macro actions as sequential in-section slots and anchored shared page actions outside scrolling content
+- Aligned Advanced Macro and Tap Dance choices with the compact picker controls and restored interaction after closing slot selection with Escape
+- Added persistent Linux IBus installation detection and corrected Entropy input-source names
+
+### Fixes
+
+- Moved Layout Indicator matrix reads to the serialized background HID worker to prevent focus-transfer stalls and reentrant device access
+- Removed the repeated keymap-read timeout on incompatible QMK/Vial devices and added a fail-fast per-key compatibility path
+- Rejected modifier keycodes as Key Override triggers and disabled invalid stored overrides before they can consume regular input
+
 ## v0.3.10 - Public Beta
 
 ### Fixes

@@ -9,6 +9,12 @@ const VIAL_MACRO_EXT_TAP: u8 = 5;
 const VIAL_MACRO_EXT_DOWN: u8 = 6;
 const VIAL_MACRO_EXT_UP: u8 = 7;
 
+fn macro_settings_total_rows(action_count: usize) -> usize {
+    // Slot, name, description, all configured actions, and one trailing
+    // selector that creates the next action in place.
+    4 + action_count
+}
+
 fn append_macro_key_action(encoded: &mut Vec<u8>, basic_opcode: u8, ext_opcode: u8, keycode: u16) {
     encoded.push(SS_QMK_PREFIX);
     if keycode < 0x0100 {
@@ -320,8 +326,7 @@ impl KeycodePicker {
             ui.add_space(metrics.value(4.0));
         }
 
-        let action_rows = edited_actions.len().max(1);
-        let total_rows = 3 + action_rows;
+        let total_rows = macro_settings_total_rows(edited_actions.len());
         crate::ui_style::modal_content(
             ui,
             crate::ui_style::ModalLayout::new(content_width).with_top_padding(metrics.value(4.0)),
@@ -459,13 +464,14 @@ impl KeycodePicker {
                             }
                             action_row => {
                                 let action_idx = action_row - 3;
-                                if edited_actions.is_empty() {
+                                if action_idx == edited_actions.len() {
+                                    let mut added_action = None;
                                     crate::ui_style::settings_list_row_with_tooltip(
                                         ui,
                                         row_content_width,
                                         row_height,
                                         crate::i18n::tr_catalog(language, "macro_editor.actions"),
-                                        false,
+                                        true,
                                         (!list.suppress_tooltips).then_some(
                                             crate::i18n::tr_catalog(
                                                 language,
@@ -474,18 +480,68 @@ impl KeycodePicker {
                                         ),
                                         action_control_width,
                                         |ui| {
-                                            ui.label(
-                                                RichText::new(crate::i18n::tr_catalog(
+                                            ui.spacing_mut().item_spacing.x = metrics.value(4.0);
+                                            let add_width =
+                                                (action_control_width - metrics.value(16.0)) / 5.0;
+                                            let add_size = egui::vec2(add_width, control_height);
+                                            for (label_key, tooltip_key, action) in [
+                                                (
+                                                    "macro_editor.plus_text",
+                                                    "macro_editor.type_characters",
+                                                    MacroAction::Text(String::new()),
+                                                ),
+                                                (
+                                                    "macro_editor.plus_tap",
+                                                    "macro_editor.press_and_release_a_key",
+                                                    MacroAction::Tap(0x04),
+                                                ),
+                                                (
+                                                    "macro_editor.plus_down",
+                                                    "macro_editor.hold_a_key",
+                                                    MacroAction::Down(0x04),
+                                                ),
+                                                (
+                                                    "macro_editor.plus_up",
+                                                    "macro_editor.release_a_key",
+                                                    MacroAction::Up(0x04),
+                                                ),
+                                                (
+                                                    "macro_editor.plus_delay",
+                                                    "macro_editor.pause_in_milliseconds",
+                                                    MacroAction::Delay(100),
+                                                ),
+                                            ] {
+                                                if crate::ui_style::modern_button_with_font(
+                                                    ui,
+                                                    crate::i18n::tr_catalog(language, label_key),
+                                                    add_size,
+                                                    metrics.value(10.5),
+                                                    true,
+                                                )
+                                                .on_hover_text(crate::i18n::tr_catalog(
                                                     language,
-                                                    "macro_editor.no_actions",
+                                                    tooltip_key,
                                                 ))
-                                                .size(control_font_size)
-                                                .color(crate::ui_style::muted_text(
-                                                    ui.visuals().dark_mode,
-                                                )),
-                                            );
+                                                .clicked()
+                                                {
+                                                    added_action = Some(action);
+                                                }
+                                            }
                                         },
                                     );
+                                    if let Some(action) = added_action {
+                                        let opens_key_picker = matches!(
+                                            action,
+                                            MacroAction::Tap(_)
+                                                | MacroAction::Down(_)
+                                                | MacroAction::Up(_)
+                                        );
+                                        edited_actions.push(action);
+                                        if opens_key_picker {
+                                            self.macro_key_pick =
+                                                Some((n, edited_actions.len() - 1));
+                                        }
+                                    }
                                     continue;
                                 }
 
@@ -703,6 +759,63 @@ impl KeycodePicker {
                         list.track_hovered,
                     );
                 }
+
+                let action_size = crate::ui_style::modal_action_button_size() * scale;
+                let action_gap = metrics.value(8.0);
+                let actions_rect = crate::app::fixed_settings_action_bar_rect(
+                    list.viewport,
+                    metrics,
+                    action_size,
+                    2,
+                    action_gap,
+                );
+                crate::ui_style::allocate_ui_at_rect(ui, actions_rect, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = action_gap;
+                        let can_clear = !edited_actions.is_empty()
+                            || !edited_name.trim().is_empty()
+                            || !edited_description.trim().is_empty();
+                        let clear_response = crate::ui_style::modern_button_with_font(
+                            ui,
+                            crate::i18n::tr_catalog(language, "alt_repeat_editor.clear"),
+                            action_size,
+                            control_font_size,
+                            can_clear,
+                        )
+                        .on_hover_text(crate::i18n::tr_catalog(
+                            language,
+                            "key_picker_text.remove_all_actions_from_this_macro",
+                        ));
+                        if clear_response.clicked() && can_clear {
+                            edited_actions.clear();
+                            edited_name.clear();
+                            edited_description.clear();
+                        }
+
+                        let undo_position = self
+                            .macro_undo_stack
+                            .iter()
+                            .rposition(|(macro_idx, _)| *macro_idx == n);
+                        let undo_response = crate::ui_style::modern_button_with_font(
+                            ui,
+                            crate::i18n::tr_catalog(language, "alt_repeat_editor.undo"),
+                            action_size,
+                            control_font_size,
+                            undo_position.is_some(),
+                        )
+                        .on_hover_text(crate::i18n::tr_catalog(
+                            language,
+                            "key_picker_text.undo_last_change",
+                        ));
+                        if undo_response.clicked() {
+                            if let Some(position) = undo_position {
+                                let (_, previous) = self.macro_undo_stack.remove(position);
+                                edited_actions = previous;
+                                undo_applied = true;
+                            }
+                        }
+                    });
+                });
             },
         );
 
@@ -727,107 +840,6 @@ impl KeycodePicker {
                 edited_actions.swap(idx, idx + 1);
             }
         }
-
-        ui.add_space(metrics.value(10.0));
-        ui.horizontal_centered(|ui| {
-            ui.spacing_mut().item_spacing.x = metrics.value(6.0);
-            let add_width = (row_content_width - metrics.value(24.0)) / 5.0;
-            let add_size = egui::vec2(add_width, control_height);
-            for (label_key, tooltip_key, action) in [
-                (
-                    "macro_editor.plus_text",
-                    "macro_editor.type_characters",
-                    MacroAction::Text(String::new()),
-                ),
-                (
-                    "macro_editor.plus_tap",
-                    "macro_editor.press_and_release_a_key",
-                    MacroAction::Tap(0x04),
-                ),
-                (
-                    "macro_editor.plus_down",
-                    "macro_editor.hold_a_key",
-                    MacroAction::Down(0x04),
-                ),
-                (
-                    "macro_editor.plus_up",
-                    "macro_editor.release_a_key",
-                    MacroAction::Up(0x04),
-                ),
-                (
-                    "macro_editor.plus_delay",
-                    "macro_editor.pause_in_milliseconds",
-                    MacroAction::Delay(100),
-                ),
-            ] {
-                let response = crate::ui_style::modern_button_with_font(
-                    ui,
-                    crate::i18n::tr_catalog(language, label_key),
-                    add_size,
-                    metrics.value(10.5),
-                    true,
-                )
-                .on_hover_text(crate::i18n::tr_catalog(language, tooltip_key));
-                if response.clicked() {
-                    let opens_key_picker = matches!(
-                        action,
-                        MacroAction::Tap(_) | MacroAction::Down(_) | MacroAction::Up(_)
-                    );
-                    edited_actions.push(action);
-                    if opens_key_picker {
-                        self.macro_key_pick = Some((n, edited_actions.len() - 1));
-                    }
-                }
-            }
-        });
-
-        ui.add_space(metrics.value(8.0));
-        ui.horizontal_centered(|ui| {
-            ui.spacing_mut().item_spacing.x = metrics.value(8.0);
-            let action_size = crate::ui_style::modal_action_button_size() * scale;
-            let can_clear = !edited_actions.is_empty()
-                || !edited_name.trim().is_empty()
-                || !edited_description.trim().is_empty();
-            let clear_response = crate::ui_style::modern_button_with_font(
-                ui,
-                crate::i18n::tr_catalog(language, "alt_repeat_editor.clear"),
-                action_size,
-                control_font_size,
-                can_clear,
-            )
-            .on_hover_text(crate::i18n::tr_catalog(
-                language,
-                "key_picker_text.remove_all_actions_from_this_macro",
-            ));
-            if clear_response.clicked() && can_clear {
-                edited_actions.clear();
-                edited_name.clear();
-                edited_description.clear();
-            }
-
-            let undo_position = self
-                .macro_undo_stack
-                .iter()
-                .rposition(|(macro_idx, _)| *macro_idx == n);
-            let undo_response = crate::ui_style::modern_button_with_font(
-                ui,
-                crate::i18n::tr_catalog(language, "alt_repeat_editor.undo"),
-                action_size,
-                control_font_size,
-                undo_position.is_some(),
-            )
-            .on_hover_text(crate::i18n::tr_catalog(
-                language,
-                "key_picker_text.undo_last_change",
-            ));
-            if undo_response.clicked() {
-                if let Some(position) = undo_position {
-                    let (_, previous) = self.macro_undo_stack.remove(position);
-                    edited_actions = previous;
-                    undo_applied = true;
-                }
-            }
-        });
 
         if edited_actions != original_actions {
             if !undo_applied {
@@ -965,6 +977,12 @@ impl KeycodePicker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn macro_editor_keeps_one_trailing_action_selector_row() {
+        assert_eq!(macro_settings_total_rows(0), 4);
+        assert_eq!(macro_settings_total_rows(3), 7);
+    }
 
     #[test]
     fn explicit_slot_pick_assigns_macro_without_marking_contents_dirty() {

@@ -44,12 +44,12 @@ impl KeycodePicker {
         data_state: DeferredPickerDataState,
     ) {
         let ready = data_state == DeferredPickerDataState::Ready;
-        let response = crate::ui_style::modern_button_with_font(
+        let response = picker_button(
             ui,
             label,
-            egui::vec2(190.0, 54.0),
-            14.0,
+            picker_scaled_size(ui.ctx(), 104.0, 42.0),
             ready,
+            false,
         )
         .on_hover_text(tooltip);
         if response.clicked() && ready {
@@ -77,6 +77,19 @@ impl KeycodePicker {
                 DeferredPickerDataState::Ready => {}
             }
         }
+    }
+
+    pub(super) fn close_advanced_slot_picker(&mut self) {
+        self.advanced_slot_picker = None;
+        self.popup_state.on_close(PopupKey::AdvancedSlotWindow);
+    }
+
+    pub(super) fn close_advanced_slot_picker_on_escape(&mut self, escape_pressed: bool) -> bool {
+        if escape_pressed && self.advanced_slot_picker.is_some() {
+            self.close_advanced_slot_picker();
+            return true;
+        }
+        false
     }
 
     pub(super) fn show_advanced_slot_picker(&mut self, ctx: &egui::Context) {
@@ -115,7 +128,7 @@ impl KeycodePicker {
                 ),
             };
             if let Some(slot) = picked {
-                self.advanced_slot_picker = None;
+                self.close_advanced_slot_picker();
                 match kind {
                     AdvancedSlotKind::Macro => self.assign_macro_slot(slot),
                     AdvancedSlotKind::TapDance => self.assign_tap_dance_slot(slot),
@@ -131,12 +144,12 @@ impl KeycodePicker {
                 )
                 .clicked()
                 {
-                    self.advanced_slot_picker = None;
+                    self.close_advanced_slot_picker();
                 }
             });
         });
         if !open {
-            self.advanced_slot_picker = None;
+            self.close_advanced_slot_picker();
         }
     }
 }
@@ -160,5 +173,18 @@ mod tests {
             ..Default::default()
         };
         assert!(tap_dance_only.vial_tab_supported(KeycodeTab::Advanced));
+    }
+
+    #[test]
+    fn escape_closes_only_the_advanced_slot_window() {
+        let mut picker = KeycodePicker {
+            open: true,
+            advanced_slot_picker: Some(AdvancedSlotKind::Macro),
+            ..Default::default()
+        };
+
+        assert!(picker.close_advanced_slot_picker_on_escape(true));
+        assert!(picker.open);
+        assert!(picker.advanced_slot_picker.is_none());
     }
 }

@@ -1,5 +1,36 @@
 use super::*;
 
+#[cfg(target_os = "linux")]
+pub(super) struct LinuxSetupTask {
+    script: String,
+    backend: String,
+    receiver: std::sync::mpsc::Receiver<Result<std::process::Output, String>>,
+}
+
+#[cfg(target_os = "linux")]
+fn start_linux_setup_task(
+    script_path: std::path::PathBuf,
+    script: &str,
+    backend: &str,
+) -> Result<LinuxSetupTask, String> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("entropy-linux-setup".to_owned())
+        .spawn(move || {
+            let output = std::process::Command::new("sh")
+                .arg(&script_path)
+                .output()
+                .map_err(|err| format!("Could not run {}: {err}", script_path.display()));
+            let _ = sender.send(output);
+        })
+        .map_err(|err| format!("Could not start {backend} setup: {err}"))?;
+    Ok(LinuxSetupTask {
+        script: script.to_owned(),
+        backend: backend.to_owned(),
+        receiver,
+    })
+}
+
 #[cfg(target_os = "macos")]
 const MACOS_UNIVERSAL_SYMBOLS_SETUP_ROWS: usize = 11;
 
@@ -606,28 +637,68 @@ impl EntropyApp {
 
     #[cfg(target_os = "linux")]
     pub(super) fn run_linux_universal_symbols_setup(&mut self, script: &str, backend: &str) {
+        if self.linux_setup_task.is_some() {
+            return;
+        }
         let Some(script_path) = crate::linux_setup::setup_script_path(script) else {
             self.status_msg = format!("Could not find {script}; run it from the Entropy folder");
             return;
         };
-        let output = std::process::Command::new("sh").arg(&script_path).output();
+
+        match start_linux_setup_task(script_path, script, backend) {
+            Ok(task) => {
+                self.linux_setup_task = Some(task);
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    linux_setup_progress_status_key(script),
+                )
+                .to_owned();
+            }
+            Err(err) => self.status_msg = err,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn poll_linux_universal_symbols_setup(&mut self, ctx: &egui::Context) {
+        let Some(task) = self.linux_setup_task.as_ref() else {
+            return;
+        };
+        let output = match task.receiver.try_recv() {
+            Ok(output) => Some(output),
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+                None
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err(
+                "setup worker stopped before returning a result".to_owned(),
+            )),
+        };
+        let Some(output) = output else {
+            return;
+        };
+        let task = self
+            .linux_setup_task
+            .take()
+            .expect("Linux setup task disappeared while polling");
         self.status_msg = match output {
             Ok(output) if output.status.success() => crate::i18n::tr_catalog(
                 self.app_settings.language,
-                linux_setup_success_status_key(script),
+                linux_setup_success_status_key(&task.script),
             )
             .to_owned(),
             Ok(output) => {
                 let details = command_output_summary(&output.stderr, &output.stdout);
-                let action = linux_setup_action_label(script);
+                let action = linux_setup_action_label(&task.script);
                 if details.is_empty() {
-                    format!("{backend} {action} failed: {}", output.status)
+                    format!("{} {action} failed: {}", task.backend, output.status)
                 } else {
-                    format!("{backend} {action} failed: {details}")
+                    format!("{} {action} failed: {details}", task.backend)
                 }
             }
-            Err(err) => format!("Could not run {}: {err}", script_path.display()),
+            Err(err) => err,
         };
+        crate::smart_input::refresh_installed_ibus_backend();
+        ctx.request_repaint();
     }
 
     #[cfg(target_os = "macos")]
@@ -1068,6 +1139,15 @@ fn linux_setup_success_status_key(script: &str) -> &'static str {
 }
 
 #[cfg(target_os = "linux")]
+fn linux_setup_progress_status_key(script: &str) -> &'static str {
+    if script.contains("uninstall") {
+        "universal_symbols_setup.ibus_uninstalling_status"
+    } else {
+        "universal_symbols_setup.ibus_installing_status"
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn linux_setup_action_label(script: &str) -> &'static str {
     if script.contains("uninstall") {
         "uninstall"
@@ -1094,4 +1174,34 @@ fn command_output_summary(primary: &[u8], fallback: &[u8]) -> String {
         .rev()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_setup_tests {
+    use super::*;
+
+    #[test]
+    fn linux_setup_worker_runs_off_thread_and_returns_command_output() {
+        let unique = format!(
+            "entropy-linux-setup-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let script_path = std::env::temp_dir().join(unique);
+        std::fs::write(&script_path, "printf 'setup complete\\n'\n").unwrap();
+
+        let task = start_linux_setup_task(script_path.clone(), "install-user.sh", "IBus").unwrap();
+        let output = task
+            .receiver
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "setup complete\n");
+        std::fs::remove_file(script_path).unwrap();
+    }
 }

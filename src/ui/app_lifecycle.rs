@@ -156,6 +156,8 @@ impl EntropyApp {
         self.finish_deferred_exit_after_hid_write(ctx);
         self.poll_text_expander_deferred_save(now);
         self.auto_reload_text_expander_rules_file(now);
+        #[cfg(target_os = "linux")]
+        self.poll_linux_universal_symbols_setup(ctx);
         self.poll_single_instance_signal(ctx);
         self.poll_connect(ctx);
         self.maybe_begin_bluetooth_reconnect();

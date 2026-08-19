@@ -495,6 +495,19 @@ impl EntropyApp {
                 self.combo_edit_revision = self.combo_edit_revision.wrapping_add(1);
                 self.combo_attempted_revision = None;
                 self.key_override_entries = r.key_override_entries.clone();
+                let mut invalid_modifier_triggers = 0;
+                for entry in &mut self.key_override_entries {
+                    if matches!(entry.trigger, 0x00E0..=0x00E7) && entry.options.enabled {
+                        Self::normalize_key_override_entry(entry);
+                        invalid_modifier_triggers += 1;
+                    }
+                }
+                if invalid_modifier_triggers > 0 {
+                    log::warn!(
+                        "Disabled {invalid_modifier_triggers} invalid Key Override modifier trigger(s)"
+                    );
+                    self.key_override_dirty = true;
+                }
                 self.alt_repeat_entries = r.alt_repeat_entries.clone();
                 self.alt_repeat_names = load_alt_repeat_names(&self.current_device_name);
                 self.alt_repeat_names

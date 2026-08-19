@@ -856,11 +856,23 @@ impl EntropyApp {
             }
             DeferredLoadPayload::KeyOverrides(entries) => {
                 self.key_override_entries = entries;
+                let mut invalid_modifier_triggers = 0;
+                for entry in &mut self.key_override_entries {
+                    if matches!(entry.trigger, 0x00E0..=0x00E7) && entry.options.enabled {
+                        Self::normalize_key_override_entry(entry);
+                        invalid_modifier_triggers += 1;
+                    }
+                }
                 self.key_override_names
                     .resize(self.key_override_entries.len(), String::new());
                 self.key_override_visible_count = 1;
                 self.selected_key_override = 0;
-                self.key_override_dirty = false;
+                self.key_override_dirty = invalid_modifier_triggers > 0;
+                if invalid_modifier_triggers > 0 {
+                    log::warn!(
+                        "Disabled {invalid_modifier_triggers} invalid Key Override modifier trigger(s)"
+                    );
+                }
                 self.key_override_undo_stack.clear();
                 self.deferred_device_load.set_section_status(
                     DeferredLoadSection::KeyOverrides,

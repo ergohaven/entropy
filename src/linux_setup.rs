@@ -43,6 +43,34 @@ pub(crate) fn bundled_ibus_engine_path() -> Option<PathBuf> {
     find_existing_resource(ENGINE).or_else(|| materialize_bundled_resource_group(ENGINE).ok())
 }
 
+pub(crate) fn ibus_user_installation_is_current() -> bool {
+    let Some(data_home) = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .map(|home| home.join(".local/share"))
+        })
+    else {
+        return false;
+    };
+
+    ibus_user_installation_is_current_at(&data_home)
+}
+
+fn ibus_user_installation_is_current_at(data_home: &Path) -> bool {
+    let engine_path = data_home.join("entropy/ibus/entropy-ibus-engine");
+    let component_path = data_home.join("ibus/component/entropy-universal-symbols.xml");
+    let expected_engine = include_bytes!("../linux/ibus/entropy-ibus-engine");
+    let component_template = include_str!("../linux/ibus/entropy-universal-symbols.xml.in");
+    let expected_component =
+        component_template.replace("@ENGINE_PATH@", engine_path.to_string_lossy().as_ref());
+
+    std::fs::read(&engine_path).is_ok_and(|installed| installed == expected_engine)
+        && std::fs::read_to_string(component_path)
+            .is_ok_and(|installed| installed == expected_component)
+}
+
 fn find_existing_resource(resource: &str) -> Option<PathBuf> {
     let relative = Path::new(resource);
     if relative.exists() {
@@ -146,8 +174,38 @@ mod tests {
         .unwrap();
 
         assert_eq!(component.matches("<engine>").count(), 2);
-        assert!(component.contains("<longname>English (Entropy)</longname>"));
-        assert!(component.contains("<longname>Russian (Entropy)</longname>"));
+        assert_eq!(component.matches("<longname>Entropy</longname>").count(), 2);
         assert!(!component.contains("entropy-universal-symbols-gb"));
+    }
+
+    #[test]
+    fn ibus_installation_state_requires_current_engine_and_component() {
+        let unique = format!(
+            "entropy-ibus-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let data_home = std::env::temp_dir().join(unique);
+        let engine_path = data_home.join("entropy/ibus/entropy-ibus-engine");
+        let component_path = data_home.join("ibus/component/entropy-universal-symbols.xml");
+        std::fs::create_dir_all(engine_path.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(component_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &engine_path,
+            include_bytes!("../linux/ibus/entropy-ibus-engine"),
+        )
+        .unwrap();
+        let component = include_str!("../linux/ibus/entropy-universal-symbols.xml.in")
+            .replace("@ENGINE_PATH@", engine_path.to_string_lossy().as_ref());
+        std::fs::write(&component_path, component).unwrap();
+
+        assert!(ibus_user_installation_is_current_at(&data_home));
+        std::fs::write(&component_path, "stale component").unwrap();
+        assert!(!ibus_user_installation_is_current_at(&data_home));
+
+        std::fs::remove_dir_all(data_home).unwrap();
     }
 }

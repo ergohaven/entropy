@@ -3843,6 +3843,8 @@ pub struct EntropyApp {
     pub(crate) import_progress_title: String,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) import_progress_body: String,
+    #[cfg(target_os = "linux")]
+    pub(super) linux_setup_task: Option<LinuxSetupTask>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) connect_state: ConnectState,
     #[cfg(not(target_arch = "wasm32"))]

@@ -92,6 +92,8 @@ impl EntropyApp {
             import_progress_started_at: None,
             import_progress_title: String::new(),
             import_progress_body: String::new(),
+            #[cfg(target_os = "linux")]
+            linux_setup_task: None,
             dark_mode,
             last_applied_theme: None,
             app_settings,

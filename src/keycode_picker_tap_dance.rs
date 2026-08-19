@@ -362,62 +362,72 @@ impl KeycodePicker {
                         list.track_hovered,
                     );
                 }
+
+                let action_size = crate::ui_style::modal_action_button_size() * scale;
+                let action_gap = metrics.value(8.0);
+                let actions_rect = crate::app::fixed_settings_action_bar_rect(
+                    list.viewport,
+                    metrics,
+                    action_size,
+                    2,
+                    action_gap,
+                );
+                crate::ui_style::allocate_ui_at_rect(ui, actions_rect, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = action_gap;
+                        let can_clear = !edited_entry.on_tap.is_no()
+                            || !edited_entry.on_hold.is_no()
+                            || !edited_entry.on_double_tap.is_no()
+                            || !edited_entry.on_tap_hold.is_no()
+                            || edited_entry.tapping_term != 200
+                            || !edited_name.trim().is_empty();
+                        let clear_response = crate::ui_style::modern_button_with_font(
+                            ui,
+                            crate::i18n::tr_catalog(language, "alt_repeat_editor.clear"),
+                            action_size,
+                            control_font_size,
+                            can_clear,
+                        )
+                        .on_hover_text(crate::i18n::tr_catalog(
+                            language,
+                            "tap_dance_editor.clear_all_actions_for_this_tap_dance",
+                        ));
+                        if clear_response.clicked() && can_clear {
+                            edited_entry = TapDanceEntry {
+                                tapping_term: 200,
+                                ..Default::default()
+                            };
+                            edited_name.clear();
+                        }
+
+                        let undo_position = self
+                            .tap_dance_undo_stack
+                            .iter()
+                            .rposition(|(slot, _, _)| *slot == n);
+                        let undo_response = crate::ui_style::modern_button_with_font(
+                            ui,
+                            crate::i18n::tr_catalog(language, "alt_repeat_editor.undo"),
+                            action_size,
+                            control_font_size,
+                            undo_position.is_some(),
+                        )
+                        .on_hover_text(crate::i18n::tr_catalog(
+                            language,
+                            "tap_dance_editor.undo_last_tap_dance_change",
+                        ));
+                        if undo_response.clicked() {
+                            if let Some(position) = undo_position {
+                                let (_, previous, previous_name) =
+                                    self.tap_dance_undo_stack.remove(position);
+                                edited_entry = previous;
+                                edited_name = previous_name;
+                                undo_applied = true;
+                            }
+                        }
+                    });
+                });
             },
         );
-
-        ui.add_space(metrics.value(14.0));
-        ui.horizontal_centered(|ui| {
-            ui.spacing_mut().item_spacing.x = metrics.value(8.0);
-            let action_size = crate::ui_style::modal_action_button_size() * scale;
-            let can_clear = !edited_entry.on_tap.is_no()
-                || !edited_entry.on_hold.is_no()
-                || !edited_entry.on_double_tap.is_no()
-                || !edited_entry.on_tap_hold.is_no()
-                || edited_entry.tapping_term != 200
-                || !edited_name.trim().is_empty();
-            let clear_response = crate::ui_style::modern_button_with_font(
-                ui,
-                crate::i18n::tr_catalog(language, "alt_repeat_editor.clear"),
-                action_size,
-                control_font_size,
-                can_clear,
-            )
-            .on_hover_text(crate::i18n::tr_catalog(
-                language,
-                "tap_dance_editor.clear_all_actions_for_this_tap_dance",
-            ));
-            if clear_response.clicked() && can_clear {
-                edited_entry = TapDanceEntry {
-                    tapping_term: 200,
-                    ..Default::default()
-                };
-                edited_name.clear();
-            }
-
-            let undo_position = self
-                .tap_dance_undo_stack
-                .iter()
-                .rposition(|(slot, _, _)| *slot == n);
-            let undo_response = crate::ui_style::modern_button_with_font(
-                ui,
-                crate::i18n::tr_catalog(language, "alt_repeat_editor.undo"),
-                action_size,
-                control_font_size,
-                undo_position.is_some(),
-            )
-            .on_hover_text(crate::i18n::tr_catalog(
-                language,
-                "tap_dance_editor.undo_last_tap_dance_change",
-            ));
-            if undo_response.clicked() {
-                if let Some(position) = undo_position {
-                    let (_, previous, previous_name) = self.tap_dance_undo_stack.remove(position);
-                    edited_entry = previous;
-                    edited_name = previous_name;
-                    undo_applied = true;
-                }
-            }
-        });
 
         if edited_entry != original_entry || edited_name != original_name {
             if !undo_applied {

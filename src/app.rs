@@ -171,6 +171,8 @@ mod text_expander_runtime;
 mod text_expander_settings_ui;
 #[path = "ui/universal_symbols_setup.rs"]
 mod text_expander_setup;
+#[cfg(target_os = "linux")]
+use text_expander_setup::LinuxSetupTask;
 #[path = "ui/touchpad_settings.rs"]
 mod touchpad_settings_ui;
 #[path = "ui/typing_trainer.rs"]

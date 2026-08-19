@@ -75,8 +75,9 @@ impl EntropyApp {
     fn key_override_entry_exists(entry: &KeyOverrideEntry) -> bool {
         // Vial and RMK Fork both require a trigger. Keeping editor defaults or
         // modifier masks without one must not turn an empty slot into an
-        // enabled rule.
-        entry.trigger != 0
+        // enabled rule. QMK/Vial also require the trigger itself to be a
+        // non-modifier key; modifiers belong in `trigger_mods`.
+        entry.trigger != 0 && !matches!(entry.trigger, 0x00E0..=0x00E7)
     }
 
     pub(super) fn initialize_key_override_entry(entry: &mut KeyOverrideEntry) {
@@ -877,6 +878,20 @@ mod tests {
     #[test]
     fn editor_defaults_do_not_enable_a_slot_without_a_trigger() {
         let mut entry = KeyOverrideEntry::default();
+
+        EntropyApp::initialize_key_override_entry(&mut entry);
+        EntropyApp::normalize_key_override_entry(&mut entry);
+
+        assert!(!entry.options.enabled);
+    }
+
+    #[test]
+    fn modifier_trigger_is_disabled_instead_of_poisoning_key_input() {
+        let mut entry = KeyOverrideEntry {
+            trigger: 0x00E3,
+            replacement: 0x000A,
+            ..Default::default()
+        };
 
         EntropyApp::initialize_key_override_entry(&mut entry);
         EntropyApp::normalize_key_override_entry(&mut entry);

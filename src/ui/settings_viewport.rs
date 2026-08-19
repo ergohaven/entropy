@@ -35,6 +35,23 @@ pub(crate) struct AdaptiveSettingsListViewport {
     pub(crate) has_scrollbar: bool,
 }
 
+/// Returns a footer rectangle anchored to the settings viewport, not to its
+/// scrolling content. Page-level actions rendered here therefore stay centered
+/// while the list scrolls or its scrollbar appears.
+pub(crate) fn fixed_settings_action_bar_rect(
+    viewport: egui::Rect,
+    metrics: crate::ui_style::ResponsiveMetrics,
+    button_size: egui::Vec2,
+    button_count: usize,
+    gap: f32,
+) -> egui::Rect {
+    let width = button_size.x * button_count as f32 + gap * button_count.saturating_sub(1) as f32;
+    egui::Rect::from_center_size(
+        egui::pos2(viewport.center().x, viewport.bottom() + metrics.value(26.0)),
+        egui::vec2(width, button_size.y),
+    )
+}
+
 pub(crate) fn allocate_adaptive_settings_list_viewport(
     ui: &mut egui::Ui,
     id_salt: &'static str,
@@ -174,5 +191,17 @@ mod tests {
     fn settings_lists_never_show_more_than_six_rows() {
         let ctx = egui::Context::default();
         assert_eq!(responsive_settings_visible_rows(&ctx, 10_000.0, 20, 0.0), 6);
+    }
+
+    #[test]
+    fn fixed_action_bar_stays_centered_on_the_viewport() {
+        let ctx = egui::Context::default();
+        let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(&ctx);
+        let viewport = egui::Rect::from_min_size(egui::pos2(35.0, 80.0), egui::vec2(470.0, 216.0));
+        let rect =
+            fixed_settings_action_bar_rect(viewport, metrics, egui::vec2(110.0, 34.0), 2, 8.0);
+
+        assert_eq!(rect.center().x, viewport.center().x);
+        assert!(rect.top() > viewport.bottom());
     }
 }

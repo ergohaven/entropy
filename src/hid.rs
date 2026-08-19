@@ -983,6 +983,14 @@ fn is_optional_qmk_settings_query(data: &[u8]) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn is_keymap_read_request(data: &[u8]) -> bool {
+    matches!(
+        data.first(),
+        Some(&CMD_VIA_KEYMAP_GET_BUFFER) | Some(&CMD_VIA_GET_KEYCODE)
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn usb_send_max_attempts(transport: HidTransport, data: &[u8]) -> usize {
     // Runtime firmware metadata and optional QMK-settings discovery both have
     // safe fallbacks, so an unsupported probe must not hold up the whole
@@ -990,6 +998,7 @@ fn usb_send_max_attempts(transport: HidTransport, data: &[u8]) -> usize {
     if transport.is_bluetooth()
         || is_optional_firmware_version_request(data)
         || is_optional_qmk_settings_query(data)
+        || is_keymap_read_request(data)
     {
         1
     } else {
@@ -2144,6 +2153,18 @@ mod tests {
         let command = [CMD_VIA_VIAL_PREFIX, CMD_VIAL_QMK_SETTINGS_QUERY, 0, 0];
 
         assert_eq!(usb_send_max_attempts(HidTransport::Usb, &command), 1);
+    }
+
+    #[test]
+    fn keymap_reads_fail_fast_for_compatibility_fallback() {
+        assert_eq!(
+            usb_send_max_attempts(HidTransport::Usb, &[CMD_VIA_KEYMAP_GET_BUFFER, 0, 0, 28]),
+            1
+        );
+        assert_eq!(
+            usb_send_max_attempts(HidTransport::Usb, &[CMD_VIA_GET_KEYCODE, 0, 0, 0]),
+            1
+        );
     }
 
     #[test]
