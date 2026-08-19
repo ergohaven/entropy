@@ -605,7 +605,7 @@ impl EntropyApp {
     }
 
     #[cfg(target_os = "linux")]
-    fn run_linux_universal_symbols_setup(&mut self, script: &str, backend: &str) {
+    pub(super) fn run_linux_universal_symbols_setup(&mut self, script: &str, backend: &str) {
         let Some(script_path) = crate::linux_setup::setup_script_path(script) else {
             self.status_msg = format!("Could not find {script}; run it from the Entropy folder");
             return;

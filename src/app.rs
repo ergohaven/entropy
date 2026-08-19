@@ -44,7 +44,7 @@ mod settings_units;
 use settings_units::*;
 #[path = "ui/settings_viewport.rs"]
 mod settings_viewport;
-use settings_viewport::*;
+pub(crate) use settings_viewport::*;
 #[path = "ui/onboarding_tour_state.rs"]
 mod onboarding_tour_state;
 use onboarding_tour_state::*;

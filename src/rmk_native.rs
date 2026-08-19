@@ -18,6 +18,7 @@ const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_RUSSIAN_LETTERS: u16 = 0x0004;
 const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_OUTPUT: u16 = 0x0008;
 const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_MORSE_ACTIONS: u16 = 0x0010;
 const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_LAYER: u16 = 0x0020;
+const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_VIAL_MACRO_EXT: u16 = 0x0040;
 const NATIVE_DYNAMIC_ACTION_KIND_COMBO_OUTPUT: u8 = 0x00;
 const NATIVE_DYNAMIC_ACTION_KIND_MORSE: u8 = 0x01;
 const NATIVE_KEY_ACTION_STATUS_OK: u8 = 0x00;
@@ -38,6 +39,7 @@ pub(crate) struct RmkNativeCapabilities {
     pub(crate) combo_output: bool,
     pub(crate) tap_dance_actions: bool,
     pub(crate) combo_layers: bool,
+    pub(crate) vial_macro_ext: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -273,6 +275,7 @@ fn decode_native_capabilities(response: &[u8; MSG_LEN]) -> RmkNativeCapabilities
         combo_output: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_OUTPUT != 0,
         tap_dance_actions: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_MORSE_ACTIONS != 0,
         combo_layers: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_LAYER != 0,
+        vial_macro_ext: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_VIAL_MACRO_EXT != 0,
     }
 }
 
@@ -668,6 +671,7 @@ mod tests {
                 combo_output: false,
                 tap_dance_actions: false,
                 combo_layers: false,
+                vial_macro_ext: false,
             }
         );
         response[4..6].copy_from_slice(
@@ -680,13 +684,15 @@ mod tests {
             &(ERGOHAVEN_NATIVE_KEY_ACTION_CAP_GET_SET
                 | ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_OUTPUT
                 | ERGOHAVEN_NATIVE_KEY_ACTION_CAP_MORSE_ACTIONS
-                | ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_LAYER)
+                | ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_LAYER
+                | ERGOHAVEN_NATIVE_KEY_ACTION_CAP_VIAL_MACRO_EXT)
                 .to_le_bytes(),
         );
         let dynamic = decode_native_capabilities(&response);
         assert!(dynamic.combo_output);
         assert!(dynamic.tap_dance_actions);
         assert!(dynamic.combo_layers);
+        assert!(dynamic.vial_macro_ext);
         assert!(!dynamic.universal_symbols);
         response[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION + 1;
         assert_eq!(
@@ -704,6 +710,7 @@ mod tests {
             combo_output: false,
             tap_dance_actions: false,
             combo_layers: false,
+            vial_macro_ext: false,
         }));
         assert!(!supports_layout_sync(RmkNativeCapabilities {
             key_actions: true,
@@ -712,6 +719,7 @@ mod tests {
             combo_output: false,
             tap_dance_actions: false,
             combo_layers: false,
+            vial_macro_ext: false,
         }));
     }
 

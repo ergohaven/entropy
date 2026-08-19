@@ -1,7 +1,7 @@
 use super::*;
 
-const EMOJI_GROUP_ICONS: [&str; 10] = ["★", "😀", "👋", "🐻", "🍎", "🚗", "⚽", "💡", "♥", "⚑"];
-const EMOJI_GROUP_KEYS: [&str; 10] = [
+const EMOJI_GROUP_ICONS: [&str; 9] = ["★", "😀", "👋", "🐻", "🍎", "🚗", "⚽", "💡", "♥"];
+const EMOJI_GROUP_KEYS: [&str; 9] = [
     "text_expander.emoji_group_all",
     "text_expander.emoji_group_smileys",
     "text_expander.emoji_group_people",
@@ -11,7 +11,6 @@ const EMOJI_GROUP_KEYS: [&str; 10] = [
     "text_expander.emoji_group_activities",
     "text_expander.emoji_group_objects",
     "text_expander.emoji_group_symbols",
-    "text_expander.emoji_group_flags",
 ];
 
 pub(super) fn show_text_expander_emoji_popup(
@@ -76,11 +75,14 @@ pub(super) fn show_text_expander_emoji_popup(
                 .filter(|emoji| emoji_matches(emoji, &query))
                 .collect::<Vec<_>>();
             let mut picked = None;
+            let columns = 8usize;
+            let row_height = 42.0 * scale;
+            let row_count = matches.len().div_ceil(columns);
             egui::ScrollArea::vertical()
                 .id_salt(popup_id.with("results"))
                 .max_height(244.0 * scale)
                 .auto_shrink([false, true])
-                .show(ui, |ui| {
+                .show_rows(ui, row_height, row_count, |ui, visible_rows| {
                     ui.set_min_width(popup_width);
                     if matches.is_empty() {
                         ui.add_sized(
@@ -98,22 +100,20 @@ pub(super) fn show_text_expander_emoji_popup(
                         return;
                     }
 
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing = egui::vec2(5.0 * scale, 5.0 * scale);
-                        for emoji in matches {
-                            let response = crate::ui_style::modern_button_with_font(
-                                ui,
-                                emoji.as_str(),
-                                egui::vec2(37.0 * scale, 37.0 * scale),
-                                24.0 * scale,
-                                true,
-                            )
-                            .on_hover_text(emoji.name());
-                            if response.clicked() {
-                                picked = Some(emoji.as_str());
+                    for row in visible_rows {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(5.0 * scale, 0.0);
+                            let start = row * columns;
+                            let end = (start + columns).min(matches.len());
+                            for emoji in &matches[start..end] {
+                                let response = color_emoji_button(ui, emoji.as_str(), scale)
+                                    .on_hover_text(emoji.name());
+                                if response.clicked() {
+                                    picked = Some(emoji.as_str());
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
                 });
             picked
         },
@@ -137,9 +137,49 @@ fn emoji_group(index: usize) -> Option<emojis::Group> {
         6 => Some(emojis::Group::Activities),
         7 => Some(emojis::Group::Objects),
         8 => Some(emojis::Group::Symbols),
-        9 => Some(emojis::Group::Flags),
         _ => None,
     }
+}
+
+fn color_emoji_button(ui: &mut egui::Ui, emoji: &str, scale: f32) -> egui::Response {
+    let size = egui::vec2(37.0 * scale, 37.0 * scale);
+    let response = crate::ui_style::modern_button_with_font(ui, "", size, 24.0 * scale, true);
+    if let Some(texture) = twemoji_texture(ui.ctx(), emoji) {
+        ui.painter().image(
+            texture.id(),
+            response.rect.shrink(5.0 * scale),
+            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    } else {
+        ui.painter().text(
+            response.rect.center(),
+            egui::Align2::CENTER_CENTER,
+            emoji,
+            egui::FontId::proportional(24.0 * scale),
+            ui.visuals().text_color(),
+        );
+    }
+    response
+}
+
+fn twemoji_texture(ctx: &egui::Context, emoji: &str) -> Option<egui::TextureHandle> {
+    let id = egui::Id::new(("text_expander_twemoji", emoji));
+    if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
+        return Some(texture);
+    }
+
+    let asset = twemoji_assets::png::PngTwemojiAsset::from_emoji(emoji)?;
+    let rgba = image::load_from_memory(asset.data.0).ok()?.into_rgba8();
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    let image = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+    let texture = ctx.load_texture(
+        format!("text-expander-twemoji-{emoji}"),
+        image,
+        egui::TextureOptions::LINEAR,
+    );
+    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+    Some(texture)
 }
 
 fn emoji_matches(emoji: &emojis::Emoji, query: &str) -> bool {
@@ -200,5 +240,17 @@ mod tests {
 
         assert!(emoji_matches(rocket, "rocket"));
         assert!(!emoji_matches(rocket, "banana"));
+    }
+
+    #[test]
+    fn flags_do_not_have_a_picker_category() {
+        assert_eq!(EMOJI_GROUP_ICONS.len(), 9);
+        assert_eq!(EMOJI_GROUP_KEYS.len(), 9);
+        assert!(EMOJI_GROUP_KEYS.iter().all(|key| !key.contains("flags")));
+    }
+
+    #[test]
+    fn color_asset_exists_for_a_representative_emoji() {
+        assert!(twemoji_assets::png::PngTwemojiAsset::from_emoji("🚀").is_some());
     }
 }

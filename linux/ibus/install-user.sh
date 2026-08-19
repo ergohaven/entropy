@@ -41,4 +41,4 @@ if command -v ibus >/dev/null 2>&1; then
 else
     printf '%s\n' "Installed, but ibus command was not found."
 fi
-printf '%s\n' "Select the Entropy Text Expander input sources for the layouts you use."
+printf '%s\n' "Select English (Entropy) or Russian (Entropy) in your system input sources."

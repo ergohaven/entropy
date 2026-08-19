@@ -1411,7 +1411,7 @@ dependencies = [
 
 [[package]]
 name = "ergohaven-entropy"
-version = "0.3.17"
+version = "0.3.18"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -1439,6 +1439,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tray-icon",
+ "twemoji-assets",
  "ureq",
  "url",
  "wasm-bindgen-futures",
@@ -4595,6 +4596,12 @@ name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
+
+[[package]]
+name = "twemoji-assets"
+version = "1.5.1+17.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6857896b4a287e70f8197ab8fb9d68b3c43bb7ae97595aceaf2d11c21b93d9e9"
 
 [[package]]
 name = "type-map"

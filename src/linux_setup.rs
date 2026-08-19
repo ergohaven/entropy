@@ -129,3 +129,25 @@ fn set_executable(path: &Path) -> std::io::Result<()> {
     permissions.set_mode(0o755);
     std::fs::set_permissions(path, permissions)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_ibus_component_registers_only_entropy_english_and_russian() {
+        let component = std::str::from_utf8(
+            BUNDLED_LINUX_FILES
+                .iter()
+                .find(|file| file.path == "linux/ibus/entropy-universal-symbols.xml.in")
+                .unwrap()
+                .bytes,
+        )
+        .unwrap();
+
+        assert_eq!(component.matches("<engine>").count(), 2);
+        assert!(component.contains("<longname>English (Entropy)</longname>"));
+        assert!(component.contains("<longname>Russian (Entropy)</longname>"));
+        assert!(!component.contains("entropy-universal-symbols-gb"));
+    }
+}

@@ -558,12 +558,15 @@ impl EntropyApp {
         }
 
         if self.keycode_picker.open {
-            let picker_section = match self.keycode_picker.selected_tab {
-                KeycodeTab::Macro => Some(DeferredLoadSection::Macros),
-                KeycodeTab::TapDance => Some(DeferredLoadSection::TapDance),
-                _ => None,
+            let picker_sections: &[DeferredLoadSection] = match self.keycode_picker.selected_tab {
+                KeycodeTab::Macro => &[DeferredLoadSection::Macros],
+                KeycodeTab::TapDance => &[DeferredLoadSection::TapDance],
+                KeycodeTab::Advanced => {
+                    &[DeferredLoadSection::Macros, DeferredLoadSection::TapDance]
+                }
+                _ => &[],
             };
-            if let Some(section) = picker_section {
+            for &section in picker_sections {
                 if matches!(
                     self.deferred_device_load.section_status(section),
                     DeferredLoadStatus::NotLoaded

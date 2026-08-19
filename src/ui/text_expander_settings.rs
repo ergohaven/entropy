@@ -183,15 +183,34 @@ impl EntropyApp {
         crate::ui_style::allocate_ui_at_rect(ui, button_rect, |ui| {
             if crate::ui_style::modern_button(
                 ui,
-                crate::i18n::tr_catalog(lang, "text_expander.open_backend_setup"),
+                crate::i18n::tr_catalog(lang, text_expander_backend_button_key()),
                 button_size,
                 true,
             )
+            .on_hover_text(crate::i18n::tr_catalog(
+                lang,
+                text_expander_backend_hint_key(),
+            ))
             .clicked()
             {
+                #[cfg(target_os = "linux")]
+                self.run_linux_universal_symbols_setup("linux/ibus/install-user.sh", "IBus");
+                #[cfg(not(target_os = "linux"))]
                 self.open_text_expander_setup_page();
             }
         });
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn text_expander_backend_button_key() -> &'static str {
+    #[cfg(target_os = "linux")]
+    {
+        "universal_symbols_setup.install_ibus"
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        "text_expander.open_backend_setup"
     }
 }
 

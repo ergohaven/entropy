@@ -17,7 +17,7 @@ pub(crate) fn responsive_settings_visible_rows(
     let row_height = crate::ui_style::ResponsiveMetrics::from_ctx(ctx).settings_row_height();
     let usable_height = (available_height - bottom_reserve).max(row_height);
     let rows_that_fit = (usable_height / row_height).floor().max(1.0) as usize;
-    rows_that_fit.min(total_rows)
+    rows_that_fit.min(total_rows).min(6)
 }
 
 pub(crate) struct AdaptiveSettingsListViewport {
@@ -163,5 +163,16 @@ pub(crate) fn allocate_adaptive_settings_list_viewport(
         row_content_width,
         row_height,
         has_scrollbar: max_offset > 0.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_lists_never_show_more_than_six_rows() {
+        let ctx = egui::Context::default();
+        assert_eq!(responsive_settings_visible_rows(&ctx, 10_000.0, 20, 0.0), 6);
     }
 }

@@ -1125,11 +1125,16 @@ impl eframe::App for EntropyApp {
             let update_check_pending =
                 matches!(self.update_check, UpdateCheckState::Checking { .. })
                     || crate::app::firmware_update_check_pending(&self.firmware_update_check);
+            let layout_indicator_interval = self
+                .app_settings
+                .sticky_layout_window
+                .then(|| self.matrix_tester_poll_interval());
             ctx.request_repaint_after(native_repaint_interval(
                 main_window_hidden_to_tray,
                 bluetooth_visible_interval,
                 connect_pending,
                 update_check_pending,
+                layout_indicator_interval,
             ));
             self.update_native_background(
                 ctx,

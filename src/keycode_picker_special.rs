@@ -28,7 +28,9 @@ impl KeycodePicker {
             | KeycodeTab::Rgb
             | KeycodeTab::Custom => Self::key_grid_width(ui, 13, spacing),
             KeycodeTab::Modifiers => Self::key_grid_width(ui, 13, spacing),
-            KeycodeTab::Macro | KeycodeTab::TapDance => Self::slot_grid_width(16, 4.0),
+            KeycodeTab::Advanced | KeycodeTab::Macro | KeycodeTab::TapDance => {
+                Self::slot_grid_width(8, 8.0)
+            }
             _ => 840.0,
         };
         width.min(ui.available_width())

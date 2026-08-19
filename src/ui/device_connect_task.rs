@@ -463,13 +463,19 @@ fn is_rmk_vial_definition(json: &serde_json::Value) -> bool {
 
 fn macro_ext_keycodes_disabled_reason(
     json: &serde_json::Value,
+    rmk_vial_macro_ext_supported: bool,
 ) -> Option<MacroExtKeycodesDisabledReason> {
-    is_rmk_vial_definition(json)
+    (is_rmk_vial_definition(json) && !rmk_vial_macro_ext_supported)
         .then_some(MacroExtKeycodesDisabledReason::RmkVialMacroExtUnsupported)
 }
 
-fn supports_vial_macro_ext_keycodes(vial_protocol: u32, json: &serde_json::Value) -> bool {
-    vial_protocol >= 5 && macro_ext_keycodes_disabled_reason(json).is_none()
+fn supports_vial_macro_ext_keycodes(
+    vial_protocol: u32,
+    json: &serde_json::Value,
+    rmk_vial_macro_ext_supported: bool,
+) -> bool {
+    vial_protocol >= 5
+        && macro_ext_keycodes_disabled_reason(json, rmk_vial_macro_ext_supported).is_none()
 }
 
 impl EntropyApp {
@@ -1232,9 +1238,15 @@ impl EntropyApp {
                     entries
                 };
 
-                let macro_ext_keycodes_disabled_reason = macro_ext_keycodes_disabled_reason(&json);
-                let supports_macro_ext_keycodes =
-                    supports_vial_macro_ext_keycodes(vial_protocol, &json);
+                let macro_ext_keycodes_disabled_reason = macro_ext_keycodes_disabled_reason(
+                    &json,
+                    rmk_native_capabilities.vial_macro_ext,
+                );
+                let supports_macro_ext_keycodes = supports_vial_macro_ext_keycodes(
+                    vial_protocol,
+                    &json,
+                    rmk_native_capabilities.vial_macro_ext,
+                );
                 let deferred_load = if staged_bluetooth_load {
                     let definition_fingerprint = vial_definition_fingerprint(&json)
                         .map_err(|error| format!("Layout fingerprint failed: {error}"))?;
@@ -1476,7 +1488,8 @@ mod tests {
             "productId": "0x4643"
         });
 
-        assert!(!supports_vial_macro_ext_keycodes(6, &json));
+        assert!(!supports_vial_macro_ext_keycodes(6, &json, false));
+        assert!(supports_vial_macro_ext_keycodes(6, &json, true));
     }
 
     #[test]
@@ -1487,7 +1500,7 @@ mod tests {
             "productId": "0x0001"
         });
 
-        assert!(supports_vial_macro_ext_keycodes(5, &json));
+        assert!(supports_vial_macro_ext_keycodes(5, &json, false));
     }
 
     #[test]

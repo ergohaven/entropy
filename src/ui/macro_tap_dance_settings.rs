@@ -1,7 +1,5 @@
 use super::*;
 
-const ADVANCED_EDITOR_MAX_WIDTH: f32 = 900.0;
-
 impl EntropyApp {
     pub(super) fn draw_macro_settings_page(&mut self, ui: &mut egui::Ui, content_rect: egui::Rect) {
         let lang = self.app_settings.language;
@@ -51,7 +49,9 @@ impl EntropyApp {
     ) {
         let dark = ui.visuals().dark_mode;
         let scale = responsive_settings_editor_scale(ui.ctx());
-        let page_width = (ADVANCED_EDITOR_MAX_WIDTH * scale).min(content_rect.width());
+        let page_width = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx())
+            .settings_content_width()
+            .min(content_rect.width());
         crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(18.0 * scale);
@@ -67,13 +67,7 @@ impl EntropyApp {
                 ui.allocate_ui_with_layout(
                     egui::vec2(page_width, editor_height),
                     egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        egui::ScrollArea::vertical()
-                            .id_salt(("advanced_action_editor", title))
-                            .max_height(editor_height)
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| draw_editor(self, ui));
-                    },
+                    |ui| draw_editor(self, ui),
                 );
             });
         });

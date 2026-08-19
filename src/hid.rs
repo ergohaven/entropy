@@ -978,10 +978,19 @@ fn is_optional_firmware_version_request(data: &[u8]) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn is_optional_qmk_settings_query(data: &[u8]) -> bool {
+    data.starts_with(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_QMK_SETTINGS_QUERY])
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn usb_send_max_attempts(transport: HidTransport, data: &[u8]) -> usize {
-    // Runtime firmware metadata has a Vial-definition fallback, so an
-    // unsupported probe must not hold up the whole connection retry budget.
-    if transport.is_bluetooth() || is_optional_firmware_version_request(data) {
+    // Runtime firmware metadata and optional QMK-settings discovery both have
+    // safe fallbacks, so an unsupported probe must not hold up the whole
+    // connection retry budget.
+    if transport.is_bluetooth()
+        || is_optional_firmware_version_request(data)
+        || is_optional_qmk_settings_query(data)
+    {
         1
     } else {
         VIAL_GUI_USB_RETRIES
@@ -1617,6 +1626,13 @@ fn response_matches_qmk_settings_get(command: &[u8], resp: &[u8; MSG_LEN]) -> bo
 
 #[cfg(not(target_arch = "wasm32"))]
 fn response_matches_qmk_settings_query(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
+    // Older Vial-QMK builds echo unsupported vendor commands. Treat that echo
+    // as a correlated terminal response so the optional settings probe can
+    // fail immediately instead of consuming the full 20-attempt USB budget.
+    if response_echoes_vial_command(command, resp) {
+        return true;
+    }
+
     let Some(qsid_bytes) = command.get(2..4) else {
         return false;
     };
@@ -2124,6 +2140,13 @@ mod tests {
     }
 
     #[test]
+    fn optional_qmk_settings_query_uses_one_usb_attempt() {
+        let command = [CMD_VIA_VIAL_PREFIX, CMD_VIAL_QMK_SETTINGS_QUERY, 0, 0];
+
+        assert_eq!(usb_send_max_attempts(HidTransport::Usb, &command), 1);
+    }
+
+    #[test]
     fn mandatory_usb_request_keeps_full_retry_budget() {
         let command = [CMD_VIA_GET_PROTOCOL_VERSION];
 
@@ -2131,6 +2154,16 @@ mod tests {
             usb_send_max_attempts(HidTransport::Usb, &command),
             VIAL_GUI_USB_RETRIES
         );
+    }
+
+    #[test]
+    fn qmk_settings_query_accepts_an_unsupported_command_echo() {
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_VIAL_PREFIX;
+        command[1] = CMD_VIAL_QMK_SETTINGS_QUERY;
+        let response = command;
+
+        assert!(response_matches_qmk_settings_query(&command, &response));
     }
 
     #[cfg(target_os = "linux")]

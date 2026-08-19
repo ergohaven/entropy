@@ -20,6 +20,8 @@ use keycode_picker_ui::*;
 #[path = "keycode_picker_popups.rs"]
 mod keycode_picker_popups;
 use keycode_picker_popups::*;
+#[path = "keycode_picker_advanced.rs"]
+mod keycode_picker_advanced;
 #[path = "keycode_picker_basic.rs"]
 mod keycode_picker_basic;
 #[path = "keycode_picker_lighting_quantum.rs"]
@@ -112,6 +114,12 @@ enum MacroKeyPickKind {
     Up,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AdvancedSlotKind {
+    Macro,
+    TapDance,
+}
+
 pub struct KeycodePicker {
     pub open: bool,
     pub selected_tab: KeycodeTab,
@@ -182,6 +190,7 @@ pub struct KeycodePicker {
     macro_undo_stack: Vec<(usize, Vec<MacroAction>)>,
     /// Macro key picker: (macro_idx, action_idx) being edited
     macro_key_pick: Option<(usize, usize)>,
+    advanced_slot_picker: Option<AdvancedSlotKind>,
     popup_state: PopupState,
     pub language: crate::i18n::Language,
     pub key_legend_layout: KeyLegendLayout,
@@ -831,6 +840,7 @@ impl Default for KeycodePicker {
             macro_actions: vec![vec![]; 16],
             macro_undo_stack: Vec::new(),
             macro_key_pick: None,
+            advanced_slot_picker: None,
             macros_dirty: false,
             macro_edit_revision: 0,
             macro_attempted_revision: None,
@@ -849,6 +859,7 @@ impl KeycodePicker {
             || self.macro_key_pick.is_some()
             || self.td_key_pick.is_some()
             || self.td_mod_key_pick.is_some()
+            || self.advanced_slot_picker.is_some()
     }
 
     pub(crate) fn mark_macros_dirty(&mut self) {
@@ -914,6 +925,7 @@ impl KeycodePicker {
             self.mark_macros_dirty();
         }
         self.macro_key_pick = None;
+        self.advanced_slot_picker = None;
     }
 
     fn macro_layer_key_choices(&self, kind: MacroKeyPickKind) -> Vec<(u16, String, String)> {
@@ -1026,6 +1038,7 @@ impl KeycodePicker {
         self.vial_quantum_pending_mod = None;
         self.vial_quantum_pending_mt = None;
         self.vial_layer_pending = None;
+        self.advanced_slot_picker = None;
         self.macro_key_pick = None;
         self.td_key_pick = None;
         self.td_mod_key_pick = None;
@@ -1042,6 +1055,7 @@ impl KeycodePicker {
         self.vial_quantum_pending_mod = None;
         self.vial_quantum_pending_mt = None;
         self.vial_layer_pending = None;
+        self.advanced_slot_picker = None;
         self.rmk_native_key_actions_allowed_for_target = false;
     }
 
@@ -1113,6 +1127,7 @@ impl KeycodePicker {
         let pending_key_pick_open =
             self.vial_quantum_pending_mod.is_some() || self.vial_quantum_pending_mt.is_some();
         let td_key_pick_open = self.td_key_pick.is_some() || self.td_mod_key_pick.is_some();
+        let advanced_slot_open = self.advanced_slot_picker.is_some();
 
         self.popup_state
             .begin_frame(PopupKey::PickerWindow, self.open);
@@ -1126,8 +1141,10 @@ impl KeycodePicker {
             .begin_frame(PopupKey::PendingKeyPickWindow, pending_key_pick_open);
         self.popup_state
             .begin_frame(PopupKey::TdKeyPickWindow, td_key_pick_open);
+        self.popup_state
+            .begin_frame(PopupKey::AdvancedSlotWindow, advanced_slot_open);
 
-        if !self.open && !macro_key_pick_open && !td_key_pick_open {
+        if !self.open && !macro_key_pick_open && !td_key_pick_open && !advanced_slot_open {
             return;
         }
 
@@ -1282,6 +1299,7 @@ impl KeycodePicker {
         }
 
         self.show_vial(ctx, macro_data_state, tap_dance_data_state);
+        self.show_advanced_slot_picker(ctx);
     }
 
     // ─────────────────────────── VIAL PICKER ────────────────────────────────
@@ -1894,6 +1912,7 @@ impl KeycodePicker {
         match tab {
             KeycodeTab::UniversalSymbols => self.universal_symbols_available(),
             KeycodeTab::Rgb => self.supports_rgb,
+            KeycodeTab::Advanced => self.supports_macro || self.supports_tap_dance,
             KeycodeTab::Macro => self.supports_macro,
             KeycodeTab::TapDance => self.supports_tap_dance,
             KeycodeTab::Bluetooth => self.has_visible_bluetooth_keycodes(),
@@ -1983,6 +2002,9 @@ impl KeycodePicker {
             KeycodeTab::Layers => self.show_vial_layers(ui),
             KeycodeTab::Modifiers => self.show_vial_modifiers(ui),
             KeycodeTab::Rgb => self.show_vial_rgb(ui),
+            KeycodeTab::Advanced => {
+                self.show_vial_advanced(ui, macro_data_state, tap_dance_data_state)
+            }
             KeycodeTab::Macro => self.show_vial_macros(ui),
             KeycodeTab::TapDance => self.show_vial_tap_dance(ui),
             KeycodeTab::Special => self.show_vial_special(ui),

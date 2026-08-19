@@ -10,7 +10,7 @@ impl EntropyApp {
             .unwrap_or(false)
     }
 
-    fn matrix_tester_poll_interval(&self) -> std::time::Duration {
+    pub(super) fn matrix_tester_poll_interval(&self) -> std::time::Duration {
         matrix_tester_poll_interval_for_target(
             self.matrix_tester_uses_bluetooth_transport(),
             cfg!(target_os = "macos"),

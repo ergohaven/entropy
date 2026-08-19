@@ -10,93 +10,13 @@
   <textdomain>entropy</textdomain>
   <engines>
     <engine>
-      <name>entropy-universal-symbols</name>
-      <language>x-other</language>
-      <license>GPL-3.0-or-later</license>
-      <author>Ergohaven</author>
-      <icon>input-keyboard</icon>
-      <layout>default</layout>
-      <longname>Entropy Text Expander</longname>
-      <description>Text expansion for Ergohaven keyboards</description>
-    </engine>
-    <engine>
       <name>entropy-universal-symbols-us</name>
       <language>en</language>
       <license>GPL-3.0-or-later</license>
       <author>Ergohaven</author>
       <icon>input-keyboard</icon>
       <layout>us</layout>
-      <longname>Entropy Text Expander EN</longname>
-      <description>Text expansion for Ergohaven keyboards</description>
-    </engine>
-    <engine>
-      <name>entropy-universal-symbols-gb</name>
-      <language>en</language>
-      <license>GPL-3.0-or-later</license>
-      <author>Ergohaven</author>
-      <icon>input-keyboard</icon>
-      <layout>gb</layout>
-      <longname>Entropy Text Expander EN UK</longname>
-      <description>Text expansion for Ergohaven keyboards</description>
-    </engine>
-    <engine>
-      <name>entropy-universal-symbols-de</name>
-      <language>de</language>
-      <license>GPL-3.0-or-later</license>
-      <author>Ergohaven</author>
-      <icon>input-keyboard</icon>
-      <layout>de</layout>
-      <longname>Entropy Text Expander DE</longname>
-      <description>Text expansion for Ergohaven keyboards</description>
-    </engine>
-    <engine>
-      <name>entropy-universal-symbols-fr</name>
-      <language>fr</language>
-      <license>GPL-3.0-or-later</license>
-      <author>Ergohaven</author>
-      <icon>input-keyboard</icon>
-      <layout>fr</layout>
-      <longname>Entropy Text Expander FR</longname>
-      <description>Text expansion for Ergohaven keyboards</description>
-    </engine>
-    <engine>
-      <name>entropy-universal-symbols-es</name>
-      <language>es</language>
-      <license>GPL-3.0-or-later</license>
-      <author>Ergohaven</author>
-      <icon>input-keyboard</icon>
-      <layout>es</layout>
-      <longname>Entropy Text Expander ES</longname>
-      <description>Text expansion for Ergohaven keyboards</description>
-    </engine>
-    <engine>
-      <name>entropy-universal-symbols-it</name>
-      <language>it</language>
-      <license>GPL-3.0-or-later</license>
-      <author>Ergohaven</author>
-      <icon>input-keyboard</icon>
-      <layout>it</layout>
-      <longname>Entropy Text Expander IT</longname>
-      <description>Text expansion for Ergohaven keyboards</description>
-    </engine>
-    <engine>
-      <name>entropy-universal-symbols-pt</name>
-      <language>pt</language>
-      <license>GPL-3.0-or-later</license>
-      <author>Ergohaven</author>
-      <icon>input-keyboard</icon>
-      <layout>pt</layout>
-      <longname>Entropy Text Expander PT</longname>
-      <description>Text expansion for Ergohaven keyboards</description>
-    </engine>
-    <engine>
-      <name>entropy-universal-symbols-br</name>
-      <language>pt</language>
-      <license>GPL-3.0-or-later</license>
-      <author>Ergohaven</author>
-      <icon>input-keyboard</icon>
-      <layout>br</layout>
-      <longname>Entropy Text Expander BR</longname>
+      <longname>English (Entropy)</longname>
       <description>Text expansion for Ergohaven keyboards</description>
     </engine>
     <engine>
@@ -106,7 +26,7 @@
       <author>Ergohaven</author>
       <icon>input-keyboard</icon>
       <layout>ru</layout>
-      <longname>Entropy Text Expander RU</longname>
+      <longname>Russian (Entropy)</longname>
       <description>Text expansion for Ergohaven keyboards</description>
     </engine>
   </engines>

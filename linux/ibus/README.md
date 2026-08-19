@@ -9,17 +9,10 @@ Entropy uses this IBus backend for Text Expander on Linux. While selected as an 
 ibus restart
 ```
 
-Then add/select Entropy input sources in the system input-source/input-method settings:
+Then add/select the two Entropy input sources in the system input-source/input-method settings:
 
-- **Entropy Text Expander EN** for the `us` layout
-- **Entropy Text Expander EN UK** for the `gb` layout
-- **Entropy Text Expander DE** for the `de` layout
-- **Entropy Text Expander FR** for the `fr` layout
-- **Entropy Text Expander ES** for the `es` layout
-- **Entropy Text Expander IT** for the `it` layout
-- **Entropy Text Expander PT** for the `pt` layout
-- **Entropy Text Expander BR** for the `br` layout
-- **Entropy Text Expander RU** for the `ru` layout
+- **English (Entropy)** for the `us` layout
+- **Russian (Entropy)** for the `ru` layout
 
 Switch between those system input sources to change language while keeping Entropy Text Expander active.
 Entropy also reads the selected source's base layout (`EN` or `RU`) for firmware-native

@@ -352,6 +352,9 @@ impl EntropyApp {
         }
 
         #[cfg(not(target_arch = "wasm32"))]
+        let poll_interval = self.matrix_tester_poll_interval();
+
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some((rows, cols)) = self
             .layout
             .as_ref()
@@ -361,6 +364,8 @@ impl EntropyApp {
         }
 
         let viewport_id = egui::ViewportId::from_hash_of("entropy_sticky_layout_window");
+        #[cfg(not(target_arch = "wasm32"))]
+        ctx.request_repaint_after_for(poll_interval, viewport_id);
         let lang = self.app_settings.language;
         let layout = self.layout.clone();
         let selected_device_name = self
