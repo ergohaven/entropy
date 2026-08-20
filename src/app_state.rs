@@ -2530,6 +2530,23 @@ pub(super) enum UndoAction {
     },
 }
 
+/// Middle-click clear queued while another HID write is in flight, so rapid
+/// clearing clicks are applied in order instead of being lost. `generation`
+/// pins the clear to the connection it was requested on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PendingKeyClear {
+    Key {
+        layer: usize,
+        key_idx: usize,
+        generation: u64,
+    },
+    Encoder {
+        layer: usize,
+        encoder_visual_idx: usize,
+        generation: u64,
+    },
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KeyOverridePickField {
     Trigger,
@@ -3921,6 +3938,8 @@ pub struct EntropyApp {
     pub(crate) secondary_click_handled: bool,
     /// Deferred left/right modifier swap, applied after Ctrl is released
     pub(crate) pending_handed_swap: Option<(usize, usize, crate::keyboard::KeyBinding)>,
+    /// Middle-click key clears waiting for the HID handle to become free
+    pub(super) pending_key_clears: Vec<PendingKeyClear>,
     /// Animation progress for hover layer preview (0.0 = hidden, 1.0 = fully shown)
     pub(crate) hover_layer_progress: f32,
     /// Stack of layers to return to on right-click (last = most recent)

@@ -1218,6 +1218,10 @@ impl eframe::App for EntropyApp {
                 }
             }
         }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        self.flush_pending_key_clears(ctx);
+
         let accent_color = self.app_settings.accent_color;
         if theme_application_required(self.last_applied_theme, self.dark_mode, accent_color) {
             ctx.set_visuals(app_visuals(self.dark_mode));
