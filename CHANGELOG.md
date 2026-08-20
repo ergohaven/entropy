@@ -5,6 +5,17 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.20-rc.6 - Test Candidate
+
+### Improvements
+
+- Added an application setting that makes middle click assign `Transparent` instead of `None`, including queued key and encoder writes with matching layout hints
+- Exposed RMK Repeat/Again in the Special picker independently from the unsupported Alt Repeat slots
+
+### Fixes
+
+- Removed the unavailable right-click Mouse Keys action when connected firmware does not expose Mouse Keys settings
+
 ## v0.3.20-rc.5 - Test Candidate
 
 ### Fixes

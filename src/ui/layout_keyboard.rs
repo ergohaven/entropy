@@ -160,7 +160,7 @@ impl EntropyApp {
                 self.open_picker_for_target(Some(*ki), None);
             }
             if response.middle_clicked() {
-                self.request_key_clear(ui.ctx(), *ki);
+                self.request_middle_click_key_assignment(ui.ctx(), *ki);
             }
 
             // Right-click actions: layer jump/retarget, modifier side swap, editors/settings.
@@ -567,7 +567,7 @@ impl EntropyApp {
             }
             if top_resp.middle_clicked() {
                 if let Some((visual_idx, _)) = cw {
-                    self.request_encoder_clear(ui.ctx(), *visual_idx);
+                    self.request_middle_click_encoder_assignment(ui.ctx(), *visual_idx);
                 }
             }
             if let (Some((press_ki, _)), Some(middle_resp)) = (press_slot, middle_resp.as_ref()) {
@@ -602,7 +602,7 @@ impl EntropyApp {
                     self.selected_encoder = None;
                 }
                 if middle_resp.middle_clicked() {
-                    self.request_key_clear(ui.ctx(), press_ki);
+                    self.request_middle_click_key_assignment(ui.ctx(), press_ki);
                 }
             }
             if bottom_resp.hovered() {
@@ -639,7 +639,7 @@ impl EntropyApp {
             }
             if bottom_resp.middle_clicked() {
                 if let Some((visual_idx, _)) = ccw {
-                    self.request_encoder_clear(ui.ctx(), *visual_idx);
+                    self.request_middle_click_encoder_assignment(ui.ctx(), *visual_idx);
                 }
             }
 

@@ -136,6 +136,7 @@ pub struct KeycodePicker {
     pub supports_auto_shift: bool,
     pub supports_caps_word: bool,
     pub supports_repeat_key: bool,
+    pub supports_alt_repeat_key: bool,
     pub supports_layer_lock: bool,
     pub supports_persistent_default_layer: bool,
     pub supports_macro_ext_keycodes: bool,
@@ -335,6 +336,26 @@ mod tests {
             tabs.get(symbols_index + 1),
             Some(&KeycodeTab::UniversalSymbols)
         );
+    }
+
+    #[test]
+    fn repeat_and_alt_repeat_have_independent_capability_gates() {
+        let repeat = crate::keycode::KEYCODES
+            .iter()
+            .find(|keycode| keycode.name == "QK_REPEAT_KEY")
+            .unwrap();
+        let alt_repeat = crate::keycode::KEYCODES
+            .iter()
+            .find(|keycode| keycode.name == "QK_ALT_REPEAT_KEY")
+            .unwrap();
+        let picker = KeycodePicker {
+            supports_repeat_key: true,
+            supports_alt_repeat_key: false,
+            ..Default::default()
+        };
+
+        assert!(picker.vial_keycode_supported(repeat));
+        assert!(!picker.vial_keycode_supported(alt_repeat));
     }
 
     #[test]
@@ -804,6 +825,7 @@ impl Default for KeycodePicker {
             supports_auto_shift: true,
             supports_caps_word: true,
             supports_repeat_key: true,
+            supports_alt_repeat_key: true,
             supports_layer_lock: true,
             supports_persistent_default_layer: true,
             supports_macro_ext_keycodes: true,
@@ -1933,7 +1955,8 @@ impl KeycodePicker {
     fn vial_keycode_supported(&self, kc: &crate::keycode::Keycode) -> bool {
         match kc.name {
             "QK_CAPS_WORD_TOGGLE" => self.supports_caps_word,
-            "QK_REPEAT_KEY" | "QK_ALT_REPEAT_KEY" => self.supports_repeat_key,
+            "QK_REPEAT_KEY" => self.supports_repeat_key,
+            "QK_ALT_REPEAT_KEY" => self.supports_alt_repeat_key,
             "CMB_TOG" => self.supports_combo,
             "KC_ASTG" => self.supports_auto_shift,
             "QK_LAYER_LOCK" => self.supports_layer_lock,

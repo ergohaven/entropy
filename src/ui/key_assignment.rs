@@ -223,7 +223,7 @@ impl EntropyApp {
                 if ctrl_held {
                     if let Some(ki) = key_target {
                         let swapped = crate::rmk_native::toggle_handed_key_action(action);
-                        self.drop_queued_key_clear(self.selected_layer, ki);
+                        self.drop_queued_middle_click_assignment(self.selected_layer, ki);
                         self.pending_handed_swap = Some((
                             self.selected_layer,
                             ki,
@@ -271,7 +271,7 @@ impl EntropyApp {
                         layout.set_encoder_keycode(self.selected_layer, visual_idx, swapped);
                     }
                 } else if let Some(ki) = key_target {
-                    self.drop_queued_key_clear(self.selected_layer, ki);
+                    self.drop_queued_middle_click_assignment(self.selected_layer, ki);
                     self.pending_handed_swap = Some((
                         self.selected_layer,
                         ki,
@@ -304,7 +304,7 @@ impl EntropyApp {
             self.secondary_click_handled = true;
             return;
         }
-        if is_mouse_keycode(kc) {
+        if is_mouse_keycode(kc) && self.mouse_keys_settings.supported {
             self.open_mouse_keys_settings_page();
             self.secondary_click_handled = true;
             return;
@@ -427,12 +427,21 @@ impl EntropyApp {
         }
     }
 
-    /// Middle-click: clear a key on the selected layer to KC_NO without
-    /// opening the picker. If a HID write is already in flight, the clear is
-    /// queued so rapid clearing clicks are not lost.
-    pub(super) fn request_key_clear(&mut self, ctx: &egui::Context, ki: usize) {
+    fn middle_click_binding(&self) -> crate::keyboard::KeyBinding {
+        crate::keyboard::KeyBinding::Vial(if self.app_settings.middle_click_assigns_transparent {
+            0x0001
+        } else {
+            0x0000
+        })
+    }
+
+    /// Assign the configured middle-click value on the selected layer without
+    /// opening the picker. If a HID write is already in flight, the assignment
+    /// is queued so rapid clicks are not lost.
+    pub(super) fn request_middle_click_key_assignment(&mut self, ctx: &egui::Context, ki: usize) {
         let layer = self.selected_layer;
-        // The clear supersedes older deferred edits of this key: a picker
+        let binding = self.middle_click_binding();
+        // The assignment supersedes older deferred edits of this key: a picker
         // result not yet applied and a handed swap waiting for Ctrl release.
         if self.keycode_picker.result.is_some()
             && self.combo_pick_target.is_none()
@@ -450,19 +459,20 @@ impl EntropyApp {
         {
             self.pending_handed_swap = None;
         }
-        let already_empty = self
+        let already_assigned = self
             .layout
             .as_ref()
-            .map(|l| l.get_key_binding(layer, ki).is_no())
+            .map(|l| l.get_key_binding(layer, ki) == binding)
             .unwrap_or(true);
-        if already_empty {
+        if already_assigned {
             return;
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if !self.assign_key_binding(ctx, layer, ki, crate::keyboard::KeyBinding::default()) {
-            self.queue_pending_key_clear(PendingKeyClear::Key {
+        if !self.assign_key_binding(ctx, layer, ki, binding) {
+            self.queue_pending_middle_click_assignment(PendingMiddleClickAssignment::Key {
                 layer,
                 key_idx: ki,
+                binding,
                 generation: self.connection_generation,
             });
         }
@@ -470,15 +480,20 @@ impl EntropyApp {
         {
             let _ = ctx;
             if let Some(layout) = &mut self.layout {
-                layout.set_key_binding(layer, ki, crate::keyboard::KeyBinding::default());
+                layout.set_key_binding(layer, ki, binding);
             }
         }
     }
 
-    /// Middle-click: clear an encoder slot on the selected layer to KC_NO.
-    pub(super) fn request_encoder_clear(&mut self, ctx: &egui::Context, encoder_visual_idx: usize) {
+    /// Assign the configured middle-click value to an encoder slot.
+    pub(super) fn request_middle_click_encoder_assignment(
+        &mut self,
+        ctx: &egui::Context,
+        encoder_visual_idx: usize,
+    ) {
         let layer = self.selected_layer;
-        // The clear supersedes a picker result not yet applied to this slot.
+        let keycode = self.middle_click_binding().vial_keycode();
+        // The assignment supersedes a picker result not yet applied to this slot.
         if self.keycode_picker.result.is_some()
             && self.combo_pick_target.is_none()
             && self.key_override_pick_target.is_none()
@@ -488,19 +503,20 @@ impl EntropyApp {
             self.keycode_picker.result = None;
             self.selected_encoder = None;
         }
-        let already_empty = self
+        let already_assigned = self
             .layout
             .as_ref()
-            .map(|l| l.get_encoder_keycode(layer, encoder_visual_idx) == 0)
+            .map(|l| l.get_encoder_keycode(layer, encoder_visual_idx) == keycode)
             .unwrap_or(true);
-        if already_empty {
+        if already_assigned {
             return;
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if !self.assign_encoder_keycode(ctx, layer, encoder_visual_idx, 0) {
-            self.queue_pending_key_clear(PendingKeyClear::Encoder {
+        if !self.assign_encoder_keycode(ctx, layer, encoder_visual_idx, keycode) {
+            self.queue_pending_middle_click_assignment(PendingMiddleClickAssignment::Encoder {
                 layer,
                 encoder_visual_idx,
+                keycode,
                 generation: self.connection_generation,
             });
         }
@@ -508,87 +524,90 @@ impl EntropyApp {
         {
             let _ = ctx;
             if let Some(layout) = &mut self.layout {
-                layout.set_encoder_keycode(layer, encoder_visual_idx, 0);
+                layout.set_encoder_keycode(layer, encoder_visual_idx, keycode);
             }
         }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn queue_pending_key_clear(&mut self, clear: PendingKeyClear) {
-        if !self.pending_key_clears.contains(&clear) {
-            self.pending_key_clears.push(clear);
-        }
+    fn queue_pending_middle_click_assignment(&mut self, assignment: PendingMiddleClickAssignment) {
+        self.pending_middle_click_assignments
+            .retain(|pending| !same_middle_click_target(*pending, assignment));
+        self.pending_middle_click_assignments.push(assignment);
     }
 
-    /// A newer deferred edit of this key supersedes an older queued clear.
-    fn drop_queued_key_clear(&mut self, layer: usize, key_idx: usize) {
-        self.pending_key_clears.retain(|clear| {
+    /// A newer deferred edit of this key supersedes an older queued assignment.
+    fn drop_queued_middle_click_assignment(&mut self, layer: usize, key_idx: usize) {
+        self.pending_middle_click_assignments.retain(|assignment| {
             !matches!(
-                clear,
-                PendingKeyClear::Key { layer: l, key_idx: k, .. } if *l == layer && *k == key_idx
+                assignment,
+                PendingMiddleClickAssignment::Key { layer: l, key_idx: k, .. }
+                    if *l == layer && *k == key_idx
             )
         });
     }
 
-    /// A whole-layer write (paste, fill, undo) supersedes queued clears of
-    /// keys and encoders on that layer.
-    pub(super) fn drop_queued_key_clears_for_layer(&mut self, layer: usize) {
-        self.pending_key_clears.retain(|clear| match clear {
-            PendingKeyClear::Key { layer: l, .. } | PendingKeyClear::Encoder { layer: l, .. } => {
-                *l != layer
-            }
-        });
+    /// A whole-layer write (paste, fill, undo) supersedes queued middle-click
+    /// assignments of keys and encoders on that layer.
+    pub(super) fn drop_queued_middle_click_assignments_for_layer(&mut self, layer: usize) {
+        self.pending_middle_click_assignments
+            .retain(|assignment| match assignment {
+                PendingMiddleClickAssignment::Key { layer: l, .. }
+                | PendingMiddleClickAssignment::Encoder { layer: l, .. } => *l != layer,
+            });
     }
 
-    /// Apply queued middle-click clears once the HID handle is free again.
-    /// Clears from a previous connection are dropped; targets that became
-    /// empty in the meantime are skipped without a write.
+    /// Apply queued middle-click assignments once the HID handle is free again.
+    /// Assignments from a previous connection are dropped; targets that already
+    /// have the intended value are skipped without a write.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn flush_pending_key_clears(&mut self, ctx: &egui::Context) {
-        if self.pending_key_clears.is_empty() {
+    pub(super) fn flush_pending_middle_click_assignments(&mut self, ctx: &egui::Context) {
+        if self.pending_middle_click_assignments.is_empty() {
             return;
         }
         let generation = self.connection_generation;
-        self.pending_key_clears.retain(|clear| match clear {
-            PendingKeyClear::Key { generation: g, .. }
-            | PendingKeyClear::Encoder { generation: g, .. } => *g == generation,
-        });
-        while !self.pending_key_clears.is_empty() {
+        self.pending_middle_click_assignments
+            .retain(|assignment| match assignment {
+                PendingMiddleClickAssignment::Key { generation: g, .. }
+                | PendingMiddleClickAssignment::Encoder { generation: g, .. } => *g == generation,
+            });
+        while !self.pending_middle_click_assignments.is_empty() {
             if self.hid_write_task_active() {
                 return;
             }
-            let applied = match self.pending_key_clears[0] {
-                PendingKeyClear::Key { layer, key_idx, .. } => {
-                    let already_empty = self
-                        .layout
-                        .as_ref()
-                        .map(|l| l.get_key_binding(layer, key_idx).is_no())
-                        .unwrap_or(true);
-                    already_empty
-                        || self.assign_key_binding(
-                            ctx,
-                            layer,
-                            key_idx,
-                            crate::keyboard::KeyBinding::default(),
-                        )
-                }
-                PendingKeyClear::Encoder {
+            let applied = match self.pending_middle_click_assignments[0] {
+                PendingMiddleClickAssignment::Key {
                     layer,
-                    encoder_visual_idx,
+                    key_idx,
+                    binding,
                     ..
                 } => {
-                    let already_empty = self
+                    let already_assigned = self
                         .layout
                         .as_ref()
-                        .map(|l| l.get_encoder_keycode(layer, encoder_visual_idx) == 0)
+                        .map(|l| l.get_key_binding(layer, key_idx) == binding)
                         .unwrap_or(true);
-                    already_empty || self.assign_encoder_keycode(ctx, layer, encoder_visual_idx, 0)
+                    already_assigned || self.assign_key_binding(ctx, layer, key_idx, binding)
+                }
+                PendingMiddleClickAssignment::Encoder {
+                    layer,
+                    encoder_visual_idx,
+                    keycode,
+                    ..
+                } => {
+                    let already_assigned = self
+                        .layout
+                        .as_ref()
+                        .map(|l| l.get_encoder_keycode(layer, encoder_visual_idx) == keycode)
+                        .unwrap_or(true);
+                    already_assigned
+                        || self.assign_encoder_keycode(ctx, layer, encoder_visual_idx, keycode)
                 }
             };
             if !applied {
                 return;
             }
-            self.pending_key_clears.remove(0);
+            self.pending_middle_click_assignments.remove(0);
         }
     }
 
@@ -672,6 +691,39 @@ impl EntropyApp {
     }
 }
 
+fn same_middle_click_target(
+    left: PendingMiddleClickAssignment,
+    right: PendingMiddleClickAssignment,
+) -> bool {
+    match (left, right) {
+        (
+            PendingMiddleClickAssignment::Key {
+                layer: left_layer,
+                key_idx: left_key,
+                ..
+            },
+            PendingMiddleClickAssignment::Key {
+                layer: right_layer,
+                key_idx: right_key,
+                ..
+            },
+        ) => left_layer == right_layer && left_key == right_key,
+        (
+            PendingMiddleClickAssignment::Encoder {
+                layer: left_layer,
+                encoder_visual_idx: left_encoder,
+                ..
+            },
+            PendingMiddleClickAssignment::Encoder {
+                layer: right_layer,
+                encoder_visual_idx: right_encoder,
+                ..
+            },
+        ) => left_layer == right_layer && left_encoder == right_encoder,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -745,6 +797,34 @@ mod tests {
         assert!(app.status_msg.contains("not supported"));
     }
 
+    #[test]
+    fn mouse_key_secondary_action_requires_exposed_mouse_settings() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+
+        app.handle_secondary_target(
+            &ctx,
+            false,
+            crate::keyboard::KeyBinding::Vial(0x00CD),
+            Some(0),
+            None,
+        );
+        assert!(!app.secondary_click_handled);
+        assert!(!matches!(app.settings_tab, SettingsTab::MouseKeys));
+
+        app.mouse_keys_settings.supported = true;
+        app.handle_secondary_target(
+            &ctx,
+            false,
+            crate::keyboard::KeyBinding::Vial(0x00CD),
+            Some(0),
+            None,
+        );
+        assert!(app.secondary_click_handled);
+        assert!(matches!(app.settings_tab, SettingsTab::MouseKeys));
+    }
+
     fn test_layout(keycodes: &[u16], encoder_keycodes: &[u16]) -> KeyboardLayout {
         KeyboardLayout {
             name: "Test".into(),
@@ -803,7 +883,7 @@ mod tests {
         let mut app = EntropyApp::new(&creation_context);
         app.layout = Some(test_layout(&[0x0004, 0x0005], &[]));
 
-        app.request_key_clear(&ctx, 0);
+        app.request_middle_click_key_assignment(&ctx, 0);
 
         assert_eq!(
             app.layout.as_ref().unwrap().get_key_binding(0, 0),
@@ -817,7 +897,7 @@ mod tests {
                 old_binding: crate::keyboard::KeyBinding::Vial(0x0004),
             })
         ));
-        assert!(app.pending_key_clears.is_empty());
+        assert!(app.pending_middle_click_assignments.is_empty());
     }
 
     #[test]
@@ -827,10 +907,10 @@ mod tests {
         let mut app = EntropyApp::new(&creation_context);
         app.layout = Some(test_layout(&[0x0000], &[]));
 
-        app.request_key_clear(&ctx, 0);
+        app.request_middle_click_key_assignment(&ctx, 0);
 
         assert!(app.undo_stack.is_empty());
-        assert!(app.pending_key_clears.is_empty());
+        assert!(app.pending_middle_click_assignments.is_empty());
     }
 
     #[test]
@@ -840,7 +920,7 @@ mod tests {
         let mut app = EntropyApp::new(&creation_context);
         app.layout = Some(test_layout(&[], &[0x00E9]));
 
-        app.request_encoder_clear(&ctx, 0);
+        app.request_middle_click_encoder_assignment(&ctx, 0);
 
         assert_eq!(app.layout.as_ref().unwrap().get_encoder_keycode(0, 0), 0);
         assert!(matches!(
@@ -851,7 +931,27 @@ mod tests {
                 old_kc: 0x00E9,
             })
         ));
-        assert!(app.pending_key_clears.is_empty());
+        assert!(app.pending_middle_click_assignments.is_empty());
+    }
+
+    #[test]
+    fn middle_click_transparent_setting_assigns_inherit_to_keys_and_encoders() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        app.app_settings.middle_click_assigns_transparent = true;
+        app.layout = Some(test_layout(&[0x0004], &[0x00E9]));
+
+        app.request_middle_click_key_assignment(&ctx, 0);
+        app.request_middle_click_encoder_assignment(&ctx, 0);
+
+        let layout = app.layout.as_ref().unwrap();
+        assert_eq!(
+            layout.get_key_binding(0, 0),
+            crate::keyboard::KeyBinding::Vial(0x0001)
+        );
+        assert_eq!(layout.get_encoder_keycode(0, 0), 0x0001);
+        assert_eq!(app.undo_stack.len(), 2);
     }
 
     #[test]
@@ -863,7 +963,7 @@ mod tests {
         app.selected_key = Some((0, 0));
         app.keycode_picker.result = Some(crate::keyboard::KeyBinding::Vial(0x0006));
 
-        app.request_key_clear(&ctx, 0);
+        app.request_middle_click_key_assignment(&ctx, 0);
         app.apply_picker_results(&ctx);
 
         assert!(app.keycode_picker.result.is_none());
@@ -881,7 +981,7 @@ mod tests {
         app.layout = Some(test_layout(&[0x00E1], &[]));
         app.pending_handed_swap = Some((0, 0, crate::keyboard::KeyBinding::Vial(0x00E5)));
 
-        app.request_key_clear(&ctx, 0);
+        app.request_middle_click_key_assignment(&ctx, 0);
 
         assert!(app.pending_handed_swap.is_none());
         assert_eq!(
@@ -891,16 +991,18 @@ mod tests {
     }
 
     #[test]
-    fn handed_swap_drops_queued_clear_for_same_key() {
+    fn handed_swap_drops_queued_middle_click_assignment_for_same_key() {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
         app.layout = Some(test_layout(&[0x00E1], &[]));
-        app.pending_key_clears.push(PendingKeyClear::Key {
-            layer: 0,
-            key_idx: 0,
-            generation: app.connection_generation,
-        });
+        app.pending_middle_click_assignments
+            .push(PendingMiddleClickAssignment::Key {
+                layer: 0,
+                key_idx: 0,
+                binding: crate::keyboard::KeyBinding::Vial(0),
+                generation: app.connection_generation,
+            });
 
         app.handle_secondary_target(
             &ctx,
@@ -910,31 +1012,34 @@ mod tests {
             None,
         );
 
-        assert!(app.pending_key_clears.is_empty());
+        assert!(app.pending_middle_click_assignments.is_empty());
         assert!(app.pending_handed_swap.is_some());
     }
 
     #[test]
-    fn layer_snapshot_write_drops_queued_clears_for_that_layer() {
+    fn layer_snapshot_write_drops_queued_middle_click_assignments_for_that_layer() {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
         app.layout = Some(test_layout(&[0x0004, 0x0005], &[]));
         let generation = app.connection_generation;
-        app.pending_key_clears = vec![
-            PendingKeyClear::Key {
+        app.pending_middle_click_assignments = vec![
+            PendingMiddleClickAssignment::Key {
                 layer: 0,
                 key_idx: 0,
+                binding: crate::keyboard::KeyBinding::Vial(0),
                 generation,
             },
-            PendingKeyClear::Encoder {
+            PendingMiddleClickAssignment::Encoder {
                 layer: 0,
                 encoder_visual_idx: 0,
+                keycode: 0,
                 generation,
             },
-            PendingKeyClear::Key {
+            PendingMiddleClickAssignment::Key {
                 layer: 1,
                 key_idx: 0,
+                binding: crate::keyboard::KeyBinding::Vial(0),
                 generation,
             },
         ];
@@ -951,19 +1056,20 @@ mod tests {
             "layer_actions.paste",
         );
 
-        // Only the pasted layer's clears are superseded.
+        // Only the pasted layer's assignments are superseded.
         assert_eq!(
-            app.pending_key_clears,
-            vec![PendingKeyClear::Key {
+            app.pending_middle_click_assignments,
+            vec![PendingMiddleClickAssignment::Key {
                 layer: 1,
                 key_idx: 0,
+                binding: crate::keyboard::KeyBinding::Vial(0),
                 generation,
             }]
         );
     }
 
     #[test]
-    fn busy_middle_click_clears_are_queued_deduped_and_flushed() {
+    fn busy_middle_click_assignments_are_queued_deduped_and_flushed() {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -971,25 +1077,25 @@ mod tests {
         let (hid_device, _recorder) = crate::hid::HidDevice::test_device();
         app.hid_device = Some(hid_device);
 
-        // First clear takes the HID handle for its write task.
-        app.request_key_clear(&ctx, 0);
+        // First assignment takes the HID handle for its write task.
+        app.request_middle_click_key_assignment(&ctx, 0);
         assert!(app.hid_write_task_active());
 
         // Clicks while the write is in flight queue once per target.
-        app.request_key_clear(&ctx, 1);
-        app.request_key_clear(&ctx, 1);
-        assert_eq!(app.pending_key_clears.len(), 1);
+        app.request_middle_click_key_assignment(&ctx, 1);
+        app.request_middle_click_key_assignment(&ctx, 1);
+        assert_eq!(app.pending_middle_click_assignments.len(), 1);
 
         for _ in 0..400 {
             app.poll_vial_hid_task(&ctx);
-            app.flush_pending_key_clears(&ctx);
-            if !app.hid_write_task_active() && app.pending_key_clears.is_empty() {
+            app.flush_pending_middle_click_assignments(&ctx);
+            if !app.hid_write_task_active() && app.pending_middle_click_assignments.is_empty() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
 
-        assert!(app.pending_key_clears.is_empty());
+        assert!(app.pending_middle_click_assignments.is_empty());
         assert!(!app.hid_write_task_active());
         let layout = app.layout.as_ref().unwrap();
         assert_eq!(

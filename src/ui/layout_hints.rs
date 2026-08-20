@@ -13,7 +13,9 @@ enum LayoutBottomHintKind {
     },
     Macro,
     TapDance,
-    Mouse,
+    Mouse {
+        settings_available: bool,
+    },
     AltRepeat,
     GraveEscape,
     Layer {
@@ -22,8 +24,11 @@ enum LayoutBottomHintKind {
 }
 
 impl LayoutBottomHintKind {
-    fn keys(self) -> &'static [&'static str] {
+    fn keys(self, middle_click_assigns_transparent: bool) -> &'static [&'static str] {
         match self {
+            Self::Empty if middle_click_assigns_transparent => {
+                &["key_hints.change_key", "key_hints.clear_key"]
+            }
             Self::Empty => &["key_hints.change_key"],
             Self::Basic => &["key_hints.change_key", "key_hints.clear_key"],
             Self::Modifier {
@@ -64,11 +69,16 @@ impl LayoutBottomHintKind {
                 "key_hints.edit_tap_dance",
                 "key_hints.clear_key",
             ],
-            Self::Mouse => &[
+            Self::Mouse {
+                settings_available: true,
+            } => &[
                 "key_hints.change_key",
                 "key_hints.open_mouse_keys",
                 "key_hints.clear_key",
             ],
+            Self::Mouse {
+                settings_available: false,
+            } => &["key_hints.change_key", "key_hints.clear_key"],
             Self::AltRepeat => &[
                 "key_hints.change_key",
                 "key_hints.open_alt_repeat",
@@ -108,6 +118,7 @@ fn paint_layout_hint_lines(
     font: &FontId,
     color: Color32,
     language: crate::i18n::Language,
+    middle_click_assigns_transparent: bool,
 ) {
     let Some(last_line) = keys.len().checked_sub(1) else {
         return;
@@ -122,7 +133,14 @@ fn paint_layout_hint_lines(
         ui.painter().text(
             egui::pos2(center_x, first_y + index as f32 * LAYOUT_HINT_LINE_HEIGHT),
             egui::Align2::CENTER_CENTER,
-            crate::i18n::tr_catalog(language, key),
+            crate::i18n::tr_catalog(
+                language,
+                if middle_click_assigns_transparent && *key == "key_hints.clear_key" {
+                    "key_hints.make_transparent"
+                } else {
+                    key
+                },
+            ),
             font.clone(),
             color,
         );
@@ -330,7 +348,9 @@ impl EntropyApp {
             } else if hovered_is_tap_dance {
                 LayoutBottomHintKind::TapDance
             } else if hovered_is_mouse {
-                LayoutBottomHintKind::Mouse
+                LayoutBottomHintKind::Mouse {
+                    settings_available: self.mouse_keys_settings.supported,
+                }
             } else if hovered_is_alt_repeat {
                 LayoutBottomHintKind::AltRepeat
             } else if hovered_is_grave_escape {
@@ -346,10 +366,11 @@ impl EntropyApp {
                 ui,
                 center_x,
                 hint_y,
-                hint_kind.keys(),
+                hint_kind.keys(self.app_settings.middle_click_assigns_transparent),
                 &hint_font,
                 hint_color,
                 hint_language,
+                self.app_settings.middle_click_assigns_transparent,
             );
         } else if layer_name_hovered {
             ui.painter().text(
@@ -384,14 +405,16 @@ mod tests {
             },
             LayoutBottomHintKind::Macro,
             LayoutBottomHintKind::TapDance,
-            LayoutBottomHintKind::Mouse,
+            LayoutBottomHintKind::Mouse {
+                settings_available: true,
+            },
             LayoutBottomHintKind::AltRepeat,
             LayoutBottomHintKind::GraveEscape,
             LayoutBottomHintKind::Layer { is_layer_tap: true },
         ];
 
         for kind in kinds {
-            assert_eq!(kind.keys().last(), Some(&CLEAR_KEY), "{kind:?}");
+            assert_eq!(kind.keys(false).last(), Some(&CLEAR_KEY), "{kind:?}");
         }
     }
 
@@ -403,7 +426,7 @@ mod tests {
                 can_retarget_key: true,
                 is_mod_tap: true,
             }
-            .keys(),
+            .keys(false),
             &[
                 "key_hints.change_key",
                 "key_hints.change_mod_tap_key",
@@ -416,8 +439,27 @@ mod tests {
     #[test]
     fn empty_binding_does_not_offer_clear() {
         assert_eq!(
-            LayoutBottomHintKind::Empty.keys(),
+            LayoutBottomHintKind::Empty.keys(false),
             &["key_hints.change_key"]
+        );
+    }
+
+    #[test]
+    fn transparent_mode_offers_middle_click_for_empty_binding() {
+        assert_eq!(
+            LayoutBottomHintKind::Empty.keys(true),
+            &["key_hints.change_key", CLEAR_KEY]
+        );
+    }
+
+    #[test]
+    fn mouse_settings_hint_is_hidden_when_firmware_does_not_support_it() {
+        assert_eq!(
+            LayoutBottomHintKind::Mouse {
+                settings_available: false,
+            }
+            .keys(false),
+            &["key_hints.change_key", CLEAR_KEY]
         );
     }
 }

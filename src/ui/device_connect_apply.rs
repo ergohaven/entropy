@@ -639,6 +639,7 @@ impl EntropyApp {
                 self.keycode_picker.supports_auto_shift = r.supported_qmk_settings.contains(&4);
                 self.keycode_picker.supports_caps_word = r.vial_features.caps_word;
                 self.keycode_picker.supports_repeat_key = r.vial_features.repeat_key;
+                self.keycode_picker.supports_alt_repeat_key = r.vial_features.alt_repeat_key;
                 self.keycode_picker.supports_layer_lock = r.vial_features.layer_lock;
                 self.keycode_picker.supports_persistent_default_layer =
                     r.vial_features.persistent_default_layer;

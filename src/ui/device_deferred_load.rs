@@ -638,7 +638,7 @@ impl EntropyApp {
             && self.keycode_picker.result.is_none()
             && self.editing_layer.is_none()
             && self.pending_handed_swap.is_none()
-            && self.pending_key_clears.is_empty()
+            && self.pending_middle_click_assignments.is_empty()
             && !self.pending_layout_undo
             && !self.import_pending()
             && !self.top_dropdown_open(ctx)

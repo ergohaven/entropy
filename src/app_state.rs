@@ -39,6 +39,8 @@ pub(crate) struct AppSettings {
     #[serde(default = "default_layer_hover_preview")]
     pub(crate) layer_hover_preview: bool,
     #[serde(default)]
+    pub(crate) middle_click_assigns_transparent: bool,
+    #[serde(default)]
     pub(crate) sticky_layout_window: bool,
     #[serde(default = "default_sticky_layout_always_on_top")]
     pub(crate) sticky_layout_always_on_top: bool,
@@ -168,6 +170,7 @@ impl Default for AppSettings {
             launch_minimized: false,
             show_shifted_number_symbols: default_show_shifted_number_symbols(),
             layer_hover_preview: default_layer_hover_preview(),
+            middle_click_assigns_transparent: false,
             sticky_layout_window: false,
             sticky_layout_always_on_top: default_sticky_layout_always_on_top(),
             sticky_layout_opacity: default_sticky_layout_opacity(),
@@ -218,6 +221,7 @@ mod app_settings_tests {
 
         assert!(!settings.dark_mode);
         assert!(!settings.launch_minimized);
+        assert!(!settings.middle_click_assigns_transparent);
     }
 }
 
@@ -356,6 +360,7 @@ pub(crate) struct VialFeatureSupport {
     pub(crate) layer_lock: bool,
     pub(crate) persistent_default_layer: bool,
     pub(crate) repeat_key: bool,
+    pub(crate) alt_repeat_key: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2530,19 +2535,21 @@ pub(super) enum UndoAction {
     },
 }
 
-/// Middle-click clear queued while another HID write is in flight, so rapid
-/// clearing clicks are applied in order instead of being lost. `generation`
-/// pins the clear to the connection it was requested on.
+/// Middle-click assignment queued while another HID write is in flight, so
+/// rapid clicks are applied in order instead of being lost. `generation` pins
+/// the assignment to the connection it was requested on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum PendingKeyClear {
+pub(super) enum PendingMiddleClickAssignment {
     Key {
         layer: usize,
         key_idx: usize,
+        binding: crate::keyboard::KeyBinding,
         generation: u64,
     },
     Encoder {
         layer: usize,
         encoder_visual_idx: usize,
+        keycode: u16,
         generation: u64,
     },
 }
@@ -3938,8 +3945,8 @@ pub struct EntropyApp {
     pub(crate) secondary_click_handled: bool,
     /// Deferred left/right modifier swap, applied after Ctrl is released
     pub(crate) pending_handed_swap: Option<(usize, usize, crate::keyboard::KeyBinding)>,
-    /// Middle-click key clears waiting for the HID handle to become free
-    pub(super) pending_key_clears: Vec<PendingKeyClear>,
+    /// Middle-click assignments waiting for the HID handle to become free.
+    pub(super) pending_middle_click_assignments: Vec<PendingMiddleClickAssignment>,
     /// Animation progress for hover layer preview (0.0 = hidden, 1.0 = fully shown)
     pub(crate) hover_layer_progress: f32,
     /// Stack of layers to return to on right-click (last = most recent)

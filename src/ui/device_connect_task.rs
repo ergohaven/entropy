@@ -1060,7 +1060,8 @@ impl EntropyApp {
                     caps_word: dynamic_feature_bits & (1 << 0) != 0,
                     layer_lock: dynamic_feature_bits & (1 << 1) != 0,
                     persistent_default_layer: vial_protocol >= 5,
-                    repeat_key: reported_alt_repeat_count > 0,
+                    repeat_key: reported_alt_repeat_count > 0 || rmk_native_capabilities.repeat_key,
+                    alt_repeat_key: reported_alt_repeat_count > 0,
                 };
 
                 progress("Reading combos…");
