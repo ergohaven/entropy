@@ -5,6 +5,12 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.20-rc.4 - Test Candidate
+
+### Fixes
+
+- Kept the main Entropy window interactive when Layout Indicator is minimized or covered on native GNOME Wayland by preventing secondary viewports from blocking the shared renderer
+
 ## v0.3.20-rc.3 - Test Candidate
 
 ### Fixes

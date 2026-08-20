@@ -1179,7 +1179,7 @@ impl eframe::App for EntropyApp {
         self.handle_ui_scale_shortcuts(ctx);
         self.remember_main_window_size(ctx);
         // Submit the independent layout-indicator viewport from `ui`; `logic`
-        // remains model-only, and minimizing the child cannot suspend root input.
+        // remains model-only, while the native renderer owns viewport scheduling.
         self.draw_sticky_layout_window(ctx);
 
         self.tour_target_rects.clear();

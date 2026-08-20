@@ -928,7 +928,6 @@ impl EntropyApp {
                 }
             },
         );
-        ctx.request_repaint_of(viewport_id);
     }
 }
 
