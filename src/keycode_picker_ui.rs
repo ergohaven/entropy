@@ -315,6 +315,22 @@ pub(super) fn picker_button(
     resp
 }
 
+pub(super) fn picker_choice_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    tooltip: &str,
+    active: bool,
+) -> egui::Response {
+    picker_button(
+        ui,
+        label,
+        crate::ui_style::modal_small_button_size(84.0),
+        true,
+        active,
+    )
+    .on_hover_text(tooltip)
+}
+
 pub(super) fn picker_tab_width(label: &str) -> f32 {
     (label.chars().count() as f32 * 7.0 + 24.0).clamp(52.0, 132.0)
 }

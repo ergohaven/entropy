@@ -1753,14 +1753,8 @@ impl KeycodePicker {
                         } else {
                             format!("Layer {}", n)
                         };
-                        let resp = picker_button(
-                            ui,
-                            &label,
-                            crate::ui_style::modal_small_button_size(84.0),
-                            true,
-                            false,
-                        );
-                        let resp = resp.on_hover_text(crate::i18n::tr_text(self.language, &label));
+                        let tooltip = crate::i18n::tr_text(self.language, &label);
+                        let resp = picker_choice_button(ui, &label, &tooltip, false);
                         if resp.clicked() {
                             if base & 0xF000 == 0x4000 {
                                 // LT: layer in bits 8..11, tap kc in bits 0..7.

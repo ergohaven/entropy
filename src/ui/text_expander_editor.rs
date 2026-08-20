@@ -1126,8 +1126,8 @@ impl EntropyApp {
                     let mut emoji_resp = None;
                     crate::ui_style::allocate_ui_at_rect(ui, emoji_rect, |ui| {
                         emoji_resp = Some(
-                            super::text_expander_emoji::color_emoji_button_sized(
-                                ui, "☺️", emoji_size,
+                            super::text_expander_emoji::monochrome_emoji_picker_button(
+                                ui, emoji_size,
                             )
                             .on_hover_text(crate::i18n::tr_catalog(
                                 lang,

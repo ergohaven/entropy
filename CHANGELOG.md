@@ -5,6 +5,17 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.20-rc.2 - Test Candidate
+
+### Improvements
+
+- Matched the Macro and Tap Dance slot dialogs to the compact Choose Layer window pattern
+
+### Fixes
+
+- Restored the Layout Indicator viewport to eframe's UI phase so focus transfers cannot paint through the logic-only lifecycle
+- Reserved square inline slots for Text Expander Twemoji and kept the emoji-picker trigger monochrome
+
 ## v0.3.20-rc.1 - Test Candidate
 
 ### Improvements

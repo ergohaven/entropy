@@ -173,6 +173,45 @@ pub(super) fn color_emoji_button_sized(
     response
 }
 
+pub(super) fn monochrome_emoji_picker_button(
+    ui: &mut egui::Ui,
+    size: egui::Vec2,
+) -> egui::Response {
+    crate::ui_style::modern_button_with_font(ui, "☺", size, size.x.min(size.y) * 0.65, true)
+}
+
+fn emoji_reservation_format(ui: &egui::Ui, character: char, font_size: f32) -> egui::TextFormat {
+    let base_font = egui::FontId::proportional(font_size);
+    let (glyph_width, row_height) = ui.fonts_mut(|fonts| {
+        (
+            fonts.glyph_width(&base_font, character),
+            fonts.row_height(&base_font),
+        )
+    });
+    let target_width = row_height.max(font_size);
+    let scale = if glyph_width > f32::EPSILON {
+        (target_width / glyph_width).max(1.0)
+    } else {
+        1.0
+    };
+
+    egui::TextFormat {
+        font_id: egui::FontId::proportional(font_size * scale),
+        line_height: Some(row_height),
+        color: egui::Color32::TRANSPARENT,
+        ..Default::default()
+    }
+}
+
+fn emoji_image_rect(glyph_rect: egui::Rect, field_height: f32) -> egui::Rect {
+    let available_side = glyph_rect
+        .width()
+        .min(glyph_rect.height())
+        .min((field_height - 6.0).max(1.0));
+    let image_side = (available_side - 1.0).max(1.0);
+    egui::Rect::from_center_size(glyph_rect.center(), egui::Vec2::splat(image_side))
+}
+
 pub(super) fn color_emoji_text_field(
     ui: &mut egui::Ui,
     id: egui::Id,
@@ -193,19 +232,17 @@ pub(super) fn color_emoji_text_field(
         for grapheme in buffer.as_str().graphemes(true) {
             if emoji_has_twemoji(grapheme) {
                 for (idx, character) in grapheme.chars().enumerate() {
-                    job.append(
-                        &character.to_string(),
-                        0.0,
+                    let format = if idx == 0 {
+                        emoji_reservation_format(ui, character, font_size)
+                    } else {
                         egui::TextFormat {
-                            font_id: egui::FontId::proportional(if idx == 0 {
-                                font_size
-                            } else {
-                                0.1
-                            }),
+                            font_id: egui::FontId::proportional(0.1),
+                            line_height: Some(font_size),
                             color: egui::Color32::TRANSPARENT,
                             ..Default::default()
-                        },
-                    );
+                        }
+                    };
+                    job.append(&character.to_string(), 0.0, format);
                 }
             } else {
                 job.append(
@@ -243,9 +280,7 @@ pub(super) fn color_emoji_text_field(
         let Some(texture) = twemoji_texture(ui.ctx(), emoji) else {
             continue;
         };
-        let image_size = glyph_rect.height().min(height - 6.0).max(1.0);
-        let image_rect =
-            egui::Rect::from_center_size(glyph_rect.center(), egui::Vec2::splat(image_size));
+        let image_rect = emoji_image_rect(glyph_rect, height);
         painter.image(
             texture.id(),
             image_rect,
@@ -446,5 +481,58 @@ mod tests {
             2
         );
         assert_eq!(text, "Text ☺️ and 👨‍👩‍👧‍👦");
+    }
+
+    #[test]
+    fn adjacent_color_emoji_keep_separate_square_slots() {
+        let ctx = egui::Context::default();
+        let mut text = "🚀☺️".to_owned();
+
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            color_emoji_text_field(
+                ui,
+                egui::Id::new("adjacent-color-emoji-test"),
+                &mut text,
+                120.0,
+                32.0,
+                "",
+                32,
+            );
+        });
+        let image_rects = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default() => {
+                    Some(egui::Rect::from_points(
+                        &mesh
+                            .vertices
+                            .iter()
+                            .map(|vertex| vertex.pos)
+                            .collect::<Vec<_>>(),
+                    ))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(image_rects.len(), 2);
+        assert!(image_rects.iter().all(|rect| rect.width() >= 10.0));
+        assert!(image_rects[0].right() <= image_rects[1].left() + 0.1);
+    }
+
+    #[test]
+    fn emoji_picker_trigger_is_monochrome_text() {
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            monochrome_emoji_picker_button(ui, egui::vec2(32.0, 32.0));
+        });
+
+        assert!(!output.shapes.iter().any(|shape| {
+            matches!(
+                &shape.shape,
+                egui::Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default()
+            )
+        }));
     }
 }

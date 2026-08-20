@@ -899,7 +899,7 @@ impl KeycodePicker {
         }
     }
 
-    fn macro_description(&self, n: usize) -> Option<String> {
+    pub(super) fn macro_description(&self, n: usize) -> Option<String> {
         self.macro_descriptions
             .get(n)
             .map(|s| s.trim().to_string())

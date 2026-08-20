@@ -74,6 +74,32 @@ impl KeycodePicker {
             AdvancedSlotKind::Macro => self.macro_count,
             AdvancedSlotKind::TapDance => self.tap_dance_entries.len(),
         };
+        let selected_slot = match kind {
+            AdvancedSlotKind::Macro => self.macro_inline_selected.unwrap_or(0),
+            AdvancedSlotKind::TapDance => self.tap_dance_editor_open.unwrap_or(0),
+        };
+        let choices = (0..slot_count.min(u8::MAX as usize + 1))
+            .map(|slot| {
+                let slot = slot as u8;
+                let id = match kind {
+                    AdvancedSlotKind::Macro => format!("M{slot}"),
+                    AdvancedSlotKind::TapDance => format!("TD{slot}"),
+                };
+                let display_name = match kind {
+                    AdvancedSlotKind::Macro => self.macro_display_name(slot as usize),
+                    AdvancedSlotKind::TapDance => self.tap_dance_display_name(slot as usize),
+                };
+                let label = advanced_slot_label(&id, &display_name);
+                let tooltip = match kind {
+                    AdvancedSlotKind::Macro => self
+                        .macro_description(slot as usize)
+                        .map(|description| format!("{label}\n{description}"))
+                        .unwrap_or_else(|| label.clone()),
+                    AdvancedSlotKind::TapDance => label.clone(),
+                };
+                (slot, label, tooltip)
+            })
+            .collect::<Vec<_>>();
         let popup_size = advanced_slot_popup_size(ctx, slot_count);
         crate::ui_style::centered_modal_window(
             ctx,
@@ -92,20 +118,23 @@ impl KeycodePicker {
                     tr_picker(self.language, "tap_dance_editor.select_tap_dance_slot")
                 }
             };
-            ui.vertical_centered(|ui| crate::ui_style::modal_intro(ui, intro));
+            crate::ui_style::modal_intro(ui, intro);
             ui.add_space(crate::ui_style::modal_space_sm());
-            let picked = match kind {
-                AdvancedSlotKind::Macro => self.show_macro_slot_grid(
-                    ui,
-                    self.macro_inline_selected.unwrap_or(0),
-                    "advanced_macro_slots",
-                ),
-                AdvancedSlotKind::TapDance => self.show_tap_dance_slot_grid(
-                    ui,
-                    self.tap_dance_editor_open.unwrap_or(0),
-                    "advanced_tap_dance_slots",
-                ),
-            };
+            let mut picked = None;
+            egui::ScrollArea::vertical()
+                .id_salt("advanced_slot_choices")
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        for (slot, label, tooltip) in &choices {
+                            let response =
+                                picker_choice_button(ui, label, tooltip, *slot == selected_slot);
+                            if response.clicked() {
+                                picked = Some(*slot);
+                            }
+                        }
+                    });
+                });
             if let Some(slot) = picked {
                 self.close_advanced_slot_picker();
                 match kind {
@@ -113,19 +142,6 @@ impl KeycodePicker {
                     AdvancedSlotKind::TapDance => self.assign_tap_dance_slot(slot),
                 }
             }
-            ui.add_space(crate::ui_style::modal_space_sm());
-            ui.horizontal_centered(|ui| {
-                if crate::ui_style::modern_button(
-                    ui,
-                    tr_picker(self.language, "key_picker.cancel"),
-                    crate::ui_style::modal_action_button_size(),
-                    true,
-                )
-                .clicked()
-                {
-                    self.close_advanced_slot_picker();
-                }
-            });
         });
         if !open {
             self.close_advanced_slot_picker();
@@ -134,16 +150,20 @@ impl KeycodePicker {
 }
 
 fn advanced_slot_popup_size(ctx: &egui::Context, slot_count: usize) -> egui::Vec2 {
-    let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ctx);
-    let width = metrics
-        .settings_content_width()
-        .min((ctx.content_rect().width() - metrics.value(32.0)).max(metrics.value(320.0)));
-    let columns = ((width - metrics.value(20.0) + metrics.value(4.0)) / metrics.value(52.0))
-        .floor()
-        .clamp(4.0, 16.0) as usize;
-    let visible_rows = slot_count.max(1).div_ceil(columns).min(2);
-    let height = metrics.value(172.0 + 46.0 * visible_rows as f32);
-    egui::vec2(width, height)
+    const WIDTH: f32 = 300.0;
+    const COLUMNS: usize = 3;
+    let rows = slot_count.max(1).div_ceil(COLUMNS);
+    let desired_height = (48.0 + rows as f32 * 36.0).max(120.0);
+    let available_height = (ctx.content_rect().height() - 64.0).max(120.0);
+    egui::vec2(WIDTH, desired_height.min(available_height))
+}
+
+fn advanced_slot_label(id: &str, display_name: &str) -> String {
+    if display_name == id {
+        id.to_owned()
+    } else {
+        format!("{id}: {display_name}")
+    }
 }
 
 #[cfg(test)]
@@ -151,10 +171,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn action_slot_popup_grows_for_a_second_visible_row() {
+    fn action_slot_popup_matches_layer_picker_width_and_grows_with_rows() {
         let ctx = egui::Context::default();
 
+        assert_eq!(advanced_slot_popup_size(&ctx, 4).x, 300.0);
         assert!(advanced_slot_popup_size(&ctx, 16).y > advanced_slot_popup_size(&ctx, 4).y);
+    }
+
+    #[test]
+    fn named_action_slot_uses_the_layer_picker_label_pattern() {
+        assert_eq!(advanced_slot_label("M3", "Paste"), "M3: Paste");
+        assert_eq!(advanced_slot_label("TD2", "TD2"), "TD2");
     }
 
     #[test]

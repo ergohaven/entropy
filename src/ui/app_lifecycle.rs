@@ -456,6 +456,21 @@ mod tests {
     use super::*;
     use crate::keyboard::{KeyboardLayout, LayoutOption, PhysicalKey};
 
+    #[test]
+    fn logic_never_paints_the_layout_indicator_viewport() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let mut frame = eframe::Frame::_new_kittest();
+        app.app_settings.sticky_layout_window = true;
+
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            eframe::App::logic(&mut app, ui.ctx(), &mut frame);
+        });
+
+        assert!(output.shapes.is_empty());
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn only_device_connection_replaces_the_layout_canvas() {
@@ -1155,13 +1170,6 @@ impl eframe::App for EntropyApp {
             self.poll_text_expander_deferred_save(now);
             self.auto_reload_text_expander_rules_file(now);
         }
-
-        // Secondary viewports must be submitted from `logic`: eframe keeps
-        // calling it while the root viewport is minimized or occluded, while
-        // `ui` can be skipped. Keeping the layout indicator here prevents its
-        // matrix polling and rendering from falling back to delayed catch-up
-        // frames after Entropy is minimized.
-        self.draw_sticky_layout_window(ctx);
     }
 
     fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -1170,6 +1178,9 @@ impl eframe::App for EntropyApp {
         self.apply_ui_scale(ctx);
         self.handle_ui_scale_shortcuts(ctx);
         self.remember_main_window_size(ctx);
+        // `show_viewport_immediate` paints synchronously, so eframe requires
+        // this submission to stay in `ui`; `logic` remains model-only.
+        self.draw_sticky_layout_window(ctx);
 
         self.tour_target_rects.clear();
 
