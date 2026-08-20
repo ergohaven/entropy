@@ -1098,7 +1098,7 @@ impl EntropyApp {
                     let mut replacement_resp = None;
                     crate::ui_style::allocate_ui_at_rect(ui, replacement_rect, |ui| {
                         replacement_resp = Some(
-                            crate::ui_style::modern_text_field_sized(
+                            super::text_expander_emoji::color_emoji_text_field(
                                 ui,
                                 replacement_id,
                                 &mut rule.replacement,
@@ -1106,7 +1106,6 @@ impl EntropyApp {
                                 field_height,
                                 crate::i18n::tr_catalog(lang, "text_expander.replacement_hint"),
                                 480,
-                                egui::Align::Min,
                             )
                             .on_hover_text(crate::i18n::tr_catalog(
                                 lang,
@@ -1127,12 +1126,8 @@ impl EntropyApp {
                     let mut emoji_resp = None;
                     crate::ui_style::allocate_ui_at_rect(ui, emoji_rect, |ui| {
                         emoji_resp = Some(
-                            crate::ui_style::modern_button_with_font(
-                                ui,
-                                "☺",
-                                emoji_size,
-                                metrics.value(18.0),
-                                true,
+                            super::text_expander_emoji::color_emoji_button_sized(
+                                ui, "☺️", emoji_size,
                             )
                             .on_hover_text(crate::i18n::tr_catalog(
                                 lang,

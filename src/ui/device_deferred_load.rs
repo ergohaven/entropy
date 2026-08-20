@@ -561,7 +561,7 @@ impl EntropyApp {
             let picker_sections: &[DeferredLoadSection] = match self.keycode_picker.selected_tab {
                 KeycodeTab::Macro => &[DeferredLoadSection::Macros],
                 KeycodeTab::TapDance => &[DeferredLoadSection::TapDance],
-                KeycodeTab::Advanced => {
+                KeycodeTab::Special => {
                     &[DeferredLoadSection::Macros, DeferredLoadSection::TapDance]
                 }
                 _ => &[],

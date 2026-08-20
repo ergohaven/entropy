@@ -5,6 +5,19 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.20-rc.1 - Test Candidate
+
+### Improvements
+
+- Moved Macro and Tap Dance assignment into the first Special-key group and removed the separate Advanced picker tab
+- Made Macro and Tap Dance lists and slot dialogs adapt to available window space, including localized action labels
+- Rendered Text Expander picker choices and replacement-field emoji with the bundled color Twemoji assets
+
+### Fixes
+
+- Kept Layout Indicator polling in the root background lifecycle and repainted its viewport only after fresh matrix data, preventing focus-return freezes
+- Normalized emoji presentation selectors before Twemoji lookup so the smiling-face picker entry no longer falls back to the old font
+
 ## v0.3.19-rc.1 - Test Candidate
 
 ### Improvements

@@ -200,7 +200,6 @@ pub enum KeycodeTab {
     Media,
     Special,
     Rgb,
-    Advanced,
     Macro,
     TapDance,
     Bluetooth,
@@ -215,7 +214,6 @@ impl KeycodeTab {
         KeycodeTab::Modifiers,
         KeycodeTab::Special,
         KeycodeTab::Rgb,
-        KeycodeTab::Advanced,
         KeycodeTab::Bluetooth,
         KeycodeTab::Custom,
     ];
@@ -230,7 +228,6 @@ impl KeycodeTab {
             KeycodeTab::Media => "key_picker.tab_media",
             KeycodeTab::Special => "key_picker.tab_special",
             KeycodeTab::Rgb => "key_picker.tab_rgb",
-            KeycodeTab::Advanced => "key_picker.tab_advanced",
             KeycodeTab::Macro => "key_picker.tab_macro",
             KeycodeTab::TapDance => "key_picker.tab_tap_dance",
             KeycodeTab::Bluetooth => "key_picker.tab_bluetooth",
@@ -261,10 +258,10 @@ impl KeycodeTab {
             return KeycodeTab::Custom;
         }
         if (0x7700..=0x77FF).contains(&value) {
-            return KeycodeTab::Advanced;
+            return KeycodeTab::Special;
         }
         if (0x5700..=0x57FF).contains(&value) {
-            return KeycodeTab::Advanced;
+            return KeycodeTab::Special;
         }
         if let Some(kc) = crate::keycode::find_keycode(value) {
             if kc.name.starts_with("RGB_") {
@@ -344,11 +341,11 @@ mod tests {
         );
         assert_eq!(
             KeycodeTab::preferred_for_vial_keycode(0x7700, false),
-            KeycodeTab::Advanced
+            KeycodeTab::Special
         );
         assert_eq!(
             KeycodeTab::preferred_for_vial_keycode(0x5700, false),
-            KeycodeTab::Advanced
+            KeycodeTab::Special
         );
         assert_eq!(
             KeycodeTab::preferred_for_vial_keycode(0x7E00, true),

@@ -323,6 +323,10 @@ fn sticky_layout_default_window_size() -> Vec2 {
     egui::vec2(STICKY_LAYOUT_WINDOW_W, STICKY_LAYOUT_WINDOW_H)
 }
 
+pub(super) fn sticky_layout_viewport_id() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("entropy_sticky_layout_window")
+}
+
 fn sticky_layout_saved_window_size(settings: &AppSettings) -> Vec2 {
     settings
         .sticky_layout_window_size
@@ -331,6 +335,21 @@ fn sticky_layout_saved_window_size(settings: &AppSettings) -> Vec2 {
 }
 
 impl EntropyApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn poll_sticky_layout_background(&mut self, ctx: &egui::Context) {
+        if !self.app_settings.sticky_layout_window || self.is_vial_locked() {
+            return;
+        }
+
+        if let Some((rows, cols)) = self
+            .layout
+            .as_ref()
+            .map(|layout| (layout.rows, layout.cols))
+        {
+            self.poll_switch_matrix_state(ctx, rows, cols, false);
+        }
+    }
+
     pub(super) fn draw_sticky_layout_window(&mut self, ctx: &egui::Context) {
         if !self.app_settings.sticky_layout_window {
             self.sticky_layout_last_size = None;
@@ -351,21 +370,7 @@ impl EntropyApp {
             return;
         }
 
-        #[cfg(not(target_arch = "wasm32"))]
-        let poll_interval = self.matrix_tester_poll_interval();
-
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some((rows, cols)) = self
-            .layout
-            .as_ref()
-            .map(|layout| (layout.rows, layout.cols))
-        {
-            self.poll_switch_matrix_state(ctx, rows, cols, false);
-        }
-
-        let viewport_id = egui::ViewportId::from_hash_of("entropy_sticky_layout_window");
-        #[cfg(not(target_arch = "wasm32"))]
-        ctx.request_repaint_after_for(poll_interval, viewport_id);
+        let viewport_id = sticky_layout_viewport_id();
         let lang = self.app_settings.language;
         let layout = self.layout.clone();
         let selected_device_name = self

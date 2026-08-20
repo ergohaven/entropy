@@ -1920,7 +1920,6 @@ impl KeycodePicker {
         match tab {
             KeycodeTab::UniversalSymbols => self.universal_symbols_available(),
             KeycodeTab::Rgb => self.supports_rgb,
-            KeycodeTab::Advanced => self.supports_macro || self.supports_tap_dance,
             KeycodeTab::Macro => self.supports_macro,
             KeycodeTab::TapDance => self.supports_tap_dance,
             KeycodeTab::Bluetooth => self.has_visible_bluetooth_keycodes(),
@@ -2010,12 +2009,11 @@ impl KeycodePicker {
             KeycodeTab::Layers => self.show_vial_layers(ui),
             KeycodeTab::Modifiers => self.show_vial_modifiers(ui),
             KeycodeTab::Rgb => self.show_vial_rgb(ui),
-            KeycodeTab::Advanced => {
-                self.show_vial_advanced(ui, macro_data_state, tap_dance_data_state)
-            }
             KeycodeTab::Macro => self.show_vial_macros(ui),
             KeycodeTab::TapDance => self.show_vial_tap_dance(ui),
-            KeycodeTab::Special => self.show_vial_special(ui),
+            KeycodeTab::Special => {
+                self.show_vial_special(ui, macro_data_state, tap_dance_data_state)
+            }
             KeycodeTab::Bluetooth => self.show_vial_bluetooth(ui),
             KeycodeTab::Custom => self.show_vial_custom(ui),
             _ => self.show_vial_generic(ui),

@@ -451,16 +451,33 @@ pub fn modern_button_with_font(
         modal_outline_stroke(dark),
         egui::StrokeKind::Inside,
     );
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        label,
-        FontId::proportional(font_size),
-        if enabled {
-            ui.visuals().text_color()
-        } else {
-            muted_text(dark)
-        },
+    let text_color = if enabled {
+        ui.visuals().text_color()
+    } else {
+        muted_text(dark)
+    };
+    let text_rect = rect.shrink2(Vec2::new(6.0, 2.0));
+    let mut fitted_font_size = font_size;
+    let mut galley = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        FontId::proportional(fitted_font_size),
+        text_color,
+    );
+    while galley.size().x > text_rect.width() && fitted_font_size > 8.5 {
+        fitted_font_size -= 0.5;
+        galley = ui.painter().layout_no_wrap(
+            label.to_owned(),
+            FontId::proportional(fitted_font_size),
+            text_color,
+        );
+    }
+    ui.painter().with_clip_rect(text_rect).galley(
+        egui::pos2(
+            text_rect.center().x - galley.size().x * 0.5,
+            text_rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
+        text_color,
     );
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -529,6 +546,73 @@ fn modern_text_field_impl(
     horizontal_align: egui::Align,
     interactive: bool,
 ) -> egui::Response {
+    let field_rect = paint_modern_text_field_frame(ui, id, width, height, interactive);
+
+    let resp = allocate_ui_at_rect(ui, field_rect.shrink2(Vec2::new(10.0, 0.0)), |ui| {
+        ui.add_sized(
+            [width - 20.0, height],
+            egui::TextEdit::singleline(text)
+                .id(id)
+                .desired_width(width - 20.0)
+                .hint_text(hint)
+                .font(FontId::proportional(font_size))
+                .char_limit(char_limit)
+                .frame(egui::Frame::NONE)
+                .interactive(interactive)
+                .horizontal_align(horizontal_align)
+                .vertical_align(egui::Align::Center),
+        )
+    })
+    .inner;
+    if resp.hovered() && interactive {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+    }
+    resp
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn modern_text_field_sized_with_layouter(
+    ui: &mut Ui,
+    id: egui::Id,
+    text: &mut String,
+    width: f32,
+    height: f32,
+    hint: &str,
+    char_limit: usize,
+    horizontal_align: egui::Align,
+    layouter: &mut dyn FnMut(&Ui, &dyn egui::TextBuffer, f32) -> std::sync::Arc<egui::Galley>,
+) -> egui::widgets::text_edit::TextEditOutput {
+    let font_size = 12.5 * (height / 32.0).clamp(1.0, 1.3);
+    let field_rect = paint_modern_text_field_frame(ui, id, width, height, true);
+    let inner_size = Vec2::new(width - 20.0, height);
+    let output = allocate_ui_at_rect(ui, field_rect.shrink2(Vec2::new(10.0, 0.0)), |ui| {
+        egui::TextEdit::singleline(text)
+            .id(id)
+            .desired_width(inner_size.x)
+            .min_size(inner_size)
+            .hint_text(hint)
+            .font(FontId::proportional(font_size))
+            .char_limit(char_limit)
+            .frame(egui::Frame::NONE)
+            .horizontal_align(horizontal_align)
+            .vertical_align(egui::Align::Center)
+            .layouter(layouter)
+            .show(ui)
+    })
+    .inner;
+    if output.response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+    }
+    output
+}
+
+fn paint_modern_text_field_frame(
+    ui: &mut Ui,
+    id: egui::Id,
+    width: f32,
+    height: f32,
+    interactive: bool,
+) -> egui::Rect {
     let dark = ui.visuals().dark_mode;
     let field_size = Vec2::new(width, height);
     let (field_rect, _) = ui.allocate_exact_size(field_size, Sense::hover());
@@ -557,27 +641,7 @@ fn modern_text_field_impl(
         modal_outline_stroke(dark),
         egui::StrokeKind::Inside,
     );
-
-    let resp = allocate_ui_at_rect(ui, field_rect.shrink2(Vec2::new(10.0, 0.0)), |ui| {
-        ui.add_sized(
-            [width - 20.0, height],
-            egui::TextEdit::singleline(text)
-                .id(id)
-                .desired_width(width - 20.0)
-                .hint_text(hint)
-                .font(FontId::proportional(font_size))
-                .char_limit(char_limit)
-                .frame(egui::Frame::NONE)
-                .interactive(interactive)
-                .horizontal_align(horizontal_align)
-                .vertical_align(egui::Align::Center),
-        )
-    })
-    .inner;
-    if resp.hovered() && interactive {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
-    }
-    resp
+    field_rect
 }
 
 pub fn modern_dropdown_button(

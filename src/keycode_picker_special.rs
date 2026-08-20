@@ -28,9 +28,7 @@ impl KeycodePicker {
             | KeycodeTab::Rgb
             | KeycodeTab::Custom => Self::key_grid_width(ui, 13, spacing),
             KeycodeTab::Modifiers => Self::key_grid_width(ui, 13, spacing),
-            KeycodeTab::Advanced | KeycodeTab::Macro | KeycodeTab::TapDance => {
-                Self::slot_grid_width(8, 8.0)
-            }
+            KeycodeTab::Macro | KeycodeTab::TapDance => Self::slot_grid_width(8, 8.0),
             _ => 840.0,
         };
         width.min(ui.available_width())
@@ -104,7 +102,12 @@ impl KeycodePicker {
         }
     }
 
-    pub(super) fn show_vial_special(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn show_vial_special(
+        &mut self,
+        ui: &mut egui::Ui,
+        macro_data_state: DeferredPickerDataState,
+        tap_dance_data_state: DeferredPickerDataState,
+    ) {
         let special_keys: Vec<(String, u16, String)> = vec![
             (
                 "✕
@@ -195,6 +198,24 @@ Repeat"
         );
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
+            if self.supports_macro {
+                self.show_special_action_kind_button(
+                    ui,
+                    AdvancedSlotKind::Macro,
+                    tr_picker(self.language, "macro_editor.picker_item"),
+                    tr_picker(self.language, "key_picker.advanced_macro_tooltip"),
+                    macro_data_state,
+                );
+            }
+            if self.supports_tap_dance {
+                self.show_special_action_kind_button(
+                    ui,
+                    AdvancedSlotKind::TapDance,
+                    tr_picker(self.language, "tap_dance_editor.picker_item"),
+                    tr_picker(self.language, "key_picker.advanced_tap_dance_tooltip"),
+                    tap_dance_data_state,
+                );
+            }
             for (label, value, tip) in &special_keys {
                 if !self.picker_value_supported(*value) {
                     continue;

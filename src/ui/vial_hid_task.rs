@@ -448,6 +448,11 @@ impl EntropyApp {
                     _ => false,
                 };
                 self.finish_matrix_tester_poll(pressed, remember_ever_pressed);
+                if self.app_settings.sticky_layout_window {
+                    ctx.request_repaint_of(
+                        super::layout_indicator_window::sticky_layout_viewport_id(),
+                    );
+                }
             }
             Ok(VialHidOutcome::Battery(battery)) => {
                 if let Some(info) = self.device_about_info.as_mut() {

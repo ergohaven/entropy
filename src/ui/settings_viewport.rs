@@ -17,7 +17,7 @@ pub(crate) fn responsive_settings_visible_rows(
     let row_height = crate::ui_style::ResponsiveMetrics::from_ctx(ctx).settings_row_height();
     let usable_height = (available_height - bottom_reserve).max(row_height);
     let rows_that_fit = (usable_height / row_height).floor().max(1.0) as usize;
-    rows_that_fit.min(total_rows).min(6)
+    rows_that_fit.min(total_rows)
 }
 
 pub(crate) struct AdaptiveSettingsListViewport {
@@ -188,9 +188,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn settings_lists_never_show_more_than_six_rows() {
+    fn settings_list_uses_all_rows_that_fit_large_windows() {
         let ctx = egui::Context::default();
-        assert_eq!(responsive_settings_visible_rows(&ctx, 10_000.0, 20, 0.0), 6);
+        let row_height = crate::ui_style::ResponsiveMetrics::from_ctx(&ctx).settings_row_height();
+
+        assert_eq!(
+            responsive_settings_visible_rows(&ctx, row_height * 9.0, 8, row_height),
+            8
+        );
+    }
+
+    #[test]
+    fn settings_list_still_scrolls_when_rows_do_not_fit() {
+        let ctx = egui::Context::default();
+        let row_height = crate::ui_style::ResponsiveMetrics::from_ctx(&ctx).settings_row_height();
+
+        assert_eq!(
+            responsive_settings_visible_rows(&ctx, row_height * 5.0, 8, row_height),
+            4
+        );
     }
 
     #[test]
