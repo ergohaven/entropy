@@ -188,6 +188,7 @@ impl EntropyApp {
             sticky_layout_active_layer: 0,
             sticky_layout_last_size: None,
             sticky_layout_resize_opacity_hold_frames: 0,
+            sticky_layout_viewport_events: StickyLayoutViewportEventQueue::default(),
             pending_layout_indicator_open_after_unlock: false,
             matrix_tester_last_poll: std::time::Instant::now(),
             matrix_tester_last_lock_check: std::time::Instant::now()

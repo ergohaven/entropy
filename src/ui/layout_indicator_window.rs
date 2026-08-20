@@ -109,6 +109,49 @@ const STICKY_LAYOUT_WINDOW_MARGIN: f32 = 1.0_f32;
 const STICKY_LAYOUT_WINDOW_TITLE_H: f32 = 42.0_f32;
 const STICKY_LAYOUT_WINDOW_FOOTER_H: f32 = 34.0_f32;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct StickyLayoutViewportControls {
+    dark_mode: bool,
+    opacity: f32,
+    visibility_mode: StickyLayoutVisibilityMode,
+    always_on_top: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum StickyLayoutViewportEvent {
+    Close,
+    Controls(StickyLayoutViewportControls),
+    WindowSize(Vec2),
+    ResizeActive,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct StickyLayoutViewportEventQueue(
+    std::sync::Arc<std::sync::Mutex<Vec<StickyLayoutViewportEvent>>>,
+);
+
+fn push_sticky_layout_viewport_event(
+    events: &StickyLayoutViewportEventQueue,
+    event: StickyLayoutViewportEvent,
+) {
+    events
+        .0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(event);
+}
+
+fn drain_sticky_layout_viewport_events(
+    events: &StickyLayoutViewportEventQueue,
+) -> Vec<StickyLayoutViewportEvent> {
+    std::mem::take(
+        &mut *events
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
+}
+
 #[derive(Clone, Copy)]
 enum StickyLayoutWindowButton {
     Pin,
@@ -350,9 +393,90 @@ impl EntropyApp {
         }
     }
 
+    fn apply_sticky_layout_viewport_events(&mut self) -> bool {
+        let events = drain_sticky_layout_viewport_events(&self.sticky_layout_viewport_events);
+        let mut should_close = false;
+        let mut should_save_settings = false;
+
+        for event in events {
+            match event {
+                StickyLayoutViewportEvent::Close => {
+                    should_close = true;
+                    should_save_settings = true;
+                }
+                StickyLayoutViewportEvent::Controls(controls) => {
+                    if self.app_settings.sticky_layout_dark_mode != controls.dark_mode {
+                        self.app_settings.sticky_layout_dark_mode = controls.dark_mode;
+                        should_save_settings = true;
+                    }
+                    let opacity = clamp_sticky_layout_opacity(controls.opacity);
+                    if (self.app_settings.sticky_layout_opacity - opacity).abs() > f32::EPSILON {
+                        self.app_settings.sticky_layout_opacity = opacity;
+                        should_save_settings = true;
+                    }
+                    if self.app_settings.sticky_layout_visibility_mode != controls.visibility_mode {
+                        self.app_settings.sticky_layout_visibility_mode = controls.visibility_mode;
+                        should_save_settings = true;
+                    }
+                    if self.app_settings.sticky_layout_always_on_top != controls.always_on_top {
+                        self.app_settings.sticky_layout_always_on_top = controls.always_on_top;
+                        should_save_settings = true;
+                    }
+                }
+                StickyLayoutViewportEvent::WindowSize(size) => {
+                    if size.x.is_finite() && size.y.is_finite() && size.x > 0.0 && size.y > 0.0 {
+                        let resized = self
+                            .sticky_layout_last_size
+                            .map(|last_size| {
+                                (last_size.x - size.x).abs() > 0.5
+                                    || (last_size.y - size.y).abs() > 0.5
+                            })
+                            .unwrap_or(false);
+                        self.sticky_layout_last_size = Some(size);
+                        if resized {
+                            self.sticky_layout_resize_opacity_hold_frames = 8;
+                        }
+                        let saved_size = sticky_layout_saved_window_size(&self.app_settings);
+                        if (saved_size.x - size.x).abs() > 1.0
+                            || (saved_size.y - size.y).abs() > 1.0
+                        {
+                            self.app_settings.sticky_layout_window_size = Some([size.x, size.y]);
+                            should_save_settings = true;
+                        }
+                    }
+                }
+                StickyLayoutViewportEvent::ResizeActive => {
+                    self.sticky_layout_resize_opacity_hold_frames = 8;
+                }
+            }
+        }
+
+        if self.sticky_layout_resize_opacity_hold_frames > 0 {
+            self.sticky_layout_resize_opacity_hold_frames = self
+                .sticky_layout_resize_opacity_hold_frames
+                .saturating_sub(1);
+        }
+        if should_close {
+            self.app_settings.sticky_layout_window = false;
+            self.sticky_layout_last_size = None;
+            self.sticky_layout_resize_opacity_hold_frames = 0;
+        }
+        if should_save_settings {
+            save_app_settings(&self.app_settings);
+        }
+
+        should_close
+    }
+
     pub(super) fn draw_sticky_layout_window(&mut self, ctx: &egui::Context) {
         if !self.app_settings.sticky_layout_window {
+            let _ = drain_sticky_layout_viewport_events(&self.sticky_layout_viewport_events);
             self.sticky_layout_last_size = None;
+            self.sticky_layout_resize_opacity_hold_frames = 0;
+            return;
+        }
+
+        if self.apply_sticky_layout_viewport_events() {
             return;
         }
 
@@ -417,17 +541,16 @@ impl EntropyApp {
         let module_settings = self.module_settings.clone();
         let matrix_pressed = self.matrix_tester_pressed.clone();
         let pressed_key_layers = self.sticky_layout_pressed_key_layers.clone();
-        let dark = self.app_settings.sticky_layout_dark_mode;
-        let mut sticky_dark_mode = self.app_settings.sticky_layout_dark_mode;
-        let mut sticky_opacity =
-            clamp_sticky_layout_opacity(self.app_settings.sticky_layout_opacity);
-        let mut sticky_visibility_mode = self.app_settings.sticky_layout_visibility_mode;
-        let mut sticky_always_on_top = self.app_settings.sticky_layout_always_on_top;
+        let controls = StickyLayoutViewportControls {
+            dark_mode: self.app_settings.sticky_layout_dark_mode,
+            opacity: clamp_sticky_layout_opacity(self.app_settings.sticky_layout_opacity),
+            visibility_mode: self.app_settings.sticky_layout_visibility_mode,
+            always_on_top: self.app_settings.sticky_layout_always_on_top,
+        };
         let sticky_window_size = sticky_layout_saved_window_size(&self.app_settings);
-        let mut observed_sticky_size: Option<Vec2> = None;
-        let mut resize_opacity_hold_frames = self.sticky_layout_resize_opacity_hold_frames;
-        let mut should_close = false;
-        let mut should_save_settings = false;
+        let sticky_layout_last_size = self.sticky_layout_last_size;
+        let resize_opacity_hold_frames = self.sticky_layout_resize_opacity_hold_frames;
+        let viewport_events = self.sticky_layout_viewport_events.clone();
 
         let mut viewport_builder = egui::ViewportBuilder::default()
             .with_title(window_title.clone())
@@ -436,7 +559,7 @@ impl EntropyApp {
             .with_decorations(false)
             .with_taskbar(false)
             .with_window_type(egui::X11WindowType::Utility)
-            .with_window_level(if sticky_always_on_top {
+            .with_window_level(if controls.always_on_top {
                 egui::WindowLevel::AlwaysOnTop
             } else {
                 egui::WindowLevel::Normal
@@ -445,13 +568,27 @@ impl EntropyApp {
             viewport_builder = viewport_builder.with_inner_size(sticky_window_size);
         }
 
-        ctx.show_viewport_immediate(
+        ctx.show_viewport_deferred(
             viewport_id,
             viewport_builder,
-            |viewport_ui, viewport_class| {
+            move |viewport_ui, viewport_class| {
                 let viewport_ctx = viewport_ui.ctx().clone();
+                let dark = controls.dark_mode;
+                let mut sticky_dark_mode = controls.dark_mode;
+                let mut sticky_opacity = controls.opacity;
+                let mut sticky_visibility_mode = controls.visibility_mode;
+                let mut sticky_always_on_top = controls.always_on_top;
+                let mut observed_sticky_size: Option<Vec2> = None;
+                let mut resize_opacity_hold_frames = resize_opacity_hold_frames;
+                let mut should_close = false;
+                let mut resize_active = false;
+
                 if viewport_ctx.input(|i| i.viewport().close_requested()) {
-                    should_close = true;
+                    push_sticky_layout_viewport_event(
+                        &viewport_events,
+                        StickyLayoutViewportEvent::Close,
+                    );
+                    viewport_ctx.request_repaint_of(egui::ViewportId::ROOT);
                     return;
                 }
 
@@ -462,17 +599,19 @@ impl EntropyApp {
                         && current_size.x > 0.0
                         && current_size.y > 0.0
                     {
-                        if self
-                            .sticky_layout_last_size
+                        let size_changed = sticky_layout_last_size
                             .map(|last_size| {
                                 (last_size.x - current_size.x).abs() > 0.5
                                     || (last_size.y - current_size.y).abs() > 0.5
                             })
-                            .unwrap_or(false)
-                        {
-                            resize_opacity_hold_frames = 8;
+                            .unwrap_or(true);
+                        if size_changed {
+                            if sticky_layout_last_size.is_some() {
+                                resize_opacity_hold_frames = 8;
+                                resize_active = true;
+                            }
+                            observed_sticky_size = Some(current_size);
                         }
-                        observed_sticky_size = Some(current_size);
                     }
                 }
 
@@ -588,7 +727,6 @@ impl EntropyApp {
                                     .clicked()
                                     {
                                         sticky_always_on_top = !sticky_always_on_top;
-                                        should_save_settings = true;
                                         viewport_ctx.send_viewport_cmd(
                                             egui::ViewportCommand::WindowLevel(
                                                 if sticky_always_on_top {
@@ -682,15 +820,13 @@ impl EntropyApp {
                         egui::vec2(132.0, 24.0),
                     );
                     crate::ui_style::allocate_ui_at_rect(ui, transparency_rect, |ui| {
-                        if draw_sticky_layout_transparency_dropdown(
+                        let _ = draw_sticky_layout_transparency_dropdown(
                             ui,
                             lang,
                             dark,
                             &mut sticky_opacity,
                             &mut sticky_visibility_mode,
-                        ) {
-                            should_save_settings = true;
-                        }
+                        );
                     });
 
                     let theme_rect = egui::Rect::from_min_size(
@@ -717,15 +853,17 @@ impl EntropyApp {
                     }
                     if resize_resp.drag_started() {
                         resize_opacity_hold_frames = 8;
+                        resize_active = true;
                         viewport_ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(
                             egui::ResizeDirection::SouthEast,
                         ));
                     }
                     if resize_resp.dragged() {
                         resize_opacity_hold_frames = 8;
+                        resize_active = true;
                     }
                     if resize_resp.drag_stopped() {
-                        should_save_settings = true;
+                        resize_active = true;
                     }
                     let grip_color = app_muted_text(dark);
                     for offset in [7.0, 12.0, 17.0] {
@@ -748,47 +886,74 @@ impl EntropyApp {
                             draw_contents(ui, &mut should_close);
                         });
                 }
+
+                let updated_controls = StickyLayoutViewportControls {
+                    dark_mode: sticky_dark_mode,
+                    opacity: clamp_sticky_layout_opacity(sticky_opacity),
+                    visibility_mode: sticky_visibility_mode,
+                    always_on_top: sticky_always_on_top,
+                };
+                let mut root_repaint_required = false;
+                if updated_controls != controls {
+                    push_sticky_layout_viewport_event(
+                        &viewport_events,
+                        StickyLayoutViewportEvent::Controls(updated_controls),
+                    );
+                    root_repaint_required = true;
+                }
+                if let Some(size) = observed_sticky_size {
+                    push_sticky_layout_viewport_event(
+                        &viewport_events,
+                        StickyLayoutViewportEvent::WindowSize(size),
+                    );
+                    root_repaint_required = true;
+                }
+                if resize_active {
+                    push_sticky_layout_viewport_event(
+                        &viewport_events,
+                        StickyLayoutViewportEvent::ResizeActive,
+                    );
+                    root_repaint_required = true;
+                }
+                if should_close {
+                    push_sticky_layout_viewport_event(
+                        &viewport_events,
+                        StickyLayoutViewportEvent::Close,
+                    );
+                    viewport_ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    root_repaint_required = true;
+                }
+                if root_repaint_required {
+                    viewport_ctx.request_repaint_of(egui::ViewportId::ROOT);
+                }
             },
         );
+        ctx.request_repaint_of(viewport_id);
+    }
+}
 
-        if resize_opacity_hold_frames > 0 {
-            resize_opacity_hold_frames = resize_opacity_hold_frames.saturating_sub(1);
-        }
-        self.sticky_layout_resize_opacity_hold_frames = resize_opacity_hold_frames;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        if let Some(size) = observed_sticky_size {
-            self.sticky_layout_last_size = Some(size);
-            let saved_size = sticky_layout_saved_window_size(&self.app_settings);
-            if (saved_size.x - size.x).abs() > 1.0 || (saved_size.y - size.y).abs() > 1.0 {
-                self.app_settings.sticky_layout_window_size = Some([size.x, size.y]);
-                should_save_settings = true;
-            }
-        }
+    #[test]
+    fn layout_indicator_uses_an_independent_deferred_viewport() {
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        app.app_settings.sticky_layout_window = true;
+        app.vial_unlocked = Some(true);
 
-        if should_close {
-            self.app_settings.sticky_layout_window = false;
-            self.sticky_layout_last_size = None;
-            should_save_settings = true;
-        }
-        if self.app_settings.sticky_layout_dark_mode != sticky_dark_mode {
-            self.app_settings.sticky_layout_dark_mode = sticky_dark_mode;
-            should_save_settings = true;
-        }
-        sticky_opacity = clamp_sticky_layout_opacity(sticky_opacity);
-        if (self.app_settings.sticky_layout_opacity - sticky_opacity).abs() > f32::EPSILON {
-            self.app_settings.sticky_layout_opacity = sticky_opacity;
-            should_save_settings = true;
-        }
-        if self.app_settings.sticky_layout_visibility_mode != sticky_visibility_mode {
-            self.app_settings.sticky_layout_visibility_mode = sticky_visibility_mode;
-            should_save_settings = true;
-        }
-        if self.app_settings.sticky_layout_always_on_top != sticky_always_on_top {
-            self.app_settings.sticky_layout_always_on_top = sticky_always_on_top;
-            should_save_settings = true;
-        }
-        if should_save_settings {
-            save_app_settings(&self.app_settings);
-        }
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.draw_sticky_layout_window(ui.ctx());
+        });
+        let viewport = output
+            .viewport_output
+            .get(&sticky_layout_viewport_id())
+            .expect("layout indicator viewport should be submitted");
+
+        assert!(matches!(viewport.class, egui::ViewportClass::Deferred));
+        assert!(viewport.viewport_ui_cb.is_some());
     }
 }

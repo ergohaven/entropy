@@ -4019,6 +4019,7 @@ pub struct EntropyApp {
     pub(crate) sticky_layout_active_layer: usize,
     pub(crate) sticky_layout_last_size: Option<Vec2>,
     pub(crate) sticky_layout_resize_opacity_hold_frames: u8,
+    pub(crate) sticky_layout_viewport_events: StickyLayoutViewportEventQueue,
     pub(crate) pending_layout_indicator_open_after_unlock: bool,
     pub(crate) matrix_tester_last_poll: std::time::Instant,
     pub(crate) matrix_tester_last_lock_check: std::time::Instant,

@@ -5,6 +5,12 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.20-rc.3 - Test Candidate
+
+### Fixes
+
+- Decoupled the Layout Indicator into an independent deferred viewport so minimizing it cannot suspend pointer input or hover updates in the main Entropy window
+
 ## v0.3.20-rc.2 - Test Candidate
 
 ### Improvements

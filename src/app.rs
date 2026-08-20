@@ -101,6 +101,7 @@ mod layout_indicator;
 mod layout_indicator_preview;
 #[path = "ui/layout_indicator_window.rs"]
 mod layout_indicator_window;
+use layout_indicator_window::StickyLayoutViewportEventQueue;
 #[path = "ui/layout_options_settings.rs"]
 mod layout_options_settings_ui;
 #[path = "ui/layout_shared.rs"]
