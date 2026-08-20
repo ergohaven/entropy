@@ -8,7 +8,13 @@
 #![expect(clippy::undocumented_unsafe_blocks)]
 #![expect(clippy::unwrap_used)]
 
-use std::{cell::RefCell, num::NonZeroU32, rc::Rc, sync::Arc, time::Instant};
+use std::{
+    cell::RefCell,
+    num::NonZeroU32,
+    rc::Rc,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use egui_winit::ActionRequested;
 use glutin::{
@@ -119,6 +125,60 @@ struct Viewport {
     gl_surface: Option<glutin::surface::Surface<glutin::surface::WindowSurface>>,
     window: Option<Arc<Window>>,
     egui_winit: Option<egui_winit::State>,
+
+    /// Wayland must use non-blocking swaps because hidden surfaces can stop presenting.
+    /// Preserve the requested VSync cadence in software when that fallback is active.
+    wayland_frame_interval: Option<Duration>,
+    last_swap_at: Option<Instant>,
+}
+
+fn wayland_frame_interval(
+    window: &Window,
+    requested_swap_interval: glutin::surface::SwapInterval,
+) -> Option<Duration> {
+    let glutin::surface::SwapInterval::Wait(interval) = requested_swap_interval else {
+        return None;
+    };
+
+    let refresh_rate_millihertz = window
+        .current_monitor()
+        .and_then(|monitor| monitor.refresh_rate_millihertz())
+        .unwrap_or(60_000);
+    Some(frame_interval_from_refresh_rate(
+        refresh_rate_millihertz,
+        interval,
+    ))
+}
+
+fn frame_interval_from_refresh_rate(
+    refresh_rate_millihertz: u32,
+    swap_interval: NonZeroU32,
+) -> Duration {
+    let refresh_rate_millihertz = refresh_rate_millihertz.max(1);
+    let refresh_period_nanos = 1_000_000_000_000_u64 / u64::from(refresh_rate_millihertz);
+    Duration::from_nanos(refresh_period_nanos.saturating_mul(u64::from(swap_interval.get())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::frame_interval_from_refresh_rate;
+    use std::{num::NonZeroU32, time::Duration};
+
+    #[test]
+    fn software_wayland_vsync_follows_refresh_rate_and_swap_interval() {
+        assert_eq!(
+            frame_interval_from_refresh_rate(60_000, NonZeroU32::new(1).unwrap()),
+            Duration::from_nanos(16_666_666)
+        );
+        assert_eq!(
+            frame_interval_from_refresh_rate(120_000, NonZeroU32::new(1).unwrap()),
+            Duration::from_nanos(8_333_333)
+        );
+        assert_eq!(
+            frame_interval_from_refresh_rate(60_000, NonZeroU32::new(2).unwrap()),
+            Duration::from_nanos(33_333_332)
+        );
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -743,7 +803,17 @@ impl GlowWinitRunning<'_> {
                     )
                 })?;
 
+                if let Some(frame_interval) = viewport.wayland_frame_interval
+                    && let Some(last_swap_at) = viewport.last_swap_at
+                {
+                    let remaining = frame_interval.saturating_sub(last_swap_at.elapsed());
+                    if !remaining.is_zero() {
+                        std::thread::sleep(remaining);
+                    }
+                }
+
                 gl_surface.swap_buffers(context)?;
+                viewport.last_swap_at = Some(Instant::now());
                 frame_timer.resume();
             }
 
@@ -1103,6 +1173,8 @@ impl GlutinWindowContext {
                 gl_surface: None,
                 window: window.map(Arc::new),
                 egui_winit: None,
+                wayland_frame_interval: None,
+                last_swap_at: None,
             },
         );
 
@@ -1235,17 +1307,16 @@ impl GlutinWindowContext {
                 };
             let current_gl_context = not_current_gl_context.make_current(&gl_surface)?;
 
-            // A Wayland compositor can stop presenting a minimized or fully covered child
+            // A Wayland compositor can stop presenting a minimized or fully covered
             // surface without exposing that state to clients. Waiting for that surface's
             // vertical blank would then block the shared GL context and every other viewport.
-            // Keep the root surface synchronized, but never wait while swapping secondary
-            // Wayland surfaces.
-            let secondary_wayland_viewport = cfg!(target_os = "linux")
-                && viewport_id != ViewportId::ROOT
+            // Never wait while swapping Wayland surfaces; preserve requested VSync cadence
+            // with the per-viewport software pacing above.
+            let wayland_viewport = cfg!(target_os = "linux")
                 && window
                     .display_handle()
                     .is_ok_and(|handle| matches!(handle.as_raw(), RawDisplayHandle::Wayland(_)));
-            let swap_interval = if secondary_wayland_viewport {
+            let swap_interval = if wayland_viewport {
                 glutin::surface::SwapInterval::DontWait
             } else {
                 self.swap_interval
@@ -1256,6 +1327,11 @@ impl GlutinWindowContext {
             if let Err(err) = gl_surface.set_swap_interval(&current_gl_context, swap_interval) {
                 log::warn!("Failed to set swap interval due to error: {err}");
             }
+
+            viewport.wayland_frame_interval = wayland_viewport
+                .then(|| wayland_frame_interval(window, self.swap_interval))
+                .flatten();
+            viewport.last_swap_at = None;
 
             // we will reach this point only once in most platforms except android.
             // create window/surface/make context current once and just use them forever.
@@ -1434,6 +1510,8 @@ fn initialize_or_update_viewport(
                 window: None,
                 egui_winit: None,
                 gl_surface: None,
+                wayland_frame_interval: None,
+                last_swap_at: None,
             })
         }
 
