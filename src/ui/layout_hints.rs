@@ -1,5 +1,134 @@
 use super::*;
 
+const LAYOUT_HINT_LINE_HEIGHT: f32 = 16.0;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LayoutBottomHintKind {
+    Empty,
+    Basic,
+    Modifier {
+        can_swap_side: bool,
+        can_retarget_key: bool,
+        is_mod_tap: bool,
+    },
+    Macro,
+    TapDance,
+    Mouse,
+    AltRepeat,
+    GraveEscape,
+    Layer {
+        is_layer_tap: bool,
+    },
+}
+
+impl LayoutBottomHintKind {
+    fn keys(self) -> &'static [&'static str] {
+        match self {
+            Self::Empty => &["key_hints.change_key"],
+            Self::Basic => &["key_hints.change_key", "key_hints.clear_key"],
+            Self::Modifier {
+                can_swap_side,
+                can_retarget_key,
+                is_mod_tap,
+            } => match (can_swap_side, can_retarget_key, is_mod_tap) {
+                (false, _, _) => &[
+                    "key_hints.change_key",
+                    "key_hints.change_modifier_key",
+                    "key_hints.clear_key",
+                ],
+                (true, false, _) => &[
+                    "key_hints.change_key",
+                    "key_hints.switch_modifier_side",
+                    "key_hints.clear_key",
+                ],
+                (true, true, true) => &[
+                    "key_hints.change_key",
+                    "key_hints.change_mod_tap_key",
+                    "key_hints.switch_modifier_side",
+                    "key_hints.clear_key",
+                ],
+                (true, true, false) => &[
+                    "key_hints.change_key",
+                    "key_hints.change_modifier_key",
+                    "key_hints.switch_modifier_side",
+                    "key_hints.clear_key",
+                ],
+            },
+            Self::Macro => &[
+                "key_hints.change_key",
+                "key_hints.edit_macro",
+                "key_hints.clear_key",
+            ],
+            Self::TapDance => &[
+                "key_hints.change_key",
+                "key_hints.edit_tap_dance",
+                "key_hints.clear_key",
+            ],
+            Self::Mouse => &[
+                "key_hints.change_key",
+                "key_hints.open_mouse_keys",
+                "key_hints.clear_key",
+            ],
+            Self::AltRepeat => &[
+                "key_hints.change_key",
+                "key_hints.open_alt_repeat",
+                "key_hints.clear_key",
+            ],
+            Self::GraveEscape => &[
+                "key_hints.change_key",
+                "key_hints.open_grave_escape",
+                "key_hints.clear_key",
+            ],
+            Self::Layer { is_layer_tap } => {
+                if is_layer_tap {
+                    &[
+                        "key_hints.change_key",
+                        "key_hints.go_to_that_layer",
+                        "key_hints.change_tap_key",
+                        "key_hints.clear_key",
+                    ]
+                } else {
+                    &[
+                        "key_hints.change_key",
+                        "key_hints.go_to_that_layer",
+                        "key_hints.change_layer_target",
+                        "key_hints.clear_key",
+                    ]
+                }
+            }
+        }
+    }
+}
+
+fn paint_layout_hint_lines(
+    ui: &egui::Ui,
+    center_x: f32,
+    hint_y: f32,
+    keys: &[&'static str],
+    font: &FontId,
+    color: Color32,
+    language: crate::i18n::Language,
+) {
+    let Some(last_line) = keys.len().checked_sub(1) else {
+        return;
+    };
+    let last_y = if last_line == 0 {
+        hint_y
+    } else {
+        hint_y + 12.0
+    };
+    let first_y = last_y - last_line as f32 * LAYOUT_HINT_LINE_HEIGHT;
+    for (index, key) in keys.iter().enumerate() {
+        ui.painter().text(
+            egui::pos2(center_x, first_y + index as f32 * LAYOUT_HINT_LINE_HEIGHT),
+            egui::Align2::CENTER_CENTER,
+            crate::i18n::tr_catalog(language, key),
+            font.clone(),
+            color,
+        );
+    }
+}
+
 impl EntropyApp {
     pub(super) fn draw_layout_bottom_hints(
         &mut self,
@@ -14,7 +143,6 @@ impl EntropyApp {
             Color32::from_gray(160)
         };
         let hint_font = FontId::proportional(12.0);
-        let secondary_hint_font = hint_font.clone();
         let hint_y = ui.max_rect().bottom() - 36.0;
         let any_hovered = self.prev_hovered_key.is_some() || self.prev_hovered_encoder;
         let hint_language = self.app_settings.language;
@@ -186,198 +314,43 @@ impl EntropyApp {
                         false, false, false, false, false, false, false, false, false, false, false,
                     ))
             };
-            if hovered_is_mod {
-                if hovered_can_swap_side {
-                    let show_retarget = hovered_can_retarget_mod_key;
-                    ui.painter().text(
-                        egui::pos2(
-                            center_x,
-                            if show_retarget {
-                                hint_y - 22.0
-                            } else {
-                                hint_y - 10.0
-                            },
-                        ),
-                        egui::Align2::CENTER_CENTER,
-                        tr_hint("key_hints.change_key"),
-                        hint_font.clone(),
-                        hint_color,
-                    );
-                    if show_retarget {
-                        ui.painter().text(
-                            egui::pos2(center_x, hint_y - 4.0),
-                            egui::Align2::CENTER_CENTER,
-                            if hovered_is_mod_tap {
-                                tr_hint("key_hints.change_mod_tap_key")
-                            } else {
-                                tr_hint("key_hints.change_modifier_key")
-                            },
-                            secondary_hint_font.clone(),
-                            hint_color,
-                        );
-                    }
-                    ui.painter().text(
-                        egui::pos2(
-                            center_x,
-                            if show_retarget {
-                                hint_y + 12.0
-                            } else {
-                                hint_y + 8.0
-                            },
-                        ),
-                        egui::Align2::CENTER_CENTER,
-                        tr_hint("key_hints.switch_modifier_side"),
-                        secondary_hint_font,
-                        hint_color,
-                    );
-                } else {
-                    ui.painter().text(
-                        egui::pos2(center_x, hint_y - 14.0),
-                        egui::Align2::CENTER_CENTER,
-                        tr_hint("key_hints.change_key"),
-                        hint_font.clone(),
-                        hint_color,
-                    );
-                    ui.painter().text(
-                        egui::pos2(center_x, hint_y + 4.0),
-                        egui::Align2::CENTER_CENTER,
-                        tr_hint("key_hints.change_modifier_key"),
-                        secondary_hint_font,
-                        hint_color,
-                    );
+            let hovered_is_empty = hint_binding()
+                .map(crate::keyboard::KeyBinding::is_no)
+                .unwrap_or(true);
+            let hint_kind = if hovered_is_empty {
+                LayoutBottomHintKind::Empty
+            } else if hovered_is_mod {
+                LayoutBottomHintKind::Modifier {
+                    can_swap_side: hovered_can_swap_side,
+                    can_retarget_key: hovered_can_retarget_mod_key,
+                    is_mod_tap: hovered_is_mod_tap,
                 }
             } else if hovered_is_macro {
-                ui.painter().text(
-                    egui::pos2(center_x, hint_y - 14.0),
-                    egui::Align2::CENTER_CENTER,
-                    tr_hint("key_hints.change_key"),
-                    hint_font.clone(),
-                    hint_color,
-                );
-                ui.painter().text(
-                    egui::pos2(center_x, hint_y + 4.0),
-                    egui::Align2::CENTER_CENTER,
-                    tr_hint("key_hints.edit_macro"),
-                    secondary_hint_font.clone(),
-                    hint_color,
-                );
+                LayoutBottomHintKind::Macro
             } else if hovered_is_tap_dance {
-                ui.painter().text(
-                    egui::pos2(center_x, hint_y - 14.0),
-                    egui::Align2::CENTER_CENTER,
-                    tr_hint("key_hints.change_key"),
-                    hint_font.clone(),
-                    hint_color,
-                );
-                ui.painter().text(
-                    egui::pos2(center_x, hint_y + 4.0),
-                    egui::Align2::CENTER_CENTER,
-                    tr_hint("key_hints.edit_tap_dance"),
-                    secondary_hint_font,
-                    hint_color,
-                );
+                LayoutBottomHintKind::TapDance
             } else if hovered_is_mouse {
-                ui.painter().text(
-                    egui::pos2(center_x, hint_y - 14.0),
-                    egui::Align2::CENTER_CENTER,
-                    tr_hint("key_hints.change_key"),
-                    hint_font.clone(),
-                    hint_color,
-                );
-                ui.painter().text(
-                    egui::pos2(center_x, hint_y + 4.0),
-                    egui::Align2::CENTER_CENTER,
-                    tr_hint("key_hints.open_mouse_keys"),
-                    secondary_hint_font.clone(),
-                    hint_color,
-                );
+                LayoutBottomHintKind::Mouse
             } else if hovered_is_alt_repeat {
-                ui.painter().text(
-                    egui::pos2(center_x, hint_y - 14.0),
-                    egui::Align2::CENTER_CENTER,
-                    tr_hint("key_hints.change_key"),
-                    hint_font.clone(),
-                    hint_color,
-                );
-                ui.painter().text(
-                    egui::pos2(center_x, hint_y + 4.0),
-                    egui::Align2::CENTER_CENTER,
-                    tr_hint("key_hints.open_alt_repeat"),
-                    secondary_hint_font,
-                    hint_color,
-                );
+                LayoutBottomHintKind::AltRepeat
             } else if hovered_is_grave_escape {
-                ui.painter().text(
-                    egui::pos2(center_x, hint_y - 14.0),
-                    egui::Align2::CENTER_CENTER,
-                    tr_hint("key_hints.change_key"),
-                    hint_font.clone(),
-                    hint_color,
-                );
-                ui.painter().text(
-                    egui::pos2(center_x, hint_y + 4.0),
-                    egui::Align2::CENTER_CENTER,
-                    tr_hint("key_hints.open_grave_escape"),
-                    secondary_hint_font,
-                    hint_color,
-                );
+                LayoutBottomHintKind::GraveEscape
             } else if hovered_is_layer {
-                ui.painter().text(
-                    egui::pos2(center_x, hint_y - 22.0),
-                    egui::Align2::CENTER_CENTER,
-                    tr_hint("key_hints.change_key"),
-                    hint_font.clone(),
-                    hint_color,
-                );
-                ui.painter().text(
-                    egui::pos2(center_x, hint_y - 4.0),
-                    egui::Align2::CENTER_CENTER,
-                    tr_hint("key_hints.go_to_that_layer"),
-                    secondary_hint_font.clone(),
-                    hint_color,
-                );
-                ui.painter().text(
-                    egui::pos2(center_x, hint_y + 12.0),
-                    egui::Align2::CENTER_CENTER,
-                    if hovered_is_lt {
-                        tr_hint("key_hints.change_tap_key")
-                    } else {
-                        tr_hint("key_hints.change_layer_target")
-                    },
-                    secondary_hint_font,
-                    hint_color,
-                );
-            } else {
-                // Unknown binding (e.g. an encoder half without a slot) has
-                // nothing to clear — show only the change hint.
-                let hovered_is_empty = hint_binding()
-                    .map(crate::keyboard::KeyBinding::is_no)
-                    .unwrap_or(true);
-                if hovered_is_empty {
-                    ui.painter().text(
-                        egui::pos2(center_x, hint_y),
-                        egui::Align2::CENTER_CENTER,
-                        tr_hint("key_hints.change_key"),
-                        hint_font,
-                        hint_color,
-                    );
-                } else {
-                    ui.painter().text(
-                        egui::pos2(center_x, hint_y - 4.0),
-                        egui::Align2::CENTER_CENTER,
-                        tr_hint("key_hints.change_key"),
-                        hint_font,
-                        hint_color,
-                    );
-                    ui.painter().text(
-                        egui::pos2(center_x, hint_y + 12.0),
-                        egui::Align2::CENTER_CENTER,
-                        tr_hint("key_hints.clear_key"),
-                        secondary_hint_font,
-                        hint_color,
-                    );
+                LayoutBottomHintKind::Layer {
+                    is_layer_tap: hovered_is_lt,
                 }
-            }
+            } else {
+                LayoutBottomHintKind::Basic
+            };
+            paint_layout_hint_lines(
+                ui,
+                center_x,
+                hint_y,
+                hint_kind.keys(),
+                &hint_font,
+                hint_color,
+                hint_language,
+            );
         } else if layer_name_hovered {
             ui.painter().text(
                 egui::pos2(center_x, hint_y),
@@ -387,5 +360,64 @@ impl EntropyApp {
                 hint_color,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LayoutBottomHintKind;
+
+    const CLEAR_KEY: &str = "key_hints.clear_key";
+
+    #[test]
+    fn clear_hint_is_last_for_every_clearable_specialized_binding() {
+        let kinds = [
+            LayoutBottomHintKind::Modifier {
+                can_swap_side: true,
+                can_retarget_key: true,
+                is_mod_tap: true,
+            },
+            LayoutBottomHintKind::Modifier {
+                can_swap_side: false,
+                can_retarget_key: false,
+                is_mod_tap: false,
+            },
+            LayoutBottomHintKind::Macro,
+            LayoutBottomHintKind::TapDance,
+            LayoutBottomHintKind::Mouse,
+            LayoutBottomHintKind::AltRepeat,
+            LayoutBottomHintKind::GraveEscape,
+            LayoutBottomHintKind::Layer { is_layer_tap: true },
+        ];
+
+        for kind in kinds {
+            assert_eq!(kind.keys().last(), Some(&CLEAR_KEY), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn modifier_actions_stay_before_clear_hint() {
+        assert_eq!(
+            LayoutBottomHintKind::Modifier {
+                can_swap_side: true,
+                can_retarget_key: true,
+                is_mod_tap: true,
+            }
+            .keys(),
+            &[
+                "key_hints.change_key",
+                "key_hints.change_mod_tap_key",
+                "key_hints.switch_modifier_side",
+                CLEAR_KEY,
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_binding_does_not_offer_clear() {
+        assert_eq!(
+            LayoutBottomHintKind::Empty.keys(),
+            &["key_hints.change_key"]
+        );
     }
 }
