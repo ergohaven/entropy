@@ -348,13 +348,35 @@ impl EntropyApp {
                     hint_color,
                 );
             } else {
-                ui.painter().text(
-                    egui::pos2(center_x, hint_y),
-                    egui::Align2::CENTER_CENTER,
-                    tr_hint("key_hints.change_key"),
-                    hint_font,
-                    hint_color,
-                );
+                // Unknown binding (e.g. an encoder half without a slot) has
+                // nothing to clear — show only the change hint.
+                let hovered_is_empty = hint_binding()
+                    .map(crate::keyboard::KeyBinding::is_no)
+                    .unwrap_or(true);
+                if hovered_is_empty {
+                    ui.painter().text(
+                        egui::pos2(center_x, hint_y),
+                        egui::Align2::CENTER_CENTER,
+                        tr_hint("key_hints.change_key"),
+                        hint_font,
+                        hint_color,
+                    );
+                } else {
+                    ui.painter().text(
+                        egui::pos2(center_x, hint_y - 4.0),
+                        egui::Align2::CENTER_CENTER,
+                        tr_hint("key_hints.change_key"),
+                        hint_font,
+                        hint_color,
+                    );
+                    ui.painter().text(
+                        egui::pos2(center_x, hint_y + 12.0),
+                        egui::Align2::CENTER_CENTER,
+                        tr_hint("key_hints.clear_key"),
+                        secondary_hint_font,
+                        hint_color,
+                    );
+                }
             }
         } else if layer_name_hovered {
             ui.painter().text(

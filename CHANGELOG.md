@@ -7,6 +7,10 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 
 ## v0.3.10 - Public Beta
 
+### Improvements
+
+- Added middle click on a key or encoder to clear it to `None` without opening the picker, with queued writes so fast repeated clearing keeps up
+
 ### Fixes
 
 - Kept Windows automatic startup hidden in the system tray after eframe's first-frame window reveal
