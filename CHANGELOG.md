@@ -5,6 +5,37 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.20 - Public Beta
+
+### Main Features
+
+- Added queued middle-click assignment for keys and encoder slots, with per-action undo and an application setting to choose `None` or `Transparent`
+- Added a color Twemoji picker and inline emoji previews to Text Expander replacement fields
+- Reworked Macro and Tap Dance assignment into adaptive slot-based settings and compact picker dialogs
+
+### Improvements
+
+- Separated firmware-provided Bluetooth profile and connection controls into a dedicated picker tab
+- Moved Macro and Tap Dance assignment into the first Special-key group and added localized, space-aware slot dialogs
+- Exposed RMK Repeat/Again independently from unsupported Alt Repeat slots
+- Added persistent Linux IBus installation detection and corrected Entropy input-source names
+- Made new Key Override entries start with usable QMK/Vial and RMK Fork defaults
+
+### Fixes
+
+- Stabilized Layout Indicator HID polling, focus changes, minimization, and covered-window rendering on native GNOME Wayland
+- Removed repeated keymap-read timeouts on incompatible QMK/Vial devices and added fail-fast per-key compatibility handling
+- Verified USB Layer LED writes through delayed readback and displayed schema-defined select labels instead of raw values
+- Rejected modifier keycodes as Key Override triggers and disabled invalid stored overrides
+- Kept Windows automatic startup hidden in the system tray after the first-frame window reveal
+- Kept Text Expander emoji rendering consistent by normalizing presentation selectors and reserving square inline slots
+- Removed the unavailable right-click Mouse Keys action when connected firmware does not expose Mouse Keys settings
+
+### Contributors
+
+- Special thanks to @suregoodru for verified USB Layer LED write/readback and schema-driven select labels in #147
+- Special thanks to @Glitchy-Sheep for queued middle-click clearing of keys and encoders with per-action undo in #153
+
 ## v0.3.20-rc.6 - Test Candidate
 
 ### Improvements
