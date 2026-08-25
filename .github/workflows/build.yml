@@ -80,6 +80,10 @@ jobs:
         if: matrix.kind == 'linux'
         run: cargo test --all-targets
 
+      - name: Test layout indicator window policy
+        if: matrix.kind != 'linux'
+        run: cargo test --all-targets app::layout_indicator_window::tests
+
       - name: Test macOS HID workers
         if: matrix.kind == 'macos'
         run: |
