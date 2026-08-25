@@ -686,7 +686,7 @@ fn platform_asset_matches(asset: &GitHubAsset) -> bool {
 
 fn compare_entropy_versions(current: &str, latest: &str) -> VersionRelation {
     let ordering = match (parse_semver(current), parse_semver(latest)) {
-        (Some(current), Some(latest)) => current.cmp(&latest),
+        (Some(current), Some(latest)) => current.cmp_precedence(&latest),
         _ => numeric_version_parts(current).cmp(&numeric_version_parts(latest)),
     };
     match ordering {
@@ -935,6 +935,10 @@ mod tests {
         );
         assert_eq!(
             compare_entropy_versions("0.3.21", "v0.3.21"),
+            VersionRelation::UpToDate
+        );
+        assert_eq!(
+            compare_entropy_versions("0.3.21+local", "v0.3.21"),
             VersionRelation::UpToDate
         );
     }
