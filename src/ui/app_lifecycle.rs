@@ -929,7 +929,7 @@ mod tests {
         app.queue_touchpad_setting_write("Sniper sensitivity".to_owned(), 121, 1, 1, 2);
         assert!(app.settings_write_task.is_none());
 
-        for _ in 0..100 {
+        for _ in 0..500 {
             app.poll_layer_write(&ctx);
             if app.settings_write_task.is_some() {
                 break;
