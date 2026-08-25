@@ -5,7 +5,115 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.21-rc.1 - Test Candidate
+
+### Fixes
+
+- Restored wired QMK-Vial loading for legacy VIA protocol replies and made unsupported RMK capability and Vial dynamic-entry probes fail fast
+
+## v0.3.20 - Public Beta
+
+### Main Features
+
+- Added queued middle-click assignment for keys and encoder slots, with per-action undo and an application setting to choose `None` or `Transparent`
+- Added a color Twemoji picker and inline emoji previews to Text Expander replacement fields
+- Reworked Macro and Tap Dance assignment into adaptive slot-based settings and compact picker dialogs
+
+### Improvements
+
+- Separated firmware-provided Bluetooth profile and connection controls into a dedicated picker tab
+- Moved Macro and Tap Dance assignment into the first Special-key group and added localized, space-aware slot dialogs
+- Exposed RMK Repeat/Again independently from unsupported Alt Repeat slots
+- Added persistent Linux IBus installation detection and corrected Entropy input-source names
+- Made new Key Override entries start with usable QMK/Vial and RMK Fork defaults
+
+### Fixes
+
+- Stabilized Layout Indicator HID polling, focus changes, minimization, and covered-window rendering on native GNOME Wayland
+- Removed repeated keymap-read timeouts on incompatible QMK/Vial devices and added fail-fast per-key compatibility handling
+- Verified USB Layer LED writes through delayed readback and displayed schema-defined select labels instead of raw values
+- Rejected modifier keycodes as Key Override triggers and disabled invalid stored overrides
+- Kept Windows automatic startup hidden in the system tray after the first-frame window reveal
+- Kept Text Expander emoji rendering consistent by normalizing presentation selectors and reserving square inline slots
+- Removed the unavailable right-click Mouse Keys action when connected firmware does not expose Mouse Keys settings
+
+### Contributors
+
+- Special thanks to @suregoodru for verified USB Layer LED write/readback and schema-driven select labels in #147
+- Special thanks to @Glitchy-Sheep for queued middle-click clearing of keys and encoders with per-action undo in #153
+
+## v0.3.20-rc.6 - Test Candidate
+
+### Improvements
+
+- Added an application setting that makes middle click assign `Transparent` instead of `None`, including queued key and encoder writes with matching layout hints
+- Exposed RMK Repeat/Again in the Special picker independently from the unsupported Alt Repeat slots
+
+### Fixes
+
+- Removed the unavailable right-click Mouse Keys action when connected firmware does not expose Mouse Keys settings
+
+## v0.3.20-rc.5 - Test Candidate
+
+### Fixes
+
+- Kept Layout Indicator responsive when the main Entropy window is minimized on native GNOME Wayland by pacing non-blocking swaps for every Wayland viewport at the monitor refresh rate
+
+## v0.3.20-rc.4 - Test Candidate
+
+### Fixes
+
+- Kept the main Entropy window interactive when Layout Indicator is minimized or covered on native GNOME Wayland by preventing secondary viewports from blocking the shared renderer
+
+## v0.3.20-rc.3 - Test Candidate
+
+### Fixes
+
+- Decoupled the Layout Indicator into an independent deferred viewport so minimizing it cannot suspend pointer input or hover updates in the main Entropy window
+
+## v0.3.20-rc.2 - Test Candidate
+
+### Improvements
+
+- Matched the Macro and Tap Dance slot dialogs to the compact Choose Layer window pattern
+
+### Fixes
+
+- Restored the Layout Indicator viewport to eframe's UI phase so focus transfers cannot paint through the logic-only lifecycle
+- Reserved square inline slots for Text Expander Twemoji and kept the emoji-picker trigger monochrome
+
+## v0.3.20-rc.1 - Test Candidate
+
+### Improvements
+
+- Moved Macro and Tap Dance assignment into the first Special-key group and removed the separate Advanced picker tab
+- Made Macro and Tap Dance lists and slot dialogs adapt to available window space, including localized action labels
+- Rendered Text Expander picker choices and replacement-field emoji with the bundled color Twemoji assets
+
+### Fixes
+
+- Kept Layout Indicator polling in the root background lifecycle and repainted its viewport only after fresh matrix data, preventing focus-return freezes
+- Normalized emoji presentation selectors before Twemoji lookup so the smiling-face picker entry no longer falls back to the old font
+
+## v0.3.19-rc.1 - Test Candidate
+
+### Improvements
+
+- Rebuilt Macro actions as sequential in-section slots and anchored shared page actions outside scrolling content
+- Aligned Advanced Macro and Tap Dance choices with the compact picker controls and restored interaction after closing slot selection with Escape
+- Added persistent Linux IBus installation detection and corrected Entropy input-source names
+
+### Fixes
+
+- Moved Layout Indicator matrix reads to the serialized background HID worker to prevent focus-transfer stalls and reentrant device access
+- Removed the repeated keymap-read timeout on incompatible QMK/Vial devices and added a fail-fast per-key compatibility path
+- Rejected modifier keycodes as Key Override triggers and disabled invalid stored overrides before they can consume regular input
+
 ## v0.3.10 - Public Beta
+
+### Improvements
+
+- Added middle click on a key or encoder to clear it to `None` without opening the picker, with queued writes so fast repeated clearing keeps up
 
 ### Fixes
 

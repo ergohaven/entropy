@@ -409,6 +409,8 @@ fn settings_tab_deferred_sections(tab: SettingsTab) -> &'static [DeferredLoadSec
             DeferredLoadSection::Combos,
             DeferredLoadSection::BehaviorSettings,
         ],
+        SettingsTab::Macros => &[DeferredLoadSection::Macros],
+        SettingsTab::TapDance => &[DeferredLoadSection::TapDance],
         SettingsTab::AutoShift
         | SettingsTab::Magic
         | SettingsTab::TapHold
@@ -556,12 +558,15 @@ impl EntropyApp {
         }
 
         if self.keycode_picker.open {
-            let picker_section = match self.keycode_picker.selected_tab {
-                KeycodeTab::Macro => Some(DeferredLoadSection::Macros),
-                KeycodeTab::TapDance => Some(DeferredLoadSection::TapDance),
-                _ => None,
+            let picker_sections: &[DeferredLoadSection] = match self.keycode_picker.selected_tab {
+                KeycodeTab::Macro => &[DeferredLoadSection::Macros],
+                KeycodeTab::TapDance => &[DeferredLoadSection::TapDance],
+                KeycodeTab::Special => {
+                    &[DeferredLoadSection::Macros, DeferredLoadSection::TapDance]
+                }
+                _ => &[],
             };
-            if let Some(section) = picker_section {
+            for &section in picker_sections {
                 if matches!(
                     self.deferred_device_load.section_status(section),
                     DeferredLoadStatus::NotLoaded
@@ -633,6 +638,7 @@ impl EntropyApp {
             && self.keycode_picker.result.is_none()
             && self.editing_layer.is_none()
             && self.pending_handed_swap.is_none()
+            && self.pending_middle_click_assignments.is_empty()
             && !self.pending_layout_undo
             && !self.import_pending()
             && !self.top_dropdown_open(ctx)
@@ -851,11 +857,23 @@ impl EntropyApp {
             }
             DeferredLoadPayload::KeyOverrides(entries) => {
                 self.key_override_entries = entries;
+                let mut invalid_modifier_triggers = 0;
+                for entry in &mut self.key_override_entries {
+                    if matches!(entry.trigger, 0x00E0..=0x00E7) && entry.options.enabled {
+                        Self::normalize_key_override_entry(entry);
+                        invalid_modifier_triggers += 1;
+                    }
+                }
                 self.key_override_names
                     .resize(self.key_override_entries.len(), String::new());
                 self.key_override_visible_count = 1;
                 self.selected_key_override = 0;
-                self.key_override_dirty = false;
+                self.key_override_dirty = invalid_modifier_triggers > 0;
+                if invalid_modifier_triggers > 0 {
+                    log::warn!(
+                        "Disabled {invalid_modifier_triggers} invalid Key Override modifier trigger(s)"
+                    );
+                }
                 self.key_override_undo_stack.clear();
                 self.deferred_device_load.set_section_status(
                     DeferredLoadSection::KeyOverrides,

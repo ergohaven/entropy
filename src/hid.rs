@@ -127,6 +127,10 @@ pub(crate) const MACOS_HID_INPUT_MONITORING_REQUIRED: &str =
      Allow Entropy in System Settings → Privacy & Security → Input Monitoring, \
      then fully quit and reopen Entropy";
 
+pub(crate) const fn is_supported_via_protocol(version: u16) -> bool {
+    matches!(version, 9 | u16::MAX)
+}
+
 #[cfg(target_os = "macos")]
 #[derive(Debug)]
 struct MacosHidInputMonitoringRequired;
@@ -318,6 +322,16 @@ impl HidDevice {
             #[cfg(test)]
             HidBackend::Test { .. } => false,
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn macos_hid_operation_lock(&self) -> Option<std::sync::MutexGuard<'static, ()>> {
+        #[cfg(test)]
+        if matches!(&self.backend, HidBackend::Test { .. }) {
+            return None;
+        }
+
+        Some(macos_hid_operation_lock())
     }
 }
 
@@ -978,10 +992,39 @@ fn is_optional_firmware_version_request(data: &[u8]) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn is_optional_qmk_settings_query(data: &[u8]) -> bool {
+    data.starts_with(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_QMK_SETTINGS_QUERY])
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn is_keymap_read_request(data: &[u8]) -> bool {
+    matches!(
+        data.first(),
+        Some(&CMD_VIA_KEYMAP_GET_BUFFER) | Some(&CMD_VIA_GET_KEYCODE)
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn is_optional_dynamic_entry_count_request(data: &[u8]) -> bool {
+    data.starts_with(&[
+        CMD_VIA_VIAL_PREFIX,
+        CMD_VIAL_DYNAMIC_ENTRY_OP,
+        DYNAMIC_VIAL_GET_NUM_ENTRIES,
+    ])
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn usb_send_max_attempts(transport: HidTransport, data: &[u8]) -> usize {
-    // Runtime firmware metadata has a Vial-definition fallback, so an
-    // unsupported probe must not hold up the whole connection retry budget.
-    if transport.is_bluetooth() || is_optional_firmware_version_request(data) {
+    // Runtime firmware metadata and optional QMK-settings discovery both have
+    // safe fallbacks, so an unsupported probe must not hold up the whole
+    // connection retry budget.
+    if transport.is_bluetooth()
+        || is_optional_firmware_version_request(data)
+        || is_optional_qmk_settings_query(data)
+        || is_keymap_read_request(data)
+        || crate::rmk_native::is_rmk_native_capabilities_request(data)
+        || is_optional_dynamic_entry_count_request(data)
+    {
         1
     } else {
         VIAL_GUI_USB_RETRIES
@@ -1501,7 +1544,7 @@ fn response_matches_command(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
     match cmd {
         CMD_VIA_GET_PROTOCOL_VERSION => {
             resp[0] == CMD_VIA_GET_PROTOCOL_VERSION
-                && matches!(u16::from_be_bytes([resp[1], resp[2]]), 9 | 0xFFFF)
+                && is_supported_via_protocol(u16::from_be_bytes([resp[1], resp[2]]))
         }
         CMD_VIA_GET_LAYER_COUNT => {
             resp[0] == CMD_VIA_GET_LAYER_COUNT && (1..=32).contains(&resp[1])
@@ -1617,6 +1660,13 @@ fn response_matches_qmk_settings_get(command: &[u8], resp: &[u8; MSG_LEN]) -> bo
 
 #[cfg(not(target_arch = "wasm32"))]
 fn response_matches_qmk_settings_query(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
+    // Older Vial-QMK builds echo unsupported vendor commands. Treat that echo
+    // as a correlated terminal response so the optional settings probe can
+    // fail immediately instead of consuming the full 20-attempt USB budget.
+    if response_echoes_vial_command(command, resp) {
+        return true;
+    }
+
     let Some(qsid_bytes) = command.get(2..4) else {
         return false;
     };
@@ -2124,6 +2174,48 @@ mod tests {
     }
 
     #[test]
+    fn optional_qmk_settings_query_uses_one_usb_attempt() {
+        let command = [CMD_VIA_VIAL_PREFIX, CMD_VIAL_QMK_SETTINGS_QUERY, 0, 0];
+
+        assert_eq!(usb_send_max_attempts(HidTransport::Usb, &command), 1);
+    }
+
+    #[test]
+    fn optional_qmk_compatibility_probes_use_one_usb_attempt() {
+        let rmk_capabilities = [
+            CMD_VIA_CUSTOM_GET_VALUE,
+            ERGOHAVEN_CUSTOM_NAMESPACE,
+            0x02, // ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS
+        ];
+        let dynamic_entry_counts = [
+            CMD_VIA_VIAL_PREFIX,
+            CMD_VIAL_DYNAMIC_ENTRY_OP,
+            DYNAMIC_VIAL_GET_NUM_ENTRIES,
+        ];
+
+        assert_eq!(
+            usb_send_max_attempts(HidTransport::Usb, &rmk_capabilities),
+            1
+        );
+        assert_eq!(
+            usb_send_max_attempts(HidTransport::Usb, &dynamic_entry_counts),
+            1
+        );
+    }
+
+    #[test]
+    fn keymap_reads_fail_fast_for_compatibility_fallback() {
+        assert_eq!(
+            usb_send_max_attempts(HidTransport::Usb, &[CMD_VIA_KEYMAP_GET_BUFFER, 0, 0, 28]),
+            1
+        );
+        assert_eq!(
+            usb_send_max_attempts(HidTransport::Usb, &[CMD_VIA_GET_KEYCODE, 0, 0, 0]),
+            1
+        );
+    }
+
+    #[test]
     fn mandatory_usb_request_keeps_full_retry_budget() {
         let command = [CMD_VIA_GET_PROTOCOL_VERSION];
 
@@ -2131,6 +2223,51 @@ mod tests {
             usb_send_max_attempts(HidTransport::Usb, &command),
             VIAL_GUI_USB_RETRIES
         );
+
+        let native_key_action = [
+            CMD_VIA_CUSTOM_GET_VALUE,
+            ERGOHAVEN_CUSTOM_NAMESPACE,
+            0x03, // ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION
+        ];
+        assert_eq!(
+            usb_send_max_attempts(HidTransport::Usb, &native_key_action),
+            VIAL_GUI_USB_RETRIES
+        );
+
+        let dynamic_entry_read = [
+            CMD_VIA_VIAL_PREFIX,
+            CMD_VIAL_DYNAMIC_ENTRY_OP,
+            DYNAMIC_VIAL_COMBO_GET,
+            0,
+        ];
+        assert_eq!(
+            usb_send_max_attempts(HidTransport::Usb, &dynamic_entry_read),
+            VIAL_GUI_USB_RETRIES
+        );
+    }
+
+    #[test]
+    fn accepts_current_and_legacy_via_protocol_versions() {
+        assert!(is_supported_via_protocol(9));
+        assert!(is_supported_via_protocol(u16::MAX));
+        assert!(!is_supported_via_protocol(0));
+        assert!(!is_supported_via_protocol(8));
+        assert!(!is_supported_via_protocol(10));
+
+        let command = [CMD_VIA_GET_PROTOCOL_VERSION];
+        let mut response = [0u8; MSG_LEN];
+        response[..3].copy_from_slice(&[CMD_VIA_GET_PROTOCOL_VERSION, 0xFF, 0xFF]);
+        assert!(response_matches_command(&command, &response));
+    }
+
+    #[test]
+    fn qmk_settings_query_accepts_an_unsupported_command_echo() {
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_VIAL_PREFIX;
+        command[1] = CMD_VIAL_QMK_SETTINGS_QUERY;
+        let response = command;
+
+        assert!(response_matches_qmk_settings_query(&command, &response));
     }
 
     #[cfg(target_os = "linux")]
@@ -2345,5 +2482,13 @@ mod tests {
         command[2] = 0x02;
 
         assert!(response_matches_command(&command, &command));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_hid_skips_macos_operation_lock() {
+        let (hid, _) = HidDevice::test_device();
+
+        assert!(hid.macos_hid_operation_lock().is_none());
     }
 }

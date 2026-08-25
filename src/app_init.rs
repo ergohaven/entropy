@@ -70,6 +70,7 @@ impl EntropyApp {
             prev_hovered_encoder_keycode: None,
             secondary_click_handled: false,
             pending_handed_swap: None,
+            pending_middle_click_assignments: Vec::new(),
             hover_layer_progress: 0.0,
             jump_back_stack: Vec::new(),
             device_manager: DeviceManager::new(),
@@ -90,9 +91,15 @@ impl EntropyApp {
             parent_window_handle: None,
             parent_display_handle: None,
             pending_entsettings_import_path: None,
+            #[cfg(target_os = "linux")]
+            ibus_registration: Default::default(),
+            #[cfg(target_os = "linux")]
+            pending_ibus_reload: None,
             import_progress_started_at: None,
             import_progress_title: String::new(),
             import_progress_body: String::new(),
+            #[cfg(target_os = "linux")]
+            linux_setup_task: None,
             dark_mode,
             last_applied_theme: None,
             app_settings,
@@ -168,6 +175,9 @@ impl EntropyApp {
             key_override_visible_count: 1,
             key_override_undo_stack: Vec::new(),
             text_expander_deleted_rules: Vec::new(),
+            text_expander_emoji_search: String::new(),
+            text_expander_emoji_group: 0,
+            text_expander_emoji_target: None,
             typing_trainer,
             typing_trainer_symbol_pool_source: None,
             typing_trainer_history_open: false,
@@ -185,6 +195,7 @@ impl EntropyApp {
             sticky_layout_active_layer: 0,
             sticky_layout_last_size: None,
             sticky_layout_resize_opacity_hold_frames: 0,
+            sticky_layout_viewport_events: StickyLayoutViewportEventQueue::default(),
             pending_layout_indicator_open_after_unlock: false,
             matrix_tester_last_poll: std::time::Instant::now(),
             matrix_tester_last_lock_check: std::time::Instant::now()

@@ -118,6 +118,7 @@ impl EntropyApp {
         selected_device_is_bluetooth: bool,
     ) {
         self.poll_vial_hid_task(ctx);
+        self.poll_sticky_layout_background(ctx);
         self.poll_settings_write(ctx);
         self.flush_due_qmk_setting_writes();
         if should_poll_device_scan(main_window_hidden_to_tray) {
@@ -150,12 +151,16 @@ impl EntropyApp {
 
         self.poll_layer_write(ctx);
         self.poll_combo_write(ctx);
+        #[cfg(target_os = "linux")]
+        self.poll_ibus_reload(ctx);
         self.maybe_start_pending_layout_undo(ctx);
         self.maybe_start_pending_layer_write();
         self.maybe_start_combo_write(ctx);
         self.finish_deferred_exit_after_hid_write(ctx);
         self.poll_text_expander_deferred_save(now);
         self.auto_reload_text_expander_rules_file(now);
+        #[cfg(target_os = "linux")]
+        self.poll_linux_universal_symbols_setup(ctx);
         self.poll_single_instance_signal(ctx);
         self.poll_connect(ctx);
         self.maybe_begin_bluetooth_reconnect();
@@ -452,6 +457,21 @@ mod tests {
     use super::super::settings_write_queue::SettingsWriteStatus;
     use super::*;
     use crate::keyboard::{KeyboardLayout, LayoutOption, PhysicalKey};
+
+    #[test]
+    fn logic_never_paints_the_layout_indicator_viewport() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let mut frame = eframe::Frame::_new_kittest();
+        app.app_settings.sticky_layout_window = true;
+
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            eframe::App::logic(&mut app, ui.ctx(), &mut frame);
+        });
+
+        assert!(output.shapes.is_empty());
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
@@ -909,7 +929,7 @@ mod tests {
         app.queue_touchpad_setting_write("Sniper sensitivity".to_owned(), 121, 1, 1, 2);
         assert!(app.settings_write_task.is_none());
 
-        for _ in 0..100 {
+        for _ in 0..500 {
             app.poll_layer_write(&ctx);
             if app.settings_write_task.is_some() {
                 break;
@@ -1126,11 +1146,16 @@ impl eframe::App for EntropyApp {
             let update_check_pending =
                 matches!(self.update_check, UpdateCheckState::Checking { .. })
                     || crate::app::firmware_update_check_pending(&self.firmware_update_check);
+            let layout_indicator_interval = self
+                .app_settings
+                .sticky_layout_window
+                .then(|| self.matrix_tester_poll_interval());
             ctx.request_repaint_after(native_repaint_interval(
                 main_window_hidden_to_tray,
                 bluetooth_visible_interval,
                 connect_pending,
                 update_check_pending,
+                layout_indicator_interval,
             ));
             self.update_native_background(
                 ctx,
@@ -1156,6 +1181,9 @@ impl eframe::App for EntropyApp {
         self.apply_ui_scale(ctx);
         self.handle_ui_scale_shortcuts(ctx);
         self.remember_main_window_size(ctx);
+        // Submit the independent layout-indicator viewport from `ui`; `logic`
+        // remains model-only, while the native renderer owns viewport scheduling.
+        self.draw_sticky_layout_window(ctx);
 
         self.tour_target_rects.clear();
 
@@ -1193,6 +1221,10 @@ impl eframe::App for EntropyApp {
                 }
             }
         }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        self.flush_pending_middle_click_assignments(ctx);
+
         let accent_color = self.app_settings.accent_color;
         if theme_application_required(self.last_applied_theme, self.dark_mode, accent_color) {
             ctx.set_visuals(app_visuals(self.dark_mode));
@@ -1236,7 +1268,9 @@ impl eframe::App for EntropyApp {
         }
 
         // Arrow keys Left/Right switch layers (when picker is closed and no text field is focused)
-        if !self.tour_state.active && !self.keycode_picker.open && !ctx.egui_wants_keyboard_input()
+        if !self.tour_state.active
+            && !self.keycode_picker.has_open_modal()
+            && !ctx.egui_wants_keyboard_input()
         {
             let layer_count = self.layer_count;
             ctx.input(|i| {
@@ -1466,8 +1500,6 @@ impl eframe::App for EntropyApp {
             self.draw_bluetooth_reconnect_status(ctx);
         }
 
-        self.draw_sticky_layout_window(ctx);
-
         let chrome_opacity = self.typing_trainer_chrome_opacity(ctx);
         if chrome_opacity > 0.0 && chrome_opacity < 1.0 {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
@@ -1598,7 +1630,7 @@ impl eframe::App for EntropyApp {
         // Keycode picker modal
         self.draw_vial_unlock_overlay(ctx);
 
-        if self.keycode_picker.open {
+        if self.keycode_picker.has_open_modal() {
             let screen_rect = ctx.content_rect();
             egui::Area::new("window_backdrop".into())
                 .order(egui::Order::Middle)

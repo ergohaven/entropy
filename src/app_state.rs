@@ -43,6 +43,8 @@ pub(crate) struct AppSettings {
     #[serde(default = "default_layer_hover_preview")]
     pub(crate) layer_hover_preview: bool,
     #[serde(default)]
+    pub(crate) middle_click_assigns_transparent: bool,
+    #[serde(default)]
     pub(crate) sticky_layout_window: bool,
     #[serde(default = "default_sticky_layout_always_on_top")]
     pub(crate) sticky_layout_always_on_top: bool,
@@ -172,6 +174,7 @@ impl Default for AppSettings {
             launch_minimized: false,
             show_shifted_number_symbols: default_show_shifted_number_symbols(),
             layer_hover_preview: default_layer_hover_preview(),
+            middle_click_assigns_transparent: false,
             sticky_layout_window: false,
             sticky_layout_always_on_top: default_sticky_layout_always_on_top(),
             sticky_layout_opacity: default_sticky_layout_opacity(),
@@ -222,6 +225,7 @@ mod app_settings_tests {
 
         assert!(!settings.dark_mode);
         assert!(!settings.launch_minimized);
+        assert!(!settings.middle_click_assigns_transparent);
     }
 
     #[test]
@@ -419,6 +423,7 @@ pub(crate) struct VialFeatureSupport {
     pub(crate) layer_lock: bool,
     pub(crate) persistent_default_layer: bool,
     pub(crate) repeat_key: bool,
+    pub(crate) alt_repeat_key: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2593,6 +2598,25 @@ pub(super) enum UndoAction {
     },
 }
 
+/// Middle-click assignment queued while another HID write is in flight, so
+/// rapid clicks are applied in order instead of being lost. `generation` pins
+/// the assignment to the connection it was requested on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PendingMiddleClickAssignment {
+    Key {
+        layer: usize,
+        key_idx: usize,
+        binding: crate::keyboard::KeyBinding,
+        generation: u64,
+    },
+    Encoder {
+        layer: usize,
+        encoder_visual_idx: usize,
+        keycode: u16,
+        generation: u64,
+    },
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KeyOverridePickField {
     Trigger,
@@ -2625,6 +2649,8 @@ pub(crate) enum SettingsTab {
     TextExpanderSetup,
     TextExpander,
     TypingTrainer,
+    Macros,
+    TapDance,
     AutoShift,
     Rgb,
     LayerLeds,
@@ -4200,12 +4226,24 @@ pub struct EntropyApp {
     pub(crate) pending_entlayout_import_path: Option<(std::path::PathBuf, u64)>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) pending_entsettings_import_path: Option<std::path::PathBuf>,
+    /// Cached result of scanning the IBus component directories, which the Text
+    /// Expander setup page would otherwise redo on every frame. Refreshes on
+    /// its own so a registration changed from the outside is picked up, and is
+    /// invalidated outright after any action of ours that can change it.
+    #[cfg(target_os = "linux")]
+    pub(crate) ibus_registration: crate::linux_setup::IbusRegistrationCache,
+    /// In-flight `ibus write-cache` + `ibus restart`, run off the UI thread so
+    /// a slow or wedged daemon cannot freeze the window.
+    #[cfg(target_os = "linux")]
+    pub(crate) pending_ibus_reload: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) import_progress_started_at: Option<f64>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) import_progress_title: String,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) import_progress_body: String,
+    #[cfg(target_os = "linux")]
+    pub(super) linux_setup_task: Option<LinuxSetupTask>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) connect_state: ConnectState,
     #[cfg(not(target_arch = "wasm32"))]
@@ -4282,6 +4320,8 @@ pub struct EntropyApp {
     pub(crate) secondary_click_handled: bool,
     /// Deferred left/right modifier swap, applied after Ctrl is released
     pub(crate) pending_handed_swap: Option<(usize, usize, crate::keyboard::KeyBinding)>,
+    /// Middle-click assignments waiting for the HID handle to become free.
+    pub(super) pending_middle_click_assignments: Vec<PendingMiddleClickAssignment>,
     /// Animation progress for hover layer preview (0.0 = hidden, 1.0 = fully shown)
     pub(crate) hover_layer_progress: f32,
     /// Stack of layers to return to on right-click (last = most recent)
@@ -4361,6 +4401,9 @@ pub struct EntropyApp {
     pub(crate) key_override_visible_count: usize,
     pub(crate) key_override_undo_stack: Vec<(Vec<KeyOverrideEntry>, Vec<String>, usize, usize)>,
     pub(crate) text_expander_deleted_rules: Vec<(usize, crate::text_expander::TextExpansionRule)>,
+    pub(crate) text_expander_emoji_search: String,
+    pub(crate) text_expander_emoji_group: usize,
+    pub(crate) text_expander_emoji_target: Option<(usize, usize, usize)>,
     pub(crate) typing_trainer: TypingTrainerState,
     /// Layers and input layout the current symbol pool was derived from, so the
     /// pool is rebuilt only when the keymap or the selected language changes.
@@ -4381,6 +4424,7 @@ pub struct EntropyApp {
     pub(crate) sticky_layout_active_layer: usize,
     pub(crate) sticky_layout_last_size: Option<Vec2>,
     pub(crate) sticky_layout_resize_opacity_hold_frames: u8,
+    pub(crate) sticky_layout_viewport_events: StickyLayoutViewportEventQueue,
     pub(crate) pending_layout_indicator_open_after_unlock: bool,
     pub(crate) matrix_tester_last_poll: std::time::Instant,
     pub(crate) matrix_tester_last_lock_check: std::time::Instant,
