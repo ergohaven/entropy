@@ -4,6 +4,7 @@ use crate::firmware::FirmwareProtocol;
 use crate::keyboard::{KeyboardLayout, LayoutOption, PhysicalEncoder, PhysicalKey};
 use crate::keycode::{
     key_label_font_sizes, keycode_label_with_names_and_layout, keycode_tooltip, KeyLegendLayout,
+    KeyOutputLayout,
 };
 use crate::keycode_picker::{DeferredPickerDataState, KeycodePicker, KeycodeTab};
 use egui::{Color32, FontId, RichText, Sense, Stroke, Vec2};
@@ -16,6 +17,9 @@ use app_theme::*;
 
 #[path = "typing_trainer_words.rs"]
 mod typing_trainer_words;
+
+#[path = "typing_trainer_symbols.rs"]
+mod typing_trainer_symbols;
 
 #[path = "app_state.rs"]
 mod app_state;

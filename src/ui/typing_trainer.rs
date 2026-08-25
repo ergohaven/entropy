@@ -27,16 +27,53 @@ impl EntropyApp {
         if self.main_menu_tab != MainMenuTab::Advanced
             || self.settings_tab != SettingsTab::TypingTrainer
         {
-            self.typing_trainer.pause_if_running(now);
+            if self.typing_trainer.pause_if_running(now) {
+                self.flush_typing_trainer_symbol_stats();
+            }
         }
+    }
+
+    /// Persists adaptive statistics recorded since the last save. Called when
+    /// the trainer page is left and on exit, so an abandoned session still
+    /// teaches the trainer which characters are difficult.
+    pub(super) fn flush_typing_trainer_symbol_stats(&mut self) {
+        if let Err(error) = self
+            .typing_trainer
+            .persist_symbol_stats(save_typing_trainer_symbol_stats)
+        {
+            log::warn!("save_typing_trainer_symbol_stats failed: {error}");
+        }
+    }
+
+    /// Rebuilds the symbol pool only when the keymap or the selected trainer
+    /// language changed — deriving it walks every layer of the layout, which is
+    /// far too much work to repeat on every frame.
+    fn refresh_typing_trainer_symbol_pool(&mut self, layout: &KeyboardLayout) {
+        let key_output_layout = crate::keycode::KeyOutputLayout::from(self.typing_trainer.language);
+        let cached = self.typing_trainer_symbol_pool_source.as_ref().is_some_and(
+            |(layers, cached_layout)| {
+                *cached_layout == key_output_layout && *layers == layout.layers
+            },
+        );
+        if cached {
+            return;
+        }
+        let symbols = crate::app::typing_trainer_symbols::printable_symbols_from_layout(
+            layout,
+            key_output_layout,
+        );
+        self.typing_trainer_symbol_pool_source = Some((layout.layers.clone(), key_output_layout));
+        self.typing_trainer.set_symbol_pool(symbols);
     }
 
     pub(super) fn draw_typing_trainer_page(
         &mut self,
         ui: &mut egui::Ui,
+        layout: &KeyboardLayout,
         ctx: &egui::Context,
         content_rect: egui::Rect,
     ) {
+        self.refresh_typing_trainer_symbol_pool(layout);
         let lang = self.app_settings.language;
         let dark = ui.visuals().dark_mode;
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
@@ -174,20 +211,35 @@ impl EntropyApp {
             .iter()
             .position(|language| *language == self.typing_trainer.language)
             .unwrap_or(0);
+        let symbol_training = self.typing_trainer.is_symbol_training();
         let mode_labels = [
             crate::i18n::tr_catalog(lang, "typing_trainer.time").to_owned(),
-            crate::i18n::tr_catalog(lang, "typing_trainer.words").to_owned(),
+            crate::i18n::tr_catalog(
+                lang,
+                if symbol_training {
+                    "typing_trainer.count"
+                } else {
+                    "typing_trainer.words"
+                },
+            )
+            .to_owned(),
         ];
         let selected_mode = match self.typing_trainer.mode {
             TypingTrainerMode::Time => 0,
-            TypingTrainerMode::Words => 1,
+            TypingTrainerMode::Words | TypingTrainerMode::Symbols => 1,
         };
         let value_labels = match self.typing_trainer.mode {
             TypingTrainerMode::Time => TYPING_TRAINER_DURATIONS
                 .iter()
                 .map(|duration| duration.to_string())
                 .collect::<Vec<_>>(),
-            TypingTrainerMode::Words => TYPING_TRAINER_WORD_COUNTS
+            TypingTrainerMode::Words | TypingTrainerMode::Symbols if symbol_training => {
+                crate::app::typing_trainer_symbols::TYPING_TRAINER_SYMBOL_COUNTS
+                    .iter()
+                    .map(|symbol_count| symbol_count.to_string())
+                    .collect::<Vec<_>>()
+            }
+            TypingTrainerMode::Words | TypingTrainerMode::Symbols => TYPING_TRAINER_WORD_COUNTS
                 .iter()
                 .map(|word_count| word_count.to_string())
                 .collect::<Vec<_>>(),
@@ -197,7 +249,13 @@ impl EntropyApp {
                 .iter()
                 .position(|duration| *duration == self.typing_trainer.duration_secs)
                 .unwrap_or(1),
-            TypingTrainerMode::Words => TYPING_TRAINER_WORD_COUNTS
+            TypingTrainerMode::Words | TypingTrainerMode::Symbols if symbol_training => {
+                crate::app::typing_trainer_symbols::TYPING_TRAINER_SYMBOL_COUNTS
+                    .iter()
+                    .position(|symbol_count| *symbol_count == self.typing_trainer.word_count)
+                    .unwrap_or(1)
+            }
+            TypingTrainerMode::Words | TypingTrainerMode::Symbols => TYPING_TRAINER_WORD_COUNTS
                 .iter()
                 .position(|word_count| *word_count == self.typing_trainer.word_count)
                 .unwrap_or(1),
@@ -207,17 +265,21 @@ impl EntropyApp {
         let value_size = metrics.size(88.0, 32.0);
         let punctuation_size = metrics.size(112.0, 32.0);
         let numbers_size = metrics.size(104.0, 32.0);
+        let material_size = metrics.size(116.0, 32.0);
         let gap = metrics.value(10.0);
+        // Every control the current material shows, the material toggle
+        // included — a short total clips the trailing controls away.
+        let shared_controls_width = language_size.x + gap + mode_size.x + gap + value_size.x;
+        let text_options_width = gap + punctuation_size.x + gap + numbers_size.x;
         let total_size = egui::vec2(
-            language_size.x
+            shared_controls_width
+                + if symbol_training {
+                    0.0
+                } else {
+                    text_options_width
+                }
                 + gap
-                + mode_size.x
-                + gap
-                + value_size.x
-                + gap
-                + punctuation_size.x
-                + gap
-                + numbers_size.x,
+                + material_size.x,
             mode_size.y,
         );
         let mut settings_changed = false;
@@ -226,6 +288,8 @@ impl EntropyApp {
             total_size,
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
+                // The language also selects the input mapping the symbol pool is
+                // derived from, so it stays available in symbol training too.
                 let language_dropdown_id =
                     ui.make_persistent_id("typing_trainer_language_dropdown");
                 let (_, picked_language) = crate::ui_style::modern_dropdown_select_sized(
@@ -282,47 +346,72 @@ impl EntropyApp {
                         TypingTrainerMode::Time => self
                             .typing_trainer
                             .set_duration(TYPING_TRAINER_DURATIONS[picked]),
-                        TypingTrainerMode::Words => self
+                        TypingTrainerMode::Words | TypingTrainerMode::Symbols
+                            if symbol_training =>
+                        {
+                            self.typing_trainer.set_word_count(
+                                crate::app::typing_trainer_symbols::TYPING_TRAINER_SYMBOL_COUNTS
+                                    [picked],
+                            )
+                        }
+                        TypingTrainerMode::Words | TypingTrainerMode::Symbols => self
                             .typing_trainer
                             .set_word_count(TYPING_TRAINER_WORD_COUNTS[picked]),
                     }
                     settings_changed = true;
                 }
 
-                ui.add_space(gap);
-                let punctuation_label = crate::i18n::tr_catalog(lang, "typing_trainer.punctuation");
-                let punctuation_short_label =
-                    crate::i18n::tr_catalog(lang, "typing_trainer.punctuation_short");
-                if crate::ui_style::modern_toggle_pill(
-                    ui,
-                    ".,?",
-                    punctuation_short_label,
-                    punctuation_label,
-                    punctuation_size,
-                    self.typing_trainer.punctuation_enabled,
-                )
-                .clicked()
-                {
-                    self.typing_trainer
-                        .set_punctuation_enabled(!self.typing_trainer.punctuation_enabled);
-                    settings_changed = true;
+                if !symbol_training {
+                    ui.add_space(gap);
+                    let punctuation_label =
+                        crate::i18n::tr_catalog(lang, "typing_trainer.punctuation");
+                    let punctuation_short_label =
+                        crate::i18n::tr_catalog(lang, "typing_trainer.punctuation_short");
+                    if crate::ui_style::modern_toggle_pill(
+                        ui,
+                        ".,?",
+                        punctuation_short_label,
+                        punctuation_label,
+                        punctuation_size,
+                        self.typing_trainer.punctuation_enabled,
+                    )
+                    .clicked()
+                    {
+                        self.typing_trainer
+                            .set_punctuation_enabled(!self.typing_trainer.punctuation_enabled);
+                        settings_changed = true;
+                    }
+                    ui.add_space(gap);
+                    let numbers_label = crate::i18n::tr_catalog(lang, "typing_trainer.numbers");
+                    let numbers_short_label =
+                        crate::i18n::tr_catalog(lang, "typing_trainer.numbers_short");
+                    if crate::ui_style::modern_toggle_pill(
+                        ui,
+                        "123",
+                        numbers_short_label,
+                        numbers_label,
+                        numbers_size,
+                        self.typing_trainer.numbers_enabled,
+                    )
+                    .clicked()
+                    {
+                        self.typing_trainer
+                            .set_numbers_enabled(!self.typing_trainer.numbers_enabled);
+                        settings_changed = true;
+                    }
                 }
                 ui.add_space(gap);
-                let numbers_label = crate::i18n::tr_catalog(lang, "typing_trainer.numbers");
-                let numbers_short_label =
-                    crate::i18n::tr_catalog(lang, "typing_trainer.numbers_short");
                 if crate::ui_style::modern_toggle_pill(
                     ui,
-                    "123",
-                    numbers_short_label,
-                    numbers_label,
-                    numbers_size,
-                    self.typing_trainer.numbers_enabled,
+                    "#?",
+                    crate::i18n::tr_catalog(lang, "typing_trainer.symbols"),
+                    crate::i18n::tr_catalog(lang, "typing_trainer.symbols_tooltip"),
+                    material_size,
+                    symbol_training,
                 )
                 .clicked()
                 {
-                    self.typing_trainer
-                        .set_numbers_enabled(!self.typing_trainer.numbers_enabled);
+                    self.typing_trainer.set_symbols_enabled(!symbol_training);
                     settings_changed = true;
                 }
             },
@@ -385,10 +474,20 @@ impl EntropyApp {
                 };
                 timer_secs.to_string()
             }
+            TypingTrainerMode::Words | TypingTrainerMode::Symbols
+                if self.typing_trainer.is_symbol_training() =>
+            {
+                format!(
+                    "{}/{}",
+                    self.typing_trainer.typed_chars.len(),
+                    self.typing_trainer.word_count
+                )
+            }
             TypingTrainerMode::Words => {
                 let (completed_words, target_words) = self.typing_trainer.word_progress();
                 format!("{completed_words}/{target_words}")
             }
+            TypingTrainerMode::Symbols => String::new(),
         }
     }
 
@@ -425,6 +524,16 @@ impl EntropyApp {
             self.draw_typing_trainer_results(ui, text_rect, metrics, lang, now, dark);
             return;
         }
+        if self.typing_trainer.is_symbol_training() && self.typing_trainer.symbol_pool.is_empty() {
+            ui.painter().text(
+                text_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                crate::i18n::tr_catalog(lang, "typing_trainer.symbols_unavailable"),
+                FontId::proportional(metrics.value(16.0)),
+                app_muted_text(dark),
+            );
+            return;
+        }
         self.ensure_typing_trainer_visible_text(max_line_chars, max_visible_lines);
 
         let target_chars = self.typing_trainer.target_text.chars().collect::<Vec<_>>();
@@ -438,32 +547,16 @@ impl EntropyApp {
             max_line_chars,
             max_visible_lines,
         );
+        let line_starts = typing_trainer_line_starts(&target_chars, max_line_chars);
+        let mut line_idx = line_starts
+            .partition_point(|start| *start <= idx)
+            .saturating_sub(1);
         let mut caret_pos = None;
         let target_len = target_chars.len();
         let mut visible_lines = 1;
 
         while idx < target_len && visible_lines <= max_visible_lines && y <= text_rect.bottom() {
-            let word_end = target_chars[idx..]
-                .iter()
-                .position(|ch| *ch == ' ')
-                .map(|offset| idx + offset)
-                .unwrap_or(target_len);
-            let visible_word_len = word_end.saturating_sub(idx).max(1);
-            let word_width = visible_word_len as f32 * char_width;
-            if x > text_rect.left() && x + word_width > text_rect.right() {
-                x = text_rect.left();
-                y += line_height;
-                visible_lines += 1;
-                if visible_lines > max_visible_lines || y > text_rect.bottom() {
-                    break;
-                }
-            }
-
-            let draw_end = if word_end < target_len {
-                word_end + 1
-            } else {
-                word_end
-            };
+            let draw_end = line_starts.get(line_idx + 1).copied().unwrap_or(target_len);
             while idx < draw_end && y <= text_rect.bottom() {
                 if idx == caret_idx {
                     caret_pos = Some(egui::pos2(x, y));
@@ -485,6 +578,12 @@ impl EntropyApp {
                 );
                 x += char_width;
                 idx += 1;
+            }
+            if idx < target_len {
+                x = text_rect.left();
+                y += line_height;
+                visible_lines += 1;
+                line_idx += 1;
             }
         }
 
@@ -1063,6 +1162,7 @@ impl EntropyApp {
             TypingTrainerRunRecord::from_state(&self.typing_trainer, now, finished_at_unix_secs)
         {
             push_typing_trainer_history(&mut self.app_settings.typing_trainer_history, record);
+            self.flush_typing_trainer_symbol_stats();
             save_app_settings(&self.app_settings);
         }
         self.typing_trainer.mark_history_recorded();
@@ -1096,6 +1196,27 @@ fn typing_trainer_history_run_label(
     entry: &TypingTrainerRunRecord,
     lang: crate::i18n::Language,
 ) -> String {
+    if entry.symbols_enabled {
+        let pacing = if entry.mode == TypingTrainerMode::Time {
+            entry.duration_secs.to_string()
+        } else {
+            entry.word_count.to_string()
+        };
+        return format!(
+            "{} / {} / {} {}",
+            entry.language.label(),
+            crate::i18n::tr_catalog(lang, "typing_trainer.symbols"),
+            crate::i18n::tr_catalog(
+                lang,
+                if entry.mode == TypingTrainerMode::Time {
+                    "typing_trainer.time"
+                } else {
+                    "typing_trainer.count"
+                },
+            ),
+            pacing
+        );
+    }
     let mode = match entry.mode {
         TypingTrainerMode::Time => format!(
             "{} {}",
@@ -1107,6 +1228,7 @@ fn typing_trainer_history_run_label(
             crate::i18n::tr_catalog(lang, "typing_trainer.words"),
             entry.word_count
         ),
+        TypingTrainerMode::Symbols => String::new(),
     };
     let mut modifiers = String::new();
     if entry.punctuation_enabled {
@@ -1162,6 +1284,9 @@ fn typing_trainer_line_starts(target_chars: &[char], max_line_chars: usize) -> V
     }
 
     let max_line_chars = max_line_chars.max(1);
+    if !target_chars.iter().any(|ch| ch.is_whitespace()) {
+        return (0..target_len).step_by(max_line_chars).collect();
+    }
     let mut line_starts = vec![0];
     let mut line_chars = 0;
     let mut idx = 0;
@@ -1222,6 +1347,65 @@ fn typing_trainer_color_with_opacity(color: Color32, opacity: f32) -> Color32 {
 mod typing_trainer_ui_tests {
     use super::*;
 
+    fn test_app() -> EntropyApp {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        EntropyApp::new(&creation_context)
+    }
+
+    #[test]
+    fn time_based_symbol_training_focus_status_shows_remaining_seconds() {
+        let mut app = test_app();
+        app.typing_trainer.set_symbols_enabled(true);
+        app.typing_trainer.set_mode(TypingTrainerMode::Time);
+        app.typing_trainer.word_count = 25;
+        app.typing_trainer.typed_chars = vec!['!', '?'];
+        app.typing_trainer.started_at = Some(std::time::Instant::now());
+
+        assert_eq!(app.typing_trainer_focus_status(42), "42");
+    }
+
+    #[test]
+    fn fixed_count_symbol_training_focus_status_shows_character_progress() {
+        let mut app = test_app();
+        app.typing_trainer.set_symbols_enabled(true);
+        app.typing_trainer.set_mode(TypingTrainerMode::Words);
+        app.typing_trainer.word_count = 50;
+        app.typing_trainer.typed_chars = vec!['!', '?', '/'];
+
+        assert_eq!(app.typing_trainer_focus_status(42), "3/50");
+    }
+
+    #[test]
+    fn symbol_history_labels_include_the_exercise_language() {
+        let mut entry = TypingTrainerRunRecord {
+            finished_at_unix_secs: 1,
+            language: TypingTrainerLanguage::English,
+            mode: TypingTrainerMode::Words,
+            duration_secs: 30,
+            word_count: 25,
+            symbols_enabled: true,
+            punctuation_enabled: false,
+            numbers_enabled: false,
+            wpm: 40,
+            accuracy_percent: 100,
+            errors: 0,
+            typed_chars: 25,
+            elapsed_secs: 10,
+        };
+
+        assert_eq!(
+            typing_trainer_history_run_label(&entry, crate::i18n::Language::English),
+            "EN / layer keys / count 25"
+        );
+
+        entry.language = TypingTrainerLanguage::Russian;
+        assert_eq!(
+            typing_trainer_history_run_label(&entry, crate::i18n::Language::Russian),
+            "RU / клавиши слоёв / количество 25"
+        );
+    }
+
     #[test]
     fn typing_trainer_visible_start_stays_at_first_line_near_start() {
         let chars = "one two three four five six".chars().collect::<Vec<_>>();
@@ -1253,5 +1437,12 @@ mod typing_trainer_ui_tests {
             typing_trainer_visible_start_index(&chars, seven_idx, 9, 2),
             "one two three ".chars().count()
         );
+    }
+
+    #[test]
+    fn typing_trainer_wraps_a_continuous_symbol_sequence() {
+        let chars = "abcdefghijklmnopqrstuvwxyz".chars().collect::<Vec<_>>();
+
+        assert_eq!(typing_trainer_line_starts(&chars, 10), vec![0, 10, 20]);
     }
 }

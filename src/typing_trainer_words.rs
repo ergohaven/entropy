@@ -14,8 +14,19 @@ pub(crate) const TYPING_TRAINER_LANGUAGES: [TypingTrainerLanguage; 2] = [
 impl TypingTrainerLanguage {
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::English => "en",
-            Self::Russian => "ru",
+            Self::English => "EN",
+            Self::Russian => "RU",
+        }
+    }
+}
+
+/// The trainer language doubles as the input mapping of the exercise: it tells
+/// which OS layout the typed characters are expected to come from.
+impl From<TypingTrainerLanguage> for crate::keycode::KeyOutputLayout {
+    fn from(language: TypingTrainerLanguage) -> Self {
+        match language {
+            TypingTrainerLanguage::English => Self::English,
+            TypingTrainerLanguage::Russian => Self::Russian,
         }
     }
 }

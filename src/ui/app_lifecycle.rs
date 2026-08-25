@@ -1098,6 +1098,7 @@ impl eframe::App for EntropyApp {
         #[cfg(target_arch = "wasm32")]
         self.flush_pending_tap_hold_numeric_writes();
         self.flush_pending_text_expander_settings();
+        self.flush_typing_trainer_symbol_stats();
         self.app_settings.dark_mode = self.dark_mode;
         save_app_settings(&self.app_settings);
     }
