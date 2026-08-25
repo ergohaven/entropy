@@ -8,6 +8,25 @@ use anyhow::Result;
 
 type TapDanceData = (u16, u16, u16, u16, u16);
 type ComboData = ([u16; 4], u16);
+type DynamicEntryCounts = (u8, u8, u8, u8, u8);
+
+fn parse_dynamic_entry_counts_response(
+    command: &[u8],
+    resp: &[u8; MSG_LEN],
+) -> Result<DynamicEntryCounts> {
+    // Some QMK-Vial builds echo an unsupported dynamic-entry query, while
+    // others replace only its command byte with the generic 0xFF marker.
+    // Without this check, either reply is misread as hundreds of entries.
+    if matches!(resp[0], CMD_VIA_VIAL_PREFIX | u8::MAX)
+        && super::response_echoes_vial_command(command, resp)
+    {
+        anyhow::bail!("Vial dynamic entries are unsupported");
+    }
+
+    // Vial GUI trusts the firmware-provided one-byte dynamic entry counts.
+    // Do not impose Entropy-only caps here: the firmware/Vial protocol is authoritative.
+    Ok((resp[0], resp[1], resp[2], resp[3], resp[31]))
+}
 
 fn verify_combo_writeback(index: u8, requested: ComboData, readback: ComboData) -> Result<()> {
     if readback == requested {
@@ -44,14 +63,13 @@ impl HidDevice {
     /// Get Vial dynamic entry counts and optional feature bits.
     /// Returns (tap_dance, combo, key_override, alt_repeat, feature_bits).
     pub fn get_dynamic_entry_counts(&self) -> Result<(u8, u8, u8, u8, u8)> {
-        let resp = self.usb_send(&[
+        let command = [
             CMD_VIA_VIAL_PREFIX,
             CMD_VIAL_DYNAMIC_ENTRY_OP,
             DYNAMIC_VIAL_GET_NUM_ENTRIES,
-        ])?;
-        // Vial GUI trusts the firmware-provided one-byte dynamic entry counts.
-        // Do not impose Entropy-only caps here: the firmware/Vial protocol is authoritative.
-        Ok((resp[0], resp[1], resp[2], resp[3], resp[31]))
+        ];
+        let resp = self.usb_send(&command)?;
+        parse_dynamic_entry_counts_response(&command, &resp)
     }
 
     /// Get number of combo entries available
@@ -273,6 +291,51 @@ impl HidDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dynamic_entry_counts_reject_an_unsupported_qmk_echo() {
+        let command = [
+            CMD_VIA_VIAL_PREFIX,
+            CMD_VIAL_DYNAMIC_ENTRY_OP,
+            DYNAMIC_VIAL_GET_NUM_ENTRIES,
+        ];
+        let mut response = [0u8; MSG_LEN];
+        response[..command.len()].copy_from_slice(&command);
+
+        let error = parse_dynamic_entry_counts_response(&command, &response).unwrap_err();
+        assert!(error.to_string().contains("unsupported"));
+
+        response[0] = u8::MAX;
+        let error = parse_dynamic_entry_counts_response(&command, &response).unwrap_err();
+        assert!(error.to_string().contains("unsupported"));
+    }
+
+    #[test]
+    fn dynamic_entry_counts_keep_firmware_authoritative_without_local_caps() {
+        let command = [
+            CMD_VIA_VIAL_PREFIX,
+            CMD_VIAL_DYNAMIC_ENTRY_OP,
+            DYNAMIC_VIAL_GET_NUM_ENTRIES,
+        ];
+        let mut response = [0u8; MSG_LEN];
+        response[..4].copy_from_slice(&[200, 201, 202, 203]);
+        response[31] = 3;
+
+        assert_eq!(
+            parse_dynamic_entry_counts_response(&command, &response).unwrap(),
+            (200, 201, 202, 203, 3)
+        );
+
+        // A real count payload can share the echoed subcommand bytes. It is
+        // not an unsupported marker unless byte zero is 0xFE or 0xFF.
+        let mut response = [0u8; MSG_LEN];
+        response[0] = 8;
+        response[1] = CMD_VIAL_DYNAMIC_ENTRY_OP;
+        assert_eq!(
+            parse_dynamic_entry_counts_response(&command, &response).unwrap(),
+            (8, CMD_VIAL_DYNAMIC_ENTRY_OP, 0, 0, 0)
+        );
+    }
 
     #[test]
     fn tap_dance_writeback_accepts_matching_entry() {

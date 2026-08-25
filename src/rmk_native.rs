@@ -201,6 +201,12 @@ fn native_response_header_matches(response: &[u8; MSG_LEN], subcommand: u8) -> b
         && response[2] == subcommand
 }
 
+pub(crate) fn is_rmk_native_capabilities_request(command: &[u8]) -> bool {
+    command.first() == Some(&CMD_VIA_CUSTOM_GET_VALUE)
+        && command.get(1) == Some(&ERGOHAVEN_CUSTOM_NAMESPACE)
+        && command.get(2) == Some(&ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS)
+}
+
 pub(crate) fn matches_rmk_native_response(
     command: &[u8],
     response: &[u8; MSG_LEN],
@@ -225,13 +231,12 @@ pub(crate) fn matches_rmk_native_response(
         return None;
     }
 
-    // Standard QMK-Vial echoes unknown custom GET commands unchanged. Treat an
-    // exact capabilities probe echo as a terminal "RMK unsupported" response;
-    // the decoder below will return empty capabilities without transport retries.
-    if subcommand == ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS
-        && command.first() == Some(&CMD_VIA_CUSTOM_GET_VALUE)
+    // QMK-Vial can either echo an unknown custom GET unchanged or replace only
+    // its command byte with the generic 0xFF unsupported marker. Both are
+    // terminal "RMK unsupported" responses, not stale packets to retry.
+    if is_rmk_native_capabilities_request(command)
         && command.len() == response.len()
-        && command == response
+        && (command == response || (response[0] == u8::MAX && command[1..] == response[1..]))
     {
         return Some(true);
     }
@@ -843,6 +848,22 @@ mod tests {
         assert_eq!(matches_rmk_native_response(&command, &command), Some(true));
         assert_eq!(
             decode_native_capabilities(&command),
+            RmkNativeCapabilities::default()
+        );
+    }
+
+    #[test]
+    fn native_capability_probe_accepts_qmk_unsupported_marker() {
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_CUSTOM_GET_VALUE;
+        command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
+        command[2] = ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS;
+        let mut response = command;
+        response[0] = u8::MAX;
+
+        assert_eq!(matches_rmk_native_response(&command, &response), Some(true));
+        assert_eq!(
+            decode_native_capabilities(&response),
             RmkNativeCapabilities::default()
         );
     }

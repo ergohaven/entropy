@@ -5,6 +5,12 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.21-rc.1 - Test Candidate
+
+### Fixes
+
+- Restored wired QMK-Vial loading for legacy VIA protocol replies and made unsupported RMK capability and Vial dynamic-entry probes fail fast
+
 ## v0.3.20 - Public Beta
 
 ### Main Features

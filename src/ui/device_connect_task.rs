@@ -656,7 +656,7 @@ impl EntropyApp {
                 log::info!("Vial protocol: {vial_protocol}, keyboard id: {keyboard_id:016X}");
                 let cache_keys = device_cache_keys(&dev, keyboard_id);
                 let cache_key = &cache_keys[0];
-                if ![-1i32, 9].contains(&(via_protocol as i32)) {
+                if !crate::hid::is_supported_via_protocol(via_protocol) {
                     return Err(format!("Unsupported VIA protocol version: {via_protocol}"));
                 }
                 if !matches!(vial_protocol, 0..=6) {
