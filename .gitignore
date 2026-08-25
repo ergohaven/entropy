@@ -1,5 +1,8 @@
 /target
 /dist
+# Скачанные инструменты сборки (nfpm, appimagetool) и кэш go-task.
+/.cache
+/.task
 *.swp
 .DS_Store
 
