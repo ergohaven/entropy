@@ -10,17 +10,72 @@ struct OneShotModifierChoice {
 
 fn mod_tap_choices(lgui: &str) -> Vec<(String, u16, Option<u16>, String)> {
     vec![
-        (picker_mod_tap_label(0x2100), 0x2100, Some(0x3100), "Ctrl".into()),
-        (picker_mod_tap_label(0x2200), 0x2200, Some(0x3200), "Shift".into()),
-        (picker_mod_tap_label(0x2400), 0x2400, Some(0x3400), "Alt".into()),
-        (picker_mod_tap_label(0x2800), 0x2800, Some(0x3800), lgui.to_string()),
-        (picker_mod_tap_label(0x2300), 0x2300, None, "Ctrl+Shift".into()),
-        (picker_mod_tap_label(0x2500), 0x2500, None, "Ctrl+Alt".into()),
-        (picker_mod_tap_label(0x2900), 0x2900, None, format!("Ctrl+{lgui}")),
-        (picker_mod_tap_label(0x2600), 0x2600, None, "Shift+Alt (LSA)".into()),
-        (picker_mod_tap_label(0x2700), 0x2700, None, "Meh (Ctrl+Shift+Alt)".into()),
-        (picker_mod_tap_label(0x2A00), 0x2A00, None, format!("Shift+{lgui}")),
-        (picker_mod_tap_label(0x2F00), 0x2F00, None, format!("Hyper (Ctrl+Shift+Alt+{})", gui_mod_name())),
+        (
+            picker_mod_tap_label(0x2100),
+            0x2100,
+            Some(0x3100),
+            "Ctrl".into(),
+        ),
+        (
+            picker_mod_tap_label(0x2200),
+            0x2200,
+            Some(0x3200),
+            "Shift".into(),
+        ),
+        (
+            picker_mod_tap_label(0x2400),
+            0x2400,
+            Some(0x3400),
+            "Alt".into(),
+        ),
+        (
+            picker_mod_tap_label(0x2800),
+            0x2800,
+            Some(0x3800),
+            lgui.to_string(),
+        ),
+        (
+            picker_mod_tap_label(0x2300),
+            0x2300,
+            None,
+            "Ctrl+Shift".into(),
+        ),
+        (
+            picker_mod_tap_label(0x2500),
+            0x2500,
+            None,
+            "Ctrl+Alt".into(),
+        ),
+        (
+            picker_mod_tap_label(0x2900),
+            0x2900,
+            None,
+            format!("Ctrl+{lgui}"),
+        ),
+        (
+            picker_mod_tap_label(0x2600),
+            0x2600,
+            None,
+            "Shift+Alt (LSA)".into(),
+        ),
+        (
+            picker_mod_tap_label(0x2700),
+            0x2700,
+            None,
+            "Meh (Ctrl+Shift+Alt)".into(),
+        ),
+        (
+            picker_mod_tap_label(0x2A00),
+            0x2A00,
+            None,
+            format!("Shift+{lgui}"),
+        ),
+        (
+            picker_mod_tap_label(0x2F00),
+            0x2F00,
+            None,
+            format!("Hyper (Ctrl+Shift+Alt+{})", gui_mod_name()),
+        ),
     ]
 }
 
@@ -483,7 +538,10 @@ mod tests {
                 label,
                 &format!("Hold {modifier}+{}/key", crate::keycode::gui_sym())
             );
-            assert_eq!(mod_name, &format!("{modifier}+{}", crate::keycode::gui_label(false)));
+            assert_eq!(
+                mod_name,
+                &format!("{modifier}+{}", crate::keycode::gui_label(false))
+            );
         }
     }
 
