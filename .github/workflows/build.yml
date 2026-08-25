@@ -77,7 +77,7 @@ jobs:
         run: TARGET="${{ matrix.target }}" scripts/build_macos_app.sh
 
       - name: Test
-        if: matrix.kind == 'linux'
+        if: matrix.kind == 'linux' || matrix.kind == 'macos'
         run: cargo test --all-targets
 
       - name: Upload artifact
