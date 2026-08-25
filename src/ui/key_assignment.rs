@@ -760,6 +760,27 @@ mod tests {
     }
 
     #[test]
+    fn right_click_reopens_gui_chord_mod_tap_tap_key_picker() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+
+        for (keycode, base) in [(0x2904, 0x2900), (0x2A04, 0x2A00)] {
+            let mut app = EntropyApp::new(&creation_context);
+            app.handle_secondary_target(
+                &ctx,
+                false,
+                crate::keyboard::KeyBinding::Vial(keycode),
+                Some(0),
+                None,
+            );
+
+            assert!(app.secondary_click_handled);
+            assert!(app.keycode_picker.open);
+            assert_eq!(app.keycode_picker.vial_quantum_pending_mt, Some(base));
+        }
+    }
+
+    #[test]
     fn universal_symbol_can_be_assigned_to_combo_output() {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());

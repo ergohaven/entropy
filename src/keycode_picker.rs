@@ -557,6 +557,16 @@ mod tests {
 
         assert_eq!(picker.selected_tab, KeycodeTab::Modifiers);
     }
+
+    #[test]
+    fn gui_chord_mod_tap_retarget_preserves_held_modifiers() {
+        for (base, tap_key, expected) in [(0x2900, 0x0005, 0x2905), (0x2A00, 0x0006, 0x2A06)] {
+            let mut picker = KeycodePicker::default();
+            picker.finish_quantum_pending_key(base, tap_key, true);
+
+            assert_eq!(picker.result, Some(expected.into()));
+        }
+    }
 }
 
 fn show_universal_symbol_section(

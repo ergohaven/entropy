@@ -92,7 +92,7 @@ fn osm_mod_short_name(bits: u16) -> String {
     }
 }
 
-fn osm_mod_full_name(bits: u16) -> String {
+fn modifier_full_name_from_bits(bits: u16) -> String {
     let right = bits & 0x10 != 0;
     let side = if right { "Right" } else { "Left" };
     let gui = gui_mod_name();
@@ -968,8 +968,6 @@ pub fn keycode_tooltip(value: u16, custom: &[CustomKeycode], layer_names: &[Stri
             _ => "modifier".into(),
         }
     };
-    let side = |v: u16| if v & 0x10 != 0 { "Right " } else { "Left " };
-
     // ── KC_NO / KC_TRNS ──────────────────────────────────────────────────────
     if value == 0x0000 {
         return "No key — this key does nothing".to_string();
@@ -982,7 +980,7 @@ pub fn keycode_tooltip(value: u16, custom: &[CustomKeycode], layer_names: &[Stri
     }
     // ── One-shot mod: 0x52A0..=0x52BF (Vial protocol v6) ─────────────────────
     if let Some(bits) = osm_mod_bits(value) {
-        let full_name = osm_mod_full_name(bits);
+        let full_name = modifier_full_name_from_bits(bits);
         return format!("One-Shot {full_name} — applies {full_name} to the next keypress only");
     }
 
@@ -1027,13 +1025,11 @@ pub fn keycode_tooltip(value: u16, custom: &[CustomKeycode], layer_names: &[Stri
     if value & 0xE000 == 0x2000 {
         let kc = value & 0xFF;
         let mods = (value >> 8) & 0x1F;
-        let right = (value >> 12) & 0x1 != 0;
         let kc_str = find_keycode(kc)
             .map(simple_key_name)
             .unwrap_or_else(|| format!("0x{:02X}", kc));
-        let m = mod_name(mods, right);
-        let side_str = side(mods);
-        return format!("Mod Tap — tap for {}, hold for {}{}", kc_str, side_str, m);
+        let m = modifier_full_name_from_bits(mods);
+        return format!("Mod Tap — tap for {}, hold for {}", kc_str, m);
     }
 
     // ── Modifier+key combos 0x0100..0x1FFF ──────────────────────────────────
@@ -1300,5 +1296,18 @@ mod tests {
     #[test]
     fn macos_gui_legends_use_cmd_text() {
         assert_eq!(gui_name_for_target_os("macos"), "Cmd");
+    }
+
+    #[test]
+    fn mod_tap_tooltips_decode_gui_chords() {
+        for (value, modifier) in [(0x2904, "Ctrl"), (0x2A04, "Shift")] {
+            let tooltip = keycode_tooltip(value, &[], &[]);
+
+            assert!(tooltip.contains("tap for A"), "{tooltip}");
+            assert!(
+                tooltip.contains(&format!("hold for Left {modifier}+{}", gui_mod_name())),
+                "{tooltip}"
+            );
+        }
     }
 }

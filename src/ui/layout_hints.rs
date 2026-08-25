@@ -36,6 +36,11 @@ impl LayoutBottomHintKind {
                 can_retarget_key,
                 is_mod_tap,
             } => match (can_swap_side, can_retarget_key, is_mod_tap) {
+                (false, true, true) => &[
+                    "key_hints.change_key",
+                    "key_hints.change_mod_tap_key",
+                    "key_hints.clear_key",
+                ],
                 (false, _, _) => &[
                     "key_hints.change_key",
                     "key_hints.change_modifier_key",
@@ -386,7 +391,7 @@ impl EntropyApp {
 
 #[cfg(test)]
 mod tests {
-    use super::LayoutBottomHintKind;
+    use super::{LayoutBottomHintKind, toggle_handed_modifier};
 
     const CLEAR_KEY: &str = "key_hints.clear_key";
 
@@ -434,6 +439,28 @@ mod tests {
                 CLEAR_KEY,
             ]
         );
+    }
+
+    #[test]
+    fn gui_chord_mod_tap_without_side_swap_uses_tap_key_hint() {
+        for keycode in [0x2904, 0x2A04] {
+            let is_mod_tap = (0x2000..0x4000).contains(&keycode);
+            let kind = LayoutBottomHintKind::Modifier {
+                can_swap_side: toggle_handed_modifier(keycode).is_some(),
+                can_retarget_key: is_mod_tap,
+                is_mod_tap,
+            };
+
+            assert_eq!(
+                kind.keys(false),
+                &[
+                    "key_hints.change_key",
+                    "key_hints.change_mod_tap_key",
+                    CLEAR_KEY,
+                ],
+                "wrong hints for {keycode:#06X}"
+            );
+        }
     }
 
     #[test]
