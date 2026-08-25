@@ -59,16 +59,18 @@ in
 
     group = lib.mkOption {
       type = lib.types.str;
-      default = "input";
+      default = "entropy";
       example = "plugdev";
       description = ''
         Group granted read/write access to Vial hidraw devices. Members can
         talk to the keyboard even where uaccess does not apply (over SSH, or
         from a session that does not own the seat).
 
-        The group is created if it does not exist yet, so that the rule can
-        never end up pointing at a group nothing can join. Add the users that
-        need it to {option}`users.users.<name>.extraGroups`.
+        The dedicated `entropy` group is used by default instead of a broad
+        input-device group. The configured group is created if it does not
+        exist yet, so that the rule can never end up pointing at a group
+        nothing can join. Add the users that need it to
+        {option}`users.users.<name>.extraGroups`.
       '';
     };
 
@@ -106,8 +108,8 @@ in
         services.udev.packages = [ vialUdevRules ];
 
         # A rule naming a group that does not exist evaluates and installs
-        # happily, and then leaves the device unreachable. Declaring it here is
-        # a no-op for groups NixOS already ships, such as the default "input".
+        # happily, and then leaves the device unreachable. Declare the
+        # configured group so the dedicated default works out of the box.
         users.groups.${cfg.group} = { };
       }
 

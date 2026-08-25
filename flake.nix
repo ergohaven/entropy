@@ -3,10 +3,18 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    home-manager = {
+      url = "github:nix-community/home-manager";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      home-manager,
+    }:
     let
       supportedSystems = [
         "x86_64-linux"
@@ -256,7 +264,12 @@
       checks = forAllSystems (
         system:
         import ./nix/checks.nix {
-          inherit self nixpkgs system;
+          inherit
+            self
+            nixpkgs
+            home-manager
+            system
+            ;
           pkgs = import nixpkgs { inherit system; };
         }
       );

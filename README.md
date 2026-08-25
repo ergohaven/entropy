@@ -192,9 +192,14 @@ engine registered this way and replaces the **Install IBus** action with
 old registry, so the new layouts show up only after it reloads (or after you
 log out and back in).
 
-`programs.entropy.group` (default `input`) is the group the udev rule grants
-access to; it is created if it does not exist, and the users that need direct
-hidraw access have to be members of it.
+`programs.entropy.group` (default `entropy`) is the dedicated group the udev
+rule grants access to. It is created automatically. Active local sessions
+normally receive access through uaccess; add users that also need direct
+hidraw access outside the active seat (for example over SSH) explicitly:
+
+```nix
+users.users.alice.extraGroups = [ "entropy" ];
+```
 
 nixpkgs ships its own `programs.entropy` module around `pkgs.ergohaven-entropy`.
 Both declare the same option, so this module disables the nixpkgs one
