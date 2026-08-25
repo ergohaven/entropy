@@ -14,8 +14,8 @@ pub(crate) const TYPING_TRAINER_LANGUAGES: [TypingTrainerLanguage; 2] = [
 impl TypingTrainerLanguage {
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::English => "en",
-            Self::Russian => "ru",
+            Self::English => "EN",
+            Self::Russian => "RU",
         }
     }
 }

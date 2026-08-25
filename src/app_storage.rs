@@ -91,27 +91,23 @@ fn load_typing_trainer_symbol_stats_from_path(
 fn save_typing_trainer_symbol_stats_to_path(
     path: &std::path::Path,
     stats: &TypingTrainerCharacterStatsMap,
-) {
+) -> Result<(), String> {
     let file = TypingTrainerSymbolStatsFile {
         version: TYPING_TRAINER_SYMBOL_STATS_VERSION,
         stats: stats.clone(),
     };
-    match serde_json::to_string_pretty(&file) {
-        Ok(json) => {
-            if let Err(error) = std::fs::write(path, json) {
-                log::warn!("save_typing_trainer_symbol_stats failed: {error}");
-            }
-        }
-        Err(error) => log::warn!("save_typing_trainer_symbol_stats serialize failed: {error}"),
-    }
+    let json = serde_json::to_string_pretty(&file).map_err(|error| error.to_string())?;
+    std::fs::write(path, json).map_err(|error| error.to_string())
 }
 
 pub(super) fn load_typing_trainer_symbol_stats() -> TypingTrainerCharacterStatsMap {
     load_typing_trainer_symbol_stats_from_path(&typing_trainer_symbol_stats_path())
 }
 
-pub(super) fn save_typing_trainer_symbol_stats(stats: &TypingTrainerCharacterStatsMap) {
-    save_typing_trainer_symbol_stats_to_path(&typing_trainer_symbol_stats_path(), stats);
+pub(super) fn save_typing_trainer_symbol_stats(
+    stats: &TypingTrainerCharacterStatsMap,
+) -> Result<(), String> {
+    save_typing_trainer_symbol_stats_to_path(&typing_trainer_symbol_stats_path(), stats)
 }
 
 const TEXT_EXPANDER_MAIN_RULES_FILE: &str = "text_expansion_rules.json";
@@ -784,12 +780,25 @@ mod tests {
             },
         )]);
 
-        save_typing_trainer_symbol_stats_to_path(&path, &stats);
+        save_typing_trainer_symbol_stats_to_path(&path, &stats).unwrap();
 
         assert_eq!(load_typing_trainer_symbol_stats_from_path(&path), stats);
         let json = std::fs::read_to_string(&path).unwrap();
         assert!(json.contains("\"version\": 1"));
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn symbol_stats_save_reports_write_failures() {
+        let missing_parent = temp_macro_metadata_path("symbol_stats_missing_parent");
+        let path = missing_parent.join("stats.json");
+
+        let error =
+            save_typing_trainer_symbol_stats_to_path(&path, &TypingTrainerCharacterStatsMap::new())
+                .expect_err("saving below a missing parent directory must fail");
+
+        assert!(!error.is_empty());
+        assert!(!path.exists());
     }
 
     #[test]

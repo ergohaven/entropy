@@ -2815,8 +2815,8 @@ impl TypingTrainerRunRecord {
             duration_secs: state.duration_secs,
             word_count: state.word_count,
             symbols_enabled: state.symbols_enabled,
-            punctuation_enabled: state.punctuation_enabled,
-            numbers_enabled: state.numbers_enabled,
+            punctuation_enabled: !state.symbols_enabled && state.punctuation_enabled,
+            numbers_enabled: !state.symbols_enabled && state.numbers_enabled,
             wpm: stats.wpm,
             accuracy_percent: stats.accuracy.round().clamp(0.0, 100.0) as u32,
             errors: stats.errors,
@@ -2829,8 +2829,9 @@ impl TypingTrainerRunRecord {
         self.language == settings.language
             && self.mode == settings.mode
             && self.symbols_enabled == settings.symbols_enabled
-            && self.punctuation_enabled == settings.punctuation_enabled
-            && self.numbers_enabled == settings.numbers_enabled
+            && (self.symbols_enabled
+                || (self.punctuation_enabled == settings.punctuation_enabled
+                    && self.numbers_enabled == settings.numbers_enabled))
             && match self.mode {
                 TypingTrainerMode::Time => self.duration_secs == settings.duration_secs,
                 TypingTrainerMode::Words | TypingTrainerMode::Symbols => {
@@ -2912,6 +2913,8 @@ pub(crate) struct TypingTrainerState {
     pub(crate) symbols_enabled: bool,
     pub(crate) symbol_pool: Vec<char>,
     pub(crate) symbol_stats: TypingTrainerCharacterStatsMap,
+    run_symbol_pool: Vec<char>,
+    run_symbol_stats: TypingTrainerCharacterStatsMap,
     symbol_stats_dirty: bool,
     pub(crate) started_at: Option<std::time::Instant>,
     pub(crate) paused_at: Option<std::time::Instant>,
@@ -2976,6 +2979,8 @@ impl TypingTrainerState {
             symbols_enabled: settings.symbols_enabled,
             symbol_pool: Vec::new(),
             symbol_stats: TypingTrainerCharacterStatsMap::new(),
+            run_symbol_pool: Vec::new(),
+            run_symbol_stats: TypingTrainerCharacterStatsMap::new(),
             symbol_stats_dirty: false,
             started_at: None,
             paused_at: None,
@@ -3009,12 +3014,25 @@ impl TypingTrainerState {
     fn start_run(&mut self, text_seed: usize) {
         self.run_seed = text_seed;
         self.text_seed = text_seed;
+        self.run_symbol_pool.clone_from(&self.symbol_pool);
+        self.run_symbol_stats.clone_from(&self.symbol_stats);
         self.target_text = self.new_target_text();
         self.clear_progress();
     }
 
     pub(crate) fn retry(&mut self) {
-        self.start_run(self.run_seed);
+        let run_source_invalid = self.is_symbol_training()
+            && self
+                .run_symbol_pool
+                .iter()
+                .any(|symbol| self.symbol_pool.binary_search(symbol).is_err());
+        if run_source_invalid {
+            self.start_run(self.run_seed);
+            return;
+        }
+        self.text_seed = self.run_seed;
+        self.target_text = self.new_target_text();
+        self.clear_progress();
     }
 
     fn clear_progress(&mut self) {
@@ -3089,18 +3107,26 @@ impl TypingTrainerState {
 
     /// Replaces the pool of characters the loaded layout can type.
     ///
-    /// A changed pool restarts the exercise so it never keeps asking for
-    /// characters the keyboard no longer types — but a run already in progress
-    /// is left alone, because layers keep arriving in the background right
-    /// after a device connects and would otherwise wipe the session.
+    /// Removing a character used by the frozen run source restarts the exercise
+    /// so it never keeps asking for output the keyboard no longer types. Other
+    /// live-pool changes leave a run in progress alone, because layers keep
+    /// arriving in the background right after a device connects and would
+    /// otherwise wipe the session.
     pub(crate) fn set_symbol_pool(&mut self, mut symbols: Vec<char>) {
         symbols.sort_unstable();
         symbols.dedup();
         if self.symbol_pool == symbols {
             return;
         }
+        let run_source_invalid = self
+            .run_symbol_pool
+            .iter()
+            .any(|symbol| symbols.binary_search(symbol).is_err());
         self.symbol_pool = symbols;
-        if self.is_symbol_training() && self.started_at.is_none() {
+        if self.is_symbol_training()
+            && self.finished_at.is_none()
+            && (self.started_at.is_none() || run_source_invalid)
+        {
             self.start_run(self.text_seed);
         }
     }
@@ -3108,6 +3134,7 @@ impl TypingTrainerState {
     /// Restores adaptive statistics persisted from earlier sessions.
     pub(crate) fn set_symbol_stats(&mut self, stats: TypingTrainerCharacterStatsMap) {
         self.symbol_stats = stats;
+        self.run_symbol_stats.clone_from(&self.symbol_stats);
         self.symbol_stats_dirty = false;
     }
 
@@ -3119,12 +3146,21 @@ impl TypingTrainerState {
     /// Whether attempts were recorded since the statistics were last persisted.
     /// Sessions are abandoned far more often than they are finished, so the
     /// adaptive weights have to survive without a completed run.
+    #[cfg(test)]
     pub(crate) fn symbol_stats_unsaved(&self) -> bool {
         self.symbol_stats_dirty
     }
 
-    pub(crate) fn mark_symbol_stats_saved(&mut self) {
+    pub(crate) fn persist_symbol_stats(
+        &mut self,
+        save: impl FnOnce(&TypingTrainerCharacterStatsMap) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if !self.symbol_stats_dirty {
+            return Ok(());
+        }
+        save(&self.symbol_stats)?;
         self.symbol_stats_dirty = false;
+        Ok(())
     }
 
     pub(crate) fn expected_char(&self) -> Option<char> {
@@ -3139,9 +3175,9 @@ impl TypingTrainerState {
         self.paused_at.is_some()
     }
 
-    pub(crate) fn pause_if_running(&mut self, now: std::time::Instant) {
+    pub(crate) fn pause_if_running(&mut self, now: std::time::Instant) -> bool {
         if self.started_at.is_none() || self.finished_at.is_some() || self.paused_at.is_some() {
-            return;
+            return false;
         }
         if self.mode == TypingTrainerMode::Time
             && self.elapsed_secs_at(now) >= self.duration_secs as f32
@@ -3150,6 +3186,7 @@ impl TypingTrainerState {
         } else {
             self.paused_at = Some(now);
         }
+        true
     }
 
     pub(crate) fn resume_if_paused(&mut self, now: std::time::Instant) {
@@ -3218,9 +3255,9 @@ impl TypingTrainerState {
         self.text_seed = self.text_seed.wrapping_add(17);
         if self.is_symbol_training() {
             self.target_text.push_str(&weighted_symbol_text(
-                &self.symbol_pool,
+                &self.run_symbol_pool,
                 self.word_count,
-                &self.symbol_stats,
+                &self.run_symbol_stats,
                 self.text_seed,
             ));
             return;
@@ -3300,9 +3337,9 @@ impl TypingTrainerState {
     fn new_target_text(&self) -> String {
         if self.is_symbol_training() {
             return weighted_symbol_text(
-                &self.symbol_pool,
+                &self.run_symbol_pool,
                 self.word_count,
-                &self.symbol_stats,
+                &self.run_symbol_stats,
                 self.text_seed,
             );
         }
@@ -3602,18 +3639,89 @@ mod typing_trainer_tests {
         assert_eq!(state.target_text, text);
         assert_eq!(state.typed_chars.len(), 1);
         assert_eq!(state.started_at, Some(started_at));
+
+        state.set_symbol_pool(vec!['a', '!']);
+
+        assert_eq!(state.target_text, text);
+        assert_eq!(state.typed_chars.len(), 1);
+        assert_eq!(state.started_at, Some(started_at));
     }
 
     #[test]
-    fn recorded_attempts_mark_statistics_as_unsaved_until_they_are_persisted() {
+    fn removing_available_symbols_restarts_a_running_symbol_session() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            symbols_enabled: true,
+            ..TypingTrainerSettings::default()
+        });
+        state.set_symbol_pool(vec!['a', '!']);
+        let started_at = std::time::Instant::now();
+        state.type_char(
+            state.expected_char().expect("symbol run has a target"),
+            started_at,
+        );
+
+        state.set_symbol_pool(vec!['?']);
+
+        assert!(state.target_text.chars().all(|symbol| symbol == '?'));
+        assert!(state.typed_chars.is_empty());
+        assert!(state.started_at.is_none());
+        assert!(state.finished_at.is_none());
+    }
+
+    #[test]
+    fn symbol_pool_shrink_preserves_a_finished_result_until_retry() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            symbols_enabled: true,
+            ..TypingTrainerSettings::default()
+        });
+        state.set_symbol_pool(vec!['a', '!']);
+        let now = std::time::Instant::now();
+        let expected = state.expected_char().expect("symbol run has a target");
+        state.type_char(expected, now);
+        state.finish(now + std::time::Duration::from_secs(1));
+        let finished_text = state.target_text.clone();
+        let finished_input = state.typed_chars.clone();
+
+        state.set_symbol_pool(vec!['?']);
+
+        assert_eq!(state.target_text, finished_text);
+        assert_eq!(state.typed_chars, finished_input);
+        assert!(state.is_finished());
+        assert!(state.history_record_pending());
+
+        state.retry();
+
+        assert!(state.target_text.chars().all(|symbol| symbol == '?'));
+        assert!(state.typed_chars.is_empty());
+        assert!(state.started_at.is_none());
+        assert!(!state.history_record_pending());
+    }
+
+    #[test]
+    fn statistics_stay_dirty_until_persistence_succeeds() {
         let mut state = TypingTrainerState::default();
         assert!(!state.symbol_stats_unsaved());
 
         state.record_symbol_attempt('!', true);
         assert!(state.symbol_stats_unsaved());
 
-        state.mark_symbol_stats_saved();
+        let error = state
+            .persist_symbol_stats(|_| Err("storage unavailable".to_owned()))
+            .expect_err("failed persistence must be reported");
+        assert_eq!(error, "storage unavailable");
+        assert!(state.symbol_stats_unsaved());
+
+        state.persist_symbol_stats(|_| Ok(())).unwrap();
         assert!(!state.symbol_stats_unsaved());
+
+        let mut clean_state_called_writer = false;
+        state
+            .persist_symbol_stats(|_| {
+                clean_state_called_writer = true;
+                Ok(())
+            })
+            .unwrap();
+        assert!(!clean_state_called_writer);
     }
 
     #[test]
@@ -3633,7 +3741,7 @@ mod typing_trainer_tests {
 
         state.type_char(expected, now);
         assert!(state.symbol_stats_unsaved());
-        state.mark_symbol_stats_saved();
+        state.persist_symbol_stats(|_| Ok(())).unwrap();
 
         // Input landing after the run ended has no expected character left.
         state.finish(now);
@@ -3722,6 +3830,90 @@ mod typing_trainer_tests {
     }
 
     #[test]
+    fn symbol_retry_reuses_the_statistics_snapshot_from_the_original_run() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            symbols_enabled: true,
+            word_count: 100,
+            ..TypingTrainerSettings::default()
+        });
+        state.set_symbol_pool(vec!['a', 'b']);
+        let first_text = state.target_text.clone();
+
+        for _ in 0..100 {
+            state.record_symbol_attempt('b', true);
+        }
+        assert_ne!(
+            weighted_symbol_text(
+                &state.symbol_pool,
+                state.word_count,
+                &state.symbol_stats,
+                state.run_seed,
+            ),
+            first_text,
+            "test setup must make live adaptive statistics change the sequence"
+        );
+
+        state.retry();
+
+        assert_eq!(state.target_text, first_text);
+        assert!(state.typed_chars.is_empty());
+        assert!(state.started_at.is_none());
+    }
+
+    #[test]
+    fn time_based_symbol_retry_replays_the_same_sequence_of_chunks() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            mode: TypingTrainerMode::Time,
+            symbols_enabled: true,
+            word_count: 25,
+            ..TypingTrainerSettings::default()
+        });
+        state.set_symbol_pool(vec!['a', 'b']);
+        let now = std::time::Instant::now();
+        let first_chunk = state.target_text.clone();
+        for symbol in first_chunk.chars() {
+            state.type_char(symbol, now);
+        }
+        let second_chunk = state.target_text.clone();
+        for _ in 0..100 {
+            state.record_symbol_attempt('b', true);
+        }
+        state.finish(now + std::time::Duration::from_secs(1));
+
+        state.retry();
+        assert_eq!(state.target_text, first_chunk);
+        for symbol in first_chunk.chars() {
+            state.type_char(symbol, now);
+        }
+
+        assert_eq!(state.target_text, second_chunk);
+    }
+
+    #[test]
+    fn a_new_symbol_run_uses_the_latest_adaptive_statistics() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            symbols_enabled: true,
+            word_count: 100,
+            ..TypingTrainerSettings::default()
+        });
+        state.set_symbol_pool(vec!['a', 'b']);
+        for _ in 0..100 {
+            state.record_symbol_attempt('b', true);
+        }
+        let next_seed = state.text_seed.wrapping_add(17);
+        let expected = weighted_symbol_text(
+            &state.symbol_pool,
+            state.word_count,
+            &state.symbol_stats,
+            next_seed,
+        );
+
+        state.reset();
+
+        assert_eq!(state.target_text, expected);
+    }
+
+    #[test]
     fn typing_trainer_finished_stats_are_stable() {
         let mut state = TypingTrainerState::default();
         let start = std::time::Instant::now();
@@ -3755,6 +3947,32 @@ mod typing_trainer_tests {
         assert_eq!(record.errors, state.stats_at(start).errors);
         assert_eq!(record.typed_chars, 1);
         assert_eq!(record.elapsed_secs, 10);
+    }
+
+    #[test]
+    fn symbol_history_record_omits_hidden_text_material_flags() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            mode: TypingTrainerMode::Words,
+            punctuation_enabled: true,
+            numbers_enabled: true,
+            symbols_enabled: true,
+            ..TypingTrainerSettings::default()
+        });
+        state.set_symbol_pool(vec!['!']);
+        let now = std::time::Instant::now();
+        state.type_char('!', now);
+        state.finish(now + std::time::Duration::from_secs(1));
+
+        let record = TypingTrainerRunRecord::from_state(
+            &state,
+            now + std::time::Duration::from_secs(1),
+            1_700_000_000,
+        )
+        .expect("finished symbol run should produce a history record");
+
+        assert!(record.symbols_enabled);
+        assert!(!record.punctuation_enabled);
+        assert!(!record.numbers_enabled);
     }
 
     #[test]
@@ -3872,6 +4090,61 @@ mod typing_trainer_tests {
                 average_accuracy_percent: Some(97),
             }
         );
+    }
+
+    #[test]
+    fn symbol_history_summary_ignores_hidden_text_material_flags() {
+        let settings = TypingTrainerSettings {
+            language: TypingTrainerLanguage::English,
+            mode: TypingTrainerMode::Words,
+            punctuation_enabled: false,
+            numbers_enabled: false,
+            duration_secs: 30,
+            word_count: 25,
+            symbols_enabled: true,
+        };
+        let legacy_record = TypingTrainerRunRecord {
+            finished_at_unix_secs: 1,
+            language: TypingTrainerLanguage::English,
+            mode: TypingTrainerMode::Words,
+            duration_secs: 30,
+            word_count: 25,
+            symbols_enabled: true,
+            punctuation_enabled: true,
+            numbers_enabled: true,
+            wpm: 40,
+            accuracy_percent: 90,
+            errors: 2,
+            typed_chars: 25,
+            elapsed_secs: 10,
+        };
+        let mut current_record = legacy_record.clone();
+        current_record.finished_at_unix_secs = 2;
+        current_record.punctuation_enabled = false;
+        current_record.numbers_enabled = false;
+        current_record.wpm = 60;
+        current_record.accuracy_percent = 100;
+        let mut russian_record = current_record.clone();
+        russian_record.language = TypingTrainerLanguage::Russian;
+        russian_record.wpm = 100;
+        let mut wrong_count_record = current_record.clone();
+        wrong_count_record.word_count = 50;
+        wrong_count_record.wpm = 100;
+
+        let summary = typing_trainer_history_summary_for_settings(
+            &[
+                legacy_record,
+                current_record,
+                russian_record,
+                wrong_count_record,
+            ],
+            settings,
+        );
+
+        assert_eq!(summary.run_count, 2);
+        assert_eq!(summary.best_wpm, Some(60));
+        assert_eq!(summary.average_wpm, Some(50));
+        assert_eq!(summary.average_accuracy_percent, Some(95));
     }
 
     #[test]

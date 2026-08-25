@@ -27,8 +27,9 @@ impl EntropyApp {
         if self.main_menu_tab != MainMenuTab::Advanced
             || self.settings_tab != SettingsTab::TypingTrainer
         {
-            self.typing_trainer.pause_if_running(now);
-            self.flush_typing_trainer_symbol_stats();
+            if self.typing_trainer.pause_if_running(now) {
+                self.flush_typing_trainer_symbol_stats();
+            }
         }
     }
 
@@ -36,11 +37,12 @@ impl EntropyApp {
     /// the trainer page is left and on exit, so an abandoned session still
     /// teaches the trainer which characters are difficult.
     pub(super) fn flush_typing_trainer_symbol_stats(&mut self) {
-        if !self.typing_trainer.symbol_stats_unsaved() {
-            return;
+        if let Err(error) = self
+            .typing_trainer
+            .persist_symbol_stats(save_typing_trainer_symbol_stats)
+        {
+            log::warn!("save_typing_trainer_symbol_stats failed: {error}");
         }
-        save_typing_trainer_symbol_stats(&self.typing_trainer.symbol_stats);
-        self.typing_trainer.mark_symbol_stats_saved();
     }
 
     /// Rebuilds the symbol pool only when the keymap or the selected trainer
@@ -1160,8 +1162,7 @@ impl EntropyApp {
             TypingTrainerRunRecord::from_state(&self.typing_trainer, now, finished_at_unix_secs)
         {
             push_typing_trainer_history(&mut self.app_settings.typing_trainer_history, record);
-            save_typing_trainer_symbol_stats(&self.typing_trainer.symbol_stats);
-            self.typing_trainer.mark_symbol_stats_saved();
+            self.flush_typing_trainer_symbol_stats();
             save_app_settings(&self.app_settings);
         }
         self.typing_trainer.mark_history_recorded();
@@ -1202,7 +1203,8 @@ fn typing_trainer_history_run_label(
             entry.word_count.to_string()
         };
         return format!(
-            "{} / {} {}",
+            "{} / {} / {} {}",
+            entry.language.label(),
             crate::i18n::tr_catalog(lang, "typing_trainer.symbols"),
             crate::i18n::tr_catalog(
                 lang,
@@ -1372,6 +1374,36 @@ mod typing_trainer_ui_tests {
         app.typing_trainer.typed_chars = vec!['!', '?', '/'];
 
         assert_eq!(app.typing_trainer_focus_status(42), "3/50");
+    }
+
+    #[test]
+    fn symbol_history_labels_include_the_exercise_language() {
+        let mut entry = TypingTrainerRunRecord {
+            finished_at_unix_secs: 1,
+            language: TypingTrainerLanguage::English,
+            mode: TypingTrainerMode::Words,
+            duration_secs: 30,
+            word_count: 25,
+            symbols_enabled: true,
+            punctuation_enabled: false,
+            numbers_enabled: false,
+            wpm: 40,
+            accuracy_percent: 100,
+            errors: 0,
+            typed_chars: 25,
+            elapsed_secs: 10,
+        };
+
+        assert_eq!(
+            typing_trainer_history_run_label(&entry, crate::i18n::Language::English),
+            "EN / layer keys / count 25"
+        );
+
+        entry.language = TypingTrainerLanguage::Russian;
+        assert_eq!(
+            typing_trainer_history_run_label(&entry, crate::i18n::Language::Russian),
+            "RU / клавиши слоёв / количество 25"
+        );
     }
 
     #[test]
