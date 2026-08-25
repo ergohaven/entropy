@@ -22,6 +22,10 @@ pub(crate) const COMBO_COLOR_SEED_PALETTE: [u32; 16] = [
     0x6F94B8, 0xB6A05F, 0x7DA986, 0xC18B74, 0x8F8BC0, 0xC2A078, 0x6FA4A0,
 ];
 
+use super::typing_trainer_symbols::{
+    record_symbol_attempt, weighted_symbol_text, TypingTrainerCharacterStatsMap,
+    TYPING_TRAINER_SYMBOL_COUNTS,
+};
 use super::*;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -38,6 +42,8 @@ pub(crate) struct AppSettings {
     pub(crate) show_shifted_number_symbols: bool,
     #[serde(default = "default_layer_hover_preview")]
     pub(crate) layer_hover_preview: bool,
+    #[serde(default)]
+    pub(crate) middle_click_assigns_transparent: bool,
     #[serde(default)]
     pub(crate) sticky_layout_window: bool,
     #[serde(default = "default_sticky_layout_always_on_top")]
@@ -168,6 +174,7 @@ impl Default for AppSettings {
             launch_minimized: false,
             show_shifted_number_symbols: default_show_shifted_number_symbols(),
             layer_hover_preview: default_layer_hover_preview(),
+            middle_click_assigns_transparent: false,
             sticky_layout_window: false,
             sticky_layout_always_on_top: default_sticky_layout_always_on_top(),
             sticky_layout_opacity: default_sticky_layout_opacity(),
@@ -218,6 +225,14 @@ mod app_settings_tests {
 
         assert!(!settings.dark_mode);
         assert!(!settings.launch_minimized);
+        assert!(!settings.middle_click_assigns_transparent);
+    }
+
+    #[test]
+    fn app_settings_no_longer_embed_symbol_training_stats() {
+        let json = serde_json::to_value(AppSettings::default()).unwrap();
+
+        assert!(json.get("typing_trainer_symbol_stats").is_none());
     }
 }
 
@@ -307,6 +322,58 @@ pub(crate) fn key_binding_label_with_macro_names(
     }
 }
 
+/// Characters a key binding types in the given input layout: the direct output
+/// and the Shift output, when the binding produces one.
+///
+/// Mirrors [`key_binding_label_with_macro_names`] in how it decodes a binding,
+/// so both firmware protocols and RMK-native actions are handled in one place.
+pub(crate) fn key_binding_printable_output(
+    binding: crate::keyboard::KeyBinding,
+    key_output_layout: crate::keycode::KeyOutputLayout,
+) -> Option<(char, Option<char>)> {
+    match binding {
+        crate::keyboard::KeyBinding::Vial(value) => {
+            crate::keycode::printable_output(value, key_output_layout)
+        }
+        crate::keyboard::KeyBinding::Rmk(action) => {
+            if let Some(parts) = crate::rmk_native::rmk_mod_tap_parts(action) {
+                return crate::keycode::printable_output(parts.tap_value(), key_output_layout);
+            }
+            rmk_action_printable_output(action, key_output_layout)
+        }
+    }
+}
+
+/// Decodes RMK key actions by what they type when tapped: Universal Symbols,
+/// a key press, or a key press with modifiers held.
+fn rmk_action_printable_output(
+    action: rmk_types::action::KeyAction,
+    key_output_layout: crate::keycode::KeyOutputLayout,
+) -> Option<(char, Option<char>)> {
+    use rmk_types::action::{Action, KeyAction};
+    use rmk_types::keycode::KeyCode;
+
+    let tap = match action {
+        KeyAction::Single(action) | KeyAction::Tap(action) => action,
+        KeyAction::TapHold(tap, _, _) => tap,
+        _ => return None,
+    };
+    match tap {
+        Action::User(_) => {
+            crate::universal_symbols::printable_output(KeyAction::Single(tap), key_output_layout)
+        }
+        Action::Key(KeyCode::Hid(key)) => {
+            crate::keycode::printable_output(key as u16, key_output_layout)
+        }
+        Action::KeyWithModifier(key, modifiers) => {
+            let modifier_bits = u16::from(modifiers.into_packed_bits()) & 0x0F;
+            let keycode = (modifier_bits << 8) | key as u16;
+            crate::keycode::printable_output(keycode, key_output_layout)
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn key_binding_tooltip_with_macro_names(
     binding: crate::keyboard::KeyBinding,
     custom: &[crate::keyboard::CustomKeycode],
@@ -356,6 +423,7 @@ pub(crate) struct VialFeatureSupport {
     pub(crate) layer_lock: bool,
     pub(crate) persistent_default_layer: bool,
     pub(crate) repeat_key: bool,
+    pub(crate) alt_repeat_key: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -371,6 +439,7 @@ pub(crate) struct DeviceAboutInfo {
     pub(crate) product_id: u16,
     pub(crate) path: String,
     pub(crate) firmware_version: Option<String>,
+    pub(crate) firmware_update_target: Option<FirmwareReleaseTarget>,
     pub(crate) supports_battery_halves: bool,
     pub(crate) battery_halves: Option<crate::hid::BatteryHalves>,
     pub(crate) via_protocol: u16,
@@ -522,6 +591,9 @@ pub(crate) struct DeferredDeviceLoadContext {
     pub(crate) supports_rmk_native_key_actions: bool,
     pub(crate) supports_universal_symbols: bool,
     pub(crate) supports_universal_russian_letters: bool,
+    pub(crate) supports_rmk_native_combo_output: bool,
+    pub(crate) supports_rmk_native_tap_dance_actions: bool,
+    pub(crate) supports_rmk_combo_layers: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -567,6 +639,10 @@ impl DeferredDeviceLoadContext {
             && self.supports_rmk_native_key_actions == other.supports_rmk_native_key_actions
             && self.supports_universal_symbols == other.supports_universal_symbols
             && self.supports_universal_russian_letters == other.supports_universal_russian_letters
+            && self.supports_rmk_native_combo_output == other.supports_rmk_native_combo_output
+            && self.supports_rmk_native_tap_dance_actions
+                == other.supports_rmk_native_tap_dance_actions
+            && self.supports_rmk_combo_layers == other.supports_rmk_combo_layers
     }
 }
 
@@ -956,6 +1032,12 @@ pub(crate) struct ConnectResult {
     pub(crate) supports_universal_symbols: bool,
     /// Firmware implements native Russian-letter Universal Symbols actions.
     pub(crate) supports_universal_russian_letters: bool,
+    /// Firmware accepts native RMK actions as Combo outputs.
+    pub(crate) supports_rmk_native_combo_output: bool,
+    /// Firmware accepts native RMK actions in Tap Dance fields.
+    pub(crate) supports_rmk_native_tap_dance_actions: bool,
+    /// Firmware can restrict each Combo to one active layer.
+    pub(crate) supports_rmk_combo_layers: bool,
     pub(crate) macro_ext_keycodes_disabled_reason: Option<MacroExtKeycodesDisabledReason>,
     /// Tap dance entries
     pub(crate) tap_dance_entries: Vec<crate::keycode_picker::TapDanceEntry>,
@@ -1140,7 +1222,8 @@ pub(crate) fn vial_layer_retarget_base(kc: u16) -> Option<u16> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ComboEntry {
     pub(crate) keys: [u16; 4],
-    pub(crate) output: u16,
+    pub(crate) output: crate::keyboard::KeyBinding,
+    pub(crate) layer: Option<u8>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1512,8 +1595,6 @@ pub(crate) struct BluetoothProfileColorSetting {
 /// RMK wireless settings exposed by the Bluetooth settings tab in Vial.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct BluetoothSettingsState {
-    /// Sleep timeout before the keyboard enters Bluetooth sleep mode
-    pub(crate) sleep_timeout: Option<BluetoothSelectSetting>,
     /// Whether the halves show yellow/green battery charging status on their LEDs
     pub(crate) charge_indicator: Option<BluetoothBooleanSetting>,
     /// Palette color index for each firmware-supported Bluetooth profile
@@ -1524,9 +1605,7 @@ pub(crate) struct BluetoothSettingsState {
 
 impl BluetoothSettingsState {
     pub(crate) fn row_count(&self) -> usize {
-        self.sleep_timeout.is_some() as usize
-            + self.charge_indicator.is_some() as usize
-            + self.profile_colors.len()
+        self.charge_indicator.is_some() as usize + self.profile_colors.len()
     }
 }
 
@@ -1671,20 +1750,10 @@ impl ModuleSettingsGroup {
 
     pub(crate) fn selected_module_kind(&self, value: u16) -> Option<ModuleDeviceKind> {
         let field = self.module_selector_field()?;
-        let selected = field
-            .variants
-            .get(value as usize)
-            .map(|variant| ModuleDeviceKind::from_variant(variant))?;
-        if selected != ModuleDeviceKind::None {
-            return Some(selected);
-        }
-
         field
             .variants
-            .iter()
+            .get(value as usize)
             .map(|variant| ModuleDeviceKind::from_variant(variant))
-            .find(|kind| *kind != ModuleDeviceKind::None)
-            .or(Some(selected))
     }
 
     pub(crate) fn selected_pointer_mode(&self, value: u16) -> Option<PointerModeKind> {
@@ -2079,6 +2148,7 @@ pub(crate) struct LayerLedNumericSetting {
     pub(crate) width: u8,
     pub(crate) value: u16,
     pub(crate) max: u16,
+    pub(crate) variants: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2528,6 +2598,25 @@ pub(super) enum UndoAction {
     },
 }
 
+/// Middle-click assignment queued while another HID write is in flight, so
+/// rapid clicks are applied in order instead of being lost. `generation` pins
+/// the assignment to the connection it was requested on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PendingMiddleClickAssignment {
+    Key {
+        layer: usize,
+        key_idx: usize,
+        binding: crate::keyboard::KeyBinding,
+        generation: u64,
+    },
+    Encoder {
+        layer: usize,
+        encoder_visual_idx: usize,
+        keycode: u16,
+        generation: u64,
+    },
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KeyOverridePickField {
     Trigger,
@@ -2560,6 +2649,8 @@ pub(crate) enum SettingsTab {
     TextExpanderSetup,
     TextExpander,
     TypingTrainer,
+    Macros,
+    TapDance,
     AutoShift,
     Rgb,
     LayerLeds,
@@ -2592,6 +2683,7 @@ pub(crate) use super::typing_trainer_words::{TypingTrainerLanguage, TYPING_TRAIN
 pub(crate) enum TypingTrainerMode {
     Time,
     Words,
+    Symbols,
 }
 
 impl Default for TypingTrainerMode {
@@ -2614,6 +2706,8 @@ pub(crate) struct TypingTrainerSettings {
     pub(crate) duration_secs: u32,
     #[serde(default = "default_typing_trainer_word_count")]
     pub(crate) word_count: usize,
+    #[serde(default)]
+    pub(crate) symbols_enabled: bool,
 }
 
 impl Default for TypingTrainerSettings {
@@ -2625,19 +2719,26 @@ impl Default for TypingTrainerSettings {
             numbers_enabled: false,
             duration_secs: default_typing_trainer_duration_secs(),
             word_count: default_typing_trainer_word_count(),
+            symbols_enabled: false,
         }
     }
 }
 
 impl TypingTrainerSettings {
-    pub(crate) fn normalized(self) -> Self {
+    pub(crate) fn normalized(mut self) -> Self {
+        if self.mode == TypingTrainerMode::Symbols {
+            self.mode = TypingTrainerMode::Words;
+            self.symbols_enabled = true;
+        }
         Self {
             duration_secs: if TYPING_TRAINER_DURATIONS.contains(&self.duration_secs) {
                 self.duration_secs
             } else {
                 default_typing_trainer_duration_secs()
             },
-            word_count: if TYPING_TRAINER_WORD_COUNTS.contains(&self.word_count) {
+            word_count: if TYPING_TRAINER_WORD_COUNTS.contains(&self.word_count)
+                || TYPING_TRAINER_SYMBOL_COUNTS.contains(&self.word_count)
+            {
                 self.word_count
             } else {
                 default_typing_trainer_word_count()
@@ -2655,6 +2756,25 @@ pub(crate) fn default_typing_trainer_word_count() -> usize {
     25
 }
 
+/// Nearest pacing count offered by the given material, so switching between
+/// words and symbols keeps the user's intent instead of silently running a
+/// count the dropdown cannot show.
+pub(crate) fn pacing_count_for_material(count: usize, symbols_enabled: bool) -> usize {
+    let presets: &[usize] = if symbols_enabled {
+        &TYPING_TRAINER_SYMBOL_COUNTS
+    } else {
+        &TYPING_TRAINER_WORD_COUNTS
+    };
+    if presets.contains(&count) {
+        return count;
+    }
+    presets
+        .iter()
+        .copied()
+        .min_by_key(|preset| preset.abs_diff(count))
+        .unwrap_or_else(default_typing_trainer_word_count)
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct TypingTrainerRunRecord {
     pub(crate) finished_at_unix_secs: i64,
@@ -2662,6 +2782,8 @@ pub(crate) struct TypingTrainerRunRecord {
     pub(crate) mode: TypingTrainerMode,
     pub(crate) duration_secs: u32,
     pub(crate) word_count: usize,
+    #[serde(default)]
+    pub(crate) symbols_enabled: bool,
     pub(crate) punctuation_enabled: bool,
     pub(crate) numbers_enabled: bool,
     pub(crate) wpm: u32,
@@ -2692,8 +2814,9 @@ impl TypingTrainerRunRecord {
             mode: state.mode,
             duration_secs: state.duration_secs,
             word_count: state.word_count,
-            punctuation_enabled: state.punctuation_enabled,
-            numbers_enabled: state.numbers_enabled,
+            symbols_enabled: state.symbols_enabled,
+            punctuation_enabled: !state.symbols_enabled && state.punctuation_enabled,
+            numbers_enabled: !state.symbols_enabled && state.numbers_enabled,
             wpm: stats.wpm,
             accuracy_percent: stats.accuracy.round().clamp(0.0, 100.0) as u32,
             errors: stats.errors,
@@ -2705,11 +2828,15 @@ impl TypingTrainerRunRecord {
     fn matches_settings(&self, settings: TypingTrainerSettings) -> bool {
         self.language == settings.language
             && self.mode == settings.mode
-            && self.punctuation_enabled == settings.punctuation_enabled
-            && self.numbers_enabled == settings.numbers_enabled
+            && self.symbols_enabled == settings.symbols_enabled
+            && (self.symbols_enabled
+                || (self.punctuation_enabled == settings.punctuation_enabled
+                    && self.numbers_enabled == settings.numbers_enabled))
             && match self.mode {
                 TypingTrainerMode::Time => self.duration_secs == settings.duration_secs,
-                TypingTrainerMode::Words => self.word_count == settings.word_count,
+                TypingTrainerMode::Words | TypingTrainerMode::Symbols => {
+                    self.word_count == settings.word_count
+                }
             }
     }
 }
@@ -2764,6 +2891,12 @@ pub(crate) fn push_typing_trainer_history(
 }
 
 pub(crate) fn normalize_typing_trainer_history(history: &mut Vec<TypingTrainerRunRecord>) {
+    for record in history.iter_mut() {
+        if record.mode == TypingTrainerMode::Symbols {
+            record.mode = TypingTrainerMode::Words;
+            record.symbols_enabled = true;
+        }
+    }
     history.truncate(TYPING_TRAINER_HISTORY_LIMIT);
 }
 
@@ -2777,6 +2910,12 @@ pub(crate) struct TypingTrainerState {
     pub(crate) numbers_enabled: bool,
     pub(crate) duration_secs: u32,
     pub(crate) word_count: usize,
+    pub(crate) symbols_enabled: bool,
+    pub(crate) symbol_pool: Vec<char>,
+    pub(crate) symbol_stats: TypingTrainerCharacterStatsMap,
+    run_symbol_pool: Vec<char>,
+    run_symbol_stats: TypingTrainerCharacterStatsMap,
+    symbol_stats_dirty: bool,
     pub(crate) started_at: Option<std::time::Instant>,
     pub(crate) paused_at: Option<std::time::Instant>,
     pub(crate) finished_at: Option<std::time::Instant>,
@@ -2808,20 +2947,25 @@ impl TypingTrainerState {
     pub(crate) fn from_settings(settings: TypingTrainerSettings) -> Self {
         let settings = settings.normalized();
         let text_seed = 0;
-        let target_text = match settings.mode {
-            TypingTrainerMode::Time => typing_trainer_text_for_language(
-                text_seed,
-                settings.language,
-                settings.punctuation_enabled,
-                settings.numbers_enabled,
-            ),
-            TypingTrainerMode::Words => typing_trainer_text_for_word_count(
-                text_seed,
-                settings.word_count,
-                settings.language,
-                settings.punctuation_enabled,
-                settings.numbers_enabled,
-            ),
+        let target_text = if settings.symbols_enabled {
+            String::new()
+        } else {
+            match settings.mode {
+                TypingTrainerMode::Time => typing_trainer_text_for_language(
+                    text_seed,
+                    settings.language,
+                    settings.punctuation_enabled,
+                    settings.numbers_enabled,
+                ),
+                TypingTrainerMode::Words => typing_trainer_text_for_word_count(
+                    text_seed,
+                    settings.word_count,
+                    settings.language,
+                    settings.punctuation_enabled,
+                    settings.numbers_enabled,
+                ),
+                TypingTrainerMode::Symbols => String::new(),
+            }
         };
         Self {
             target_text,
@@ -2832,6 +2976,12 @@ impl TypingTrainerState {
             numbers_enabled: settings.numbers_enabled,
             duration_secs: settings.duration_secs,
             word_count: settings.word_count,
+            symbols_enabled: settings.symbols_enabled,
+            symbol_pool: Vec::new(),
+            symbol_stats: TypingTrainerCharacterStatsMap::new(),
+            run_symbol_pool: Vec::new(),
+            run_symbol_stats: TypingTrainerCharacterStatsMap::new(),
+            symbol_stats_dirty: false,
             started_at: None,
             paused_at: None,
             finished_at: None,
@@ -2853,6 +3003,7 @@ impl TypingTrainerState {
             numbers_enabled: self.numbers_enabled,
             duration_secs: self.duration_secs,
             word_count: self.word_count,
+            symbols_enabled: self.symbols_enabled,
         }
     }
 
@@ -2863,12 +3014,25 @@ impl TypingTrainerState {
     fn start_run(&mut self, text_seed: usize) {
         self.run_seed = text_seed;
         self.text_seed = text_seed;
+        self.run_symbol_pool.clone_from(&self.symbol_pool);
+        self.run_symbol_stats.clone_from(&self.symbol_stats);
         self.target_text = self.new_target_text();
         self.clear_progress();
     }
 
     pub(crate) fn retry(&mut self) {
-        self.start_run(self.run_seed);
+        let run_source_invalid = self.is_symbol_training()
+            && self
+                .run_symbol_pool
+                .iter()
+                .any(|symbol| self.symbol_pool.binary_search(symbol).is_err());
+        if run_source_invalid {
+            self.start_run(self.run_seed);
+            return;
+        }
+        self.text_seed = self.run_seed;
+        self.target_text = self.new_target_text();
+        self.clear_progress();
     }
 
     fn clear_progress(&mut self) {
@@ -2926,6 +3090,83 @@ impl TypingTrainerState {
         }
     }
 
+    pub(crate) fn is_symbol_training(&self) -> bool {
+        self.symbols_enabled
+    }
+
+    pub(crate) fn set_symbols_enabled(&mut self, enabled: bool) {
+        if self.symbols_enabled != enabled {
+            self.symbols_enabled = enabled;
+            // Words and symbols are paced by different count presets, so a count
+            // carried over from the other material would leave the dropdown
+            // showing a value the run does not use.
+            self.word_count = pacing_count_for_material(self.word_count, enabled);
+            self.reset();
+        }
+    }
+
+    /// Replaces the pool of characters the loaded layout can type.
+    ///
+    /// Removing a character used by the frozen run source restarts the exercise
+    /// so it never keeps asking for output the keyboard no longer types. Other
+    /// live-pool changes leave a run in progress alone, because layers keep
+    /// arriving in the background right after a device connects and would
+    /// otherwise wipe the session.
+    pub(crate) fn set_symbol_pool(&mut self, mut symbols: Vec<char>) {
+        symbols.sort_unstable();
+        symbols.dedup();
+        if self.symbol_pool == symbols {
+            return;
+        }
+        let run_source_invalid = self
+            .run_symbol_pool
+            .iter()
+            .any(|symbol| symbols.binary_search(symbol).is_err());
+        self.symbol_pool = symbols;
+        if self.is_symbol_training()
+            && self.finished_at.is_none()
+            && (self.started_at.is_none() || run_source_invalid)
+        {
+            self.start_run(self.text_seed);
+        }
+    }
+
+    /// Restores adaptive statistics persisted from earlier sessions.
+    pub(crate) fn set_symbol_stats(&mut self, stats: TypingTrainerCharacterStatsMap) {
+        self.symbol_stats = stats;
+        self.run_symbol_stats.clone_from(&self.symbol_stats);
+        self.symbol_stats_dirty = false;
+    }
+
+    pub(crate) fn record_symbol_attempt(&mut self, expected: char, was_error: bool) {
+        record_symbol_attempt(&mut self.symbol_stats, expected, was_error);
+        self.symbol_stats_dirty = true;
+    }
+
+    /// Whether attempts were recorded since the statistics were last persisted.
+    /// Sessions are abandoned far more often than they are finished, so the
+    /// adaptive weights have to survive without a completed run.
+    #[cfg(test)]
+    pub(crate) fn symbol_stats_unsaved(&self) -> bool {
+        self.symbol_stats_dirty
+    }
+
+    pub(crate) fn persist_symbol_stats(
+        &mut self,
+        save: impl FnOnce(&TypingTrainerCharacterStatsMap) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if !self.symbol_stats_dirty {
+            return Ok(());
+        }
+        save(&self.symbol_stats)?;
+        self.symbol_stats_dirty = false;
+        Ok(())
+    }
+
+    pub(crate) fn expected_char(&self) -> Option<char> {
+        self.target_text.chars().nth(self.typed_chars.len())
+    }
+
     pub(crate) fn is_finished(&self) -> bool {
         self.finished_at.is_some()
     }
@@ -2934,9 +3175,9 @@ impl TypingTrainerState {
         self.paused_at.is_some()
     }
 
-    pub(crate) fn pause_if_running(&mut self, now: std::time::Instant) {
+    pub(crate) fn pause_if_running(&mut self, now: std::time::Instant) -> bool {
         if self.started_at.is_none() || self.finished_at.is_some() || self.paused_at.is_some() {
-            return;
+            return false;
         }
         if self.mode == TypingTrainerMode::Time
             && self.elapsed_secs_at(now) >= self.duration_secs as f32
@@ -2945,6 +3186,7 @@ impl TypingTrainerState {
         } else {
             self.paused_at = Some(now);
         }
+        true
     }
 
     pub(crate) fn resume_if_paused(&mut self, now: std::time::Instant) {
@@ -2957,7 +3199,10 @@ impl TypingTrainerState {
     }
 
     pub(crate) fn type_char(&mut self, ch: char, now: std::time::Instant) {
-        if self.is_finished() || !typing_trainer_accepts_char(ch) {
+        if self.is_finished()
+            || !typing_trainer_accepts_char(ch)
+            || (self.is_symbol_training() && self.symbol_pool.is_empty())
+        {
             return;
         }
         self.resume_if_paused(now);
@@ -2965,12 +3210,22 @@ impl TypingTrainerState {
             self.started_at = Some(now);
         }
         if self.typed_chars.len() < self.target_text.chars().count() {
+            // Adaptive weights may only count keystrokes the run actually
+            // consumes: recording ahead of the guards above would let rejected
+            // characters and post-timer input inflate one symbol's error rate
+            // and permanently over-sample it.
+            if self.is_symbol_training() {
+                if let Some(expected) = self.expected_char() {
+                    self.record_symbol_attempt(expected, expected != ch);
+                }
+            }
             self.typed_chars.push(ch);
         }
         if self.typed_chars.len() >= self.target_text.chars().count() {
-            match self.mode {
-                TypingTrainerMode::Time => self.advance_to_next_text(),
-                TypingTrainerMode::Words => self.finish(now),
+            if self.mode == TypingTrainerMode::Time {
+                self.advance_to_next_text();
+            } else {
+                self.finish(now);
             }
         }
     }
@@ -2998,6 +3253,15 @@ impl TypingTrainerState {
             return;
         }
         self.text_seed = self.text_seed.wrapping_add(17);
+        if self.is_symbol_training() {
+            self.target_text.push_str(&weighted_symbol_text(
+                &self.run_symbol_pool,
+                self.word_count,
+                &self.run_symbol_stats,
+                self.text_seed,
+            ));
+            return;
+        }
         if !self.target_text.is_empty() {
             self.target_text.push(' ');
         }
@@ -3071,6 +3335,14 @@ impl TypingTrainerState {
     }
 
     fn new_target_text(&self) -> String {
+        if self.is_symbol_training() {
+            return weighted_symbol_text(
+                &self.run_symbol_pool,
+                self.word_count,
+                &self.run_symbol_stats,
+                self.text_seed,
+            );
+        }
         match self.mode {
             TypingTrainerMode::Time => typing_trainer_text_for_language(
                 self.text_seed,
@@ -3085,6 +3357,7 @@ impl TypingTrainerState {
                 self.punctuation_enabled,
                 self.numbers_enabled,
             ),
+            TypingTrainerMode::Symbols => String::new(),
         }
     }
 
@@ -3192,7 +3465,10 @@ pub(crate) fn typing_trainer_accepts_char(ch: char) -> bool {
     ch == ' '
         || ch.is_alphanumeric()
         || ch.is_ascii_punctuation()
-        || matches!(ch, '«' | '»' | '—' | '–' | '…')
+        // Typographic characters of the word lists plus the non-ASCII symbols a
+        // layout can put into the symbol pool. Anything the pool may contain has
+        // to be accepted here, otherwise the exercise stalls on that character.
+        || matches!(ch, '«' | '»' | '—' | '–' | '…' | '№')
 }
 
 pub(crate) fn typing_trainer_stats(
@@ -3288,6 +3564,7 @@ mod typing_trainer_tests {
             numbers_enabled: true,
             duration_secs: 60,
             word_count: 50,
+            symbols_enabled: false,
         });
 
         assert_eq!(state.language, TypingTrainerLanguage::Russian);
@@ -3297,6 +3574,225 @@ mod typing_trainer_tests {
         assert_eq!(state.duration_secs, 60);
         assert_eq!(state.word_count, 50);
         assert_eq!(state.target_text.split_whitespace().count(), 50);
+    }
+
+    #[test]
+    fn symbol_mode_generates_text_from_the_current_layout_symbols() {
+        let settings = TypingTrainerSettings {
+            mode: TypingTrainerMode::Symbols,
+            word_count: 25,
+            ..TypingTrainerSettings::default()
+        };
+        let mut state = TypingTrainerState::from_settings(settings);
+
+        state.set_symbol_pool(vec!['a', '!']);
+
+        assert_eq!(state.target_text.chars().count(), 25);
+        assert!(state.target_text.chars().all(|ch| matches!(ch, 'a' | '!')));
+    }
+
+    #[test]
+    fn empty_symbol_pool_does_not_start_or_finish_a_run() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            mode: TypingTrainerMode::Words,
+            symbols_enabled: true,
+            ..TypingTrainerSettings::default()
+        });
+        state.set_symbol_pool(Vec::new());
+
+        state.type_char('a', std::time::Instant::now());
+
+        assert!(state.target_text.is_empty());
+        assert!(state.started_at.is_none());
+        assert!(!state.is_finished());
+    }
+
+    #[test]
+    fn switching_material_moves_the_count_to_a_preset_the_material_offers() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            mode: TypingTrainerMode::Words,
+            word_count: 10,
+            ..TypingTrainerSettings::default()
+        });
+
+        state.set_symbols_enabled(true);
+        assert_eq!(state.word_count, 25);
+
+        state.set_word_count(100);
+        state.set_symbols_enabled(false);
+        assert_eq!(state.word_count, 100);
+    }
+
+    #[test]
+    fn a_late_arriving_layer_does_not_wipe_a_running_symbol_session() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            symbols_enabled: true,
+            ..TypingTrainerSettings::default()
+        });
+        state.set_symbol_pool(vec!['a', '!']);
+        let started_at = std::time::Instant::now();
+        state.type_char('a', started_at);
+        let text = state.target_text.clone();
+
+        state.set_symbol_pool(vec!['a', '!', '?']);
+
+        assert_eq!(state.target_text, text);
+        assert_eq!(state.typed_chars.len(), 1);
+        assert_eq!(state.started_at, Some(started_at));
+
+        state.set_symbol_pool(vec!['a', '!']);
+
+        assert_eq!(state.target_text, text);
+        assert_eq!(state.typed_chars.len(), 1);
+        assert_eq!(state.started_at, Some(started_at));
+    }
+
+    #[test]
+    fn removing_available_symbols_restarts_a_running_symbol_session() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            symbols_enabled: true,
+            ..TypingTrainerSettings::default()
+        });
+        state.set_symbol_pool(vec!['a', '!']);
+        let started_at = std::time::Instant::now();
+        state.type_char(
+            state.expected_char().expect("symbol run has a target"),
+            started_at,
+        );
+
+        state.set_symbol_pool(vec!['?']);
+
+        assert!(state.target_text.chars().all(|symbol| symbol == '?'));
+        assert!(state.typed_chars.is_empty());
+        assert!(state.started_at.is_none());
+        assert!(state.finished_at.is_none());
+    }
+
+    #[test]
+    fn symbol_pool_shrink_preserves_a_finished_result_until_retry() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            symbols_enabled: true,
+            ..TypingTrainerSettings::default()
+        });
+        state.set_symbol_pool(vec!['a', '!']);
+        let now = std::time::Instant::now();
+        let expected = state.expected_char().expect("symbol run has a target");
+        state.type_char(expected, now);
+        state.finish(now + std::time::Duration::from_secs(1));
+        let finished_text = state.target_text.clone();
+        let finished_input = state.typed_chars.clone();
+
+        state.set_symbol_pool(vec!['?']);
+
+        assert_eq!(state.target_text, finished_text);
+        assert_eq!(state.typed_chars, finished_input);
+        assert!(state.is_finished());
+        assert!(state.history_record_pending());
+
+        state.retry();
+
+        assert!(state.target_text.chars().all(|symbol| symbol == '?'));
+        assert!(state.typed_chars.is_empty());
+        assert!(state.started_at.is_none());
+        assert!(!state.history_record_pending());
+    }
+
+    #[test]
+    fn statistics_stay_dirty_until_persistence_succeeds() {
+        let mut state = TypingTrainerState::default();
+        assert!(!state.symbol_stats_unsaved());
+
+        state.record_symbol_attempt('!', true);
+        assert!(state.symbol_stats_unsaved());
+
+        let error = state
+            .persist_symbol_stats(|_| Err("storage unavailable".to_owned()))
+            .expect_err("failed persistence must be reported");
+        assert_eq!(error, "storage unavailable");
+        assert!(state.symbol_stats_unsaved());
+
+        state.persist_symbol_stats(|_| Ok(())).unwrap();
+        assert!(!state.symbol_stats_unsaved());
+
+        let mut clean_state_called_writer = false;
+        state
+            .persist_symbol_stats(|_| {
+                clean_state_called_writer = true;
+                Ok(())
+            })
+            .unwrap();
+        assert!(!clean_state_called_writer);
+    }
+
+    #[test]
+    fn discarded_keystrokes_stay_out_of_the_adaptive_statistics() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            symbols_enabled: true,
+            ..TypingTrainerSettings::default()
+        });
+        state.set_symbol_pool(vec!['a', '!']);
+        let now = std::time::Instant::now();
+        let expected = state.expected_char().expect("symbol run has a target text");
+
+        // A character the trainer refuses never advances the run.
+        state.type_char('€', now);
+        assert!(!state.symbol_stats_unsaved());
+        assert!(state.typed_chars.is_empty());
+
+        state.type_char(expected, now);
+        assert!(state.symbol_stats_unsaved());
+        state.persist_symbol_stats(|_| Ok(())).unwrap();
+
+        // Input landing after the run ended has no expected character left.
+        state.finish(now);
+        state.type_char('a', now);
+        assert!(!state.symbol_stats_unsaved());
+    }
+
+    #[test]
+    fn typing_trainer_accepts_the_number_sign_of_the_russian_layout() {
+        assert!(typing_trainer_accepts_char('№'));
+    }
+
+    #[test]
+    fn legacy_symbol_mode_normalizes_to_symbol_material_with_count_pacing() {
+        let settings = TypingTrainerSettings {
+            mode: TypingTrainerMode::Symbols,
+            ..TypingTrainerSettings::default()
+        }
+        .normalized();
+
+        assert_eq!(settings.mode, TypingTrainerMode::Words);
+        assert!(settings.symbols_enabled);
+    }
+
+    #[test]
+    fn disabling_symbols_restores_saved_text_options() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            punctuation_enabled: true,
+            numbers_enabled: true,
+            ..TypingTrainerSettings::default()
+        });
+
+        state.set_symbols_enabled(true);
+        state.set_symbols_enabled(false);
+
+        assert!(state.punctuation_enabled);
+        assert!(state.numbers_enabled);
+    }
+
+    #[test]
+    fn time_based_symbol_training_extends_with_symbols_only() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            mode: TypingTrainerMode::Time,
+            symbols_enabled: true,
+            ..TypingTrainerSettings::default()
+        });
+        state.set_symbol_pool(vec!['a', '!']);
+
+        state.extend_target_text();
+
+        assert!(state.target_text.chars().all(|ch| matches!(ch, 'a' | '!')));
     }
 
     #[test]
@@ -3331,6 +3827,90 @@ mod typing_trainer_tests {
 
         assert_eq!(state.target_text, first_text);
         assert!(state.typed_chars.is_empty());
+    }
+
+    #[test]
+    fn symbol_retry_reuses_the_statistics_snapshot_from_the_original_run() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            symbols_enabled: true,
+            word_count: 100,
+            ..TypingTrainerSettings::default()
+        });
+        state.set_symbol_pool(vec!['a', 'b']);
+        let first_text = state.target_text.clone();
+
+        for _ in 0..100 {
+            state.record_symbol_attempt('b', true);
+        }
+        assert_ne!(
+            weighted_symbol_text(
+                &state.symbol_pool,
+                state.word_count,
+                &state.symbol_stats,
+                state.run_seed,
+            ),
+            first_text,
+            "test setup must make live adaptive statistics change the sequence"
+        );
+
+        state.retry();
+
+        assert_eq!(state.target_text, first_text);
+        assert!(state.typed_chars.is_empty());
+        assert!(state.started_at.is_none());
+    }
+
+    #[test]
+    fn time_based_symbol_retry_replays_the_same_sequence_of_chunks() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            mode: TypingTrainerMode::Time,
+            symbols_enabled: true,
+            word_count: 25,
+            ..TypingTrainerSettings::default()
+        });
+        state.set_symbol_pool(vec!['a', 'b']);
+        let now = std::time::Instant::now();
+        let first_chunk = state.target_text.clone();
+        for symbol in first_chunk.chars() {
+            state.type_char(symbol, now);
+        }
+        let second_chunk = state.target_text.clone();
+        for _ in 0..100 {
+            state.record_symbol_attempt('b', true);
+        }
+        state.finish(now + std::time::Duration::from_secs(1));
+
+        state.retry();
+        assert_eq!(state.target_text, first_chunk);
+        for symbol in first_chunk.chars() {
+            state.type_char(symbol, now);
+        }
+
+        assert_eq!(state.target_text, second_chunk);
+    }
+
+    #[test]
+    fn a_new_symbol_run_uses_the_latest_adaptive_statistics() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            symbols_enabled: true,
+            word_count: 100,
+            ..TypingTrainerSettings::default()
+        });
+        state.set_symbol_pool(vec!['a', 'b']);
+        for _ in 0..100 {
+            state.record_symbol_attempt('b', true);
+        }
+        let next_seed = state.text_seed.wrapping_add(17);
+        let expected = weighted_symbol_text(
+            &state.symbol_pool,
+            state.word_count,
+            &state.symbol_stats,
+            next_seed,
+        );
+
+        state.reset();
+
+        assert_eq!(state.target_text, expected);
     }
 
     #[test]
@@ -3370,6 +3950,32 @@ mod typing_trainer_tests {
     }
 
     #[test]
+    fn symbol_history_record_omits_hidden_text_material_flags() {
+        let mut state = TypingTrainerState::from_settings(TypingTrainerSettings {
+            mode: TypingTrainerMode::Words,
+            punctuation_enabled: true,
+            numbers_enabled: true,
+            symbols_enabled: true,
+            ..TypingTrainerSettings::default()
+        });
+        state.set_symbol_pool(vec!['!']);
+        let now = std::time::Instant::now();
+        state.type_char('!', now);
+        state.finish(now + std::time::Duration::from_secs(1));
+
+        let record = TypingTrainerRunRecord::from_state(
+            &state,
+            now + std::time::Duration::from_secs(1),
+            1_700_000_000,
+        )
+        .expect("finished symbol run should produce a history record");
+
+        assert!(record.symbols_enabled);
+        assert!(!record.punctuation_enabled);
+        assert!(!record.numbers_enabled);
+    }
+
+    #[test]
     fn typing_trainer_empty_finished_run_has_no_history_record() {
         let mut state = TypingTrainerState::default();
         let now = std::time::Instant::now();
@@ -3391,6 +3997,7 @@ mod typing_trainer_tests {
                     mode: TypingTrainerMode::Time,
                     duration_secs: 30,
                     word_count: 25,
+                    symbols_enabled: false,
                     punctuation_enabled: false,
                     numbers_enabled: false,
                     wpm: idx as u32,
@@ -3422,6 +4029,7 @@ mod typing_trainer_tests {
             numbers_enabled: false,
             duration_secs: 30,
             word_count: 25,
+            symbols_enabled: false,
         };
         let history = vec![
             TypingTrainerRunRecord {
@@ -3430,6 +4038,7 @@ mod typing_trainer_tests {
                 mode: TypingTrainerMode::Time,
                 duration_secs: 30,
                 word_count: 25,
+                symbols_enabled: false,
                 punctuation_enabled: true,
                 numbers_enabled: false,
                 wpm: 42,
@@ -3444,6 +4053,7 @@ mod typing_trainer_tests {
                 mode: TypingTrainerMode::Time,
                 duration_secs: 30,
                 word_count: 25,
+                symbols_enabled: false,
                 punctuation_enabled: true,
                 numbers_enabled: false,
                 wpm: 50,
@@ -3458,6 +4068,7 @@ mod typing_trainer_tests {
                 mode: TypingTrainerMode::Time,
                 duration_secs: 60,
                 word_count: 25,
+                symbols_enabled: false,
                 punctuation_enabled: true,
                 numbers_enabled: false,
                 wpm: 80,
@@ -3479,6 +4090,61 @@ mod typing_trainer_tests {
                 average_accuracy_percent: Some(97),
             }
         );
+    }
+
+    #[test]
+    fn symbol_history_summary_ignores_hidden_text_material_flags() {
+        let settings = TypingTrainerSettings {
+            language: TypingTrainerLanguage::English,
+            mode: TypingTrainerMode::Words,
+            punctuation_enabled: false,
+            numbers_enabled: false,
+            duration_secs: 30,
+            word_count: 25,
+            symbols_enabled: true,
+        };
+        let legacy_record = TypingTrainerRunRecord {
+            finished_at_unix_secs: 1,
+            language: TypingTrainerLanguage::English,
+            mode: TypingTrainerMode::Words,
+            duration_secs: 30,
+            word_count: 25,
+            symbols_enabled: true,
+            punctuation_enabled: true,
+            numbers_enabled: true,
+            wpm: 40,
+            accuracy_percent: 90,
+            errors: 2,
+            typed_chars: 25,
+            elapsed_secs: 10,
+        };
+        let mut current_record = legacy_record.clone();
+        current_record.finished_at_unix_secs = 2;
+        current_record.punctuation_enabled = false;
+        current_record.numbers_enabled = false;
+        current_record.wpm = 60;
+        current_record.accuracy_percent = 100;
+        let mut russian_record = current_record.clone();
+        russian_record.language = TypingTrainerLanguage::Russian;
+        russian_record.wpm = 100;
+        let mut wrong_count_record = current_record.clone();
+        wrong_count_record.word_count = 50;
+        wrong_count_record.wpm = 100;
+
+        let summary = typing_trainer_history_summary_for_settings(
+            &[
+                legacy_record,
+                current_record,
+                russian_record,
+                wrong_count_record,
+            ],
+            settings,
+        );
+
+        assert_eq!(summary.run_count, 2);
+        assert_eq!(summary.best_wpm, Some(60));
+        assert_eq!(summary.average_wpm, Some(50));
+        assert_eq!(summary.average_accuracy_percent, Some(95));
     }
 
     #[test]
@@ -3833,12 +4499,24 @@ pub struct EntropyApp {
     pub(crate) pending_entlayout_import_path: Option<(std::path::PathBuf, u64)>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) pending_entsettings_import_path: Option<std::path::PathBuf>,
+    /// Cached result of scanning the IBus component directories, which the Text
+    /// Expander setup page would otherwise redo on every frame. Refreshes on
+    /// its own so a registration changed from the outside is picked up, and is
+    /// invalidated outright after any action of ours that can change it.
+    #[cfg(target_os = "linux")]
+    pub(crate) ibus_registration: crate::linux_setup::IbusRegistrationCache,
+    /// In-flight `ibus write-cache` + `ibus restart`, run off the UI thread so
+    /// a slow or wedged daemon cannot freeze the window.
+    #[cfg(target_os = "linux")]
+    pub(crate) pending_ibus_reload: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) import_progress_started_at: Option<f64>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) import_progress_title: String,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) import_progress_body: String,
+    #[cfg(target_os = "linux")]
+    pub(super) linux_setup_task: Option<LinuxSetupTask>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) connect_state: ConnectState,
     #[cfg(not(target_arch = "wasm32"))]
@@ -3915,6 +4593,8 @@ pub struct EntropyApp {
     pub(crate) secondary_click_handled: bool,
     /// Deferred left/right modifier swap, applied after Ctrl is released
     pub(crate) pending_handed_swap: Option<(usize, usize, crate::keyboard::KeyBinding)>,
+    /// Middle-click assignments waiting for the HID handle to become free.
+    pub(super) pending_middle_click_assignments: Vec<PendingMiddleClickAssignment>,
     /// Animation progress for hover layer preview (0.0 = hidden, 1.0 = fully shown)
     pub(crate) hover_layer_progress: f32,
     /// Stack of layers to return to on right-click (last = most recent)
@@ -3932,6 +4612,8 @@ pub struct EntropyApp {
     pub(crate) windows_hwnd: Option<isize>,
     #[cfg(target_os = "windows")]
     pub(crate) windows_window_hidden_to_tray: bool,
+    #[cfg(target_os = "windows")]
+    pub(crate) windows_start_hidden_to_tray_pending: bool,
     #[cfg(target_os = "macos")]
     pub(crate) macos_ns_window: Option<usize>,
     #[cfg(target_os = "macos")]
@@ -3948,6 +4630,7 @@ pub struct EntropyApp {
     pub(crate) main_menu_tab: MainMenuTab,
     pub(crate) combo_entries: Vec<ComboEntry>,
     pub(crate) combo_synced_entries: Vec<ComboEntry>,
+    pub(crate) supports_rmk_combo_layers: bool,
     pub(crate) combo_names: Vec<String>,
     pub(crate) combo_colors: Vec<u32>,
     pub(crate) selected_combo: usize,
@@ -3991,7 +4674,14 @@ pub struct EntropyApp {
     pub(crate) key_override_visible_count: usize,
     pub(crate) key_override_undo_stack: Vec<(Vec<KeyOverrideEntry>, Vec<String>, usize, usize)>,
     pub(crate) text_expander_deleted_rules: Vec<(usize, crate::text_expander::TextExpansionRule)>,
+    pub(crate) text_expander_emoji_search: String,
+    pub(crate) text_expander_emoji_group: usize,
+    pub(crate) text_expander_emoji_target: Option<(usize, usize, usize)>,
     pub(crate) typing_trainer: TypingTrainerState,
+    /// Layers and input layout the current symbol pool was derived from, so the
+    /// pool is rebuilt only when the keymap or the selected language changes.
+    pub(crate) typing_trainer_symbol_pool_source:
+        Option<(Vec<Vec<crate::keyboard::KeyBinding>>, KeyOutputLayout)>,
     pub(crate) typing_trainer_history_open: bool,
     pub(crate) selected_key_override: usize,
     pub(crate) key_override_pick_target: Option<KeyOverridePickField>,
@@ -4007,6 +4697,7 @@ pub struct EntropyApp {
     pub(crate) sticky_layout_active_layer: usize,
     pub(crate) sticky_layout_last_size: Option<Vec2>,
     pub(crate) sticky_layout_resize_opacity_hold_frames: u8,
+    pub(crate) sticky_layout_viewport_events: StickyLayoutViewportEventQueue,
     pub(crate) pending_layout_indicator_open_after_unlock: bool,
     pub(crate) matrix_tester_last_poll: std::time::Instant,
     pub(crate) matrix_tester_last_lock_check: std::time::Instant,
@@ -4029,6 +4720,7 @@ pub struct EntropyApp {
     pub(crate) device_display_names: std::collections::HashMap<String, String>,
     pub(crate) device_about_info: Option<DeviceAboutInfo>,
     pub(crate) update_check: UpdateCheckState,
+    pub(crate) firmware_update_check: FirmwareUpdateCheckState,
     pub(crate) tour_state: TourState,
     pub(crate) tour_target_rects: Vec<(TourTarget, egui::Rect)>,
     /// Vial unlock dialog open

@@ -21,9 +21,10 @@ impl EntropyApp {
             .iter()
             .enumerate()
             .filter_map(|(ki, key)| {
-                if !Self::layout_condition_visible(
+                if !Self::layout_key_visible(
+                    &self.module_settings,
                     layout,
-                    key.layout_condition,
+                    key,
                     self.layout_options_value,
                 ) {
                     return None;
@@ -44,14 +45,18 @@ impl EntropyApp {
             .iter()
             .enumerate()
             .filter_map(|(ei, encoder)| {
-                if !Self::layout_condition_visible(
+                if !Self::encoder_layout_condition_visible(
                     layout,
-                    encoder.layout_condition,
+                    encoder,
                     self.layout_options_value,
                 ) || !Self::module_settings_encoder_visible(
                     &self.module_settings,
                     layout,
                     encoder.encoder_idx,
+                ) || !Self::encoder_visibility_allows(
+                    layout,
+                    encoder.encoder_idx,
+                    &self.encoder_visibility,
                 ) {
                     return None;
                 }
@@ -66,14 +71,6 @@ impl EntropyApp {
                 Some((ei, rect))
             })
             .collect();
-        let keyboard_target_rect = key_rects
-            .iter()
-            .map(|(_, rect)| *rect)
-            .chain(encoder_rects.iter().map(|(_, rect)| *rect))
-            .reduce(|acc, rect| acc.union(rect));
-        if let Some(rect) = keyboard_target_rect {
-            self.register_tour_target(TourTarget::KeyboardArea, rect.expand(10.0));
-        }
         self.register_tour_target(
             TourTarget::BottomHints,
             egui::Rect::from_center_size(
@@ -84,18 +81,6 @@ impl EntropyApp {
         let mut encoder_groups: Vec<EncoderGroup> = Vec::new();
         for (ei, rect) in &encoder_rects {
             let encoder = &layout.encoders[*ei];
-            if !Self::module_settings_encoder_visible(
-                &self.module_settings,
-                layout,
-                encoder.encoder_idx,
-            ) || !self
-                .encoder_visibility
-                .get(encoder.encoder_idx as usize)
-                .copied()
-                .unwrap_or(true)
-            {
-                continue;
-            }
             let kc = layout.get_encoder_keycode(self.selected_layer, *ei);
             if let Some((_, group_rect, ccw, cw)) = encoder_groups
                 .iter_mut()
@@ -128,14 +113,32 @@ impl EntropyApp {
             .iter()
             .map(|(encoder_idx, rect, _, _)| (*encoder_idx, *rect))
             .collect();
-        let encoder_press_rects = encoder_press_key_rects(layout, &key_rects, &encoder_group_rects);
+        let explicit_press_keys =
+            Self::module_settings_encoder_press_keys(&self.module_settings, layout);
+        let encoder_press_rects = encoder_press_key_rects(
+            layout,
+            &key_rects,
+            &encoder_group_rects,
+            &explicit_press_keys,
+        );
+        for (encoder_idx, rect, _, _) in &mut encoder_groups {
+            *rect = encoder_group_rect_with_press(*encoder_idx, *rect, &encoder_press_rects);
+        }
+        let keyboard_target_rect = key_rects
+            .iter()
+            .map(|(_, rect)| *rect)
+            .chain(encoder_groups.iter().map(|(_, rect, _, _)| *rect))
+            .reduce(|acc, rect| acc.union(rect));
+        if let Some(rect) = keyboard_target_rect {
+            self.register_tour_target(TourTarget::KeyboardArea, rect.expand(10.0));
+        }
         let mut rects: Vec<(usize, egui::Rect, egui::Response)> =
             Vec::with_capacity(layout.keys.len());
         for (ki, rect) in &key_rects {
             let response_rect = encoder_press_rects
                 .iter()
-                .find(|(press_ki, _)| press_ki == ki)
-                .map(|(_, press_rect)| *press_rect)
+                .find(|press| press.key_idx == *ki)
+                .map(|press| press.press_rect)
                 .unwrap_or(*rect);
             let response = ui.allocate_rect(response_rect, Sense::click());
             rects.push((*ki, response_rect, response));
@@ -155,6 +158,9 @@ impl EntropyApp {
             }
             if response.clicked() {
                 self.open_picker_for_target(Some(*ki), None);
+            }
+            if response.middle_clicked() {
+                self.request_middle_click_key_assignment(ui.ctx(), *ki);
             }
 
             // Right-click actions: layer jump/retarget, modifier side swap, editors/settings.
@@ -281,8 +287,8 @@ impl EntropyApp {
 
             let press_rect_override = encoder_press_rects
                 .iter()
-                .find(|(press_ki, _)| *press_ki == *ki)
-                .map(|(_, press_rect)| *press_rect);
+                .find(|press| press.key_idx == *ki)
+                .map(|press| press.press_rect);
             let draw_rect = press_rect_override.unwrap_or(*rect);
 
             let is_hovering = hover_alpha > 0.05;
@@ -457,7 +463,7 @@ impl EntropyApp {
 
         const ENCODER_HOVER_SCALE: f32 = 1.5;
         let encoder_hover_enlarge = self.app_settings.encoder_hover_enlarge;
-        for (_encoder_idx, rect, ccw, cw) in &encoder_groups {
+        for (encoder_idx, rect, ccw, cw) in &encoder_groups {
             let center = rect.center();
             let base_radius = rect.width().min(rect.height()) * LAYOUT_ENCODER_RADIUS_FACTOR;
             let hover_radius = base_radius * ENCODER_HOVER_SCALE;
@@ -472,8 +478,8 @@ impl EntropyApp {
             );
             let press_slot = encoder_press_rects
                 .iter()
-                .find(|(_, press_rect)| press_rect.center().distance(center) < 1.0)
-                .map(|(press_ki, press_rect)| (*press_ki, *press_rect));
+                .find(|press| press.encoder_idx == *encoder_idx)
+                .map(|press| (press.key_idx, press.press_rect));
             let (top_rect, middle_rect, bottom_rect) = if let Some((_, press_rect)) = press_slot {
                 let divider_gap = base_radius * 0.06;
                 let top_divider_y = press_rect.top() - divider_gap;
@@ -559,6 +565,11 @@ impl EntropyApp {
                     self.open_picker_for_target(None, Some(*visual_idx));
                 }
             }
+            if top_resp.middle_clicked() {
+                if let Some((visual_idx, _)) = cw {
+                    self.request_middle_click_encoder_assignment(ui.ctx(), *visual_idx);
+                }
+            }
             if let (Some((press_ki, _)), Some(middle_resp)) = (press_slot, middle_resp.as_ref()) {
                 if middle_resp.hovered() {
                     hovered_key = Some(press_ki);
@@ -589,6 +600,9 @@ impl EntropyApp {
                 if middle_resp.clicked() {
                     self.open_picker_for_target(Some(press_ki), None);
                     self.selected_encoder = None;
+                }
+                if middle_resp.middle_clicked() {
+                    self.request_middle_click_key_assignment(ui.ctx(), press_ki);
                 }
             }
             if bottom_resp.hovered() {
@@ -621,6 +635,11 @@ impl EntropyApp {
             if bottom_resp.clicked() {
                 if let Some((visual_idx, _)) = ccw {
                     self.open_picker_for_target(None, Some(*visual_idx));
+                }
+            }
+            if bottom_resp.middle_clicked() {
+                if let Some((visual_idx, _)) = ccw {
+                    self.request_middle_click_encoder_assignment(ui.ctx(), *visual_idx);
                 }
             }
 
@@ -680,9 +699,7 @@ impl EntropyApp {
                 .circle_filled(center, fill_radius, bottom_fill);
             painter.circle_stroke(center, radius, outline);
 
-            let has_press_button = encoder_press_rects
-                .iter()
-                .any(|(_, press_rect)| press_rect.center().distance(center) < 1.0);
+            let has_press_button = press_slot.is_some();
             let (top_label, top_dimmed) = cw
                 .map(|(visual_idx, kc)| encoder_label(layer, visual_idx, kc))
                 .unwrap_or_else(|| (String::new(), false));
@@ -884,8 +901,14 @@ fn combo_key_colors_for_layer(
 ) -> Vec<Vec<(usize, Option<Color32>)>> {
     let mut key_colors = vec![Vec::new(); layout.keys.len()];
     for (combo_idx, combo) in combos.iter().enumerate() {
+        if combo
+            .layer
+            .is_some_and(|combo_layer| combo_layer as usize != layer)
+        {
+            continue;
+        }
         let triggers: Vec<u16> = combo.keys.iter().copied().filter(|&key| key != 0).collect();
-        if triggers.is_empty() || combo.output == 0 {
+        if triggers.is_empty() || combo.output.is_no() {
             continue;
         }
         let color_value = colors.get(combo_idx).copied().unwrap_or(COMBO_NO_COLOR);

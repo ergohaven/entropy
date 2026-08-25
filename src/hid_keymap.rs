@@ -2,6 +2,10 @@ use super::hid_parse::parse_keymap_u16_be;
 use super::hid_protocol::*;
 use super::HidDevice;
 use anyhow::{bail, Context, Result};
+use std::time::Duration;
+
+const KEYCODE_WRITEBACK_ATTEMPTS: usize = 4;
+const KEYCODE_WRITEBACK_RETRY_DELAY: Duration = Duration::from_millis(25);
 
 #[derive(Debug)]
 struct KeycodeWritebackMismatch {
@@ -49,6 +53,29 @@ fn verify_keycode_writeback(
         readback,
     }
     .into())
+}
+
+fn verify_keycode_writeback_with_retry(
+    layer: u8,
+    row: u8,
+    col: u8,
+    requested: u16,
+    mut readback: impl FnMut() -> Result<u16>,
+    mut wait_before_retry: impl FnMut(),
+) -> Result<()> {
+    let mut last_readback = requested;
+
+    for attempt in 0..KEYCODE_WRITEBACK_ATTEMPTS {
+        last_readback = readback()?;
+        if last_readback == requested {
+            return Ok(());
+        }
+        if attempt + 1 < KEYCODE_WRITEBACK_ATTEMPTS {
+            wait_before_retry();
+        }
+    }
+
+    verify_keycode_writeback(layer, row, col, requested, last_readback)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -209,9 +236,18 @@ impl HidDevice {
             .with_context(|| {
                 format!("failed to set keycode at layer {layer}, row {row}, col {col}")
             })?;
-        let readback = self.get_keycode(layer, row, col)?;
-        verify_keycode_writeback(layer, row, col, keycode, readback)?;
-        Ok(())
+        // Some older Vial-QMK builds acknowledge SET before the dynamic
+        // keymap becomes visible to GET. Keep strict verification, but allow
+        // that bounded propagation window instead of rolling back a write
+        // which Vial itself has already accepted.
+        verify_keycode_writeback_with_retry(
+            layer,
+            row,
+            col,
+            keycode,
+            || self.get_keycode(layer, row, col),
+            || std::thread::sleep(KEYCODE_WRITEBACK_RETRY_DELAY),
+        )
     }
 
     pub fn get_encoder(&self, layer: u8, idx: u8) -> Result<(u16, u16)> {
@@ -264,6 +300,47 @@ mod tests {
             "unexpected error: {err}"
         );
         assert_eq!(keycode_writeback_readback(&err), Some(0x0001));
+    }
+
+    #[test]
+    fn keycode_writeback_retries_a_stale_qmk_read() {
+        let mut reads = [0x0001, 0x0001, 0x0000].into_iter();
+        let mut waits = 0;
+
+        verify_keycode_writeback_with_retry(
+            5,
+            3,
+            7,
+            0x0000,
+            || Ok(reads.next().expect("readback attempt")),
+            || waits += 1,
+        )
+        .unwrap();
+
+        assert_eq!(waits, 2);
+    }
+
+    #[test]
+    fn keycode_writeback_still_rejects_a_persistent_mismatch() {
+        let mut reads = 0;
+        let mut waits = 0;
+
+        let error = verify_keycode_writeback_with_retry(
+            5,
+            3,
+            7,
+            0x0000,
+            || {
+                reads += 1;
+                Ok(0x0001)
+            },
+            || waits += 1,
+        )
+        .unwrap_err();
+
+        assert_eq!(reads, KEYCODE_WRITEBACK_ATTEMPTS);
+        assert_eq!(waits, KEYCODE_WRITEBACK_ATTEMPTS - 1);
+        assert_eq!(keycode_writeback_readback(&error), Some(0x0001));
     }
 
     #[test]

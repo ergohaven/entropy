@@ -147,14 +147,15 @@ impl EntropyApp {
             .flatten()
     }
 
-    fn module_settings_encoder_visible_for_position(
+    fn module_settings_encoder_group_for_position(
         module_settings: &ModuleSettingsState,
         encoder_position: usize,
-    ) -> bool {
+    ) -> Option<&ModuleSettingsGroup> {
         if !module_settings.supported {
-            return true;
+            return None;
         }
-        let module_groups = module_settings
+
+        module_settings
             .groups
             .iter()
             .filter(|group| {
@@ -163,8 +164,16 @@ impl EntropyApp {
                     ModuleSettingsGroupKind::Left | ModuleSettingsGroupKind::Right
                 ) && Self::module_group_encoder_field(group).is_some()
             })
-            .collect::<Vec<_>>();
-        let Some(group) = module_groups.get(encoder_position) else {
+            .nth(encoder_position)
+    }
+
+    fn module_settings_encoder_visible_for_position(
+        module_settings: &ModuleSettingsState,
+        encoder_position: usize,
+    ) -> bool {
+        let Some(group) =
+            Self::module_settings_encoder_group_for_position(module_settings, encoder_position)
+        else {
             return true;
         };
         let Some(field) = Self::module_group_encoder_field(group) else {
@@ -198,6 +207,86 @@ impl EntropyApp {
             return true;
         };
         Self::module_settings_encoder_visible_for_position(module_settings, encoder_position)
+    }
+
+    pub(super) fn module_settings_encoder_press_key_encoder_idx(
+        module_settings: &ModuleSettingsState,
+        layout: &KeyboardLayout,
+        key: &PhysicalKey,
+    ) -> Option<u8> {
+        let key_condition = key.layout_condition?;
+        let encoder_indices = layout
+            .encoders
+            .iter()
+            .map(|encoder| encoder.encoder_idx)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        encoder_indices
+            .into_iter()
+            .enumerate()
+            .find_map(|(encoder_position, encoder_idx)| {
+                (Self::module_settings_encoder_group_for_position(
+                    module_settings,
+                    encoder_position,
+                )
+                .is_some()
+                    && encoder_group_layout_condition(layout, encoder_idx) == Some(key_condition))
+                .then_some(encoder_idx)
+            })
+    }
+
+    pub(super) fn module_settings_encoder_press_keys(
+        module_settings: &ModuleSettingsState,
+        layout: &KeyboardLayout,
+    ) -> Vec<(usize, u8)> {
+        layout
+            .keys
+            .iter()
+            .enumerate()
+            .filter_map(|(key_idx, key)| {
+                Self::module_settings_encoder_press_key_encoder_idx(module_settings, layout, key)
+                    .map(|encoder_idx| (key_idx, encoder_idx))
+            })
+            .collect()
+    }
+
+    pub(super) fn module_settings_encoder_has_press_key(
+        module_settings: &ModuleSettingsState,
+        layout: &KeyboardLayout,
+        encoder_idx: u8,
+    ) -> bool {
+        layout.keys.iter().any(|key| {
+            Self::module_settings_encoder_press_key_encoder_idx(module_settings, layout, key)
+                == Some(encoder_idx)
+        })
+    }
+
+    pub(super) fn layout_key_visible(
+        module_settings: &ModuleSettingsState,
+        layout: &KeyboardLayout,
+        key: &PhysicalKey,
+        packed: Option<u32>,
+    ) -> bool {
+        if let Some(encoder_idx) =
+            Self::module_settings_encoder_press_key_encoder_idx(module_settings, layout, key)
+        {
+            return Self::module_settings_encoder_visible(module_settings, layout, encoder_idx);
+        }
+
+        Self::layout_condition_visible(layout, key.layout_condition, packed)
+    }
+
+    pub(super) fn encoder_layout_condition_visible(
+        layout: &KeyboardLayout,
+        encoder: &PhysicalEncoder,
+        packed: Option<u32>,
+    ) -> bool {
+        let managed_by_automatic_visibility = encoder
+            .layout_condition
+            .and_then(|condition| layout.layout_options.get(condition.option_idx))
+            .is_some_and(Self::is_encoder_layout_option);
+        managed_by_automatic_visibility
+            || Self::layout_condition_visible(layout, encoder.layout_condition, packed)
     }
 
     pub(super) fn display_preset_choice_label(
@@ -807,7 +896,6 @@ impl EntropyApp {
         dev_conn: &crate::hid::HidDevice,
     ) -> BluetoothSettingsState {
         let has_qmk_setting = |qsid: u16| supported_qmk_settings.contains(&qsid);
-        let mut sleep_timeout = None;
         let mut charge_indicator = None;
         let mut profile_colors = Vec::<(usize, BluetoothSelectSetting)>::new();
 
@@ -839,14 +927,7 @@ impl EntropyApp {
                     .unwrap_or("");
                 let lower_title = title.to_ascii_lowercase();
 
-                if lower_title.contains("sleep") && lower_title.contains("timeout") {
-                    sleep_timeout = Self::read_bluetooth_select_setting(
-                        dev_conn,
-                        field,
-                        qsid,
-                        "bluetooth sleep timeout",
-                    );
-                } else if lower_title.contains("charge") && lower_title.contains("indicator") {
+                if lower_title.contains("charge") && lower_title.contains("indicator") {
                     charge_indicator = Self::read_bluetooth_boolean_setting(
                         dev_conn,
                         field,
@@ -876,11 +957,9 @@ impl EntropyApp {
             .filter(|(profile, _)| *profile <= 4)
             .map(|(profile, setting)| BluetoothProfileColorSetting { profile, setting })
             .collect::<Vec<_>>();
-        let supported =
-            sleep_timeout.is_some() || charge_indicator.is_some() || !profile_colors.is_empty();
+        let supported = charge_indicator.is_some() || !profile_colors.is_empty();
 
         BluetoothSettingsState {
-            sleep_timeout,
             charge_indicator,
             profile_colors,
             supported,
@@ -919,12 +998,9 @@ impl EntropyApp {
                     .and_then(|value| value.as_str())
                     .unwrap_or("")
                     .to_ascii_lowercase();
-                (title.contains("sleep")
-                    && title.contains("timeout")
-                    && !Self::bluetooth_setting_variants(field).is_empty())
-                    || (title.contains("charge")
-                        && title.contains("indicator")
-                        && field.get("type").and_then(|value| value.as_str()) == Some("boolean"))
+                (title.contains("charge")
+                    && title.contains("indicator")
+                    && field.get("type").and_then(|value| value.as_str()) == Some("boolean"))
                     || (title.contains("bt profile")
                         && title.contains("color")
                         && !Self::bluetooth_setting_variants(field).is_empty())
@@ -989,15 +1065,41 @@ impl EntropyApp {
     }
 
     fn layer_led_field_max(field: &serde_json::Value, width: u8) -> u16 {
-        field
+        if let Some(max) = field
             .get("max")
             .and_then(|value| value.as_u64())
-            .unwrap_or(if width > 1 {
-                u16::MAX as u64
-            } else {
-                u8::MAX as u64
-            })
-            .min(u16::MAX as u64) as u16
+            .map(|max| max.min(u16::MAX as u64) as u16)
+        {
+            return max;
+        }
+        if field.get("type").and_then(|value| value.as_str()) == Some("select") {
+            if let Some(max) = field
+                .get("variants")
+                .and_then(|value| value.as_array())
+                .map(|variants| variants.len().saturating_sub(1))
+                .and_then(|max| u16::try_from(max).ok())
+            {
+                return max;
+            }
+        }
+        if width > 1 {
+            u16::MAX
+        } else {
+            u8::MAX as u16
+        }
+    }
+
+    fn layer_led_field_variants(field: &serde_json::Value) -> Vec<String> {
+        field
+            .get("variants")
+            .and_then(|value| value.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect()
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1006,6 +1108,7 @@ impl EntropyApp {
         qsid: u16,
         width: u8,
         max: u16,
+        variants: Vec<String>,
         label: &str,
     ) -> LayerLedNumericSetting {
         let value = if width > 1 {
@@ -1024,6 +1127,7 @@ impl EntropyApp {
             width,
             value,
             max,
+            variants,
         }
     }
 
@@ -1119,6 +1223,7 @@ impl EntropyApp {
                         qsid,
                         width,
                         max.min(255),
+                        Vec::new(),
                         "layer_led brightness",
                     ));
                 } else if lower_title.contains("led timeout") {
@@ -1143,6 +1248,7 @@ impl EntropyApp {
                         qsid,
                         width,
                         max,
+                        Self::layer_led_field_variants(field),
                         "layer_led timeout",
                     ));
                 } else if lower_title.contains("bt profile") && lower_title.contains("color") {
@@ -1251,6 +1357,7 @@ impl EntropyApp {
                     316,
                     2,
                     255,
+                    Vec::new(),
                     "layer_led brightness",
                 ));
             }
@@ -1260,6 +1367,7 @@ impl EntropyApp {
                     317,
                     1,
                     255,
+                    Vec::new(),
                     "layer_led timeout",
                 ));
             }
@@ -1898,6 +2006,31 @@ mod tests {
     }
 
     #[test]
+    fn bluetooth_settings_ignore_removed_deep_sleep_timeout() {
+        let json = serde_json::json!({
+            "settings": [{
+                "name": "Bluetooth settings",
+                "fields": [
+                    {
+                        "type": "select",
+                        "title": "Sleep timeout",
+                        "qsid": 323,
+                        "variants": ["Never", "10 minutes"]
+                    },
+                    {
+                        "type": "boolean",
+                        "title": "Charge indicator",
+                        "qsid": 331
+                    }
+                ]
+            }]
+        });
+
+        assert!(!EntropyApp::bluetooth_settings_supported(&json, &[323]));
+        assert!(EntropyApp::bluetooth_settings_supported(&json, &[323, 331]));
+    }
+
+    #[test]
     fn layer_led_color_qsid_groups_ignore_out_of_range_layers_and_duplicate_qsids() {
         let groups = EntropyApp::layer_led_color_qsid_groups(
             vec![(0, 300), (2, 302), (1, 301), (1, 301)],
@@ -1905,6 +2038,22 @@ mod tests {
         );
 
         assert_eq!(groups, vec![(0, vec![300]), (1, vec![301])]);
+    }
+
+    #[test]
+    fn layer_led_select_max_comes_from_variants() {
+        let field = serde_json::json!({
+            "type": "select",
+            "title": "LED timeout",
+            "qsid": 317,
+            "variants": ["Never", "1 min", "2 min", "5 min", "10 min", "15 min", "30 min", "60 min"]
+        });
+
+        assert_eq!(EntropyApp::layer_led_field_max(&field, 1), 7);
+        assert_eq!(
+            EntropyApp::layer_led_field_variants(&field),
+            vec!["Never", "1 min", "2 min", "5 min", "10 min", "15 min", "30 min", "60 min"]
+        );
     }
 
     #[test]
@@ -2389,6 +2538,98 @@ mod tests {
         assert!(EntropyApp::module_settings_encoder_visible(
             &settings, &layout, 1
         ));
+    }
+
+    #[test]
+    fn module_settings_own_the_conditional_encoder_press_key() {
+        let module_condition = crate::keyboard::LayoutCondition {
+            option_idx: 0,
+            value: 0,
+        };
+        let mut layout = test_layout_with_encoders(&[0]);
+        layout.layout_options = vec![LayoutOption {
+            label: "Hide left encoder module".to_owned(),
+            choices: Vec::new(),
+        }];
+        layout.encoders[0].layout_condition = Some(module_condition);
+        layout.keys = vec![PhysicalKey {
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+            row: 0,
+            col: 0,
+            label: "0,0".to_owned(),
+            rotation: 0.0,
+            rotation_x: 0.0,
+            rotation_y: 0.0,
+            layout_condition: Some(module_condition),
+        }];
+        let settings = ModuleSettingsState {
+            groups: vec![ModuleSettingsGroup {
+                title: "Left Module".to_owned(),
+                kind: ModuleSettingsGroupKind::Left,
+                fields: vec![test_module_field("Left Module", 300)],
+            }],
+            values: std::collections::BTreeMap::from([(300, 0)]),
+            supported: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            EntropyApp::module_settings_encoder_press_key_encoder_idx(
+                &settings,
+                &layout,
+                &layout.keys[0],
+            ),
+            Some(0),
+        );
+        assert!(!EntropyApp::layout_key_visible(
+            &settings,
+            &layout,
+            &layout.keys[0],
+            Some(1),
+        ));
+        let mut encoder_settings = settings.clone();
+        encoder_settings.set_value(300, 2);
+        assert!(EntropyApp::layout_key_visible(
+            &encoder_settings,
+            &layout,
+            &layout.keys[0],
+            Some(1),
+        ));
+        assert!(EntropyApp::encoder_layout_condition_visible(
+            &layout,
+            &layout.encoders[0],
+            Some(1),
+        ));
+    }
+
+    #[test]
+    fn ordinary_keyboards_keep_keys_near_encoders() {
+        let mut layout = test_layout_with_encoders(&[0]);
+        layout.keys = vec![PhysicalKey {
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+            row: 0,
+            col: 0,
+            label: "0,0".to_owned(),
+            rotation: 0.0,
+            rotation_x: 0.0,
+            rotation_y: 0.0,
+            layout_condition: None,
+        }];
+
+        assert_eq!(
+            EntropyApp::module_settings_encoder_press_key_encoder_idx(
+                &ModuleSettingsState::default(),
+                &layout,
+                &layout.keys[0],
+            ),
+            None,
+        );
     }
 
     #[test]

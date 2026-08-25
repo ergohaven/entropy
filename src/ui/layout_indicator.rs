@@ -71,7 +71,20 @@ fn sticky_combo_is_active(combo: &ComboEntry, pressed_keycodes: &[u16]) -> bool 
         used[idx] = true;
     }
 
-    trigger_count > 0 && combo.output != 0
+    trigger_count > 0 && !combo.output.is_no()
+}
+
+fn sticky_combo_is_active_on_layer(
+    combo: &ComboEntry,
+    pressed_keycodes: &[u16],
+    active_layer: usize,
+    was_active: bool,
+) -> bool {
+    sticky_combo_is_active(combo, pressed_keycodes)
+        && (was_active
+            || combo
+                .layer
+                .is_none_or(|combo_layer| combo_layer as usize == active_layer))
 }
 
 fn sticky_pressed_keycodes(
@@ -102,9 +115,11 @@ fn sticky_pressed_keycodes(
 }
 
 fn sticky_tap_dance_index(keycode: u16) -> Option<usize> {
+    // Lazily: the argument of then_some is always evaluated, which overflows
+    // the subtraction for keycodes below the range.
     (0x5700..=0x57FF)
         .contains(&keycode)
-        .then_some((keycode - 0x5700) as usize)
+        .then(|| (keycode - 0x5700) as usize)
 }
 
 fn sticky_tap_dance_term(
@@ -120,7 +135,7 @@ fn sticky_tap_dance_tap_action(
     entries: &[crate::keycode_picker::TapDanceEntry],
     entry: usize,
 ) -> Option<u16> {
-    entries.get(entry).map(|entry| entry.on_tap)
+    entries.get(entry).map(|entry| entry.on_tap.vial_keycode())
 }
 
 fn sticky_tap_dance_hold_action(
@@ -130,9 +145,9 @@ fn sticky_tap_dance_hold_action(
 ) -> Option<u16> {
     entries.get(entry).map(|entry| {
         if tap_count >= 2 {
-            entry.on_tap_hold
+            entry.on_tap_hold.vial_keycode()
         } else {
-            entry.on_hold
+            entry.on_hold.vial_keycode()
         }
     })
 }
@@ -210,7 +225,7 @@ fn sticky_update_tap_dance_state(
                     StickyLayoutTapDanceState::Idle
                 } else if tap_count >= 2 {
                     if let Some(entry) = entries.get(entry) {
-                        actions.push(entry.on_double_tap);
+                        actions.push(entry.on_double_tap.vial_keycode());
                     }
                     StickyLayoutTapDanceState::Idle
                 } else {
@@ -269,7 +284,10 @@ fn sticky_virtual_layer_keycodes(
     active_combos
         .iter()
         .zip(combos)
-        .filter_map(|(active, combo)| (*active && combo.output != 0).then_some(combo.output))
+        .filter_map(|(active, combo)| {
+            let output = combo.output.vial_keycode();
+            (*active && output != 0).then_some(output)
+        })
         .chain(
             tap_dance_states
                 .iter()
@@ -449,7 +467,18 @@ impl EntropyApp {
         );
         let current_active_combos: Vec<bool> = combo_entries
             .iter()
-            .map(|combo| sticky_combo_is_active(combo, &pressed_keycodes))
+            .enumerate()
+            .map(|(idx, combo)| {
+                sticky_combo_is_active_on_layer(
+                    combo,
+                    &pressed_keycodes,
+                    layer_before,
+                    self.sticky_layout_active_combos
+                        .get(idx)
+                        .copied()
+                        .unwrap_or(false),
+                )
+            })
             .collect();
         for (idx, active) in current_active_combos.iter().copied().enumerate() {
             let was_active = self
@@ -459,7 +488,7 @@ impl EntropyApp {
                 .unwrap_or(false);
             if active && !was_active {
                 sticky_apply_persistent_layer_action(
-                    combo_entries[idx].output,
+                    combo_entries[idx].output.vial_keycode(),
                     layer_count,
                     &mut self.sticky_layout_toggled_layers,
                     &mut self.sticky_layout_base_layer,
@@ -488,6 +517,14 @@ impl EntropyApp {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sticky_tap_dance_index_ignores_keycodes_below_the_tap_dance_range() {
+        assert_eq!(sticky_tap_dance_index(0x0004), None);
+        assert_eq!(sticky_tap_dance_index(0x5700), Some(0));
+        assert_eq!(sticky_tap_dance_index(0x57ff), Some(0xff));
+        assert_eq!(sticky_tap_dance_index(0x5800), None);
+    }
+
     use super::*;
     use crate::firmware::FirmwareProtocol;
     use crate::keyboard::PhysicalKey;
@@ -565,7 +602,8 @@ mod tests {
         let pressed_keycodes = sticky_pressed_keycodes(&layout, &pressed, &pressed_key_layers, 0);
         let combo = ComboEntry {
             keys: [0x0004, 0x0005, 0, 0],
-            output: mo(2),
+            output: mo(2).into(),
+            layer: None,
         };
 
         assert!(sticky_combo_is_active(&combo, &pressed_keycodes));
@@ -576,16 +614,45 @@ mod tests {
                 &pressed_key_layers,
                 &[false; 3],
                 0,
-                &[combo.output],
+                &[combo.output.vial_keycode()],
             ),
             2
         );
     }
 
     #[test]
+    fn layer_specific_combo_activates_only_on_its_layer() {
+        let combo = ComboEntry {
+            keys: [0x0004, 0x0005, 0, 0],
+            output: 0x0006.into(),
+            layer: Some(1),
+        };
+        let pressed_keycodes = [0x0004, 0x0005];
+
+        assert!(!sticky_combo_is_active_on_layer(
+            &combo,
+            &pressed_keycodes,
+            0,
+            false,
+        ));
+        assert!(sticky_combo_is_active_on_layer(
+            &combo,
+            &pressed_keycodes,
+            1,
+            false,
+        ));
+        assert!(sticky_combo_is_active_on_layer(
+            &combo,
+            &pressed_keycodes,
+            2,
+            true,
+        ));
+    }
+
+    #[test]
     fn tap_dance_hold_exposes_its_layer_action_after_tapping_term() {
         let entries = vec![crate::keycode_picker::TapDanceEntry {
-            on_hold: mo(2),
+            on_hold: mo(2).into(),
             tapping_term: 150,
             ..Default::default()
         }];
@@ -621,7 +688,7 @@ mod tests {
     #[test]
     fn tap_dance_tap_emits_persistent_layer_action_after_tapping_term() {
         let entries = vec![crate::keycode_picker::TapDanceEntry {
-            on_tap: tg(2),
+            on_tap: tg(2).into(),
             tapping_term: 150,
             ..Default::default()
         }];

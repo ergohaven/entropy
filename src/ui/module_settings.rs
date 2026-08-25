@@ -134,14 +134,7 @@ fn module_setting_variant_label(language: crate::i18n::Language, variant: &str) 
 enum ModuleSettingsRow {
     SideSelector,
     Section(usize),
-    Field {
-        group_idx: usize,
-        field_idx: usize,
-    },
-    EncoderVisibility {
-        encoder_idx: usize,
-        option_idx: usize,
-    },
+    Field { group_idx: usize, field_idx: usize },
 }
 
 impl EntropyApp {
@@ -188,32 +181,6 @@ impl EntropyApp {
             value
         } else {
             value.min(u8::MAX as u16)
-        }
-    }
-
-    fn module_setting_select_variant_indices(
-        group: &ModuleSettingsGroup,
-        field: &ModuleSettingField,
-    ) -> Vec<usize> {
-        let all_indices = (0..field.variants.len()).collect::<Vec<_>>();
-        let is_module_selector = group
-            .module_selector_field()
-            .is_some_and(|selector| selector.qsid == field.qsid);
-        if !is_module_selector {
-            return all_indices;
-        }
-
-        let configurable_indices = all_indices
-            .iter()
-            .copied()
-            .filter(|idx| {
-                ModuleDeviceKind::from_variant(&field.variants[*idx]) != ModuleDeviceKind::None
-            })
-            .collect::<Vec<_>>();
-        if configurable_indices.is_empty() {
-            all_indices
-        } else {
-            configurable_indices
         }
     }
 
@@ -358,14 +325,10 @@ impl EntropyApp {
             }
             ModuleSettingKind::Select => {
                 let dropdown_width = metrics.value(120.0);
-                let variant_indices = Self::module_setting_select_variant_indices(group, &field);
-                let selected_idx = variant_indices
+                let selected_idx = (raw_value as usize).min(field.variants.len().saturating_sub(1));
+                let variants = field
+                    .variants
                     .iter()
-                    .position(|idx| *idx == raw_value as usize)
-                    .unwrap_or(0);
-                let variants = variant_indices
-                    .iter()
-                    .filter_map(|idx| field.variants.get(*idx))
                     .map(|variant| {
                         module_setting_variant_label(self.app_settings.language, variant)
                     })
@@ -392,10 +355,8 @@ impl EntropyApp {
                             &variants,
                             dropdown_width,
                         );
-                        if let Some(raw_index) =
-                            picked.and_then(|idx| variant_indices.get(idx).copied())
-                        {
-                            self.write_module_setting_value(group_idx, &field, raw_index as u16);
+                        if let Some(picked) = picked {
+                            self.write_module_setting_value(group_idx, &field, picked as u16);
                         }
                     },
                 );
@@ -416,16 +377,6 @@ impl EntropyApp {
         }
         if let Some(group_idx) = selected_side_group {
             rows.extend(self.module_settings_field_rows(group_idx, selected_module, selected_mode));
-            if selected_module == Some(ModuleDeviceKind::Encoder) {
-                if let Some((encoder_idx, option_idx)) =
-                    self.module_encoder_visibility_entry(group_idx)
-                {
-                    rows.push(ModuleSettingsRow::EncoderVisibility {
-                        encoder_idx,
-                        option_idx,
-                    });
-                }
-            }
         }
         for (group_idx, group) in self.module_settings.groups.iter().enumerate() {
             if matches!(
@@ -502,15 +453,6 @@ impl EntropyApp {
                 .then_some(idx)
             })
             .collect()
-    }
-
-    fn module_encoder_visibility_entry(&self, group_idx: usize) -> Option<(usize, usize)> {
-        let layout = self.layout.as_ref()?;
-        let group = self.module_settings.groups.get(group_idx)?;
-        group
-            .supports_module_kind(ModuleDeviceKind::Encoder)
-            .then(|| Self::encoder_visibility_entry_for_module_group(layout, group.kind))
-            .flatten()
     }
 
     pub(super) fn module_settings_include_encoder_visibility(
@@ -677,17 +619,6 @@ impl EntropyApp {
                 content_width,
                 row_height,
                 suppress_tooltips,
-            ),
-            ModuleSettingsRow::EncoderVisibility {
-                encoder_idx,
-                option_idx,
-            } => self.draw_module_encoder_visibility_setting_row(
-                ui,
-                content_width,
-                row_height,
-                suppress_tooltips,
-                encoder_idx,
-                option_idx,
             ),
         }
     }
@@ -986,9 +917,7 @@ mod tests {
                     .get(group_idx)
                     .and_then(|group| group.fields.get(field_idx))
                     .map(|field| field.qsid),
-                ModuleSettingsRow::SideSelector
-                | ModuleSettingsRow::Section(_)
-                | ModuleSettingsRow::EncoderVisibility { .. } => None,
+                ModuleSettingsRow::SideSelector | ModuleSettingsRow::Section(_) => None,
             })
             .collect()
     }
@@ -1007,7 +936,7 @@ mod tests {
     }
 
     #[test]
-    fn modular_encoder_visibility_moves_into_selected_side_settings() {
+    fn modular_encoder_visibility_is_automatic() {
         let mut app = test_app();
         add_encoder_module_groups(&mut app);
         app.layout = Some(encoder_visibility_layout(
@@ -1021,22 +950,13 @@ mod tests {
         assert!(
             !app.show_separate_encoder_visibility_settings(app.layout.as_ref().expect("layout"))
         );
-        assert!(app.module_settings_rows().iter().any(|row| matches!(
-            row,
-            ModuleSettingsRow::EncoderVisibility {
-                encoder_idx: 0,
-                option_idx: 0
-            }
-        )));
+        assert_eq!(visible_module_qsids(&app), vec![149]);
 
         app.module_settings.set_selected_module_group(1);
-        assert!(app.module_settings_rows().iter().any(|row| matches!(
-            row,
-            ModuleSettingsRow::EncoderVisibility {
-                encoder_idx: 1,
-                option_idx: 1
-            }
-        )));
+        assert_eq!(visible_module_qsids(&app), vec![150]);
+        assert!(
+            !app.show_separate_encoder_visibility_settings(app.layout.as_ref().expect("layout"))
+        );
     }
 
     #[test]
@@ -1113,7 +1033,7 @@ mod tests {
     }
 
     #[test]
-    fn encoder_visibility_row_is_hidden_for_selected_pointing_module() {
+    fn encoder_visibility_control_is_absent_for_selected_pointing_module() {
         let mut app = test_app();
         add_encoder_module_groups(&mut app);
         app.layout = Some(encoder_visibility_layout(
@@ -1122,14 +1042,13 @@ mod tests {
         ));
         app.module_settings.values.insert(149, 1);
 
-        assert!(!app
-            .module_settings_rows()
-            .iter()
-            .any(|row| matches!(row, ModuleSettingsRow::EncoderVisibility { .. })));
+        assert!(
+            !app.show_separate_encoder_visibility_settings(app.layout.as_ref().expect("layout"))
+        );
     }
 
     #[test]
-    fn keyboards_without_module_settings_keep_separate_encoder_page() {
+    fn keyboards_without_module_settings_do_not_get_encoder_visibility_page() {
         let mut app = test_app();
         app.layout = Some(encoder_visibility_layout(
             "Hide left encoder",
@@ -1139,7 +1058,25 @@ mod tests {
         assert!(
             !app.module_settings_include_encoder_visibility(app.layout.as_ref().expect("layout"))
         );
-        assert!(app.show_separate_encoder_visibility_settings(app.layout.as_ref().expect("layout")));
+        assert!(
+            !app.show_separate_encoder_visibility_settings(app.layout.as_ref().expect("layout"))
+        );
+    }
+
+    #[test]
+    fn k03_and_imperial44_keep_their_encoder_page() {
+        let mut app = test_app();
+        for name in ["K:03", "Imperial44"] {
+            app.layout = Some(encoder_visibility_layout(
+                "Hide left encoder",
+                "Hide right encoder",
+            ));
+            app.layout.as_mut().expect("layout").name = name.to_owned();
+
+            assert!(
+                app.show_separate_encoder_visibility_settings(app.layout.as_ref().expect("layout"))
+            );
+        }
     }
 
     #[test]
@@ -1183,28 +1120,25 @@ mod tests {
     }
 
     #[test]
-    fn module_selector_hides_none_without_shifting_transport_values() {
+    fn module_selector_keeps_none_and_transport_values_aligned() {
         let mut app = test_app();
         add_filterable_module_groups(&mut app);
         let group = &app.module_settings.groups[0];
         let field = &group.fields[0];
 
         assert_eq!(
-            EntropyApp::module_setting_select_variant_indices(group, field),
-            vec![1, 2, 3]
+            field.variants,
+            vec!["None", "Encoder", "Trackball", "Touchpad"]
         );
     }
 
     #[test]
-    fn stored_none_falls_back_to_first_configurable_module() {
+    fn stored_none_selects_none() {
         let mut app = test_app();
         add_filterable_module_groups(&mut app);
         let group = &app.module_settings.groups[0];
 
-        assert_eq!(
-            group.selected_module_kind(0),
-            Some(ModuleDeviceKind::Encoder)
-        );
+        assert_eq!(group.selected_module_kind(0), Some(ModuleDeviceKind::None));
     }
 
     #[test]
@@ -1212,7 +1146,7 @@ mod tests {
         let mut app = test_app();
         add_filterable_module_groups(&mut app);
 
-        assert_eq!(visible_module_qsids(&app), vec![149, 325, 332]);
+        assert_eq!(visible_module_qsids(&app), vec![149]);
 
         app.module_settings.set_value(149, 1);
         assert_eq!(visible_module_qsids(&app), vec![149, 325, 332]);
@@ -1364,7 +1298,8 @@ mod tests {
         app.hid_device = Some(hid_device);
         app.combo_entries = vec![ComboEntry {
             keys: [0x0004, 0x0005, 0, 0],
-            output: 0x0006,
+            output: 0x0006.into(),
+            layer: None,
         }];
         app.combo_synced_entries = vec![ComboEntry::default()];
         app.mark_combo_dirty();

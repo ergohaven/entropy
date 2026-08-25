@@ -24,7 +24,8 @@ impl EntropyApp {
 
         let text_expander_rules_signature =
             text_expander_rules_signature(&app_settings.text_expander_rule_files);
-        let typing_trainer = TypingTrainerState::from_settings(app_settings.typing_trainer);
+        let mut typing_trainer = TypingTrainerState::from_settings(app_settings.typing_trainer);
+        typing_trainer.set_symbol_stats(load_typing_trainer_symbol_stats());
         let dark_mode = app_settings.dark_mode;
 
         Self {
@@ -69,6 +70,7 @@ impl EntropyApp {
             prev_hovered_encoder_keycode: None,
             secondary_click_handled: false,
             pending_handed_swap: None,
+            pending_middle_click_assignments: Vec::new(),
             hover_layer_progress: 0.0,
             jump_back_stack: Vec::new(),
             device_manager: DeviceManager::new(),
@@ -89,9 +91,15 @@ impl EntropyApp {
             parent_window_handle: None,
             parent_display_handle: None,
             pending_entsettings_import_path: None,
+            #[cfg(target_os = "linux")]
+            ibus_registration: Default::default(),
+            #[cfg(target_os = "linux")]
+            pending_ibus_reload: None,
             import_progress_started_at: None,
             import_progress_title: String::new(),
             import_progress_body: String::new(),
+            #[cfg(target_os = "linux")]
+            linux_setup_task: None,
             dark_mode,
             last_applied_theme: None,
             app_settings,
@@ -105,6 +113,8 @@ impl EntropyApp {
             windows_hwnd: None,
             #[cfg(target_os = "windows")]
             windows_window_hidden_to_tray: false,
+            #[cfg(target_os = "windows")]
+            windows_start_hidden_to_tray_pending: false,
             #[cfg(target_os = "macos")]
             macos_ns_window: None,
             #[cfg(target_os = "macos")]
@@ -121,6 +131,7 @@ impl EntropyApp {
             main_menu_tab: MainMenuTab::Keyboard,
             combo_entries: vec![],
             combo_synced_entries: vec![],
+            supports_rmk_combo_layers: false,
             combo_names: vec![],
             combo_colors: vec![],
             selected_combo: 0,
@@ -164,7 +175,11 @@ impl EntropyApp {
             key_override_visible_count: 1,
             key_override_undo_stack: Vec::new(),
             text_expander_deleted_rules: Vec::new(),
+            text_expander_emoji_search: String::new(),
+            text_expander_emoji_group: 0,
+            text_expander_emoji_target: None,
             typing_trainer,
+            typing_trainer_symbol_pool_source: None,
             typing_trainer_history_open: false,
             selected_key_override: 0,
             key_override_pick_target: None,
@@ -180,6 +195,7 @@ impl EntropyApp {
             sticky_layout_active_layer: 0,
             sticky_layout_last_size: None,
             sticky_layout_resize_opacity_hold_frames: 0,
+            sticky_layout_viewport_events: StickyLayoutViewportEventQueue::default(),
             pending_layout_indicator_open_after_unlock: false,
             matrix_tester_last_poll: std::time::Instant::now(),
             matrix_tester_last_lock_check: std::time::Instant::now()
@@ -198,6 +214,7 @@ impl EntropyApp {
             device_display_names: std::collections::HashMap::new(),
             device_about_info: None,
             update_check: start_update_check(),
+            firmware_update_check: FirmwareUpdateCheckState::Unsupported,
             tour_state: TourState::default(),
             tour_target_rects: Vec::new(),
             unlock_open: false,

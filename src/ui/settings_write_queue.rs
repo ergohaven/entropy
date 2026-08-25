@@ -88,11 +88,12 @@ impl SettingsWriteTarget {
         matches!(self, Self::Touchpad { .. })
     }
 
-    fn verifies_readback(&self) -> bool {
-        // RMK persists device settings asynchronously after SET. Match Vial's
-        // single-request path for Module and Layer LED settings so an immediate
-        // GET cannot collide with that flash work over Bluetooth.
-        self.is_touchpad()
+    fn verifies_readback(&self, is_bluetooth_transport: bool) -> bool {
+        // RMK persists device settings asynchronously after SET, so an immediate
+        // GET can collide with that flash work over Bluetooth. USB Layer LED
+        // writes still need readback because some firmware acknowledges SET
+        // without applying the requested value.
+        self.is_touchpad() || (matches!(self, Self::LayerLed { .. }) && !is_bluetooth_transport)
     }
 
     fn reconcile_readback(
@@ -257,7 +258,10 @@ fn run_settings_write(
     hid: &crate::hid::HidDevice,
     request: &SettingsWriteRequest,
 ) -> (Result<u16, ModuleSettingWritebackError>, bool) {
-    let policy = if request.target.verifies_readback() {
+    let policy = if request
+        .target
+        .verifies_readback(hid.is_bluetooth_transport())
+    {
         QmkSettingWritePolicy::VerifiedReadback
     } else {
         QmkSettingWritePolicy::SetOnly
@@ -580,7 +584,7 @@ impl EntropyApp {
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             #[cfg(target_os = "macos")]
-            let _hid_lock = crate::hid::macos_hid_operation_lock();
+            let _hid_lock = hid_device.macos_hid_operation_lock();
 
             let (result, disconnected) = run_settings_write(&hid_device, &request);
             let hid_device = (!disconnected).then_some(hid_device);
@@ -879,6 +883,7 @@ mod tests {
                 width: 2,
                 value: 32,
                 max: 255,
+                variants: Vec::new(),
             }),
             ..LayerLedSettingsState::default()
         };
@@ -992,6 +997,47 @@ mod tests {
         let requests = recorder.requests();
         assert_eq!(requests.len(), 2);
         assert!(requests.iter().all(|request| request[1] == 0x0B));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn usb_layer_led_write_rejects_ignored_set() {
+        let (hid_device, recorder) = crate::hid::HidDevice::test_device_with_fault_after_requests(
+            Some((0, crate::hid::TestHidFault::IgnoreQmkSettingSet)),
+        );
+        let request = SettingsWriteRequest {
+            id: 1,
+            generation: 0,
+            qsid: 317,
+            width: 1,
+            old_value: 4,
+            requested: 5,
+            target: SettingsWriteTarget::LayerLed {
+                display_label: "Layer LED timeout".to_owned(),
+            },
+        };
+
+        assert_eq!(
+            run_settings_write(&hid_device, &request).0,
+            Err(ModuleSettingWritebackError::ReadbackMismatch {
+                expected: 5,
+                actual: 0,
+            })
+        );
+        let requests = recorder.requests();
+        assert_eq!(requests[0][1], 0x0B);
+        assert!(!requests[1..].is_empty());
+        assert!(requests[1..].iter().all(|request| request[1] == 0x0A));
+    }
+
+    #[test]
+    fn layer_led_readback_is_usb_only() {
+        let target = SettingsWriteTarget::LayerLed {
+            display_label: "Layer LED timeout".to_owned(),
+        };
+
+        assert!(target.verifies_readback(false));
+        assert!(!target.verifies_readback(true));
     }
 
     #[test]

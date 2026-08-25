@@ -20,16 +20,28 @@ impl EntropyApp {
                 .data(|d| d.get_temp::<bool>(dropdown_id))
                 .unwrap_or(false);
             let combo_supported = !self.combo_entries.is_empty();
+            let macro_supported =
+                self.keycode_picker.supports_macro && self.keycode_picker.macro_count > 0;
+            let tap_dance_supported = self.keycode_picker.supports_tap_dance
+                && !self.keycode_picker.tap_dance_entries.is_empty();
             let key_override_supported = !self.key_override_entries.is_empty();
             let auto_shift_supported =
                 self.auto_shift_timeout.is_some() || self.supported_qmk_settings.contains(&4);
             let advanced_item_count = 2
+                + macro_supported as usize
+                + tap_dance_supported as usize
                 + combo_supported as usize
                 + auto_shift_supported as usize
                 + key_override_supported as usize;
             let mut advanced_menu_labels =
                 vec![crate::i18n::tr_catalog(lang, "text_expander.title")];
             advanced_menu_labels.push(crate::i18n::tr_catalog(lang, "typing_trainer.title"));
+            if macro_supported {
+                advanced_menu_labels.push(crate::i18n::tr_catalog(lang, "macro_editor.title"));
+            }
+            if tap_dance_supported {
+                advanced_menu_labels.push(crate::i18n::tr_catalog(lang, "tap_dance_editor.title"));
+            }
             if combo_supported {
                 advanced_menu_labels.push(crate::i18n::tr(lang, TrKey::ComboTitle));
             }
@@ -68,6 +80,8 @@ impl EntropyApp {
                 let (
                     text_expander_hovered,
                     typing_trainer_hovered,
+                    macro_hovered,
+                    tap_dance_hovered,
                     combo_hovered,
                     auto_shift_hovered,
                     key_override_hovered,
@@ -95,6 +109,26 @@ impl EntropyApp {
                                     self.main_menu_tab == MainMenuTab::Advanced
                                         && self.settings_tab == SettingsTab::TypingTrainer,
                                 );
+                                let macro_resp = macro_supported.then(|| {
+                                    top_dropdown_item(
+                                        ui,
+                                        item_width,
+                                        crate::i18n::tr_catalog(lang, "macro_editor.title"),
+                                        true,
+                                        self.main_menu_tab == MainMenuTab::Advanced
+                                            && self.settings_tab == SettingsTab::Macros,
+                                    )
+                                });
+                                let tap_dance_resp = tap_dance_supported.then(|| {
+                                    top_dropdown_item(
+                                        ui,
+                                        item_width,
+                                        crate::i18n::tr_catalog(lang, "tap_dance_editor.title"),
+                                        true,
+                                        self.main_menu_tab == MainMenuTab::Advanced
+                                            && self.settings_tab == SettingsTab::TapDance,
+                                    )
+                                });
                                 let combo_resp = combo_supported.then(|| {
                                     top_dropdown_item(
                                         ui,
@@ -132,6 +166,20 @@ impl EntropyApp {
                                 if typing_trainer_resp.clicked() {
                                     self.close_top_dropdowns(ui.ctx());
                                     self.open_typing_trainer_page();
+                                }
+                                if macro_resp
+                                    .as_ref()
+                                    .is_some_and(|response| response.clicked())
+                                {
+                                    self.close_top_dropdowns(ui.ctx());
+                                    self.open_macro_settings_page();
+                                }
+                                if tap_dance_resp
+                                    .as_ref()
+                                    .is_some_and(|response| response.clicked())
+                                {
+                                    self.close_top_dropdowns(ui.ctx());
+                                    self.open_tap_dance_settings_page();
                                 }
 
                                 if combo_resp.as_ref().map(|r| r.clicked()).unwrap_or(false) {
@@ -177,6 +225,11 @@ impl EntropyApp {
                                 (
                                     text_expander_resp.hovered(),
                                     typing_trainer_resp.hovered(),
+                                    macro_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
+                                    tap_dance_resp
+                                        .as_ref()
+                                        .map(|r| r.hovered())
+                                        .unwrap_or(false),
                                     combo_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
                                     auto_shift_resp
                                         .as_ref()
@@ -188,6 +241,14 @@ impl EntropyApp {
                                         .unwrap_or(false),
                                     text_expander_resp.clicked()
                                         || typing_trainer_resp.clicked()
+                                        || macro_resp
+                                            .as_ref()
+                                            .map(|r| r.clicked())
+                                            .unwrap_or(false)
+                                        || tap_dance_resp
+                                            .as_ref()
+                                            .map(|r| r.clicked())
+                                            .unwrap_or(false)
                                         || combo_resp
                                             .as_ref()
                                             .map(|r| r.clicked())
@@ -212,6 +273,8 @@ impl EntropyApp {
                             && (advanced_tab_hovered
                                 || text_expander_hovered
                                 || typing_trainer_hovered
+                                || macro_hovered
+                                || tap_dance_hovered
                                 || combo_hovered
                                 || auto_shift_hovered
                                 || key_override_hovered

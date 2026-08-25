@@ -926,11 +926,16 @@ impl EntropyApp {
         );
 
         for (key_idx, key) in layout.keys.iter().enumerate() {
-            if !Self::layout_condition_visible(
+            if !Self::layout_key_visible(
+                &self.module_settings,
                 layout,
-                key.layout_condition,
+                key,
                 self.layout_options_value,
-            ) {
+            ) || encoder_groups.iter().any(|group| {
+                group
+                    .press
+                    .is_some_and(|(press_key_idx, _)| press_key_idx == key_idx)
+            }) {
                 continue;
             }
             let rect = export_item_rect(
@@ -1097,11 +1102,16 @@ impl EntropyApp {
         );
 
         for (key_idx, key) in layout.keys.iter().enumerate() {
-            if !Self::layout_condition_visible(
+            if !Self::layout_key_visible(
+                &self.module_settings,
                 layout,
-                key.layout_condition,
+                key,
                 self.layout_options_value,
-            ) {
+            ) || encoder_groups.iter().any(|group| {
+                group
+                    .press
+                    .is_some_and(|(press_key_idx, _)| press_key_idx == key_idx)
+            }) {
                 continue;
             }
             let rect = export_item_rect(
@@ -1241,6 +1251,7 @@ struct ExportEncoderGroup {
     rect: egui::Rect,
     ccw: Option<usize>,
     cw: Option<usize>,
+    press: Option<(usize, egui::Rect)>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1257,8 +1268,7 @@ fn export_layout_bounds(
 ) -> Option<egui::Rect> {
     let mut rect: Option<egui::Rect> = None;
     for key in &layout.keys {
-        if !EntropyApp::layout_condition_visible(layout, key.layout_condition, layout_options_value)
-        {
+        if !EntropyApp::layout_key_visible(module_settings, layout, key, layout_options_value) {
             continue;
         }
         let item_rect = layout_aabb_rect(
@@ -1273,18 +1283,22 @@ fn export_layout_bounds(
         rect = Some(rect.map(|rect| rect.union(item_rect)).unwrap_or(item_rect));
     }
     for encoder in &layout.encoders {
-        if !EntropyApp::layout_condition_visible(
-            layout,
-            encoder.layout_condition,
-            layout_options_value,
-        ) || !EntropyApp::module_settings_encoder_visible(
-            module_settings,
-            layout,
-            encoder.encoder_idx,
-        ) || !encoder_visibility
-            .get(encoder.encoder_idx as usize)
-            .copied()
-            .unwrap_or(true)
+        if !EntropyApp::encoder_layout_condition_visible(layout, encoder, layout_options_value)
+            || !EntropyApp::module_settings_encoder_visible(
+                module_settings,
+                layout,
+                encoder.encoder_idx,
+            )
+            || !EntropyApp::encoder_visibility_allows(
+                layout,
+                encoder.encoder_idx,
+                encoder_visibility,
+            )
+            || EntropyApp::module_settings_encoder_has_press_key(
+                module_settings,
+                layout,
+                encoder.encoder_idx,
+            )
         {
             continue;
         }
@@ -1354,18 +1368,17 @@ fn export_encoder_groups(
 ) -> Vec<ExportEncoderGroup> {
     let mut groups: Vec<(u8, ExportEncoderGroup)> = Vec::new();
     for (encoder_idx, encoder) in layout.encoders.iter().enumerate() {
-        if !EntropyApp::layout_condition_visible(
-            layout,
-            encoder.layout_condition,
-            layout_options_value,
-        ) || !EntropyApp::module_settings_encoder_visible(
-            module_settings,
-            layout,
-            encoder.encoder_idx,
-        ) || !encoder_visibility
-            .get(encoder.encoder_idx as usize)
-            .copied()
-            .unwrap_or(true)
+        if !EntropyApp::encoder_layout_condition_visible(layout, encoder, layout_options_value)
+            || !EntropyApp::module_settings_encoder_visible(
+                module_settings,
+                layout,
+                encoder.encoder_idx,
+            )
+            || !EntropyApp::encoder_visibility_allows(
+                layout,
+                encoder.encoder_idx,
+                encoder_visibility,
+            )
         {
             continue;
         }
@@ -1413,11 +1426,112 @@ fn export_encoder_groups(
                     } else {
                         Some(encoder_idx)
                     },
+                    press: None,
                 },
             ));
         }
     }
+
+    let key_rects: Vec<(usize, egui::Rect)> = layout
+        .keys
+        .iter()
+        .enumerate()
+        .filter(|(_, key)| {
+            EntropyApp::layout_key_visible(module_settings, layout, key, layout_options_value)
+        })
+        .map(|(key_idx, key)| {
+            (
+                key_idx,
+                export_item_rect(
+                    key.x,
+                    key.y,
+                    key.w,
+                    key.h,
+                    key.rotation,
+                    key.rotation_x,
+                    key.rotation_y,
+                    bounds,
+                    layout_y,
+                ),
+            )
+        })
+        .collect();
+    let group_rects: Vec<(u8, egui::Rect)> = groups
+        .iter()
+        .map(|(encoder_idx, group)| (*encoder_idx, group.rect))
+        .collect();
+    let explicit_press_keys =
+        EntropyApp::module_settings_encoder_press_keys(module_settings, layout);
+    let press_rects =
+        encoder_press_key_rects(layout, &key_rects, &group_rects, &explicit_press_keys);
+    for (encoder_idx, group) in &mut groups {
+        if let Some(press) = press_rects
+            .iter()
+            .find(|press| press.encoder_idx == *encoder_idx)
+        {
+            group.rect = encoder_group_rect_with_press(*encoder_idx, group.rect, &press_rects);
+            group.press = Some((press.key_idx, press.press_rect));
+        }
+    }
     groups.into_iter().map(|(_, group)| group).collect()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn export_encoder_press_label(
+    layout: &KeyboardLayout,
+    layer_idx: usize,
+    key_idx: usize,
+    app: &EntropyApp,
+) -> (String, bool) {
+    let keycode = layout.get_keycode(layer_idx, key_idx);
+    let (keycode, dimmed) = if keycode == 0x0001 {
+        let fallback = (0..layer_idx)
+            .rev()
+            .map(|fallback_layer| layout.get_keycode(fallback_layer, key_idx))
+            .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
+        match fallback {
+            Some(fallback) => (fallback, true),
+            None => return ("▽".to_owned(), false),
+        }
+    } else {
+        (keycode, false)
+    };
+    if keycode == 0x0000 {
+        return (String::new(), false);
+    }
+
+    (
+        export_keycode_label_with_macro_names(
+            keycode,
+            &layout.custom_keycodes,
+            &app.layer_names,
+            &app.keycode_picker.macro_names,
+            &app.keycode_picker.tap_dance_names,
+            app.app_settings.layout_image_export.key_legend_layout,
+        )
+        .replace('\n', " "),
+        dimmed,
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn encoder_press_dividers(
+    center: egui::Pos2,
+    radius: f32,
+    press_rect: egui::Rect,
+) -> [(f32, f32); 2] {
+    let divider_gap = radius * 0.06;
+    let divider_radius = (radius - 0.5).max(0.0);
+    let divider = |y: f32| {
+        let half_width = (divider_radius * divider_radius - (y - center.y) * (y - center.y))
+            .max(0.0)
+            .sqrt();
+        (y, half_width)
+    };
+    [
+        divider(press_rect.top() - divider_gap),
+        divider(press_rect.bottom() + divider_gap),
+    ]
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1441,15 +1555,29 @@ fn draw_encoder_export(
         palette.key_stroke,
         1.4,
     );
-    draw_line_segment(
-        image,
-        center.x - radius * 0.58,
-        center.y,
-        center.x + radius * 0.58,
-        center.y,
-        1.2,
-        palette.key_stroke,
-    );
+    if let Some((_, press_rect)) = group.press {
+        for (divider_y, divider_half_width) in encoder_press_dividers(center, radius, press_rect) {
+            draw_line_segment(
+                image,
+                center.x - divider_half_width,
+                divider_y,
+                center.x + divider_half_width,
+                divider_y,
+                1.2,
+                palette.key_stroke,
+            );
+        }
+    } else {
+        draw_line_segment(
+            image,
+            center.x - radius * 0.58,
+            center.y,
+            center.x + radius * 0.58,
+            center.y,
+            1.2,
+            palette.key_stroke,
+        );
+    }
 
     let encoder_value_label = |kc: u16| -> String {
         export_keycode_label_with_macro_names(
@@ -1489,8 +1617,14 @@ fn draw_encoder_export(
             font,
             &label,
             center.x,
-            center.y - radius * 0.34,
-            fit_text_size(font, &label, 10.5, radius * 1.35, 6.5),
+            center.y - radius * if group.press.is_some() { 0.52 } else { 0.34 },
+            fit_text_size(
+                font,
+                &label,
+                if group.press.is_some() { 7.4 } else { 10.5 },
+                radius * 1.35,
+                6.0,
+            ),
             if dimmed {
                 palette.dim_text
             } else {
@@ -1509,8 +1643,31 @@ fn draw_encoder_export(
             font,
             &label,
             center.x,
-            center.y + radius * 0.38,
-            fit_text_size(font, &label, 10.5, radius * 1.35, 6.5),
+            center.y + radius * if group.press.is_some() { 0.52 } else { 0.38 },
+            fit_text_size(
+                font,
+                &label,
+                if group.press.is_some() { 7.4 } else { 10.5 },
+                radius * 1.35,
+                6.0,
+            ),
+            if dimmed {
+                palette.dim_text
+            } else {
+                palette.text
+            },
+            0.0,
+        );
+    }
+    if let Some((press_key_idx, _)) = group.press {
+        let (label, dimmed) = export_encoder_press_label(layout, layer_idx, press_key_idx, app);
+        draw_text_centered_rotated(
+            image,
+            font,
+            &label,
+            center.x,
+            center.y,
+            fit_text_size(font, &label, 7.4, radius * 1.45, 5.8),
             if dimmed {
                 palette.dim_text
             } else {
@@ -1572,15 +1729,29 @@ fn write_encoder_svg(
         svg_color(palette.key_fill),
         svg_color(palette.key_stroke)
     )?;
-    writeln!(
-        svg,
-        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.2" stroke-linecap="round"/>"#,
-        center.x - radius * 0.58,
-        center.y,
-        center.x + radius * 0.58,
-        center.y,
-        svg_color(palette.key_stroke)
-    )?;
+    if let Some((_, press_rect)) = group.press {
+        for (divider_y, divider_half_width) in encoder_press_dividers(center, radius, press_rect) {
+            writeln!(
+                svg,
+                r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.2" stroke-linecap="round"/>"#,
+                center.x - divider_half_width,
+                divider_y,
+                center.x + divider_half_width,
+                divider_y,
+                svg_color(palette.key_stroke)
+            )?;
+        }
+    } else {
+        writeln!(
+            svg,
+            r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.2" stroke-linecap="round"/>"#,
+            center.x - radius * 0.58,
+            center.y,
+            center.x + radius * 0.58,
+            center.y,
+            svg_color(palette.key_stroke)
+        )?;
+    }
 
     let encoder_value_label = |kc: u16| -> String {
         export_keycode_label_with_macro_names(
@@ -1619,8 +1790,14 @@ fn write_encoder_svg(
             svg,
             &label,
             center.x,
-            center.y - radius * 0.34,
-            fit_text_size(font, &label, 10.5, radius * 1.35, 6.5),
+            center.y - radius * if group.press.is_some() { 0.52 } else { 0.34 },
+            fit_text_size(
+                font,
+                &label,
+                if group.press.is_some() { 7.4 } else { 10.5 },
+                radius * 1.35,
+                6.0,
+            ),
             if dimmed {
                 palette.dim_text
             } else {
@@ -1638,8 +1815,30 @@ fn write_encoder_svg(
             svg,
             &label,
             center.x,
-            center.y + radius * 0.38,
-            fit_text_size(font, &label, 10.5, radius * 1.35, 6.5),
+            center.y + radius * if group.press.is_some() { 0.52 } else { 0.38 },
+            fit_text_size(
+                font,
+                &label,
+                if group.press.is_some() { 7.4 } else { 10.5 },
+                radius * 1.35,
+                6.0,
+            ),
+            if dimmed {
+                palette.dim_text
+            } else {
+                palette.text
+            },
+            0.0,
+        )?;
+    }
+    if let Some((press_key_idx, _)) = group.press {
+        let (label, dimmed) = export_encoder_press_label(layout, layer_idx, press_key_idx, app);
+        svg_text_centered_rotated(
+            svg,
+            &label,
+            center.x,
+            center.y,
+            fit_text_size(font, &label, 7.4, radius * 1.45, 5.8),
             if dimmed {
                 palette.dim_text
             } else {

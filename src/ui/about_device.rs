@@ -61,24 +61,6 @@ fn device_about_description(lang: crate::i18n::Language) -> &'static str {
     }
 }
 
-fn refresh_device_data_label(lang: crate::i18n::Language) -> &'static str {
-    match lang {
-        crate::i18n::Language::Russian => "Обновить данные",
-        crate::i18n::Language::English => "Refresh device data",
-    }
-}
-
-fn refresh_device_data_tooltip(lang: crate::i18n::Language) -> &'static str {
-    match lang {
-        crate::i18n::Language::Russian => {
-            "Удалить сохраненные данные Vial и QMK, затем переподключить устройство"
-        }
-        crate::i18n::Language::English => {
-            "Discard the cached definition and QMK settings, then reconnect the device"
-        }
-    }
-}
-
 struct AboutRow {
     label: &'static str,
     tooltip: &'static str,
@@ -159,7 +141,113 @@ pub(super) fn battery_percent_text(lang: crate::i18n::Language, value: Option<u8
         .unwrap_or_else(|| not_reported(lang).to_owned())
 }
 
-fn device_about_rows(lang: crate::i18n::Language, info: &DeviceAboutInfo) -> Vec<AboutRow> {
+fn firmware_update_rows(
+    lang: crate::i18n::Language,
+    target: &FirmwareReleaseTarget,
+    state: &FirmwareUpdateCheckState,
+) -> Vec<AboutRow> {
+    let state_matches = crate::app::firmware_update_target(state) == Some(target);
+    let latest = if state_matches {
+        match state {
+            FirmwareUpdateCheckState::Ready { result, .. } => result.latest_version.clone(),
+            FirmwareUpdateCheckState::Checking { .. } => match lang {
+                crate::i18n::Language::Russian => "проверяется".to_owned(),
+                crate::i18n::Language::English => "checking".to_owned(),
+            },
+            _ => not_reported(lang).to_owned(),
+        }
+    } else {
+        not_reported(lang).to_owned()
+    };
+    let status = if !state_matches {
+        match lang {
+            crate::i18n::Language::Russian => "не проверялось".to_owned(),
+            crate::i18n::Language::English => "not checked".to_owned(),
+        }
+    } else {
+        match state {
+            FirmwareUpdateCheckState::Unsupported => match lang {
+                crate::i18n::Language::Russian => "не поддерживается".to_owned(),
+                crate::i18n::Language::English => "not supported".to_owned(),
+            },
+            FirmwareUpdateCheckState::Checking { .. } => match lang {
+                crate::i18n::Language::Russian => "проверяем GitHub Releases".to_owned(),
+                crate::i18n::Language::English => "checking GitHub Releases".to_owned(),
+            },
+            FirmwareUpdateCheckState::Ready { result, .. } => match result.relation {
+                VersionRelation::UpdateAvailable => match lang {
+                    crate::i18n::Language::Russian => "доступно обновление".to_owned(),
+                    crate::i18n::Language::English => "update available".to_owned(),
+                },
+                VersionRelation::UpToDate => match lang {
+                    crate::i18n::Language::Russian => "актуальная версия".to_owned(),
+                    crate::i18n::Language::English => "up to date".to_owned(),
+                },
+                VersionRelation::DevelopmentBuild => match lang {
+                    crate::i18n::Language::Russian => {
+                        "установленная прошивка новее опубликованной".to_owned()
+                    }
+                    crate::i18n::Language::English => {
+                        "installed firmware is newer than published".to_owned()
+                    }
+                },
+            },
+            FirmwareUpdateCheckState::Unavailable { .. } => match lang {
+                crate::i18n::Language::Russian => "опубликованный пакет не найден".to_owned(),
+                crate::i18n::Language::English => "published package not found".to_owned(),
+            },
+            FirmwareUpdateCheckState::Failed { error, .. } => match lang {
+                crate::i18n::Language::Russian => format!("ошибка: {error}"),
+                crate::i18n::Language::English => format!("error: {error}"),
+            },
+        }
+    };
+    let asset = if state_matches {
+        match state {
+            FirmwareUpdateCheckState::Ready { result, .. } => result.asset.name.clone(),
+            FirmwareUpdateCheckState::Unavailable { .. } => match lang {
+                crate::i18n::Language::Russian => "не опубликован".to_owned(),
+                crate::i18n::Language::English => "not published".to_owned(),
+            },
+            _ => not_reported(lang).to_owned(),
+        }
+    } else {
+        not_reported(lang).to_owned()
+    };
+
+    vec![
+        localized_monospace_row(
+            lang,
+            "Последняя прошивка",
+            "Latest firmware",
+            "Новая стабильная версия RMK с пакетом именно для этого устройства",
+            "Newest stable RMK release containing a package for this exact device",
+            latest,
+        ),
+        localized_row(
+            lang,
+            "Статус прошивки",
+            "Firmware status",
+            "Результат автоматической проверки обновления прошивки",
+            "Automatic firmware update check result",
+            status,
+        ),
+        localized_row(
+            lang,
+            "Пакет прошивки",
+            "Firmware package",
+            "Архив GitHub Release для модели и топологии устройства",
+            "GitHub Release archive for this device model and topology",
+            asset,
+        ),
+    ]
+}
+
+fn device_about_rows(
+    lang: crate::i18n::Language,
+    info: &DeviceAboutInfo,
+    firmware_update_check: &FirmwareUpdateCheckState,
+) -> Vec<AboutRow> {
     let firmware_version = info
         .firmware_version
         .as_deref()
@@ -333,9 +421,19 @@ fn device_about_rows(lang: crate::i18n::Language, info: &DeviceAboutInfo) -> Vec
         ),
     ];
 
+    let firmware_update_row_count = if let Some(target) = &info.firmware_update_target {
+        let update_rows = firmware_update_rows(lang, target, firmware_update_check);
+        let count = update_rows.len();
+        rows.splice(3..3, update_rows);
+        count
+    } else {
+        0
+    };
+
     if let Some(battery) = info.battery_halves {
+        let battery_row_index = 3 + firmware_update_row_count;
         rows.insert(
-            3,
+            battery_row_index,
             localized_row(
                 lang,
                 "Заряд левой половинки",
@@ -346,7 +444,7 @@ fn device_about_rows(lang: crate::i18n::Language, info: &DeviceAboutInfo) -> Vec
             ),
         );
         rows.insert(
-            4,
+            battery_row_index + 1,
             localized_row(
                 lang,
                 "Заряд правой половинки",
@@ -468,14 +566,17 @@ fn update_status_text(lang: crate::i18n::Language, update_check: &UpdateCheckSta
 
 fn update_asset_text(lang: crate::i18n::Language, update_check: &UpdateCheckState) -> String {
     match update_check {
-        UpdateCheckState::Ready(result) => result
-            .asset
-            .as_ref()
-            .map(|asset| asset.name.clone())
-            .unwrap_or_else(|| match lang {
+        UpdateCheckState::Ready(result) => match &result.asset {
+            UpdateAssetState::Available(asset) => asset.name.clone(),
+            UpdateAssetState::MetadataUnavailable => match lang {
+                crate::i18n::Language::Russian => "данные о файле недоступны".to_owned(),
+                crate::i18n::Language::English => "file metadata unavailable".to_owned(),
+            },
+            UpdateAssetState::MissingForPlatform => match lang {
                 crate::i18n::Language::Russian => "нет файла для этой ОС".to_owned(),
                 crate::i18n::Language::English => "no file for this OS".to_owned(),
-            }),
+            },
+        },
         _ => not_reported(lang).to_owned(),
     }
 }
@@ -590,7 +691,8 @@ impl EntropyApp {
         };
 
         let title = about_title(lang, &info.product);
-        let rows = device_about_rows(lang, &info);
+        let rows = device_about_rows(lang, &info, &self.firmware_update_check);
+        let firmware_update_supported = info.firmware_update_target.is_some();
 
         crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
@@ -603,33 +705,84 @@ impl EntropyApp {
                         .color(app_muted_text(dark)),
                 );
                 ui.add_space(metrics.value(24.0));
+                let bottom_reserve = if firmware_update_supported {
+                    metrics.value(54.0)
+                } else {
+                    0.0
+                };
                 let list_viewport =
-                    draw_about_rows(ui, "about_device", metrics, &rows, metrics.value(54.0));
-                let button_size = egui::vec2(metrics.value(180.0), metrics.value(32.0));
+                    draw_about_rows(ui, "about_device", metrics, &rows, bottom_reserve);
+                if !firmware_update_supported {
+                    return;
+                }
+                let firmware_checking = matches!(
+                    self.firmware_update_check,
+                    FirmwareUpdateCheckState::Checking { .. }
+                );
+                let firmware_ready = match &self.firmware_update_check {
+                    FirmwareUpdateCheckState::Ready { target, result }
+                        if info.firmware_update_target.as_ref() == Some(target) =>
+                    {
+                        Some(result.clone())
+                    }
+                    _ => None,
+                };
+                let button_size = egui::vec2(metrics.value(132.0), metrics.value(32.0));
+                let button_gap = metrics.value(8.0);
+                let button_count = 1 + 2 * usize::from(firmware_ready.is_some());
+                let actions_width = button_size.x * button_count as f32
+                    + button_gap * button_count.saturating_sub(1) as f32;
                 let actions_rect = egui::Rect::from_center_size(
                     egui::pos2(
                         list_viewport.center().x,
                         list_viewport.bottom() + metrics.value(34.0),
                     ),
-                    button_size,
+                    egui::vec2(actions_width, button_size.y),
                 );
-                #[cfg(not(target_arch = "wasm32"))]
-                let refresh_enabled = !self.hid_write_lifecycle_busy();
-                #[cfg(target_arch = "wasm32")]
-                let refresh_enabled = true;
                 crate::ui_style::allocate_ui_at_rect(ui, actions_rect, |ui| {
                     ui.set_min_size(actions_rect.size());
-                    if crate::ui_style::modern_button(
-                        ui,
-                        refresh_device_data_label(lang),
-                        button_size,
-                        refresh_enabled,
-                    )
-                    .on_hover_text(refresh_device_data_tooltip(lang))
-                    .clicked()
-                    {
-                        self.refresh_current_device_data();
-                    }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = button_gap;
+                        if crate::ui_style::modern_button(
+                            ui,
+                            check_updates_label(lang, firmware_checking),
+                            button_size,
+                            !firmware_checking,
+                        )
+                        .clicked()
+                        {
+                            self.firmware_update_check = crate::app::retry_firmware_update_check(
+                                &self.firmware_update_check,
+                            );
+                        }
+
+                        if let Some(result) = firmware_ready {
+                            if crate::ui_style::modern_button(
+                                ui,
+                                download_update_label(lang),
+                                button_size,
+                                true,
+                            )
+                            .clicked()
+                                && !crate::app::open_url_in_browser(&result.asset.url)
+                            {
+                                self.status_msg = browser_open_failed(lang).to_owned();
+                            }
+
+                            if crate::ui_style::modern_button(
+                                ui,
+                                changelog_label(lang),
+                                button_size,
+                                true,
+                            )
+                            .on_hover_text(changelog_tooltip(lang))
+                            .clicked()
+                                && !crate::app::open_url_in_browser(&result.release_url)
+                            {
+                                self.status_msg = browser_open_failed(lang).to_owned();
+                            }
+                        }
+                    });
                 });
             });
         });
@@ -664,7 +817,9 @@ impl EntropyApp {
                     UpdateCheckState::Ready(result) => Some(result.clone()),
                     _ => None,
                 };
-                let has_asset = ready.as_ref().is_some_and(|result| result.asset.is_some());
+                let has_asset = ready
+                    .as_ref()
+                    .is_some_and(|result| result.downloadable_asset().is_some());
                 let button_size = egui::vec2(metrics.value(132.0), metrics.value(32.0));
                 let button_gap = metrics.value(8.0);
                 let button_count = 1 + usize::from(has_asset) + usize::from(ready.is_some());
@@ -693,7 +848,7 @@ impl EntropyApp {
                         }
 
                         if let Some(result) = ready {
-                            if let Some(asset) = result.asset {
+                            if let Some(asset) = result.downloadable_asset() {
                                 if crate::ui_style::modern_button(
                                     ui,
                                     download_update_label(lang),
@@ -731,6 +886,16 @@ impl EntropyApp {
 mod tests {
     use super::*;
 
+    fn update_state(asset: UpdateAssetState) -> UpdateCheckState {
+        UpdateCheckState::Ready(UpdateCheckResult {
+            latest_version: "v0.3.21".to_owned(),
+            release_url: "https://github.com/ergohaven/entropy/releases/tag/v0.3.21".to_owned(),
+            platform_label: "Linux x86_64".to_owned(),
+            asset,
+            relation: VersionRelation::UpdateAvailable,
+        })
+    }
+
     #[test]
     fn macro_ext_status_explains_rmk_guard() {
         let info = DeviceAboutInfo {
@@ -742,5 +907,83 @@ mod tests {
         };
 
         assert!(macro_ext_keycodes_status(crate::i18n::Language::English, &info).contains("RMK"));
+    }
+
+    #[test]
+    fn update_asset_text_distinguishes_missing_metadata_from_missing_asset() {
+        assert_eq!(
+            update_asset_text(
+                crate::i18n::Language::English,
+                &update_state(UpdateAssetState::MetadataUnavailable)
+            ),
+            "file metadata unavailable"
+        );
+        assert_eq!(
+            update_asset_text(
+                crate::i18n::Language::English,
+                &update_state(UpdateAssetState::MissingForPlatform)
+            ),
+            "no file for this OS"
+        );
+        assert_eq!(
+            update_asset_text(
+                crate::i18n::Language::Russian,
+                &update_state(UpdateAssetState::MetadataUnavailable)
+            ),
+            "данные о файле недоступны"
+        );
+    }
+
+    #[test]
+    fn firmware_rows_are_hidden_for_unsupported_devices() {
+        let info = DeviceAboutInfo::default();
+        let rows = device_about_rows(
+            crate::i18n::Language::English,
+            &info,
+            &FirmwareUpdateCheckState::Unsupported,
+        );
+
+        assert!(!rows.iter().any(|row| row.label == "Latest firmware"));
+        assert!(!rows.iter().any(|row| row.label == "Firmware package"));
+    }
+
+    #[test]
+    fn firmware_rows_show_matching_release_package() {
+        let target = FirmwareReleaseTarget {
+            current_version: "0.1.5".to_owned(),
+            asset_prefix: "k04".to_owned(),
+        };
+        let info = DeviceAboutInfo {
+            firmware_update_target: Some(target.clone()),
+            ..Default::default()
+        };
+        let state = FirmwareUpdateCheckState::Ready {
+            target,
+            result: FirmwareUpdateCheckResult {
+                latest_version: "v0.1.6".to_owned(),
+                release_url: "https://github.com/ergohaven/rmk/releases/tag/v0.1.6".to_owned(),
+                asset: UpdateAsset {
+                    name: "k04-v0.1.6.zip".to_owned(),
+                    url: "https://github.com/ergohaven/rmk/releases/download/v0.1.6/k04-v0.1.6.zip"
+                        .to_owned(),
+                },
+                relation: VersionRelation::UpdateAvailable,
+            },
+        };
+
+        let rows = device_about_rows(crate::i18n::Language::English, &info, &state);
+
+        assert_eq!(
+            rows.iter()
+                .find(|row| row.label == "Latest firmware")
+                .map(|row| row.value.as_str()),
+            Some("v0.1.6")
+        );
+        assert_eq!(
+            rows.iter()
+                .find(|row| row.label == "Firmware package")
+                .map(|row| row.value.as_str()),
+            Some("k04-v0.1.6.zip")
+        );
     }
 }
