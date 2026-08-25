@@ -1,0 +1,65 @@
+name: Nix
+
+# The Build workflow compiles with cargo and apt dependencies, which says
+# nothing about whether the flake still evaluates or builds. This one covers
+# the Nix side: both packages, both module evaluations, and every declared
+# system's flake outputs.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: nix-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  flake:
+    name: Flake (${{ matrix.system }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-latest
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Check formatting
+        if: matrix.system == 'x86_64-linux'
+        run: nix fmt -- --ci
+
+      # Cheap and the most likely thing to break: option collisions with the
+      # Entropy module in nixpkgs, or the module quietly claiming the system
+      # input method again.
+      - name: Evaluate modules
+        run: |
+          nix build --print-build-logs --out-link result-nixos-module .#checks.${{ matrix.system }}.module-eval
+          nix build --print-build-logs --out-link result-home-manager-module .#checks.${{ matrix.system }}.home-manager-module-eval
+
+      - name: Build packages
+        run: |
+          nix build --print-build-logs --out-link result-entropy .#packages.${{ matrix.system }}.entropy
+          nix build --print-build-logs --out-link result-engine .#packages.${{ matrix.system }}.entropy-ibus-engine
+
+      - name: Check the IBus engine dependencies
+        run: ./result-engine/libexec/entropy-ibus-engine --entropy-check
+
+      - name: Flake check
+        run: nix flake check --print-build-logs

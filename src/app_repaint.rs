@@ -52,6 +52,7 @@ pub(super) fn native_repaint_interval(
     bluetooth_visible_interval: Option<std::time::Duration>,
     connect_pending: bool,
     update_check_pending: bool,
+    layout_indicator_interval: Option<std::time::Duration>,
 ) -> std::time::Duration {
     let baseline = if hidden_to_tray {
         HIDDEN_TO_TRAY_REPAINT_INTERVAL
@@ -62,11 +63,16 @@ pub(super) fn native_repaint_interval(
     let connect_interval = connect_pending.then_some(CONNECT_POLL_INTERVAL);
     let update_check_interval = update_check_pending.then_some(UPDATE_CHECK_POLL_INTERVAL);
 
-    [Some(baseline), connect_interval, update_check_interval]
-        .into_iter()
-        .flatten()
-        .min()
-        .expect("baseline repaint interval is always present")
+    [
+        Some(baseline),
+        connect_interval,
+        update_check_interval,
+        layout_indicator_interval,
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+    .expect("baseline repaint interval is always present")
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -76,7 +82,7 @@ mod tests {
     #[test]
     fn native_repaint_cadence_uses_shortest_pending_interval() {
         assert_eq!(
-            native_repaint_interval(false, None, false, false),
+            native_repaint_interval(false, None, false, false, None),
             std::time::Duration::from_millis(250)
         );
         assert_eq!(
@@ -85,36 +91,53 @@ mod tests {
                 Some(BLUETOOTH_VISIBLE_REPAINT_INTERVAL),
                 false,
                 false,
+                None,
             ),
             BLUETOOTH_VISIBLE_REPAINT_INTERVAL
         );
         assert_eq!(
-            native_repaint_interval(true, Some(BLUETOOTH_VISIBLE_REPAINT_INTERVAL), false, false,),
+            native_repaint_interval(
+                true,
+                Some(BLUETOOTH_VISIBLE_REPAINT_INTERVAL),
+                false,
+                false,
+                None,
+            ),
             std::time::Duration::from_secs(5)
         );
         assert_eq!(
-            native_repaint_interval(true, None, true, false),
+            native_repaint_interval(true, None, true, false, None),
             CONNECT_POLL_INTERVAL
         );
         assert_eq!(
-            native_repaint_interval(true, None, false, true),
+            native_repaint_interval(true, None, false, true, None),
             UPDATE_CHECK_POLL_INTERVAL
         );
         assert_eq!(
-            native_repaint_interval(true, None, true, true),
+            native_repaint_interval(true, None, true, true, None),
             UPDATE_CHECK_POLL_INTERVAL
         );
         assert_eq!(
-            native_repaint_interval(false, None, true, false),
+            native_repaint_interval(false, None, true, false, None),
             CONNECT_POLL_INTERVAL
         );
         assert_eq!(
-            native_repaint_interval(false, None, false, true),
+            native_repaint_interval(false, None, false, true, None),
             UPDATE_CHECK_POLL_INTERVAL
         );
         assert_eq!(
-            native_repaint_interval(false, None, true, true),
+            native_repaint_interval(false, None, true, true, None),
             UPDATE_CHECK_POLL_INTERVAL
+        );
+        assert_eq!(
+            native_repaint_interval(
+                true,
+                None,
+                false,
+                false,
+                Some(std::time::Duration::from_millis(80)),
+            ),
+            std::time::Duration::from_millis(80)
         );
     }
 
@@ -130,6 +153,7 @@ mod tests {
                 bluetooth_visible_repaint_interval_for_target(true, false, true),
                 false,
                 false,
+                None,
             ),
             WAYLAND_BLUETOOTH_VISIBLE_REPAINT_INTERVAL
         );
@@ -147,6 +171,7 @@ mod tests {
                 bluetooth_visible_repaint_interval_for_target(true, false, false),
                 false,
                 false,
+                None,
             ),
             VISIBLE_REPAINT_INTERVAL
         );
@@ -160,6 +185,7 @@ mod tests {
                 bluetooth_visible_repaint_interval_for_target(true, true, false),
                 false,
                 false,
+                None,
             ),
             BLUETOOTH_VISIBLE_REPAINT_INTERVAL
         );

@@ -796,6 +796,8 @@ impl EntropyApp {
         action_key: &'static str,
         undo_behavior: LayerUndoBehavior,
     ) {
+        self.drop_queued_middle_click_assignments_for_layer(layer);
+
         if self.vial_hid_background_layer_active() {
             self.pending_layer_write = Some(PendingLayerWrite {
                 layer,

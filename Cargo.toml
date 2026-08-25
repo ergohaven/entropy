@@ -1,6 +1,6 @@
 [package]
 name = "ergohaven-entropy"
-version = "0.3.2"
+version = "0.3.21-rc.1"
 edition = "2021"
 description = "Desktop app for configuring Vial-QMK and Vial-RMK programmable keyboards and input devices"
 authors = ["Ergohaven"]
@@ -36,6 +36,9 @@ eframe = { version = "0.34.3", default-features = false, features = ["accesskit"
 egui = "0.34.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+emojis = "0.9"
+twemoji-assets = { version = "=1.5.1", default-features = false, features = ["png"] }
+unicode-segmentation = "1.13"
 log = "0.4"
 env_logger = "0.11"
 flate2 = "1"
@@ -84,6 +87,9 @@ zbus = "5.16"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["Window"] }
 getrandom = { version = "0.2", features = ["js"] }
+
+[patch.crates-io]
+eframe = { path = "vendor/eframe" }
 
 [profile.release]
 opt-level = 3

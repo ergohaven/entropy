@@ -1,5 +1,32 @@
 use super::*;
 
+fn combo_picker_allows_native_actions(field: ComboPickField, capability: bool) -> bool {
+    capability && matches!(field, ComboPickField::Output)
+}
+
+fn combo_layer_labels(
+    lang: crate::i18n::Language,
+    layer_names: &[String],
+    layer_count: usize,
+) -> Vec<String> {
+    let mut labels = Vec::with_capacity(layer_count + 1);
+    labels.push(crate::i18n::tr_catalog(lang, "combo_editor.all_layers").to_owned());
+    labels.extend((0..layer_count).map(|layer| {
+        let fallback = crate::i18n::tr_catalog_format(
+            lang,
+            "combo_editor.layer_number",
+            &[("number", &layer.to_string())],
+        );
+        match layer_names.get(layer).map(|name| name.trim()) {
+            Some(name) if !name.is_empty() && name != layer.to_string() => {
+                format!("{layer}: {name}")
+            }
+            _ => fallback,
+        }
+    }));
+    labels
+}
+
 impl EntropyApp {
     pub(super) fn draw_combo_settings_page(
         &mut self,
@@ -49,10 +76,21 @@ impl EntropyApp {
     }
 
     fn open_combo_key_picker(&mut self, combo_idx: usize, field: ComboPickField) {
+        let current_output = matches!(field, ComboPickField::Output)
+            .then(|| self.combo_entries.get(combo_idx).map(|entry| entry.output))
+            .flatten();
         self.combo_pick_target = Some((combo_idx, field));
         self.keycode_picker.layer_names = self.layer_names.clone();
         self.keycode_picker
             .open_full_key_picker(crate::keycode_picker::KeycodeTab::Basic);
+        self.keycode_picker
+            .rmk_native_key_actions_allowed_for_target = combo_picker_allows_native_actions(
+            field,
+            self.keycode_picker.supports_rmk_native_combo_output,
+        );
+        if let Some(binding) = current_output {
+            self.keycode_picker.select_tab_for_binding(binding);
+        }
     }
 
     fn handle_combo_editor_input(&mut self, ctx: &egui::Context, allow_close: bool) -> bool {
@@ -135,7 +173,9 @@ impl EntropyApp {
         let selected_combo_empty = self
             .combo_entries
             .get(combo_idx)
-            .map(|entry| entry.keys.iter().all(|&k| k == 0) && entry.output == 0)
+            .map(|entry| {
+                entry.keys.iter().all(|&k| k == 0) && entry.output.is_no() && entry.layer.is_none()
+            })
             .unwrap_or(true)
             && self
                 .combo_names
@@ -200,7 +240,8 @@ impl EntropyApp {
                                                 .get(entry_idx)
                                                 .map(|entry| {
                                                     entry.keys.iter().all(|&k| k == 0)
-                                                        && entry.output == 0
+                                                        && entry.output.is_no()
+                                                        && entry.layer.is_none()
                                                 })
                                                 .unwrap_or(true)
                                                 && self
@@ -528,10 +569,10 @@ impl EntropyApp {
                     input_key_size.x,
                     |ui| {
                         let value = self.combo_entries[combo_idx].output;
-                        let button_label = if value == 0 {
+                        let button_label = if value.is_no() {
                             String::new()
                         } else {
-                            keycode_label_with_macro_names(
+                            key_binding_label_with_macro_names(
                                 value,
                                 custom,
                                 &self.layer_names,
@@ -548,7 +589,18 @@ impl EntropyApp {
                             true,
                         );
                         if !hover_label.is_empty() {
-                            resp.clone().on_hover_text(hover_label.as_str());
+                            let tooltip = key_binding_tooltip_with_macro_names(
+                                value,
+                                custom,
+                                &self.layer_names,
+                                &self.keycode_picker.macro_names,
+                                &self.keycode_picker.macro_descriptions,
+                                &self.keycode_picker.tap_dance_names,
+                            );
+                            resp.clone().on_hover_text(crate::i18n::tr_text(
+                                self.app_settings.language,
+                                &tooltip,
+                            ));
                         }
                         combo_keycap_hovered |= resp.hovered();
                         if resp.clicked_by(egui::PointerButton::Primary) {
@@ -556,14 +608,69 @@ impl EntropyApp {
                         }
                         if resp.clicked_by(egui::PointerButton::Secondary) {
                             self.secondary_click_handled = true;
-                            if value != 0 {
+                            if !value.is_no() {
                                 self.push_combo_undo();
-                                self.combo_entries[combo_idx].output = 0;
+                                self.combo_entries[combo_idx].output = Default::default();
                                 self.mark_combo_dirty();
                             }
                         }
                     },
                 );
+
+                if self.supports_rmk_combo_layers {
+                    let layer_labels = combo_layer_labels(
+                        self.app_settings.language,
+                        &self.layer_names,
+                        self.layer_count,
+                    );
+                    let selected_layer = self.combo_entries[combo_idx]
+                        .layer
+                        .filter(|layer| (*layer as usize) < self.layer_count)
+                        .map(|layer| layer as usize + 1)
+                        .unwrap_or(0);
+                    let mut picked_layer = None;
+                    crate::ui_style::settings_list_row_with_tooltip(
+                        ui,
+                        row_content_width,
+                        row_height,
+                        crate::i18n::tr_catalog(self.app_settings.language, "combo_editor.layer"),
+                        true,
+                        Some(crate::i18n::tr_catalog(
+                            self.app_settings.language,
+                            "combo_editor.layer_where_this_combo_can_activate",
+                        )),
+                        control_width,
+                        |ui| {
+                            let dropdown_id =
+                                ui.make_persistent_id(("combo_layer_dropdown", combo_idx));
+                            let (_, picked) = crate::ui_style::modern_dropdown_select_sized(
+                                ui,
+                                dropdown_id,
+                                &layer_labels,
+                                selected_layer,
+                                control_width,
+                                control_height,
+                                control_font_size,
+                            );
+                            picked_layer = picked;
+                        },
+                    );
+                    if let Some(picked) = picked_layer {
+                        let next_layer = if picked == 0 {
+                            None
+                        } else {
+                            u8::try_from(picked - 1).ok()
+                        };
+                        if self.combo_entries[combo_idx].layer != next_layer {
+                            self.combo_undo_stack.push(combo_undo_snapshot.clone());
+                            if self.combo_undo_stack.len() > 64 {
+                                self.combo_undo_stack.remove(0);
+                            }
+                            self.combo_entries[combo_idx].layer = next_layer;
+                            self.mark_combo_dirty();
+                        }
+                    }
+                }
 
                 if let Some(current_combo_term) = self.combo_term {
                     crate::ui_style::settings_list_row_with_tooltip(
@@ -665,7 +772,8 @@ impl EntropyApp {
                 ui.spacing_mut().item_spacing.x = 8.0 * scale;
                 let clear_enabled = combo_idx < self.combo_entries.len()
                     && (self.combo_entries[combo_idx].keys.iter().any(|&k| k != 0)
-                        || self.combo_entries[combo_idx].output != 0
+                        || !self.combo_entries[combo_idx].output.is_no()
+                        || self.combo_entries[combo_idx].layer.is_some()
                         || self
                             .combo_names
                             .get(combo_idx)
@@ -840,4 +948,37 @@ fn paint_combo_color_chip(
     }
     ui.painter()
         .rect(rect, 5.0, color, stroke, egui::StrokeKind::Inside);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_actions_are_available_only_for_combo_output() {
+        assert!(combo_picker_allows_native_actions(
+            ComboPickField::Output,
+            true
+        ));
+        assert!(!combo_picker_allows_native_actions(
+            ComboPickField::Trigger(0),
+            true
+        ));
+        assert!(!combo_picker_allows_native_actions(
+            ComboPickField::Output,
+            false
+        ));
+    }
+
+    #[test]
+    fn combo_layer_labels_include_all_layers_and_local_names() {
+        assert_eq!(
+            combo_layer_labels(
+                crate::i18n::Language::English,
+                &["Base".to_owned(), "1".to_owned(), "Nav".to_owned()],
+                3,
+            ),
+            vec!["All layers", "0: Base", "Layer 1", "2: Nav"]
+        );
+    }
 }

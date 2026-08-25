@@ -56,6 +56,14 @@ impl EntropyApp {
                 self.draw_typing_trainer_page(ui, ctx, content_rect);
                 false
             }
+            SettingsTab::Macros => {
+                self.draw_macro_settings_page(ui, content_rect);
+                false
+            }
+            SettingsTab::TapDance => {
+                self.draw_tap_dance_settings_page(ui, content_rect);
+                false
+            }
             SettingsTab::AutoShift => {
                 self.draw_auto_shift_settings_page(ui, content_rect, dark);
                 false
@@ -215,6 +223,47 @@ impl EntropyApp {
         self.main_menu_tab = MainMenuTab::Advanced;
     }
 
+    pub(super) fn open_macro_settings_page(&mut self) {
+        self.settings_tab = SettingsTab::Macros;
+        self.main_menu_tab = MainMenuTab::Advanced;
+        let selected = self.keycode_picker.macro_inline_selected.unwrap_or(0).min(
+            self.keycode_picker
+                .macro_count
+                .saturating_sub(1)
+                .min(u8::MAX as usize) as u8,
+        );
+        self.keycode_picker.macro_inline_selected = Some(selected);
+        if self.is_vial_locked() {
+            self.unlock_open = true;
+            self.status_msg = crate::i18n::tr_catalog(
+                self.app_settings.language,
+                "connection.keyboard_locked_edit_macros",
+            )
+            .into();
+        }
+    }
+
+    pub(super) fn open_tap_dance_settings_page(&mut self) {
+        self.settings_tab = SettingsTab::TapDance;
+        self.main_menu_tab = MainMenuTab::Advanced;
+        let selected = self.keycode_picker.tap_dance_editor_open.unwrap_or(0).min(
+            self.keycode_picker
+                .tap_dance_entries
+                .len()
+                .saturating_sub(1)
+                .min(u8::MAX as usize) as u8,
+        );
+        self.keycode_picker.tap_dance_editor_open = Some(selected);
+        if self.is_vial_locked() {
+            self.unlock_open = true;
+            self.status_msg = crate::i18n::tr_catalog(
+                self.app_settings.language,
+                "connection.keyboard_locked_edit_tap_dance",
+            )
+            .into();
+        }
+    }
+
     pub(super) fn open_layer_led_settings_page(&mut self) {
         self.settings_tab = SettingsTab::LayerLeds;
         self.main_menu_tab = MainMenuTab::Settings;
@@ -247,7 +296,7 @@ impl EntropyApp {
         ) && self.settings_tab != SettingsTab::MatrixTester
             && self.settings_tab != SettingsTab::TypingTrainer
             && !self.secondary_click_handled
-            && !self.keycode_picker.open
+            && !self.keycode_picker.has_open_modal()
             && !self.unlock_open
             && !self.vial_unlock_polling
             && !modal_or_popup_open_at_frame_start

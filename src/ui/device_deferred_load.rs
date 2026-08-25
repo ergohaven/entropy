@@ -236,9 +236,20 @@ pub(super) fn run_deferred_load(
                     Ok(DeferredLoadPayload::Macros(texts))
                 }
                 DeferredLoadSection::Combos => {
-                    let entries = (0..context.combo_count)
+                    let mut entries = (0..context.combo_count)
                         .map(|index| match hid.get_combo(index) {
-                            Ok((keys, output)) => Ok(ComboEntry { keys, output }),
+                            Ok((keys, output)) => {
+                                let layer = if context.supports_rmk_combo_layers {
+                                    hid.get_rmk_combo_layer(index)?
+                                } else {
+                                    None
+                                };
+                                Ok(ComboEntry {
+                                    keys,
+                                    output: output.into(),
+                                    layer,
+                                })
+                            }
                             Err(error) if crate::hid::is_disconnect_error(&error) => Err(error),
                             Err(error) => {
                                 log::warn!("get_combo({index}) during staged load: {error}");
@@ -246,17 +257,30 @@ pub(super) fn run_deferred_load(
                             }
                         })
                         .collect::<anyhow::Result<Vec<_>>>()?;
+                    if context.supports_rmk_native_combo_output {
+                        let native_actions = hid.get_rmk_native_dynamic_actions(
+                            context.combo_count as usize,
+                            context.tap_dance_count as usize,
+                        )?;
+                        let mut tap_dances = Vec::new();
+                        crate::rmk_native::apply_rmk_native_dynamic_actions(
+                            &mut entries,
+                            &mut tap_dances,
+                            context.combo_count as usize,
+                            &native_actions,
+                        );
+                    }
                     Ok(DeferredLoadPayload::Combos(entries))
                 }
                 DeferredLoadSection::TapDance => {
-                    let entries = (0..context.tap_dance_count)
+                    let mut entries = (0..context.tap_dance_count)
                         .map(|index| match hid.get_tap_dance(index) {
                             Ok((on_tap, on_hold, on_double_tap, on_tap_hold, tapping_term)) => {
                                 Ok(crate::keycode_picker::TapDanceEntry {
-                                    on_tap,
-                                    on_hold,
-                                    on_double_tap,
-                                    on_tap_hold,
+                                    on_tap: on_tap.into(),
+                                    on_hold: on_hold.into(),
+                                    on_double_tap: on_double_tap.into(),
+                                    on_tap_hold: on_tap_hold.into(),
                                     tapping_term,
                                 })
                             }
@@ -267,6 +291,19 @@ pub(super) fn run_deferred_load(
                             }
                         })
                         .collect::<anyhow::Result<Vec<_>>>()?;
+                    if context.supports_rmk_native_tap_dance_actions {
+                        let native_actions = hid.get_rmk_native_dynamic_actions(
+                            context.combo_count as usize,
+                            context.tap_dance_count as usize,
+                        )?;
+                        let mut combos = Vec::new();
+                        crate::rmk_native::apply_rmk_native_dynamic_actions(
+                            &mut combos,
+                            &mut entries,
+                            context.combo_count as usize,
+                            &native_actions,
+                        );
+                    }
                     Ok(DeferredLoadPayload::TapDance(entries))
                 }
                 DeferredLoadSection::KeyOverrides => {
@@ -372,6 +409,8 @@ fn settings_tab_deferred_sections(tab: SettingsTab) -> &'static [DeferredLoadSec
             DeferredLoadSection::Combos,
             DeferredLoadSection::BehaviorSettings,
         ],
+        SettingsTab::Macros => &[DeferredLoadSection::Macros],
+        SettingsTab::TapDance => &[DeferredLoadSection::TapDance],
         SettingsTab::AutoShift
         | SettingsTab::Magic
         | SettingsTab::TapHold
@@ -519,12 +558,15 @@ impl EntropyApp {
         }
 
         if self.keycode_picker.open {
-            let picker_section = match self.keycode_picker.selected_tab {
-                KeycodeTab::Macro => Some(DeferredLoadSection::Macros),
-                KeycodeTab::TapDance => Some(DeferredLoadSection::TapDance),
-                _ => None,
+            let picker_sections: &[DeferredLoadSection] = match self.keycode_picker.selected_tab {
+                KeycodeTab::Macro => &[DeferredLoadSection::Macros],
+                KeycodeTab::TapDance => &[DeferredLoadSection::TapDance],
+                KeycodeTab::Special => {
+                    &[DeferredLoadSection::Macros, DeferredLoadSection::TapDance]
+                }
+                _ => &[],
             };
-            if let Some(section) = picker_section {
+            for &section in picker_sections {
                 if matches!(
                     self.deferred_device_load.section_status(section),
                     DeferredLoadStatus::NotLoaded
@@ -596,6 +638,7 @@ impl EntropyApp {
             && self.keycode_picker.result.is_none()
             && self.editing_layer.is_none()
             && self.pending_handed_swap.is_none()
+            && self.pending_middle_click_assignments.is_empty()
             && !self.pending_layout_undo
             && !self.import_pending()
             && !self.top_dropdown_open(ctx)
@@ -766,7 +809,7 @@ impl EntropyApp {
                     .iter()
                     .map(|bytes| crate::keycode_picker::decode_macro_actions(bytes))
                     .collect();
-                self.keycode_picker.macros_dirty = false;
+                self.keycode_picker.mark_macros_clean();
                 self.deferred_device_load
                     .set_section_status(DeferredLoadSection::Macros, DeferredLoadStatus::Loaded);
             }
@@ -784,8 +827,9 @@ impl EntropyApp {
                     .iter()
                     .enumerate()
                     .filter(|(index, combo)| {
-                        combo.output != 0
+                        !combo.output.is_no()
                             || combo.keys.iter().any(|keycode| *keycode != 0)
+                            || combo.layer.is_some()
                             || self
                                 .combo_names
                                 .get(*index)
@@ -813,11 +857,23 @@ impl EntropyApp {
             }
             DeferredLoadPayload::KeyOverrides(entries) => {
                 self.key_override_entries = entries;
+                let mut invalid_modifier_triggers = 0;
+                for entry in &mut self.key_override_entries {
+                    if matches!(entry.trigger, 0x00E0..=0x00E7) && entry.options.enabled {
+                        Self::normalize_key_override_entry(entry);
+                        invalid_modifier_triggers += 1;
+                    }
+                }
                 self.key_override_names
                     .resize(self.key_override_entries.len(), String::new());
                 self.key_override_visible_count = 1;
                 self.selected_key_override = 0;
-                self.key_override_dirty = false;
+                self.key_override_dirty = invalid_modifier_triggers > 0;
+                if invalid_modifier_triggers > 0 {
+                    log::warn!(
+                        "Disabled {invalid_modifier_triggers} invalid Key Override modifier trigger(s)"
+                    );
+                }
                 self.key_override_undo_stack.clear();
                 self.deferred_device_load.set_section_status(
                     DeferredLoadSection::KeyOverrides,
@@ -1375,6 +1431,9 @@ mod tests {
             supports_rmk_native_key_actions: false,
             supports_universal_symbols: false,
             supports_universal_russian_letters: false,
+            supports_rmk_native_combo_output: false,
+            supports_rmk_native_tap_dance_actions: false,
+            supports_rmk_combo_layers: false,
         }
     }
 

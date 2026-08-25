@@ -38,12 +38,11 @@ impl EntropyApp {
                     .wrap()
                     .halign(egui::Align::Center),
                 );
-                #[cfg(not(target_os = "windows"))]
-                self.draw_text_expander_backend_hint(ui, metrics, lang, dark);
                 ui.add_space(metrics.value(10.0));
 
                 let rule_row_count = self.app_settings.text_expansion_rules.len().max(1);
-                let row_count = 4 + rule_row_count;
+                let backend_row_count = usize::from(cfg!(not(target_os = "windows")));
+                let row_count = backend_row_count + 4 + rule_row_count;
                 let list = allocate_adaptive_settings_list_viewport(
                     ui,
                     "text_expander_settings",
@@ -77,13 +76,12 @@ impl EntropyApp {
 
                 let button_size = metrics.size(126.0, 34.0);
                 let button_gap = metrics.value(10.0);
-                let actions_width = button_size.x * 2.0 + button_gap;
-                let actions_rect = egui::Rect::from_center_size(
-                    egui::pos2(
-                        list.viewport.center().x,
-                        list.viewport.bottom() + metrics.value(26.0),
-                    ),
-                    egui::vec2(actions_width, button_size.y),
+                let actions_rect = fixed_settings_action_bar_rect(
+                    list.viewport,
+                    metrics,
+                    button_size,
+                    2,
+                    button_gap,
                 );
                 crate::ui_style::allocate_ui_at_rect(ui, actions_rect, |ui| {
                     ui.horizontal(|ui| {
@@ -136,62 +134,90 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_os = "windows"))]
-    fn draw_text_expander_backend_hint(
+    pub(super) fn draw_text_expander_backend_settings_row(
         &mut self,
         ui: &mut egui::Ui,
+        content_width: f32,
+        row_height: f32,
         metrics: crate::ui_style::ResponsiveMetrics,
         lang: crate::i18n::Language,
-        dark: bool,
+        suppress_tooltips: bool,
     ) {
-        let content_width = metrics.settings_content_width();
         let button_size = metrics.size(148.0, 30.0);
-        let button_gap = metrics.value(8.0);
-        let hint_height = metrics.value(42.0);
-        ui.add_space(metrics.value(4.0));
-        let (hint_rect, _) =
-            ui.allocate_exact_size(Vec2::new(content_width, hint_height), egui::Sense::hover());
-        let label_rect = egui::Rect::from_min_max(
-            hint_rect.left_top(),
-            egui::pos2(
-                hint_rect.right() - button_size.x - button_gap,
-                hint_rect.bottom(),
-            ),
+        #[cfg(target_os = "linux")]
+        let installed = crate::linux_setup::ibus_user_installation_is_current();
+        #[cfg(not(target_os = "linux"))]
+        let installed = false;
+        #[cfg(target_os = "linux")]
+        let setup_running = self.linux_setup_task.is_some();
+        #[cfg(not(target_os = "linux"))]
+        let setup_running = false;
+
+        crate::ui_style::settings_list_row_with_tooltip(
+            ui,
+            content_width,
+            row_height,
+            crate::i18n::tr_catalog(lang, text_expander_backend_label_key()),
+            true,
+            (!suppress_tooltips).then_some(crate::i18n::tr_catalog(
+                lang,
+                text_expander_backend_hint_key(),
+            )),
+            button_size.x,
+            |ui| {
+                if crate::ui_style::modern_button(
+                    ui,
+                    crate::i18n::tr_catalog(
+                        lang,
+                        text_expander_backend_button_key(installed, setup_running),
+                    ),
+                    button_size,
+                    !installed && !setup_running,
+                )
+                .on_hover_text(crate::i18n::tr_catalog(
+                    lang,
+                    text_expander_backend_hint_key(),
+                ))
+                .clicked()
+                {
+                    #[cfg(target_os = "linux")]
+                    self.run_linux_universal_symbols_setup("linux/ibus/install-user.sh", "IBus");
+                    #[cfg(not(target_os = "linux"))]
+                    self.open_text_expander_setup_page();
+                }
+            },
         );
-        let button_rect = egui::Rect::from_center_size(
-            egui::pos2(
-                hint_rect.right() - button_size.x / 2.0,
-                hint_rect.center().y,
-            ),
-            button_size,
-        );
-        crate::ui_style::allocate_ui_at_rect(ui, label_rect, |ui| {
-            ui.centered_and_justified(|ui| {
-                ui.add_sized(
-                    label_rect.size(),
-                    egui::Label::new(
-                        RichText::new(crate::i18n::tr_catalog(
-                            lang,
-                            text_expander_backend_hint_key(),
-                        ))
-                        .size(metrics.value(11.0))
-                        .color(app_muted_text(dark)),
-                    )
-                    .wrap(),
-                );
-            });
-        });
-        crate::ui_style::allocate_ui_at_rect(ui, button_rect, |ui| {
-            if crate::ui_style::modern_button(
-                ui,
-                crate::i18n::tr_catalog(lang, "text_expander.open_backend_setup"),
-                button_size,
-                true,
-            )
-            .clicked()
-            {
-                self.open_text_expander_setup_page();
-            }
-        });
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn text_expander_backend_button_key(installed: bool, setup_running: bool) -> &'static str {
+    #[cfg(target_os = "linux")]
+    {
+        if setup_running {
+            "universal_symbols_setup.ibus_installing"
+        } else if installed {
+            "universal_symbols_setup.ibus_installed"
+        } else {
+            "universal_symbols_setup.install_ibus"
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (installed, setup_running);
+        "text_expander.open_backend_setup"
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn text_expander_backend_label_key() -> &'static str {
+    #[cfg(target_os = "linux")]
+    {
+        "universal_symbols_setup.wayland_ibus"
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        "universal_symbols_setup.current_backend"
     }
 }
 

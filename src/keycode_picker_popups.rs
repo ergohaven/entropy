@@ -86,15 +86,10 @@ fn popup_key_group_sort_key(kc: &crate::keycode::Keycode) -> usize {
     }
 }
 
-pub(super) fn is_f13_to_f24(value: u16) -> bool {
-    (0x0068..=0x0073).contains(&value)
-}
-
 pub(super) fn is_8bit_tap_key_choice(kc: &crate::keycode::Keycode) -> bool {
     kc.value != 0
         && kc.value != 0x0001
         && kc.value < 0x0100
-        && !is_f13_to_f24(kc.value)
         && !matches!(kc.value, 0x0087..=0x0094)
         && matches!(
             kc.category,
@@ -358,4 +353,21 @@ pub(super) fn show_grouped_popup_choice_buttons(
     }
 
     selected
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extended_function_keys_are_regular_popup_choices() {
+        for value in 0x0068..=0x0073 {
+            let keycode = KEYCODES
+                .iter()
+                .find(|keycode| keycode.value == value)
+                .expect("extended function key should exist in the shared catalog");
+            assert!(is_8bit_tap_key_choice(keycode));
+            assert!(is_mod_key_tap_key_choice(keycode));
+        }
+    }
 }

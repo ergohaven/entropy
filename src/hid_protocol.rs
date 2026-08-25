@@ -9,6 +9,7 @@ pub(super) const CMD_VIA_GET_KEYCODE: u8 = 0x04;
 pub(super) const CMD_VIA_SET_KEYCODE: u8 = 0x05;
 pub(super) const CMD_VIA_LIGHTING_SET_VALUE: u8 = 0x07;
 pub(super) const CMD_VIA_LIGHTING_GET_VALUE: u8 = 0x08;
+pub(super) const CMD_VIA_CUSTOM_SET_VALUE: u8 = 0x07;
 pub(super) const CMD_VIA_CUSTOM_GET_VALUE: u8 = 0x08;
 pub(super) const CMD_VIA_LIGHTING_SAVE: u8 = 0x09;
 pub(super) const CMD_VIA_GET_LAYER_COUNT: u8 = 0x11;
@@ -62,3 +63,14 @@ pub(super) const DYNAMIC_VIAL_ALT_REPEAT_KEY_GET: u8 = 0x07;
 pub(super) const DYNAMIC_VIAL_ALT_REPEAT_KEY_SET: u8 = 0x08;
 
 pub(super) const BUFFER_FETCH_CHUNK: usize = 28;
+
+/// These successful Vial replies carry only the requested value, not the
+/// encoder index or QSID. A transport therefore cannot distinguish a late
+/// reply to the previous request from the reply to the current one.
+pub(crate) fn vial_reply_is_uncorrelated(command: &[u8]) -> bool {
+    command.first() == Some(&CMD_VIA_VIAL_PREFIX)
+        && matches!(
+            command.get(1),
+            Some(&CMD_VIAL_GET_ENCODER | &CMD_VIAL_QMK_SETTINGS_GET)
+        )
+}

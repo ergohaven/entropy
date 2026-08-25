@@ -263,11 +263,21 @@ pub(crate) fn layout_physical_encoder_rect(
     )
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EncoderPressKeyRect {
+    pub(crate) encoder_idx: u8,
+    pub(crate) key_idx: usize,
+    pub(crate) press_rect: egui::Rect,
+}
+
 pub(crate) fn encoder_press_key_rects(
     layout: &KeyboardLayout,
     key_rects: &[(usize, egui::Rect)],
     encoder_group_rects: &[(u8, egui::Rect)],
-) -> Vec<(usize, egui::Rect)> {
+    explicit_press_keys: &[(usize, u8)],
+) -> Vec<EncoderPressKeyRect> {
+    let allow_geometric_match = layout_uses_combined_encoder_press(layout);
+
     let mut press_rects = Vec::new();
 
     for (encoder_idx, group_rect) in encoder_group_rects {
@@ -279,47 +289,89 @@ pub(crate) fn encoder_press_key_rects(
         for (key_idx, key_rect) in key_rects {
             if press_rects
                 .iter()
-                .any(|(assigned_key_idx, _)| assigned_key_idx == key_idx)
+                .any(|press: &EncoderPressKeyRect| press.key_idx == *key_idx)
             {
                 continue;
             }
 
             let distance = key_rect.center().distance(center);
-            let condition_matches = group_condition.is_some()
+            let explicit_match =
+                explicit_press_keys
+                    .iter()
+                    .any(|(press_key_idx, press_encoder_idx)| {
+                        press_key_idx == key_idx && press_encoder_idx == encoder_idx
+                    });
+            let condition_matches = allow_geometric_match
+                && group_condition.is_some()
                 && layout
                     .keys
                     .get(*key_idx)
                     .is_some_and(|key| key.layout_condition == group_condition);
-            if !condition_matches && distance > radius * 0.38 {
+            let preferred_match = explicit_match || condition_matches;
+            if !preferred_match && (!allow_geometric_match || distance > radius * 0.38) {
                 continue;
             }
 
             match best_key {
                 Some((_, best_condition_matches, _))
-                    if best_condition_matches && !condition_matches => {}
+                    if best_condition_matches && !preferred_match => {}
                 Some((_, best_condition_matches, best_distance))
-                    if best_condition_matches == condition_matches && distance >= best_distance => {
-                }
-                _ => best_key = Some((*key_idx, condition_matches, distance)),
+                    if best_condition_matches == preferred_match && distance >= best_distance => {}
+                _ => best_key = Some((*key_idx, preferred_match, distance)),
             }
         }
 
         if let Some((key_idx, _, _)) = best_key {
+            let anchor_center = key_rects
+                .iter()
+                .find(|(candidate_idx, _)| *candidate_idx == key_idx)
+                .map(|(_, rect)| rect.center())
+                .unwrap_or(center);
             let press_rect = egui::Rect::from_center_size(
-                center,
+                anchor_center,
                 Vec2::new(
                     (radius * 0.88).min(group_rect.width() * 0.44),
                     (radius * 0.48).min(group_rect.height() * 0.22),
                 ),
             );
-            press_rects.push((key_idx, press_rect));
+            press_rects.push(EncoderPressKeyRect {
+                encoder_idx: *encoder_idx,
+                key_idx,
+                press_rect,
+            });
         }
     }
 
     press_rects
 }
 
-fn encoder_group_layout_condition(
+pub(crate) fn encoder_group_rect_with_press(
+    encoder_idx: u8,
+    group_rect: egui::Rect,
+    press_rects: &[EncoderPressKeyRect],
+) -> egui::Rect {
+    press_rects
+        .iter()
+        .find(|press| press.encoder_idx == encoder_idx)
+        .map(|press| egui::Rect::from_center_size(press.press_rect.center(), group_rect.size()))
+        .unwrap_or(group_rect)
+}
+
+fn normalized_keyboard_name(name: &str) -> String {
+    name.chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+pub(crate) fn layout_uses_combined_encoder_press(layout: &KeyboardLayout) -> bool {
+    matches!(
+        normalized_keyboard_name(&layout.name).as_str(),
+        "ergohavenk03" | "k03" | "ergohavenimperial44" | "imperial44"
+    )
+}
+
+pub(crate) fn encoder_group_layout_condition(
     layout: &KeyboardLayout,
     encoder_idx: u8,
 ) -> Option<LayoutCondition> {
@@ -763,7 +815,9 @@ mod tests {
             option_idx: 0,
             value: 0,
         };
-        let layout = encoder_test_layout(&[None, Some(module_condition)], Some(module_condition));
+        let mut layout =
+            encoder_test_layout(&[None, Some(module_condition)], Some(module_condition));
+        layout.name = "Ergohaven K:03".to_owned();
         let group_rect =
             egui::Rect::from_center_size(egui::pos2(50.0, 50.0), egui::vec2(80.0, 80.0));
         let key_rects = vec![
@@ -777,16 +831,17 @@ mod tests {
             ),
         ];
 
-        let press_rects = encoder_press_key_rects(&layout, &key_rects, &[(0, group_rect)]);
+        let press_rects = encoder_press_key_rects(&layout, &key_rects, &[(0, group_rect)], &[]);
 
         assert_eq!(press_rects.len(), 1);
-        assert_eq!(press_rects[0].0, 1);
-        assert_eq!(press_rects[0].1.center(), group_rect.center());
+        assert_eq!(press_rects[0].key_idx, 1);
+        assert_eq!(press_rects[0].press_rect.center(), key_rects[1].1.center());
     }
 
     #[test]
     fn encoder_press_keeps_geometric_macro_pad_matching() {
-        let layout = encoder_test_layout(&[None], None);
+        let mut layout = encoder_test_layout(&[None], None);
+        layout.name = "Ergohaven Imperial44".to_owned();
         let group_rect =
             egui::Rect::from_center_size(egui::pos2(50.0, 50.0), egui::vec2(80.0, 80.0));
         let key_rects = vec![(
@@ -794,15 +849,16 @@ mod tests {
             egui::Rect::from_center_size(egui::pos2(52.0, 50.0), egui::vec2(20.0, 20.0)),
         )];
 
-        let press_rects = encoder_press_key_rects(&layout, &key_rects, &[(0, group_rect)]);
+        let press_rects = encoder_press_key_rects(&layout, &key_rects, &[(0, group_rect)], &[]);
 
         assert_eq!(press_rects.len(), 1);
-        assert_eq!(press_rects[0].0, 0);
+        assert_eq!(press_rects[0].key_idx, 0);
     }
 
     #[test]
     fn encoder_press_leaves_unrelated_distant_key_separate() {
-        let layout = encoder_test_layout(&[None], None);
+        let mut layout = encoder_test_layout(&[None], None);
+        layout.name = "Ergohaven K:03".to_owned();
         let group_rect =
             egui::Rect::from_center_size(egui::pos2(50.0, 50.0), egui::vec2(80.0, 80.0));
         let key_rects = vec![(
@@ -810,7 +866,49 @@ mod tests {
             egui::Rect::from_center_size(egui::pos2(180.0, 50.0), egui::vec2(20.0, 20.0)),
         )];
 
-        let press_rects = encoder_press_key_rects(&layout, &key_rects, &[(0, group_rect)]);
+        let press_rects = encoder_press_key_rects(&layout, &key_rects, &[(0, group_rect)], &[]);
+
+        assert!(press_rects.is_empty());
+    }
+
+    #[test]
+    fn explicit_module_press_anchors_encoder_for_other_keyboards() {
+        let module_condition = LayoutCondition {
+            option_idx: 0,
+            value: 0,
+        };
+        let layout = encoder_test_layout(&[Some(module_condition)], Some(module_condition));
+        let group_rect =
+            egui::Rect::from_center_size(egui::pos2(50.0, 50.0), egui::vec2(80.0, 80.0));
+        let key_rects = vec![(
+            0,
+            egui::Rect::from_center_size(egui::pos2(50.0, 50.0), egui::vec2(20.0, 20.0)),
+        )];
+
+        let press_rects =
+            encoder_press_key_rects(&layout, &key_rects, &[(0, group_rect)], &[(0, 0)]);
+
+        assert_eq!(press_rects.len(), 1);
+        assert_eq!(press_rects[0].encoder_idx, 0);
+        assert_eq!(press_rects[0].key_idx, 0);
+        assert_eq!(press_rects[0].press_rect.center(), key_rects[0].1.center());
+        assert_eq!(
+            encoder_group_rect_with_press(0, group_rect, &press_rects).center(),
+            key_rects[0].1.center(),
+        );
+    }
+
+    #[test]
+    fn ordinary_keyboard_keeps_nearby_key_outside_encoder() {
+        let layout = encoder_test_layout(&[None], None);
+        let group_rect =
+            egui::Rect::from_center_size(egui::pos2(50.0, 50.0), egui::vec2(80.0, 80.0));
+        let key_rects = vec![(
+            0,
+            egui::Rect::from_center_size(egui::pos2(50.0, 50.0), egui::vec2(20.0, 20.0)),
+        )];
+
+        let press_rects = encoder_press_key_rects(&layout, &key_rects, &[(0, group_rect)], &[]);
 
         assert!(press_rects.is_empty());
     }

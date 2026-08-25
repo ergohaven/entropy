@@ -309,13 +309,17 @@ fn main() -> eframe::Result<()> {
     #[cfg(target_os = "macos")]
     hid::initialize_macos_hid_on_main_thread();
 
+    let viewport = egui::ViewportBuilder::default()
+        .with_title(APP_TITLE)
+        .with_app_id(APP_ID)
+        .with_icon(app_icon::egui_icon(64))
+        .with_inner_size(initial_window_size())
+        .with_min_inner_size([800.0, 500.0]);
+    #[cfg(target_os = "windows")]
+    let viewport = viewport.with_visible(!launch_minimized);
+
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(APP_TITLE)
-            .with_app_id(APP_ID)
-            .with_icon(app_icon::egui_icon(64))
-            .with_inner_size(initial_window_size())
-            .with_min_inner_size([800.0, 500.0]),
+        viewport,
         persistence_path: Some(eframe_persistence_path()),
         centered: true,
         ..Default::default()
@@ -344,7 +348,7 @@ fn main() -> eframe::Result<()> {
             );
             fonts.font_data.insert(
                 "noto_emoji".to_owned(),
-                egui::FontData::from_static(include_bytes!("../assets/NotoEmoji-subset.ttf"))
+                egui::FontData::from_static(include_bytes!("../assets/NotoEmoji-Regular.ttf"))
                     .into(),
             );
             let prop = fonts
@@ -362,8 +366,23 @@ fn main() -> eframe::Result<()> {
             mono.push("dejavu".to_owned());
             mono.push("noto_symbols".to_owned());
             mono.push("noto_emoji".to_owned());
+            fonts.families.insert(
+                egui::FontFamily::Name("emoji_preview".into()),
+                vec![
+                    "noto_emoji".to_owned(),
+                    "noto_symbols".to_owned(),
+                    "dejavu".to_owned(),
+                ],
+            );
             cc.egui_ctx.set_fonts(fonts);
             let app = EntropyApp::new(cc);
+            #[cfg(target_os = "windows")]
+            let app = if launch_minimized {
+                app.with_start_hidden_to_tray()
+            } else {
+                app
+            };
+            #[cfg(not(target_os = "windows"))]
             if launch_minimized {
                 cc.egui_ctx
                     .send_viewport_cmd(egui::ViewportCommand::Minimized(true));

@@ -228,6 +228,43 @@ fn set_user_executable(path: &std::path::Path) {
     }
 }
 
+/// Reloads the IBus registry without touching the filesystem.
+///
+/// A declarative install (the NixOS or home-manager module, a distribution
+/// package) puts the engine in place while the running daemon still serves the
+/// registry it read at startup, so the layouts are missing until it reloads.
+/// Nothing user-local is added to IBUS_COMPONENT_PATH here: whatever registered
+/// the engine is already on it.
+#[cfg(target_os = "linux")]
+pub(crate) fn reload_ibus_registry() -> Result<(), String> {
+    if !linux_command_available("ibus") {
+        return Err("ibus is not installed".to_owned());
+    }
+    run_ibus_command("write-cache")?;
+    run_ibus_command("restart")
+}
+
+#[cfg(target_os = "linux")]
+fn run_ibus_command(arg: &str) -> Result<(), String> {
+    match std::process::Command::new("ibus").arg(arg).output() {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => {
+            let details = String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .unwrap_or_default()
+                .to_owned();
+            if details.is_empty() {
+                Err(format!("ibus {arg} failed: {}", output.status))
+            } else {
+                Err(format!("ibus {arg} failed: {details}"))
+            }
+        }
+        Err(err) => Err(format!("could not run ibus {arg}: {err}")),
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn refresh_ibus_registry() {
     if !linux_command_available("ibus") {

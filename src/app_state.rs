@@ -39,6 +39,8 @@ pub(crate) struct AppSettings {
     #[serde(default = "default_layer_hover_preview")]
     pub(crate) layer_hover_preview: bool,
     #[serde(default)]
+    pub(crate) middle_click_assigns_transparent: bool,
+    #[serde(default)]
     pub(crate) sticky_layout_window: bool,
     #[serde(default = "default_sticky_layout_always_on_top")]
     pub(crate) sticky_layout_always_on_top: bool,
@@ -168,6 +170,7 @@ impl Default for AppSettings {
             launch_minimized: false,
             show_shifted_number_symbols: default_show_shifted_number_symbols(),
             layer_hover_preview: default_layer_hover_preview(),
+            middle_click_assigns_transparent: false,
             sticky_layout_window: false,
             sticky_layout_always_on_top: default_sticky_layout_always_on_top(),
             sticky_layout_opacity: default_sticky_layout_opacity(),
@@ -218,6 +221,7 @@ mod app_settings_tests {
 
         assert!(!settings.dark_mode);
         assert!(!settings.launch_minimized);
+        assert!(!settings.middle_click_assigns_transparent);
     }
 }
 
@@ -356,6 +360,7 @@ pub(crate) struct VialFeatureSupport {
     pub(crate) layer_lock: bool,
     pub(crate) persistent_default_layer: bool,
     pub(crate) repeat_key: bool,
+    pub(crate) alt_repeat_key: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -371,6 +376,7 @@ pub(crate) struct DeviceAboutInfo {
     pub(crate) product_id: u16,
     pub(crate) path: String,
     pub(crate) firmware_version: Option<String>,
+    pub(crate) firmware_update_target: Option<FirmwareReleaseTarget>,
     pub(crate) supports_battery_halves: bool,
     pub(crate) battery_halves: Option<crate::hid::BatteryHalves>,
     pub(crate) via_protocol: u16,
@@ -522,6 +528,9 @@ pub(crate) struct DeferredDeviceLoadContext {
     pub(crate) supports_rmk_native_key_actions: bool,
     pub(crate) supports_universal_symbols: bool,
     pub(crate) supports_universal_russian_letters: bool,
+    pub(crate) supports_rmk_native_combo_output: bool,
+    pub(crate) supports_rmk_native_tap_dance_actions: bool,
+    pub(crate) supports_rmk_combo_layers: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -567,6 +576,10 @@ impl DeferredDeviceLoadContext {
             && self.supports_rmk_native_key_actions == other.supports_rmk_native_key_actions
             && self.supports_universal_symbols == other.supports_universal_symbols
             && self.supports_universal_russian_letters == other.supports_universal_russian_letters
+            && self.supports_rmk_native_combo_output == other.supports_rmk_native_combo_output
+            && self.supports_rmk_native_tap_dance_actions
+                == other.supports_rmk_native_tap_dance_actions
+            && self.supports_rmk_combo_layers == other.supports_rmk_combo_layers
     }
 }
 
@@ -956,6 +969,12 @@ pub(crate) struct ConnectResult {
     pub(crate) supports_universal_symbols: bool,
     /// Firmware implements native Russian-letter Universal Symbols actions.
     pub(crate) supports_universal_russian_letters: bool,
+    /// Firmware accepts native RMK actions as Combo outputs.
+    pub(crate) supports_rmk_native_combo_output: bool,
+    /// Firmware accepts native RMK actions in Tap Dance fields.
+    pub(crate) supports_rmk_native_tap_dance_actions: bool,
+    /// Firmware can restrict each Combo to one active layer.
+    pub(crate) supports_rmk_combo_layers: bool,
     pub(crate) macro_ext_keycodes_disabled_reason: Option<MacroExtKeycodesDisabledReason>,
     /// Tap dance entries
     pub(crate) tap_dance_entries: Vec<crate::keycode_picker::TapDanceEntry>,
@@ -1140,7 +1159,8 @@ pub(crate) fn vial_layer_retarget_base(kc: u16) -> Option<u16> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ComboEntry {
     pub(crate) keys: [u16; 4],
-    pub(crate) output: u16,
+    pub(crate) output: crate::keyboard::KeyBinding,
+    pub(crate) layer: Option<u8>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1512,8 +1532,6 @@ pub(crate) struct BluetoothProfileColorSetting {
 /// RMK wireless settings exposed by the Bluetooth settings tab in Vial.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct BluetoothSettingsState {
-    /// Sleep timeout before the keyboard enters Bluetooth sleep mode
-    pub(crate) sleep_timeout: Option<BluetoothSelectSetting>,
     /// Whether the halves show yellow/green battery charging status on their LEDs
     pub(crate) charge_indicator: Option<BluetoothBooleanSetting>,
     /// Palette color index for each firmware-supported Bluetooth profile
@@ -1524,9 +1542,7 @@ pub(crate) struct BluetoothSettingsState {
 
 impl BluetoothSettingsState {
     pub(crate) fn row_count(&self) -> usize {
-        self.sleep_timeout.is_some() as usize
-            + self.charge_indicator.is_some() as usize
-            + self.profile_colors.len()
+        self.charge_indicator.is_some() as usize + self.profile_colors.len()
     }
 }
 
@@ -1671,20 +1687,10 @@ impl ModuleSettingsGroup {
 
     pub(crate) fn selected_module_kind(&self, value: u16) -> Option<ModuleDeviceKind> {
         let field = self.module_selector_field()?;
-        let selected = field
-            .variants
-            .get(value as usize)
-            .map(|variant| ModuleDeviceKind::from_variant(variant))?;
-        if selected != ModuleDeviceKind::None {
-            return Some(selected);
-        }
-
         field
             .variants
-            .iter()
+            .get(value as usize)
             .map(|variant| ModuleDeviceKind::from_variant(variant))
-            .find(|kind| *kind != ModuleDeviceKind::None)
-            .or(Some(selected))
     }
 
     pub(crate) fn selected_pointer_mode(&self, value: u16) -> Option<PointerModeKind> {
@@ -2079,6 +2085,7 @@ pub(crate) struct LayerLedNumericSetting {
     pub(crate) width: u8,
     pub(crate) value: u16,
     pub(crate) max: u16,
+    pub(crate) variants: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2528,6 +2535,25 @@ pub(super) enum UndoAction {
     },
 }
 
+/// Middle-click assignment queued while another HID write is in flight, so
+/// rapid clicks are applied in order instead of being lost. `generation` pins
+/// the assignment to the connection it was requested on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PendingMiddleClickAssignment {
+    Key {
+        layer: usize,
+        key_idx: usize,
+        binding: crate::keyboard::KeyBinding,
+        generation: u64,
+    },
+    Encoder {
+        layer: usize,
+        encoder_visual_idx: usize,
+        keycode: u16,
+        generation: u64,
+    },
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KeyOverridePickField {
     Trigger,
@@ -2560,6 +2586,8 @@ pub(crate) enum SettingsTab {
     TextExpanderSetup,
     TextExpander,
     TypingTrainer,
+    Macros,
+    TapDance,
     AutoShift,
     Rgb,
     LayerLeds,
@@ -3833,12 +3861,24 @@ pub struct EntropyApp {
     pub(crate) pending_entlayout_import_path: Option<(std::path::PathBuf, u64)>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) pending_entsettings_import_path: Option<std::path::PathBuf>,
+    /// Cached result of scanning the IBus component directories, which the Text
+    /// Expander setup page would otherwise redo on every frame. Refreshes on
+    /// its own so a registration changed from the outside is picked up, and is
+    /// invalidated outright after any action of ours that can change it.
+    #[cfg(target_os = "linux")]
+    pub(crate) ibus_registration: crate::linux_setup::IbusRegistrationCache,
+    /// In-flight `ibus write-cache` + `ibus restart`, run off the UI thread so
+    /// a slow or wedged daemon cannot freeze the window.
+    #[cfg(target_os = "linux")]
+    pub(crate) pending_ibus_reload: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) import_progress_started_at: Option<f64>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) import_progress_title: String,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) import_progress_body: String,
+    #[cfg(target_os = "linux")]
+    pub(super) linux_setup_task: Option<LinuxSetupTask>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) connect_state: ConnectState,
     #[cfg(not(target_arch = "wasm32"))]
@@ -3915,6 +3955,8 @@ pub struct EntropyApp {
     pub(crate) secondary_click_handled: bool,
     /// Deferred left/right modifier swap, applied after Ctrl is released
     pub(crate) pending_handed_swap: Option<(usize, usize, crate::keyboard::KeyBinding)>,
+    /// Middle-click assignments waiting for the HID handle to become free.
+    pub(super) pending_middle_click_assignments: Vec<PendingMiddleClickAssignment>,
     /// Animation progress for hover layer preview (0.0 = hidden, 1.0 = fully shown)
     pub(crate) hover_layer_progress: f32,
     /// Stack of layers to return to on right-click (last = most recent)
@@ -3932,6 +3974,8 @@ pub struct EntropyApp {
     pub(crate) windows_hwnd: Option<isize>,
     #[cfg(target_os = "windows")]
     pub(crate) windows_window_hidden_to_tray: bool,
+    #[cfg(target_os = "windows")]
+    pub(crate) windows_start_hidden_to_tray_pending: bool,
     #[cfg(target_os = "macos")]
     pub(crate) macos_ns_window: Option<usize>,
     #[cfg(target_os = "macos")]
@@ -3948,6 +3992,7 @@ pub struct EntropyApp {
     pub(crate) main_menu_tab: MainMenuTab,
     pub(crate) combo_entries: Vec<ComboEntry>,
     pub(crate) combo_synced_entries: Vec<ComboEntry>,
+    pub(crate) supports_rmk_combo_layers: bool,
     pub(crate) combo_names: Vec<String>,
     pub(crate) combo_colors: Vec<u32>,
     pub(crate) selected_combo: usize,
@@ -3991,6 +4036,9 @@ pub struct EntropyApp {
     pub(crate) key_override_visible_count: usize,
     pub(crate) key_override_undo_stack: Vec<(Vec<KeyOverrideEntry>, Vec<String>, usize, usize)>,
     pub(crate) text_expander_deleted_rules: Vec<(usize, crate::text_expander::TextExpansionRule)>,
+    pub(crate) text_expander_emoji_search: String,
+    pub(crate) text_expander_emoji_group: usize,
+    pub(crate) text_expander_emoji_target: Option<(usize, usize, usize)>,
     pub(crate) typing_trainer: TypingTrainerState,
     pub(crate) typing_trainer_history_open: bool,
     pub(crate) selected_key_override: usize,
@@ -4007,6 +4055,7 @@ pub struct EntropyApp {
     pub(crate) sticky_layout_active_layer: usize,
     pub(crate) sticky_layout_last_size: Option<Vec2>,
     pub(crate) sticky_layout_resize_opacity_hold_frames: u8,
+    pub(crate) sticky_layout_viewport_events: StickyLayoutViewportEventQueue,
     pub(crate) pending_layout_indicator_open_after_unlock: bool,
     pub(crate) matrix_tester_last_poll: std::time::Instant,
     pub(crate) matrix_tester_last_lock_check: std::time::Instant,
@@ -4029,6 +4078,7 @@ pub struct EntropyApp {
     pub(crate) device_display_names: std::collections::HashMap<String, String>,
     pub(crate) device_about_info: Option<DeviceAboutInfo>,
     pub(crate) update_check: UpdateCheckState,
+    pub(crate) firmware_update_check: FirmwareUpdateCheckState,
     pub(crate) tour_state: TourState,
     pub(crate) tour_target_rects: Vec<(TourTarget, egui::Rect)>,
     /// Vial unlock dialog open

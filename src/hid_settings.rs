@@ -184,6 +184,9 @@ impl HidDevice {
             cmd[1] = CMD_VIAL_QMK_SETTINGS_QUERY;
             cmd[2..4].copy_from_slice(&cur.to_le_bytes());
             let resp = self.usb_send(&cmd)?;
+            if super::response_echoes_vial_command(&cmd, &resp) {
+                anyhow::bail!("qmk settings query unsupported by firmware");
+            }
 
             let mut next = cur;
             for chunk in resp.chunks_exact(2) {

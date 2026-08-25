@@ -467,6 +467,10 @@ impl EntropyApp {
                         self.vial_unlock_keys.clear();
                     }
                 }
+                crate::app::ensure_firmware_update_check(
+                    &mut self.firmware_update_check,
+                    r.about_info.firmware_update_target.clone(),
+                );
                 self.device_about_info = Some(r.about_info.clone());
                 if staged_bluetooth_load {
                     self.schedule_initial_battery_refresh();
@@ -491,6 +495,19 @@ impl EntropyApp {
                 self.combo_edit_revision = self.combo_edit_revision.wrapping_add(1);
                 self.combo_attempted_revision = None;
                 self.key_override_entries = r.key_override_entries.clone();
+                let mut invalid_modifier_triggers = 0;
+                for entry in &mut self.key_override_entries {
+                    if matches!(entry.trigger, 0x00E0..=0x00E7) && entry.options.enabled {
+                        Self::normalize_key_override_entry(entry);
+                        invalid_modifier_triggers += 1;
+                    }
+                }
+                if invalid_modifier_triggers > 0 {
+                    log::warn!(
+                        "Disabled {invalid_modifier_triggers} invalid Key Override modifier trigger(s)"
+                    );
+                    self.key_override_dirty = true;
+                }
                 self.alt_repeat_entries = r.alt_repeat_entries.clone();
                 self.alt_repeat_names = load_alt_repeat_names(&self.current_device_name);
                 self.alt_repeat_names
@@ -537,8 +554,9 @@ impl EntropyApp {
                     .iter()
                     .enumerate()
                     .filter(|(i, combo)| {
-                        combo.output != 0
+                        !combo.output.is_no()
                             || combo.keys.iter().any(|&k| k != 0)
+                            || combo.layer.is_some()
                             || self
                                 .combo_names
                                 .get(*i)
@@ -565,6 +583,11 @@ impl EntropyApp {
                 self.keycode_picker.supports_universal_symbols = r.supports_universal_symbols;
                 self.keycode_picker.supports_universal_russian_letters =
                     r.supports_universal_russian_letters;
+                self.keycode_picker.supports_rmk_native_combo_output =
+                    r.supports_rmk_native_combo_output;
+                self.keycode_picker.supports_rmk_native_tap_dance_actions =
+                    r.supports_rmk_native_tap_dance_actions;
+                self.supports_rmk_combo_layers = r.supports_rmk_combo_layers;
                 self.keycode_picker.macro_ext_keycodes_disabled_reason =
                     r.macro_ext_keycodes_disabled_reason;
                 // Parse macro texts into actions (Vial protocol v2+ bytecode).
@@ -616,6 +639,7 @@ impl EntropyApp {
                 self.keycode_picker.supports_auto_shift = r.supported_qmk_settings.contains(&4);
                 self.keycode_picker.supports_caps_word = r.vial_features.caps_word;
                 self.keycode_picker.supports_repeat_key = r.vial_features.repeat_key;
+                self.keycode_picker.supports_alt_repeat_key = r.vial_features.alt_repeat_key;
                 self.keycode_picker.supports_layer_lock = r.vial_features.layer_lock;
                 self.keycode_picker.supports_persistent_default_layer =
                     r.vial_features.persistent_default_layer;

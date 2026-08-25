@@ -270,55 +270,6 @@ fn save_cached_qmk_settings(cache_key: &str, context: &QmkSettingsCacheContext, 
     }
 }
 
-fn is_cached_vial_definition_for_device(file_name: &str, cache_key: &str) -> bool {
-    let Some(stem) = file_name.strip_suffix(".json") else {
-        return false;
-    };
-    let Some((device_prefix, definition_size)) = stem.rsplit_once('_') else {
-        return false;
-    };
-    let expected_prefix = format!("definition_v{VIAL_DEFINITION_CACHE_VERSION}_{cache_key}");
-
-    device_prefix == expected_prefix
-        && definition_size.len() == 8
-        && definition_size.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn clear_cached_device_data(cache_key: &str) -> Result<(), String> {
-    let cache_dir =
-        vial_cache_dir().ok_or_else(|| "device cache directory is unavailable".to_owned())?;
-    let mut paths = Vec::new();
-    for entry in std::fs::read_dir(&cache_dir)
-        .map_err(|error| format!("failed to read {}: {error}", cache_dir.display()))?
-    {
-        let entry = entry.map_err(|error| {
-            format!(
-                "failed to inspect cached device data in {}: {error}",
-                cache_dir.display()
-            )
-        })?;
-        if entry
-            .file_name()
-            .to_str()
-            .is_some_and(|name| is_cached_vial_definition_for_device(name, cache_key))
-        {
-            paths.push(entry.path());
-        }
-    }
-    paths.push(cache_dir.join(format!("qmk_settings_{cache_key}.json")));
-
-    for path in paths {
-        match std::fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(format!("failed to remove {}: {error}", path.display()));
-            }
-        }
-    }
-    Ok(())
-}
-
 fn normalize_reported_layer_count(reported_layer_count: usize) -> usize {
     reported_layer_count.max(1)
 }
@@ -512,63 +463,22 @@ fn is_rmk_vial_definition(json: &serde_json::Value) -> bool {
 
 fn macro_ext_keycodes_disabled_reason(
     json: &serde_json::Value,
+    rmk_vial_macro_ext_supported: bool,
 ) -> Option<MacroExtKeycodesDisabledReason> {
-    is_rmk_vial_definition(json)
+    (is_rmk_vial_definition(json) && !rmk_vial_macro_ext_supported)
         .then_some(MacroExtKeycodesDisabledReason::RmkVialMacroExtUnsupported)
 }
 
-fn supports_vial_macro_ext_keycodes(vial_protocol: u32, json: &serde_json::Value) -> bool {
-    vial_protocol >= 5 && macro_ext_keycodes_disabled_reason(json).is_none()
+fn supports_vial_macro_ext_keycodes(
+    vial_protocol: u32,
+    json: &serde_json::Value,
+    rmk_vial_macro_ext_supported: bool,
+) -> bool {
+    vial_protocol >= 5
+        && macro_ext_keycodes_disabled_reason(json, rmk_vial_macro_ext_supported).is_none()
 }
 
 impl EntropyApp {
-    pub(super) fn refresh_current_device_data(&mut self) {
-        let lang = self.app_settings.language;
-        if self.hid_write_lifecycle_busy() {
-            self.status_msg =
-                crate::i18n::tr_catalog(lang, "status_messages.refresh_device_data_pending_write")
-                    .to_owned();
-            return;
-        }
-        let Some(device_idx) = self.selected_device else {
-            self.status_msg =
-                crate::i18n::tr_catalog(lang, "status_messages.refresh_device_data_missing_device")
-                    .to_owned();
-            return;
-        };
-        let Some(device) = self.device_manager.devices().get(device_idx).cloned() else {
-            self.status_msg =
-                crate::i18n::tr_catalog(lang, "status_messages.refresh_device_data_missing_device")
-                    .to_owned();
-            return;
-        };
-        let Some(info) = self.device_about_info.as_ref() else {
-            self.status_msg =
-                crate::i18n::tr_catalog(lang, "status_messages.refresh_device_data_missing_info")
-                    .to_owned();
-            return;
-        };
-
-        let cache_keys = device_cache_keys(&device, info.keyboard_id);
-        for cache_key in &cache_keys {
-            if let Err(error) = clear_cached_device_data(cache_key) {
-                self.status_msg = crate::i18n::tr_catalog(
-                    lang,
-                    "status_messages.refresh_device_data_delete_failed",
-                )
-                .to_owned();
-                log::warn!("device cache refresh failed for key {cache_key}: {error}");
-                return;
-            }
-        }
-
-        log::info!(
-            "Cleared Vial definition and QMK settings cache for keys {}",
-            cache_keys.join(", ")
-        );
-        self.start_connect(device_idx);
-    }
-
     pub(super) fn start_connect(&mut self, device_idx: usize) {
         self.start_connect_with_reconnect(device_idx, None);
     }
@@ -693,7 +603,7 @@ impl EntropyApp {
             self.keycode_picker.macro_names.clear();
             self.keycode_picker.macro_descriptions.clear();
             self.keycode_picker.macro_actions.clear();
-            self.keycode_picker.macros_dirty = false;
+            self.keycode_picker.mark_macros_clean();
             self.key_override_entries.clear();
             self.key_override_names.clear();
             self.key_override_visible_count = 1;
@@ -746,7 +656,7 @@ impl EntropyApp {
                 log::info!("Vial protocol: {vial_protocol}, keyboard id: {keyboard_id:016X}");
                 let cache_keys = device_cache_keys(&dev, keyboard_id);
                 let cache_key = &cache_keys[0];
-                if ![-1i32, 9].contains(&(via_protocol as i32)) {
+                if !crate::hid::is_supported_via_protocol(via_protocol) {
                     return Err(format!("Unsupported VIA protocol version: {via_protocol}"));
                 }
                 if !matches!(vial_protocol, 0..=6) {
@@ -942,6 +852,26 @@ impl EntropyApp {
                             return Err(format!("Initial Bluetooth layer read failed: {e:#}"));
                         }
                         log::warn!("get_keymap_buffer failed: {e}");
+                        progress("Reading keymap (compatibility mode)…");
+                        let mut fallback_error = None;
+                        'layers: for layer in 0..initial_layer_count {
+                            for (key_index, key) in layout.keys.iter().enumerate() {
+                                match dev_conn.get_keycode(layer as u8, key.row, key.col) {
+                                    Ok(keycode) => {
+                                        layout.layers[layer][key_index] = keycode.into();
+                                    }
+                                    Err(error) => {
+                                        fallback_error = Some(error);
+                                        break 'layers;
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(error) = fallback_error {
+                            log::warn!("keymap compatibility read failed: {error:#}");
+                        } else {
+                            log::info!("Keymap loaded with per-key compatibility reads");
+                        }
                     }
                 }
 
@@ -952,6 +882,10 @@ impl EntropyApp {
                 let supports_rmk_native_key_actions = rmk_native_capabilities.key_actions;
                 let supports_universal_symbols = rmk_native_capabilities.universal_symbols;
                 let supports_universal_russian_letters = rmk_native_capabilities.russian_letters;
+                let supports_rmk_native_combo_output = rmk_native_capabilities.combo_output;
+                let supports_rmk_native_tap_dance_actions =
+                    rmk_native_capabilities.tap_dance_actions;
+                let supports_rmk_combo_layers = rmk_native_capabilities.combo_layers;
                 layout.live_features.layout |=
                     crate::rmk_native::supports_layout_sync(rmk_native_capabilities);
                 if supports_rmk_native_key_actions {
@@ -1126,11 +1060,12 @@ impl EntropyApp {
                     caps_word: dynamic_feature_bits & (1 << 0) != 0,
                     layer_lock: dynamic_feature_bits & (1 << 1) != 0,
                     persistent_default_layer: vial_protocol >= 5,
-                    repeat_key: reported_alt_repeat_count > 0,
+                    repeat_key: reported_alt_repeat_count > 0 || rmk_native_capabilities.repeat_key,
+                    alt_repeat_key: reported_alt_repeat_count > 0,
                 };
 
                 progress("Reading combos…");
-                let combo_entries = if staged_bluetooth_load {
+                let mut combo_entries = if staged_bluetooth_load {
                     vec![ComboEntry::default(); combo_count as usize]
                 } else {
                     let count = combo_count;
@@ -1138,7 +1073,20 @@ impl EntropyApp {
                     let mut entries = Vec::new();
                     for i in 0..count {
                         match dev_conn.get_combo(i) {
-                            Ok((keys, output)) => entries.push(ComboEntry { keys, output }),
+                            Ok((keys, output)) => {
+                                let layer = if supports_rmk_combo_layers {
+                                    dev_conn.get_rmk_combo_layer(i).map_err(|error| {
+                                        format!("RMK Combo layer {i} read failed: {error:#}")
+                                    })?
+                                } else {
+                                    None
+                                };
+                                entries.push(ComboEntry {
+                                    keys,
+                                    output: output.into(),
+                                    layer,
+                                });
+                            }
                             Err(e) => {
                                 log::warn!("get_combo({i}): {e}");
                                 entries.push(Default::default());
@@ -1203,7 +1151,7 @@ impl EntropyApp {
                 };
 
                 progress("Reading tap dance entries…");
-                let tap_dance_entries = if staged_bluetooth_load {
+                let mut tap_dance_entries = if staged_bluetooth_load {
                     vec![crate::keycode_picker::TapDanceEntry::default(); tap_dance_count as usize]
                 } else {
                     let count = tap_dance_count;
@@ -1213,10 +1161,10 @@ impl EntropyApp {
                         match dev_conn.get_tap_dance(i) {
                             Ok((tap, hold, dtap, taphold, term)) => {
                                 entries.push(crate::keycode_picker::TapDanceEntry {
-                                    on_tap: tap,
-                                    on_hold: hold,
-                                    on_double_tap: dtap,
-                                    on_tap_hold: taphold,
+                                    on_tap: tap.into(),
+                                    on_hold: hold.into(),
+                                    on_double_tap: dtap.into(),
+                                    on_tap_hold: taphold.into(),
                                     tapping_term: term,
                                 });
                             }
@@ -1228,6 +1176,26 @@ impl EntropyApp {
                     }
                     entries
                 };
+
+                if !staged_bluetooth_load
+                    && (supports_rmk_native_combo_output || supports_rmk_native_tap_dance_actions)
+                {
+                    let native_actions = dev_conn
+                        .get_rmk_native_dynamic_actions(
+                            combo_entries.len(),
+                            tap_dance_entries.len(),
+                        )
+                        .map_err(|error| {
+                            format!("RMK native dynamic-action scan failed: {error:#}")
+                        })?;
+                    let loaded = crate::rmk_native::apply_rmk_native_dynamic_actions(
+                        &mut combo_entries,
+                        &mut tap_dance_entries,
+                        combo_count as usize,
+                        &native_actions,
+                    );
+                    log::info!("Loaded {loaded} lossless RMK dynamic action(s)");
+                }
 
                 progress("Reading key overrides…");
                 let key_override_entries = if staged_bluetooth_load {
@@ -1291,9 +1259,15 @@ impl EntropyApp {
                     entries
                 };
 
-                let macro_ext_keycodes_disabled_reason = macro_ext_keycodes_disabled_reason(&json);
-                let supports_macro_ext_keycodes =
-                    supports_vial_macro_ext_keycodes(vial_protocol, &json);
+                let macro_ext_keycodes_disabled_reason = macro_ext_keycodes_disabled_reason(
+                    &json,
+                    rmk_native_capabilities.vial_macro_ext,
+                );
+                let supports_macro_ext_keycodes = supports_vial_macro_ext_keycodes(
+                    vial_protocol,
+                    &json,
+                    rmk_native_capabilities.vial_macro_ext,
+                );
                 let deferred_load = if staged_bluetooth_load {
                     let definition_fingerprint = vial_definition_fingerprint(&json)
                         .map_err(|error| format!("Layout fingerprint failed: {error}"))?;
@@ -1329,10 +1303,27 @@ impl EntropyApp {
                         supports_rmk_native_key_actions,
                         supports_universal_symbols,
                         supports_universal_russian_letters,
+                        supports_rmk_native_combo_output,
+                        supports_rmk_native_tap_dance_actions,
+                        supports_rmk_combo_layers,
                     })
                 } else {
                     DeferredDeviceLoadState::complete(layer_count)
                 };
+
+                let native_rmk_marker = supports_rmk_native_key_actions
+                    || supports_rmk_native_combo_output
+                    || supports_rmk_native_tap_dance_actions
+                    || supports_rmk_combo_layers;
+                let legacy_qube = layout.live_features.time && layout.live_features.media;
+                let firmware_update_target = crate::app::rmk_firmware_release_target(
+                    dev.vendor_id,
+                    dev.product_id,
+                    firmware_version.as_deref(),
+                    &json,
+                    legacy_qube,
+                    native_rmk_marker,
+                );
 
                 let about_info = DeviceAboutInfo {
                     manufacturer,
@@ -1341,6 +1332,7 @@ impl EntropyApp {
                     product_id: dev.product_id,
                     path: dev.path.clone(),
                     firmware_version,
+                    firmware_update_target,
                     supports_battery_halves,
                     battery_halves,
                     via_protocol,
@@ -1373,6 +1365,9 @@ impl EntropyApp {
                     supports_rmk_native_key_actions,
                     supports_universal_symbols,
                     supports_universal_russian_letters,
+                    supports_rmk_native_combo_output,
+                    supports_rmk_native_tap_dance_actions,
+                    supports_rmk_combo_layers,
                     macro_ext_keycodes_disabled_reason,
                     tap_dance_entries,
                     combo_entries,
@@ -1514,7 +1509,8 @@ mod tests {
             "productId": "0x4643"
         });
 
-        assert!(!supports_vial_macro_ext_keycodes(6, &json));
+        assert!(!supports_vial_macro_ext_keycodes(6, &json, false));
+        assert!(supports_vial_macro_ext_keycodes(6, &json, true));
     }
 
     #[test]
@@ -1525,7 +1521,7 @@ mod tests {
             "productId": "0x0001"
         });
 
-        assert!(supports_vial_macro_ext_keycodes(5, &json));
+        assert!(supports_vial_macro_ext_keycodes(5, &json, false));
     }
 
     #[test]
@@ -1642,38 +1638,6 @@ mod tests {
             cached_vial_definition_file_name("keyboard", 0x1234),
             cached_vial_definition_file_name("keyboard", 0x1235)
         );
-    }
-
-    #[test]
-    fn device_cache_refresh_matches_all_definition_sizes_for_only_one_device() {
-        assert!(is_cached_vial_definition_for_device(
-            "definition_v4_keyboard_00001234.json",
-            "keyboard"
-        ));
-        assert!(is_cached_vial_definition_for_device(
-            "definition_v4_keyboard_00005678.json",
-            "keyboard"
-        ));
-        assert!(!is_cached_vial_definition_for_device(
-            "definition_v4_other-keyboard_00001234.json",
-            "keyboard"
-        ));
-        assert!(!is_cached_vial_definition_for_device(
-            "definition_v3_keyboard_00001234.json",
-            "keyboard"
-        ));
-        assert!(!is_cached_vial_definition_for_device(
-            "definition_v4_keyboard_pro_00001234.json",
-            "keyboard"
-        ));
-        assert!(!is_cached_vial_definition_for_device(
-            "definition_v4_keyboard_0000123.json",
-            "keyboard"
-        ));
-        assert!(!is_cached_vial_definition_for_device(
-            "definition_v4_keyboard_not-hex.json",
-            "keyboard"
-        ));
     }
 
     fn cache_context(json: &serde_json::Value) -> QmkSettingsCacheContext {
