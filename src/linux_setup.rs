@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 struct BundledLinuxFile {
     path: &'static str,
@@ -33,6 +34,144 @@ const BUNDLED_LINUX_FILES: &[BundledLinuxFile] = &[
         executable: true,
     },
 ];
+
+/// Where the IBus component describing the Entropy engine is registered.
+///
+/// The two are independent: a machine can carry a declarative registration and
+/// a leftover copy from `install-user.sh` at the same time, and the setup
+/// screen has to offer removal of the latter without pretending it can touch
+/// the former.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct IbusRegistration {
+    /// Installed into the user's data directory by `install-user.sh`.
+    pub(crate) user: bool,
+    /// Registered outside the user's data directory — a distribution package or
+    /// a declarative setup such as the NixOS module. Not ours to modify.
+    pub(crate) system: bool,
+}
+
+/// Identifier the component XML carries; see linux/ibus/entropy-universal-symbols.xml.in.
+const IBUS_COMPONENT_NAME: &str = "org.freedesktop.IBus.Entropy";
+
+/// Scans the component directories. Hits the filesystem, so callers cache the
+/// result rather than asking once per frame.
+pub(crate) fn ibus_registration() -> IbusRegistration {
+    let user_dir = user_ibus_component_dir();
+    ibus_registration_in(
+        user_dir.as_deref(),
+        &system_ibus_component_dirs(
+            std::env::var_os("IBUS_COMPONENT_PATH").as_deref(),
+            std::env::var_os("XDG_DATA_DIRS").as_deref(),
+            user_dir.as_deref(),
+        ),
+    )
+}
+
+/// How long a scan result is reused before the directories are consulted
+/// again.
+///
+/// The registration is not ours alone to change: a `nixos-rebuild`, a
+/// `home-manager switch` or a package update can add or drop the system
+/// component while Entropy is running. Short enough that such a change shows
+/// up on the setup page without a restart, long enough that the page does not
+/// scan once per frame.
+pub(crate) const IBUS_REGISTRATION_MAX_AGE: Duration = Duration::from_secs(2);
+
+/// Caches [`ibus_registration`] for [`IBUS_REGISTRATION_MAX_AGE`].
+#[derive(Debug, Default)]
+pub(crate) struct IbusRegistrationCache {
+    scanned: Option<(Instant, IbusRegistration)>,
+}
+
+impl IbusRegistrationCache {
+    pub(crate) fn get(&mut self) -> IbusRegistration {
+        self.get_at(Instant::now(), ibus_registration)
+    }
+
+    /// Drops the cached value so the next [`get`](Self::get) rescans. Used for
+    /// the changes this app makes itself, which have to show up at once rather
+    /// than after the refresh window.
+    pub(crate) fn invalidate(&mut self) {
+        self.scanned = None;
+    }
+
+    fn get_at(
+        &mut self,
+        now: Instant,
+        scan: impl FnOnce() -> IbusRegistration,
+    ) -> IbusRegistration {
+        if let Some((scanned_at, registration)) = self.scanned {
+            if now.duration_since(scanned_at) < IBUS_REGISTRATION_MAX_AGE {
+                return registration;
+            }
+        }
+        let registration = scan();
+        self.scanned = Some((now, registration));
+        registration
+    }
+}
+
+fn ibus_registration_in(user_dir: Option<&Path>, system_dirs: &[PathBuf]) -> IbusRegistration {
+    IbusRegistration {
+        user: user_dir.is_some_and(dir_declares_entropy),
+        system: system_dirs.iter().any(|dir| dir_declares_entropy(dir)),
+    }
+}
+
+fn dir_declares_entropy(dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.filter_map(Result::ok).any(|entry| {
+        let path = entry.path();
+        path.extension().is_some_and(|ext| ext == "xml")
+            && std::fs::read_to_string(&path)
+                .is_ok_and(|contents| contents.contains(IBUS_COMPONENT_NAME))
+    })
+}
+
+fn user_ibus_component_dir() -> Option<PathBuf> {
+    xdg_data_home().map(|data_home| data_home.join("ibus/component"))
+}
+
+/// Mirrors the lookup IBus itself performs: IBUS_COMPONENT_PATH wins outright
+/// (ibus-with-plugins on NixOS pins it to a store path), otherwise every
+/// XDG_DATA_DIRS entry is scanned, falling back to the XDG default.
+///
+/// The user's own directory is filtered out of both: XDG_DATA_DIRS routinely
+/// carries paths inside $HOME (profile directories, for one), and a user
+/// install showing up as a system registration would hide the very action that
+/// removes it.
+fn system_ibus_component_dirs(
+    component_path: Option<&std::ffi::OsStr>,
+    data_dirs: Option<&std::ffi::OsStr>,
+    user_dir: Option<&Path>,
+) -> Vec<PathBuf> {
+    let dirs: Vec<PathBuf> = match component_path {
+        Some(paths) => std::env::split_paths(paths).collect(),
+        None => {
+            let data_dirs = data_dirs
+                .filter(|dirs| !dirs.is_empty())
+                .unwrap_or_else(|| std::ffi::OsStr::new("/usr/local/share:/usr/share"));
+            std::env::split_paths(data_dirs)
+                .map(|dir| dir.join("ibus/component"))
+                .collect()
+        }
+    };
+    dirs.into_iter()
+        .filter(|dir| Some(dir.as_path()) != user_dir)
+        .collect()
+}
+
+fn xdg_data_home() -> Option<PathBuf> {
+    std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .map(|home| home.join(".local/share"))
+        })
+}
 
 pub(crate) fn setup_script_path(script: &str) -> Option<PathBuf> {
     find_existing_resource(script).or_else(|| materialize_bundled_resource_group(script).ok())
@@ -207,5 +346,236 @@ mod tests {
         assert!(!ibus_user_installation_is_current_at(&data_home));
 
         std::fs::remove_dir_all(data_home).unwrap();
+    }
+
+    fn test_dir(name: &str) -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "entropy-linux-setup-{name}-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn write_component(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join("entropy-universal-symbols.xml"),
+            include_str!("../linux/ibus/entropy-universal-symbols.xml.in"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn registration_is_empty_without_any_component() {
+        let root = test_dir("missing");
+        let user = root.join("user");
+        let system = root.join("system");
+        std::fs::create_dir_all(&user).unwrap();
+        std::fs::create_dir_all(&system).unwrap();
+
+        assert_eq!(
+            ibus_registration_in(Some(&user), &[system]),
+            IbusRegistration {
+                user: false,
+                system: false
+            }
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn registration_reports_a_user_install() {
+        let root = test_dir("user");
+        let user = root.join("user");
+        write_component(&user);
+
+        assert_eq!(
+            ibus_registration_in(Some(&user), &[root.join("system")]),
+            IbusRegistration {
+                user: true,
+                system: false
+            }
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn registration_reports_a_system_install() {
+        let root = test_dir("system");
+        let system = root.join("system");
+        write_component(&system);
+
+        assert_eq!(
+            ibus_registration_in(Some(&root.join("user")), &[system]),
+            IbusRegistration {
+                user: false,
+                system: true
+            }
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    // Both can be present at once, and the user copy stays visible so that the
+    // uninstall action for it does not disappear.
+    #[test]
+    fn registration_reports_both_copies_independently() {
+        let root = test_dir("both");
+        let user = root.join("user");
+        let system = root.join("system");
+        write_component(&user);
+        write_component(&system);
+
+        assert_eq!(
+            ibus_registration_in(Some(&user), &[system]),
+            IbusRegistration {
+                user: true,
+                system: true
+            }
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn unrelated_components_do_not_count_as_entropy() {
+        let root = test_dir("unrelated");
+        let system = root.join("system");
+        std::fs::create_dir_all(&system).unwrap();
+        std::fs::write(
+            system.join("other.xml"),
+            "<component><name>org.freedesktop.IBus.Other</name></component>",
+        )
+        .unwrap();
+
+        assert_eq!(
+            ibus_registration_in(Some(&root.join("user")), &[system]),
+            IbusRegistration::default()
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    const SYSTEM_ONLY: IbusRegistration = IbusRegistration {
+        user: false,
+        system: true,
+    };
+
+    #[test]
+    fn a_scan_is_reused_within_the_refresh_window() {
+        let mut cache = IbusRegistrationCache::default();
+        let scans = std::cell::Cell::new(0);
+        let scan = || {
+            scans.set(scans.get() + 1);
+            IbusRegistration::default()
+        };
+
+        let start = Instant::now();
+        cache.get_at(start, scan);
+        cache.get_at(start + IBUS_REGISTRATION_MAX_AGE / 2, scan);
+
+        assert_eq!(scans.get(), 1);
+    }
+
+    // A rebuild can register or drop the system component behind Entropy's
+    // back, and the setup page has to notice: the reload action it offers only
+    // appears for a system registration.
+    #[test]
+    fn an_external_registration_change_is_picked_up_after_the_refresh_window() {
+        let mut cache = IbusRegistrationCache::default();
+        let start = Instant::now();
+
+        assert_eq!(
+            cache.get_at(start, IbusRegistration::default),
+            IbusRegistration::default()
+        );
+        // Still the cached answer, even though the component just appeared.
+        assert_eq!(
+            cache.get_at(start + IBUS_REGISTRATION_MAX_AGE / 2, || SYSTEM_ONLY),
+            IbusRegistration::default()
+        );
+
+        assert_eq!(
+            cache.get_at(start + IBUS_REGISTRATION_MAX_AGE, || SYSTEM_ONLY),
+            SYSTEM_ONLY
+        );
+        // And back again once it is removed.
+        assert_eq!(
+            cache.get_at(
+                start + IBUS_REGISTRATION_MAX_AGE * 2,
+                IbusRegistration::default
+            ),
+            IbusRegistration::default()
+        );
+    }
+
+    // Actions taken in the app cannot wait for the window to elapse.
+    #[test]
+    fn invalidating_the_cache_forces_a_rescan() {
+        let mut cache = IbusRegistrationCache::default();
+        let start = Instant::now();
+
+        cache.get_at(start, IbusRegistration::default);
+        cache.invalidate();
+
+        assert_eq!(cache.get_at(start, || SYSTEM_ONLY), SYSTEM_ONLY);
+    }
+
+    #[test]
+    fn ibus_component_path_takes_precedence_over_data_dirs() {
+        let dirs = system_ibus_component_dirs(
+            Some(std::ffi::OsStr::new("/pinned/component")),
+            Some(std::ffi::OsStr::new("/ignored")),
+            None,
+        );
+
+        assert_eq!(dirs, vec![PathBuf::from("/pinned/component")]);
+    }
+
+    #[test]
+    fn data_dirs_fall_back_to_the_xdg_default() {
+        let dirs = system_ibus_component_dirs(None, None, None);
+
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from("/usr/local/share/ibus/component"),
+                PathBuf::from("/usr/share/ibus/component"),
+            ]
+        );
+    }
+
+    // XDG_DATA_DIRS regularly contains paths inside $HOME, and IBUS_COMPONENT_PATH
+    // can be set to the user's own directory. Either way a user install must not
+    // be mistaken for a system one.
+    #[test]
+    fn the_user_directory_is_never_treated_as_a_system_one() {
+        let user = PathBuf::from("/home/someone/.local/share/ibus/component");
+
+        let from_data_dirs = system_ibus_component_dirs(
+            None,
+            Some(std::ffi::OsStr::new(
+                "/home/someone/.local/share:/usr/share",
+            )),
+            Some(&user),
+        );
+        assert_eq!(
+            from_data_dirs,
+            vec![PathBuf::from("/usr/share/ibus/component")]
+        );
+
+        let from_component_path = system_ibus_component_dirs(
+            Some(std::ffi::OsStr::new(
+                "/home/someone/.local/share/ibus/component:/usr/share/ibus/component",
+            )),
+            None,
+            Some(&user),
+        );
+        assert_eq!(
+            from_component_path,
+            vec![PathBuf::from("/usr/share/ibus/component")]
+        );
     }
 }

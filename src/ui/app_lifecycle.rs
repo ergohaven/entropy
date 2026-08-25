@@ -151,6 +151,8 @@ impl EntropyApp {
 
         self.poll_layer_write(ctx);
         self.poll_combo_write(ctx);
+        #[cfg(target_os = "linux")]
+        self.poll_ibus_reload(ctx);
         self.maybe_start_pending_layout_undo(ctx);
         self.maybe_start_pending_layer_write();
         self.maybe_start_combo_write(ctx);
