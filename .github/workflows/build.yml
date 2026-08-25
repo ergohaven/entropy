@@ -84,10 +84,9 @@ jobs:
         if: matrix.kind == 'macos'
         run: |
           cargo test --all-targets hid::tests::test_hid_skips_macos_operation_lock -- --exact
-          cargo test --all-targets app::combo_write::tests
-          cargo test --all-targets app::settings_write_queue::tests
-          cargo test --all-targets app::vial_hid_task::tests
-          cargo test --all-targets app::layer_operations::tests
+          cargo test --all-targets app::app_lifecycle::tests::combo_completion_starts_settings_queued_behind_it -- --exact
+          cargo test --all-targets app::vial_hid_task::tests::macro_write_uses_the_serialized_background_transport -- --exact
+          cargo test --all-targets app::app_lifecycle::tests::layer_completion_starts_settings_queued_behind_it -- --exact
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
