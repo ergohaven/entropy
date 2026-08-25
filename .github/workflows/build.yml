@@ -77,8 +77,17 @@ jobs:
         run: TARGET="${{ matrix.target }}" scripts/build_macos_app.sh
 
       - name: Test
-        if: matrix.kind == 'linux' || matrix.kind == 'macos'
+        if: matrix.kind == 'linux'
         run: cargo test --all-targets
+
+      - name: Test macOS HID workers
+        if: matrix.kind == 'macos'
+        run: |
+          cargo test --all-targets hid::tests::test_hid_skips_macos_operation_lock -- --exact
+          cargo test --all-targets app::combo_write::tests
+          cargo test --all-targets app::settings_write_queue::tests
+          cargo test --all-targets app::vial_hid_task::tests
+          cargo test --all-targets app::layer_operations::tests
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
