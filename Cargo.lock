@@ -1434,6 +1434,7 @@ dependencies = [
  "raw-window-handle",
  "rfd",
  "rmk-types",
+ "semver",
  "serde",
  "serde_json",
  "tray-icon",

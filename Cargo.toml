@@ -51,6 +51,7 @@ ab_glyph = "0.2"
 image = { version = "0.25", default-features = false, features = ["png"] }
 postcard = "1"
 rmk-types = { git = "https://github.com/ergohaven/rmk.git", rev = "99cdcd542600eb1a439675455997fe7cf3928600", default-features = false }
+semver = "1"
 url = "2"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

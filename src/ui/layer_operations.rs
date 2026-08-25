@@ -953,7 +953,7 @@ impl EntropyApp {
         let layer_u8 = layer as u8;
         std::thread::spawn(move || {
             #[cfg(target_os = "macos")]
-            let _hid_lock = crate::hid::macos_hid_operation_lock();
+            let _hid_lock = hid_device.macos_hid_operation_lock();
 
             let progress = run_layer_writes(
                 &key_changes,
