@@ -29,6 +29,12 @@ certificate_sha1='0123456789abcdef0123456789abcdef01234567'
 bundle_id='com.ergohaven.entropy'
 self_signed_details=$'Authority=Entropy Open Source Release Signing\nTeamIdentifier=not set'
 self_signed_requirement="designated => certificate root = H\"$certificate_sha1\" and identifier \"$bundle_id\""
+generated_requirement="$(macos_stable_designated_requirement "$certificate_sha1" "$bundle_id")"
+expected_generated_requirement="=designated => anchor = H\"$certificate_sha1\" and identifier \"$bundle_id\""
+
+if [[ "$generated_requirement" != "$expected_generated_requirement" ]]; then
+	fail "stable designated requirement generator returned an unexpected requirement"
+fi
 
 expect_failure \
 	"required stable signing accepted an ad-hoc identity" \

@@ -8,6 +8,7 @@ CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 CODESIGN_KEYCHAIN="${CODESIGN_KEYCHAIN:-}"
 MACOS_SIGNING_CERTIFICATE_SHA1="${MACOS_SIGNING_CERTIFICATE_SHA1:-}"
 REQUIRE_STABLE_SIGNING="${REQUIRE_STABLE_SIGNING:-0}"
+SKIP_CARGO_BUILD="${SKIP_CARGO_BUILD:-0}"
 MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-10.15}"
 export MACOSX_DEPLOYMENT_TARGET
 
@@ -160,7 +161,21 @@ macos_validate_stable_signing_configuration \
 	"$BUNDLE_ID"
 
 cd "$ROOT"
-cargo build "${BUILD_ARGS[@]}"
+case "$SKIP_CARGO_BUILD" in
+0)
+	cargo build "${BUILD_ARGS[@]}"
+	;;
+1)
+	if [[ ! -x "$BIN" ]]; then
+		echo "SKIP_CARGO_BUILD=1 requires a prebuilt executable at $BIN" >&2
+		exit 1
+	fi
+	;;
+*)
+	echo "SKIP_CARGO_BUILD must be 0 or 1" >&2
+	exit 1
+	;;
+esac
 validate_binary_arch
 
 rm -rf "$APP_PATH" "$ZIP_PATH" "$DMG_PATH"

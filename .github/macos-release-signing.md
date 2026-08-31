@@ -15,6 +15,8 @@ This prototype uses one project-owned self-signed code-signing certificate acros
 
 Do not replace the certificate anchor with a bundle-ID-only requirement. Any binary can copy a bundle ID; Accessibility grants make that unsafe.
 
+Before storing the signing secrets, create a repository ruleset for `v0.*` tags that restricts tag creation, updates, and deletion to trusted release maintainers and blocks force updates. The release workflow executes code from the tagged commit before using the project signing key, so branch protection alone is not sufficient.
+
 ## Create release identity
 
 Create this identity once on a secure Mac using Keychain Access > Certificate Assistant > Create a Certificate:
@@ -27,14 +29,26 @@ Create this identity once on a secure Mac using Keychain Access > Certificate As
 
 The common name must remain exact because release workflow uses it to select identity. Store encrypted `.p12` and password in maintainer-controlled offline backup. Never commit private material.
 
-Configure two GitHub Actions repository secrets:
+Configure two GitHub Actions repository secrets and one repository variable:
 
 | Secret | Value |
 | --- | --- |
 | `MACOS_CERTIFICATE_P12_BASE64` | `base64 -i entropy-release-signing.p12` output |
 | `MACOS_CERTIFICATE_PASSWORD` | `.p12` export password |
 
-Release workflow imports identity into a temporary keychain, derives certificate hash, embeds an explicit requirement containing that certificate plus `com.ergohaven.entropy`, signs app, and rejects ad-hoc or mismatched output. DMG is not notarized. Shipped requirement does not contain `anchor trusted`; users do not install or trust this certificate.
+| Variable | Value |
+| --- | --- |
+| `MACOS_SIGNING_CERTIFICATE_SHA1` | Approved 40-character SHA-1 fingerprint of the signing certificate, without colons |
+
+Derive the public fingerprint from the exported identity, verify it against the certificate shown in Keychain Access, and store the result as the repository variable:
+
+```bash
+openssl pkcs12 -in entropy-release-signing.p12 -nokeys |
+  openssl x509 -noout -fingerprint -sha1 |
+  sed 's/^.*=//; s/://g'
+```
+
+Release workflow builds before loading signing credentials, imports identity into a temporary keychain restricted to `/usr/bin/codesign`, verifies its certificate hash against the approved repository variable, embeds an explicit requirement containing that certificate plus `com.ergohaven.entropy`, signs app, and rejects ad-hoc or mismatched output. DMG is not notarized. Shipped requirement does not contain `anchor trusted`; users do not install or trust this certificate.
 
 ## Automated proof
 

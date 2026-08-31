@@ -45,18 +45,53 @@ jobs:
         if: matrix.kind == 'macos'
         run: rustup target add ${{ matrix.target }}
 
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libhidapi-dev \
+            libudev-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libssl-dev \
+            libgtk-3-dev
+
+      - name: Build
+        if: matrix.kind == 'windows'
+        run: cargo build --release
+
+      - name: Build macOS binary
+        if: matrix.kind == 'macos'
+        shell: bash
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '10.15'
+        run: cargo build --release --target "${{ matrix.target }}"
+
       - name: Import macOS self-signed release identity
         if: matrix.kind == 'macos'
         shell: bash
         env:
           CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-          MACOS_SIGNING_IDENTITY: Entropy Open Source Release Signing
+          EXPECTED_MACOS_SIGNING_CERTIFICATE_SHA1: ${{ vars.MACOS_SIGNING_CERTIFICATE_SHA1 }}
         run: |
           umask 077
           if [[ -z "$CERTIFICATE_P12_BASE64" ]] ||
             [[ -z "$MACOS_CERTIFICATE_PASSWORD" ]]; then
             echo "macOS stable signing secrets are not configured" >&2
+            exit 1
+          fi
+
+          expected_certificate_sha1="$(
+            printf '%s' "$EXPECTED_MACOS_SIGNING_CERTIFICATE_SHA1" |
+              tr -d '[:space:]:' |
+              tr '[:lower:]' '[:upper:]'
+          )"
+          if [[ ! "$expected_certificate_sha1" =~ ^[[:xdigit:]]{40}$ ]]; then
+            echo "MACOS_SIGNING_CERTIFICATE_SHA1 must be a 40-character SHA-1 fingerprint" >&2
             exit 1
           fi
 
@@ -72,7 +107,7 @@ jobs:
           security unlock-keychain -p "$keychain_password" "$keychain_path"
           security import "$certificate_path" \
             -P "$MACOS_CERTIFICATE_PASSWORD" \
-            -A \
+            -T /usr/bin/codesign \
             -f pkcs12 \
             -k "$keychain_path"
           security set-key-partition-list \
@@ -93,31 +128,18 @@ jobs:
               -noout \
               -fingerprint \
               -sha1 |
-              sed 's/^.*=//; s/://g'
+              sed 's/^.*=//; s/://g' |
+              tr '[:lower:]' '[:upper:]'
           )"
           if [[ ! "$certificate_sha1" =~ ^[[:xdigit:]]{40}$ ]]; then
             echo "Could not derive macOS signing certificate SHA-1" >&2
             exit 1
           fi
+          if [[ "$certificate_sha1" != "$expected_certificate_sha1" ]]; then
+            echo "Configured macOS signing certificate does not match the approved fingerprint" >&2
+            exit 1
+          fi
           echo "MACOS_SIGNING_CERTIFICATE_SHA1=$certificate_sha1" >> "$GITHUB_ENV"
-
-      - name: Install Linux dependencies
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libhidapi-dev \
-            libudev-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libxkbcommon-dev \
-            libssl-dev \
-            libgtk-3-dev
-
-      - name: Build
-        if: matrix.kind == 'windows'
-        run: cargo build --release
 
       - name: Package Linux artifact
         if: matrix.kind == 'linux'
@@ -141,6 +163,7 @@ jobs:
           CODESIGN_IDENTITY: Entropy Open Source Release Signing
           CODESIGN_KEYCHAIN: ${{ runner.temp }}/entropy-signing.keychain-db
           REQUIRE_STABLE_SIGNING: '1'
+          SKIP_CARGO_BUILD: '1'
         run: |
           TARGET="${{ matrix.target }}" scripts/build_macos_app.sh
 
@@ -203,7 +226,7 @@ jobs:
           printf '%s\n' '- Linux: download the `.AppImage`, make it executable, and run it.' >> RELEASE_NOTES.md
           printf '%s\n' '- Windows: download and run the portable `.exe`.' >> RELEASE_NOTES.md
           printf '%s\n' '- macOS: download the project-signed, non-notarized `.dmg` for your Mac (`arm64` for Apple Silicon, `x86_64` for Intel), then drag Entropy to Applications. macOS may require Privacy & Security > Open Anyway.' >> RELEASE_NOTES.md
-          printf '%s\n' '- When upgrading from Entropy v0.2.0 or earlier, remove old Entropy entries from Accessibility and Input Monitoring, then grant both permissions once for the project-signed app. Later builds signed with the same project key are intended to preserve this identity.' >> RELEASE_NOTES.md
+          printf '%s\n' '- When upgrading from an earlier unsigned Entropy release, remove old Entropy entries from Accessibility and Input Monitoring, then grant both permissions once for the project-signed app. Later builds signed with the same project key are intended to preserve this identity.' >> RELEASE_NOTES.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
