@@ -49,7 +49,7 @@ security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
 security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 security import "$TMP_DIR/identity.p12" \
 	-P "$P12_PASSWORD" \
-	-A \
+	-T /usr/bin/codesign \
 	-f pkcs12 \
 	-k "$KEYCHAIN_PATH" >/dev/null
 security set-key-partition-list \
