@@ -515,6 +515,7 @@ pub const KEYCODES: &[Keycode] = &[
     Keycode { value: 0x7C73, name: "QK_CAPS_WORD_TOGGLE", label: "Caps\nWord",   category: KeycodeCategory::Special },
     Keycode { value: 0x7C79, name: "QK_REPEAT_KEY",       label: "Repeat",       category: KeycodeCategory::Special },
     Keycode { value: 0x7C7A, name: "QK_ALT_REPEAT_KEY",   label: "Alt\nRepeat",  category: KeycodeCategory::Special },
+    Keycode { value: 0x7C7B, name: "QK_LAYER_LOCK",       label: "Layer\nLock",  category: KeycodeCategory::Special },
     // RGB Light
     Keycode { value: 0x7820, name: "RGB_TOG",  label: "RGB\nTog",  category: KeycodeCategory::Special },
     Keycode { value: 0x7821, name: "RGB_MOD",  label: "RGB\nMod",  category: KeycodeCategory::Special },
@@ -1401,6 +1402,7 @@ fn simple_key_tooltip(kc: &Keycode) -> String {
         "QK_CAPS_WORD_TOGGLE" => "Capitalizes until end of current word",
         "QK_REPEAT_KEY"       => "Repeats the last pressed key",
         "QK_ALT_REPEAT_KEY"   => "Alt repeats the last pressed key",
+        "QK_LAYER_LOCK"       => "Layer Lock — locks or unlocks the highest active layer",
         // RGB
         "RGB_TOG"  => "RGB lighting — toggle on/off",
         "RGB_MOD"  => "RGB lighting — next animation mode",
@@ -1439,6 +1441,27 @@ mod tests {
     #[test]
     fn macos_gui_legends_use_cmd_text() {
         assert_eq!(gui_name_for_target_os("macos"), "Cmd");
+    }
+
+    #[test]
+    fn layer_lock_uses_a_readable_keycap_label() {
+        assert_eq!(
+            keycode_label_with_names_and_layout(
+                0x7C7B,
+                &[],
+                &[],
+                KeyLegendLayout::English,
+            ),
+            "Layer\nLock"
+        );
+    }
+
+    #[test]
+    fn layer_lock_tooltip_explains_what_it_toggles() {
+        assert_eq!(
+            keycode_tooltip(0x7C7B, &[], &[]),
+            "Layer Lock — locks or unlocks the highest active layer"
+        );
     }
 
     #[test]
