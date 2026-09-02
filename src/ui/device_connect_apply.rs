@@ -477,7 +477,6 @@ impl EntropyApp {
                 } else {
                     self.schedule_battery_refresh_for_result(r.about_info.battery_halves);
                 }
-                self.matrix_tester_rmk_byte_order = self.current_device_is_likely_rmk();
                 self.current_encoder_visibility_id =
                     encoder_visibility_id(&r.device_name, r.keyboard_id);
                 if let Some(dev) = self

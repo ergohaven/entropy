@@ -27,7 +27,6 @@ pub(super) enum VialHidOperation {
     Matrix {
         rows: usize,
         cols: usize,
-        rmk_byte_order: bool,
         remember_ever_pressed: bool,
     },
     BatteryRefresh,
@@ -125,13 +124,8 @@ fn run_vial_hid_operation(
             hid.lock()?;
             Ok(VialHidOutcome::Locked)
         }
-        VialHidOperation::Matrix {
-            rows,
-            cols,
-            rmk_byte_order,
-            ..
-        } => hid
-            .get_switch_matrix_with_rmk_byte_order(rows, cols, rmk_byte_order)
+        VialHidOperation::Matrix { rows, cols, .. } => hid
+            .get_switch_matrix(rows, cols)
             .map(VialHidOutcome::Matrix),
         VialHidOperation::BatteryRefresh => hid.get_battery_halves().map(VialHidOutcome::Battery),
         VialHidOperation::KeyWrite {
@@ -333,7 +327,6 @@ impl EntropyApp {
             VialHidOperation::Matrix {
                 rows,
                 cols,
-                rmk_byte_order: self.matrix_tester_rmk_byte_order,
                 remember_ever_pressed,
             },
         )
@@ -840,7 +833,6 @@ mod tests {
             VialHidOperation::Matrix {
                 rows: 2,
                 cols: 3,
-                rmk_byte_order: true,
                 remember_ever_pressed: true,
             },
         )

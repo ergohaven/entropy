@@ -100,24 +100,22 @@ pub(crate) fn parse_tap_dance_response(resp: &[u8]) -> Result<(u16, u16, u16, u1
     ))
 }
 
-fn parse_switch_matrix_payload_inner(
-    data: &[u8],
-    rows: usize,
-    cols: usize,
-    reverse_row_bytes: bool,
-) -> Vec<bool> {
+/// Decode the VIA `id_switch_matrix_state` payload into a row-major pressed map.
+///
+/// Each matrix row is packed into `ceil(cols / 8)` bytes with the most significant
+/// byte first: the first byte of a row carries its highest columns and the last
+/// byte carries columns 0-7. QMK (`quantum/via.c`), Vial GUI and RMK all emit
+/// and expect this wire order, so it does not depend on the firmware family.
+/// Within the chunk `k = col / 8`, bit `n` is column `8 * k + n`; the chunks
+/// themselves are serialised in descending order.
+pub(crate) fn parse_switch_matrix_payload(data: &[u8], rows: usize, cols: usize) -> Vec<bool> {
     let total = rows * cols;
     let bytes_per_row = cols.div_ceil(8);
     let mut pressed = vec![false; total];
 
     for row in 0..rows {
         for col in 0..cols {
-            let col_byte = col / 8;
-            let row_byte = if reverse_row_bytes {
-                bytes_per_row.saturating_sub(1).saturating_sub(col_byte)
-            } else {
-                col_byte
-            };
+            let row_byte = bytes_per_row - 1 - col / 8;
             let byte_idx = row * bytes_per_row + row_byte;
             let bit_idx = col % 8;
             if byte_idx < data.len() {
@@ -127,15 +125,6 @@ fn parse_switch_matrix_payload_inner(
     }
 
     pressed
-}
-
-pub(crate) fn parse_switch_matrix_payload(data: &[u8], rows: usize, cols: usize) -> Vec<bool> {
-    parse_switch_matrix_payload_inner(data, rows, cols, false)
-}
-
-pub(crate) fn parse_rmk_switch_matrix_payload(data: &[u8], rows: usize, cols: usize) -> Vec<bool> {
-    // RMK MatrixState::read_all emits each row's byte chunks in reverse order.
-    parse_switch_matrix_payload_inner(data, rows, cols, true)
 }
 
 pub(crate) fn parse_vialrgb_supported_effects_payload(
@@ -273,8 +262,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_rmk_switch_matrix_reversed_row_bytes() {
-        let pressed = parse_rmk_switch_matrix_payload(
+    fn parses_switch_matrix_with_msb_row_byte_first() {
+        let pressed = parse_switch_matrix_payload(
             &[0b0000_0010, 0b0000_0100, 0b0000_0001, 0b0000_0000],
             2,
             12,
@@ -283,6 +272,30 @@ mod tests {
         assert!(pressed[9]);
         assert!(pressed[20]);
         assert_eq!(pressed.iter().filter(|&&pressed| pressed).count(), 3);
+    }
+
+    #[test]
+    fn parses_thirteen_column_switch_matrix_without_column_shift() {
+        // 13 columns use two bytes per row: [columns 8-12, columns 0-7].
+        // Row 0: column 0 pressed. Row 1: column 8 pressed. Row 2: column 5 pressed.
+        let pressed = parse_switch_matrix_payload(
+            &[
+                0b0000_0000,
+                0b0000_0001,
+                0b0000_0001,
+                0b0000_0000,
+                0b0000_0000,
+                0b0010_0000,
+            ],
+            3,
+            13,
+        );
+        let pressed_cells: Vec<usize> = pressed
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, &is_pressed)| is_pressed.then_some(idx))
+            .collect();
+        assert_eq!(pressed_cells, vec![0, 13 + 8, 26 + 5]);
     }
 
     #[test]

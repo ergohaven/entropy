@@ -249,7 +249,6 @@ impl EntropyApp {
         self.layer_led_settings = LayerLedSettingsState::default();
         self.rgb_settings = RgbSettingsState::default();
         self.layout_options_value = None;
-        self.matrix_tester_rmk_byte_order = false;
         self.sticky_layout_prev_pressed.clear();
         self.sticky_layout_pressed_key_layers.clear();
         self.sticky_layout_toggled_layers.clear();

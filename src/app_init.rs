@@ -185,7 +185,6 @@ impl EntropyApp {
             key_override_pick_target: None,
             matrix_tester_pressed: Vec::new(),
             matrix_tester_ever_pressed: Vec::new(),
-            matrix_tester_rmk_byte_order: false,
             sticky_layout_prev_pressed: Vec::new(),
             sticky_layout_pressed_key_layers: Vec::new(),
             sticky_layout_toggled_layers: Vec::new(),
