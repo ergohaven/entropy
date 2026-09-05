@@ -162,18 +162,33 @@ impl EntropyApp {
             self.prompt_if_vial_locked_for_matrix_poll();
         }
 
-        let total_keys = layout.keys.len();
-        let tested_count = layout
-            .keys
-            .iter()
-            .filter(|key| {
-                let idx = key.row as usize * layout.cols + key.col as usize;
-                self.matrix_tester_ever_pressed
-                    .get(idx)
-                    .copied()
-                    .unwrap_or(false)
-            })
-            .count();
+        // Only the caps of the currently selected physical configuration exist
+        // on the board: alternative layout-option variants share matrix
+        // positions and must not be drawn or counted on top of each other, and
+        // layout_key_visible() also hides a module-owned encoder press key when
+        // its module is set to something other than an encoder.
+        let mut total_keys = 0;
+        let mut tested_count = 0;
+        for key in &layout.keys {
+            if !Self::layout_key_visible(
+                &self.module_settings,
+                layout,
+                key,
+                self.layout_options_value,
+            ) {
+                continue;
+            }
+            total_keys += 1;
+            let idx = key.row as usize * layout.cols + key.col as usize;
+            if self
+                .matrix_tester_ever_pressed
+                .get(idx)
+                .copied()
+                .unwrap_or(false)
+            {
+                tested_count += 1;
+            }
+        }
 
         crate::ui_style::allocate_ui_at_rect(
             ui,
@@ -301,7 +316,15 @@ impl EntropyApp {
         // `content_rect`, which already sits below the top chrome. Fit the board
         // into the rectangle left between them instead of the whole panel, so the
         // caps never cover the header or the "Tested" button.
-        let geometry = layout_geometry_with_reserved(
+        let key_visible = |key: &crate::keyboard::PhysicalKey| {
+            Self::layout_key_visible(
+                &self.module_settings,
+                layout,
+                key,
+                self.layout_options_value,
+            )
+        };
+        let geometry = layout_geometry_with_reserved_and_filter(
             ui.ctx(),
             layout,
             board_rect,
@@ -310,6 +333,8 @@ impl EntropyApp {
             0.0,
             LAYOUT_FIT_MARGIN,
             None,
+            key_visible,
+            |_| false,
         );
 
         let hint_color = if dark {
@@ -329,6 +354,9 @@ impl EntropyApp {
         );
 
         for key in &layout.keys {
+            if !key_visible(key) {
+                continue;
+            }
             let matrix_idx = key.row as usize * layout.cols + key.col as usize;
             let is_pressed = self
                 .matrix_tester_pressed
