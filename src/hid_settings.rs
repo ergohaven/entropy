@@ -1,7 +1,4 @@
-use super::hid_parse::{
-    parse_rmk_switch_matrix_payload, parse_switch_matrix_payload,
-    parse_vialrgb_supported_effects_payload,
-};
+use super::hid_parse::{parse_switch_matrix_payload, parse_vialrgb_supported_effects_payload};
 use super::hid_protocol::*;
 use super::HidDevice;
 
@@ -405,20 +402,11 @@ impl HidDevice {
         Ok(())
     }
 
-    pub fn get_switch_matrix_with_rmk_byte_order(
-        &self,
-        rows: usize,
-        cols: usize,
-        rmk_byte_order: bool,
-    ) -> Result<Vec<bool>> {
+    pub fn get_switch_matrix(&self, rows: usize, cols: usize) -> Result<Vec<bool>> {
         let resp = self.usb_send(&[CMD_VIA_GET_KEYBOARD_VALUE, VIA_SWITCH_MATRIX_STATE])?;
-        // Matrix data is packed row-by-row, with each row padded to whole bytes.
-        // QMK sends row bytes low-to-high; RMK reverses byte order inside each row.
-        Ok(if rmk_byte_order {
-            parse_rmk_switch_matrix_payload(&resp[2..], rows, cols)
-        } else {
-            parse_switch_matrix_payload(&resp[2..], rows, cols)
-        })
+        // Matrix data is packed row-by-row, each row padded to whole bytes with the
+        // most significant byte first (same for QMK and RMK firmware).
+        Ok(parse_switch_matrix_payload(&resp[2..], rows, cols))
     }
 }
 
