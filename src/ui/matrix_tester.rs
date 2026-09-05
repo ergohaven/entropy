@@ -297,18 +297,19 @@ impl EntropyApp {
             return;
         }
 
-        let viewport = egui::Rect::from_min_max(
-            ui.min_rect().min,
-            egui::pos2(
-                ui.min_rect().left() + ui.available_size().x,
-                ui.max_rect().bottom(),
-            ),
-        );
-        let geometry = layout_geometry(
+        // The header, the status button and the bottom hint are laid out from
+        // `content_rect`, which already sits below the top chrome. Fit the board
+        // into the rectangle left between them instead of the whole panel, so the
+        // caps never cover the header or the "Tested" button.
+        let geometry = layout_geometry_with_reserved(
             ui.ctx(),
             layout,
-            viewport,
+            board_rect,
             clamp_ui_scale(self.app_settings.ui_scale),
+            0.0,
+            0.0,
+            LAYOUT_FIT_MARGIN,
+            None,
         );
 
         let hint_color = if dark {

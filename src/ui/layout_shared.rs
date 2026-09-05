@@ -20,24 +20,6 @@ pub(crate) fn responsive_layout_max_scale(ctx: &egui::Context, viewport: egui::R
     1.0 + 0.35 * t
 }
 
-pub(crate) fn layout_geometry(
-    ctx: &egui::Context,
-    layout: &KeyboardLayout,
-    viewport: egui::Rect,
-    ui_scale: f32,
-) -> LayoutGeometry {
-    layout_geometry_with_reserved(
-        ctx,
-        layout,
-        viewport,
-        ui_scale,
-        LAYOUT_TOP_RESERVED_H,
-        LAYOUT_BOTTOM_RESERVED_H,
-        LAYOUT_FIT_MARGIN,
-        None,
-    )
-}
-
 pub(crate) fn layout_geometry_with_reserved(
     ctx: &egui::Context,
     layout: &KeyboardLayout,
