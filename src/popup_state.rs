@@ -8,6 +8,7 @@ pub enum PopupKey {
     PickLayerWindow,
     PendingKeyPickWindow,
     TdKeyPickWindow,
+    AdvancedSlotWindow,
 }
 
 #[derive(Debug, Default, Clone)]

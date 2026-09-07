@@ -28,62 +28,14 @@ except Exception as exc:  # pragma: no cover - depends on distro packages
 ENGINE_DESCRIPTION = "Text expansion for Ergohaven keyboards"
 ENGINE_DESCRIPTORS = (
     {
-        "name": "entropy-universal-symbols",
-        "longname": "Entropy Text Expander",
-        "language": "x-other",
-        "layout": "default",
-    },
-    {
         "name": "entropy-universal-symbols-us",
-        "longname": "Entropy Text Expander EN",
+        "longname": "English (Entropy)",
         "language": "en",
         "layout": "us",
     },
     {
-        "name": "entropy-universal-symbols-gb",
-        "longname": "Entropy Text Expander EN UK",
-        "language": "en",
-        "layout": "gb",
-    },
-    {
-        "name": "entropy-universal-symbols-de",
-        "longname": "Entropy Text Expander DE",
-        "language": "de",
-        "layout": "de",
-    },
-    {
-        "name": "entropy-universal-symbols-fr",
-        "longname": "Entropy Text Expander FR",
-        "language": "fr",
-        "layout": "fr",
-    },
-    {
-        "name": "entropy-universal-symbols-es",
-        "longname": "Entropy Text Expander ES",
-        "language": "es",
-        "layout": "es",
-    },
-    {
-        "name": "entropy-universal-symbols-it",
-        "longname": "Entropy Text Expander IT",
-        "language": "it",
-        "layout": "it",
-    },
-    {
-        "name": "entropy-universal-symbols-pt",
-        "longname": "Entropy Text Expander PT",
-        "language": "pt",
-        "layout": "pt",
-    },
-    {
-        "name": "entropy-universal-symbols-br",
-        "longname": "Entropy Text Expander BR",
-        "language": "pt",
-        "layout": "br",
-    },
-    {
         "name": "entropy-universal-symbols-ru",
-        "longname": "Entropy Text Expander RU",
+        "longname": "Russian (Entropy)",
         "language": "ru",
         "layout": "ru",
     },

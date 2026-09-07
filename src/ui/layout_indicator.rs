@@ -115,9 +115,11 @@ fn sticky_pressed_keycodes(
 }
 
 fn sticky_tap_dance_index(keycode: u16) -> Option<usize> {
+    // Lazily: the argument of then_some is always evaluated, which overflows
+    // the subtraction for keycodes below the range.
     (0x5700..=0x57FF)
         .contains(&keycode)
-        .then_some((keycode - 0x5700) as usize)
+        .then(|| (keycode - 0x5700) as usize)
 }
 
 fn sticky_tap_dance_term(
@@ -515,6 +517,14 @@ impl EntropyApp {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sticky_tap_dance_index_ignores_keycodes_below_the_tap_dance_range() {
+        assert_eq!(sticky_tap_dance_index(0x0004), None);
+        assert_eq!(sticky_tap_dance_index(0x5700), Some(0));
+        assert_eq!(sticky_tap_dance_index(0x57ff), Some(0xff));
+        assert_eq!(sticky_tap_dance_index(0x5800), None);
+    }
+
     use super::*;
     use crate::firmware::FirmwareProtocol;
     use crate::keyboard::PhysicalKey;

@@ -566,14 +566,17 @@ fn update_status_text(lang: crate::i18n::Language, update_check: &UpdateCheckSta
 
 fn update_asset_text(lang: crate::i18n::Language, update_check: &UpdateCheckState) -> String {
     match update_check {
-        UpdateCheckState::Ready(result) => result
-            .asset
-            .as_ref()
-            .map(|asset| asset.name.clone())
-            .unwrap_or_else(|| match lang {
+        UpdateCheckState::Ready(result) => match &result.asset {
+            UpdateAssetState::Available(asset) => asset.name.clone(),
+            UpdateAssetState::MetadataUnavailable => match lang {
+                crate::i18n::Language::Russian => "данные о файле недоступны".to_owned(),
+                crate::i18n::Language::English => "file metadata unavailable".to_owned(),
+            },
+            UpdateAssetState::MissingForPlatform => match lang {
                 crate::i18n::Language::Russian => "нет файла для этой ОС".to_owned(),
                 crate::i18n::Language::English => "no file for this OS".to_owned(),
-            }),
+            },
+        },
         _ => not_reported(lang).to_owned(),
     }
 }
@@ -814,7 +817,9 @@ impl EntropyApp {
                     UpdateCheckState::Ready(result) => Some(result.clone()),
                     _ => None,
                 };
-                let has_asset = ready.as_ref().is_some_and(|result| result.asset.is_some());
+                let has_asset = ready
+                    .as_ref()
+                    .is_some_and(|result| result.downloadable_asset().is_some());
                 let button_size = egui::vec2(metrics.value(132.0), metrics.value(32.0));
                 let button_gap = metrics.value(8.0);
                 let button_count = 1 + usize::from(has_asset) + usize::from(ready.is_some());
@@ -843,7 +848,7 @@ impl EntropyApp {
                         }
 
                         if let Some(result) = ready {
-                            if let Some(asset) = result.asset {
+                            if let Some(asset) = result.downloadable_asset() {
                                 if crate::ui_style::modern_button(
                                     ui,
                                     download_update_label(lang),
@@ -881,6 +886,16 @@ impl EntropyApp {
 mod tests {
     use super::*;
 
+    fn update_state(asset: UpdateAssetState) -> UpdateCheckState {
+        UpdateCheckState::Ready(UpdateCheckResult {
+            latest_version: "v0.3.21".to_owned(),
+            release_url: "https://github.com/ergohaven/entropy/releases/tag/v0.3.21".to_owned(),
+            platform_label: "Linux x86_64".to_owned(),
+            asset,
+            relation: VersionRelation::UpdateAvailable,
+        })
+    }
+
     #[test]
     fn macro_ext_status_explains_rmk_guard() {
         let info = DeviceAboutInfo {
@@ -892,6 +907,31 @@ mod tests {
         };
 
         assert!(macro_ext_keycodes_status(crate::i18n::Language::English, &info).contains("RMK"));
+    }
+
+    #[test]
+    fn update_asset_text_distinguishes_missing_metadata_from_missing_asset() {
+        assert_eq!(
+            update_asset_text(
+                crate::i18n::Language::English,
+                &update_state(UpdateAssetState::MetadataUnavailable)
+            ),
+            "file metadata unavailable"
+        );
+        assert_eq!(
+            update_asset_text(
+                crate::i18n::Language::English,
+                &update_state(UpdateAssetState::MissingForPlatform)
+            ),
+            "no file for this OS"
+        );
+        assert_eq!(
+            update_asset_text(
+                crate::i18n::Language::Russian,
+                &update_state(UpdateAssetState::MetadataUnavailable)
+            ),
+            "данные о файле недоступны"
+        );
     }
 
     #[test]

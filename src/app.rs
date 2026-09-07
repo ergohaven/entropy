@@ -4,6 +4,7 @@ use crate::firmware::FirmwareProtocol;
 use crate::keyboard::{KeyboardLayout, LayoutOption, PhysicalEncoder, PhysicalKey};
 use crate::keycode::{
     key_label_font_sizes, keycode_label_with_names_and_layout, keycode_tooltip, KeyLegendLayout,
+    KeyOutputLayout,
 };
 use crate::keycode_picker::{DeferredPickerDataState, KeycodePicker, KeycodeTab};
 use egui::{Color32, FontId, RichText, Sense, Stroke, Vec2};
@@ -16,6 +17,9 @@ use app_theme::*;
 
 #[path = "typing_trainer_words.rs"]
 mod typing_trainer_words;
+
+#[path = "typing_trainer_symbols.rs"]
+mod typing_trainer_symbols;
 
 #[path = "app_state.rs"]
 mod app_state;
@@ -44,7 +48,7 @@ mod settings_units;
 use settings_units::*;
 #[path = "ui/settings_viewport.rs"]
 mod settings_viewport;
-use settings_viewport::*;
+pub(crate) use settings_viewport::*;
 #[path = "ui/onboarding_tour_state.rs"]
 mod onboarding_tour_state;
 use onboarding_tour_state::*;
@@ -101,6 +105,7 @@ mod layout_indicator;
 mod layout_indicator_preview;
 #[path = "ui/layout_indicator_window.rs"]
 mod layout_indicator_window;
+use layout_indicator_window::StickyLayoutViewportEventQueue;
 #[path = "ui/layout_options_settings.rs"]
 mod layout_options_settings_ui;
 #[path = "ui/layout_shared.rs"]
@@ -133,6 +138,8 @@ mod layout_top_tabs;
 mod layout_view;
 #[path = "ui/live_features_settings.rs"]
 mod live_features_settings_ui;
+#[path = "ui/macro_tap_dance_settings.rs"]
+mod macro_tap_dance_settings_ui;
 #[path = "ui/magic_settings.rs"]
 mod magic_settings_ui;
 #[path = "ui/matrix_tester.rs"]
@@ -161,12 +168,16 @@ use settings_write_queue::SettingsWriteTask;
 mod tap_hold_settings_ui;
 #[path = "ui/text_expander_editor.rs"]
 mod text_expander_editor;
+#[path = "ui/text_expander_emoji.rs"]
+mod text_expander_emoji;
 #[path = "ui/text_expander_runtime.rs"]
 mod text_expander_runtime;
 #[path = "ui/text_expander_settings.rs"]
 mod text_expander_settings_ui;
 #[path = "ui/universal_symbols_setup.rs"]
 mod text_expander_setup;
+#[cfg(target_os = "linux")]
+use text_expander_setup::LinuxSetupTask;
 #[path = "ui/touchpad_settings.rs"]
 mod touchpad_settings_ui;
 #[path = "ui/typing_trainer.rs"]

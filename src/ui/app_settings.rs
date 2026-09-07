@@ -628,6 +628,33 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
+                12 => {
+                    let mut assign_transparent = self.app_settings.middle_click_assigns_transparent;
+                    crate::ui_style::settings_list_row_with_tooltip(
+                        ui,
+                        content_width,
+                        row_height,
+                        crate::i18n::tr_catalog(lang, "ui.middle_click_transparent_label"),
+                        true,
+                        tooltip(crate::i18n::tr_catalog(
+                            lang,
+                            "ui.middle_click_transparent_tooltip",
+                        )),
+                        switch_width,
+                        |ui| {
+                            let _ = crate::ui_style::settings_switch_sized_stable(
+                                ui,
+                                "app_settings_middle_click_transparent",
+                                &mut assign_transparent,
+                                switch_size,
+                            );
+                        },
+                    );
+                    if assign_transparent != self.app_settings.middle_click_assigns_transparent {
+                        self.app_settings.middle_click_assigns_transparent = assign_transparent;
+                        save_app_settings(&self.app_settings);
+                    }
+                }
                 _ => {}
             }
         }
@@ -706,7 +733,7 @@ impl EntropyApp {
 }
 
 fn total_app_settings_rows() -> usize {
-    let rows = 12;
+    let rows = 13;
     #[cfg(target_os = "linux")]
     {
         rows + 1

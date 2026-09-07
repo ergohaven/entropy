@@ -463,13 +463,19 @@ fn is_rmk_vial_definition(json: &serde_json::Value) -> bool {
 
 fn macro_ext_keycodes_disabled_reason(
     json: &serde_json::Value,
+    rmk_vial_macro_ext_supported: bool,
 ) -> Option<MacroExtKeycodesDisabledReason> {
-    is_rmk_vial_definition(json)
+    (is_rmk_vial_definition(json) && !rmk_vial_macro_ext_supported)
         .then_some(MacroExtKeycodesDisabledReason::RmkVialMacroExtUnsupported)
 }
 
-fn supports_vial_macro_ext_keycodes(vial_protocol: u32, json: &serde_json::Value) -> bool {
-    vial_protocol >= 5 && macro_ext_keycodes_disabled_reason(json).is_none()
+fn supports_vial_macro_ext_keycodes(
+    vial_protocol: u32,
+    json: &serde_json::Value,
+    rmk_vial_macro_ext_supported: bool,
+) -> bool {
+    vial_protocol >= 5
+        && macro_ext_keycodes_disabled_reason(json, rmk_vial_macro_ext_supported).is_none()
 }
 
 impl EntropyApp {
@@ -650,7 +656,7 @@ impl EntropyApp {
                 log::info!("Vial protocol: {vial_protocol}, keyboard id: {keyboard_id:016X}");
                 let cache_keys = device_cache_keys(&dev, keyboard_id);
                 let cache_key = &cache_keys[0];
-                if ![-1i32, 9].contains(&(via_protocol as i32)) {
+                if !crate::hid::is_supported_via_protocol(via_protocol) {
                     return Err(format!("Unsupported VIA protocol version: {via_protocol}"));
                 }
                 if !matches!(vial_protocol, 0..=6) {
@@ -846,6 +852,26 @@ impl EntropyApp {
                             return Err(format!("Initial Bluetooth layer read failed: {e:#}"));
                         }
                         log::warn!("get_keymap_buffer failed: {e}");
+                        progress("Reading keymap (compatibility mode)…");
+                        let mut fallback_error = None;
+                        'layers: for layer in 0..initial_layer_count {
+                            for (key_index, key) in layout.keys.iter().enumerate() {
+                                match dev_conn.get_keycode(layer as u8, key.row, key.col) {
+                                    Ok(keycode) => {
+                                        layout.layers[layer][key_index] = keycode.into();
+                                    }
+                                    Err(error) => {
+                                        fallback_error = Some(error);
+                                        break 'layers;
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(error) = fallback_error {
+                            log::warn!("keymap compatibility read failed: {error:#}");
+                        } else {
+                            log::info!("Keymap loaded with per-key compatibility reads");
+                        }
                     }
                 }
 
@@ -1034,7 +1060,8 @@ impl EntropyApp {
                     caps_word: dynamic_feature_bits & (1 << 0) != 0,
                     layer_lock: dynamic_feature_bits & (1 << 1) != 0,
                     persistent_default_layer: vial_protocol >= 5,
-                    repeat_key: reported_alt_repeat_count > 0,
+                    repeat_key: reported_alt_repeat_count > 0 || rmk_native_capabilities.repeat_key,
+                    alt_repeat_key: reported_alt_repeat_count > 0,
                 };
 
                 progress("Reading combos…");
@@ -1232,9 +1259,15 @@ impl EntropyApp {
                     entries
                 };
 
-                let macro_ext_keycodes_disabled_reason = macro_ext_keycodes_disabled_reason(&json);
-                let supports_macro_ext_keycodes =
-                    supports_vial_macro_ext_keycodes(vial_protocol, &json);
+                let macro_ext_keycodes_disabled_reason = macro_ext_keycodes_disabled_reason(
+                    &json,
+                    rmk_native_capabilities.vial_macro_ext,
+                );
+                let supports_macro_ext_keycodes = supports_vial_macro_ext_keycodes(
+                    vial_protocol,
+                    &json,
+                    rmk_native_capabilities.vial_macro_ext,
+                );
                 let deferred_load = if staged_bluetooth_load {
                     let definition_fingerprint = vial_definition_fingerprint(&json)
                         .map_err(|error| format!("Layout fingerprint failed: {error}"))?;
@@ -1476,7 +1509,8 @@ mod tests {
             "productId": "0x4643"
         });
 
-        assert!(!supports_vial_macro_ext_keycodes(6, &json));
+        assert!(!supports_vial_macro_ext_keycodes(6, &json, false));
+        assert!(supports_vial_macro_ext_keycodes(6, &json, true));
     }
 
     #[test]
@@ -1487,7 +1521,7 @@ mod tests {
             "productId": "0x0001"
         });
 
-        assert!(supports_vial_macro_ext_keycodes(5, &json));
+        assert!(supports_vial_macro_ext_keycodes(5, &json, false));
     }
 
     #[test]

@@ -278,7 +278,7 @@ impl EntropyApp {
         let task_operation = operation.clone();
         std::thread::spawn(move || {
             #[cfg(target_os = "macos")]
-            let _hid_lock = crate::hid::macos_hid_operation_lock();
+            let _hid_lock = hid_device.macos_hid_operation_lock();
 
             let outcome = run_vial_hid_operation(&hid_device, operation.clone());
             let disconnected = outcome
@@ -448,6 +448,11 @@ impl EntropyApp {
                     _ => false,
                 };
                 self.finish_matrix_tester_poll(pressed, remember_ever_pressed);
+                if self.app_settings.sticky_layout_window {
+                    ctx.request_repaint_of(
+                        super::layout_indicator_window::sticky_layout_viewport_id(),
+                    );
+                }
             }
             Ok(VialHidOutcome::Battery(battery)) => {
                 if let Some(info) = self.device_about_info.as_mut() {

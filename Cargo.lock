@@ -1159,8 +1159,6 @@ dependencies = [
 [[package]]
 name = "eframe"
 version = "0.34.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f98fe83b2589105b69dd25ca1e0fa2135a6e864d502fd8e08978f937e128cfef"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1285,6 +1283,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "emojis"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b1514ced566c94991ed9563258ecf61e311fd773bf0a3f20606830386bf66e3"
+dependencies = [
+ "phf",
+]
+
+[[package]]
 name = "encoding_rs"
 version = "0.8.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1402,7 +1409,7 @@ dependencies = [
 
 [[package]]
 name = "ergohaven-entropy"
-version = "0.3.10"
+version = "0.3.21-rc.1"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -1413,6 +1420,7 @@ dependencies = [
  "dispatch2",
  "eframe",
  "egui",
+ "emojis",
  "env_logger",
  "flate2",
  "futures-lite",
@@ -1426,9 +1434,12 @@ dependencies = [
  "raw-window-handle",
  "rfd",
  "rmk-types",
+ "semver",
  "serde",
  "serde_json",
  "tray-icon",
+ "twemoji-assets",
+ "unicode-segmentation",
  "ureq",
  "url",
  "wasm-bindgen-futures",
@@ -4585,6 +4596,12 @@ name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
+
+[[package]]
+name = "twemoji-assets"
+version = "1.5.1+17.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6857896b4a287e70f8197ab8fb9d68b3c43bb7ae97595aceaf2d11c21b93d9e9"
 
 [[package]]
 name = "type-map"

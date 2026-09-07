@@ -8,6 +8,77 @@ struct OneShotModifierChoice {
     mod_name: String,
 }
 
+fn mod_tap_choices(lgui: &str) -> Vec<(String, u16, Option<u16>, String)> {
+    vec![
+        (
+            picker_mod_tap_label(0x2100),
+            0x2100,
+            Some(0x3100),
+            "Ctrl".into(),
+        ),
+        (
+            picker_mod_tap_label(0x2200),
+            0x2200,
+            Some(0x3200),
+            "Shift".into(),
+        ),
+        (
+            picker_mod_tap_label(0x2400),
+            0x2400,
+            Some(0x3400),
+            "Alt".into(),
+        ),
+        (
+            picker_mod_tap_label(0x2800),
+            0x2800,
+            Some(0x3800),
+            lgui.to_string(),
+        ),
+        (
+            picker_mod_tap_label(0x2300),
+            0x2300,
+            None,
+            "Ctrl+Shift".into(),
+        ),
+        (
+            picker_mod_tap_label(0x2500),
+            0x2500,
+            None,
+            "Ctrl+Alt".into(),
+        ),
+        (
+            picker_mod_tap_label(0x2900),
+            0x2900,
+            None,
+            format!("Ctrl+{lgui}"),
+        ),
+        (
+            picker_mod_tap_label(0x2600),
+            0x2600,
+            None,
+            "Shift+Alt (LSA)".into(),
+        ),
+        (
+            picker_mod_tap_label(0x2700),
+            0x2700,
+            None,
+            "Meh (Ctrl+Shift+Alt)".into(),
+        ),
+        (
+            picker_mod_tap_label(0x2A00),
+            0x2A00,
+            None,
+            format!("Shift+{lgui}"),
+        ),
+        (
+            picker_mod_tap_label(0x2F00),
+            0x2F00,
+            None,
+            format!("Hyper (Ctrl+Shift+Alt+{})", gui_mod_name()),
+        ),
+    ]
+}
+
 fn one_shot_modifier_choices(gui_label: &str, gui_mod_name: &str) -> Vec<OneShotModifierChoice> {
     vec![
         OneShotModifierChoice {
@@ -86,13 +157,29 @@ impl KeycodePicker {
     }
 
     pub(super) fn has_visible_custom_keycodes(&self) -> bool {
-        self.custom_keycodes
-            .iter()
-            .any(|(_, label, _, _)| !label.trim().is_empty())
+        self.custom_keycodes.iter().any(|(name, label, title, _)| {
+            !label.trim().is_empty() && !is_bluetooth_custom_keycode(name, label, title)
+        })
     }
 
-    pub(super) fn show_custom_keycode_choice_section(&self, ui: &mut egui::Ui) -> Option<u16> {
-        if !self.has_visible_custom_keycodes() {
+    pub(super) fn has_visible_bluetooth_keycodes(&self) -> bool {
+        self.custom_keycodes.iter().any(|(name, label, title, _)| {
+            !label.trim().is_empty() && is_bluetooth_custom_keycode(name, label, title)
+        })
+    }
+
+    fn show_custom_keycode_choice_section_filtered(
+        &self,
+        ui: &mut egui::Ui,
+        section_key: &'static str,
+        bluetooth: bool,
+    ) -> Option<u16> {
+        let visible = if bluetooth {
+            self.has_visible_bluetooth_keycodes()
+        } else {
+            self.has_visible_custom_keycodes()
+        };
+        if !visible {
             return None;
         }
 
@@ -100,17 +187,16 @@ impl KeycodePicker {
         let mut selected = None;
         ui.add_space(2.0);
         ui.label(
-            RichText::new(tr_picker(
-                self.language,
-                "key_picker.section_custom_keycodes",
-            ))
-            .size(11.0)
-            .color(Color32::from_gray(150)),
+            RichText::new(tr_picker(self.language, section_key))
+                .size(11.0)
+                .color(Color32::from_gray(150)),
         );
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
             for (name, label, title, value) in custom_keycodes {
-                if label.trim().is_empty() {
+                if label.trim().is_empty()
+                    || is_bluetooth_custom_keycode(&name, &label, &title) != bluetooth
+                {
                     continue;
                 }
                 let tip = if title.trim().is_empty() {
@@ -131,6 +217,22 @@ impl KeycodePicker {
         ui.add_space(8.0);
 
         selected
+    }
+
+    pub(super) fn show_custom_keycode_choice_section(&self, ui: &mut egui::Ui) -> Option<u16> {
+        self.show_custom_keycode_choice_section_filtered(
+            ui,
+            "key_picker.section_custom_keycodes",
+            false,
+        )
+    }
+
+    pub(super) fn show_bluetooth_keycode_choice_section(&self, ui: &mut egui::Ui) -> Option<u16> {
+        self.show_custom_keycode_choice_section_filtered(
+            ui,
+            "key_picker.section_bluetooth_keycodes",
+            true,
+        )
     }
 
     pub(super) fn show_vial_symbols(&mut self, ui: &mut egui::Ui) {
@@ -212,6 +314,12 @@ impl KeycodePicker {
 
     pub(super) fn show_vial_custom(&mut self, ui: &mut egui::Ui) {
         if let Some(value) = self.show_custom_keycode_choice_section(ui) {
+            self.assign_keycode_value(value);
+        }
+    }
+
+    pub(super) fn show_vial_bluetooth(&mut self, ui: &mut egui::Ui) {
+        if let Some(value) = self.show_bluetooth_keycode_choice_section(ui) {
             self.assign_keycode_value(value);
         }
     }
@@ -336,62 +444,7 @@ impl KeycodePicker {
                 .color(Color32::from_gray(150)),
         );
         ui.add_space(4.0);
-        let mt: Vec<(String, u16, Option<u16>, String)> = vec![
-            (
-                picker_mod_tap_label(0x2100),
-                0x2100,
-                Some(0x3100),
-                "Ctrl".into(),
-            ),
-            (
-                picker_mod_tap_label(0x2200),
-                0x2200,
-                Some(0x3200),
-                "Shift".into(),
-            ),
-            (
-                picker_mod_tap_label(0x2400),
-                0x2400,
-                Some(0x3400),
-                "Alt".into(),
-            ),
-            (
-                picker_mod_tap_label(0x2800),
-                0x2800,
-                Some(0x3800),
-                lgui.to_string(),
-            ),
-            (
-                picker_mod_tap_label(0x2300),
-                0x2300,
-                None,
-                "Ctrl+Shift".into(),
-            ),
-            (
-                picker_mod_tap_label(0x2500),
-                0x2500,
-                None,
-                "Ctrl+Alt".into(),
-            ),
-            (
-                picker_mod_tap_label(0x2600),
-                0x2600,
-                None,
-                "Shift+Alt (LSA)".into(),
-            ),
-            (
-                picker_mod_tap_label(0x2700),
-                0x2700,
-                None,
-                "Meh (Ctrl+Shift+Alt)".into(),
-            ),
-            (
-                picker_mod_tap_label(0x2F00),
-                0x2F00,
-                None,
-                format!("Hyper (Ctrl+Shift+Alt+{})", gui_mod_name()),
-            ),
-        ];
+        let mt = mod_tap_choices(lgui);
         ui.horizontal_wrapped(|ui| {
             for (label, left_value, right_value, mod_name) in &mt {
                 let resp = ui
@@ -469,6 +522,27 @@ mod tests {
         assert_eq!(shift_gui.right_value, Some(0x52BA));
         assert_eq!(shift_gui.label, "OSM\nS+GUI");
         assert_eq!(shift_gui.mod_name, "Shift+GUI");
+    }
+
+    #[test]
+    fn mod_tap_choices_include_gui_chords() {
+        let choices = mod_tap_choices(crate::keycode::gui_label(false));
+        for (value, modifier) in [(0x2900, "Ctrl"), (0x2A00, "Shift")] {
+            let (label, _, right_value, mod_name) = choices
+                .iter()
+                .find(|(_, left_value, _, _)| *left_value == value)
+                .expect("GUI Mod-Tap chord should be exposed in the picker");
+
+            assert_eq!(*right_value, None);
+            assert_eq!(
+                label,
+                &format!("Hold {modifier}+{}/key", crate::keycode::gui_sym())
+            );
+            assert_eq!(
+                mod_name,
+                &format!("{modifier}+{}", crate::keycode::gui_label(false))
+            );
+        }
     }
 
     #[test]

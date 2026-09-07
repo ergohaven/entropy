@@ -3,7 +3,7 @@
 Modern app for programmable keyboards and input devices, built by Ergohaven.
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
-[![Latest release](https://img.shields.io/badge/latest-v0.3.9-lightgrey.svg)](https://github.com/ergohaven/entropy/releases)
+[![Latest release](https://img.shields.io/badge/latest-v0.3.20-lightgrey.svg)](https://github.com/ergohaven/entropy/releases)
 [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey.svg)](#platforms)
 [![Firmware](https://img.shields.io/badge/firmware-Vial--QMK%20%7C%20Vial--RMK-lightgrey.svg)](#compatibility)
 
@@ -63,13 +63,13 @@ unsigned and not notarized for now.
 Release builds are published on the
 [GitHub Releases](https://github.com/ergohaven/entropy/releases) page:
 
-- `entropy-v0.3.9-x86_64.AppImage`
-- `entropy-v0.3.9-windows-x86_64.exe`
-- `entropy-v0.3.9-macos-arm64.dmg`
-- `entropy-v0.3.9-macos-x86_64.dmg`
+- `entropy-v0.3.20-x86_64.AppImage`
+- `entropy-v0.3.20-windows-x86_64.exe`
+- `entropy-v0.3.20-macos-arm64.dmg`
+- `entropy-v0.3.20-macos-x86_64.dmg`
 
-Stable tags such as `v0.3.9` publish a regular GitHub release and mark it as
-latest. Tags with a suffix, such as `v0.3.9-rc.1`, publish the same artifacts as
+Stable tags such as `v0.3.20` publish a regular GitHub release and mark it as
+latest. Tags with a suffix, such as `v0.3.20-rc.1`, publish the same artifacts as
 a GitHub prerelease.
 
 Windows builds are unsigned for now, so Windows SmartScreen may warn before
@@ -132,6 +132,90 @@ sudo apt-get install ibus python3-gi gir1.2-ibus-1.0
 
 After installation, restart IBus if Entropy did not do it automatically, then add
 an **Entropy Text Expander** layout as an input source in your desktop input settings.
+
+## NixOS
+
+A flake is included. Run without installing:
+
+```sh
+nix run github:ergohaven/entropy
+```
+
+The in-app setup actions cannot work on NixOS: **Install Vial udev rules**
+writes to `/etc/udev/rules.d`, and IBus loads engines only from its own store
+path, so a copy under `~/.local/share` is never picked up. Use the NixOS module
+instead, which covers both declaratively:
+
+```nix
+{
+  inputs.entropy.url = "github:ergohaven/entropy";
+
+  outputs = { nixpkgs, entropy, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      modules = [
+        entropy.nixosModules.default
+        { programs.entropy.enable = true; }
+      ];
+    };
+  };
+}
+```
+
+This installs the app and the Vial hidraw udev rule. Nothing else is touched:
+no input method is enabled or selected on your behalf.
+
+Text Expander needs the Entropy IBus engine, which is opt-in and expects IBus
+to be the input method you already run:
+
+```nix
+{
+  programs.entropy = {
+    enable = true;
+    ibus.enable = true;
+  };
+
+  i18n.inputMethod = {
+    enable = true;
+    type = "ibus";
+  };
+}
+```
+
+Enabling `programs.entropy.ibus` while some other input method is active only
+produces a warning — the engine is never loaded in that case. Universal Symbols
+need no input method at all on firmware that exposes native RMK key actions.
+
+After rebuilding, add **Entropy Text Expander** — or a layout-specific variant,
+e.g. **Entropy Text Expander EN** — as an input source. Entropy detects an
+engine registered this way and replaces the **Install IBus** action with
+**Reload IBus registry**: a daemon started before the rebuild still serves its
+old registry, so the new layouts show up only after it reloads (or after you
+log out and back in).
+
+`programs.entropy.group` (default `entropy`) is the dedicated group the udev
+rule grants access to. It is created automatically. Active local sessions
+normally receive access through uaccess; add users that also need direct
+hidraw access outside the active seat (for example over SSH) explicitly:
+
+```nix
+users.users.alice.extraGroups = [ "entropy" ];
+```
+
+nixpkgs ships its own `programs.entropy` module around `pkgs.ergohaven-entropy`.
+Both declare the same option, so this module disables the nixpkgs one
+(`disabledModules`) and takes over: it follows the version in this repository
+and exposes `package`, `group` and the `ibus` options. Use one or the other,
+not both — importing this module is what makes the choice.
+
+A `homeManagerModules.default` is also available, but the udev rule needs root,
+so it only covers the app and the IBus engine, and its IBus registration works
+only under standalone home-manager.
+
+Development shell with the toolchain and native dependencies:
+
+```sh
+nix develop
+```
 
 ## Universal Symbols
 

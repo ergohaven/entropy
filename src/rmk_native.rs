@@ -18,6 +18,8 @@ const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_RUSSIAN_LETTERS: u16 = 0x0004;
 const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_OUTPUT: u16 = 0x0008;
 const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_MORSE_ACTIONS: u16 = 0x0010;
 const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_LAYER: u16 = 0x0020;
+const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_VIAL_MACRO_EXT: u16 = 0x0040;
+const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_REPEAT_KEY: u16 = 0x0080;
 const NATIVE_DYNAMIC_ACTION_KIND_COMBO_OUTPUT: u8 = 0x00;
 const NATIVE_DYNAMIC_ACTION_KIND_MORSE: u8 = 0x01;
 const NATIVE_KEY_ACTION_STATUS_OK: u8 = 0x00;
@@ -38,6 +40,8 @@ pub(crate) struct RmkNativeCapabilities {
     pub(crate) combo_output: bool,
     pub(crate) tap_dance_actions: bool,
     pub(crate) combo_layers: bool,
+    pub(crate) vial_macro_ext: bool,
+    pub(crate) repeat_key: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -197,6 +201,12 @@ fn native_response_header_matches(response: &[u8; MSG_LEN], subcommand: u8) -> b
         && response[2] == subcommand
 }
 
+pub(crate) fn is_rmk_native_capabilities_request(command: &[u8]) -> bool {
+    command.first() == Some(&CMD_VIA_CUSTOM_GET_VALUE)
+        && command.get(1) == Some(&ERGOHAVEN_CUSTOM_NAMESPACE)
+        && command.get(2) == Some(&ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS)
+}
+
 pub(crate) fn matches_rmk_native_response(
     command: &[u8],
     response: &[u8; MSG_LEN],
@@ -221,13 +231,12 @@ pub(crate) fn matches_rmk_native_response(
         return None;
     }
 
-    // Standard QMK-Vial echoes unknown custom GET commands unchanged. Treat an
-    // exact capabilities probe echo as a terminal "RMK unsupported" response;
-    // the decoder below will return empty capabilities without transport retries.
-    if subcommand == ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS
-        && command.first() == Some(&CMD_VIA_CUSTOM_GET_VALUE)
+    // QMK-Vial can either echo an unknown custom GET unchanged or replace only
+    // its command byte with the generic 0xFF unsupported marker. Both are
+    // terminal "RMK unsupported" responses, not stale packets to retry.
+    if is_rmk_native_capabilities_request(command)
         && command.len() == response.len()
-        && command == response
+        && (command == response || (response[0] == u8::MAX && command[1..] == response[1..]))
     {
         return Some(true);
     }
@@ -273,6 +282,8 @@ fn decode_native_capabilities(response: &[u8; MSG_LEN]) -> RmkNativeCapabilities
         combo_output: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_OUTPUT != 0,
         tap_dance_actions: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_MORSE_ACTIONS != 0,
         combo_layers: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_LAYER != 0,
+        vial_macro_ext: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_VIAL_MACRO_EXT != 0,
+        repeat_key: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_REPEAT_KEY != 0,
     }
 }
 
@@ -668,6 +679,8 @@ mod tests {
                 combo_output: false,
                 tap_dance_actions: false,
                 combo_layers: false,
+                vial_macro_ext: false,
+                repeat_key: false,
             }
         );
         response[4..6].copy_from_slice(
@@ -680,13 +693,17 @@ mod tests {
             &(ERGOHAVEN_NATIVE_KEY_ACTION_CAP_GET_SET
                 | ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_OUTPUT
                 | ERGOHAVEN_NATIVE_KEY_ACTION_CAP_MORSE_ACTIONS
-                | ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_LAYER)
+                | ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_LAYER
+                | ERGOHAVEN_NATIVE_KEY_ACTION_CAP_VIAL_MACRO_EXT
+                | ERGOHAVEN_NATIVE_KEY_ACTION_CAP_REPEAT_KEY)
                 .to_le_bytes(),
         );
         let dynamic = decode_native_capabilities(&response);
         assert!(dynamic.combo_output);
         assert!(dynamic.tap_dance_actions);
         assert!(dynamic.combo_layers);
+        assert!(dynamic.vial_macro_ext);
+        assert!(dynamic.repeat_key);
         assert!(!dynamic.universal_symbols);
         response[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION + 1;
         assert_eq!(
@@ -704,6 +721,8 @@ mod tests {
             combo_output: false,
             tap_dance_actions: false,
             combo_layers: false,
+            vial_macro_ext: false,
+            repeat_key: false,
         }));
         assert!(!supports_layout_sync(RmkNativeCapabilities {
             key_actions: true,
@@ -712,6 +731,8 @@ mod tests {
             combo_output: false,
             tap_dance_actions: false,
             combo_layers: false,
+            vial_macro_ext: false,
+            repeat_key: false,
         }));
     }
 
@@ -827,6 +848,22 @@ mod tests {
         assert_eq!(matches_rmk_native_response(&command, &command), Some(true));
         assert_eq!(
             decode_native_capabilities(&command),
+            RmkNativeCapabilities::default()
+        );
+    }
+
+    #[test]
+    fn native_capability_probe_accepts_qmk_unsupported_marker() {
+        let mut command = [0u8; MSG_LEN];
+        command[0] = CMD_VIA_CUSTOM_GET_VALUE;
+        command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
+        command[2] = ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS;
+        let mut response = command;
+        response[0] = u8::MAX;
+
+        assert_eq!(matches_rmk_native_response(&command, &response), Some(true));
+        assert_eq!(
+            decode_native_capabilities(&response),
             RmkNativeCapabilities::default()
         );
     }

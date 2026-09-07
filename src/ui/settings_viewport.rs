@@ -35,6 +35,23 @@ pub(crate) struct AdaptiveSettingsListViewport {
     pub(crate) has_scrollbar: bool,
 }
 
+/// Returns a footer rectangle anchored to the settings viewport, not to its
+/// scrolling content. Page-level actions rendered here therefore stay centered
+/// while the list scrolls or its scrollbar appears.
+pub(crate) fn fixed_settings_action_bar_rect(
+    viewport: egui::Rect,
+    metrics: crate::ui_style::ResponsiveMetrics,
+    button_size: egui::Vec2,
+    button_count: usize,
+    gap: f32,
+) -> egui::Rect {
+    let width = button_size.x * button_count as f32 + gap * button_count.saturating_sub(1) as f32;
+    egui::Rect::from_center_size(
+        egui::pos2(viewport.center().x, viewport.bottom() + metrics.value(26.0)),
+        egui::vec2(width, button_size.y),
+    )
+}
+
 pub(crate) fn allocate_adaptive_settings_list_viewport(
     ui: &mut egui::Ui,
     id_salt: &'static str,
@@ -163,5 +180,44 @@ pub(crate) fn allocate_adaptive_settings_list_viewport(
         row_content_width,
         row_height,
         has_scrollbar: max_offset > 0.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_list_uses_all_rows_that_fit_large_windows() {
+        let ctx = egui::Context::default();
+        let row_height = crate::ui_style::ResponsiveMetrics::from_ctx(&ctx).settings_row_height();
+
+        assert_eq!(
+            responsive_settings_visible_rows(&ctx, row_height * 9.0, 8, row_height),
+            8
+        );
+    }
+
+    #[test]
+    fn settings_list_still_scrolls_when_rows_do_not_fit() {
+        let ctx = egui::Context::default();
+        let row_height = crate::ui_style::ResponsiveMetrics::from_ctx(&ctx).settings_row_height();
+
+        assert_eq!(
+            responsive_settings_visible_rows(&ctx, row_height * 5.0, 8, row_height),
+            4
+        );
+    }
+
+    #[test]
+    fn fixed_action_bar_stays_centered_on_the_viewport() {
+        let ctx = egui::Context::default();
+        let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(&ctx);
+        let viewport = egui::Rect::from_min_size(egui::pos2(35.0, 80.0), egui::vec2(470.0, 216.0));
+        let rect =
+            fixed_settings_action_bar_rect(viewport, metrics, egui::vec2(110.0, 34.0), 2, 8.0);
+
+        assert_eq!(rect.center().x, viewport.center().x);
+        assert!(rect.top() > viewport.bottom());
     }
 }

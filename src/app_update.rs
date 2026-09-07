@@ -1,5 +1,6 @@
 const ENTROPY_LATEST_RELEASE_API: &str =
     "https://api.github.com/repos/ergohaven/entropy/releases/latest";
+const ENTROPY_LATEST_RELEASE_PAGE: &str = "https://github.com/ergohaven/entropy/releases/latest";
 const RMK_RELEASES_API: &str = "https://api.github.com/repos/ergohaven/rmk/releases?per_page=30";
 const ERGOHAVEN_VENDOR_ID: u16 = 0xE126;
 
@@ -16,13 +17,29 @@ pub(crate) enum VersionRelation {
     DevelopmentBuild,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum UpdateAssetState {
+    Available(UpdateAsset),
+    MissingForPlatform,
+    MetadataUnavailable,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct UpdateCheckResult {
     pub(crate) latest_version: String,
     pub(crate) release_url: String,
     pub(crate) platform_label: String,
-    pub(crate) asset: Option<UpdateAsset>,
+    pub(crate) asset: UpdateAssetState,
     pub(crate) relation: VersionRelation,
+}
+
+impl UpdateCheckResult {
+    pub(crate) fn downloadable_asset(&self) -> Option<&UpdateAsset> {
+        match &self.asset {
+            UpdateAssetState::Available(asset) => Some(asset),
+            UpdateAssetState::MissingForPlatform | UpdateAssetState::MetadataUnavailable => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,6 +129,17 @@ struct GitHubRelease {
 struct GitHubAsset {
     name: String,
     browser_download_url: String,
+}
+
+enum EntropyReleaseAssets {
+    Known(Vec<GitHubAsset>),
+    Unavailable,
+}
+
+struct LatestEntropyRelease {
+    tag_name: String,
+    html_url: String,
+    assets: EntropyReleaseAssets,
 }
 
 pub(crate) fn current_platform_label() -> String {
@@ -443,14 +471,7 @@ fn is_trusted_release_url(url: &str) -> bool {
     let Ok(url) = url::Url::parse(url) else {
         return false;
     };
-    if url.scheme() != "https"
-        || url.host_str() != Some("github.com")
-        || url.port().is_some()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
+    if !is_trusted_github_release_url(&url) {
         return false;
     }
 
@@ -468,9 +489,107 @@ fn is_trusted_release_url(url: &str) -> bool {
     }
 }
 
+fn is_trusted_github_release_url(url: &url::Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str() == Some("github.com")
+        && url.port().is_none()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+}
+
 #[cfg(not(target_arch = "wasm32"))]
-fn fetch_latest_release() -> Result<GitHubRelease, String> {
-    fetch_github_json(ENTROPY_LATEST_RELEASE_API)
+fn fetch_latest_release() -> Result<LatestEntropyRelease, String> {
+    fetch_latest_release_with_fallback(
+        || fetch_github_json(ENTROPY_LATEST_RELEASE_API).and_then(latest_entropy_release_from_api),
+        fetch_latest_release_from_redirect,
+    )
+}
+
+fn fetch_latest_release_with_fallback(
+    fetch_from_api: impl FnOnce() -> Result<LatestEntropyRelease, String>,
+    fetch_from_redirect: impl FnOnce() -> Result<LatestEntropyRelease, String>,
+) -> Result<LatestEntropyRelease, String> {
+    match fetch_from_api() {
+        Ok(release) => Ok(release),
+        Err(api_error) => fetch_from_redirect().map_err(|redirect_error| {
+            format!("{api_error}; GitHub Releases fallback failed: {redirect_error}")
+        }),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fetch_latest_release_from_redirect() -> Result<LatestEntropyRelease, String> {
+    let response = ureq::get(ENTROPY_LATEST_RELEASE_PAGE)
+        .set("User-Agent", concat!("Entropy/", env!("CARGO_PKG_VERSION")))
+        .call()
+        .map_err(|error| format!("GitHub Releases request failed: {error}"))?;
+
+    release_from_latest_release_redirect(response.get_url())
+}
+
+fn latest_entropy_release_from_api(release: GitHubRelease) -> Result<LatestEntropyRelease, String> {
+    if parse_canonical_entropy_release_tag(&release.tag_name).is_none() {
+        return Err("GitHub API did not return a canonical stable Entropy version".to_owned());
+    }
+    let url_tag = parse_entropy_release_url(&release.html_url)
+        .map_err(|error| format!("GitHub API release URL was invalid: {error}"))?;
+    if url_tag != release.tag_name {
+        return Err("GitHub API release tag and URL did not match".to_owned());
+    }
+
+    Ok(LatestEntropyRelease {
+        html_url: canonical_entropy_release_url(&release.tag_name),
+        tag_name: release.tag_name,
+        assets: EntropyReleaseAssets::Known(release.assets),
+    })
+}
+
+fn release_from_latest_release_redirect(url: &str) -> Result<LatestEntropyRelease, String> {
+    let tag_name = parse_entropy_release_url(url)?;
+
+    Ok(LatestEntropyRelease {
+        html_url: canonical_entropy_release_url(&tag_name),
+        tag_name,
+        assets: EntropyReleaseAssets::Unavailable,
+    })
+}
+
+fn parse_entropy_release_url(url: &str) -> Result<String, String> {
+    let parsed = url::Url::parse(url)
+        .map_err(|error| format!("GitHub Releases redirect URL was invalid: {error}"))?;
+
+    if !is_trusted_github_release_url(&parsed) {
+        return Err("GitHub Releases redirect URL was not trusted".to_owned());
+    }
+
+    let Some(segments) = parsed.path_segments() else {
+        return Err("GitHub Releases redirect URL had no path".to_owned());
+    };
+    let segments = segments.collect::<Vec<_>>();
+    let ["ergohaven", "entropy", "releases", "tag", tag] = segments.as_slice() else {
+        return Err("GitHub Releases redirect URL was not an Entropy release tag".to_owned());
+    };
+    if parse_canonical_entropy_release_tag(tag).is_none() {
+        return Err(
+            "GitHub Releases redirect URL did not contain a canonical Entropy version".to_owned(),
+        );
+    }
+
+    Ok((*tag).to_owned())
+}
+
+fn parse_canonical_entropy_release_tag(tag: &str) -> Option<semver::Version> {
+    let version = semver::Version::parse(tag.strip_prefix('v')?).ok()?;
+    if !version.pre.is_empty() || !version.build.is_empty() || format!("v{version}") != tag {
+        return None;
+    }
+    Some(version)
+}
+
+fn canonical_entropy_release_url(tag: &str) -> String {
+    format!("https://github.com/ergohaven/entropy/releases/tag/{tag}")
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -489,20 +608,30 @@ fn fetch_github_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, Str
         .map_err(|error| format!("GitHub response parse failed: {error}"))
 }
 
-fn build_update_result(release: GitHubRelease) -> UpdateCheckResult {
-    let asset = release
-        .assets
-        .into_iter()
-        .find(platform_asset_matches)
-        .map(|asset| UpdateAsset {
-            name: asset.name,
-            url: asset.browser_download_url,
-        });
-    let relation = compare_versions(env!("CARGO_PKG_VERSION"), &release.tag_name);
+fn build_update_result(latest: LatestEntropyRelease) -> UpdateCheckResult {
+    let LatestEntropyRelease {
+        tag_name,
+        html_url,
+        assets,
+    } = latest;
+    let asset = match assets {
+        EntropyReleaseAssets::Known(assets) => assets
+            .into_iter()
+            .find(platform_asset_matches)
+            .map(|asset| {
+                UpdateAssetState::Available(UpdateAsset {
+                    name: asset.name,
+                    url: asset.browser_download_url,
+                })
+            })
+            .unwrap_or(UpdateAssetState::MissingForPlatform),
+        EntropyReleaseAssets::Unavailable => UpdateAssetState::MetadataUnavailable,
+    };
+    let relation = compare_entropy_versions(env!("CARGO_PKG_VERSION"), &tag_name);
 
     UpdateCheckResult {
-        latest_version: release.tag_name,
-        release_url: release.html_url,
+        latest_version: tag_name,
+        release_url: html_url,
         platform_label: current_platform_label(),
         asset,
         relation,
@@ -525,7 +654,7 @@ fn build_firmware_update_result(
             Some((numeric_version_parts(&release.tag_name), release, asset))
         })
         .max_by(|left, right| left.0.cmp(&right.0))?;
-    let relation = compare_versions(&target.current_version, &release.tag_name);
+    let relation = compare_firmware_versions(&target.current_version, &release.tag_name);
 
     Some(FirmwareUpdateCheckResult {
         latest_version: release.tag_name,
@@ -555,14 +684,30 @@ fn platform_asset_matches(asset: &GitHubAsset) -> bool {
     }
 }
 
-fn compare_versions(current: &str, latest: &str) -> VersionRelation {
-    let current_parts = numeric_version_parts(current);
-    let latest_parts = numeric_version_parts(latest);
-    match current_parts.cmp(&latest_parts) {
+fn compare_entropy_versions(current: &str, latest: &str) -> VersionRelation {
+    let ordering = match (parse_semver(current), parse_semver(latest)) {
+        (Some(current), Some(latest)) => current.cmp_precedence(&latest),
+        _ => numeric_version_parts(current).cmp(&numeric_version_parts(latest)),
+    };
+    match ordering {
         std::cmp::Ordering::Less => VersionRelation::UpdateAvailable,
         std::cmp::Ordering::Equal => VersionRelation::UpToDate,
         std::cmp::Ordering::Greater => VersionRelation::DevelopmentBuild,
     }
+}
+
+fn compare_firmware_versions(current: &str, latest: &str) -> VersionRelation {
+    match numeric_version_parts(current).cmp(&numeric_version_parts(latest)) {
+        std::cmp::Ordering::Less => VersionRelation::UpdateAvailable,
+        std::cmp::Ordering::Equal => VersionRelation::UpToDate,
+        std::cmp::Ordering::Greater => VersionRelation::DevelopmentBuild,
+    }
+}
+
+fn parse_semver(version: &str) -> Option<semver::Version> {
+    let version = version.trim();
+    let version = version.strip_prefix('v').unwrap_or(version);
+    semver::Version::parse(version).ok()
 }
 
 fn numeric_version_parts(version: &str) -> Vec<u64> {
@@ -597,6 +742,34 @@ fn normalized_arch_label() -> &'static str {
 mod tests {
     use super::*;
 
+    fn entropy_release(tag: &str, assets: &[&str]) -> GitHubRelease {
+        GitHubRelease {
+            tag_name: tag.to_owned(),
+            html_url: format!("https://github.com/ergohaven/entropy/releases/tag/{tag}"),
+            draft: false,
+            prerelease: false,
+            assets: assets
+                .iter()
+                .map(|name| GitHubAsset {
+                    name: (*name).to_owned(),
+                    browser_download_url: format!(
+                        "https://github.com/ergohaven/entropy/releases/download/{tag}/{name}"
+                    ),
+                })
+                .collect(),
+        }
+    }
+
+    fn current_platform_asset_name() -> Option<&'static str> {
+        match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("linux", "x86_64") => Some("entropy-v0.3.21-x86_64.AppImage"),
+            ("windows", "x86_64") => Some("Entropy-Windows-v0.3.21-x86_64.exe"),
+            ("macos", "aarch64") => Some("Entropy-macOS-v0.3.21-arm64.dmg"),
+            ("macos", "x86_64") => Some("Entropy-macOS-v0.3.21-x86_64.dmg"),
+            _ => None,
+        }
+    }
+
     fn release(tag: &str, draft: bool, prerelease: bool, assets: &[&str]) -> GitHubRelease {
         GitHubRelease {
             tag_name: tag.to_owned(),
@@ -613,6 +786,161 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn builds_tag_only_release_from_latest_redirect() {
+        let release = release_from_latest_release_redirect(
+            "https://github.com/ergohaven/entropy/releases/tag/v0.3.21",
+        )
+        .unwrap();
+
+        assert_eq!(release.tag_name, "v0.3.21");
+        assert_eq!(
+            release.html_url,
+            "https://github.com/ergohaven/entropy/releases/tag/v0.3.21"
+        );
+        assert!(matches!(release.assets, EntropyReleaseAssets::Unavailable));
+    }
+
+    #[test]
+    fn rejects_noncanonical_or_untrusted_latest_redirects() {
+        for url in [
+            "https://github.com/ergohaven/another-repo/releases/tag/v0.3.21",
+            "https://github.com/ergohaven/entropy/releases/tag/release%2Fv0.3.21",
+            "https://github.com/ergohaven/entropy/releases/tag/v0%2E3%2E21",
+            "https://github.com/ergohaven/entropy/releases/tag/v0.3.21-rc.1",
+            "https://github.com/ergohaven/entropy/releases/tag/v0.3.21+build.1",
+            "https://github.com/ergohaven/entropy/releases/tag/v0.03.21",
+            "https://github.com/ergohaven/entropy/releases/tag/v0.3",
+            "https://github.com/ergohaven/entropy/releases/tag/0.3.21",
+            "https://github.com/ergohaven/entropy/releases/tag/v0.3.21?source=update",
+            "https://github.com/ergohaven/entropy/releases/tag/",
+        ] {
+            assert!(release_from_latest_release_redirect(url).is_err(), "{url}");
+        }
+    }
+
+    #[test]
+    fn uses_api_release_with_complete_asset_metadata() {
+        let mut fallback_requested = false;
+        let latest = fetch_latest_release_with_fallback(
+            || {
+                latest_entropy_release_from_api(entropy_release(
+                    "v0.3.21",
+                    &["entropy-v0.3.21-x86_64.AppImage"],
+                ))
+            },
+            || {
+                fallback_requested = true;
+                Err("fallback should not be requested".to_owned())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(latest.tag_name, "v0.3.21");
+        assert!(matches!(latest.assets, EntropyReleaseAssets::Known(_)));
+        assert!(!fallback_requested);
+    }
+
+    #[test]
+    fn rejects_api_release_when_tag_and_url_do_not_match() {
+        let mut release = entropy_release("v0.3.21", &[]);
+        release.html_url = "https://github.com/ergohaven/entropy/releases/tag/v0.3.20".to_owned();
+
+        assert!(latest_entropy_release_from_api(release).is_err());
+    }
+
+    #[test]
+    fn rejects_noncanonical_api_release_tags() {
+        for tag in ["0.3.21", "v0.3.21-rc.1", "v0.3.21+build.1", "v0.03.21"] {
+            assert!(latest_entropy_release_from_api(entropy_release(tag, &[])).is_err());
+        }
+    }
+
+    #[test]
+    fn complete_api_metadata_distinguishes_available_and_missing_assets() {
+        let Some(asset_name) = current_platform_asset_name() else {
+            return;
+        };
+        let available = build_update_result(
+            latest_entropy_release_from_api(entropy_release("v0.3.21", &[asset_name])).unwrap(),
+        );
+        let missing = build_update_result(
+            latest_entropy_release_from_api(entropy_release("v0.3.21", &[])).unwrap(),
+        );
+
+        assert!(matches!(
+            &available.asset,
+            UpdateAssetState::Available(UpdateAsset { name, .. }) if name == asset_name
+        ));
+        assert_eq!(
+            available
+                .downloadable_asset()
+                .map(|asset| asset.name.as_str()),
+            Some(asset_name)
+        );
+        assert_eq!(missing.asset, UpdateAssetState::MissingForPlatform);
+        assert!(missing.downloadable_asset().is_none());
+    }
+
+    #[test]
+    fn uses_tag_only_redirect_after_api_failure() {
+        let latest = fetch_latest_release_with_fallback(
+            || Err("GitHub request failed: rate limited".to_owned()),
+            || {
+                release_from_latest_release_redirect(
+                    "https://github.com/ergohaven/entropy/releases/tag/v999.0.0",
+                )
+            },
+        )
+        .unwrap();
+        let result = build_update_result(latest);
+
+        assert_eq!(result.latest_version, "v999.0.0");
+        assert_eq!(
+            result.release_url,
+            "https://github.com/ergohaven/entropy/releases/tag/v999.0.0"
+        );
+        assert_eq!(result.asset, UpdateAssetState::MetadataUnavailable);
+        assert!(result.downloadable_asset().is_none());
+        assert_eq!(result.relation, VersionRelation::UpdateAvailable);
+    }
+
+    #[test]
+    fn reports_api_and_redirect_failures_together() {
+        let result = fetch_latest_release_with_fallback(
+            || Err("GitHub request failed: rate limited".to_owned()),
+            || Err("GitHub Releases request failed: unavailable".to_owned()),
+        );
+        let Err(error) = result else {
+            panic!("fallback should have failed");
+        };
+
+        assert_eq!(
+            error,
+            "GitHub request failed: rate limited; GitHub Releases fallback failed: GitHub Releases request failed: unavailable"
+        );
+    }
+
+    #[test]
+    fn compares_prerelease_versions_using_semver_precedence() {
+        assert_eq!(
+            compare_entropy_versions("0.3.21-rc.1", "v0.3.21"),
+            VersionRelation::UpdateAvailable
+        );
+        assert_eq!(
+            compare_entropy_versions("0.3.21", "v0.3.21-rc.1"),
+            VersionRelation::DevelopmentBuild
+        );
+        assert_eq!(
+            compare_entropy_versions("0.3.21", "v0.3.21"),
+            VersionRelation::UpToDate
+        );
+        assert_eq!(
+            compare_entropy_versions("0.3.21+local", "v0.3.21"),
+            VersionRelation::UpToDate
+        );
     }
 
     #[test]
