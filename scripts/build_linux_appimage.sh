@@ -12,6 +12,10 @@ APPDIR="${APPDIR:-$ROOT/target/appimage/Entropy.AppDir}"
 # Кэш инструментов общий с nfpm, который кладёт туда же scripts/prepare_env.sh,
 # и переживает `cargo clean`.
 APPIMAGETOOL="${APPIMAGETOOL:-$ROOT/.cache/tools/appimagetool-x86_64.AppImage}"
+# mksquashfs пишет в образ mtime каждого файла, а AppDir собирается `install`ом
+# «сейчас», поэтому две сборки одного дерева иначе дают разные суммы.
+SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --pretty=%ct 2>/dev/null || echo 315532800)}"
+export SOURCE_DATE_EPOCH
 
 cd "$ROOT"
 # shellcheck disable=SC1091
@@ -55,6 +59,11 @@ cp -r "$ROOT/assets/icons/hicolor" "$APPDIR/usr/share/icons/hicolor"
 install -m 0644 "$ROOT/packaging/linux/entropy.desktop" "$APPDIR/entropy.desktop"
 printf 'X-AppImage-Version=%s\n' "${VERSION#v}" >> "$APPDIR/entropy.desktop"
 install -m 0644 "$ROOT/assets/icons/hicolor/256x256/apps/entropy.png" "$APPDIR/entropy.png"
+# .DirIcon создаём сами: appimagetool делает это уже после нормализации времён,
+# и его симлинк со временем «сейчас» ломает воспроизводимость образа.
+ln -s entropy.png "$APPDIR/.DirIcon"
+
+find "$APPDIR" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
 
 if [[ ! -x "$APPIMAGETOOL" ]]; then
   APPIMAGETOOL_DOWNLOAD="$(mktemp "${APPIMAGETOOL}.download.XXXXXX")"

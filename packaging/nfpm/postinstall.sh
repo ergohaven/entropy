@@ -3,7 +3,9 @@ set -e
 
 if command -v udevadm >/dev/null 2>&1; then
 	udevadm control --reload-rules >/dev/null 2>&1 || true
-	udevadm trigger >/dev/null 2>&1 || true
+	# Только hidraw: полный trigger переприменяет правила ко всем устройствам
+	# системы, вплоть до пересоздания сетевых интерфейсов и дисковых симлинков.
+	udevadm trigger --subsystem-match=hidraw >/dev/null 2>&1 || true
 fi
 
 if command -v update-desktop-database >/dev/null 2>&1; then

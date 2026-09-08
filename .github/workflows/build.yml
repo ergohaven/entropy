@@ -84,34 +84,22 @@ jobs:
         if: matrix.kind == 'linux'
         uses: arduino/setup-task@v2
         with:
-          version: 3.x
+          version: 3.44.0
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Linux packages
+      # Путь разработчика: `task linux:all` на голом хосте. Публикуемые пакеты
+      # приезжают не отсюда, а из контейнера с пиннутым тулчейном — здесь
+      # проверяется только то, что локальная сборка вообще работает.
+      - name: Build Linux packages on the host
         if: matrix.kind == 'linux'
         run: |
           sudo apt-get install -y --no-install-recommends libarchive-tools desktop-file-utils
           scripts/prepare_env.sh --tools-only
+          scripts/test_toolchain_pins.sh
+          scripts/test_pkg_version.sh
           task linux:all
           scripts/test_linux_packages.sh
           desktop-file-validate packaging/linux/entropy.desktop
-
-      # Настоящая установка, а не только распаковка: только она проверяет, что
-      # руками выписанные Depends действительно существуют в архиве Ubuntu.
-      - name: Install the .deb
-        if: matrix.kind == 'linux'
-        run: |
-          sudo apt-get install -y ./dist/linux/*.deb
-          test -x /usr/bin/entropy
-          dpkg -L ergohaven-entropy
-
-      - name: Upload Linux packages
-        if: matrix.kind == 'linux'
-        uses: actions/upload-artifact@v7
-        with:
-          name: entropy-linux-packages
-          path: dist/linux/*
-          if-no-files-found: error
 
       - name: Test layout indicator window policy
         if: matrix.kind != 'linux'
@@ -132,27 +120,63 @@ jobs:
           path: ${{ matrix.binary }}
           if-no-files-found: error
 
-  # Тот же `task docker:linux`, что запускает разработчик: проверяется не только
-  # образ, но и утверждение, ради которого он существует — Linux-артефакты
-  # собираются одинаково у разработчика и в CI, независимо от того, что стоит на
-  # машине.
+  # Канонические Linux-артефакты: только контейнер с пиннутыми базовым образом,
+  # слепком архива Debian и версиями nfpm/appimagetool. У хост-джобы Rust
+  # плавающий (stable), и её пакеты поэтому никуда не публикуются.
   container:
     name: Build (toolchain container)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # SOURCE_DATE_EPOCH берётся из времени коммита, а без истории его нет.
+          fetch-depth: 0
 
       - name: Install go-task
         uses: arduino/setup-task@v2
         with:
-          version: 3.x
+          version: 3.44.0
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Linux artifacts in the container
-        run: task docker:linux
+      # Собирает дважды из одного дерева и сравнивает суммы: без этого
+      # «воспроизводимо» остаётся утверждением, которое никто не проверял.
+      - name: Build Linux artifacts twice in the container
+        run: task docker:repro
+
+      - name: Take the verified build as the canonical artifacts
+        run: |
+          mkdir -p dist/linux
+          cp target/repro/a/linux/* dist/linux/
 
       - name: Verify package contents
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libarchive-tools
           scripts/test_linux_packages.sh
+
+      - name: Upload Linux packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: entropy-linux-packages
+          path: dist/linux/*
+          if-no-files-found: error
+
+  # Установка, а не распаковка: только она проверяет, что выписанные руками
+  # зависимости существуют в репозиториях, разрешаются и что приложение с ними
+  # стартует. Три чистых образа вместо хоста, где всё нужное уже стоит как
+  # build-зависимость.
+  packages:
+    name: Install packages (clean distros)
+    runs-on: ubuntu-latest
+    needs: container
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download the container-built packages
+        uses: actions/download-artifact@v8
+        with:
+          name: entropy-linux-packages
+          path: dist/linux
+
+      - name: Clean-install on Debian, Fedora and Arch
+        run: scripts/test_linux_install.sh

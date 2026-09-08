@@ -1,6 +1,10 @@
+# Entropy Vial hidraw access v2
 # Vial-compatible HID devices: grant access to the active local user.
 # TAG+="uaccess" hands the device to the logged-in session via systemd-logind,
 # so no static group membership is required.
+# Первая строка — маркер версии правила: по нему приложение отличает актуальное
+# правило от старого (см. vial_udev_rule_is_current в src/ui/app_settings.rs),
+# и без неё пакет считается не настроившим доступ.
 # Второе правило — для Bluetooth: у подключённых по BLE устройств серийный номер
 # Vial в hidraw не виден, остаётся только идентификатор шины HID (0005 = BLUETOOTH).
 # Оно должно совпадать с тем, что ставит linux/udev/install-vial-rules.sh.

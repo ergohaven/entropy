@@ -9,6 +9,19 @@ FROM ${RUST_IMAGE}
 
 ARG DEBIAN_FRONTEND=noninteractive
 
+# Слепок архива Debian на фиксированную дату: с обычным deb.debian.org «тот же
+# Dockerfile» через месяц ставит другие версии заголовков и рантайма, и
+# воспроизводимость держится только на удаче. Дату двигаем осознанно, вместе с
+# дайджестом базового образа.
+ARG DEBIAN_SNAPSHOT=20260901T000000Z
+RUN set -eux; \
+	rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*; \
+	{ \
+		echo "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT} bookworm main"; \
+		echo "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT} bookworm-updates main"; \
+		echo "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT} bookworm-security main"; \
+	} > /etc/apt/sources.list
+
 # Тот же набор, что ставит scripts/prepare_env.sh для debian, плюс bsdtar из
 # libarchive-tools — им проверяет содержимое пакетов scripts/test_linux_packages.sh.
 RUN set -eux; \

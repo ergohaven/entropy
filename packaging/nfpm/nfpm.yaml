@@ -1,21 +1,27 @@
 # nfpm config for the Entropy desktop app (deb / rpm / archlinux).
 # nfpm expands ${...} from its own environment; the Taskfile exports PKG_ARCH
-# (amd64 / arm64) and VERSION (from Cargo.toml or the release tag). Такой
+# (amd64 / arm64), VERSION (уже приведённую к формату скриптом
+# scripts/pkg_version.sh) и GLIBC_VERSION (scripts/glibc_baseline.sh). Такой
 # подстановки нет в contents.src, поэтому бинарник Taskfile кладёт в
 # target/nfpm/entropy, а не подставляет сюда путь.
-# Depends declared by hand: auto-detection (ldd/find-requires) is unreliable under
-# cross-compilation, and the binary link-loads its GUI stack (libGL, xkbcommon,
-# X11/xcb, wayland) via dlopen, so those must be listed explicitly rather than
-# derived.
-# Only libc is a real ELF dependency; hidapi uses the pure-Rust hidraw backend
-# (no libudev) and file dialogs go through xdg-desktop-portal, not GTK.
+#
+# Зависимости выписаны руками: автоопределение видит только три NEEDED-записи
+# ELF (libc, libm, libgcc_s) — весь GUI-стек грузится через dlopen, и пакет с
+# автоматическим списком поставился бы, но не запустился. Список сверен со
+# строками сонеймов в самом бинарнике; полнота проверяется установкой в чистые
+# образы дистрибутивов (scripts/test_linux_install.sh).
+# hidapi собран с чисто растовым hidraw-бэкендом (libudev не нужен), файловые
+# диалоги идут через xdg-desktop-portal, а не GTK.
 name: ergohaven-entropy
 arch: ${PKG_ARCH}
 platform: linux
 version: ${VERSION}
+# Версия уже готова для целевого формата, второй разбор семвера её только
+# испортит: 0.3.21~rc.1 в semver невалидна.
+version_schema: none
 section: utils
 priority: optional
-maintainer: Ergohaven <ergohaven@users.noreply.github.com>
+maintainer: Ergohaven <hello@eh.works>
 description: |
   Desktop app for configuring Vial-QMK and Vial-RMK programmable keyboards.
   Modern interface for layouts, keycodes, macros, lighting, pointing controls
@@ -26,12 +32,19 @@ license: GPL-3.0-or-later
 overrides:
   deb:
     depends:
-      - libc6
-      - libxkbcommon0
-      - libx11-6
-      - libxcb1
+      - libc6 (>= ${GLIBC_VERSION})
+      - libgcc-s1
       - libgl1
+      - libegl1
+      - libx11-6
+      - libx11-xcb1
+      - libxcursor1
+      - libxi6
+      - libxrender1
+      - libxkbcommon0
+      - libxkbcommon-x11-0
       - libwayland-client0
+      - libwayland-egl1
     recommends:
       - xdg-desktop-portal
   rpm:
@@ -39,21 +52,37 @@ overrides:
     # дистрибутивами (libX11 в Fedora против libX11-6 в openSUSE), а провайды
     # вида libX11.so.6()(64bit) есть в любом rpm-дистрибутиве.
     depends:
-      - "libxkbcommon.so.0()(64bit)"
-      - "libX11.so.6()(64bit)"
-      - "libxcb.so.1()(64bit)"
+      - "libc.so.6(GLIBC_${GLIBC_VERSION})(64bit)"
+      - "libm.so.6()(64bit)"
+      - "libgcc_s.so.1()(64bit)"
       - "libGL.so.1()(64bit)"
+      - "libEGL.so.1()(64bit)"
+      - "libX11.so.6()(64bit)"
+      - "libX11-xcb.so.1()(64bit)"
+      - "libXcursor.so.1()(64bit)"
+      - "libXi.so.6()(64bit)"
+      - "libXrender.so.1()(64bit)"
+      - "libxkbcommon.so.0()(64bit)"
+      - "libxkbcommon-x11.so.0()(64bit)"
       - "libwayland-client.so.0()(64bit)"
+      - "libwayland-egl.so.1()(64bit)"
     recommends:
       - xdg-desktop-portal
   archlinux:
     depends:
-      - libxkbcommon
-      - libx11
-      - libxcb
+      - glibc>=${GLIBC_VERSION}
+      - gcc-libs
       - libglvnd
+      - libx11
+      - libxcursor
+      - libxi
+      - libxrender
+      - libxkbcommon
+      - libxkbcommon-x11
       - wayland
 
+# Режимы выставлены явно: nfpm наследует их у файла в рабочей копии, а там они
+# зависят от umask сборщика — так в пакет уезжали 0664.
 contents:
   - src: ./target/nfpm/entropy
     dst: /usr/bin/entropy
@@ -62,28 +91,48 @@ contents:
 
   - src: ./packaging/linux/entropy.desktop
     dst: /usr/share/applications/entropy.desktop
+    file_info:
+      mode: 0644
 
   - src: ./packaging/linux/com.ergohaven.entropy.metainfo.xml
     dst: /usr/share/metainfo/com.ergohaven.entropy.metainfo.xml
+    file_info:
+      mode: 0644
 
   - src: ./packaging/linux/59-vial.rules
     dst: /usr/lib/udev/rules.d/59-vial.rules
+    file_info:
+      mode: 0644
 
   - src: ./assets/icons/hicolor/16x16/apps/entropy.png
     dst: /usr/share/icons/hicolor/16x16/apps/entropy.png
+    file_info:
+      mode: 0644
   - src: ./assets/icons/hicolor/32x32/apps/entropy.png
     dst: /usr/share/icons/hicolor/32x32/apps/entropy.png
+    file_info:
+      mode: 0644
   - src: ./assets/icons/hicolor/48x48/apps/entropy.png
     dst: /usr/share/icons/hicolor/48x48/apps/entropy.png
+    file_info:
+      mode: 0644
   - src: ./assets/icons/hicolor/64x64/apps/entropy.png
     dst: /usr/share/icons/hicolor/64x64/apps/entropy.png
+    file_info:
+      mode: 0644
   - src: ./assets/icons/hicolor/128x128/apps/entropy.png
     dst: /usr/share/icons/hicolor/128x128/apps/entropy.png
+    file_info:
+      mode: 0644
   - src: ./assets/icons/hicolor/256x256/apps/entropy.png
     dst: /usr/share/icons/hicolor/256x256/apps/entropy.png
+    file_info:
+      mode: 0644
 
   - src: ./LICENSE
     dst: /usr/share/doc/ergohaven-entropy/LICENSE
+    file_info:
+      mode: 0644
 
 scripts:
   postinstall: ./packaging/nfpm/postinstall.sh
