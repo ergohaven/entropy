@@ -63,6 +63,84 @@ jobs:
         if: matrix.kind == 'windows'
         run: cargo build --release
 
+      - name: Build macOS binary
+        if: matrix.kind == 'macos'
+        shell: bash
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '10.15'
+        run: cargo build --release --target "${{ matrix.target }}"
+
+      - name: Import macOS self-signed release identity
+        if: matrix.kind == 'macos'
+        shell: bash
+        env:
+          CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          EXPECTED_MACOS_SIGNING_CERTIFICATE_SHA1: ${{ vars.MACOS_SIGNING_CERTIFICATE_SHA1 }}
+        run: |
+          umask 077
+          if [[ -z "$CERTIFICATE_P12_BASE64" ]] ||
+            [[ -z "$MACOS_CERTIFICATE_PASSWORD" ]]; then
+            echo "macOS stable signing secrets are not configured" >&2
+            exit 1
+          fi
+
+          expected_certificate_sha1="$(
+            printf '%s' "$EXPECTED_MACOS_SIGNING_CERTIFICATE_SHA1" |
+              tr -d '[:space:]:' |
+              tr '[:lower:]' '[:upper:]'
+          )"
+          if [[ ! "$expected_certificate_sha1" =~ ^[[:xdigit:]]{40}$ ]]; then
+            echo "MACOS_SIGNING_CERTIFICATE_SHA1 must be a 40-character SHA-1 fingerprint" >&2
+            exit 1
+          fi
+
+          certificate_path="$RUNNER_TEMP/entropy-release-signing.p12"
+          certificate_pem_path="$RUNNER_TEMP/entropy-release-signing.pem"
+          keychain_path="$RUNNER_TEMP/entropy-signing.keychain-db"
+          keychain_password="$(openssl rand -base64 32)"
+
+          printf '%s' "$CERTIFICATE_P12_BASE64" |
+            base64 -D > "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -f pkcs12 \
+            -k "$keychain_path"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+
+          openssl pkcs12 \
+            -in "$certificate_path" \
+            -nokeys \
+            -passin "pass:$MACOS_CERTIFICATE_PASSWORD" \
+            -out "$certificate_pem_path"
+          certificate_sha1="$(
+            openssl x509 \
+              -in "$certificate_pem_path" \
+              -noout \
+              -fingerprint \
+              -sha1 |
+              sed 's/^.*=//; s/://g' |
+              tr '[:lower:]' '[:upper:]'
+          )"
+          if [[ ! "$certificate_sha1" =~ ^[[:xdigit:]]{40}$ ]]; then
+            echo "Could not derive macOS signing certificate SHA-1" >&2
+            exit 1
+          fi
+          if [[ "$certificate_sha1" != "$expected_certificate_sha1" ]]; then
+            echo "Configured macOS signing certificate does not match the approved fingerprint" >&2
+            exit 1
+          fi
+          echo "MACOS_SIGNING_CERTIFICATE_SHA1=$certificate_sha1" >> "$GITHUB_ENV"
+
       - name: Package Linux artifact
         if: matrix.kind == 'linux'
         shell: bash
@@ -81,11 +159,37 @@ jobs:
       - name: Build macOS app bundle and DMG
         if: matrix.kind == 'macos'
         shell: bash
+        env:
+          CODESIGN_IDENTITY: Entropy Open Source Release Signing
+          CODESIGN_KEYCHAIN: ${{ runner.temp }}/entropy-signing.keychain-db
+          REQUIRE_STABLE_SIGNING: '1'
+          SKIP_CARGO_BUILD: '1'
         run: |
           TARGET="${{ matrix.target }}" scripts/build_macos_app.sh
+
+      - name: Package macOS release artifact
+        if: matrix.kind == 'macos'
+        shell: bash
+        run: |
+          dmg_paths=(dist/macos/*.dmg)
+          if [[ ${#dmg_paths[@]} -ne 1 || ! -f "${dmg_paths[0]}" ]]; then
+            echo "Expected exactly one macOS DMG" >&2
+            exit 1
+          fi
+
           mkdir -p dist/release
           asset="entropy-${GITHUB_REF_NAME}-macos-${{ matrix.arch }}.dmg"
-          cp dist/macos/*.dmg "dist/release/$asset"
+          cp "${dmg_paths[0]}" "dist/release/$asset"
+
+      - name: Remove macOS signing credentials
+        if: matrix.kind == 'macos' && always()
+        shell: bash
+        run: |
+          keychain_path="$RUNNER_TEMP/entropy-signing.keychain-db"
+          security delete-keychain "$keychain_path" || true
+          rm -f \
+            "$RUNNER_TEMP/entropy-release-signing.p12" \
+            "$RUNNER_TEMP/entropy-release-signing.pem"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -121,7 +225,8 @@ jobs:
           printf '\n## Downloads\n\n' >> RELEASE_NOTES.md
           printf '%s\n' '- Linux: download the `.AppImage`, make it executable, and run it.' >> RELEASE_NOTES.md
           printf '%s\n' '- Windows: download and run the portable `.exe`.' >> RELEASE_NOTES.md
-          printf '%s\n' '- macOS: download the unsigned `.dmg` for your Mac (`arm64` for Apple Silicon, `x86_64` for Intel), drag Entropy to Applications, then remove quarantine if macOS blocks the app.' >> RELEASE_NOTES.md
+          printf '%s\n' '- macOS: download the project-signed, non-notarized `.dmg` for your Mac (`arm64` for Apple Silicon, `x86_64` for Intel), then drag Entropy to Applications. macOS may require Privacy & Security > Open Anyway.' >> RELEASE_NOTES.md
+          printf '%s\n' '- When upgrading from an earlier unsigned Entropy release, remove old Entropy entries from Accessibility and Input Monitoring, then grant both permissions once for the project-signed app. Later builds signed with the same project key are intended to preserve this identity.' >> RELEASE_NOTES.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

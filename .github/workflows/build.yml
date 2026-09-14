@@ -72,8 +72,16 @@ jobs:
         if: matrix.kind != 'macos'
         run: cargo build --release
 
+      - name: Build macOS binary
+        if: matrix.kind == 'macos'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '10.15'
+        run: cargo build --release --target "${{ matrix.target }}"
+
       - name: Build macOS app bundle
         if: matrix.kind == 'macos'
+        env:
+          SKIP_CARGO_BUILD: '1'
         run: TARGET="${{ matrix.target }}" scripts/build_macos_app.sh
 
       - name: Test
@@ -91,6 +99,10 @@ jobs:
           cargo test --all-targets app::app_lifecycle::tests::combo_completion_starts_settings_queued_behind_it -- --exact
           cargo test --all-targets app::vial_hid_task::tests::macro_write_uses_the_serialized_background_transport -- --exact
           cargo test --all-targets app::app_lifecycle::tests::layer_completion_starts_settings_queued_behind_it -- --exact
+
+      - name: Test macOS stable signing validation
+        if: matrix.kind == 'macos'
+        run: scripts/test_macos_stable_signing.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7

@@ -5,8 +5,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="${APP_NAME:-Entropy}"
 BUNDLE_ID="${BUNDLE_ID:-com.ergohaven.entropy}"
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
+CODESIGN_KEYCHAIN="${CODESIGN_KEYCHAIN:-}"
+MACOS_SIGNING_CERTIFICATE_SHA1="${MACOS_SIGNING_CERTIFICATE_SHA1:-}"
+REQUIRE_STABLE_SIGNING="${REQUIRE_STABLE_SIGNING:-0}"
+SKIP_CARGO_BUILD="${SKIP_CARGO_BUILD:-0}"
 MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-10.15}"
 export MACOSX_DEPLOYMENT_TARGET
+
+source "$ROOT/scripts/macos_stable_signing.sh"
 
 VERSION="$(
 	awk -F '"' '/^version = / { print $2; exit }' "$ROOT/Cargo.toml"
@@ -81,17 +87,40 @@ sign_app_bundle() {
 	fi
 
 	if ! command -v codesign >/dev/null 2>&1; then
+		if [[ "$REQUIRE_STABLE_SIGNING" == "1" ]]; then
+			echo "codesign not found; cannot build a signed release" >&2
+			return 1
+		fi
 		echo "codesign not found; skipped app bundle signing"
 		return
 	fi
 
 	local codesign_args=(--force --sign "$CODESIGN_IDENTITY")
+	if [[ -n "$CODESIGN_KEYCHAIN" ]]; then
+		codesign_args+=(--keychain "$CODESIGN_KEYCHAIN")
+	fi
 	if [[ "$CODESIGN_IDENTITY" == "-" ]]; then
 		codesign_args+=(--timestamp=none)
+	else
+		codesign_args+=(
+			--identifier "$BUNDLE_ID"
+			--requirements "$(macos_stable_designated_requirement \
+				"$MACOS_SIGNING_CERTIFICATE_SHA1" \
+				"$BUNDLE_ID")"
+			--options runtime
+			--timestamp=none
+		)
 	fi
 
 	codesign "${codesign_args[@]}" "$APP_PATH"
-	codesign --verify --strict "$APP_PATH"
+	if [[ "$REQUIRE_STABLE_SIGNING" == "1" ]]; then
+		macos_verify_stable_signature \
+			"$APP_PATH" \
+			"$MACOS_SIGNING_CERTIFICATE_SHA1" \
+			"$BUNDLE_ID"
+	else
+		codesign --verify --strict "$APP_PATH"
+	fi
 }
 
 create_dmg_with_retries() {
@@ -125,8 +154,28 @@ create_dmg_with_retries() {
 	return "$status"
 }
 
+macos_validate_stable_signing_configuration \
+	"$CODESIGN_IDENTITY" \
+	"$REQUIRE_STABLE_SIGNING" \
+	"$MACOS_SIGNING_CERTIFICATE_SHA1" \
+	"$BUNDLE_ID"
+
 cd "$ROOT"
-cargo build "${BUILD_ARGS[@]}"
+case "$SKIP_CARGO_BUILD" in
+0)
+	cargo build "${BUILD_ARGS[@]}"
+	;;
+1)
+	if [[ ! -x "$BIN" ]]; then
+		echo "SKIP_CARGO_BUILD=1 requires a prebuilt executable at $BIN" >&2
+		exit 1
+	fi
+	;;
+*)
+	echo "SKIP_CARGO_BUILD must be 0 or 1" >&2
+	exit 1
+	;;
+esac
 validate_binary_arch
 
 rm -rf "$APP_PATH" "$ZIP_PATH" "$DMG_PATH"
@@ -188,6 +237,9 @@ fi
 
 if command -v hdiutil >/dev/null 2>&1; then
 	create_dmg_with_retries
+elif [[ "$REQUIRE_STABLE_SIGNING" == "1" ]]; then
+	echo "hdiutil not found; cannot build a macOS release DMG" >&2
+	exit 1
 else
 	echo "hdiutil not found; skipped DMG build"
 fi
