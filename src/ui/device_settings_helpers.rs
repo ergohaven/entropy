@@ -1,5 +1,30 @@
 use super::*;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "device_settings_helpers/clock_lifecycle_tests.rs"]
+mod clock_lifecycle_tests;
+
+#[cfg(not(target_arch = "wasm32"))]
+type QmkBridgeFactory<'a> = dyn FnMut(
+    Device,
+    crate::qmk_hid_host::HostDataMode,
+    Option<crate::hid::SharedHidOutput>,
+    crate::qmk_hid_host::HostProtocol,
+) -> crate::qmk_hid_host::QmkHidHostBridge + 'a;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn qmk_bridge_device_still_connected(devices: &[Device], path: &str) -> bool {
+    devices.iter().any(|device| device.path == path)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn qmk_bridge_matches_device(
+    bridge: &crate::qmk_hid_host::QmkHidHostBridge,
+    current: &Device,
+) -> bool {
+    bridge.device().path == current.path && bridge.device().permits_hid_target(current)
+}
+
 impl EntropyApp {
     pub(super) fn is_encoder_layout_option(option: &LayoutOption) -> bool {
         if !option.choices.is_empty() {
@@ -1864,10 +1889,21 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn sync_qmk_hid_host_bridges(&mut self) {
-        let selected_path = self
-            .selected_device
-            .and_then(|idx| self.device_manager.devices().get(idx))
-            .map(|device| device.path.as_str());
+        self.sync_qmk_hid_host_bridges_with(&mut crate::qmk_hid_host::QmkHidHostBridge::start);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn sync_qmk_hid_host_bridges_with(&mut self, start: &mut QmkBridgeFactory<'_>) {
+        // A queued click can already change selected_device while the previous
+        // cancelled connector still owns its endpoint. Reserve the actual
+        // connector, not the next UI selection, until that handoff begins.
+        let selected_device = match &self.connect_state {
+            ConnectState::Loading { device, .. } => Some(device),
+            _ => self
+                .selected_device
+                .and_then(|idx| self.device_manager.devices().get(idx)),
+        };
+        let selected_path = selected_device.map(|device| device.path.as_str());
 
         let mut desired = std::collections::HashMap::<
             String,
@@ -1875,6 +1911,7 @@ impl EntropyApp {
                 crate::device::Device,
                 crate::qmk_hid_host::HostDataMode,
                 Option<crate::hid::SharedHidOutput>,
+                crate::qmk_hid_host::HostProtocol,
             ),
         >::new();
 
@@ -1883,8 +1920,26 @@ impl EntropyApp {
                 continue;
             }
 
-            let mut mode = crate::qmk_hid_host::HostDataMode::default();
-            if Some(device.path.as_str()) == selected_path {
+            let selected = Some(device.path.as_str()) == selected_path;
+            if !selected
+                && selected_device.is_some_and(|selected| device.may_share_physical_device(selected))
+            {
+                // An alias must not race the selected connector, even while
+                // that connector has not published its shared output yet.
+                continue;
+            }
+            // The connector owns a selected endpoint until it publishes its
+            // shared output. A background opener must not race that acquisition.
+            if selected && (self.shared_hid_output.is_none() || self.layout.is_none()) {
+                continue;
+            }
+            let mut mode = self
+                .qmk_hid_hosts
+                .get(&device.path)
+                .filter(|bridge| !selected && qmk_bridge_matches_device(bridge, device))
+                .map(|bridge| bridge.mode())
+                .unwrap_or_default();
+            if selected {
                 if let Some(layout) = self.layout.as_ref() {
                     mode = Self::qmk_hid_host_mode_for(layout, self.layout_options_value);
                 }
@@ -1900,24 +1955,115 @@ impl EntropyApp {
             }
 
             if !mode.is_empty() {
-                let shared_output = (Some(device.path.as_str()) == selected_path)
+                let shared_output = selected
                     .then(|| self.shared_hid_output.clone())
                     .flatten();
-                desired.insert(device.path.clone(), (device.clone(), mode, shared_output));
+                let protocol = if selected {
+                    crate::qmk_hid_host::HostProtocol::Selected(
+                        self.layout
+                            .as_ref()
+                            .is_some_and(|layout| layout.live_features.extended_host_protocol),
+                    )
+                } else {
+                    crate::qmk_hid_host::HostProtocol::Discover
+                };
+                desired.insert(
+                    device.path.clone(),
+                    (device.clone(), mode, shared_output, protocol),
+                );
             }
         }
 
         self.qmk_hid_hosts.retain(|path, bridge| {
-            desired.get(path).is_some_and(|(_, mode, shared_output)| {
-                *mode == bridge.mode() && shared_output.is_some() == bridge.uses_shared_output()
-            })
+            let Some((device, mode, shared_output, protocol)) = desired.get(path) else {
+                return false;
+            };
+            if !qmk_bridge_matches_device(bridge, device) {
+                return false;
+            }
+            let same_mode = *mode == bridge.mode();
+            let keep = same_mode
+                && bridge.matches_shared_output(shared_output.as_ref())
+                && *protocol == bridge.protocol();
+            if !keep && same_mode {
+                // Transfer the same service, not a request to clear its display.
+                bridge.suppress_shutdown();
+            }
+            keep
         });
 
-        for (path, (device, mode, shared_output)) in desired {
+        for (path, (device, mode, shared_output, protocol)) in desired {
             self.qmk_hid_hosts.entry(path).or_insert_with(|| {
-                crate::qmk_hid_host::QmkHidHostBridge::start(device, mode, shared_output)
+                start(device, mode, shared_output, protocol)
             });
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn clear_qmk_hid_host_bridges_for_reconnect(&mut self) {
+        self.clear_qmk_hid_host_bridges_for_reconnect_with(
+            &mut crate::qmk_hid_host::QmkHidHostBridge::start,
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn clear_qmk_hid_host_bridges_for_reconnect_with(&mut self, start: &mut QmkBridgeFactory<'_>) {
+        let devices = self.device_manager.devices();
+        let selected = self.selected_device.and_then(|index| devices.get(index));
+        self.qmk_hid_hosts.retain(|path, bridge| {
+            let Some(device) = devices
+                .iter()
+                .find(|device| device.path == *path && qmk_bridge_matches_device(bridge, device))
+            else {
+                return false;
+            };
+            if selected.is_some_and(|selected| bridge.device().may_share_physical_device(selected)) {
+                // Free only this selection's physical endpoint, including aliases.
+                bridge.suppress_shutdown();
+                return false;
+            }
+            if bridge.uses_shared_output() {
+                // The former editor no longer holds its HID owner. Continue
+                // its known mode through a freshly discovered dedicated owner.
+                let mode = bridge.mode();
+                bridge.suppress_shutdown();
+                bridge.stop();
+                *bridge = start(
+                    device.clone(),
+                    mode,
+                    None,
+                    crate::qmk_hid_host::HostProtocol::Discover,
+                );
+            }
+            true
+        });
+    }
+
+    /// Discovery updates retire only vanished/replaced enumerations; returning
+    /// to the picker is not a request to stop other keyboards' live displays.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn retain_connected_qmk_hid_host_bridges(&mut self) {
+        let devices = self.device_manager.devices();
+        self.qmk_hid_hosts.retain(|path, bridge| {
+            devices
+                .iter()
+                .any(|device| device.path == *path && qmk_bridge_matches_device(bridge, device))
+        });
+    }
+
+    /// A failed/cleared editor must not take unrelated background owners down.
+    /// No endpoint is opened here: the selected transport may still be retiring.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn retire_selected_qmk_hid_host_bridges(&mut self) {
+        self.retain_connected_qmk_hid_host_bridges();
+        let selected = match &self.connect_state {
+            ConnectState::Loading { device, .. } => Some(device),
+            _ => self.selected_device.and_then(|index| self.device_manager.devices().get(index)),
+        };
+        self.qmk_hid_hosts.retain(|_, bridge| {
+            !bridge.uses_shared_output()
+                && !selected.is_some_and(|selected| bridge.device().may_share_physical_device(selected))
+        });
     }
 
     pub(super) fn open_layout_options_settings_page(&mut self) {
@@ -1988,6 +2134,30 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reconnect_preserves_only_the_bridge_for_the_remaining_macropad() {
+        let remaining = Device {
+            name: "M4CR0Pad v3".to_owned(),
+            vendor_id: 0xE126,
+            product_id: 0x0066,
+            manufacturer: "Ergohaven".to_owned(),
+            serial_number: "second".to_owned(),
+            bus_type: "USB".to_owned(),
+            path: "second-path".to_owned(),
+            instance_token: "second-instance".to_owned(),
+            firmware: FirmwareProtocol::Vial,
+        };
+
+        assert!(qmk_bridge_device_still_connected(
+            std::slice::from_ref(&remaining),
+            "second-path"
+        ));
+        assert!(!qmk_bridge_device_still_connected(
+            std::slice::from_ref(&remaining),
+            "disconnected-first-path"
+        ));
+    }
 
     fn test_app() -> EntropyApp {
         let ctx = egui::Context::default();
@@ -2774,6 +2944,7 @@ mod tests {
             serial_number: "test".to_owned(),
             bus_type: "Bluetooth".to_owned(),
             path: "test-shared-live-features".to_owned(),
+            instance_token: String::new(),
             firmware: FirmwareProtocol::Vial,
         };
         let mut layout = test_layout_with_encoders(&[]);
@@ -2786,6 +2957,7 @@ mod tests {
 
         app.device_manager.replace_devices(vec![device.clone()]);
         app.selected_device = Some(0);
+        layout.live_features.extended_host_protocol = true;
         app.layout = Some(layout);
         app.app_settings.layout_sync_enabled = true;
         app.shared_hid_output = hid.shared_output();
@@ -2795,6 +2967,10 @@ mod tests {
 
         let bridge = app.qmk_hid_hosts.get(&device.path).unwrap();
         assert!(bridge.uses_shared_output());
+        assert_eq!(
+            bridge.protocol(),
+            crate::qmk_hid_host::HostProtocol::Selected(true)
+        );
         app.qmk_hid_hosts.clear();
     }
 

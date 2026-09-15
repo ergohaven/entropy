@@ -27,7 +27,6 @@ pub(super) enum VialHidOperation {
     Matrix {
         rows: usize,
         cols: usize,
-        rmk_byte_order: bool,
         remember_ever_pressed: bool,
     },
     BatteryRefresh,
@@ -53,6 +52,32 @@ pub(super) enum VialHidOperation {
         macros: Vec<Vec<u8>>,
         revision: u64,
     },
+    BackgroundUpload {
+        path: std::path::PathBuf,
+        fallback: [u8; 3],
+        scale: crate::app::StandbyBackgroundScale,
+    },
+    BackgroundClear,
+    BackgroundSpeed {
+        old_percent: u16,
+        percent: u16,
+    },
+    StartupImageUpload {
+        path: std::path::PathBuf,
+        fallback: [u8; 3],
+    },
+    StartupImageClear,
+    PictogramLoad {
+        preserve_editor: bool,
+    },
+    PictogramUpload {
+        library: crate::app::PictogramLibrary,
+    },
+    PictogramSlotUpload {
+        library: crate::app::PictogramLibrary,
+        kind: crate::app::PictogramKind,
+        slot: usize,
+    },
     Deferred(super::device_deferred_load::DeferredLoadRequest),
 }
 
@@ -73,6 +98,16 @@ enum VialHidOutcome {
     KeyWritten,
     EncoderWritten,
     MacrosWritten,
+    BackgroundUploaded(crate::app::standby_background::BackgroundUploadResult),
+    BackgroundCleared,
+    BackgroundCancelled {
+        cleared: bool,
+    },
+    BackgroundSpeedSet,
+    StartupImageUploaded(crate::app::standby_background::StartupImageUploadResult),
+    StartupImageCleared,
+    PictogramsLoaded(crate::app::PictogramLibrary),
+    PictogramsUploaded(crate::app::PictogramLibrary),
     Deferred(super::device_deferred_load::DeferredLoadPayload),
 }
 
@@ -90,6 +125,8 @@ pub(super) struct VialHidTask {
     receiver: std::sync::mpsc::Receiver<VialHidTaskResult>,
     operation: VialHidOperation,
     generation: u64,
+    progress: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -101,9 +138,11 @@ pub(super) enum VialHidTaskStart {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn run_vial_hid_operation(
+fn run_vial_hid_operation_with_progress(
     hid: &crate::hid::HidDevice,
     operation: VialHidOperation,
+    progress: &std::sync::atomic::AtomicU32,
+    cancel: &std::sync::atomic::AtomicBool,
 ) -> anyhow::Result<VialHidOutcome> {
     match operation {
         VialHidOperation::UnlockStart => {
@@ -125,13 +164,8 @@ fn run_vial_hid_operation(
             hid.lock()?;
             Ok(VialHidOutcome::Locked)
         }
-        VialHidOperation::Matrix {
-            rows,
-            cols,
-            rmk_byte_order,
-            ..
-        } => hid
-            .get_switch_matrix_with_rmk_byte_order(rows, cols, rmk_byte_order)
+        VialHidOperation::Matrix { rows, cols, .. } => hid
+            .get_switch_matrix(rows, cols)
             .map(VialHidOutcome::Matrix),
         VialHidOperation::BatteryRefresh => hid.get_battery_halves().map(VialHidOutcome::Battery),
         VialHidOperation::KeyWrite {
@@ -163,11 +197,65 @@ fn run_vial_hid_operation(
             hid.set_macro_buffer(&buffer)?;
             Ok(VialHidOutcome::MacrosWritten)
         }
+        VialHidOperation::BackgroundUpload {
+            path,
+            fallback,
+            scale,
+        } => hid
+            .upload_standby_background(&path, fallback, scale, progress, cancel)
+            .map(|result| match result {
+                Some(upload) => VialHidOutcome::BackgroundUploaded(upload),
+                None => VialHidOutcome::BackgroundCancelled {
+                    cleared: progress.load(std::sync::atomic::Ordering::Relaxed) >= 150,
+                },
+            }),
+        VialHidOperation::BackgroundClear => {
+            hid.clear_standby_background()?;
+            Ok(VialHidOutcome::BackgroundCleared)
+        }
+        VialHidOperation::BackgroundSpeed { percent, .. } => {
+            hid.set_standby_background_speed(percent)?;
+            Ok(VialHidOutcome::BackgroundSpeedSet)
+        }
+        VialHidOperation::StartupImageUpload { path, fallback } => hid
+            .upload_startup_image(&path, fallback, progress)
+            .map(VialHidOutcome::StartupImageUploaded),
+        VialHidOperation::StartupImageClear => {
+            hid.clear_startup_image()?;
+            Ok(VialHidOutcome::StartupImageCleared)
+        }
+        VialHidOperation::PictogramLoad { .. } => hid
+            .load_pictograms(progress)
+            .map(VialHidOutcome::PictogramsLoaded),
+        VialHidOperation::PictogramUpload { library } => hid
+            .upload_pictograms(library, progress)
+            .map(VialHidOutcome::PictogramsUploaded),
+        VialHidOperation::PictogramSlotUpload {
+            library,
+            kind,
+            slot,
+        } => hid
+            .upload_pictogram_slot(library, kind, slot, progress)
+            .map(VialHidOutcome::PictogramsUploaded),
         VialHidOperation::Deferred(request) => {
             super::device_deferred_load::run_deferred_load(hid, &request)
                 .map(VialHidOutcome::Deferred)
         }
     }
+}
+
+#[cfg(test)]
+fn run_vial_hid_operation(
+    hid: &crate::hid::HidDevice,
+    operation: VialHidOperation,
+) -> anyhow::Result<VialHidOutcome> {
+    let progress = std::sync::atomic::AtomicU32::new(0);
+    run_vial_hid_operation_with_progress(
+        hid,
+        operation,
+        &progress,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
 }
 
 impl EntropyApp {
@@ -251,6 +339,32 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn cancel_background_upload(&self) {
+        if let Some(task) = &self.vial_hid_task {
+            if matches!(task.operation, VialHidOperation::BackgroundUpload { .. }) {
+                task.cancel
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn standby_background_upload_progress(&self) -> Option<f32> {
+        self.vial_hid_task.as_ref().and_then(|task| {
+            matches!(task.operation, VialHidOperation::BackgroundUpload { .. })
+                .then(|| task.progress.load(std::sync::atomic::Ordering::Relaxed) as f32 / 1000.0)
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn startup_image_upload_progress(&self) -> Option<f32> {
+        self.vial_hid_task.as_ref().and_then(|task| {
+            matches!(task.operation, VialHidOperation::StartupImageUpload { .. })
+                .then(|| task.progress.load(std::sync::atomic::Ordering::Relaxed) as f32 / 1000.0)
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn another_hid_owner_or_write_is_pending(&self) -> bool {
         self.layer_write_task.is_some()
             || self.combo_write_task.is_some()
@@ -265,6 +379,23 @@ impl EntropyApp {
         ctx: &egui::Context,
         operation: VialHidOperation,
     ) -> VialHidTaskStart {
+        self.start_vial_hid_operation_with_runner(ctx, operation, run_vial_hid_operation_with_progress)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_vial_hid_operation_with_runner(
+        &mut self,
+        ctx: &egui::Context,
+        operation: VialHidOperation,
+        run: impl FnOnce(
+                &crate::hid::HidDevice,
+                VialHidOperation,
+                &std::sync::atomic::AtomicU32,
+                &std::sync::atomic::AtomicBool,
+            ) -> anyhow::Result<VialHidOutcome>
+            + Send
+            + 'static,
+    ) -> VialHidTaskStart {
         if self.vial_hid_task.is_some() || self.another_hid_owner_or_write_is_pending() {
             return VialHidTaskStart::Busy;
         }
@@ -272,15 +403,28 @@ impl EntropyApp {
             return VialHidTaskStart::NoDevice;
         };
 
+        if matches!(operation, VialHidOperation::PictogramLoad { .. }) {
+            self.display_settings.pictograms.loading = true;
+            self.display_settings.pictograms.load_failure = None;
+        }
         let generation = self.connection_generation;
         let (sender, receiver) = std::sync::mpsc::channel();
         let repaint_ctx = ctx.clone();
         let task_operation = operation.clone();
+        let progress = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let worker_progress = progress.clone();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
         std::thread::spawn(move || {
             #[cfg(target_os = "macos")]
             let _hid_lock = hid_device.macos_hid_operation_lock();
 
-            let outcome = run_vial_hid_operation(&hid_device, operation.clone());
+            let outcome = run(
+                &hid_device,
+                operation.clone(),
+                &worker_progress,
+                &worker_cancel,
+            );
             let disconnected = outcome
                 .as_ref()
                 .err()
@@ -301,6 +445,8 @@ impl EntropyApp {
             receiver,
             operation: task_operation,
             generation,
+            progress,
+            cancel,
         });
         VialHidTaskStart::Started
     }
@@ -333,7 +479,6 @@ impl EntropyApp {
             VialHidOperation::Matrix {
                 rows,
                 cols,
-                rmk_byte_order: self.matrix_tester_rmk_byte_order,
                 remember_ever_pressed,
             },
         )
@@ -393,6 +538,15 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn poll_vial_hid_task(&mut self, ctx: &egui::Context) {
+        self.poll_vial_hid_task_with_settings_save(ctx, save_app_settings);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_vial_hid_task_with_settings_save(
+        &mut self,
+        ctx: &egui::Context,
+        save_settings: impl FnOnce(&AppSettings),
+    ) {
         let received = match self.vial_hid_task.as_ref() {
             Some(task) => task.receiver.try_recv(),
             None => return,
@@ -505,6 +659,140 @@ impl EntropyApp {
                 self.status_msg = crate::i18n::tr_catalog(
                     self.app_settings.language,
                     "status_messages.macros_saved",
+                )
+                .into();
+            }
+            Ok(VialHidOutcome::BackgroundUploaded(upload)) => {
+                self.app_settings.standby_background_source_path = Some(upload.source_path.clone());
+                save_settings(&self.app_settings);
+                self.display_settings.clock_background_kind = upload.kind;
+                self.display_settings.clock_background_frames = upload.frame_count;
+                self.display_settings.clock_background_bytes = upload.total_size;
+                self.display_settings.clock_background_file_name = Some(upload.file_name);
+                self.display_settings.clock_background_preview_rgba = upload.preview_rgba;
+                self.display_settings.clock_background_preview_frames_rgba =
+                    upload.preview_frames_rgba;
+                self.display_settings.clock_background_preview_delays_ms = upload.preview_delays_ms;
+                self.display_settings.clock_background_preview_revision = self
+                    .display_settings
+                    .clock_background_preview_revision
+                    .wrapping_add(1);
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "display_settings.background_uploaded",
+                )
+                .into();
+            }
+            Ok(VialHidOutcome::BackgroundCancelled { cleared: false }) => {
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "display_settings.upload_cancelled",
+                )
+                .into();
+            }
+            Ok(
+                VialHidOutcome::BackgroundCleared
+                | VialHidOutcome::BackgroundCancelled { cleared: true },
+            ) => {
+                self.display_settings.clock_background_kind = 0;
+                self.display_settings.clock_background_frames = 0;
+                self.display_settings.clock_background_bytes = 0;
+                self.display_settings.clock_background_file_name = None;
+                self.display_settings.clock_background_preview_rgba.clear();
+                self.display_settings
+                    .clock_background_preview_frames_rgba
+                    .clear();
+                self.display_settings
+                    .clock_background_preview_delays_ms
+                    .clear();
+                self.display_settings.clock_background_preview_revision = self
+                    .display_settings
+                    .clock_background_preview_revision
+                    .wrapping_add(1);
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    if matches!(result.operation, VialHidOperation::BackgroundUpload { .. }) {
+                        "display_settings.upload_cancelled"
+                    } else {
+                        "display_settings.background_cleared"
+                    },
+                )
+                .into();
+            }
+            Ok(VialHidOutcome::BackgroundSpeedSet) => {
+                let VialHidOperation::BackgroundSpeed { percent, .. } = result.operation else {
+                    unreachable!("background speed outcome must come from a speed operation");
+                };
+                self.display_settings.clock_background_speed_percent = percent;
+                self.display_settings
+                    .confirmed_clock_background_speed_percent = percent;
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "display_settings.background_speed_saved",
+                )
+                .into();
+            }
+            Ok(VialHidOutcome::StartupImageUploaded(upload)) => {
+                self.display_settings.startup_image_present = true;
+                self.display_settings.startup_image_bytes = upload.total_size;
+                self.display_settings.startup_image_file_name = Some(upload.file_name);
+                self.display_settings.startup_image_preview_rgba = upload.preview_rgba;
+                self.display_settings.startup_image_preview_revision = self
+                    .display_settings
+                    .startup_image_preview_revision
+                    .wrapping_add(1);
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "display_settings.startup_image_uploaded",
+                )
+                .into();
+            }
+            Ok(VialHidOutcome::StartupImageCleared) => {
+                self.display_settings.startup_image_present = false;
+                self.display_settings.startup_image_bytes = 0;
+                self.display_settings.startup_image_file_name = None;
+                self.display_settings.startup_image_preview_rgba.clear();
+                self.display_settings.startup_image_preview_revision = self
+                    .display_settings
+                    .startup_image_preview_revision
+                    .wrapping_add(1);
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "display_settings.startup_image_cleared",
+                )
+                .into();
+            }
+            Ok(VialHidOutcome::PictogramsLoaded(library)) => {
+                self.display_settings.pictograms.load_failure = None;
+                self.display_settings.pictograms.supported = Some(true);
+                self.display_settings.pictograms.loaded = true;
+                self.display_settings.pictograms.loading = false;
+                self.display_settings.pictograms.library = library;
+                self.display_settings.pictograms.preserve_editor_on_load = false;
+                if !matches!(
+                    result.operation,
+                    VialHidOperation::PictogramLoad {
+                        preserve_editor: true
+                    }
+                ) {
+                    self.restore_pictogram_editor_from_device();
+                }
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "display_settings.pictograms_loaded",
+                )
+                .into();
+            }
+            Ok(VialHidOutcome::PictogramsUploaded(library)) => {
+                self.display_settings.pictograms.load_failure = None;
+                self.display_settings.pictograms.preserve_editor_on_load = false;
+                self.display_settings.pictograms.supported = Some(true);
+                self.display_settings.pictograms.loaded = true;
+                self.display_settings.pictograms.loading = false;
+                self.display_settings.pictograms.library = library;
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "display_settings.pictograms_saved",
                 )
                 .into();
             }
@@ -657,6 +945,32 @@ impl EntropyApp {
         error: String,
         disconnected: bool,
     ) {
+        match &operation {
+            VialHidOperation::PictogramLoad { .. } => {
+                self.display_settings.pictograms.loading = false;
+                self.display_settings.pictograms.load_failure =
+                    Some((self.connection_generation, error.clone()));
+                // A failed read is not proof that the firmware lacks storage.
+                if self.display_settings.pictograms.supported != Some(true) {
+                    self.display_settings.pictograms.supported = Some(false);
+                }
+            }
+            VialHidOperation::PictogramUpload { .. }
+            | VialHidOperation::PictogramSlotUpload { .. } => {
+                let pictograms = &mut self.display_settings.pictograms;
+                // Flash/transport errors can leave even the old library uncertain.
+                // Invalidate the device snapshot, not the user's editor; the next
+                // storage read preserves that editor and confirms the actual bytes.
+                pictograms.loaded = false;
+                pictograms.loading = false;
+                pictograms.load_failure = None;
+                pictograms.preserve_editor_on_load = true;
+                pictograms.library = PictogramLibrary::default();
+                pictograms.upload_due = None;
+            }
+            _ => {}
+        }
+
         if let VialHidOperation::MacroWrite { revision, .. } = &operation {
             self.keycode_picker.macros_dirty = true;
             self.keycode_picker.macro_attempted_revision =
@@ -686,8 +1000,30 @@ impl EntropyApp {
         }
 
         if disconnected {
+            // Connection cleanup owns device state, but an uncertain write must
+            // not erase the user's independent editor. Carry the invalidated
+            // snapshot through cleanup; never restore a confirmed device library.
+            let draft = matches!(
+                operation,
+                VialHidOperation::PictogramUpload { .. }
+                    | VialHidOperation::PictogramSlotUpload { .. }
+                    | VialHidOperation::PictogramLoad {
+                        preserve_editor: true
+                    }
+            )
+            .then(|| {
+                let mut draft = std::mem::take(&mut self.display_settings.pictograms);
+                draft.supported = None;
+                draft.loaded = false;
+                draft.loading = false;
+                draft.library = PictogramLibrary::default();
+                draft
+            });
             if !self.begin_bluetooth_reconnect(error.clone()) {
                 self.clear_connected_keyboard_state(error);
+            }
+            if let Some(draft) = draft {
+                self.display_settings.pictograms = draft;
             }
             return;
         }
@@ -714,6 +1050,47 @@ impl EntropyApp {
             VialHidOperation::MacroWrite { .. } => {
                 // The localized error and edit-gated dirty state were set above.
             }
+            VialHidOperation::BackgroundUpload { .. } | VialHidOperation::BackgroundClear => {
+                self.status_msg = crate::i18n::tr_catalog_format(
+                    self.app_settings.language,
+                    "display_settings.background_error",
+                    &[("error", &error)],
+                );
+            }
+            VialHidOperation::BackgroundSpeed { old_percent, .. } => {
+                self.display_settings.clock_background_speed_percent = old_percent;
+                self.status_msg = crate::i18n::tr_catalog_format(
+                    self.app_settings.language,
+                    "display_settings.background_speed_error",
+                    &[("error", &error)],
+                );
+            }
+            VialHidOperation::StartupImageUpload { .. } | VialHidOperation::StartupImageClear => {
+                self.status_msg = crate::i18n::tr_catalog_format(
+                    self.app_settings.language,
+                    "display_settings.startup_image_error",
+                    &[("error", &error)],
+                );
+            }
+            VialHidOperation::PictogramLoad { .. } => {
+                self.status_msg = format!(
+                    "{}: {error}",
+                    crate::i18n::tr_catalog(
+                        self.app_settings.language,
+                        "display_settings.pictograms_firmware_required",
+                    )
+                );
+            }
+            VialHidOperation::PictogramUpload { .. }
+            | VialHidOperation::PictogramSlotUpload { .. } => {
+                self.status_msg = format!(
+                    "{}: {error}",
+                    crate::i18n::tr_catalog(
+                        self.app_settings.language,
+                        "display_settings.pictograms_status",
+                    )
+                );
+            }
             VialHidOperation::Deferred(request) => {
                 log::warn!("Deferred Bluetooth device load failed: {error}");
                 if request.is_background_layer() {
@@ -733,6 +1110,387 @@ impl EntropyApp {
                 _ => false,
             })
             .unwrap_or(false)
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod repeat_lifecycle_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicU32};
+    use std::time::{Duration, Instant};
+
+    fn app() -> (EntropyApp, egui::Context, crate::hid::TestHidRecorder) {
+        let mut app = EntropyApp::new_inert_for_test();
+        assert!(app.device_manager.devices().is_empty());
+        assert!(matches!(app.update_check, UpdateCheckState::Idle));
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid);
+        app.app_settings.language = crate::i18n::Language::Russian;
+        app.display_settings.supported = true;
+        app.display_settings.clock_settings_supported = true;
+        app.display_settings.clock_background_asset_supported = true;
+        app.display_settings.pictograms.supported = Some(true);
+        app.display_settings.pictograms.loaded = true;
+        app.keycode_picker.macro_count = 4;
+        let ctx = egui::Context::default();
+        let mut fonts = egui::FontDefinitions::default();
+        for family in ["display_preview", "clock_montserrat"] {
+            fonts.families.insert(
+                egui::FontFamily::Name(family.into()),
+                fonts.families[&egui::FontFamily::Proportional].clone(),
+            );
+        }
+        ctx.set_fonts(fonts);
+        (app, ctx, recorder)
+    }
+
+    fn frame(
+        app: &mut EntropyApp,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1100.0, 1000.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| app.draw_display_settings_page(ui, ui.max_rect()),
+        )
+    }
+
+    fn text_position(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing rendered text: {label}"))
+    }
+
+    fn tab(app: &mut EntropyApp, ctx: &egui::Context, label: &str) {
+        let output = frame(app, ctx, Vec::new());
+        let pos = text_position(&output, label);
+        for pressed in [true, false] {
+            frame(
+                app,
+                ctx,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+    }
+
+    fn poll(app: &mut EntropyApp, ctx: &egui::Context, saved: &mut usize) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.vial_hid_task_active() {
+            assert!(
+                Instant::now() < deadline,
+                "same-session worker did not finish"
+            );
+            app.poll_vial_hid_task_with_settings_save(ctx, |_| *saved += 1);
+            frame(app, ctx, Vec::new());
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn repeat_lifecycle_two_pictogram_uploads_use_one_app_and_remain_renderable() {
+        let (mut app, ctx, recorder) = app();
+        tab(&mut app, &ctx, "Пиктограммы");
+        let generation = app.connection_generation;
+        let mut saved = 0;
+        for byte in [0xAA, 0x55] {
+            recorder.respond_with(test_pictogram_upload_responses(true, 0));
+            app.display_settings.pictograms.source_levels =
+                pictogram_bitmap_levels(&[byte; PICTOGRAM_BYTES]);
+            assert!(app.apply_current_pictogram(&ctx));
+            frame(&mut app, &ctx, Vec::new());
+            poll(&mut app, &ctx, &mut saved);
+            assert_eq!(app.connection_generation, generation);
+            assert!(app.hid_device.is_some());
+            assert!(app.display_settings.pictograms.loaded);
+            assert!(!app.display_settings.pictograms.loading);
+            assert!(!app.vial_hid_task_blocks_user_action());
+            let output = frame(&mut app, &ctx, Vec::new());
+            text_position(&output, "Выбрать");
+            tab(&mut app, &ctx, "Выбрать");
+            assert!(
+                egui::Popup::is_any_open(&ctx),
+                "Select did not reopen after upload"
+            );
+            egui::Popup::close_all(&ctx);
+        }
+        assert_eq!(saved, 0);
+        assert_eq!(
+            recorder.requests().iter().filter(|r| r[0] == 0xC9).count(),
+            2
+        );
+    }
+
+    fn directory() -> tempfile::TempDir {
+        let root = std::env::var_os("ENTROPY_TEST_ARTIFACT_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        tempfile::Builder::new()
+            .prefix("repeat-lifecycle-")
+            .tempdir_in(root)
+            .unwrap()
+    }
+
+    #[test]
+    fn repeat_lifecycle_failed_recovery_read_stops_until_explicit_retry() {
+        let (mut app, ctx, recorder) = app();
+        tab(&mut app, &ctx, "Пиктограммы");
+        let before = app.display_settings.pictograms.library.clone();
+        app.display_settings.pictograms.editor_name = "Unsaved draft".into();
+        let draft = app.display_settings.pictograms.source_levels.clone();
+        recorder.respond_with(test_pictogram_upload_responses(true, 4));
+        // A real firmware error on the automatic recovery QUERY, not a timeout
+        // or an unsupported capability. Known support must remain known.
+        let mut read_error = [0; 32];
+        read_error[0] = 0xC0;
+        read_error[1] = 4;
+        recorder.respond_with([read_error]);
+        assert!(app.apply_current_pictogram(&ctx));
+        for _ in 0..30 {
+            app.poll_vial_hid_task_with_settings_save(&ctx, |_| panic!("no settings write"));
+            frame(&mut app, &ctx, Vec::new());
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let queries = recorder.requests().iter().filter(|r| r[0] == 0xC0).count();
+        assert_eq!(
+            queries, 2,
+            "upload QUERY + one recovery QUERY, not a render-driven retry loop"
+        );
+        assert!(!app.vial_hid_task_active());
+        assert_eq!(app.display_settings.pictograms.supported, Some(true));
+        assert!(!app.display_settings.pictograms.loaded);
+        assert_eq!(app.display_settings.pictograms.source_levels, draft);
+        assert_eq!(app.display_settings.pictograms.editor_name, "Unsaved draft");
+        assert!(app
+            .display_settings
+            .pictograms
+            .load_failure
+            .as_ref()
+            .unwrap()
+            .1
+            .contains("status 4"));
+        // Merely navigating away and back is not a recovery attempt.
+        tab(&mut app, &ctx, "Экран ожидания");
+        tab(&mut app, &ctx, "Пиктограммы");
+        assert_eq!(
+            recorder.requests().iter().filter(|r| r[0] == 0xC0).count(),
+            2
+        );
+        // The existing Select control is an explicit read retry boundary when
+        // the snapshot is unknown; it must never seed another upload itself.
+        recorder.respond_with(test_pictogram_read_responses(&before));
+        tab(&mut app, &ctx, "Выбрать");
+        poll(&mut app, &ctx, &mut 0);
+        assert!(app.display_settings.pictograms.loaded);
+        assert_eq!(app.display_settings.pictograms.library, before);
+        assert!(app.display_settings.pictograms.load_failure.is_none());
+        assert_eq!(app.display_settings.pictograms.source_levels, draft);
+        recorder.respond_with(test_pictogram_upload_responses(true, 0));
+        assert!(app.apply_current_pictogram(&ctx));
+        poll(&mut app, &ctx, &mut 0);
+        assert!(app.hid_device.is_some());
+        assert!(app.display_settings.pictograms.loaded);
+    }
+
+    #[test]
+    fn repeat_lifecycle_stale_read_result_cannot_overwrite_successor_state() {
+        let (mut app, ctx, _) = app();
+        let (release, gate) = std::sync::mpsc::channel();
+        assert_eq!(
+            app.start_vial_hid_operation_with_runner(
+                &ctx,
+                VialHidOperation::PictogramLoad {
+                    preserve_editor: true
+                },
+                move |_, _, _, _| {
+                    gate.recv_timeout(Duration::from_secs(3)).unwrap();
+                    anyhow::bail!("old read failed")
+                },
+            ),
+            VialHidTaskStart::Started
+        );
+        app.connection_generation += 1;
+        app.display_settings.pictograms = PictogramSettingsState::default();
+        app.display_settings.pictograms.editor_name = "Successor".into();
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.vial_hid_task_active() {
+            assert!(Instant::now() < deadline);
+            app.poll_vial_hid_task_with_settings_save(&ctx, |_| panic!("no save"));
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(app.hid_device.is_none(), "stale HID handle was restored");
+        assert!(app.display_settings.pictograms.load_failure.is_none());
+        assert_eq!(app.display_settings.pictograms.editor_name, "Successor");
+    }
+
+    fn start_background(
+        app: &mut EntropyApp,
+        ctx: &egui::Context,
+        directory: &std::path::Path,
+        gate: Option<std::sync::mpsc::Receiver<()>>,
+    ) {
+        let path = directory.join("source.png");
+        let red = if app.display_settings.clock_background_preview_revision == 0 {
+            32
+        } else {
+            224
+        };
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([red, 87, 120, 255]))
+            .save(&path)
+            .unwrap();
+        let cache = directory.join("cache.ehbg");
+        assert_eq!(
+            app.start_vial_hid_operation_with_runner(
+                ctx,
+                VialHidOperation::BackgroundUpload {
+                    path,
+                    fallback: [0; 3],
+                    scale: StandbyBackgroundScale::Fill
+                },
+                move |hid, operation, progress: &AtomicU32, cancel: &AtomicBool| {
+                    if let Some(gate) = gate {
+                        gate.recv_timeout(Duration::from_secs(3)).unwrap();
+                    }
+                    let VialHidOperation::BackgroundUpload {
+                        path,
+                        fallback,
+                        scale,
+                    } = operation
+                    else {
+                        panic!("wrong operation")
+                    };
+                    hid.upload_standby_background_with_cache(
+                        &path,
+                        fallback,
+                        scale,
+                        progress,
+                        cancel,
+                        |package| Ok(std::fs::write(&cache, package)?),
+                    )
+                    .map(|upload| match upload {
+                        Some(upload) => VialHidOutcome::BackgroundUploaded(upload),
+                        None => VialHidOutcome::BackgroundCancelled {
+                            cleared: progress.load(std::sync::atomic::Ordering::Relaxed) >= 150,
+                        },
+                    })
+                },
+            ),
+            VialHidTaskStart::Started
+        );
+    }
+
+    #[test]
+    fn repeat_lifecycle_two_standby_uploads_keep_same_handle_and_gui_live() {
+        let (mut app, ctx, recorder) = app();
+        tab(&mut app, &ctx, "Экран ожидания");
+        let directory = directory();
+        let generation = app.connection_generation;
+        let mut saved = 0;
+        let mut previous_package = Vec::new();
+        for revision in 1..=2 {
+            recorder
+                .respond_with(crate::app::standby_background::test_background_upload_responses(0));
+            let (release, gate) = std::sync::mpsc::channel();
+            start_background(&mut app, &ctx, directory.path(), Some(gate));
+            // Deterministically stalled worker, not HID. GUI polling/rendering
+            // must remain independent while the original owner is in-flight.
+            let started = Instant::now();
+            for _ in 0..3 {
+                app.poll_vial_hid_task_with_settings_save(&ctx, |_| panic!("worker is gated"));
+                let output = frame(&mut app, &ctx, Vec::new());
+                text_position(&output, "Отмена");
+                assert!(app.standby_background_upload_progress().is_some());
+            }
+            assert!(started.elapsed() < Duration::from_secs(2));
+            release.send(()).unwrap();
+            poll(&mut app, &ctx, &mut saved);
+            assert_eq!(
+                app.display_settings.clock_background_preview_revision,
+                revision
+            );
+            assert!(app.standby_background_upload_progress().is_none());
+            assert!(!app.vial_hid_task_blocks_user_action());
+            assert!(app.hid_device.is_some());
+            assert_eq!(app.connection_generation, generation);
+            let output = frame(&mut app, &ctx, Vec::new());
+            text_position(&output, "Загрузить");
+            text_position(&output, "Сбросить");
+            assert!(
+                std::fs::metadata(directory.path().join("cache.ehbg"))
+                    .unwrap()
+                    .len()
+                    > 256
+            );
+            let package = std::fs::read(directory.path().join("cache.ehbg")).unwrap();
+            assert_ne!(package, previous_package, "second upload must replace different pixels");
+            previous_package = package;
+        }
+        assert_eq!(saved, 2);
+        assert_eq!(
+            recorder.requests().iter().filter(|r| r[0] == 0xB3).count(),
+            2
+        );
+    }
+
+    #[test]
+    fn repeat_lifecycle_failed_or_cancelled_standby_upload_can_retry() {
+        for cancel_first in [false, true] {
+            let (mut app, ctx, recorder) = app();
+            tab(&mut app, &ctx, "Экран ожидания");
+            let directory = directory();
+            let mut saved = 0;
+            let generation = app.connection_generation;
+            let (release, gate) = std::sync::mpsc::channel();
+            if !cancel_first {
+                recorder.respond_with(
+                    crate::app::standby_background::test_background_upload_responses(4),
+                );
+            }
+            start_background(&mut app, &ctx, directory.path(), Some(gate));
+            if cancel_first {
+                app.cancel_background_upload();
+            }
+            release.send(()).unwrap();
+            poll(&mut app, &ctx, &mut saved);
+            assert!(app.hid_device.is_some());
+            assert_eq!(saved, 0);
+            assert_eq!(app.display_settings.clock_background_preview_revision, 0);
+            if cancel_first {
+                assert!(recorder.requests().is_empty());
+            } else {
+                assert!(app.status_msg.contains("status 4"));
+            }
+            recorder
+                .respond_with(crate::app::standby_background::test_background_upload_responses(0));
+            start_background(&mut app, &ctx, directory.path(), None);
+            poll(&mut app, &ctx, &mut saved);
+            assert_eq!(saved, 1);
+            assert_eq!(app.connection_generation, generation);
+            assert!(app.hid_device.is_some());
+            assert!(!app.vial_hid_task_blocks_user_action());
+        }
     }
 }
 
@@ -840,7 +1598,6 @@ mod tests {
             VialHidOperation::Matrix {
                 rows: 2,
                 cols: 3,
-                rmk_byte_order: true,
                 remember_ever_pressed: true,
             },
         )

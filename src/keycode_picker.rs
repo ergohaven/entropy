@@ -120,6 +120,13 @@ enum AdvancedSlotKind {
     TapDance,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum PickerValuePolicy {
+    #[default]
+    Any,
+    KeyOverrideTrigger,
+}
+
 pub struct KeycodePicker {
     pub open: bool,
     pub selected_tab: KeycodeTab,
@@ -146,6 +153,7 @@ pub struct KeycodePicker {
     pub supports_rmk_native_combo_output: bool,
     pub supports_rmk_native_tap_dance_actions: bool,
     pub rmk_native_key_actions_allowed_for_target: bool,
+    value_policy: PickerValuePolicy,
     pub macro_ext_keycodes_disabled_reason: Option<MacroExtKeycodesDisabledReason>,
     pub layer_names: Vec<String>,
     pub layer_count: usize,
@@ -567,6 +575,46 @@ mod tests {
             assert_eq!(picker.result, Some(expected.into()));
         }
     }
+
+    #[test]
+    fn key_override_trigger_picker_accepts_qmk_and_rmk_fork_dual_role_values() {
+        let mut picker = KeycodePicker {
+            supports_rmk_native_key_actions: true,
+            ..Default::default()
+        };
+
+        picker.open_key_override_trigger_picker(0x4104);
+
+        assert!(picker.open);
+        assert!(!picker.regular_key_pick);
+        assert_eq!(picker.selected_tab, KeycodeTab::Modifiers);
+        assert!(!picker.rmk_native_key_actions_allowed_for_target);
+        for value in [0x2204, 0x4104] {
+            assert!(picker.picker_value_supported(value));
+        }
+        for value in [0x0000, 0x0001, 0x00E0, 0x00E7] {
+            assert!(!picker.picker_value_supported(value));
+        }
+
+        picker.assign_keycode_value(0x00E1);
+        assert!(picker.result.is_none());
+        assert!(picker.open);
+
+        // RMK Fork's Vial adapter converts this shared wire value to
+        // KeyAction::TapHold on-device; Entropy must not collapse it to zero.
+        picker.finish_quantum_pending_key(0x2200, 0x0004, true);
+        assert_eq!(picker.result, Some(0x2204.into()));
+    }
+
+    #[test]
+    fn ordinary_full_picker_resets_key_override_trigger_policy() {
+        let mut picker = KeycodePicker::default();
+        picker.open_key_override_trigger_picker(0);
+        assert!(!picker.picker_value_supported(0x00E1));
+
+        picker.open_full_key_picker(KeycodeTab::Basic);
+        assert!(picker.picker_value_supported(0x00E1));
+    }
 }
 
 fn show_universal_symbol_section(
@@ -845,6 +893,7 @@ impl Default for KeycodePicker {
             supports_rmk_native_combo_output: false,
             supports_rmk_native_tap_dance_actions: false,
             rmk_native_key_actions_allowed_for_target: false,
+            value_policy: PickerValuePolicy::default(),
             macro_ext_keycodes_disabled_reason: None,
             layer_names: (0..16).map(|i| i.to_string()).collect(),
             layer_count: 4,
@@ -925,7 +974,19 @@ impl KeycodePicker {
         keycode_tooltip(value, custom_pairs, &self.layer_names)
     }
 
+    pub(crate) fn picker_value_supported(&self, value: u16) -> bool {
+        match self.value_policy {
+            PickerValuePolicy::Any => true,
+            PickerValuePolicy::KeyOverrideTrigger => {
+                !matches!(value, 0x0000 | 0x0001 | 0x00E0..=0x00E7)
+            }
+        }
+    }
+
     fn assign_keycode_value(&mut self, value: u16) {
+        if !self.picker_value_supported(value) {
+            return;
+        }
         self.result = Some(crate::keyboard::KeyBinding::Vial(value));
         self.open = false;
     }
@@ -1075,6 +1136,7 @@ impl KeycodePicker {
         self.td_key_pick = None;
         self.td_mod_key_pick = None;
         self.rmk_native_key_actions_allowed_for_target = false;
+        self.value_policy = PickerValuePolicy::Any;
     }
 
     pub(crate) fn open_regular_key_picker_with_mod_key(&mut self, allow_mod_key: bool) {
@@ -1089,6 +1151,7 @@ impl KeycodePicker {
         self.vial_layer_pending = None;
         self.advanced_slot_picker = None;
         self.rmk_native_key_actions_allowed_for_target = false;
+        self.value_policy = PickerValuePolicy::Any;
     }
 
     pub(crate) fn open_full_key_picker(&mut self, selected_tab: KeycodeTab) {
@@ -1102,11 +1165,25 @@ impl KeycodePicker {
         self.vial_quantum_pending_mt = None;
         self.vial_layer_pending = None;
         self.rmk_native_key_actions_allowed_for_target = false;
+        self.value_policy = PickerValuePolicy::Any;
         self.macro_inline_selected = None;
         self.tap_dance_editor_open = None;
         self.td_key_pick = None;
         self.td_mod_key_pick = None;
         self.selected_tab = selected_tab;
+    }
+
+    pub(crate) fn open_key_override_trigger_picker(&mut self, current_value: u16) {
+        self.open_full_key_picker(KeycodeTab::Basic);
+        self.value_policy = PickerValuePolicy::KeyOverrideTrigger;
+
+        // QMK Key Overrides and RMK Fork share Vial's u16 entry here. RMK's
+        // firmware adapter converts representable LT/MT values to TapHold;
+        // native RMK actions require a separate lossless Fork endpoint.
+        self.rmk_native_key_actions_allowed_for_target = false;
+        if self.picker_value_supported(current_value) {
+            self.select_tab_for_keycode(current_value);
+        }
     }
 
     pub(crate) fn select_tab_for_keycode(&mut self, value: u16) {
@@ -1963,17 +2040,18 @@ impl KeycodePicker {
     }
 
     fn vial_keycode_supported(&self, kc: &crate::keycode::Keycode) -> bool {
-        match kc.name {
-            "QK_CAPS_WORD_TOGGLE" => self.supports_caps_word,
-            "QK_REPEAT_KEY" => self.supports_repeat_key,
-            "QK_ALT_REPEAT_KEY" => self.supports_alt_repeat_key,
-            "CMB_TOG" => self.supports_combo,
-            "KC_ASTG" => self.supports_auto_shift,
-            "QK_LAYER_LOCK" => self.supports_layer_lock,
-            name if name.starts_with("RGB_") => self.supports_rgb,
-            name if name.starts_with("BL_") => false,
-            _ => true,
-        }
+        self.picker_value_supported(kc.value)
+            && match kc.name {
+                "QK_CAPS_WORD_TOGGLE" => self.supports_caps_word,
+                "QK_REPEAT_KEY" => self.supports_repeat_key,
+                "QK_ALT_REPEAT_KEY" => self.supports_alt_repeat_key,
+                "CMB_TOG" => self.supports_combo,
+                "KC_ASTG" => self.supports_auto_shift,
+                "QK_LAYER_LOCK" => self.supports_layer_lock,
+                name if name.starts_with("RGB_") => self.supports_rgb,
+                name if name.starts_with("BL_") => false,
+                _ => true,
+            }
     }
 
     fn show_vial_tab_content(

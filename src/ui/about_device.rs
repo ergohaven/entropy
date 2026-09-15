@@ -812,6 +812,26 @@ impl EntropyApp {
                 let list_viewport =
                     draw_about_rows(ui, "about_entropy", metrics, &rows, metrics.value(54.0));
 
+                let licenses_id = ui.make_persistent_id("font_licenses");
+                let mut show_licenses = ui
+                    .ctx()
+                    .data(|d| d.get_temp::<bool>(licenses_id))
+                    .unwrap_or(false);
+                if show_licenses {
+                    egui::Window::new(crate::i18n::tr_catalog(
+                        lang,
+                        "display_settings.font_licenses",
+                    ))
+                    .open(&mut show_licenses)
+                    .default_size(egui::vec2(650.0, 450.0))
+                    .show(ui.ctx(), |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            ui.label(include_str!("../../assets/FONT-LICENSES.txt"));
+                        });
+                    });
+                    ui.ctx()
+                        .data_mut(|d| d.insert_temp(licenses_id, show_licenses));
+                }
                 let checking = matches!(self.update_check, UpdateCheckState::Checking { .. });
                 let ready = match &self.update_check {
                     UpdateCheckState::Ready(result) => Some(result.clone()),
@@ -822,7 +842,7 @@ impl EntropyApp {
                     .is_some_and(|result| result.downloadable_asset().is_some());
                 let button_size = egui::vec2(metrics.value(132.0), metrics.value(32.0));
                 let button_gap = metrics.value(8.0);
-                let button_count = 1 + usize::from(has_asset) + usize::from(ready.is_some());
+                let button_count = 2 + usize::from(has_asset) + usize::from(ready.is_some());
                 let actions_width = button_size.x * button_count as f32
                     + button_gap * button_count.saturating_sub(1) as f32;
                 let actions_rect = egui::Rect::from_center_size(
@@ -836,6 +856,16 @@ impl EntropyApp {
                     ui.set_min_size(actions_rect.size());
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = button_gap;
+                        if crate::ui_style::modern_button(
+                            ui,
+                            crate::i18n::tr_catalog(lang, "display_settings.font_licenses"),
+                            button_size,
+                            true,
+                        )
+                        .clicked()
+                        {
+                            ui.ctx().data_mut(|d| d.insert_temp(licenses_id, true));
+                        }
                         if crate::ui_style::modern_button(
                             ui,
                             check_updates_label(lang, checking),

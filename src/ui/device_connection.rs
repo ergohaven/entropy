@@ -100,7 +100,7 @@ impl EntropyApp {
         self.connection_generation = self.connection_generation.wrapping_add(1);
         self.hid_device = None;
         self.shared_hid_output = None;
-        self.qmk_hid_hosts.clear();
+        self.retire_selected_qmk_hid_host_bridges();
         self.pending_device_connect = None;
         self.pending_entlayout_import_path = None;
         self.pending_entsettings_import_path = None;
@@ -192,6 +192,10 @@ impl EntropyApp {
     pub(super) fn clear_connected_keyboard_state(&mut self, status_msg: impl Into<String>) {
         #[cfg(not(target_arch = "wasm32"))]
         {
+            // Capture the actual loading owner before retire_connect_worker
+            // clears that state; selected_device may already name a queued B.
+            self.retire_selected_qmk_hid_host_bridges();
+            self.retire_connect_worker();
             self.connection_generation = self.connection_generation.wrapping_add(1);
         }
         self.layout = None;
@@ -199,7 +203,6 @@ impl EntropyApp {
         self.selected_encoder = None;
         self.selected_layer = 0;
         self.layer_count = 0;
-        self.qmk_hid_hosts.clear();
         self.layer_write_task = None;
         self.pending_layer_write = None;
         self.combo_write_task = None;
@@ -248,8 +251,8 @@ impl EntropyApp {
         self.grave_escape_settings = GraveEscapeSettingsState::default();
         self.layer_led_settings = LayerLedSettingsState::default();
         self.rgb_settings = RgbSettingsState::default();
+        self.display_settings = DisplaySettingsState::default();
         self.layout_options_value = None;
-        self.matrix_tester_rmk_byte_order = false;
         self.sticky_layout_prev_pressed.clear();
         self.sticky_layout_pressed_key_layers.clear();
         self.sticky_layout_toggled_layers.clear();
@@ -355,7 +358,6 @@ impl EntropyApp {
                         }
                     });
                     if let Some(idx) = selected_device {
-                        self.selected_device = Some(idx);
                         self.main_menu_tab = MainMenuTab::Keyboard;
                         self.start_connect(idx);
                     }
@@ -397,6 +399,7 @@ mod tests {
             serial_number: "AA:BB:CC:DD:EE:FF".to_owned(),
             bus_type: "Bluetooth".to_owned(),
             path: path.to_owned(),
+            instance_token: path.to_owned(),
             firmware: FirmwareProtocol::Vial,
         }
     }

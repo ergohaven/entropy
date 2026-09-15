@@ -9,12 +9,18 @@ impl EntropyApp {
 
         if let Some(binding) = self.keycode_picker.result.take() {
             let kc_value = binding.vial_keycode();
-            let native_target_supported = match self.combo_pick_target {
-                Some((_, ComboPickField::Output)) => {
-                    self.keycode_picker.supports_rmk_native_combo_output
+            let native_target_supported = if self.key_override_pick_target.is_some()
+                || self.alt_repeat_pick_target.is_some()
+            {
+                false
+            } else {
+                match self.combo_pick_target {
+                    Some((_, ComboPickField::Output)) => {
+                        self.keycode_picker.supports_rmk_native_combo_output
+                    }
+                    Some((_, ComboPickField::Trigger(_))) => false,
+                    None => self.selected_key.is_some(),
                 }
-                Some((_, ComboPickField::Trigger(_))) => false,
-                None => self.selected_key.is_some(),
             };
             if binding.rmk_action().is_some() && !native_target_supported {
                 self.status_msg =
@@ -815,6 +821,49 @@ mod tests {
 
         assert_eq!(app.combo_entries[0].keys[0], 0);
         assert!(!app.combo_dirty);
+        assert!(app.status_msg.contains("not supported"));
+    }
+
+    #[test]
+    fn dual_role_key_override_trigger_is_written_without_truncation() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid_device, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        app.key_override_entries = vec![KeyOverrideEntry::default()];
+        app.key_override_pick_target = Some(KeyOverridePickField::Trigger);
+        app.keycode_picker.result = Some(0x2204.into());
+
+        app.apply_picker_results(&ctx);
+
+        assert_eq!(app.key_override_entries[0].trigger, 0x2204);
+        let request = recorder
+            .requests()
+            .into_iter()
+            .find(|request| request[..4] == [0xFE, 0x0D, 0x06, 0])
+            .expect("Key Override write should reach the Vial transport");
+        assert_eq!(&request[4..6], &0x2204u16.to_le_bytes());
+    }
+
+    #[test]
+    fn native_action_is_rejected_for_key_override_without_clearing_it() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let binding =
+            crate::universal_symbols::binding(crate::universal_symbols::USER_SYMBOL_START);
+        app.key_override_entries = vec![KeyOverrideEntry {
+            trigger: 0x0004,
+            ..Default::default()
+        }];
+        app.key_override_pick_target = Some(KeyOverridePickField::Trigger);
+        app.selected_key = Some((0, 0));
+        app.keycode_picker.result = Some(binding);
+
+        app.apply_picker_results(&ctx);
+
+        assert_eq!(app.key_override_entries[0].trigger, 0x0004);
         assert!(app.status_msg.contains("not supported"));
     }
 

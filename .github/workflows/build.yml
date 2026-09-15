@@ -113,6 +113,12 @@ jobs:
           cargo test --all-targets app::vial_hid_task::tests::macro_write_uses_the_serialized_background_transport -- --exact
           cargo test --all-targets app::app_lifecycle::tests::layer_completion_starts_settings_queued_behind_it -- --exact
 
+      - name: Test native HID ownership and shared host output
+        if: matrix.kind != 'linux'
+        run: |
+          cargo test --all-targets hid::hid_proxy::tests -- --test-threads=1
+          cargo test --all-targets qmk_hid_host::qa_followup_shared_output -- --test-threads=1
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:

@@ -65,7 +65,24 @@ cat > "$TRUSTED_TOOL" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'ran\n' > "$APPIMAGETOOL_RUN_MARKER"
-: > "$2"
+compression=""
+positionals=()
+while (( $# )); do
+  case "$1" in
+    --comp)
+      [[ $# -ge 2 ]] || exit 2
+      compression="$2"
+      shift 2
+      ;;
+    --) shift; positionals+=("$@"); break ;;
+    -*) echo "Unexpected appimagetool option: $1" >&2; exit 2 ;;
+    *) positionals+=("$1"); shift ;;
+  esac
+done
+[[ "$compression" == "xz" ]]
+[[ ${#positionals[@]} -eq 2 ]]
+[[ -d "${positionals[0]}" ]]
+: > "${positionals[1]}"
 EOF
 chmod 0755 "$TRUSTED_TOOL"
 TRUSTED_SHA256="$(hash_file "$TRUSTED_TOOL")"

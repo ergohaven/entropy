@@ -88,6 +88,672 @@ fn drain_connect_task_messages(rx: &mpsc::Receiver<ConnectTaskMessage>) -> Conne
 mod tests {
     use super::*;
 
+    // These tests drive the real start/poll/clear paths. The per-app launch seam
+    // replaces only transport execution, so no HID open or discovery is needed.
+    fn connection_app() -> (
+        EntropyApp,
+        egui::Context,
+        mpsc::Receiver<(Device, mpsc::Sender<ConnectTaskMessage>)>,
+    ) {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&cc);
+        let (tx, requests) = mpsc::channel();
+        app.test_connect_requests = Some(tx);
+        app.device_manager
+            .replace_devices(vec![connection_device("A"), connection_device("B")]);
+        (app, ctx, requests)
+    }
+
+    fn connection_device(name: &str) -> Device {
+        Device {
+            name: name.to_owned(),
+            vendor_id: 0xFFFF,
+            product_id: 0xFFFF,
+            manufacturer: "Test".to_owned(),
+            serial_number: name.to_owned(),
+            bus_type: "Usb".to_owned(),
+            path: format!("/nonexistent/entropy-test-{name}"),
+            instance_token: name.to_owned(),
+            firmware: FirmwareProtocol::Vial,
+        }
+    }
+
+    fn connection_result(name: &str) -> ConnectResult {
+        ConnectResult {
+            device_name: name.to_owned(),
+            keyboard_id: 0xDEAD165,
+            vial_unlock_status: Default::default(),
+            hid_device: Some(crate::hid::HidDevice::test_device().0),
+            layout: KeyboardLayout::from_vial_json(&serde_json::json!({
+                "name": name, "matrix": {"rows": 1, "cols": 1},
+                "layouts": {"keymap": [["0,0"]]}
+            }))
+            .unwrap(),
+            layer_count: 1,
+            about_info: Default::default(),
+            macro_texts: Default::default(),
+            supports_macro_ext_keycodes: Default::default(),
+            supports_rmk_native_key_actions: Default::default(),
+            supports_universal_symbols: Default::default(),
+            supports_universal_russian_letters: Default::default(),
+            supports_rmk_native_combo_output: Default::default(),
+            supports_rmk_native_tap_dance_actions: Default::default(),
+            supports_rmk_combo_layers: Default::default(),
+            macro_ext_keycodes_disabled_reason: Default::default(),
+            tap_dance_entries: Default::default(),
+            combo_entries: Default::default(),
+            combo_term: Default::default(),
+            auto_shift_options: Default::default(),
+            auto_shift_timeout: Default::default(),
+            mouse_keys_settings: Default::default(),
+            touchpad_settings: Default::default(),
+            bluetooth_settings: Default::default(),
+            module_settings: Default::default(),
+            tap_hold_settings: Default::default(),
+            magic_settings: Default::default(),
+            one_shot_settings: Default::default(),
+            grave_escape_settings: Default::default(),
+            layer_led_settings: Default::default(),
+            rgb_settings: Default::default(),
+            display_settings: Default::default(),
+            layout_options_value: Default::default(),
+            key_override_entries: Default::default(),
+            alt_repeat_entries: Default::default(),
+            vial_features: Default::default(),
+            layer_names_from_firmware: Default::default(),
+            supported_qmk_settings: Default::default(),
+            deferred_load: Default::default(),
+        }
+    }
+
+    fn expire_connection(app: &mut EntropyApp, idle: bool) {
+        let ConnectState::Loading {
+            started_at,
+            last_progress_at,
+            ..
+        } = &mut app.connect_state
+        else {
+            panic!("expected loading worker");
+        };
+        let now = std::time::Instant::now();
+        *started_at = now - std::time::Duration::from_secs(if idle { 46 } else { 241 });
+        *last_progress_at = if idle { *started_at } else { now };
+    }
+
+    fn assert_no_applied_connection(app: &EntropyApp) {
+        assert!(app.layout.is_none());
+        assert!(app.hid_device.is_none());
+        assert!(app.shared_hid_output.is_none());
+        assert!(app.current_device_name.is_empty());
+        assert!(app.current_keyboard_id.is_none());
+        assert!(app.device_display_names.is_empty());
+    }
+
+    fn replacement_discards_result(
+        result: Result<ConnectResult, String>,
+        queued_before_selection: bool,
+    ) {
+        let (mut app, ctx, requests) = connection_app();
+        app.start_connect(0);
+        let (_, old_tx) = requests.try_recv().unwrap();
+        let generation = app.connection_generation;
+        let message = ConnectTaskMessage::Done(Box::new(result));
+        if queued_before_selection {
+            old_tx.send(message).unwrap();
+            app.start_connect(1);
+        } else {
+            app.start_connect(1);
+            old_tx.send(message).unwrap();
+        }
+        assert!(requests.try_recv().is_err(), "B started before A retired");
+        app.poll_connect(&ctx);
+        let (target, new_tx) = requests.try_recv().unwrap();
+        assert_eq!(target.serial_number, "B");
+        assert_eq!(app.selected_device, Some(1));
+        assert!(app.pending_device_connect.is_none());
+        assert_eq!(
+            app.connection_generation, generation,
+            "obsolete result was applied"
+        );
+        assert_no_applied_connection(&app);
+        assert_eq!(app.status_msg, "Connecting to B (USB)…");
+        assert!(matches!(app.connect_state, ConnectState::Loading { .. }));
+        // Verify the current receiver remains authoritative after the replacement.
+        new_tx
+            .send(ConnectTaskMessage::Progress("B progress".to_owned()))
+            .unwrap();
+        app.poll_connect(&ctx);
+        assert_eq!(app.status_msg, "B progress");
+    }
+
+    #[test]
+    fn replacement_rejects_success_already_queued_before_selection() {
+        replacement_discards_result(Ok(connection_result("Obsolete Keyboard A")), true);
+    }
+
+    #[test]
+    fn replacement_rejects_success_after_last_worker_cancellation_checkpoint() {
+        replacement_discards_result(Ok(connection_result("Obsolete Keyboard A")), false);
+    }
+
+    #[test]
+    fn replacement_survives_old_disconnect_error() {
+        replacement_discards_result(
+            Err("VIA protocol read failed: HID timeout — device did not respond".to_owned()),
+            true,
+        );
+    }
+
+    #[test]
+    fn replacement_survives_old_wrapped_cancellation_error() {
+        replacement_discards_result(
+            Err("Layout read failed: Connect cancelled".to_owned()),
+            true,
+        );
+    }
+
+    #[test]
+    fn replacement_survives_other_obsolete_error() {
+        replacement_discards_result(Err("Layout parse failed: invalid matrix".to_owned()), false);
+    }
+
+    #[test]
+    fn replacement_survives_worker_channel_disconnect() {
+        let (mut app, ctx, requests) = connection_app();
+        app.start_connect(0);
+        let (_, tx) = requests.try_recv().unwrap();
+        app.start_connect(1);
+        drop(tx);
+        app.poll_connect(&ctx);
+        assert_eq!(requests.try_recv().unwrap().0.serial_number, "B");
+        assert_eq!(app.selected_device, Some(1));
+        assert_no_applied_connection(&app);
+    }
+
+    #[test]
+    fn obsolete_progress_neither_overwrites_status_nor_extends_deadline() {
+        let (mut app, ctx, requests) = connection_app();
+        app.start_connect(0);
+        let (_, tx) = requests.try_recv().unwrap();
+        app.start_connect(1);
+        let before = match &app.connect_state {
+            ConnectState::Loading {
+                last_progress_at, ..
+            } => *last_progress_at,
+            _ => panic!("expected loading"),
+        };
+        let status = app.status_msg.clone();
+        tx.send(ConnectTaskMessage::Progress(
+            "obsolete A progress".to_owned(),
+        ))
+        .unwrap();
+        app.poll_connect(&ctx);
+        assert_eq!(app.status_msg, status);
+        assert!(
+            matches!(app.connect_state, ConnectState::Loading { last_progress_at, .. } if last_progress_at == before)
+        );
+        assert!(requests.try_recv().is_err());
+    }
+
+    fn timeout_releases_owner(idle: bool, queued_progress: bool) {
+        let (mut app, ctx, requests) = connection_app();
+        app.start_connect(0);
+        let (_, tx) = requests.try_recv().unwrap();
+        let cancel = match &app.connect_state {
+            ConnectState::Loading { cancel, .. } => cancel.clone(),
+            _ => panic!("expected loading"),
+        };
+        expire_connection(&mut app, idle);
+        if queued_progress {
+            tx.send(ConnectTaskMessage::Progress("still working".to_owned()))
+                .unwrap();
+        }
+        let generation = app.connection_generation;
+        app.poll_connect(&ctx);
+        assert!(matches!(app.connect_state, ConnectState::Idle));
+        assert!(!app.retiring_connects.is_empty());
+        assert!(cancel.load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(app.connection_generation, generation.wrapping_add(1));
+        assert!(app.status_msg.starts_with("Connect timeout"));
+        assert_eq!(app.selected_device, None);
+        assert_no_applied_connection(&app);
+        // The sender remains alive and silent: UI recovery needs no worker cooperation.
+        for _ in 0..3 {
+            app.poll_connect(&ctx);
+            assert!(!matches!(app.connect_state, ConnectState::Loading { .. }));
+            assert!(requests.try_recv().is_err());
+        }
+        drop(tx);
+        app.poll_connect(&ctx);
+        assert!(app.retiring_connects.is_empty());
+    }
+
+    #[test]
+    fn idle_timeout_releases_ui_owner_without_worker_cooperation() {
+        timeout_releases_owner(true, false);
+    }
+
+    #[test]
+    fn total_timeout_releases_ui_owner_despite_fresh_progress() {
+        timeout_releases_owner(false, true);
+    }
+
+    #[test]
+    fn timeout_allows_different_device_to_connect_while_old_worker_remains_unresponsive() {
+        let (mut app, ctx, requests) = connection_app();
+        app.start_connect(0);
+        let (_, a_tx) = requests.try_recv().unwrap();
+        expire_connection(&mut app, true);
+        app.poll_connect(&ctx);
+        assert!(!matches!(app.connect_state, ConnectState::Loading { .. }));
+
+        // A remains alive, silent and unable to observe cancellation. Recovery
+        // must actually start and apply B, not only hide A's loading screen.
+        app.start_connect(1);
+        app.poll_connect(&ctx);
+        let (target, b_tx) = requests
+            .try_recv()
+            .expect("P2: different device B must start after A times out, without A completing");
+        assert_eq!(target.serial_number, "B");
+        b_tx.send(ConnectTaskMessage::Done(Box::new(Ok(connection_result(
+            "Current B",
+        )))))
+        .unwrap();
+        app.poll_connect(&ctx);
+        assert_eq!(app.selected_device, Some(1));
+        assert_eq!(app.current_device_name, "Current B");
+        assert_eq!(app.layout.as_ref().unwrap().name, "Current B");
+        assert!(app.hid_device.is_some());
+
+        // Only now may A finish; even a successful late result cannot replace B.
+        a_tx.send(ConnectTaskMessage::Done(Box::new(Ok(connection_result(
+            "Late A",
+        )))))
+        .unwrap();
+        app.poll_connect(&ctx);
+        assert_eq!(app.selected_device, Some(1));
+        assert_eq!(app.current_device_name, "Current B");
+        assert_eq!(app.layout.as_ref().unwrap().name, "Current B");
+        assert!(app.hid_device.is_some());
+    }
+
+    #[test]
+    fn queued_success_past_timeout_is_never_applied() {
+        let (mut app, ctx, requests) = connection_app();
+        app.start_connect(0);
+        let (_, tx) = requests.try_recv().unwrap();
+        expire_connection(&mut app, true);
+        tx.send(ConnectTaskMessage::Done(Box::new(Ok(connection_result(
+            "Expired A",
+        )))))
+        .unwrap();
+        app.poll_connect(&ctx);
+        app.poll_connect(&ctx);
+        assert_no_applied_connection(&app);
+        assert!(app.retiring_connects.is_empty());
+        assert!(app.status_msg.starts_with("Connect timeout"));
+    }
+
+    fn late_timeout_result_is_inert(result: Result<ConnectResult, String>) {
+        let (mut app, ctx, requests) = connection_app();
+        app.start_connect(0);
+        let (_, tx) = requests.try_recv().unwrap();
+        app.start_connect(1);
+        expire_connection(&mut app, true);
+        app.poll_connect(&ctx);
+        assert_eq!(app.retiring_connects.len(), 1);
+        let (target, b_tx) = requests.try_recv().expect("queued B resumes at A timeout");
+        assert_eq!(target.serial_number, "B");
+        assert!(app.pending_device_connect.is_none());
+        b_tx.send(ConnectTaskMessage::Progress("B progress".to_owned()))
+            .unwrap();
+        for _ in 0..3 {
+            app.poll_connect(&ctx);
+            assert!(
+                requests.try_recv().is_err(),
+                "spawned extra connection worker"
+            );
+            assert!(matches!(app.connect_state, ConnectState::Loading { .. }));
+            assert_eq!(app.status_msg, "B progress");
+        }
+        tx.send(ConnectTaskMessage::Done(Box::new(result))).unwrap();
+        app.poll_connect(&ctx);
+        assert_eq!(app.selected_device, Some(1));
+        assert_eq!(app.status_msg, "B progress");
+        assert_no_applied_connection(&app);
+        assert!(app.retiring_connects.is_empty());
+        assert!(requests.try_recv().is_err());
+        assert!(tx
+            .send(ConnectTaskMessage::Progress("too late".to_owned()))
+            .is_err());
+        b_tx.send(ConnectTaskMessage::Done(Box::new(Ok(connection_result(
+            "Current B",
+        )))))
+        .unwrap();
+        app.poll_connect(&ctx);
+        assert_eq!(app.current_device_name, "Current B");
+        assert!(app.hid_device.is_some());
+    }
+
+    #[test]
+    fn late_success_after_timeout_cannot_replace_the_loading_target() {
+        late_timeout_result_is_inert(Ok(connection_result("Late A")));
+    }
+
+    #[test]
+    fn late_disconnect_after_timeout_cannot_clear_replacement() {
+        late_timeout_result_is_inert(Err(
+            "VIA protocol read failed: HID timeout — device did not respond".to_owned(),
+        ));
+    }
+
+    #[test]
+    fn clearing_two_workers_keeps_same_endpoint_reserved_until_its_owner_retires() {
+        let (mut app, ctx, requests) = connection_app();
+        app.start_connect(0);
+        let (_, a_tx) = requests.try_recv().unwrap();
+        app.clear_connected_keyboard_state("");
+        app.start_connect(1);
+        let (_, b_tx) = requests.try_recv().unwrap();
+        app.clear_connected_keyboard_state("");
+        assert_eq!(app.retiring_connects.len(), MAX_CONNECT_WORKERS);
+        app.start_connect(1);
+        assert!(requests.try_recv().is_err());
+        a_tx.send(ConnectTaskMessage::Done(Box::new(Ok(connection_result(
+            "Cleared A",
+        )))))
+        .unwrap();
+        app.poll_connect(&ctx);
+        assert!(
+            requests.try_recv().is_err(),
+            "B still owns its endpoint despite free capacity"
+        );
+        assert_eq!(app.retiring_connects.len(), 1);
+        assert_no_applied_connection(&app);
+        b_tx.send(ConnectTaskMessage::Done(Box::new(Ok(connection_result(
+            "Cleared B",
+        )))))
+        .unwrap();
+        app.poll_connect(&ctx);
+        assert_eq!(requests.try_recv().unwrap().0.serial_number, "B");
+        assert_no_applied_connection(&app);
+    }
+
+    #[test]
+    fn repeated_timeouts_and_new_selections_never_exceed_two_connection_workers() {
+        let (mut app, ctx, requests) = connection_app();
+        app.device_manager.replace_devices(vec![
+            connection_device("A"),
+            connection_device("B"),
+            connection_device("C"),
+        ]);
+        app.start_connect(0);
+        let (_, a_tx) = requests.try_recv().unwrap();
+        expire_connection(&mut app, true);
+        app.poll_connect(&ctx);
+        app.start_connect(1);
+        let (_, b_tx) = requests.try_recv().unwrap();
+        expire_connection(&mut app, true);
+        app.poll_connect(&ctx);
+        for _ in 0..10 {
+            app.start_connect(2);
+            app.poll_connect(&ctx);
+            assert_eq!(app.retiring_connects.len(), MAX_CONNECT_WORKERS);
+            assert!(!matches!(app.connect_state, ConnectState::Loading { .. }));
+            assert!(requests.try_recv().is_err());
+        }
+        // Reclaim exactly one slot, keeping B blocked and reserved.
+        drop(a_tx);
+        app.poll_connect(&ctx);
+        let (target, _c_tx) = requests.try_recv().unwrap();
+        assert_eq!(target.serial_number, "C");
+        assert_eq!(app.retiring_connects.len(), 1);
+        assert!(matches!(app.connect_state, ConnectState::Loading { .. }));
+        drop(b_tx);
+    }
+
+    #[test]
+    fn timeout_does_not_release_same_device_reservation_after_path_change() {
+        let (mut app, ctx, requests) = connection_app();
+        app.start_connect(0);
+        let (_, a_tx) = requests.try_recv().unwrap();
+        expire_connection(&mut app, true);
+        app.poll_connect(&ctx);
+        let mut reenumerated = connection_device("A");
+        reenumerated.path = "/nonexistent/entropy-test-new-path".to_owned();
+        reenumerated.instance_token = "new-instance".to_owned();
+        app.device_manager.replace_devices(vec![reenumerated]);
+        app.start_connect(0);
+        app.poll_connect(&ctx);
+        assert!(requests.try_recv().is_err());
+        assert_eq!(app.retiring_connects.len(), 1);
+        drop(a_tx);
+        app.poll_connect(&ctx);
+        assert_eq!(requests.try_recv().unwrap().0.serial_number, "A");
+    }
+
+    #[test]
+    fn ambiguous_serial_less_endpoint_stays_reserved_after_timeout() {
+        let (mut app, ctx, requests) = connection_app();
+        let mut a = connection_device("Same model");
+        a.serial_number.clear();
+        let mut ambiguous = a.clone();
+        ambiguous.path = "/nonexistent/other-endpoint".to_owned();
+        ambiguous.instance_token = "other-instance".to_owned();
+        app.device_manager.replace_devices(vec![a, ambiguous]);
+        app.start_connect(0);
+        let (_, _a_tx) = requests.try_recv().unwrap();
+        expire_connection(&mut app, true);
+        app.poll_connect(&ctx);
+        app.start_connect(1);
+        app.poll_connect(&ctx);
+        assert!(requests.try_recv().is_err());
+        assert_eq!(app.retiring_connects.len(), 1);
+        assert!(!matches!(app.connect_state, ConnectState::Loading { .. }));
+    }
+
+    #[test]
+    fn blocked_retired_endpoint_request_does_not_relabel_a_live_different_keyboard() {
+        let (mut app, ctx, requests) = connection_app();
+        app.start_connect(0);
+        let (_, a_tx) = requests.try_recv().unwrap();
+        expire_connection(&mut app, true);
+        app.poll_connect(&ctx);
+        app.start_connect(1);
+        let (_, b_tx) = requests.try_recv().unwrap();
+        b_tx.send(ConnectTaskMessage::Done(Box::new(Ok(connection_result(
+            "Current B",
+        )))))
+        .unwrap();
+        app.poll_connect(&ctx);
+
+        // A is still reserved. Keep B selected while A is merely queued; edits
+        // must never go to B under A's identity/name cache or selected index.
+        app.start_connect(0);
+        assert_eq!(app.selected_device, Some(1));
+        assert_eq!(
+            app.pending_device_connect,
+            Some(connection_device("A").stable_identity())
+        );
+        assert_eq!(app.current_device_name, "Current B");
+        assert_eq!(app.layout.as_ref().unwrap().name, "Current B");
+        assert!(app.hid_device.is_some());
+        assert!(requests.try_recv().is_err());
+
+        let (scan_tx, scan_rx) = mpsc::channel();
+        app.device_scan_state = DeviceScanState::Scanning {
+            rx: scan_rx,
+            started_at: std::time::Instant::now(),
+            generation: app.connection_generation,
+            timeout_logged: false,
+        };
+        scan_tx
+            .send(Ok(vec![connection_device("B"), connection_device("A")]))
+            .unwrap();
+        app.poll_device_scan(&ctx);
+        assert_eq!(app.selected_device, Some(0));
+        assert_eq!(app.current_device_name, "Current B");
+        assert!(app.hid_device.is_some());
+        assert!(requests.try_recv().is_err());
+
+        drop(a_tx);
+        app.poll_connect(&ctx);
+        let (target, _new_a_tx) = requests.try_recv().unwrap();
+        assert_eq!(target.serial_number, "A");
+        assert_eq!(app.selected_device, Some(1));
+        assert!(app.hid_device.is_none());
+        assert!(app.layout.is_none());
+    }
+
+    #[test]
+    fn consumer_rejects_completion_when_selected_identity_no_longer_matches_owner() {
+        let (mut app, ctx, requests) = connection_app();
+        app.start_connect(0);
+        let (_, a_tx) = requests.try_recv().unwrap();
+        // Simulate an inconsistent selection independently of cooperative cancel.
+        app.selected_device = Some(1);
+        let (_scan_tx, scan_rx) = mpsc::channel();
+        app.device_scan_state = DeviceScanState::Scanning {
+            rx: scan_rx,
+            started_at: std::time::Instant::now(),
+            generation: app.connection_generation,
+            timeout_logged: false,
+        };
+        a_tx.send(ConnectTaskMessage::Done(Box::new(Ok(connection_result(
+            "Wrong A",
+        )))))
+        .unwrap();
+        app.poll_connect(&ctx);
+        assert_no_applied_connection(&app);
+        assert_eq!(app.selected_device, None);
+    }
+
+    #[test]
+    fn resumed_identity_updates_selected_index_after_device_reordering() {
+        let (mut app, ctx, requests) = connection_app();
+        app.start_connect(0);
+        let (_, tx) = requests.try_recv().unwrap();
+        app.start_connect(1);
+        app.device_manager
+            .replace_devices(vec![connection_device("B"), connection_device("A")]);
+        tx.send(ConnectTaskMessage::Done(Box::new(Err(
+            "Connect cancelled".to_owned()
+        ))))
+        .unwrap();
+        app.poll_connect(&ctx);
+        assert_eq!(requests.try_recv().unwrap().0.serial_number, "B");
+        assert_eq!(app.selected_device, Some(0));
+    }
+
+    #[test]
+    fn replacement_success_applies_only_the_selected_targets_layout_hid_and_name_cache() {
+        let (mut app, ctx, requests) = connection_app();
+        app.start_connect(0);
+        let (_, a_tx) = requests.try_recv().unwrap();
+        a_tx.send(ConnectTaskMessage::Done(Box::new(Ok(connection_result(
+            "Obsolete A",
+        )))))
+        .unwrap();
+        app.start_connect(1);
+        app.poll_connect(&ctx);
+        let (_, b_tx) = requests.try_recv().unwrap();
+        b_tx.send(ConnectTaskMessage::Done(Box::new(Ok(connection_result(
+            "Current B",
+        )))))
+        .unwrap();
+        app.poll_connect(&ctx);
+        assert_eq!(app.selected_device, Some(1));
+        assert_eq!(app.current_device_name, "Current B");
+        assert_eq!(app.layout.as_ref().unwrap().name, "Current B");
+        assert!(app.hid_device.is_some());
+        assert_eq!(
+            app.device_display_names
+                .get(&connection_device("B").display_name_cache_key())
+                .map(String::as_str),
+            Some("Current B")
+        );
+        assert!(!app
+            .device_display_names
+            .contains_key(&connection_device("A").display_name_cache_key()));
+        assert!(app.pending_device_connect.is_none());
+        assert!(matches!(app.connect_state, ConnectState::Idle));
+    }
+
+    #[test]
+    fn bluetooth_timeout_preserves_snapshot_and_serializes_retry() {
+        let (mut app, ctx, requests) = connection_app();
+        let mut device = connection_device("A");
+        device.bus_type = "Bluetooth".to_owned();
+        let reconnect =
+            BluetoothReconnectState::new(device.stable_identity(), "A (Bluetooth)".to_owned());
+        app.device_manager.replace_devices(vec![device]);
+        app.layout = Some(connection_result("A snapshot").layout);
+        app.start_reconnect_connect(0, reconnect.clone());
+        let (_, tx) = requests.try_recv().unwrap();
+        expire_connection(&mut app, true);
+        app.poll_connect(&ctx);
+        assert!(matches!(app.connect_state, ConnectState::Reconnecting(_)));
+        assert!(!app.retiring_connects.is_empty());
+        assert_eq!(app.layout.as_ref().unwrap().name, "A snapshot");
+        app.start_reconnect_connect(0, reconnect.clone());
+        assert!(requests.try_recv().is_err());
+        tx.send(ConnectTaskMessage::Done(Box::new(Ok(connection_result(
+            "Late A",
+        )))))
+        .unwrap();
+        app.poll_connect(&ctx);
+        assert_eq!(app.layout.as_ref().unwrap().name, "A snapshot");
+        assert!(app.hid_device.is_none());
+        app.start_reconnect_connect(0, reconnect);
+        assert_eq!(requests.try_recv().unwrap().0.serial_number, "A");
+    }
+
+    #[test]
+    fn manual_selection_during_retired_bluetooth_attempt_supersedes_old_retry() {
+        let (mut app, ctx, requests) = connection_app();
+        let reconnect = BluetoothReconnectState::new(
+            connection_device("A").stable_identity(),
+            "A (Bluetooth)".to_owned(),
+        );
+        app.layout = Some(connection_result("A snapshot").layout);
+        app.start_reconnect_connect(0, reconnect);
+        let (_, tx) = requests.try_recv().unwrap();
+        expire_connection(&mut app, true);
+        app.poll_connect(&ctx);
+        assert!(matches!(app.connect_state, ConnectState::Reconnecting(_)));
+        app.start_connect(1);
+        assert!(!app.bluetooth_reconnect_active());
+        assert!(app.layout.is_none());
+        assert!(app.hid_device.is_none());
+        assert_eq!(app.selected_device, Some(1));
+        assert!(app.pending_device_connect.is_none());
+        let (target, _b_tx) = requests.try_recv().unwrap();
+        assert_eq!(target.serial_number, "B");
+        drop(tx);
+        app.poll_connect(&ctx);
+        assert!(requests.try_recv().is_err());
+        assert_eq!(app.selected_device, Some(1));
+    }
+
+    #[test]
+    fn latest_replacement_identity_wins_without_parallel_workers() {
+        let (mut app, ctx, requests) = connection_app();
+        app.start_connect(0);
+        let (_, tx) = requests.try_recv().unwrap();
+        app.start_connect(1);
+        app.start_connect(0);
+        assert!(requests.try_recv().is_err());
+        tx.send(ConnectTaskMessage::Done(Box::new(Ok(connection_result(
+            "Obsolete first A",
+        )))))
+        .unwrap();
+        app.poll_connect(&ctx);
+        assert_eq!(requests.try_recv().unwrap().0.serial_number, "A");
+        assert_eq!(app.selected_device, Some(0));
+        assert_no_applied_connection(&app);
+    }
+
     #[test]
     fn connect_apply_start_log_includes_device_layer_count_and_firmware() {
         assert_eq!(
@@ -357,91 +1023,157 @@ mod tests {
 }
 
 impl EntropyApp {
+    /// Revoke UI ownership without losing the serialization fence for a worker
+    /// that may be unable to observe cancellation inside synchronous HID I/O.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn retire_connect_worker(&mut self) {
+        if !matches!(self.connect_state, ConnectState::Loading { .. }) {
+            return;
+        }
+        if let ConnectState::Loading {
+            device, rx, cancel, ..
+        } = std::mem::replace(&mut self.connect_state, ConnectState::Idle)
+        {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            debug_assert!(self.retiring_connects.len() < MAX_CONNECT_WORKERS);
+            self.retiring_connects.push(RetiringConnect { device, rx });
+        }
+    }
+
     /// Poll background thread for connect result.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn poll_connect(&mut self, ctx: &egui::Context) {
         const CONNECT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
         const CONNECT_TOTAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(240);
 
-        enum ConnectPollEvent {
-            Done {
-                result: Result<ConnectResult, String>,
-                reconnect: Option<BluetoothReconnectState>,
-            },
-            Failed {
-                error: String,
-                reconnect: Option<BluetoothReconnectState>,
-            },
+        // Retired receivers only release endpoint reservations. Poll them without
+        // blocking the current owner: B must progress while a distinct A is stuck.
+        let retired_before = self.retiring_connects.len();
+        self.retiring_connects
+            .retain(|retiring| match drain_connect_task_messages(&retiring.rx) {
+                ConnectTaskChannelState::Done(result) => {
+                    drop(result);
+                    false
+                }
+                ConnectTaskChannelState::Disconnected => false,
+                ConnectTaskChannelState::Progress(_) | ConnectTaskChannelState::Empty => true,
+            });
+        if !self.retiring_connects.is_empty() {
+            ctx.request_repaint_after(CONNECT_POLL_INTERVAL);
+        }
+        if self.retiring_connects.len() != retired_before {
+            self.resume_pending_device_connect();
         }
 
-        let event = match &mut self.connect_state {
-            ConnectState::Loading {
-                rx,
-                started_at,
-                last_progress_at,
-                reconnect,
-            } => match drain_connect_task_messages(rx) {
-                ConnectTaskChannelState::Progress(message) => {
-                    if reconnect.is_none() {
-                        self.status_msg = message;
-                    }
-                    *last_progress_at = std::time::Instant::now();
-                    ctx.request_repaint();
-                    return;
-                }
-                ConnectTaskChannelState::Done(result) => {
-                    ctx.request_repaint();
-                    ConnectPollEvent::Done {
-                        result: *result,
-                        reconnect: reconnect.clone(),
-                    }
-                }
-                ConnectTaskChannelState::Empty => {
-                    let idle_timeout = last_progress_at.elapsed() > CONNECT_IDLE_TIMEOUT;
-                    let total_timeout = started_at.elapsed() > CONNECT_TOTAL_TIMEOUT;
-                    if idle_timeout || total_timeout {
-                        let stage = if self.status_msg.is_empty() {
-                            "unknown stage".to_owned()
-                        } else {
-                            self.status_msg.clone()
-                        };
-                        let error = format!(
-                            "Connect timeout — RMK/Vial device did not finish loading while: {stage}"
-                        );
-                        log::warn!("Connect timeout while waiting for stage: {stage}");
-                        ConnectPollEvent::Failed {
-                            error,
-                            reconnect: reconnect.clone(),
-                        }
+        // Check deadlines before messages: even a stream of progress or a Done
+        // already queued after the deadline must not revive expired ownership.
+        if let ConnectState::Loading {
+            started_at,
+            last_progress_at,
+            reconnect,
+            ..
+        } = &self.connect_state
+        {
+            if last_progress_at.elapsed() > CONNECT_IDLE_TIMEOUT
+                || started_at.elapsed() > CONNECT_TOTAL_TIMEOUT
+            {
+                let stage = if self.status_msg.is_empty() {
+                    "unknown stage".to_owned()
+                } else {
+                    self.status_msg.clone()
+                };
+                let error = format!(
+                    "Connect timeout — RMK/Vial device did not finish loading while: {stage}"
+                );
+                log::warn!("{error}; retiring worker");
+                let reconnect = reconnect.clone();
+                let pending = self.pending_device_connect.take();
+                if let Some(reconnect) = reconnect.filter(|_| pending.is_none()) {
+                    // Keep the existing Bluetooth snapshot/retry path, but revoke
+                    // this attempt and fence transport reuse until it retires.
+                    self.retire_connect_worker();
+                    self.connection_generation = self.connection_generation.wrapping_add(1);
+                    self.schedule_bluetooth_reconnect_retry(reconnect, &error);
+                } else {
+                    self.clear_connected_keyboard_state(error);
+                    self.pending_device_connect = pending;
+                    if self.pending_device_connect.is_none() {
+                        self.selected_device = None;
                     } else {
+                        self.resume_pending_device_connect();
+                    }
+                }
+                ctx.request_repaint_after(CONNECT_POLL_INTERVAL);
+                return;
+            }
+        }
+
+        let (result, reconnect, obsolete) = match &mut self.connect_state {
+            ConnectState::Loading {
+                device,
+                rx,
+                last_progress_at,
+                cancel,
+                reconnect,
+                ..
+            } => {
+                // Cancellation is authoritative at the consumer, not just at
+                // cooperative worker checkpoints. Done can predate selection B.
+                let selected_matches_owner = self
+                    .selected_device
+                    .and_then(|index| self.device_manager.devices().get(index))
+                    .is_some_and(|selected| device.stable_identity().matches(selected));
+                let obsolete = cancel.load(std::sync::atomic::Ordering::Relaxed)
+                    || self.pending_device_connect.is_some()
+                    || !selected_matches_owner;
+                let result = match drain_connect_task_messages(rx) {
+                    ConnectTaskChannelState::Progress(message) => {
+                        if !obsolete && reconnect.is_none() {
+                            self.status_msg = message;
+                        }
+                        // Obsolete progress must not extend cancellation recovery.
+                        if !obsolete {
+                            *last_progress_at = std::time::Instant::now();
+                        }
+                        ctx.request_repaint_after(CONNECT_POLL_INTERVAL);
+                        return;
+                    }
+                    ConnectTaskChannelState::Done(result) => *result,
+                    ConnectTaskChannelState::Empty => {
                         #[cfg(not(target_os = "windows"))]
                         ctx.request_repaint_after(CONNECT_POLL_INTERVAL);
                         return;
                     }
-                }
-                ConnectTaskChannelState::Disconnected => {
-                    log::error!("Connect thread died before returning a result");
-                    ConnectPollEvent::Failed {
-                        error: "Connect thread died".to_owned(),
-                        reconnect: reconnect.clone(),
-                    }
-                }
-            },
+                    ConnectTaskChannelState::Disconnected => Err("Connect thread died".to_owned()),
+                };
+                (result, reconnect.clone(), obsolete)
+            }
             ConnectState::Idle | ConnectState::SelectingDevice | ConnectState::Reconnecting(_) => {
-                return
+                return;
             }
         };
 
         self.connect_state = ConnectState::Idle;
-        let (result, reconnect) = match event {
-            ConnectPollEvent::Done { result, reconnect } => (result, reconnect),
-            ConnectPollEvent::Failed { error, reconnect } => (Err(error), reconnect),
-        };
+        ctx.request_repaint();
+        if obsolete {
+            // Drop A's HID handle before allowing B to start. Never classify an
+            // obsolete error (including wrapped cancellation) as B's failure.
+            drop(result);
+            if self.pending_device_connect.is_some() {
+                self.resume_pending_device_connect();
+            } else if let Some(reconnect) = reconnect {
+                self.schedule_bluetooth_reconnect_retry(reconnect, "connect cancelled");
+            } else {
+                self.selected_device = None;
+                self.start_device_scan();
+            }
+            return;
+        }
 
         match result {
             Ok(mut r) => {
-                if reconnect.is_some() && self.layout.is_some() {
-                    self.preserve_deferred_snapshot_on_reconnect(&mut r);
+                if let Some(reconnect) = reconnect.as_ref().filter(|_| self.layout.is_some()) {
+                    self.preserve_deferred_snapshot_on_reconnect(&mut r, reconnect);
                 }
                 let staged_bluetooth_load = r.deferred_load.is_staged();
                 self.pending_tap_hold_numeric_writes.clear();
@@ -477,7 +1209,6 @@ impl EntropyApp {
                 } else {
                     self.schedule_battery_refresh_for_result(r.about_info.battery_halves);
                 }
-                self.matrix_tester_rmk_byte_order = self.current_device_is_likely_rmk();
                 self.current_encoder_visibility_id =
                     encoder_visibility_id(&r.device_name, r.keyboard_id);
                 if let Some(dev) = self
@@ -548,6 +1279,7 @@ impl EntropyApp {
                 self.grave_escape_settings = r.grave_escape_settings;
                 self.layer_led_settings = r.layer_led_settings;
                 self.rgb_settings = r.rgb_settings;
+                self.display_settings = r.display_settings;
                 self.layout_options_value = r.layout_options_value;
                 let highest_used_combo = self
                     .combo_entries
@@ -712,6 +1444,13 @@ impl EntropyApp {
                     return;
                 }
 
+                if crate::hid::is_disconnect_error_message(&e) {
+                    self.selected_device = None;
+                    self.clear_connected_keyboard_state(e);
+                    self.start_device_scan();
+                    return;
+                }
+
                 if is_hid_open_failure(&e) {
                     self.selected_device = None;
                     self.clear_connected_keyboard_state(e);
@@ -823,4 +1562,209 @@ pub(super) fn sync_layer_names_to_store<S: LayerNameStore>(
         }
     }
     failed
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod qa_followup_reconnect {
+    use super::super::vial_hid_task::{VialHidOperation, VialHidTaskStart};
+    use super::*;
+
+    fn device(serial: &str) -> crate::device::Device {
+        crate::device::Device {
+            name: "Draft keyboard".into(),
+            vendor_id: 0x1111,
+            product_id: 0x2222,
+            manufacturer: "fixture".into(),
+            serial_number: serial.into(),
+            bus_type: "Bluetooth".into(),
+            path: format!("fixture-{serial}"),
+            instance_token: format!("fixture-instance-{serial}"),
+            firmware: FirmwareProtocol::Vial,
+        }
+    }
+    fn layout() -> KeyboardLayout {
+        KeyboardLayout::from_vial_json(&serde_json::json!({
+            "name":"Draft keyboard", "matrix":{"rows":1,"cols":1},
+            "layouts":{"keymap":[["0,0"]]}
+        }))
+        .unwrap()
+    }
+    fn result(device: &crate::device::Device, keyboard_id: u64) -> ConnectResult {
+        let (hid, _) = crate::hid::HidDevice::test_device();
+        ConnectResult {
+            device_name: device.name.clone(),
+            keyboard_id: keyboard_id,
+            vial_unlock_status: Default::default(),
+            hid_device: Some(hid),
+            layout: layout(),
+            layer_count: 1,
+            about_info: DeviceAboutInfo {
+                vendor_id: device.vendor_id,
+                product_id: device.product_id,
+                ..Default::default()
+            },
+            macro_texts: Default::default(),
+            supports_macro_ext_keycodes: Default::default(),
+            supports_rmk_native_key_actions: Default::default(),
+            supports_universal_symbols: Default::default(),
+            supports_universal_russian_letters: Default::default(),
+            supports_rmk_native_combo_output: Default::default(),
+            supports_rmk_native_tap_dance_actions: Default::default(),
+            supports_rmk_combo_layers: Default::default(),
+            macro_ext_keycodes_disabled_reason: Default::default(),
+            tap_dance_entries: Default::default(),
+            combo_entries: Default::default(),
+            combo_term: Default::default(),
+            auto_shift_options: Default::default(),
+            auto_shift_timeout: Default::default(),
+            mouse_keys_settings: Default::default(),
+            touchpad_settings: Default::default(),
+            bluetooth_settings: Default::default(),
+            module_settings: Default::default(),
+            tap_hold_settings: Default::default(),
+            magic_settings: Default::default(),
+            one_shot_settings: Default::default(),
+            grave_escape_settings: Default::default(),
+            layer_led_settings: Default::default(),
+            rgb_settings: Default::default(),
+            display_settings: Default::default(),
+            layout_options_value: Default::default(),
+            key_override_entries: Default::default(),
+            alt_repeat_entries: Default::default(),
+            vial_features: Default::default(),
+            layer_names_from_firmware: Default::default(),
+            supported_qmk_settings: Default::default(),
+            deferred_load: Default::default(),
+        }
+    }
+    fn poll_upload(app: &mut EntropyApp, ctx: &egui::Context) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.vial_hid_task.is_some() {
+            assert!(std::time::Instant::now() < deadline);
+            app.poll_vial_hid_task(ctx);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+    fn failed_upload(ctx: &egui::Context) -> (EntropyApp, BluetoothReconnectState) {
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&cc);
+        app.device_manager.replace_devices(vec![device("a")]);
+        app.selected_device = Some(0);
+        app.layout = Some(layout());
+        app.current_keyboard_id = Some(7);
+        app.current_device_name = "Draft keyboard".into();
+        let (hid, _) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+            0,
+            crate::hid::TestHidFault::Disconnect,
+        )));
+        app.hid_device = Some(hid);
+        let p = &mut app.display_settings.pictograms;
+        p.loaded = true;
+        p.supported = Some(true);
+        p.editor_name = "rejected upload draft".into();
+        p.source_levels = vec![42; PICTOGRAM_WIDTH * PICTOGRAM_HEIGHT];
+        p.undo = vec![vec![17; PICTOGRAM_WIDTH * PICTOGRAM_HEIGHT]];
+        p.library
+            .set(PictogramKind::Macro, 0, &vec![0xAA; PICTOGRAM_BYTES]);
+        assert!(app.apply_current_pictogram(ctx));
+        poll_upload(&mut app, ctx);
+        let ConnectState::Reconnecting(reconnect) = &app.connect_state else {
+            panic!("did not enter actual automatic reconnect");
+        };
+        let reconnect = reconnect.clone();
+        assert_eq!(
+            app.display_settings.pictograms.editor_name,
+            "rejected upload draft"
+        );
+        assert!(!app.display_settings.pictograms.loaded);
+        (app, reconnect)
+    }
+    fn complete(
+        app: &mut EntropyApp,
+        ctx: &egui::Context,
+        result: ConnectResult,
+        reconnect: Option<BluetoothReconnectState>,
+    ) {
+        let (tx, rx) = mpsc::channel();
+        let now = std::time::Instant::now();
+        app.connect_state = ConnectState::Loading {
+            device: app.device_manager.devices()[app.selected_device.unwrap()].clone(),
+            cancel: Default::default(),
+            rx,
+            started_at: now,
+            last_progress_at: now,
+            reconnect,
+        };
+        tx.send(ConnectTaskMessage::Done(Box::new(Ok(result))))
+            .unwrap();
+        app.poll_connect(ctx);
+        assert!(matches!(app.connect_state, ConnectState::Idle));
+    }
+
+    #[test]
+    fn failed_upload_draft_survives_successful_same_device_automatic_reconnect_and_reread() {
+        let ctx = egui::Context::default();
+        let (mut app, reconnect) = failed_upload(&ctx);
+        let draft = app.display_settings.pictograms.clone();
+        complete(&mut app, &ctx, result(&device("a"), 7), Some(reconnect));
+        let p = &app.display_settings.pictograms;
+        assert_eq!(p.editor_name, draft.editor_name);
+        assert_eq!(p.source_levels, draft.source_levels);
+        assert_eq!(p.undo, draft.undo);
+        assert!(!p.loaded);
+        assert!(!p.library.has(PictogramKind::Macro, 0));
+        assert!(p.preserve_editor_on_load);
+        let confirmed = PictogramLibrary::default();
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        recorder.respond_with(test_pictogram_read_responses(&confirmed));
+        app.hid_device = Some(hid);
+        assert!(matches!(
+            app.start_vial_hid_operation(
+                &ctx,
+                VialHidOperation::PictogramLoad {
+                    preserve_editor: app.display_settings.pictograms.preserve_editor_on_load,
+                }
+            ),
+            VialHidTaskStart::Started
+        ));
+        poll_upload(&mut app, &ctx);
+        let p = &app.display_settings.pictograms;
+        assert!(p.loaded);
+        assert_eq!(p.library, confirmed);
+        assert_eq!(p.editor_name, draft.editor_name);
+        assert_eq!(p.source_levels, draft.source_levels);
+        assert_eq!(p.undo, draft.undo);
+        assert!(!p.preserve_editor_on_load);
+    }
+
+    #[test]
+    fn reconnect_does_not_transfer_draft_to_another_physical_device_or_definition() {
+        for (serial, keyboard_id) in [("b", 7), ("a", 8)] {
+            let ctx = egui::Context::default();
+            let (mut app, reconnect) = failed_upload(&ctx);
+            app.device_manager.replace_devices(vec![device(serial)]);
+            complete(
+                &mut app,
+                &ctx,
+                result(&device(serial), keyboard_id),
+                Some(reconnect),
+            );
+            let p = &app.display_settings.pictograms;
+            assert!(p.editor_name.is_empty());
+            assert!(p.undo.is_empty());
+            assert!(!p.preserve_editor_on_load);
+            assert!(!p.loaded);
+            assert!(!p.library.has(PictogramKind::Macro, 0));
+        }
+    }
+
+    #[test]
+    fn explicit_new_connection_does_not_inherit_failed_upload_draft() {
+        let ctx = egui::Context::default();
+        let (mut app, _) = failed_upload(&ctx);
+        complete(&mut app, &ctx, result(&device("a"), 7), None);
+        assert!(app.display_settings.pictograms.editor_name.is_empty());
+        assert!(app.display_settings.pictograms.undo.is_empty());
+        assert!(!app.display_settings.pictograms.preserve_editor_on_load);
+    }
 }

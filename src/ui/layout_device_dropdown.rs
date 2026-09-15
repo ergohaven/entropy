@@ -215,7 +215,7 @@ impl EntropyApp {
                             top_dropdown_frame(dark).show(ui, |ui| {
                                 ui.set_min_width(dropdown_size.x - 16.0);
 
-                                let prev_selected = self.selected_device;
+                                let mut requested_device = None;
                                 if self.device_manager.devices().is_empty() {
                                     ui.allocate_ui_with_layout(
                                         egui::vec2(dropdown_size.x - 16.0, 30.0),
@@ -255,18 +255,20 @@ impl EntropyApp {
                                             is_selected,
                                         );
                                         if switch_enabled && resp.clicked() {
-                                            self.selected_device = Some(i);
+                                            requested_device = Some(i);
                                             self.main_menu_tab = MainMenuTab::Keyboard;
                                             device_clicked = true;
                                         }
                                     }
                                 }
 
-                                #[cfg(not(target_arch = "wasm32"))]
-                                if self.selected_device != prev_selected {
-                                    if let Some(idx) = self.selected_device {
+                                if let Some(idx) = requested_device {
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    if self.selected_device != Some(idx) || self.pending_device_connect.is_some() {
                                         self.start_connect(idx);
                                     }
+                                    #[cfg(target_arch = "wasm32")]
+                                    { self.selected_device = Some(idx); }
                                 }
 
                                 if show_key_legend_switcher {

@@ -49,6 +49,9 @@ enum SettingsWriteTarget {
     LayerLed {
         display_label: String,
     },
+    Display {
+        display_label: String,
+    },
 }
 
 impl SettingsWriteTarget {
@@ -58,7 +61,8 @@ impl SettingsWriteTarget {
             | Self::Touchpad { display_label }
             | Self::TapHold { display_label }
             | Self::OneShot { display_label }
-            | Self::LayerLed { display_label } => display_label,
+            | Self::LayerLed { display_label }
+            | Self::Display { display_label } => display_label,
         }
     }
 
@@ -81,6 +85,9 @@ impl SettingsWriteTarget {
             Self::LayerLed { display_label } => {
                 format!("layer-led field={display_label:?}")
             }
+            Self::Display { display_label } => {
+                format!("display field={display_label:?}")
+            }
         }
     }
 
@@ -88,12 +95,18 @@ impl SettingsWriteTarget {
         matches!(self, Self::Touchpad { .. })
     }
 
+    fn is_display(&self) -> bool {
+        matches!(self, Self::Display { .. })
+    }
+
     fn verifies_readback(&self, is_bluetooth_transport: bool) -> bool {
         // RMK persists device settings asynchronously after SET, so an immediate
         // GET can collide with that flash work over Bluetooth. USB Layer LED
         // writes still need readback because some firmware acknowledges SET
         // without applying the requested value.
-        self.is_touchpad() || (matches!(self, Self::LayerLed { .. }) && !is_bluetooth_transport)
+        self.is_touchpad()
+            || matches!(self, Self::Display { .. })
+            || (matches!(self, Self::LayerLed { .. }) && !is_bluetooth_transport)
     }
 
     fn reconcile_readback(
@@ -103,6 +116,7 @@ impl SettingsWriteTarget {
         tap_hold_settings: &mut TapHoldSettingsState,
         one_shot_settings: &mut OneShotSettingsState,
         layer_led_settings: &mut LayerLedSettingsState,
+        display_settings: &mut DisplaySettingsState,
         qsid: u16,
         readback: u16,
     ) {
@@ -149,6 +163,94 @@ impl SettingsWriteTarget {
             Self::LayerLed { .. } => {
                 layer_led_settings.set_value(qsid, readback);
             }
+            Self::Display { .. } => {
+                let value = readback.min(u8::MAX as u16) as u8;
+                if let Some(index) = DATE_QSIDS.iter().position(|q| *q == qsid) {
+                    display_settings.date[index] = value;
+                    display_settings.confirmed_date[index] = value;
+                } else if let Some(index) = DISPLAY_COLOR_QSIDS
+                    .iter()
+                    .position(|candidate| *candidate == qsid)
+                {
+                    display_settings.color[index] = value;
+                    display_settings.confirmed_color[index] = value;
+                } else if let Some(index) = DISPLAY_BACKGROUND_COLOR_QSIDS
+                    .iter()
+                    .position(|candidate| *candidate == qsid)
+                {
+                    display_settings.background_color[index] = value;
+                    display_settings.confirmed_background_color[index] = value;
+                } else if qsid == DISPLAY_BRIGHTNESS_QSID {
+                    display_settings.brightness = value.min(100);
+                    display_settings.confirmed_brightness = value.min(100);
+                } else if qsid == DISPLAY_BUTTON_STYLE_QSID {
+                    display_settings.button_style = value.min(32);
+                    display_settings.confirmed_button_style = value.min(32);
+                } else if let Some(index) = CLOCK_TEXT_COLOR_QSIDS
+                    .iter()
+                    .position(|candidate| *candidate == qsid)
+                {
+                    display_settings.clock_text_color[index] = value;
+                    display_settings.confirmed_clock_text_color[index] = value;
+                } else if let Some(index) = CLOCK_BACKGROUND_COLOR_QSIDS
+                    .iter()
+                    .position(|candidate| *candidate == qsid)
+                {
+                    display_settings.clock_background_color[index] = value;
+                    display_settings.confirmed_clock_background_color[index] = value;
+                } else if let Some(index) = CLOCK_INFO_COLOR_QSIDS
+                    .iter()
+                    .position(|candidate| *candidate == qsid)
+                {
+                    display_settings.clock_info_color[index] = value;
+                    display_settings.confirmed_clock_info_color[index] = value;
+                } else if let Some(index) = CLOCK_MODIFIERS_COLOR_QSIDS
+                    .iter()
+                    .position(|candidate| *candidate == qsid)
+                {
+                    display_settings.clock_modifiers_color[index] = value;
+                    display_settings.confirmed_clock_modifiers_color[index] = value;
+                } else if qsid == CLOCK_VISIBLE_QSID {
+                    display_settings.clock_visible = value != 0;
+                    display_settings.confirmed_clock_visible = value != 0;
+                } else if qsid == CLOCK_OPACITY_QSID {
+                    display_settings.clock_opacity = value.min(100);
+                    display_settings.confirmed_clock_opacity = value.min(100);
+                } else if qsid == CLOCK_INFO_VISIBLE_QSID {
+                    display_settings.clock_info_visible = value != 0;
+                    display_settings.confirmed_clock_info_visible = value != 0;
+                } else if qsid == CLOCK_INFO_OPACITY_QSID {
+                    display_settings.clock_info_opacity = value.min(100);
+                    display_settings.confirmed_clock_info_opacity = value.min(100);
+                } else if qsid == CLOCK_MODIFIERS_VISIBLE_QSID {
+                    display_settings.clock_modifiers_visible = value != 0;
+                    display_settings.confirmed_clock_modifiers_visible = value != 0;
+                } else if qsid == CLOCK_MODIFIERS_OPACITY_QSID {
+                    display_settings.clock_modifiers_opacity = value.min(100);
+                    display_settings.confirmed_clock_modifiers_opacity = value.min(100);
+                } else if qsid == CLOCK_STYLE_QSID {
+                    display_settings.clock_style = value.min(9);
+                    display_settings.confirmed_clock_style = value.min(9);
+                } else if qsid == CLOCK_SIZE_QSID {
+                    display_settings.clock_size = value.min(3);
+                    display_settings.confirmed_clock_size = value.min(3);
+                } else if qsid == CLOCK_ALIGNMENT_QSID {
+                    display_settings.clock_alignment = value.min(2);
+                    display_settings.confirmed_clock_alignment = value.min(2);
+                } else if qsid == CLOCK_DELAY_QSID {
+                    display_settings.clock_delay = value.min(7);
+                    display_settings.confirmed_clock_delay = value.min(7);
+                } else if qsid == CLOCK_COLON_BLINK_QSID {
+                    display_settings.clock_colon_blink = value != 0;
+                    display_settings.confirmed_clock_colon_blink = value != 0;
+                } else if qsid == CLOCK_BACKGROUND_DIM_QSID {
+                    display_settings.clock_background_dim = value.min(100);
+                    display_settings.confirmed_clock_background_dim = value.min(100);
+                } else if qsid == DISPLAY_TIMEOUT_QSID {
+                    display_settings.display_timeout = value.min(7);
+                    display_settings.confirmed_display_timeout = value.min(7);
+                }
+            }
         }
     }
 }
@@ -191,6 +293,19 @@ impl SettingsWriteQueueState {
             },
         );
         let id = request.id;
+
+        if request.target.is_display() {
+            if let Some(existing) = self
+                .pending
+                .iter_mut()
+                .find(|existing| existing.qsid == request.qsid && existing.target.is_display())
+            {
+                request.old_value = existing.old_value;
+                *existing = request;
+                return id;
+            }
+        }
+
         self.pending.push_back(request);
         id
     }
@@ -518,6 +633,24 @@ impl EntropyApp {
         });
     }
 
+    pub(super) fn queue_display_setting_write(
+        &mut self,
+        display_label: String,
+        qsid: u16,
+        old_value: u16,
+        requested: u16,
+    ) {
+        self.queue_settings_write(SettingsWriteRequest {
+            id: 0,
+            generation: self.settings_write_generation,
+            qsid,
+            width: 1,
+            old_value,
+            requested,
+            target: SettingsWriteTarget::Display { display_label },
+        });
+    }
+
     fn queue_settings_write(&mut self, request: SettingsWriteRequest) {
         let label = request.target.display_label().to_owned();
         let context = request.target.log_context();
@@ -706,6 +839,7 @@ impl EntropyApp {
                         &mut self.tap_hold_settings,
                         &mut self.one_shot_settings,
                         &mut self.layer_led_settings,
+                        &mut self.display_settings,
                         request.qsid,
                         readback,
                     );
@@ -746,6 +880,7 @@ impl EntropyApp {
                             &mut self.tap_hold_settings,
                             &mut self.one_shot_settings,
                             &mut self.layer_led_settings,
+                            &mut self.display_settings,
                             request.qsid,
                             *actual,
                         );
@@ -816,6 +951,20 @@ mod tests {
         }
     }
 
+    fn display_request(qsid: u16, old_value: u16, requested: u16) -> SettingsWriteRequest {
+        SettingsWriteRequest {
+            id: 0,
+            generation: 0,
+            qsid,
+            width: 1,
+            old_value,
+            requested,
+            target: SettingsWriteTarget::Display {
+                display_label: "Display color".to_owned(),
+            },
+        }
+    }
+
     fn test_app() -> EntropyApp {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx);
@@ -849,6 +998,21 @@ mod tests {
     }
 
     #[test]
+    fn display_pending_write_coalesces_to_latest_value() {
+        let mut queue = SettingsWriteQueueState::default();
+        let first_id = queue.enqueue(display_request(320, 84, 100));
+        let second_id = queue.enqueue(display_request(320, 100, 140));
+
+        assert_ne!(first_id, second_id);
+        assert_eq!(queue.pending.len(), 1);
+        let request = queue.pop_front().expect("coalesced display write");
+        assert_eq!(request.id, second_id);
+        assert_eq!(request.old_value, 84);
+        assert_eq!(request.requested, 140);
+        assert_eq!(queue.pending_value(320), Some(140));
+    }
+
+    #[test]
     fn failed_transport_marks_all_queued_settings() {
         let mut queue = SettingsWriteQueueState::default();
         queue.enqueue(request(121, 10));
@@ -877,6 +1041,7 @@ mod tests {
         let mut touchpad_settings = TouchpadSettingsState::default();
         let mut tap_hold_settings = TapHoldSettingsState::default();
         let mut one_shot_settings = OneShotSettingsState::default();
+        let mut display_settings = DisplaySettingsState::default();
         let mut layer_led_settings = LayerLedSettingsState {
             brightness: Some(LayerLedNumericSetting {
                 qsid: 316,
@@ -899,6 +1064,7 @@ mod tests {
             &mut tap_hold_settings,
             &mut one_shot_settings,
             &mut layer_led_settings,
+            &mut display_settings,
             7,
             3,
         );
@@ -911,6 +1077,7 @@ mod tests {
             &mut tap_hold_settings,
             &mut one_shot_settings,
             &mut layer_led_settings,
+            &mut display_settings,
             122,
             9,
         );
@@ -923,6 +1090,7 @@ mod tests {
             &mut tap_hold_settings,
             &mut one_shot_settings,
             &mut layer_led_settings,
+            &mut display_settings,
             7,
             175,
         );
@@ -935,6 +1103,7 @@ mod tests {
             &mut tap_hold_settings,
             &mut one_shot_settings,
             &mut layer_led_settings,
+            &mut display_settings,
             6,
             800,
         );
@@ -947,14 +1116,150 @@ mod tests {
             &mut tap_hold_settings,
             &mut one_shot_settings,
             &mut layer_led_settings,
+            &mut display_settings,
             316,
             128,
+        );
+        SettingsWriteTarget::Display {
+            display_label: "Display color".to_owned(),
+        }
+        .reconcile_readback(
+            &mut module_settings,
+            &mut touchpad_settings,
+            &mut tap_hold_settings,
+            &mut one_shot_settings,
+            &mut layer_led_settings,
+            &mut display_settings,
+            321,
+            72,
+        );
+        SettingsWriteTarget::Display {
+            display_label: "Background color".to_owned(),
+        }
+        .reconcile_readback(
+            &mut module_settings,
+            &mut touchpad_settings,
+            &mut tap_hold_settings,
+            &mut one_shot_settings,
+            &mut layer_led_settings,
+            &mut display_settings,
+            DISPLAY_BACKGROUND_COLOR_QSIDS[0],
+            24,
+        );
+        SettingsWriteTarget::Display {
+            display_label: "Brightness".to_owned(),
+        }
+        .reconcile_readback(
+            &mut module_settings,
+            &mut touchpad_settings,
+            &mut tap_hold_settings,
+            &mut one_shot_settings,
+            &mut layer_led_settings,
+            &mut display_settings,
+            DISPLAY_BRIGHTNESS_QSID,
+            140,
+        );
+        SettingsWriteTarget::Display {
+            display_label: "Button style".to_owned(),
+        }
+        .reconcile_readback(
+            &mut module_settings,
+            &mut touchpad_settings,
+            &mut tap_hold_settings,
+            &mut one_shot_settings,
+            &mut layer_led_settings,
+            &mut display_settings,
+            DISPLAY_BUTTON_STYLE_QSID,
+            42,
+        );
+        SettingsWriteTarget::Display {
+            display_label: "Clock style".to_owned(),
+        }
+        .reconcile_readback(
+            &mut module_settings,
+            &mut touchpad_settings,
+            &mut tap_hold_settings,
+            &mut one_shot_settings,
+            &mut layer_led_settings,
+            &mut display_settings,
+            CLOCK_STYLE_QSID,
+            99,
+        );
+        SettingsWriteTarget::Display {
+            display_label: "Clock text color".to_owned(),
+        }
+        .reconcile_readback(
+            &mut module_settings,
+            &mut touchpad_settings,
+            &mut tap_hold_settings,
+            &mut one_shot_settings,
+            &mut layer_led_settings,
+            &mut display_settings,
+            CLOCK_TEXT_COLOR_QSIDS[2],
+            73,
+        );
+        SettingsWriteTarget::Display {
+            display_label: "Display timeout".to_owned(),
+        }
+        .reconcile_readback(
+            &mut module_settings,
+            &mut touchpad_settings,
+            &mut tap_hold_settings,
+            &mut one_shot_settings,
+            &mut layer_led_settings,
+            &mut display_settings,
+            DISPLAY_TIMEOUT_QSID,
+            99,
+        );
+        SettingsWriteTarget::Display {
+            display_label: "Labels color".to_owned(),
+        }
+        .reconcile_readback(
+            &mut module_settings,
+            &mut touchpad_settings,
+            &mut tap_hold_settings,
+            &mut one_shot_settings,
+            &mut layer_led_settings,
+            &mut display_settings,
+            CLOCK_INFO_COLOR_QSIDS[1],
+            91,
+        );
+        SettingsWriteTarget::Display {
+            display_label: "Blinking separator".to_owned(),
+        }
+        .reconcile_readback(
+            &mut module_settings,
+            &mut touchpad_settings,
+            &mut tap_hold_settings,
+            &mut one_shot_settings,
+            &mut layer_led_settings,
+            &mut display_settings,
+            CLOCK_COLON_BLINK_QSID,
+            1,
         );
 
         assert_eq!(module_settings.value(7), 3);
         assert_eq!(touchpad_settings.scroll_sens, 9);
         assert_eq!(tap_hold_settings.tapping_term, 175);
         assert_eq!(one_shot_settings.timeout, 800);
+        assert_eq!(display_settings.color[1], 72);
+        assert_eq!(display_settings.confirmed_color[1], 72);
+        assert_eq!(display_settings.background_color[0], 24);
+        assert_eq!(display_settings.confirmed_background_color[0], 24);
+        assert_eq!(display_settings.brightness, 100);
+        assert_eq!(display_settings.confirmed_brightness, 100);
+        assert_eq!(display_settings.button_style, 32);
+        assert_eq!(display_settings.confirmed_button_style, 32);
+        assert_eq!(display_settings.clock_style, 9);
+        assert_eq!(display_settings.confirmed_clock_style, 9);
+        assert_eq!(display_settings.clock_text_color[2], 73);
+        assert_eq!(display_settings.confirmed_clock_text_color[2], 73);
+        assert_eq!(display_settings.clock_info_color[1], 91);
+        assert_eq!(display_settings.confirmed_clock_info_color[1], 91);
+        assert_eq!(display_settings.display_timeout, 7);
+        assert_eq!(display_settings.confirmed_display_timeout, 7);
+        assert!(display_settings.clock_colon_blink);
+        assert!(display_settings.confirmed_clock_colon_blink);
         assert_eq!(
             layer_led_settings
                 .brightness

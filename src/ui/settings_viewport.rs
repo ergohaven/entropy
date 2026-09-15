@@ -33,6 +33,8 @@ pub(crate) struct AdaptiveSettingsListViewport {
     pub(crate) row_content_width: f32,
     pub(crate) row_height: f32,
     pub(crate) has_scrollbar: bool,
+    pub(crate) scroll_offset: f32,
+    pub(crate) content_height: f32,
 }
 
 /// Returns a footer rectangle anchored to the settings viewport, not to its
@@ -180,6 +182,8 @@ pub(crate) fn allocate_adaptive_settings_list_viewport(
         row_content_width,
         row_height,
         has_scrollbar: max_offset > 0.0,
+        scroll_offset,
+        content_height,
     }
 }
 

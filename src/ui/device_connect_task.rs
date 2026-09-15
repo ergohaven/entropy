@@ -7,7 +7,7 @@ fn vial_cache_dir() -> Option<std::path::PathBuf> {
 }
 
 const VIAL_DEFINITION_CACHE_VERSION: u8 = 4;
-const QMK_SETTINGS_CACHE_VERSION: u8 = 2;
+const QMK_SETTINGS_CACHE_VERSION: u8 = 8;
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 struct CachedVialDefinition {
@@ -256,6 +256,48 @@ fn load_cached_qmk_settings(
     })
 }
 
+// Firmware builds may keep both their version and Vial definition unchanged.
+// Discover capabilities on each connection; the disk cache is only a fallback.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct LiveQmkHostCapabilities {
+    extended_protocol: bool,
+    legacy_lcd_clock: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl LiveQmkHostCapabilities {
+    fn apply(self, layout: &mut KeyboardLayout) {
+        layout.live_features.extended_host_protocol = self.extended_protocol;
+        layout.live_features.time |= self.legacy_lcd_clock;
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn current_qmk_settings(
+    definition: &serde_json::Value,
+    query: impl FnOnce() -> anyhow::Result<Vec<u16>>,
+    fallback: impl FnOnce() -> Option<Vec<u16>>,
+) -> (Vec<u16>, LiveQmkHostCapabilities) {
+    match query() {
+        Ok(settings) => {
+            let host = LiveQmkHostCapabilities {
+                extended_protocol: crate::qmk_hid_host::supports_extended_host_protocol(&settings),
+                legacy_lcd_clock: !is_rmk_vial_definition(definition)
+                    && crate::qmk_hid_host::supports_legacy_lcd_clock(definition, &settings),
+            };
+            (settings, host)
+        }
+        Err(error) => {
+            log::warn!("live QMK capability query failed, using cached fallback: {error}");
+            (
+                fallback().unwrap_or_default(),
+                LiveQmkHostCapabilities::default(),
+            )
+        }
+    }
+}
+
 fn save_cached_qmk_settings(cache_key: &str, context: &QmkSettingsCacheContext, settings: &[u16]) {
     let Some(path) = cached_qmk_settings_path(cache_key) else {
         return;
@@ -272,6 +314,15 @@ fn save_cached_qmk_settings(cache_key: &str, context: &QmkSettingsCacheContext, 
 
 fn normalize_reported_layer_count(reported_layer_count: usize) -> usize {
     reported_layer_count.max(1)
+}
+
+fn use_device_name_for_unnamed_layout(layout: &mut KeyboardLayout, device_name: &str) {
+    if layout.name.trim().is_empty() || layout.name.eq_ignore_ascii_case("unknown") {
+        let device_name = device_name.trim();
+        if !device_name.is_empty() {
+            layout.name = device_name.to_owned();
+        }
+    }
 }
 
 fn is_default_layer_name(index: usize, name: &str) -> bool {
@@ -496,17 +547,62 @@ impl EntropyApp {
         device_idx: usize,
         reconnect: Option<BluetoothReconnectState>,
     ) {
+        let dev = match self.device_manager.devices().get(device_idx) {
+            Some(d) => d.clone(),
+            None => {
+                if let Some(reconnect) = reconnect {
+                    self.schedule_bluetooth_reconnect_retry(reconnect, "device not found");
+                } else {
+                    self.status_msg = "Device not found".into();
+                }
+                return;
+            }
+        };
+        let pending_identity = dev.stable_identity();
+        if let ConnectState::Loading { cancel, .. } = &self.connect_state {
+            self.selected_device = Some(device_idx);
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            if reconnect.is_none() {
+                self.pending_device_connect = Some(pending_identity);
+            }
+            return;
+        }
+        if self.retiring_connects.len() >= MAX_CONNECT_WORKERS
+            || self
+                .retiring_connects
+                .iter()
+                .any(|retiring| retiring.device.may_share_physical_device(&dev))
+        {
+            if let Some(reconnect) = reconnect {
+                self.schedule_bluetooth_reconnect_retry(
+                    reconnect,
+                    "Connect endpoint still retiring",
+                );
+            } else {
+                if self.bluetooth_reconnect_active() {
+                    self.clear_connected_keyboard_state(format!(
+                        "Connecting to {}…",
+                        dev.display_name_with_transport(&dev.name)
+                    ));
+                }
+                if self.layout.is_none() {
+                    self.selected_device = Some(device_idx);
+                }
+                self.pending_device_connect = Some(pending_identity);
+            }
+            return;
+        }
         if self.hid_write_task_active() {
             if let Some(reconnect) = reconnect {
                 self.schedule_bluetooth_reconnect_retry(reconnect, "HID write still active");
             } else {
-                self.pending_device_connect = Some(device_idx);
+                self.pending_device_connect = Some(pending_identity);
             }
             return;
         }
         if self.qmk_settings_write_pending() {
             if reconnect.is_none() {
-                self.pending_device_connect = Some(device_idx);
+                self.pending_device_connect = Some(pending_identity);
             }
             self.flush_pending_qmk_setting_writes();
             if self.qmk_settings_write_busy() {
@@ -519,20 +615,13 @@ impl EntropyApp {
                 return;
             }
         }
+        // The index is mutable discovery state, so bind it only when this
+        // identity actually becomes the UI owner. A queued request must not
+        // relabel the still-live layout/HID of the previous keyboard.
+        self.selected_device = Some(device_idx);
         self.pending_device_connect = None;
         self.pending_layout_undo = false;
         self.pending_layer_write = None;
-        let dev = match self.device_manager.devices().get(device_idx) {
-            Some(d) => d.clone(),
-            None => {
-                if let Some(reconnect) = reconnect {
-                    self.schedule_bluetooth_reconnect_retry(reconnect, "device not found");
-                } else {
-                    self.status_msg = "Device not found".into();
-                }
-                return;
-            }
-        };
 
         if let Some(reconnect) = &reconnect {
             self.status_msg = crate::i18n::tr_catalog_format(
@@ -568,7 +657,6 @@ impl EntropyApp {
             self.undo_stack.clear();
             self.device_about_info = None;
             self.next_battery_refresh_at = None;
-            self.qmk_hid_hosts.clear();
             self.combo_visible_count = 1;
             self.combo_undo_stack.clear();
             self.combo_pick_target = None;
@@ -596,6 +684,7 @@ impl EntropyApp {
             self.alt_repeat_visible_count = 1;
             self.alt_repeat_pick_target = None;
             self.rgb_settings = RgbSettingsState::default();
+            self.display_settings = DisplaySettingsState::default();
             self.layout_options_value = None;
             self.encoder_visibility.clear();
             self.keycode_picker.macro_count = 0;
@@ -615,23 +704,41 @@ impl EntropyApp {
             self.reset_matrix_tester_state();
         }
 
+        // Both ordinary selection and Bluetooth retry must release this
+        // endpoint's aliases without stopping unrelated background displays.
+        self.clear_qmk_hid_host_bridges_for_reconnect();
         let (tx, rx) = mpsc::channel();
         let now = std::time::Instant::now();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.connect_state = ConnectState::Loading {
+            device: dev.clone(),
             rx,
             started_at: now,
             last_progress_at: now,
+            cancel: cancel.clone(),
             reconnect,
         };
 
+        #[cfg(test)]
+        if let Some(requests) = &self.test_connect_requests {
+            requests
+                .send((dev, tx))
+                .expect("test connect worker receiver");
+            return;
+        }
+
         std::thread::spawn(move || {
-            let progress = |message: &str| {
+            let progress = |message: &str| -> Result<(), String> {
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err("Connect cancelled".to_owned());
+                }
                 let _ = tx.send(ConnectTaskMessage::Progress(message.to_owned()));
+                Ok(())
             };
             let result = (|| -> Result<ConnectResult, String> {
                 use crate::hid::HidDevice;
 
-                progress("Opening HID device…");
+                progress("Opening HID device…")?;
                 log::info!(
                     "Opening HID device: {} {:04X}:{:04X}",
                     dev.name,
@@ -640,16 +747,18 @@ impl EntropyApp {
                 );
                 let dev_conn =
                     HidDevice::open_fresh_for(&dev).map_err(|e| format!("Open failed: {e:#}"))?;
+                let standby_animation_load = Self::device_uses_automatic_display_host_data(&dev)
+                    .then(|| dev_conn.pause_standby_animation_for_load());
                 let staged_bluetooth_load = dev_conn.is_bluetooth_transport();
 
-                progress("Reading VIA protocol version…");
+                progress("Reading VIA protocol version…")?;
                 log::info!("Getting protocol version…");
                 let via_protocol = dev_conn
                     .get_protocol_version()
                     .map_err(|e| format!("VIA protocol read failed: {e:#}"))?;
                 log::info!("VIA protocol version: {via_protocol}");
 
-                progress("Reading Vial keyboard id…");
+                progress("Reading Vial keyboard id…")?;
                 let (vial_protocol, keyboard_id) = dev_conn
                     .get_keyboard_id()
                     .map_err(|e| format!("Vial keyboard id read failed: {e:#}"))?;
@@ -673,7 +782,7 @@ impl EntropyApp {
                     }
                 };
 
-                progress("Reading firmware version…");
+                progress("Reading firmware version…")?;
                 let runtime_firmware_version = match dev_conn.get_firmware_version() {
                     Ok(Some(version)) => Some(version),
                     Ok(None) => {
@@ -688,7 +797,7 @@ impl EntropyApp {
                     }
                 };
 
-                progress("Reading Vial layout definition…");
+                progress("Reading Vial layout definition…")?;
                 log::info!("Getting layout JSON…");
                 let definition_size = dev_conn
                     .get_definition_size()
@@ -716,7 +825,18 @@ impl EntropyApp {
                     cached
                 } else {
                     let json = dev_conn
-                        .get_layout_json_with_size(definition_size)
+                        .get_layout_json_with_size_and_progress(
+                            definition_size,
+                            |completed, total| {
+                                if total > 0 {
+                                    progress(&format!(
+                                        "Reading Vial layout definition… {completed}/{total}"
+                                    ))
+                                    .map_err(anyhow::Error::msg)?;
+                                }
+                                Ok(())
+                            },
+                        )
                         .map_err(|e| format!("Layout read failed: {e:#}"))?;
                     if let Some(runtime_firmware_version) = runtime_firmware_cache_token {
                         save_cached_vial_definition(
@@ -738,7 +858,7 @@ impl EntropyApp {
                 let manufacturer = manufacturer_for_about(&dev.manufacturer, &json);
                 let supports_battery_halves = supports_battery_halves_from_vial_json(&json);
                 let battery_halves = if supports_battery_halves && !staged_bluetooth_load {
-                    progress("Reading split battery levels…");
+                    progress("Reading split battery levels…")?;
                     match dev_conn.get_battery_halves() {
                         Ok(levels) => levels,
                         Err(e) => {
@@ -769,47 +889,34 @@ impl EntropyApp {
                         }
                     },
                 );
-                let supported_qmk_settings = if vial_protocol >= 4 {
-                    if let Some(cached) = qmk_cache_context
-                        .as_ref()
-                        .and_then(|context| load_cached_qmk_settings(&cache_keys, context))
-                    {
-                        let (cached, source_cache_key) = cached;
-                        log::info!(
-                            "Loaded {} QMK settings from definition-aware cache for keyboard id {keyboard_id:016X}, key {source_cache_key}",
-                            cached.len(),
-                        );
-                        if source_cache_key != *cache_key {
-                            if let Some(context) = qmk_cache_context.as_ref() {
-                                save_cached_qmk_settings(cache_key, context, &cached);
-                            }
-                        }
-                        cached
-                    } else {
-                        progress("Querying QMK settings…");
-                        match dev_conn.query_qmk_settings() {
-                            Ok(settings) => {
-                                if let Some(context) = qmk_cache_context.as_ref() {
-                                    save_cached_qmk_settings(cache_key, context, &settings);
-                                }
-                                settings
-                            }
-                            Err(error) => {
-                                log::warn!("qmk settings query failed: {error}");
-                                Vec::new()
-                            }
-                        }
+                let (supported_qmk_settings, live_host_capabilities) = if vial_protocol >= 4 {
+                    progress("Querying QMK settings…")?;
+                    let (settings, live_host_capabilities) = current_qmk_settings(
+                        &json,
+                        || dev_conn.query_qmk_settings(),
+                        || {
+                            qmk_cache_context.as_ref().and_then(|context| {
+                                load_cached_qmk_settings(&cache_keys, context)
+                                    .map(|(settings, _)| settings)
+                            })
+                        },
+                    );
+                    if let Some(context) = qmk_cache_context.as_ref() {
+                        save_cached_qmk_settings(cache_key, context, &settings);
                     }
+                    (settings, live_host_capabilities)
                 } else {
-                    Vec::new()
+                    (Vec::new(), LiveQmkHostCapabilities::default())
                 };
                 let has_qmk_setting = |qsid: u16| supported_qmk_settings.contains(&qsid);
 
-                progress("Parsing keyboard layout…");
+                progress("Parsing keyboard layout…")?;
                 let mut layout = KeyboardLayout::from_vial_json(&json)
                     .map_err(|e| format!("Layout parse failed: {e}"))?;
+                live_host_capabilities.apply(&mut layout);
+                use_device_name_for_unnamed_layout(&mut layout, &dev.name);
 
-                progress("Reading layer count…");
+                progress("Reading layer count…")?;
                 log::info!("Getting layer count…");
                 let reported_layer_count = dev_conn
                     .get_layer_count()
@@ -827,7 +934,7 @@ impl EntropyApp {
                 layout.layers =
                     vec![vec![crate::keyboard::KeyBinding::default(); num_keys]; layer_count];
 
-                progress("Reading keymap…");
+                progress("Reading keymap…")?;
                 let initial_layer_count = if staged_bluetooth_load {
                     1
                 } else {
@@ -852,7 +959,7 @@ impl EntropyApp {
                             return Err(format!("Initial Bluetooth layer read failed: {e:#}"));
                         }
                         log::warn!("get_keymap_buffer failed: {e}");
-                        progress("Reading keymap (compatibility mode)…");
+                        progress("Reading keymap (compatibility mode)…")?;
                         let mut fallback_error = None;
                         'layers: for layer in 0..initial_layer_count {
                             for (key_index, key) in layout.keys.iter().enumerate() {
@@ -956,7 +1063,7 @@ impl EntropyApp {
                     })
                     .unwrap_or_default();
                 if !layer_name_updates.is_empty() {
-                    progress("Syncing layer names…");
+                    progress("Syncing layer names…")?;
                     for (qsid, name) in layer_name_updates {
                         if let Err(e) = dev_conn.set_qmk_setting_string(qsid, &name) {
                             log::warn!(
@@ -966,7 +1073,7 @@ impl EntropyApp {
                     }
                 }
 
-                progress("Reading Vial-core extras…");
+                progress("Reading Vial-core extras…")?;
                 if !layout.encoders.is_empty() {
                     layout.encoder_layers = vec![vec![0u16; layout.encoders.len()]; layer_count];
                     let encoder_count = layout.encoder_count();
@@ -1006,7 +1113,7 @@ impl EntropyApp {
                     }
                 };
 
-                progress("Reading macros…");
+                progress("Reading macros…")?;
                 let (macro_texts, macro_memory_bytes) = match dev_conn.get_macro_count() {
                     Ok(count) => {
                         log::info!("Macro count: {count}");
@@ -1045,7 +1152,7 @@ impl EntropyApp {
                     reported_alt_repeat_count,
                     dynamic_feature_bits,
                 ) = if vial_protocol >= 4 {
-                    progress("Reading dynamic feature counts…");
+                    progress("Reading dynamic feature counts…")?;
                     match dev_conn.get_dynamic_entry_counts() {
                         Ok(counts) => counts,
                         Err(e) => {
@@ -1064,7 +1171,7 @@ impl EntropyApp {
                     alt_repeat_key: reported_alt_repeat_count > 0,
                 };
 
-                progress("Reading combos…");
+                progress("Reading combos…")?;
                 let mut combo_entries = if staged_bluetooth_load {
                     vec![ComboEntry::default(); combo_count as usize]
                 } else {
@@ -1099,7 +1206,7 @@ impl EntropyApp {
                 let behavior_settings = if staged_bluetooth_load {
                     BehaviorSettingsState::default()
                 } else {
-                    progress("Reading QMK settings values…");
+                    progress("Reading QMK settings values…")?;
                     Self::read_behavior_settings(&supported_qmk_settings, &dev_conn)
                 };
 
@@ -1109,14 +1216,14 @@ impl EntropyApp {
                     Self::read_touchpad_settings(&json, &supported_qmk_settings, &dev_conn)
                 };
 
-                progress("Reading Bluetooth settings…");
+                progress("Reading Bluetooth settings…")?;
                 let bluetooth_settings = if staged_bluetooth_load {
                     BluetoothSettingsState::default()
                 } else {
                     Self::read_bluetooth_settings(&json, &supported_qmk_settings, &dev_conn)
                 };
 
-                progress("Reading module settings…");
+                progress("Reading module settings…")?;
                 let module_settings = if staged_bluetooth_load {
                     let mut settings =
                         Self::module_settings_from_definition(&json, &supported_qmk_settings);
@@ -1146,11 +1253,22 @@ impl EntropyApp {
                     // instead of the generic RGB page.
                     RgbSettingsState::default()
                 } else {
-                    progress("Reading RGB settings…");
+                    progress("Reading RGB settings…")?;
                     load_rgb_settings(&dev_conn, &layout)
                 };
 
-                progress("Reading tap dance entries…");
+                let display_settings = if DISPLAY_COLOR_QSIDS
+                    .iter()
+                    .all(|qsid| supported_qmk_settings.contains(qsid))
+                {
+                    progress("Reading display settings…")?;
+                    load_display_settings(&dev_conn, &supported_qmk_settings)
+                        .map_err(|error| format!("Display settings read failed: {error:#}"))?
+                } else {
+                    DisplaySettingsState::default()
+                };
+
+                progress("Reading tap dance entries…")?;
                 let mut tap_dance_entries = if staged_bluetooth_load {
                     vec![crate::keycode_picker::TapDanceEntry::default(); tap_dance_count as usize]
                 } else {
@@ -1197,7 +1315,7 @@ impl EntropyApp {
                     log::info!("Loaded {loaded} lossless RMK dynamic action(s)");
                 }
 
-                progress("Reading key overrides…");
+                progress("Reading key overrides…")?;
                 let key_override_entries = if staged_bluetooth_load {
                     vec![KeyOverrideEntry::default(); key_override_count as usize]
                 } else {
@@ -1352,7 +1470,8 @@ impl EntropyApp {
                     qmk_settings: !supported_qmk_settings.is_empty(),
                 };
 
-                progress("Applying keyboard layout…");
+                progress("Applying keyboard layout…")?;
+                drop(standby_animation_load);
                 Ok(ConnectResult {
                     device_name: dev.name.clone(),
                     keyboard_id,
@@ -1384,6 +1503,7 @@ impl EntropyApp {
                     grave_escape_settings: behavior_settings.grave_escape,
                     layer_led_settings,
                     rgb_settings,
+                    display_settings,
                     layout_options_value,
                     key_override_entries,
                     alt_repeat_entries,
@@ -1400,18 +1520,246 @@ impl EntropyApp {
     }
 
     pub(super) fn resume_pending_device_connect(&mut self) {
-        if self.hid_write_task_owner_active() || self.qmk_settings_write_busy() {
+        if self.hid_write_task_owner_active()
+            || self.qmk_settings_write_busy()
+            || matches!(self.connect_state, ConnectState::Loading { .. })
+        {
             return;
         }
-        if let Some(device_idx) = self.pending_device_connect.take() {
-            self.start_connect(device_idx);
+        let Some(identity) = self.pending_device_connect.take() else {
+            return;
+        };
+        let mut matches = self
+            .device_manager
+            .devices()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, device)| identity.matches(device).then_some(index));
+        let Some(device_idx) = matches.next() else {
+            self.selected_device = None;
+            self.pending_device_connect = Some(identity);
+            self.start_device_scan();
+            return;
+        };
+        if matches.next().is_some() {
+            self.selected_device = None;
+            self.connect_state = ConnectState::SelectingDevice;
+            self.status_msg.clear();
+            return;
         }
+        self.start_connect(device_idx);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn live_capabilities_replace_cache_even_when_firmware_version_is_unchanged() {
+        let (settings, host) = current_qmk_settings(
+            &serde_json::Value::Null,
+            || Ok((333..=371).collect()),
+            || panic!("A successful discovery must not reuse pre-date cached capabilities"),
+        );
+        assert!(DATE_QSIDS.iter().all(|qsid| settings.contains(qsid)));
+        assert!(host.extended_protocol);
+        let (older, host) = current_qmk_settings(
+            &serde_json::Value::Null,
+            || Ok(vec![333]),
+            || Some((333..=371).collect()),
+        );
+        assert!(
+            !older.contains(&357),
+            "Downgrades must also remove stale capabilities"
+        );
+        assert!(!host.extended_protocol);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn capability_query_failure_can_use_previous_cache() {
+        assert_eq!(
+            current_qmk_settings(
+                &serde_json::Value::Null,
+                || Err(anyhow::anyhow!("offline")),
+                || Some(vec![333]),
+            ),
+            (vec![333], LiveQmkHostCapabilities::default())
+        );
+        let (cached, host) = current_qmk_settings(
+            &serde_json::Value::Null,
+            || Err(anyhow::anyhow!("timeout after firmware downgrade")),
+            || Some((333..=371).collect()),
+        );
+        assert!(cached.contains(&357));
+        assert!(
+            !host.extended_protocol,
+            "a cache must never authorize BA/AF on this connection"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn legacy_lcd_definition() -> serde_json::Value {
+        serde_json::json!({
+            "name": "Legacy LCD keyboard",
+            "matrix": { "rows": 1, "cols": 1 },
+            "layouts": { "keymap": [["0,0"]] },
+            "settings": [{
+                "name": "LCD settings",
+                "fields": [
+                    { "qsid": 318, "type": "integer" },
+                    { "qsid": 319, "type": "select" }
+                ]
+            }]
+        })
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn legacy_lcd_clock_is_applied_only_from_fresh_qmk_capabilities() {
+        let definition = legacy_lcd_definition();
+        let mut layout = KeyboardLayout::from_vial_json(&definition).unwrap();
+        assert!(!layout.live_features.time);
+        let (_, host) = current_qmk_settings(
+            &definition,
+            || Ok(vec![318, 319]),
+            || panic!("fresh capabilities must win"),
+        );
+        host.apply(&mut layout);
+        assert!(layout.live_features.time);
+        assert!(!layout.live_features.extended_host_protocol);
+
+        let (cached, host) = current_qmk_settings(
+            &definition,
+            || Err(anyhow::anyhow!("device unavailable")),
+            || Some([318, 319].into_iter().chain(333..=371).collect()),
+        );
+        assert!(cached.contains(&318));
+        let mut layout = KeyboardLayout::from_vial_json(&definition).unwrap();
+        host.apply(&mut layout);
+        assert!(!layout.live_features.time);
+        assert!(!layout.live_features.extended_host_protocol);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn legacy_lcd_inference_preserves_rmk_and_explicit_live_features() {
+        let mut definition = legacy_lcd_definition();
+        definition["firmware"] = serde_json::json!({ "name": "RMK" });
+        let (_, host) = current_qmk_settings(&definition, || Ok(vec![318, 319]), || None);
+        let mut layout = KeyboardLayout::from_vial_json(&definition).unwrap();
+        host.apply(&mut layout);
+        assert!(
+            !layout.live_features.time,
+            "QMK LCD inference is not an RMK capability"
+        );
+        layout.live_features.time = true;
+        LiveQmkHostCapabilities::default().apply(&mut layout);
+        assert!(
+            layout.live_features.time,
+            "retain explicit backend metadata"
+        );
+    }
+
+    #[test]
+    fn unnamed_m4cr0pad_definition_uses_hid_name_for_encoder_layout() {
+        let json = serde_json::json!({
+            "matrix": { "rows": 5, "cols": 3 },
+            "layouts": {
+                "keymap": [
+                    [{ "x": 1.25 }, "1,0", "1,1", "1,2"],
+                    ["0,1\n\n\n\n\n\n\n\n\ne", { "x": 0.25 }, "2,0", "2,1", "2,2"],
+                    ["0,2", { "x": 0.25 }, "3,0", "3,1", "3,2"],
+                    ["0,0\n\n\n\n\n\n\n\n\ne", { "x": 0.25 }, "4,0", "4,1", "4,2"]
+                ]
+            }
+        });
+        let mut layout = KeyboardLayout::from_vial_json(&json).unwrap();
+
+        assert_eq!(layout.name, "Unknown");
+        use_device_name_for_unnamed_layout(&mut layout, "M4CR0Pad v3");
+
+        assert_eq!(layout.name, "M4CR0Pad v3");
+        assert!(layout_uses_combined_encoder_press(&layout));
+        assert_eq!(layout.encoders.len(), 2);
+
+        let geometry = LayoutGeometry {
+            offset_x: 0.0,
+            offset_y: 0.0,
+            unit: 64.0,
+            padding: 3.0,
+            layout_h: 256.0,
+        };
+        let key_rects = layout
+            .keys
+            .iter()
+            .enumerate()
+            .map(|(key_idx, key)| (key_idx, layout_physical_key_rect(key, geometry)))
+            .collect::<Vec<_>>();
+        let encoder_rect = layout
+            .encoders
+            .iter()
+            .map(|encoder| layout_physical_encoder_rect(encoder, geometry))
+            .reduce(|left, right| left.union(right))
+            .unwrap();
+        let press_rects = encoder_press_key_rects(&layout, &key_rects, &[(0, encoder_rect)], &[]);
+
+        assert_eq!(press_rects.len(), 1);
+        let press_key = &layout.keys[press_rects[0].key_idx];
+        assert_eq!((press_key.row, press_key.col), (0, 2));
+        assert_eq!(press_rects[0].press_rect.center(), encoder_rect.center());
+    }
+
+    #[test]
+    fn vial_layout_name_is_not_replaced_when_present() {
+        let json = serde_json::json!({
+            "name": "Firmware layout name",
+            "matrix": { "rows": 1, "cols": 1 },
+            "layouts": { "keymap": [["0,0"]] }
+        });
+        let mut layout = KeyboardLayout::from_vial_json(&json).unwrap();
+
+        use_device_name_for_unnamed_layout(&mut layout, "M4CR0Pad v3");
+
+        assert_eq!(layout.name, "Firmware layout name");
+    }
+
+    #[test]
+    fn replacement_connect_cancels_the_only_active_worker_and_queues_identity() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        let target = crate::device::Device {
+            name: "M4CR0Pad v3".to_owned(),
+            vendor_id: 0xE126,
+            product_id: 0x0042,
+            manufacturer: "Ergohaven".to_owned(),
+            serial_number: "test-pad".to_owned(),
+            bus_type: "Usb".to_owned(),
+            path: "/dev/hidraw4".to_owned(),
+            instance_token: "new-instance".to_owned(),
+            firmware: FirmwareProtocol::Vial,
+        };
+        let identity = target.stable_identity();
+        app.device_manager.replace_devices(vec![target]);
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        app.connect_state = ConnectState::Loading {
+            device: app.device_manager.devices()[0].clone(),
+            rx: std::sync::mpsc::channel().1,
+            started_at: std::time::Instant::now(),
+            last_progress_at: std::time::Instant::now(),
+            cancel: cancel.clone(),
+            reconnect: None,
+        };
+
+        app.start_connect(0);
+
+        assert!(cancel.load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(app.pending_device_connect, Some(identity));
+        assert!(matches!(app.connect_state, ConnectState::Loading { .. }));
+    }
 
     #[test]
     fn reported_layer_count_is_never_zero() {
@@ -1593,6 +1941,7 @@ mod tests {
             } else {
                 "/dev/hidraw4".to_owned()
             },
+            instance_token: String::new(),
             firmware: FirmwareProtocol::Vial,
         }
     }

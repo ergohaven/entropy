@@ -28,6 +28,13 @@ use super::typing_trainer_symbols::{
 };
 use super::*;
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct SavedPictogram {
+    pub(crate) name: String,
+    pub(crate) color: [u8; 3],
+    pub(crate) bitmap: Vec<u8>,
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct AppSettings {
     #[serde(default)]
@@ -70,6 +77,12 @@ pub(crate) struct AppSettings {
     pub(crate) key_legend_layout: KeyLegendLayout,
     #[serde(default)]
     pub(crate) layout_image_export: LayoutImageExportState,
+    #[serde(default)]
+    pub(crate) standby_background_scale: StandbyBackgroundScale,
+    #[serde(default)]
+    pub(crate) standby_background_source_path: Option<String>,
+    #[serde(default)]
+    pub(crate) saved_pictograms: Vec<SavedPictogram>,
     #[serde(default = "default_app_accent_color")]
     pub(crate) accent_color: AppAccentColor,
     #[serde(default = "default_ui_scale")]
@@ -109,6 +122,15 @@ pub(crate) enum CloseToTrayBehavior {
 pub(crate) enum StickyLayoutVisibilityMode {
     LayoutAndPresses,
     PressedOnly,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StandbyBackgroundScale {
+    Fit,
+    #[default]
+    Fill,
+    Stretch,
 }
 
 impl Default for StickyLayoutVisibilityMode {
@@ -188,6 +210,9 @@ impl Default for AppSettings {
             show_made_by_signature: default_show_made_by_signature(),
             key_legend_layout: KeyLegendLayout::default(),
             layout_image_export: LayoutImageExportState::default(),
+            standby_background_scale: StandbyBackgroundScale::default(),
+            standby_background_source_path: None,
+            saved_pictograms: Vec::new(),
             accent_color: default_app_accent_color(),
             ui_scale: default_ui_scale(),
             diagnostics_enabled: false,
@@ -226,6 +251,18 @@ mod app_settings_tests {
         assert!(!settings.dark_mode);
         assert!(!settings.launch_minimized);
         assert!(!settings.middle_click_assigns_transparent);
+        assert_eq!(
+            settings.standby_background_scale,
+            StandbyBackgroundScale::Fill
+        );
+    }
+
+    #[test]
+    fn standby_background_fill_is_the_default() {
+        assert_eq!(
+            AppSettings::default().standby_background_scale,
+            StandbyBackgroundScale::Fill
+        );
     }
 
     #[test]
@@ -1069,6 +1106,8 @@ pub(crate) struct ConnectResult {
     pub(crate) layer_led_settings: LayerLedSettingsState,
     /// Runtime RGB settings, if supported by the current Vial/QMK lighting backend
     pub(crate) rgb_settings: RgbSettingsState,
+    /// LCD accent color, if exposed by the keyboard firmware.
+    pub(crate) display_settings: DisplaySettingsState,
     /// Vial layout/display option bitfield, if exposed by `layouts.labels`
     pub(crate) layout_options_value: Option<u32>,
     /// Key Override entries
@@ -1137,17 +1176,36 @@ pub(crate) enum ConnectState {
     SelectingDevice,
     Reconnecting(BluetoothReconnectState),
     Loading {
+        /// Physical endpoint snapshot, independent of the mutable selected index.
+        device: Device,
         rx: mpsc::Receiver<ConnectTaskMessage>,
         started_at: std::time::Instant,
         last_progress_at: std::time::Instant,
+        cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
         reconnect: Option<BluetoothReconnectState>,
     },
+}
+
+/// Bound connection-thread accumulation even if a cancelled task never returns.
+/// Transport helpers have their own global resource/reservation bound.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const MAX_CONNECT_WORKERS: usize = 2;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct RetiringConnect {
+    pub(crate) device: Device,
+    pub(crate) rx: mpsc::Receiver<ConnectTaskMessage>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) enum DeviceScanState {
     Idle,
-    Scanning(mpsc::Receiver<Vec<Device>>),
+    Scanning {
+        rx: mpsc::Receiver<Result<Vec<Device>, String>>,
+        started_at: std::time::Instant,
+        generation: u64,
+        timeout_logged: bool,
+    },
 }
 
 pub(crate) fn toggle_handed_modifier(value: u16) -> Option<u16> {
@@ -2359,6 +2417,557 @@ pub(crate) struct RgbSettingsState {
     pub(crate) last_enabled_effect: u16,
 }
 
+pub(crate) const DISPLAY_COLOR_QSIDS: [u16; 3] = [320, 321, 322];
+pub(crate) const DISPLAY_BUTTON_STYLE_QSID: u16 = 323;
+pub(crate) const DISPLAY_BRIGHTNESS_QSID: u16 = 318;
+pub(crate) const DISPLAY_TIMEOUT_QSID: u16 = 319;
+pub(crate) const DISPLAY_BACKGROUND_COLOR_QSIDS: [u16; 3] = [330, 331, 332];
+pub(crate) const CLOCK_TEXT_COLOR_QSIDS: [u16; 3] = [333, 334, 335];
+pub(crate) const CLOCK_BACKGROUND_COLOR_QSIDS: [u16; 3] = [336, 337, 338];
+pub(crate) const CLOCK_STYLE_QSID: u16 = 339;
+pub(crate) const CLOCK_SIZE_QSID: u16 = 340;
+pub(crate) const CLOCK_ALIGNMENT_QSID: u16 = 341;
+pub(crate) const CLOCK_DELAY_QSID: u16 = 342;
+pub(crate) const CLOCK_COLON_BLINK_QSID: u16 = 343;
+pub(crate) const CLOCK_INFO_COLOR_QSIDS: [u16; 3] = [344, 345, 346];
+pub(crate) const CLOCK_BACKGROUND_DIM_QSID: u16 = 347;
+pub(crate) const CLOCK_VISIBLE_QSID: u16 = 348;
+pub(crate) const CLOCK_OPACITY_QSID: u16 = 349;
+pub(crate) const CLOCK_INFO_VISIBLE_QSID: u16 = 350;
+pub(crate) const CLOCK_INFO_OPACITY_QSID: u16 = 351;
+pub(crate) const CLOCK_MODIFIERS_VISIBLE_QSID: u16 = 352;
+pub(crate) const CLOCK_MODIFIERS_COLOR_QSIDS: [u16; 3] = [353, 354, 355];
+pub(crate) const CLOCK_MODIFIERS_OPACITY_QSID: u16 = 356;
+
+pub(crate) const DATE_QSIDS: [u16; 15] = [
+    357, 358, 359, 360, 361, 362, 363, 364, 365, 366, 367, 368, 369, 370, 371,
+];
+pub(crate) const DATE_DEFAULT: [u8; 15] =
+    [0, 100, 255, 255, 255, 0, 1, 1, 0, 7, 100, 1, 255, 255, 255];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DisplaySettingsState {
+    pub(crate) date_supported: bool,
+    pub(crate) standby_controls_supported: bool,
+    pub(crate) date: [u8; 15],
+    pub(crate) confirmed_date: [u8; 15],
+    pub(crate) supported: bool,
+    pub(crate) color: [u8; 3],
+    pub(crate) confirmed_color: [u8; 3],
+    pub(crate) background_color_supported: bool,
+    pub(crate) background_color: [u8; 3],
+    pub(crate) confirmed_background_color: [u8; 3],
+    pub(crate) brightness_supported: bool,
+    pub(crate) brightness: u8,
+    pub(crate) confirmed_brightness: u8,
+    pub(crate) button_style_supported: bool,
+    pub(crate) button_style: u8,
+    pub(crate) confirmed_button_style: u8,
+    pub(crate) startup_image_supported: bool,
+    pub(crate) startup_image_present: bool,
+    pub(crate) startup_image_bytes: u32,
+    pub(crate) startup_image_max_bytes: u32,
+    pub(crate) startup_image_file_name: Option<String>,
+    pub(crate) startup_image_preview_rgba: Vec<u8>,
+    pub(crate) startup_image_preview_revision: u64,
+    pub(crate) clock_settings_supported: bool,
+    pub(crate) clock_text_color: [u8; 3],
+    pub(crate) confirmed_clock_text_color: [u8; 3],
+    pub(crate) clock_overlay_controls_supported: bool,
+    pub(crate) clock_visible: bool,
+    pub(crate) confirmed_clock_visible: bool,
+    pub(crate) clock_opacity: u8,
+    pub(crate) confirmed_clock_opacity: u8,
+    pub(crate) clock_info_visible: bool,
+    pub(crate) confirmed_clock_info_visible: bool,
+    pub(crate) clock_info_opacity: u8,
+    pub(crate) confirmed_clock_info_opacity: u8,
+    pub(crate) clock_modifiers_visible: bool,
+    pub(crate) confirmed_clock_modifiers_visible: bool,
+    pub(crate) clock_modifiers_color: [u8; 3],
+    pub(crate) confirmed_clock_modifiers_color: [u8; 3],
+    pub(crate) clock_modifiers_opacity: u8,
+    pub(crate) confirmed_clock_modifiers_opacity: u8,
+    pub(crate) clock_info_color_supported: bool,
+    pub(crate) clock_info_color: [u8; 3],
+    pub(crate) confirmed_clock_info_color: [u8; 3],
+    pub(crate) clock_background_asset_supported: bool,
+    pub(crate) clock_background_kind: u8,
+    pub(crate) clock_background_frames: u8,
+    pub(crate) clock_background_bytes: u32,
+    pub(crate) clock_background_max_bytes: u32,
+    pub(crate) clock_background_max_frames: u8,
+    pub(crate) clock_background_speed_supported: bool,
+    pub(crate) clock_background_speed_percent: u16,
+    pub(crate) confirmed_clock_background_speed_percent: u16,
+    pub(crate) clock_background_speed_write_due: Option<std::time::Instant>,
+    pub(crate) clock_background_file_name: Option<String>,
+    pub(crate) clock_background_preview_rgba: Vec<u8>,
+    pub(crate) clock_background_preview_frames_rgba: Vec<Vec<u8>>,
+    pub(crate) clock_background_preview_delays_ms: Vec<u16>,
+    pub(crate) clock_background_preview_revision: u64,
+    pub(crate) clock_background_dim_supported: bool,
+    pub(crate) clock_background_dim: u8,
+    pub(crate) confirmed_clock_background_dim: u8,
+    pub(crate) clock_background_color: [u8; 3],
+    pub(crate) confirmed_clock_background_color: [u8; 3],
+    pub(crate) clock_style: u8,
+    pub(crate) confirmed_clock_style: u8,
+    pub(crate) clock_size: u8,
+    pub(crate) confirmed_clock_size: u8,
+    pub(crate) clock_alignment: u8,
+    pub(crate) confirmed_clock_alignment: u8,
+    pub(crate) clock_delay: u8,
+    pub(crate) confirmed_clock_delay: u8,
+    pub(crate) clock_colon_blink_supported: bool,
+    pub(crate) clock_colon_blink: bool,
+    pub(crate) confirmed_clock_colon_blink: bool,
+    pub(crate) display_timeout: u8,
+    pub(crate) confirmed_display_timeout: u8,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) pictograms: PictogramSettingsState,
+}
+
+impl Default for DisplaySettingsState {
+    fn default() -> Self {
+        Self {
+            date_supported: false,
+            standby_controls_supported: false,
+            date: DATE_DEFAULT,
+            confirmed_date: DATE_DEFAULT,
+            supported: false,
+            color: [200, 178, 146],
+            confirmed_color: [200, 178, 146],
+            background_color_supported: false,
+            background_color: [0, 0, 0],
+            confirmed_background_color: [0, 0, 0],
+            brightness_supported: false,
+            brightness: 100,
+            confirmed_brightness: 100,
+            button_style_supported: false,
+            button_style: 0,
+            confirmed_button_style: 0,
+            startup_image_supported: false,
+            startup_image_present: false,
+            startup_image_bytes: 0,
+            startup_image_max_bytes: 0,
+            startup_image_file_name: None,
+            startup_image_preview_rgba: Vec::new(),
+            startup_image_preview_revision: 0,
+            clock_settings_supported: false,
+            clock_text_color: [255, 255, 255],
+            confirmed_clock_text_color: [255, 255, 255],
+            clock_overlay_controls_supported: false,
+            clock_visible: true,
+            confirmed_clock_visible: true,
+            clock_opacity: 100,
+            confirmed_clock_opacity: 100,
+            clock_info_visible: true,
+            confirmed_clock_info_visible: true,
+            clock_info_opacity: 100,
+            confirmed_clock_info_opacity: 100,
+            clock_modifiers_visible: true,
+            confirmed_clock_modifiers_visible: true,
+            clock_modifiers_color: [255, 255, 255],
+            confirmed_clock_modifiers_color: [255, 255, 255],
+            clock_modifiers_opacity: 100,
+            confirmed_clock_modifiers_opacity: 100,
+            clock_info_color_supported: false,
+            clock_info_color: [255, 255, 255],
+            confirmed_clock_info_color: [255, 255, 255],
+            clock_background_asset_supported: false,
+            clock_background_kind: 0,
+            clock_background_frames: 0,
+            clock_background_bytes: 0,
+            clock_background_max_bytes: 0,
+            clock_background_max_frames: 0,
+            clock_background_speed_supported: false,
+            clock_background_speed_percent: 100,
+            confirmed_clock_background_speed_percent: 100,
+            clock_background_speed_write_due: None,
+            clock_background_file_name: None,
+            clock_background_preview_rgba: Vec::new(),
+            clock_background_preview_frames_rgba: Vec::new(),
+            clock_background_preview_delays_ms: Vec::new(),
+            clock_background_preview_revision: 0,
+            clock_background_dim_supported: false,
+            clock_background_dim: 30,
+            confirmed_clock_background_dim: 30,
+            clock_background_color: [0, 0, 0],
+            confirmed_clock_background_color: [0, 0, 0],
+            clock_style: 0,
+            confirmed_clock_style: 0,
+            clock_size: 2,
+            confirmed_clock_size: 2,
+            clock_alignment: 1,
+            confirmed_clock_alignment: 1,
+            clock_delay: 7,
+            confirmed_clock_delay: 7,
+            clock_colon_blink_supported: false,
+            clock_colon_blink: false,
+            confirmed_clock_colon_blink: false,
+            display_timeout: 4,
+            confirmed_display_timeout: 4,
+            #[cfg(not(target_arch = "wasm32"))]
+            pictograms: PictogramSettingsState::default(),
+        }
+    }
+}
+
+fn read_display_setting_u8(dev_conn: &crate::hid::HidDevice, qsid: u16) -> anyhow::Result<u8> {
+    dev_conn
+        .get_qmk_setting_u8(qsid)
+        .map_err(|error| anyhow::anyhow!("QSID {qsid} read failed: {error:#}"))
+}
+
+fn read_display_rgb(dev_conn: &crate::hid::HidDevice, qsids: [u16; 3]) -> anyhow::Result<[u8; 3]> {
+    Ok([
+        read_display_setting_u8(dev_conn, qsids[0])?,
+        read_display_setting_u8(dev_conn, qsids[1])?,
+        read_display_setting_u8(dev_conn, qsids[2])?,
+    ])
+}
+
+pub(crate) fn load_display_settings(
+    dev_conn: &crate::hid::HidDevice,
+    supported_qmk_settings: &[u16],
+) -> anyhow::Result<DisplaySettingsState> {
+    if !DISPLAY_COLOR_QSIDS
+        .iter()
+        .all(|qsid| supported_qmk_settings.contains(qsid))
+    {
+        return Ok(DisplaySettingsState::default());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let cached_background;
+    let color = read_display_rgb(dev_conn, DISPLAY_COLOR_QSIDS)?;
+    let background_color_supported = DISPLAY_BACKGROUND_COLOR_QSIDS
+        .iter()
+        .all(|qsid| supported_qmk_settings.contains(qsid));
+    let background_color = if background_color_supported {
+        read_display_rgb(dev_conn, DISPLAY_BACKGROUND_COLOR_QSIDS)?
+    } else {
+        [0, 0, 0]
+    };
+    let brightness_supported = supported_qmk_settings.contains(&DISPLAY_BRIGHTNESS_QSID);
+    let brightness = if brightness_supported {
+        read_display_setting_u8(dev_conn, DISPLAY_BRIGHTNESS_QSID)?.min(100)
+    } else {
+        100
+    };
+    let button_style_supported = supported_qmk_settings.contains(&DISPLAY_BUTTON_STYLE_QSID);
+    let button_style = if button_style_supported {
+        read_display_setting_u8(dev_conn, DISPLAY_BUTTON_STYLE_QSID)?.min(32)
+    } else {
+        0
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let startup_image_info = match dev_conn.get_startup_image_info() {
+        Ok(info) => Some(info),
+        Err(error) if crate::hid::is_disconnect_error(&error) => return Err(error),
+        Err(error) => {
+            log::debug!("startup image probe unavailable: {error:#}");
+            None
+        }
+    };
+    #[cfg(target_arch = "wasm32")]
+    let startup_image_info: Option<crate::app::standby_background::StartupImageInfo> = None;
+    #[cfg(not(target_arch = "wasm32"))]
+    let startup_image_preview_rgba = if startup_image_info.is_some_and(|info| info.present) {
+        match dev_conn.get_startup_image_preview(background_color) {
+            Ok(preview) => preview,
+            Err(error) if crate::hid::is_disconnect_error(&error) => return Err(error),
+            Err(error) => {
+                log::debug!("startup image preview unavailable: {error:#}");
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let startup_image_preview_rgba = Vec::new();
+    let clock_settings_supported = CLOCK_TEXT_COLOR_QSIDS
+        .iter()
+        .chain(CLOCK_BACKGROUND_COLOR_QSIDS.iter())
+        .copied()
+        .chain([
+            CLOCK_STYLE_QSID,
+            CLOCK_SIZE_QSID,
+            CLOCK_ALIGNMENT_QSID,
+            CLOCK_DELAY_QSID,
+            DISPLAY_TIMEOUT_QSID,
+        ])
+        .all(|qsid| supported_qmk_settings.contains(&qsid));
+    let clock_text_color = if clock_settings_supported {
+        read_display_rgb(dev_conn, CLOCK_TEXT_COLOR_QSIDS)?
+    } else {
+        [255, 255, 255]
+    };
+    let clock_overlay_controls_supported = [
+        CLOCK_VISIBLE_QSID,
+        CLOCK_OPACITY_QSID,
+        CLOCK_INFO_VISIBLE_QSID,
+        CLOCK_INFO_OPACITY_QSID,
+        CLOCK_MODIFIERS_VISIBLE_QSID,
+        CLOCK_MODIFIERS_OPACITY_QSID,
+    ]
+    .into_iter()
+    .chain(CLOCK_MODIFIERS_COLOR_QSIDS)
+    .all(|qsid| supported_qmk_settings.contains(&qsid));
+    let clock_visible = if clock_overlay_controls_supported {
+        read_display_setting_u8(dev_conn, CLOCK_VISIBLE_QSID)? != 0
+    } else {
+        true
+    };
+    let clock_opacity = if clock_overlay_controls_supported {
+        read_display_setting_u8(dev_conn, CLOCK_OPACITY_QSID)?.min(100)
+    } else {
+        100
+    };
+    let clock_info_visible = if clock_overlay_controls_supported {
+        read_display_setting_u8(dev_conn, CLOCK_INFO_VISIBLE_QSID)? != 0
+    } else {
+        true
+    };
+    let clock_info_opacity = if clock_overlay_controls_supported {
+        read_display_setting_u8(dev_conn, CLOCK_INFO_OPACITY_QSID)?.min(100)
+    } else {
+        100
+    };
+    let clock_modifiers_visible = if clock_overlay_controls_supported {
+        read_display_setting_u8(dev_conn, CLOCK_MODIFIERS_VISIBLE_QSID)? != 0
+    } else {
+        true
+    };
+    let clock_modifiers_color = if clock_overlay_controls_supported {
+        read_display_rgb(dev_conn, CLOCK_MODIFIERS_COLOR_QSIDS)?
+    } else {
+        [255, 255, 255]
+    };
+    let clock_modifiers_opacity = if clock_overlay_controls_supported {
+        read_display_setting_u8(dev_conn, CLOCK_MODIFIERS_OPACITY_QSID)?.min(100)
+    } else {
+        100
+    };
+    let clock_info_color_supported = clock_settings_supported
+        && CLOCK_INFO_COLOR_QSIDS
+            .iter()
+            .all(|qsid| supported_qmk_settings.contains(qsid));
+    let clock_info_color = if clock_info_color_supported {
+        read_display_rgb(dev_conn, CLOCK_INFO_COLOR_QSIDS)?
+    } else {
+        [255, 255, 255]
+    };
+    let clock_background_dim_supported =
+        clock_settings_supported && supported_qmk_settings.contains(&CLOCK_BACKGROUND_DIM_QSID);
+    let clock_background_dim = if clock_background_dim_supported {
+        read_display_setting_u8(dev_conn, CLOCK_BACKGROUND_DIM_QSID)?.min(100)
+    } else {
+        30
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let (
+        clock_background_asset_supported,
+        clock_background_kind,
+        clock_background_frames,
+        clock_background_bytes,
+        clock_background_max_bytes,
+        clock_background_max_frames,
+        clock_background_speed_supported,
+        clock_background_speed_percent,
+    ) = {
+        let info = if clock_background_dim_supported {
+            match dev_conn.get_standby_background_info() {
+                Ok(info) => Some(info),
+                Err(error) if crate::hid::is_disconnect_error(&error) => return Err(error),
+                Err(error) => {
+                    log::warn!("standby background probe failed: {error:#}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        cached_background = info.and_then(standby_background::restore_background_preview);
+        (
+            info.is_some(),
+            info.map_or(0, |value| value.kind),
+            info.map_or(0, |value| value.frame_count),
+            info.map_or(0, |value| value.total_size),
+            info.map_or(0, |value| value.max_size),
+            info.map_or(0, |value| value.max_frames),
+            info.is_some_and(|value| value.format_version >= 4),
+            info.map_or(100, |value| value.speed_percent),
+        )
+    };
+    #[cfg(target_arch = "wasm32")]
+    let (
+        clock_background_asset_supported,
+        clock_background_kind,
+        clock_background_frames,
+        clock_background_bytes,
+        clock_background_max_bytes,
+        clock_background_max_frames,
+        clock_background_speed_supported,
+        clock_background_speed_percent,
+    ) = (false, 0, 0, 0, 0, 0, false, 100);
+    let clock_background_color = if clock_settings_supported {
+        read_display_rgb(dev_conn, CLOCK_BACKGROUND_COLOR_QSIDS)?
+    } else {
+        [0, 0, 0]
+    };
+    let clock_style = clock_settings_supported
+        .then(|| read_display_setting_u8(dev_conn, CLOCK_STYLE_QSID).map(|value| value.min(9)))
+        .transpose()?
+        .unwrap_or(0);
+    let clock_size = clock_settings_supported
+        .then(|| read_display_setting_u8(dev_conn, CLOCK_SIZE_QSID).map(|value| value.min(3)))
+        .transpose()?
+        .unwrap_or(2);
+    let clock_alignment = clock_settings_supported
+        .then(|| read_display_setting_u8(dev_conn, CLOCK_ALIGNMENT_QSID).map(|value| value.min(2)))
+        .transpose()?
+        .unwrap_or(1);
+    let clock_delay = clock_settings_supported
+        .then(|| read_display_setting_u8(dev_conn, CLOCK_DELAY_QSID).map(|value| value.min(7)))
+        .transpose()?
+        .unwrap_or(7);
+    let clock_colon_blink_supported =
+        clock_settings_supported && supported_qmk_settings.contains(&CLOCK_COLON_BLINK_QSID);
+    let clock_colon_blink = clock_colon_blink_supported
+        .then(|| read_display_setting_u8(dev_conn, CLOCK_COLON_BLINK_QSID).map(|value| value != 0))
+        .transpose()?
+        .unwrap_or(false);
+    let display_timeout = clock_settings_supported
+        .then(|| read_display_setting_u8(dev_conn, DISPLAY_TIMEOUT_QSID).map(|value| value.min(7)))
+        .transpose()?
+        .unwrap_or(4);
+    let date_supported = DATE_QSIDS[..10]
+        .iter()
+        .all(|q| supported_qmk_settings.contains(q));
+    let mut date = DATE_DEFAULT;
+    if date_supported {
+        for (i, q) in DATE_QSIDS.iter().enumerate() {
+            if supported_qmk_settings.contains(q) {
+                date[i] = read_display_setting_u8(dev_conn, *q)?;
+            }
+        }
+    }
+    let mut state = DisplaySettingsState {
+        date_supported,
+        standby_controls_supported: DATE_QSIDS
+            .iter()
+            .all(|q| supported_qmk_settings.contains(q)),
+        date,
+        confirmed_date: date,
+        supported: true,
+        color,
+        confirmed_color: color,
+        background_color_supported,
+        background_color,
+        confirmed_background_color: background_color,
+        brightness_supported,
+        brightness,
+        confirmed_brightness: brightness,
+        button_style_supported,
+        button_style,
+        confirmed_button_style: button_style,
+        startup_image_supported: startup_image_info.is_some(),
+        startup_image_present: startup_image_info.is_some_and(|info| info.present),
+        startup_image_bytes: startup_image_info.map_or(0, |info| info.total_size),
+        startup_image_max_bytes: startup_image_info.map_or(0, |info| info.max_size),
+        startup_image_file_name: None,
+        startup_image_preview_rgba,
+        startup_image_preview_revision: 0,
+        clock_settings_supported,
+        clock_text_color,
+        confirmed_clock_text_color: clock_text_color,
+        clock_overlay_controls_supported,
+        clock_visible,
+        confirmed_clock_visible: clock_visible,
+        clock_opacity,
+        confirmed_clock_opacity: clock_opacity,
+        clock_info_visible,
+        confirmed_clock_info_visible: clock_info_visible,
+        clock_info_opacity,
+        confirmed_clock_info_opacity: clock_info_opacity,
+        clock_modifiers_visible,
+        confirmed_clock_modifiers_visible: clock_modifiers_visible,
+        clock_modifiers_color,
+        confirmed_clock_modifiers_color: clock_modifiers_color,
+        clock_modifiers_opacity,
+        confirmed_clock_modifiers_opacity: clock_modifiers_opacity,
+        clock_info_color_supported,
+        clock_info_color,
+        confirmed_clock_info_color: clock_info_color,
+        clock_background_asset_supported,
+        clock_background_kind,
+        clock_background_frames,
+        clock_background_bytes,
+        clock_background_max_bytes,
+        clock_background_max_frames,
+        clock_background_speed_supported,
+        clock_background_speed_percent,
+        confirmed_clock_background_speed_percent: clock_background_speed_percent,
+        clock_background_speed_write_due: None,
+        clock_background_file_name: None,
+        clock_background_preview_rgba: Vec::new(),
+        clock_background_preview_frames_rgba: Vec::new(),
+        clock_background_preview_delays_ms: Vec::new(),
+        clock_background_preview_revision: 0,
+        clock_background_dim_supported,
+        clock_background_dim,
+        confirmed_clock_background_dim: clock_background_dim,
+        clock_background_color,
+        confirmed_clock_background_color: clock_background_color,
+        clock_style,
+        confirmed_clock_style: clock_style,
+        clock_size,
+        confirmed_clock_size: clock_size,
+        clock_alignment,
+        confirmed_clock_alignment: clock_alignment,
+        clock_delay,
+        confirmed_clock_delay: clock_delay,
+        clock_colon_blink_supported,
+        clock_colon_blink,
+        confirmed_clock_colon_blink: clock_colon_blink,
+        display_timeout,
+        confirmed_display_timeout: display_timeout,
+        #[cfg(not(target_arch = "wasm32"))]
+        pictograms: PictogramSettingsState::default(),
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(preview) = cached_background {
+        state.clock_background_preview_rgba = preview.preview_rgba;
+        state.clock_background_preview_frames_rgba = preview.preview_frames_rgba;
+        state.clock_background_preview_delays_ms = preview.preview_delays_ms;
+        state.clock_background_file_name =
+            (!preview.file_name.is_empty()).then_some(preview.file_name);
+        state.clock_background_preview_revision = 1;
+    }
+    Ok(state)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod display_settings_load_tests {
+    use super::*;
+
+    #[test]
+    fn first_transport_timeout_stops_the_display_batch() {
+        let (hid, recorder) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+            1,
+            crate::hid::TestHidFault::Timeout,
+        )));
+
+        let result = load_display_settings(&hid, &DISPLAY_COLOR_QSIDS);
+
+        assert!(result.is_err());
+        assert_eq!(recorder.requests().len(), 2);
+    }
+}
+
 impl RgbSettingsState {
     pub(crate) fn is_enabled(&self) -> bool {
         self.supported && self.effect != 0
@@ -2653,6 +3262,7 @@ pub(crate) enum SettingsTab {
     TapDance,
     AutoShift,
     Rgb,
+    Display,
     LayerLeds,
     Encoders,
     Magic,
@@ -4519,6 +5129,14 @@ pub struct EntropyApp {
     pub(super) linux_setup_task: Option<LinuxSetupTask>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) connect_state: ConnectState,
+    /// Cancelled workers no longer owning the UI. Keep their endpoint reservations
+    /// until completion; at most MAX_CONNECT_WORKERS including Loading may exist.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) retiring_connects: Vec<RetiringConnect>,
+    /// Deterministic worker-launch seam: tests supply completions without HID I/O.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) test_connect_requests:
+        Option<mpsc::Sender<(Device, mpsc::Sender<ConnectTaskMessage>)>>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) device_scan_state: DeviceScanState,
     /// Persistent open HID device for real-time writes (Vial)
@@ -4557,7 +5175,7 @@ pub struct EntropyApp {
     pub(super) settings_write_queue: SettingsWriteQueueState,
     pub(super) settings_write_generation: u64,
     pub(super) qmk_settings_write_queue: QmkSettingsWriteQueue,
-    pub(super) pending_device_connect: Option<usize>,
+    pub(super) pending_device_connect: Option<DeviceIdentity>,
     /// Built-in qmk-hid-host bridges for displays/presets that need host data
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) qmk_hid_hosts:
@@ -4662,6 +5280,7 @@ pub struct EntropyApp {
     pub(crate) alt_repeat_pick_target: Option<AltRepeatPickField>,
     pub(crate) last_single_instance_signal: String,
     pub(crate) rgb_settings: RgbSettingsState,
+    pub(crate) display_settings: DisplaySettingsState,
     pub(crate) layout_options_value: Option<u32>,
     pub(crate) encoder_visibility: Vec<bool>,
     pub(crate) combo_term_dirty: bool,
@@ -4687,7 +5306,6 @@ pub struct EntropyApp {
     pub(crate) key_override_pick_target: Option<KeyOverridePickField>,
     pub(crate) matrix_tester_pressed: Vec<bool>,
     pub(crate) matrix_tester_ever_pressed: Vec<bool>,
-    pub(crate) matrix_tester_rmk_byte_order: bool,
     pub(crate) sticky_layout_prev_pressed: Vec<bool>,
     pub(crate) sticky_layout_pressed_key_layers: Vec<Option<usize>>,
     pub(crate) sticky_layout_toggled_layers: Vec<bool>,

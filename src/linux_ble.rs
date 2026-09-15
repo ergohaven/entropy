@@ -8,7 +8,7 @@ use crate::hid::hid_protocol::{
 use anyhow::{bail, Context, Result};
 use futures_lite::{future, StreamExt};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use zbus::blocking::connection::Builder as ConnectionBuilder;
@@ -263,9 +263,38 @@ fn collect_bluez_summaries(
     )
 }
 
+/// Restrict the existing resolver BEFORE any ReadValue calls. Opening B must
+/// never read A's report map/descriptors (even if A is stalled or retiring).
+fn retain_service_summaries(
+    service: &str,
+    hid_services: &mut HashMap<String, String>,
+    vendor_services: &mut HashMap<String, String>,
+    characteristics: &mut Vec<CharacteristicSummary>,
+    descriptors: &mut Vec<DescriptorSummary>,
+) {
+    hid_services.retain(|path, _| path == service);
+    vendor_services.retain(|path, _| path == service);
+    characteristics.retain(|characteristic| {
+        characteristic.service == service
+            && characteristic
+                .path
+                .rsplit_once('/')
+                .map(|(parent, _)| parent)
+                == Some(service)
+    });
+    descriptors.retain(|descriptor| {
+        characteristics.iter().any(|characteristic| {
+            descriptor.characteristic == characteristic.path
+                && descriptor.path.rsplit_once('/').map(|(parent, _)| parent)
+                    == Some(characteristic.path.as_str())
+        })
+    });
+}
+
 fn resolved_bluez_summaries(
     connection: &Connection,
     objects: &ManagedObjects,
+    only_service: Option<&str>,
 ) -> (
     HashMap<String, BluezDeviceSummary>,
     HashMap<String, String>,
@@ -273,8 +302,17 @@ fn resolved_bluez_summaries(
     Vec<CharacteristicSummary>,
     Vec<DescriptorSummary>,
 ) {
-    let (devices, hid_services, vendor_services, mut characteristics, mut descriptors) =
+    let (devices, mut hid_services, mut vendor_services, mut characteristics, mut descriptors) =
         collect_bluez_summaries(objects);
+    if let Some(service) = only_service {
+        retain_service_summaries(
+            service,
+            &mut hid_services,
+            &mut vendor_services,
+            &mut characteristics,
+            &mut descriptors,
+        );
+    }
 
     for characteristic in characteristics.iter_mut().filter(|characteristic| {
         characteristic.value.is_empty()
@@ -515,7 +553,7 @@ fn parse_bluez_modalias(modalias: &str) -> (u16, u16) {
 
 fn devices_from_objects(connection: &Connection, objects: &ManagedObjects) -> Vec<Device> {
     let (devices, hid_services, vendor_services, characteristics, descriptors) =
-        resolved_bluez_summaries(connection, objects);
+        resolved_bluez_summaries(connection, objects, None);
     select_vial_endpoints(
         &vendor_services,
         &hid_services,
@@ -538,6 +576,7 @@ fn devices_from_objects(connection: &Connection, objects: &ManagedObjects) -> Ve
             serial_number: summary.address.clone(),
             bus_type: "Bluetooth".to_owned(),
             path: format!("{BLUEZ_GATT_PREFIX}{}", endpoints.service),
+            instance_token: endpoints.service.clone(),
             firmware: FirmwareProtocol::Vial,
         })
     })
@@ -575,10 +614,91 @@ pub(crate) fn scan_devices() -> Vec<Device> {
     }
 }
 
+/// Return the last completed BlueZ scan and refresh it on a dedicated worker.
+/// USB discovery must never wait for a stalled D-Bus call.
+pub(crate) fn scan_devices_cached_nonblocking() -> Vec<Device> {
+    static SCAN_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+    static SCAN_CACHE: OnceLock<Mutex<Vec<Device>>> = OnceLock::new();
+
+    let cache = SCAN_CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    let cached = cache
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+
+    if SCAN_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok()
+    {
+        std::thread::spawn(|| {
+            let devices = scan_devices();
+            *SCAN_CACHE
+                .get_or_init(|| Mutex::new(Vec::new()))
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = devices;
+            SCAN_IN_FLIGHT.store(false, Ordering::Release);
+        });
+    }
+
+    cached
+}
+
 fn service_device_path(objects: &ManagedObjects, service: &str) -> Option<String> {
     let service_path = objects.keys().find(|path| path.as_str() == service)?;
     let properties = interface_properties(objects.get(service_path)?, SERVICE_INTERFACE)?;
     property_path(properties, "Device")
+}
+
+/// Validate BOTH the service's Device property and that Device1's address.
+/// A cached service path is not permission to connect a different BlueZ owner.
+fn validated_service_owner(
+    objects: &ManagedObjects,
+    service: &str,
+    expected: &Device,
+) -> Result<String> {
+    let owner = service_device_path(objects, service)
+        .context("BlueZ Vial service no longer belongs to a Bluetooth device")?;
+    let owner_path = objects
+        .keys()
+        .find(|path| path.as_str() == owner)
+        .context("BlueZ owning device disappeared")?;
+    let properties = interface_properties(
+        objects.get(owner_path).context("Missing BlueZ owner")?,
+        DEVICE_INTERFACE,
+    )
+    .context("Missing BlueZ Device1 identity")?;
+    let address = property_string(properties, "Address").context("Missing BlueZ owning address")?;
+    validate_service_identity(service, &owner, &address, expected)?;
+    Ok(owner)
+}
+
+fn validate_service_identity(
+    service: &str,
+    owner: &str,
+    address: &str,
+    expected: &Device,
+) -> Result<()> {
+    let normalize_address = |value: &str| -> Option<String> {
+        let normalized: String = value
+            .chars()
+            .filter(|c| !matches!(c, ':' | '-' | '_'))
+            .collect();
+        (normalized.len() == 12 && normalized.bytes().all(|b| b.is_ascii_hexdigit()))
+            .then(|| normalized.to_ascii_lowercase())
+    };
+    let address = normalize_address(address).context("Invalid BlueZ owning address")?;
+    let expected_path_address = crate::device::bluez_path_address(&expected.path)
+        .context("Invalid reserved BlueZ owning address")?;
+    if bluez_service_path(&expected.path) != Some(service)
+        || service.rsplit_once('/').map(|(parent, _)| parent) != Some(owner)
+        || crate::device::bluez_path_address(owner).as_deref() != Some(address.as_str())
+        || expected_path_address != address
+        || (!expected.serial_number.is_empty()
+            && normalize_address(&expected.serial_number).as_deref() != Some(address.as_str()))
+    {
+        bail!("BlueZ service identity changed or belongs to a different physical device");
+    }
+    Ok(())
 }
 
 fn ensure_device_connected(connection: &Connection, device_path: &str) -> Result<()> {
@@ -613,7 +733,7 @@ fn endpoints_for_service(
     service: &str,
 ) -> Option<VialGattEndpoints> {
     let (_, hid_services, vendor_services, characteristics, descriptors) =
-        resolved_bluez_summaries(connection, objects);
+        resolved_bluez_summaries(connection, objects, Some(service));
     select_vendor_vial_endpoints(&vendor_services, &characteristics)
         .into_iter()
         .chain(select_hid_vial_endpoints(
@@ -789,11 +909,14 @@ impl LinuxBleDevice {
             .to_owned();
         let connection = bluez_connection()?;
         let initial_objects = managed_objects(&connection)?;
-        let device_path = service_device_path(&initial_objects, &service)
-            .context("BlueZ Vial service no longer belongs to a Bluetooth device")?;
+        let device_path = validated_service_owner(&initial_objects, &service, device)?;
+        crate::hid::claim_open_target(device)?;
         ensure_device_connected(&connection, &device_path)?;
 
         let objects = managed_objects(&connection)?;
+        if validated_service_owner(&objects, &service, device)? != device_path {
+            bail!("BlueZ service owner changed during connection");
+        }
         let endpoints = endpoints_for_service(&connection, &objects, &service)
             .context("BlueZ Vial GATT characteristics are unavailable")?;
         log::info!(
@@ -1067,6 +1190,82 @@ mod tests {
             uuid: REPORT_REFERENCE_DESCRIPTOR_UUID.to_owned(),
             value: vec![report_id, report_type],
         }
+    }
+
+    #[test]
+    fn opening_b_never_resolves_a_or_cross_owned_characteristics() {
+        let a = "/org/bluez/hci0/dev_AA_AA_AA_AA_AA_AA/service0010";
+        let b = "/org/bluez/hci0/dev_BB_BB_BB_BB_BB_BB/service0010";
+        let mut hid_services =
+            HashMap::from([(a.into(), "owner-a".into()), (b.into(), "owner-b".into())]);
+        let mut vendor_services = HashMap::new();
+        let characteristic = |path: String, service: &str| CharacteristicSummary {
+            path,
+            service: service.into(),
+            uuid: REPORT_MAP_CHARACTERISTIC_UUID.into(),
+            flags: vec![],
+            value: vec![],
+        };
+        let mut characteristics = vec![
+            characteristic(format!("{a}/char1"), a),
+            characteristic(format!("{b}/char1"), b),
+            characteristic(format!("{a}/spoof"), b),
+        ];
+        let descriptor = |path: String, characteristic: String| DescriptorSummary {
+            path,
+            characteristic,
+            uuid: REPORT_REFERENCE_DESCRIPTOR_UUID.into(),
+            value: vec![],
+        };
+        let mut descriptors = vec![
+            descriptor(format!("{a}/char1/desc1"), format!("{a}/char1")),
+            descriptor(format!("{b}/char1/desc1"), format!("{b}/char1")),
+            descriptor(format!("{a}/char1/spoof"), format!("{b}/char1")),
+        ];
+        retain_service_summaries(
+            b,
+            &mut hid_services,
+            &mut vendor_services,
+            &mut characteristics,
+            &mut descriptors,
+        );
+        assert_eq!(hid_services.len(), 1);
+        assert!(hid_services.contains_key(b));
+        assert_eq!(characteristics.len(), 1);
+        assert_eq!(characteristics[0].path, format!("{b}/char1"));
+        assert_eq!(descriptors.len(), 1);
+        assert_eq!(descriptors[0].path, format!("{b}/char1/desc1"));
+    }
+
+    #[test]
+    fn bluez_open_validates_service_owning_address_before_connecting() {
+        let owner = "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF";
+        let service = format!("{owner}/service0010");
+        let mut device = Device {
+            name: "Test".into(),
+            vendor_id: 0x1209,
+            product_id: 0x1234,
+            manufacturer: String::new(),
+            serial_number: "AA:BB:CC:DD:EE:FF".into(),
+            bus_type: "Bluetooth".into(),
+            path: format!("bluez-gatt:{service}"),
+            instance_token: service.clone(),
+            firmware: FirmwareProtocol::Vial,
+        };
+        assert!(validate_service_identity(&service, owner, "aa:bb:cc:dd:ee:ff", &device).is_ok());
+        assert!(validate_service_identity(&service, owner, "11:22:33:44:55:66", &device).is_err());
+        assert!(validate_service_identity(
+            &service,
+            "/org/bluez/hci0/dev_11_22_33_44_55_66",
+            "AA:BB:CC:DD:EE:FF",
+            &device
+        )
+        .is_err());
+        device.serial_number = "11:22:33:44:55:66".into();
+        assert!(validate_service_identity(&service, owner, "AA:BB:CC:DD:EE:FF", &device).is_err());
+        device.serial_number.clear();
+        assert!(validate_service_identity(&service, owner, "AA:BB:CC:DD:EE:FF", &device).is_ok());
+        assert!(validate_service_identity(&service, owner, "", &device).is_err());
     }
 
     #[test]

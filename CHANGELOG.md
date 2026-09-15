@@ -5,6 +5,12 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.3.21-rc.2 - Test Candidate
+
+### Fixes
+
+- Allowed Layer-Tap and Mod-Tap keys as triggers in the shared QMK Key Override and RMK Fork editor while keeping empty, transparent, and plain-modifier triggers unavailable
+
 ## v0.3.21-rc.1 - Test Candidate
 
 ### Fixes

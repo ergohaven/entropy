@@ -391,7 +391,7 @@ impl EntropyApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{LayoutBottomHintKind, toggle_handed_modifier};
+    use super::{toggle_handed_modifier, LayoutBottomHintKind};
 
     const CLEAR_KEY: &str = "key_hints.clear_key";
 

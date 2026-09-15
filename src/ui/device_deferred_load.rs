@@ -1021,7 +1021,28 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn preserve_deferred_snapshot_on_reconnect(&self, result: &mut ConnectResult) {
+    pub(super) fn preserve_deferred_snapshot_on_reconnect(
+        &self,
+        result: &mut ConnectResult,
+        reconnect: &BluetoothReconnectState,
+    ) {
+        // This is an automatic reconnect, not a device-independent draft cache.
+        // Validate identity as well as the definition id before transferring an editor.
+        let same_device = self.current_keyboard_id == Some(result.keyboard_id)
+            && self
+                .selected_device
+                .and_then(|index| self.device_manager.devices().get(index))
+                .is_some_and(|device| reconnect.identity.matches(device));
+        if same_device && self.display_settings.pictograms.preserve_editor_on_load {
+            let mut draft = self.display_settings.pictograms.clone();
+            draft.supported = result.display_settings.pictograms.supported;
+            draft.loaded = false;
+            draft.loading = false;
+            draft.library = PictogramLibrary::default();
+            draft.upload_due = None;
+            draft.editor_last_cell = None;
+            result.display_settings.pictograms = draft;
+        }
         if !result.deferred_load.is_staged() {
             return;
         }

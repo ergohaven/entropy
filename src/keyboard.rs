@@ -119,6 +119,9 @@ pub struct LayoutOption {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LiveFeatures {
+    // Runtime-only: never trust a definition/disk cache to authorize host commands.
+    #[serde(skip)]
+    pub extended_host_protocol: bool,
     #[serde(default)]
     pub time: bool,
     #[serde(default)]
@@ -723,5 +726,25 @@ mod tests {
         assert!(!layout.live_features.layout);
         assert!(!layout.live_features.volume);
         assert!(layout.live_features.media);
+    }
+}
+
+#[cfg(test)]
+mod live_protocol_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn host_protocol_permission_is_never_restored_from_serialized_metadata() {
+        let metadata = LiveFeatures {
+            extended_host_protocol: true,
+            time: true,
+            ..Default::default()
+        };
+        let serialized = serde_json::to_string(&metadata).unwrap();
+        assert!(!serialized.contains("extended_host_protocol"));
+        let restored: LiveFeatures =
+            serde_json::from_str(r#"{"extended_host_protocol":true,"time":true}"#).unwrap();
+        assert!(!restored.extended_host_protocol);
+        assert!(restored.time);
     }
 }

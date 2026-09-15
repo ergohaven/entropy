@@ -366,41 +366,49 @@ impl KeycodePicker {
         let gui = gui_label(false);
         let lgui = gui_label(false);
 
-        ui.label(
-            RichText::new(tr_picker(
-                self.language,
-                "key_picker.section_plain_modifiers",
-            ))
-            .size(11.0)
-            .color(Color32::from_gray(150)),
-        );
-        ui.add_space(4.0);
         let plain: Vec<(String, u16, u16, String)> = vec![
             ("Ctrl".into(), 0x00E0, 0x00E4, "Ctrl".into()),
             ("Shift".into(), 0x00E1, 0x00E5, "Shift".into()),
             ("Alt".into(), 0x00E2, 0x00E6, "Alt".into()),
             (gui.into(), 0x00E3, 0x00E7, lgui.to_string()),
-        ];
-        ui.horizontal_wrapped(|ui| {
-            for (label, left_value, right_value, mod_name) in &plain {
-                let resp = ui
-                    .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                Self::paint_compact_picker_label(ui, &resp, label);
-                if resp.clicked_by(egui::PointerButton::Primary) {
-                    self.assign_keycode_value(*left_value);
-                }
-                if resp.clicked_by(egui::PointerButton::Secondary) {
-                    self.assign_keycode_value(*right_value);
-                }
-                resp.on_hover_text(crate::i18n::tr_text(
+        ]
+        .into_iter()
+        .filter(|(_, left_value, right_value, _)| {
+            self.picker_value_supported(*left_value)
+                || self.picker_value_supported(*right_value)
+        })
+        .collect();
+        if !plain.is_empty() {
+            ui.label(
+                RichText::new(tr_picker(
                     self.language,
-                    &plain_modifier_tooltip(mod_name),
-                ));
-            }
-        });
+                    "key_picker.section_plain_modifiers",
+                ))
+                .size(11.0)
+                .color(Color32::from_gray(150)),
+            );
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                for (label, left_value, right_value, mod_name) in &plain {
+                    let resp = ui
+                        .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    Self::paint_compact_picker_label(ui, &resp, label);
+                    if resp.clicked_by(egui::PointerButton::Primary) {
+                        self.assign_keycode_value(*left_value);
+                    }
+                    if resp.clicked_by(egui::PointerButton::Secondary) {
+                        self.assign_keycode_value(*right_value);
+                    }
+                    resp.on_hover_text(crate::i18n::tr_text(
+                        self.language,
+                        &plain_modifier_tooltip(mod_name),
+                    ));
+                }
+            });
+            ui.add_space(10.0);
+        }
 
-        ui.add_space(10.0);
         self.show_vial_layers(ui);
 
         ui.add_space(10.0);

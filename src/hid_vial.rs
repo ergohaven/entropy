@@ -37,6 +37,14 @@ impl HidDevice {
     }
 
     pub fn get_layout_json_with_size(&self, sz: u32) -> Result<serde_json::Value> {
+        self.get_layout_json_with_size_and_progress(sz, |_, _| Ok(()))
+    }
+
+    pub fn get_layout_json_with_size_and_progress(
+        &self,
+        sz: u32,
+        mut progress: impl FnMut(usize, usize) -> Result<()>,
+    ) -> Result<serde_json::Value> {
         let sz = sz as usize;
         if sz == 0 || sz > 2_000_000 {
             bail!("Invalid definition size: {sz}");
@@ -46,6 +54,8 @@ impl HidDevice {
         let mut payload = Vec::with_capacity(sz);
         let mut block: u32 = 0;
         let mut remaining = sz;
+        let total_blocks = sz.div_ceil(MSG_LEN);
+        progress(0, total_blocks)?;
 
         while remaining > 0 {
             let mut cmd = [0u8; MSG_LEN];
@@ -60,6 +70,10 @@ impl HidDevice {
             payload.extend_from_slice(&resp[..chunk]);
             remaining -= chunk;
             block += 1;
+            let completed = block as usize;
+            if completed == total_blocks || completed % 32 == 0 {
+                progress(completed, total_blocks)?;
+            }
         }
 
         // Decompress: vial uses Python lzma which defaults to XZ container format

@@ -1,11 +1,6 @@
 use super::*;
 
 impl KeycodePicker {
-    fn picker_value_supported(&self, value: u16) -> bool {
-        let _ = value;
-        true
-    }
-
     pub(super) fn picker_key_size(ctx: &egui::Context) -> Vec2 {
         responsive_picker_key_size(ctx)
     }

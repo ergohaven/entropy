@@ -33,8 +33,8 @@ fn sticky_layout_visuals(dark: bool) -> egui::Visuals {
 #[cfg(target_os = "windows")]
 fn set_windows_window_opacity_by_title(title: &str, opacity: f32) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, GWL_EXSTYLE, GetWindowLongPtrW, LWA_ALPHA, SetLayeredWindowAttributes,
-        SetWindowLongPtrW, WS_EX_LAYERED,
+        FindWindowW, GetWindowLongPtrW, SetLayeredWindowAttributes, SetWindowLongPtrW, GWL_EXSTYLE,
+        LWA_ALPHA, WS_EX_LAYERED,
     };
 
     let opacity = clamp_sticky_layout_opacity(opacity);
@@ -1021,10 +1021,8 @@ mod tests {
         expected_level: egui::WindowLevel,
         expected_resizable: bool,
     ) {
-        let [
-            egui::ViewportCommand::WindowLevel(level),
-            egui::ViewportCommand::Resizable(resizable),
-        ] = sticky_layout_pin_viewport_commands(always_on_top)
+        let [egui::ViewportCommand::WindowLevel(level), egui::ViewportCommand::Resizable(resizable)] =
+            sticky_layout_pin_viewport_commands(always_on_top)
         else {
             panic!("pin transition must update window level and resizability");
         };

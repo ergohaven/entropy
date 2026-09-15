@@ -21,6 +21,12 @@ mod typing_trainer_words;
 #[path = "typing_trainer_symbols.rs"]
 mod typing_trainer_symbols;
 
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "pictograms.rs"]
+mod pictograms;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use pictograms::*;
+
 #[path = "app_state.rs"]
 mod app_state;
 pub use app_state::*;
@@ -82,6 +88,10 @@ mod device_deferred_load;
 mod device_scan;
 #[path = "ui/device_settings_helpers.rs"]
 mod device_settings_helpers;
+#[path = "ui/display_preview.rs"]
+mod display_preview;
+#[path = "ui/display_settings.rs"]
+mod display_settings_ui;
 #[path = "ui/encoder_visibility_settings.rs"]
 mod encoder_visibility_settings_ui;
 #[path = "ui/file_dialog.rs"]
@@ -92,6 +102,9 @@ mod grave_escape_settings_ui;
 mod key_assignment;
 #[path = "ui/layer_operations.rs"]
 mod layer_operations;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "standby_background.rs"]
+mod standby_background;
 use layer_operations::{LayerClipboard, LayerSnapshot};
 #[cfg(not(target_arch = "wasm32"))]
 use layer_operations::{LayerWriteTask, PendingLayerWrite};

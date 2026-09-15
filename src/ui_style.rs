@@ -227,6 +227,7 @@ pub fn modern_button(ui: &mut Ui, label: &str, size: Vec2, enabled: bool) -> egu
 }
 
 pub fn modern_keycap_button(ui: &mut Ui, label: &str, size: Vec2, enabled: bool) -> egui::Response {
+    let enabled = enabled && ui.is_enabled();
     let dark = ui.visuals().dark_mode;
     let sense = if enabled {
         Sense::click()
@@ -255,11 +256,7 @@ pub fn modern_keycap_button(ui: &mut Ui, label: &str, size: Vec2, enabled: bool)
         egui::StrokeKind::Inside,
     );
 
-    let text_color = if enabled {
-        ui.visuals().text_color()
-    } else {
-        muted_text(dark)
-    };
+    let text_color = button_text_color(dark, enabled);
     let label_scale = (rect.height() / 54.0).clamp(0.88, 1.22);
     let (top_size, bottom_size) = crate::keycode::key_label_font_sizes(label);
     if let Some((top, bottom)) = label.split_once('\n') {
@@ -417,6 +414,26 @@ pub fn settings_segmented_control(
     picked
 }
 
+/// Keep disabled controls distinct even when the surrounding text style is muted.
+fn button_text_color(dark: bool, enabled: bool) -> Color32 {
+    Color32::from_gray(match (dark, enabled) {
+        (true, true) => 230,
+        (true, false) => 100,
+        (false, true) => 45,
+        (false, false) => 165,
+    })
+}
+
+pub fn modern_progress_button(
+    ui: &mut Ui,
+    label: &str,
+    size: Vec2,
+    enabled: bool,
+    progress: Option<f32>,
+) -> egui::Response {
+    modern_button_impl(ui, label, size, 12.5, enabled, progress)
+}
+
 pub fn modern_button_with_font(
     ui: &mut Ui,
     label: &str,
@@ -424,6 +441,18 @@ pub fn modern_button_with_font(
     font_size: f32,
     enabled: bool,
 ) -> egui::Response {
+    modern_button_impl(ui, label, size, font_size, enabled, None)
+}
+
+fn modern_button_impl(
+    ui: &mut Ui,
+    label: &str,
+    size: Vec2,
+    font_size: f32,
+    enabled: bool,
+    progress: Option<f32>,
+) -> egui::Response {
+    let enabled = enabled && ui.is_enabled() && progress.is_none();
     let dark = ui.visuals().dark_mode;
     let sense = if enabled {
         Sense::click()
@@ -451,11 +480,23 @@ pub fn modern_button_with_font(
         modal_outline_stroke(dark),
         egui::StrokeKind::Inside,
     );
-    let text_color = if enabled {
-        ui.visuals().text_color()
-    } else {
-        muted_text(dark)
-    };
+    if let Some(progress) = progress {
+        let fraction = progress.clamp(0.0, 1.0);
+        let clip = egui::Rect::from_min_max(
+            rect.min,
+            egui::pos2(rect.left() + rect.width() * fraction, rect.bottom()),
+        );
+        ui.painter()
+            .with_clip_rect(clip.intersect(ui.clip_rect()))
+            .rect_filled(
+                rect.shrink(1.0),
+                8.0,
+                accent().gamma_multiply(if dark { 0.42 } else { 0.25 }),
+            );
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(50));
+    }
+    let text_color = button_text_color(dark, enabled || progress.is_some());
     let text_rect = rect.shrink2(Vec2::new(6.0, 2.0));
     let mut fitted_font_size = font_size;
     let mut galley = ui.painter().layout_no_wrap(
@@ -686,14 +727,18 @@ pub fn modern_dropdown_button_sized(
         modal_outline_stroke(dark),
         egui::StrokeKind::Inside,
     );
-    ui.painter().text(
+    let chevron_x = dropdown_rect.right() - 15.0;
+    let text_clip = egui::Rect::from_min_max(
+        egui::pos2(dropdown_rect.left() + 8.0, dropdown_rect.top()),
+        egui::pos2(chevron_x - 9.0, dropdown_rect.bottom()),
+    );
+    ui.painter().with_clip_rect(text_clip).text(
         egui::pos2(dropdown_rect.left() + 12.0, dropdown_rect.center().y),
         egui::Align2::LEFT_CENTER,
         selected_text,
         FontId::proportional(font_size),
         text_color,
     );
-    let chevron_x = dropdown_rect.right() - 15.0;
     let chevron_y = dropdown_rect.center().y + 1.0;
     let chevron_color = muted_text(dark);
     ui.painter().line_segment(
@@ -733,14 +778,32 @@ pub fn modern_dropdown_select_sized(
         height,
         font_size,
     );
+    let option_font = FontId::proportional(font_size);
+    let longest_label_width = labels
+        .iter()
+        .map(|label| {
+            ui.painter()
+                .layout_no_wrap(
+                    label.clone(),
+                    option_font.clone(),
+                    ui.visuals().text_color(),
+                )
+                .size()
+                .x
+        })
+        .fold(0.0_f32, f32::max);
+    let popup_width = (longest_label_width + 24.0)
+        .max(width)
+        .min((ui.ctx().content_rect().width() - 24.0).max(width));
     let mut picked = None;
-    crate::ui_style::popup_below_widget(
+    crate::ui_style::popup_below_widget_with_width(
         ui,
         id,
         &dropdown_resp,
         egui::PopupCloseBehavior::CloseOnClickOutside,
+        popup_width,
         |ui| {
-            ui.set_min_width(width);
+            ui.set_min_width(popup_width);
             ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
             let option_height = 28.0;
             let max_height = (labels.len() as f32 * (option_height + 2.0))
@@ -753,8 +816,10 @@ pub fn modern_dropdown_select_sized(
                 .show(ui, |ui| {
                     for (idx, label) in labels.iter().enumerate() {
                         let is_selected = idx == selected;
-                        let (option_rect, option_resp) =
-                            ui.allocate_exact_size(Vec2::new(width, option_height), Sense::click());
+                        let (option_rect, option_resp) = ui.allocate_exact_size(
+                            Vec2::new(popup_width, option_height),
+                            Sense::click(),
+                        );
                         if option_resp.hovered() {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
@@ -774,7 +839,7 @@ pub fn modern_dropdown_select_sized(
                             egui::pos2(option_rect.left() + 10.0, option_rect.center().y),
                             egui::Align2::LEFT_CENTER,
                             label,
-                            FontId::proportional(12.0),
+                            option_font.clone(),
                             if is_selected {
                                 ui.visuals().text_color()
                             } else {

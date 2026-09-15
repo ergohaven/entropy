@@ -323,6 +323,7 @@ mod tests {
                 serial_number: "test".to_owned(),
                 bus_type: "Usb".to_owned(),
                 path: "test-live-features".to_owned(),
+                instance_token: String::new(),
                 firmware: FirmwareProtocol::Vial,
             }]);
         app.selected_device = Some(0);
@@ -356,6 +357,7 @@ mod tests {
         });
         app.layout_options_value = Some(0);
         app.app_settings.layout_sync_enabled = false;
+        app.display_settings.clock_overlay_controls_supported = true;
 
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -377,6 +379,9 @@ mod tests {
         assert!(text.iter().any(|value| value == "Media info"));
         assert!(text.iter().any(|value| value == "Layout sync"));
         assert!(text.iter().any(|value| value == "Entropy background"));
+        assert!(!text.iter().any(|value| value == "Clock"));
+        assert!(!text.iter().any(|value| value == "Layer and language"));
+        assert!(!text.iter().any(|value| value == "Modifiers"));
         assert!(text.iter().any(|value| value == "required"));
         assert!(!text
             .iter()

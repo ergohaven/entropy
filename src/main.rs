@@ -279,7 +279,7 @@ fn initial_window_size() -> [f32; 2] {
 }
 
 fn main() -> eframe::Result<()> {
-    #[cfg(all(not(target_arch = "wasm32"), target_os = "windows"))]
+    #[cfg(not(target_arch = "wasm32"))]
     if hid::run_hid_proxy_if_requested() {
         return Ok(());
     }
@@ -336,6 +336,11 @@ fn main() -> eframe::Result<()> {
                 egui::FontData::from_static(include_bytes!("../assets/Roboto-Regular.ttf")).into(),
             );
             fonts.font_data.insert(
+                "montserrat_medium".to_owned(),
+                egui::FontData::from_static(include_bytes!("../assets/Montserrat-Medium.ttf"))
+                    .into(),
+            );
+            fonts.font_data.insert(
                 "dejavu".to_owned(),
                 egui::FontData::from_static(include_bytes!("../assets/DejaVuSans.ttf")).into(),
             );
@@ -351,6 +356,48 @@ fn main() -> eframe::Result<()> {
                 egui::FontData::from_static(include_bytes!("../assets/NotoEmoji-Regular.ttf"))
                     .into(),
             );
+            for (name, data) in [
+                (
+                    "clock_ubuntu_sans",
+                    include_bytes!("../assets/Clock-UbuntuSans.ttf").as_slice(),
+                ),
+                (
+                    "clock_ubuntu_mono",
+                    include_bytes!("../assets/Clock-UbuntuMono.ttf").as_slice(),
+                ),
+                (
+                    "clock_liberation_mono",
+                    include_bytes!("../assets/Clock-LiberationMono.ttf").as_slice(),
+                ),
+                (
+                    "clock_dejavu_sans",
+                    include_bytes!("../assets/Clock-DejaVuSans.ttf").as_slice(),
+                ),
+                (
+                    "clock_dejavu_serif",
+                    include_bytes!("../assets/Clock-DejaVuSerif.ttf").as_slice(),
+                ),
+                (
+                    "clock_dejavu_mono",
+                    include_bytes!("../assets/Clock-DejaVuMono.ttf").as_slice(),
+                ),
+                (
+                    "clock_liberation_sans",
+                    include_bytes!("../assets/Clock-LiberationSans.ttf").as_slice(),
+                ),
+                (
+                    "clock_liberation_serif",
+                    include_bytes!("../assets/Clock-LiberationSerif.ttf").as_slice(),
+                ),
+                (
+                    "clock_liberation_narrow",
+                    include_bytes!("../assets/EntropyDisplay-Narrow.ttf").as_slice(),
+                ),
+            ] {
+                fonts
+                    .font_data
+                    .insert(name.to_owned(), egui::FontData::from_static(data).into());
+            }
             let prop = fonts
                 .families
                 .entry(egui::FontFamily::Proportional)
@@ -374,6 +421,30 @@ fn main() -> eframe::Result<()> {
                     "dejavu".to_owned(),
                 ],
             );
+            fonts.families.insert(
+                egui::FontFamily::Name("display_preview".into()),
+                vec![
+                    "montserrat_medium".to_owned(),
+                    "dejavu".to_owned(),
+                    "noto_symbols".to_owned(),
+                ],
+            );
+            for (family, font) in [
+                ("clock_montserrat", "montserrat_medium"),
+                ("clock_ubuntu_sans", "clock_ubuntu_sans"),
+                ("clock_ubuntu_mono", "clock_ubuntu_mono"),
+                ("clock_liberation_mono", "clock_liberation_mono"),
+                ("clock_dejavu_sans", "clock_dejavu_sans"),
+                ("clock_dejavu_serif", "clock_dejavu_serif"),
+                ("clock_dejavu_mono", "clock_dejavu_mono"),
+                ("clock_liberation_sans", "clock_liberation_sans"),
+                ("clock_liberation_serif", "clock_liberation_serif"),
+                ("clock_liberation_narrow", "clock_liberation_narrow"),
+            ] {
+                fonts
+                    .families
+                    .insert(egui::FontFamily::Name(family.into()), vec![font.to_owned()]);
+            }
             cc.egui_ctx.set_fonts(fonts);
             let app = EntropyApp::new(cc);
             #[cfg(target_os = "windows")]

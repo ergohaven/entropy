@@ -1,5 +1,17 @@
 use super::*;
 
+// Bootstrap effects are resolved once by `new`; both real and inert callers
+// then use the same application-state initializer.
+struct AppBootstrap {
+    app_settings: AppSettings,
+    device_manager: DeviceManager,
+    typing_trainer: TypingTrainerState,
+    text_expander_rules_signature: Vec<(String, Option<std::time::SystemTime>)>,
+    last_single_instance_signal: String,
+    layer_names: Vec<String>,
+    update_check: UpdateCheckState,
+}
+
 impl EntropyApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let mut app_settings = load_app_settings();
@@ -26,6 +38,41 @@ impl EntropyApp {
             text_expander_rules_signature(&app_settings.text_expander_rule_files);
         let mut typing_trainer = TypingTrainerState::from_settings(app_settings.typing_trainer);
         typing_trainer.set_symbol_stats(load_typing_trainer_symbol_stats());
+        Self::from_bootstrap(AppBootstrap {
+            app_settings,
+            device_manager: DeviceManager::new(),
+            typing_trainer,
+            text_expander_rules_signature,
+            last_single_instance_signal: read_single_instance_signal(),
+            layer_names: load_layer_names("default"),
+            update_check: start_update_check(),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_inert_for_test() -> Self {
+        let app_settings = AppSettings::default();
+        Self::from_bootstrap(AppBootstrap {
+            typing_trainer: TypingTrainerState::from_settings(app_settings.typing_trainer),
+            app_settings,
+            device_manager: DeviceManager::empty_for_test(),
+            text_expander_rules_signature: Vec::new(),
+            last_single_instance_signal: String::new(),
+            layer_names: Vec::new(),
+            update_check: UpdateCheckState::Idle,
+        })
+    }
+
+    fn from_bootstrap(bootstrap: AppBootstrap) -> Self {
+        let AppBootstrap {
+            app_settings,
+            device_manager,
+            typing_trainer,
+            text_expander_rules_signature,
+            last_single_instance_signal,
+            layer_names,
+            update_check,
+        } = bootstrap;
         let dark_mode = app_settings.dark_mode;
 
         Self {
@@ -73,7 +120,7 @@ impl EntropyApp {
             pending_middle_click_assignments: Vec::new(),
             hover_layer_progress: 0.0,
             jump_back_stack: Vec::new(),
-            device_manager: DeviceManager::new(),
+            device_manager,
             selected_device: None,
             selected_layer: 0,
             selected_key: None,
@@ -161,8 +208,9 @@ impl EntropyApp {
             selected_alt_repeat: 0,
             alt_repeat_visible_count: 1,
             alt_repeat_pick_target: None,
-            last_single_instance_signal: read_single_instance_signal(),
+            last_single_instance_signal,
             rgb_settings: RgbSettingsState::default(),
+            display_settings: DisplaySettingsState::default(),
             layout_options_value: None,
             encoder_visibility: vec![],
             combo_term_dirty: false,
@@ -185,7 +233,6 @@ impl EntropyApp {
             key_override_pick_target: None,
             matrix_tester_pressed: Vec::new(),
             matrix_tester_ever_pressed: Vec::new(),
-            matrix_tester_rmk_byte_order: false,
             sticky_layout_prev_pressed: Vec::new(),
             sticky_layout_pressed_key_layers: Vec::new(),
             sticky_layout_toggled_layers: Vec::new(),
@@ -204,7 +251,7 @@ impl EntropyApp {
             matrix_tester_lock_checked: false,
             macro_auto_unlock_cancelled: false,
             settings_tab: SettingsTab::MatrixTester,
-            layer_names: load_layer_names("default"),
+            layer_names,
             editing_layer: None,
             editing_layer_text: String::new(),
             editing_layer_focus_requested: false,
@@ -213,7 +260,7 @@ impl EntropyApp {
             current_encoder_visibility_id: String::new(),
             device_display_names: std::collections::HashMap::new(),
             device_about_info: None,
-            update_check: start_update_check(),
+            update_check,
             firmware_update_check: FirmwareUpdateCheckState::Unsupported,
             tour_state: TourState::default(),
             tour_target_rects: Vec::new(),
@@ -228,6 +275,10 @@ impl EntropyApp {
             vial_unlock_animation_nonce: 0,
             #[cfg(not(target_arch = "wasm32"))]
             connect_state: ConnectState::Idle,
+            #[cfg(not(target_arch = "wasm32"))]
+            retiring_connects: Vec::new(),
+            #[cfg(all(test, not(target_arch = "wasm32")))]
+            test_connect_requests: None,
             #[cfg(not(target_arch = "wasm32"))]
             device_scan_state: DeviceScanState::Idle,
         }

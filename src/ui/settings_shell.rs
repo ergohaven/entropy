@@ -72,6 +72,10 @@ impl EntropyApp {
                 self.draw_rgb_settings_page(ui, content_rect, dark);
                 false
             }
+            SettingsTab::Display => {
+                self.draw_display_settings_page(ui, content_rect);
+                false
+            }
             SettingsTab::LayerLeds => {
                 self.draw_layer_led_settings_page(ui, content_rect);
                 false

@@ -357,6 +357,92 @@ fn apply_app_settings_migrations(settings: &mut AppSettings, settings_data: Opti
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PictogramFile {
+    version: u32,
+    width: u32,
+    height: u32,
+    builtin: Vec<SavedPictogram>,
+    user: Vec<SavedPictogram>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn pictogram_library_path() -> std::path::PathBuf {
+    app_settings_path().with_file_name("pictograms.json")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn read_pictogram_file(path: &std::path::Path) -> anyhow::Result<Vec<SavedPictogram>> {
+    anyhow::ensure!(
+        std::fs::metadata(path)?.len() <= 16 * 1024 * 1024,
+        "Pictogram file exceeds 16 MB"
+    );
+    let mut file: PictogramFile = serde_json::from_slice(&std::fs::read(path)?)?;
+    anyhow::ensure!(
+        (file.version == 1 && file.width == 32 && file.height == 32)
+            || (file.version == 2 && file.width == 35 && file.height == 35),
+        "Unsupported pictogram format"
+    );
+    anyhow::ensure!(
+        file.user.len() <= 4096 && file.builtin.len() <= 4096,
+        "Too many pictograms"
+    );
+    for p in file.user.iter_mut().chain(file.builtin.iter_mut()) {
+        anyhow::ensure!(
+            !p.name.trim().is_empty()
+                && p.name.chars().count() <= 128
+                && p.bitmap.len() == (file.width as usize * file.height as usize).div_ceil(8),
+            "Invalid pictogram"
+        );
+        p.bitmap = normalize_pictogram_bitmap(&p.bitmap)?;
+    }
+    let mut result = file.user;
+    // Known stock revisions follow the refreshed library. Preserve unrecognized
+    // imported drawings and all explicit user copies unchanged.
+    for p in file.builtin {
+        if builtin_pictogram_index(&p.bitmap).is_none()
+            && legacy_builtin_pictogram_index(&p.bitmap).is_none()
+            && !result.iter().any(|v| v.bitmap == p.bitmap)
+        {
+            result.push(p);
+        }
+    }
+    Ok(result)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn write_pictogram_file(
+    path: &std::path::Path,
+    user: &[SavedPictogram],
+) -> anyhow::Result<()> {
+    let file = PictogramFile {
+        version: 2,
+        width: 35,
+        height: 35,
+        builtin: BUILTIN_PICTOGRAM_KEYS
+            .iter()
+            .enumerate()
+            .map(|(i, key)| SavedPictogram {
+                name: crate::i18n::tr_catalog(crate::i18n::Language::English, key).to_owned(),
+                color: [84, 189, 191],
+                bitmap: builtin_pictogram_bitmap(i).to_vec(),
+            })
+            .collect(),
+        user: user.to_vec(),
+    };
+    let data = serde_json::to_vec_pretty(&file)?;
+    if std::fs::read(path).ok().as_deref() == Some(data.as_slice()) {
+        return Ok(());
+    }
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+    std::io::Write::write_all(&mut temp, &data)?;
+    temp.as_file().sync_all()?;
+    temp.persist(path).map_err(|e| e.error)?;
+    Ok(())
+}
+
 pub(super) fn load_app_settings() -> AppSettings {
     migrate_legacy_text_expander_rules_file();
     let path = app_settings_path();
@@ -379,7 +465,26 @@ pub(super) fn load_app_settings() -> AppSettings {
     settings.text_expander_rule_files =
         normalize_text_expander_rule_files(&settings.text_expander_rule_files);
 
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        for icon in &mut settings.saved_pictograms {
+            if let Ok(bitmap) = normalize_pictogram_bitmap(&icon.bitmap) {
+                icon.bitmap = bitmap;
+            }
+        }
+        let path = pictogram_library_path();
+        if path.exists() {
+            match read_pictogram_file(&path) {
+                Ok(icons) => settings.saved_pictograms = icons,
+                Err(error) => log::warn!("Pictogram library not loaded: {error}"),
+            }
+        } else if let Err(error) = write_pictogram_file(&path, &settings.saved_pictograms) {
+            log::warn!("Pictogram migration failed: {error}");
+        }
+    }
     apply_app_settings_migrations(&mut settings, settings_data.as_deref());
+    // Standby artwork now always uses the aspect-preserving fill algorithm.
+    settings.standby_background_scale = StandbyBackgroundScale::Fill;
     settings.typing_trainer = settings.typing_trainer.normalized();
     normalize_typing_trainer_history(&mut settings.typing_trainer_history);
 
@@ -387,6 +492,15 @@ pub(super) fn load_app_settings() -> AppSettings {
 }
 
 pub(super) fn save_app_settings(settings: &AppSettings) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let path = pictogram_library_path();
+        if !path.exists() || read_pictogram_file(&path).is_ok() {
+            if let Err(error) = write_pictogram_file(&path, &settings.saved_pictograms) {
+                log::warn!("Pictogram save failed: {error}");
+            }
+        }
+    }
     match serde_json::to_string_pretty(settings) {
         Ok(json) => {
             if let Err(e) = std::fs::write(app_settings_path(), json) {
@@ -960,5 +1074,80 @@ mod tests {
         assert_eq!(rules.len(), 1);
         assert!(!rules[0].enabled);
         assert_eq!(rules[0].trigger, ":off");
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod pictogram_portability_tests {
+    use super::*;
+    #[test]
+    fn legacy_json_import_preserves_name_and_converts_to_35px() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.json");
+        let bitmap = vec![0x81u8; 128];
+        let json = serde_json::json!({"version":1,"width":32,"height":32,"builtin":[],"user":[{"name":"My camera","color":[1,2,3],"bitmap":bitmap}]});
+        std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+        let read = read_pictogram_file(&path).unwrap();
+        assert_eq!(read[0].name, "My camera");
+        assert_eq!(read[0].bitmap, normalize_pictogram_bitmap(&bitmap).unwrap());
+        assert_eq!(read[0].color, [1, 2, 3]);
+    }
+
+    #[test]
+    fn stock_refresh_does_not_duplicate_old_icons_or_remove_user_copies() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("v071.json");
+        let old = legacy_builtin_pictogram_bitmap(15).to_vec();
+        let stock: Vec<_> = (0..BUILTIN_PICTOGRAM_KEYS.len()).map(|n| {
+            serde_json::json!({"name":format!("Stock {n}"),"color":[255,255,255],"bitmap":legacy_builtin_pictogram_bitmap(n).to_vec()})
+        }).collect();
+        let json = serde_json::json!({"version":2,"width":35,"height":35,"builtin":stock,"user":[{"name":"My lock","color":[1,2,3],"bitmap":old}]});
+        std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+        let imported = read_pictogram_file(&path).unwrap();
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].name, "My lock");
+        assert_eq!(imported[0].color, [1, 2, 3]);
+        assert_eq!(imported[0].bitmap, old);
+    }
+
+    #[test]
+    fn portable_library_survives_export_import_and_preserves_pixels() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("icons.json");
+        let icon = SavedPictogram {
+            name: "My icon".into(),
+            color: [1, 2, 3],
+            bitmap: vec![0xA5; PICTOGRAM_BYTES],
+        };
+        write_pictogram_file(&path, &[icon.clone()]).unwrap();
+        let read = read_pictogram_file(&path).unwrap();
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].bitmap, icon.bitmap);
+        assert_eq!(read[0].name, icon.name);
+        let file: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            file["builtin"].as_array().unwrap().len(),
+            BUILTIN_PICTOGRAM_KEYS.len()
+        );
+        write_pictogram_file(&path, &[]).unwrap();
+        assert!(read_pictogram_file(&path).unwrap().is_empty());
+    }
+    #[test]
+    fn malformed_or_future_library_is_rejected_without_modifying_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("icons.json");
+        write_pictogram_file(&path, &[]).unwrap();
+        let mut file: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        file["version"] = 99.into();
+        let original = serde_json::to_vec(&file).unwrap();
+        std::fs::write(&path, &original).unwrap();
+        assert!(read_pictogram_file(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        file["version"] = 2.into();
+        file["builtin"][0]["bitmap"] = serde_json::json!([0]);
+        std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+        assert!(read_pictogram_file(&path).is_err());
     }
 }

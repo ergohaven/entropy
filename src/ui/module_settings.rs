@@ -104,6 +104,10 @@ fn module_setting_catalog_keys(title: &str) -> Option<(&'static str, &'static st
             "modules_settings.auto_layer_timeout",
             "modules_settings.auto_layer_timeout_tooltip",
         )),
+        "auto layer deactivate on key" => Some((
+            "modules_settings.auto_layer_deactivate_on_key",
+            "modules_settings.auto_layer_deactivate_on_key_tooltip",
+        )),
         "trackball enabled" => Some((
             "modules_settings.trackball_enabled",
             "modules_settings.trackball_enabled_tooltip",
@@ -1095,6 +1099,7 @@ mod tests {
             "Auto layer in Scroll",
             "auto layer in text",
             "Auto layer timeout",
+            "Auto layer deactivate on key",
         ] {
             assert!(
                 module_setting_catalog_keys(title).is_some(),
@@ -1351,6 +1356,56 @@ mod tests {
         assert_eq!(
             app.module_settings_title_key(),
             "modules_settings.trackball_title"
+        );
+    }
+
+    #[test]
+    fn firmware_exposed_deactivate_on_key_becomes_a_localized_auto_layer_toggle() {
+        let json = serde_json::json!({
+            "settings": [{
+                "name": "Auto layer",
+                "fields": [
+                    {"qsid": 143, "title": "Auto layer", "type": "select"},
+                    {
+                        "qsid": 335,
+                        "title": "Auto layer deactivate on key",
+                        "type": "boolean",
+                        "bit": 0
+                    }
+                ]
+            }]
+        });
+
+        let groups = EntropyApp::module_settings_groups(&json, &[143, 335]);
+        let group = groups
+            .iter()
+            .find(|group| group.kind == ModuleSettingsGroupKind::AutoLayer)
+            .expect("auto layer group");
+        let field = group
+            .fields
+            .iter()
+            .find(|field| field.qsid == 335)
+            .expect("deactivate on key field");
+
+        assert!(matches!(field.kind, ModuleSettingKind::Boolean));
+        for mode in [
+            PointerModeKind::Normal,
+            PointerModeKind::Sniper,
+            PointerModeKind::Scroll,
+            PointerModeKind::Text,
+        ] {
+            assert!(group.field_visible_for_pointer_mode(field, mode));
+        }
+
+        let mut app = test_app();
+        assert_eq!(
+            app.module_setting_label(ModuleSettingsGroupKind::AutoLayer, &field.title),
+            "Auto layer deactivate on key"
+        );
+        app.app_settings.language = crate::i18n::Language::Russian;
+        assert_eq!(
+            app.module_setting_label(ModuleSettingsGroupKind::AutoLayer, &field.title),
+            "Выключение автослоя по клавише"
         );
     }
 

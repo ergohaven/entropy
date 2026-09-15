@@ -176,7 +176,7 @@ fn compact_rgb_slider_2d(
     changed
 }
 
-fn compact_rgb_color_picker(ui: &mut egui::Ui, hsva: &mut egui::ecolor::Hsva) -> bool {
+pub(super) fn compact_rgb_color_picker(ui: &mut egui::Ui, hsva: &mut egui::ecolor::Hsva) -> bool {
     let mut changed = false;
     let mut h = hsva.h.rem_euclid(1.0);
     let mut s = hsva.s.clamp(0.0, 1.0);

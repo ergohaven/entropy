@@ -148,10 +148,24 @@ impl EntropyApp {
     }
 
     fn open_key_override_picker(&mut self, target: KeyOverridePickField) {
-        let allow_mod_key = matches!(target, KeyOverridePickField::Replacement);
+        let current_value = self
+            .key_override_entries
+            .get(self.selected_key_override)
+            .map(|entry| match target {
+                KeyOverridePickField::Trigger => entry.trigger,
+                KeyOverridePickField::Replacement => entry.replacement,
+            })
+            .unwrap_or_default();
         self.key_override_pick_target = Some(target);
-        self.keycode_picker
-            .open_regular_key_picker_with_mod_key(allow_mod_key);
+        self.keycode_picker.layer_names = self.layer_names.clone();
+        match target {
+            KeyOverridePickField::Trigger => self
+                .keycode_picker
+                .open_key_override_trigger_picker(current_value),
+            KeyOverridePickField::Replacement => self
+                .keycode_picker
+                .open_regular_key_picker_with_mod_key(true),
+        }
     }
 
     fn key_override_mod_mask_summary(language: crate::i18n::Language, mask: u8) -> String {
@@ -897,5 +911,29 @@ mod tests {
         EntropyApp::normalize_key_override_entry(&mut entry);
 
         assert!(!entry.options.enabled);
+    }
+
+    #[test]
+    fn composite_trigger_reopens_in_the_full_modifiers_picker() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        app.key_override_entries = vec![KeyOverrideEntry {
+            trigger: 0x4104,
+            ..Default::default()
+        }];
+
+        app.open_key_override_picker(KeyOverridePickField::Trigger);
+
+        assert!(matches!(
+            app.key_override_pick_target,
+            Some(KeyOverridePickField::Trigger)
+        ));
+        assert!(app.keycode_picker.open);
+        assert!(!app.keycode_picker.regular_key_pick);
+        assert_eq!(
+            app.keycode_picker.selected_tab,
+            crate::keycode_picker::KeycodeTab::Modifiers
+        );
     }
 }

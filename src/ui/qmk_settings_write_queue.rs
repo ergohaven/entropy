@@ -254,17 +254,50 @@ mod tests {
         assert!(!app.qmk_settings_write_pending());
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn pending_debounced_write_without_transport_restores_confirmed_value() {
+        let mut app = test_app();
+        app.touchpad_settings.scroll_sens = 12;
+        app.qmk_settings_write_queue
+            .enqueue(request(122, 8, 12, std::time::Instant::now()));
+
+        app.flush_pending_qmk_setting_writes();
+
+        assert_eq!(app.touchpad_settings.scroll_sens, 8);
+        assert!(!app.qmk_settings_write_pending());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn device_switch_cancels_debounced_write_without_transport() {
         let mut app = test_app();
         app.touchpad_settings.scroll_sens = 12;
         app.qmk_settings_write_queue
             .enqueue(request(122, 8, 12, std::time::Instant::now()));
-
-        app.start_connect(usize::MAX);
-
-        assert_eq!(app.touchpad_settings.scroll_sens, 8);
+        let target = crate::device::Device {
+            name: "Debounce switch target".into(),
+            vendor_id: 0x1209,
+            product_id: 0x2327,
+            manufacturer: "Entropy tests".into(),
+            serial_number: "switch-target".into(),
+            bus_type: "Usb".into(),
+            path: "never-opened".into(),
+            instance_token: "switch-instance".into(),
+            firmware: FirmwareProtocol::Vial,
+        };
+        app.device_manager.replace_devices(vec![target]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.test_connect_requests = Some(tx);
+        // A nonexistent selection now correctly does nothing. Exercise a real
+        // new identity without launching a physical connect worker instead.
+        app.start_connect(0);
+        assert!(rx.try_recv().is_ok());
         assert!(!app.qmk_settings_write_pending());
+        assert_eq!(
+            app.touchpad_settings.scroll_sens,
+            TouchpadSettingsState::default().scroll_sens
+        );
     }
 
     #[test]
@@ -341,17 +374,30 @@ mod tests {
         let mut app = test_app();
         let (hid_device, recorder) = crate::hid::HidDevice::test_device();
         app.hid_device = Some(hid_device);
+        let target = crate::device::Device {
+            name: "Test Keyboard".to_owned(),
+            vendor_id: 0x1209,
+            product_id: 0x2327,
+            manufacturer: "Entropy".to_owned(),
+            serial_number: "switch-target".to_owned(),
+            bus_type: "Usb".to_owned(),
+            path: "/missing/test-hidraw".to_owned(),
+            instance_token: "test-instance".to_owned(),
+            firmware: FirmwareProtocol::Vial,
+        };
+        let target_identity = target.stable_identity();
+        app.device_manager.replace_devices(vec![target]);
         app.qmk_settings_write_queue
             .enqueue(request(122, 8, 12, std::time::Instant::now()));
 
-        app.start_connect(usize::MAX);
-        assert_eq!(app.pending_device_connect, Some(usize::MAX));
+        app.start_connect(0);
+        assert_eq!(app.pending_device_connect, Some(target_identity));
         assert!(app.settings_write_task.is_some());
 
         drain_hid_writes(&mut app, &ctx);
 
         assert!(app.pending_device_connect.is_none());
-        assert_eq!(app.status_msg, "Device not found");
+        assert!(app.status_msg.starts_with("Connecting to Test Keyboard"));
         assert_eq!(qsid_request_count(&recorder, 122), 2);
     }
 

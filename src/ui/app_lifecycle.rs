@@ -1,7 +1,18 @@
 use super::*;
 
-fn should_poll_device_scan(main_window_hidden_to_tray: bool) -> bool {
+fn should_poll_device_scan(main_window_hidden_to_tray: bool, _hid_lifecycle_busy: bool) -> bool {
+    // HID work belongs to one connection generation. Discovery must still run
+    // so an unplug can invalidate that generation instead of deadlocking scan
+    // behind a request which is waiting on the vanished device.
     !main_window_hidden_to_tray
+}
+
+fn periodic_device_scan_allowed(
+    _selected_device_is_bluetooth: bool,
+    hid_session_active: bool,
+) -> bool {
+    // A selected Bluetooth keyboard must not hide newly attached USB devices.
+    !hid_session_active
 }
 
 fn theme_application_required(
@@ -121,27 +132,25 @@ impl EntropyApp {
         self.poll_sticky_layout_background(ctx);
         self.poll_settings_write(ctx);
         self.flush_due_qmk_setting_writes();
-        if should_poll_device_scan(main_window_hidden_to_tray) {
+        if should_poll_device_scan(main_window_hidden_to_tray, self.hid_write_lifecycle_busy()) {
             if hid_lifecycle_writes_available(self.hid_write_lifecycle_busy()) {
                 self.handle_pending_imports(ctx, now);
             }
-            if !self.hid_write_lifecycle_busy() {
-                self.poll_device_scan(ctx);
-            }
+            // Discovery must keep progressing independently from device-scoped HID
+            // work. After an unplug that work can remain pending until a scan
+            // observes the missing endpoint and advances connection_generation.
+            self.poll_device_scan(ctx);
             self.maybe_start_bluetooth_reconnect_scan(ctx);
 
-            let is_connecting = matches!(self.connect_state, ConnectState::Loading { .. });
-            let hid_write_active = self.hid_write_lifecycle_busy();
             #[cfg(target_os = "macos")]
             let hid_session_active = self.hid_device.is_some();
             #[cfg(not(target_os = "macos"))]
             let hid_session_active = false;
-            if !selected_device_is_bluetooth
-                && (self.last_device_scan_at == 0.0 || now - self.last_device_scan_at >= 1.0)
-                && !self.vial_unlock_polling
-                && !is_connecting
-                && !hid_write_active
-                && !hid_session_active
+            // Keep the common discovery loop alive even when the selected
+            // keyboard is Bluetooth; otherwise newly attached USB keyboards
+            // never enter the device menu.
+            if (self.last_device_scan_at == 0.0 || now - self.last_device_scan_at >= 1.0)
+                && periodic_device_scan_allowed(selected_device_is_bluetooth, hid_session_active)
             {
                 self.scan_frame = self.scan_frame.wrapping_add(1);
                 self.last_device_scan_at = now;
@@ -483,19 +492,34 @@ mod tests {
 
         let (_sender, receiver) = std::sync::mpsc::channel();
         let now = std::time::Instant::now();
+        let device = Device {
+            name: "Test keyboard".to_owned(),
+            vendor_id: 0xFFFF,
+            product_id: 0xFFFF,
+            manufacturer: "Test".to_owned(),
+            serial_number: "test".to_owned(),
+            bus_type: "Usb".to_owned(),
+            path: "/nonexistent/entropy-test".to_owned(),
+            instance_token: "test".to_owned(),
+            firmware: FirmwareProtocol::Vial,
+        };
         let loading = ConnectState::Loading {
+            device: device.clone(),
             rx: receiver,
             started_at: now,
             last_progress_at: now,
+            cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             reconnect: None,
         };
         assert!(connection_replaces_layout_canvas(&loading, false));
         assert!(connection_replaces_layout_canvas(&loading, true));
 
         let reconnecting_loading = ConnectState::Loading {
+            device,
             rx: std::sync::mpsc::channel().1,
             started_at: now,
             last_progress_at: now,
+            cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             reconnect: Some(BluetoothReconnectState::new(
                 Device {
                     name: "K:04".to_owned(),
@@ -505,6 +529,7 @@ mod tests {
                     serial_number: "AA:BB:CC:DD:EE:FF".to_owned(),
                     bus_type: "Bluetooth".to_owned(),
                     path: "/dev/hidraw4".to_owned(),
+                    instance_token: "/dev/hidraw4".to_owned(),
                     firmware: FirmwareProtocol::Vial,
                 }
                 .stable_identity(),
@@ -1053,10 +1078,22 @@ mod tests {
 
     #[test]
     fn hidden_to_tray_skips_device_scan_polling() {
-        assert!(!should_poll_device_scan(true));
+        assert!(!should_poll_device_scan(true, false));
         // Minimized and occluded windows are not tray-hidden, so App::logic
         // keeps their background device polling alive while App::ui is skipped.
-        assert!(should_poll_device_scan(false));
+        assert!(should_poll_device_scan(false, false));
+    }
+
+    #[test]
+    fn pending_hid_work_does_not_block_device_scan_polling() {
+        assert!(should_poll_device_scan(false, true));
+    }
+
+    #[test]
+    fn selected_bluetooth_device_does_not_hide_new_usb_devices() {
+        assert!(periodic_device_scan_allowed(true, false));
+        assert!(periodic_device_scan_allowed(false, false));
+        assert!(!periodic_device_scan_allowed(true, true));
     }
 
     #[test]

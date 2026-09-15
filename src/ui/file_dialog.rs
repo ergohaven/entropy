@@ -14,6 +14,11 @@ pub enum FileDialogAction {
     ImportEntsettings,
     ExportEntsettings,
     ExportLayoutImage,
+    StartupImage,
+    StandbyBackground,
+    Pictogram,
+    ImportPictograms,
+    ExportPictograms,
 }
 
 impl FileDialogAction {
@@ -24,8 +29,14 @@ impl FileDialogAction {
         match self {
             FileDialogAction::ImportEntlayout
             | FileDialogAction::ExportEntlayout
-            | FileDialogAction::ExportLayoutImage => true,
-            FileDialogAction::ImportEntsettings | FileDialogAction::ExportEntsettings => false,
+            | FileDialogAction::ExportLayoutImage
+            | FileDialogAction::StartupImage
+            | FileDialogAction::StandbyBackground
+            | FileDialogAction::Pictogram => true,
+            FileDialogAction::ImportEntsettings
+            | FileDialogAction::ExportEntsettings
+            | FileDialogAction::ImportPictograms
+            | FileDialogAction::ExportPictograms => false,
         }
     }
 }
@@ -380,7 +391,7 @@ impl EntropyApp {
             FileDialogPoll::Dispatch(path) => {
                 self.pending_file_dialog = None;
                 self.recover_input_after_dialog(ctx);
-                self.handle_file_dialog_result(action, path);
+                self.handle_file_dialog_result(ctx, action, path);
             }
             FileDialogPoll::WorkerLost => {
                 // Worker vanished (e.g. the dialog thread panicked) without ever
@@ -399,13 +410,153 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn handle_file_dialog_result(&mut self, action: FileDialogAction, path: std::path::PathBuf) {
+    fn handle_file_dialog_result(
+        &mut self,
+        ctx: &egui::Context,
+        action: FileDialogAction,
+        path: std::path::PathBuf,
+    ) {
         match action {
             FileDialogAction::ImportEntlayout => self.begin_entlayout_import(path),
             FileDialogAction::ExportEntlayout => self.write_entlayout_export(&path),
             FileDialogAction::ImportEntsettings => self.begin_entsettings_import(path),
             FileDialogAction::ExportEntsettings => self.write_entsettings_export(&path),
             FileDialogAction::ExportLayoutImage => self.write_layout_image_export(path),
+            FileDialogAction::ExportPictograms => {
+                self.status_msg =
+                    match write_pictogram_file(&path, &self.app_settings.saved_pictograms) {
+                        Ok(()) => format!(
+                            "{}: {}",
+                            crate::i18n::tr_catalog(
+                                self.app_settings.language,
+                                "display_settings.export_icons"
+                            ),
+                            path.display()
+                        ),
+                        Err(e) => format!("{e:#}"),
+                    };
+            }
+            FileDialogAction::ImportPictograms => match read_pictogram_file(&path) {
+                Ok(icons) => {
+                    for mut icon in icons {
+                        if self
+                            .app_settings
+                            .saved_pictograms
+                            .iter()
+                            .any(|p| p.name == icon.name && p.bitmap == icon.bitmap)
+                        {
+                            continue;
+                        }
+                        let base = icon.name.clone();
+                        let mut n = 2;
+                        while self
+                            .app_settings
+                            .saved_pictograms
+                            .iter()
+                            .any(|p| p.name.to_lowercase() == icon.name.to_lowercase())
+                        {
+                            icon.name = format!("{base} {n}");
+                            n += 1;
+                        }
+                        self.app_settings.saved_pictograms.push(icon);
+                    }
+                    save_app_settings(&self.app_settings);
+                    self.status_msg = crate::i18n::tr_catalog(
+                        self.app_settings.language,
+                        "display_settings.icons_imported",
+                    )
+                    .to_owned();
+                }
+                Err(e) => self.status_msg = format!("{e:#}"),
+            },
+            FileDialogAction::Pictogram => match crate::app::prepare_pictogram(&path) {
+                Ok(prepared) => {
+                    let pictograms = &mut self.display_settings.pictograms;
+                    pictograms.source_levels = prepared.levels;
+                    pictograms.source_file_name = prepared.file_name;
+                    pictograms.editor_name = path
+                        .file_stem()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("")
+                        .to_owned();
+                    pictograms.threshold = prepared.threshold;
+                    pictograms.inverted = prepared.inverted;
+                    pictograms.selected_builtin = None;
+                    pictograms.selected_saved_pictogram = None;
+                    pictograms.undo.clear();
+                }
+                Err(error) => {
+                    self.status_msg = crate::i18n::tr_catalog(
+                        self.app_settings.language,
+                        "display_settings.pictogram_decode_error",
+                    )
+                    .replace("{error}", &error.to_string());
+                }
+            },
+            FileDialogAction::StartupImage => {
+                let fallback = self.display_settings.background_color;
+                match self.start_vial_hid_operation(
+                    ctx,
+                    super::vial_hid_task::VialHidOperation::StartupImageUpload { path, fallback },
+                ) {
+                    super::vial_hid_task::VialHidTaskStart::Started => {
+                        self.status_msg = crate::i18n::tr_catalog(
+                            self.app_settings.language,
+                            "display_settings.startup_image_uploading",
+                        )
+                        .into();
+                    }
+                    super::vial_hid_task::VialHidTaskStart::Busy => {
+                        self.status_msg = crate::i18n::tr_catalog(
+                            self.app_settings.language,
+                            "display_settings.background_busy",
+                        )
+                        .into();
+                    }
+                    super::vial_hid_task::VialHidTaskStart::NoDevice => {
+                        self.status_msg = crate::i18n::tr_catalog(
+                            self.app_settings.language,
+                            "display_settings.background_no_device",
+                        )
+                        .into();
+                    }
+                }
+            }
+            FileDialogAction::StandbyBackground => {
+                let fallback = self.display_settings.clock_background_color;
+                // Standby images always use an aspect-preserving cover crop.
+                let scale = StandbyBackgroundScale::Fill;
+                match self.start_vial_hid_operation(
+                    ctx,
+                    super::vial_hid_task::VialHidOperation::BackgroundUpload {
+                        path,
+                        fallback,
+                        scale,
+                    },
+                ) {
+                    super::vial_hid_task::VialHidTaskStart::Started => {
+                        self.status_msg = crate::i18n::tr_catalog(
+                            self.app_settings.language,
+                            "display_settings.background_uploading",
+                        )
+                        .into();
+                    }
+                    super::vial_hid_task::VialHidTaskStart::Busy => {
+                        self.status_msg = crate::i18n::tr_catalog(
+                            self.app_settings.language,
+                            "display_settings.background_busy",
+                        )
+                        .into();
+                    }
+                    super::vial_hid_task::VialHidTaskStart::NoDevice => {
+                        self.status_msg = crate::i18n::tr_catalog(
+                            self.app_settings.language,
+                            "display_settings.background_no_device",
+                        )
+                        .into();
+                    }
+                }
+            }
         }
     }
 }

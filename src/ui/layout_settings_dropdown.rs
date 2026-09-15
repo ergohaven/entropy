@@ -37,6 +37,10 @@ fn vial_lock_control_idle(
     !user_action_busy && (!is_unlocked || !background_layer_active)
 }
 
+fn display_menu_available(known_display_device: bool) -> bool {
+    known_display_device
+}
+
 impl EntropyApp {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_layout_settings_dropdown(
@@ -58,6 +62,14 @@ impl EntropyApp {
                 .data(|d| d.get_temp::<bool>(dropdown_id))
                 .unwrap_or(false);
             let rgb_available_for_menu = self.rgb_settings.supported || layout.supports_rgb;
+            #[cfg(not(target_arch = "wasm32"))]
+            let known_display_device = self
+                .selected_device
+                .and_then(|index| self.device_manager.devices().get(index))
+                .is_some_and(Self::device_uses_automatic_display_host_data);
+            #[cfg(target_arch = "wasm32")]
+            let known_display_device = false;
+            let show_display_item = display_menu_available(known_display_device);
             let layer_leds_available_for_menu = self.layer_led_settings.supported;
             let show_encoders_item = self.show_separate_encoder_visibility_settings(layout);
             let show_layout_options_item = !self.user_layout_option_indices(layout).is_empty();
@@ -119,6 +131,7 @@ impl EntropyApp {
             let settings_item_count = 2
                 + show_matrix_item as usize
                 + show_rgb_item as usize
+                + show_display_item as usize
                 + show_layer_leds_item as usize
                 + show_encoders_item as usize
                 + show_layout_options_item as usize
@@ -138,6 +151,9 @@ impl EntropyApp {
             }
             if show_rgb_item {
                 settings_menu_labels.push(crate::i18n::tr(lang, TrKey::RgbTitle));
+            }
+            if show_display_item {
+                settings_menu_labels.push(crate::i18n::tr_catalog(lang, "display_settings.title"));
             }
             if show_layer_leds_item {
                 settings_menu_labels.push(crate::i18n::tr(lang, TrKey::LayerLedsTitle));
@@ -205,6 +221,7 @@ impl EntropyApp {
                     app_hovered,
                     matrix_hovered,
                     rgb_hovered,
+                    display_hovered,
                     layer_leds_hovered,
                     encoders_hovered,
                     layout_options_hovered,
@@ -255,6 +272,16 @@ impl EntropyApp {
                                 } else {
                                     None
                                 };
+                                let display_resp = show_display_item.then(|| {
+                                    top_dropdown_item(
+                                        ui,
+                                        item_width,
+                                        crate::i18n::tr_catalog(lang, "display_settings.title"),
+                                        true,
+                                        self.main_menu_tab == MainMenuTab::Settings
+                                            && self.settings_tab == SettingsTab::Display,
+                                    )
+                                });
                                 let layer_leds_resp = show_layer_leds_item.then(|| {
                                     top_dropdown_item(
                                         ui,
@@ -393,6 +420,15 @@ impl EntropyApp {
                                         ));
                                     }
                                 }
+                                if display_resp
+                                    .as_ref()
+                                    .map(|response| response.clicked())
+                                    .unwrap_or(false)
+                                {
+                                    self.close_top_dropdowns(ui.ctx());
+                                    self.settings_tab = SettingsTab::Display;
+                                    self.main_menu_tab = MainMenuTab::Settings;
+                                }
                                 if layer_leds_resp
                                     .as_ref()
                                     .map(|r| r.clicked())
@@ -480,6 +516,10 @@ impl EntropyApp {
                                         .as_ref()
                                         .map(|resp| resp.hovered())
                                         .unwrap_or(false),
+                                    display_resp
+                                        .as_ref()
+                                        .map(|resp| resp.hovered())
+                                        .unwrap_or(false),
                                     layer_leds_resp
                                         .as_ref()
                                         .map(|r| r.hovered())
@@ -511,6 +551,10 @@ impl EntropyApp {
                                         || rgb_resp
                                             .as_ref()
                                             .map(|resp| resp.clicked() && rgb_available)
+                                            .unwrap_or(false)
+                                        || display_resp
+                                            .as_ref()
+                                            .map(|resp| resp.clicked())
                                             .unwrap_or(false)
                                         || layer_leds_resp
                                             .as_ref()
@@ -563,6 +607,7 @@ impl EntropyApp {
                                 || app_hovered
                                 || matrix_hovered
                                 || rgb_hovered
+                                || display_hovered
                                 || layer_leds_hovered
                                 || encoders_hovered
                                 || layout_options_hovered
@@ -620,5 +665,11 @@ mod tests {
     fn background_layer_keeps_unlock_available_but_not_unqueued_lock() {
         assert!(vial_lock_control_idle(false, true, false));
         assert!(!vial_lock_control_idle(false, true, true));
+    }
+
+    #[test]
+    fn known_display_device_keeps_display_menu_visible_during_capability_reload() {
+        assert!(display_menu_available(true));
+        assert!(!display_menu_available(false));
     }
 }
