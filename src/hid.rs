@@ -94,6 +94,10 @@ fn macos_running_under_rosetta() -> bool {
 
 const VIAL_GUI_USB_RETRIES: usize = 20;
 const VIAL_GUI_READ_TIMEOUT_MS: i32 = 500;
+// Firmware 4.0.6 performs the flash update synchronously before acknowledging
+// SLOT_COMMIT. It remains enumerated, but regularly exceeds the generic USB
+// response window; timing out here incorrectly tears down the whole connection.
+const PICTOGRAM_SLOT_COMMIT_READ_TIMEOUT_MS: i32 = 2_500;
 const WINDOWS_BLE_READ_TIMEOUT_MS: i32 = 2_500;
 const WINDOWS_BLE_READ_SLICE_MS: i32 = 250;
 const WINDOWS_BLE_SETTLE_DELAY: Duration = Duration::from_millis(12);
@@ -689,6 +693,30 @@ impl HidDevice {
 
     /// Send exactly MSG_LEN bytes (with 0x00 report ID prepended), receive MSG_LEN bytes back.
     pub(crate) fn usb_send(&self, data: &[u8]) -> Result<[u8; MSG_LEN]> {
+        let trace = log::log_enabled!(log::Level::Debug)
+            .then(|| display_diagnostic_request(data))
+            .flatten();
+        let Some(trace) = trace else {
+            return self.usb_send_untraced(data);
+        };
+        let started = std::time::Instant::now();
+        log::debug!("Display HID request: {trace}");
+        let result = self.usb_send_untraced(data);
+        match &result {
+            Ok(response) => log::debug!(
+                "Display HID response: {trace} elapsed_ms={} {}",
+                started.elapsed().as_millis(),
+                display_diagnostic_response(data, response),
+            ),
+            Err(error) => log::debug!(
+                "Display HID error: {trace} elapsed_ms={} error={error:#}",
+                started.elapsed().as_millis(),
+            ),
+        }
+        result
+    }
+
+    fn usb_send_untraced(&self, data: &[u8]) -> Result<[u8; MSG_LEN]> {
         match &self.backend {
             HidBackend::Local {
                 device,
@@ -917,6 +945,17 @@ fn is_optional_dynamic_entry_count_request(data: &[u8]) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn usb_read_timeout_ms(transport: HidTransport, data: &[u8]) -> i32 {
+    if transport.is_bluetooth() {
+        WINDOWS_BLE_READ_TIMEOUT_MS
+    } else if data.first() == Some(&0xC9) {
+        PICTOGRAM_SLOT_COMMIT_READ_TIMEOUT_MS
+    } else {
+        VIAL_GUI_READ_TIMEOUT_MS
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn usb_send_max_attempts(transport: HidTransport, data: &[u8]) -> usize {
     // Runtime firmware metadata and optional QMK-settings discovery both have
     // safe fallbacks, so an unsupported probe must not hold up the whole
@@ -929,13 +968,68 @@ fn usb_send_max_attempts(transport: HidTransport, data: &[u8]) -> usize {
         || crate::rmk_native::is_rmk_native_capabilities_request(data)
         || is_optional_dynamic_entry_count_request(data)
         || data.first().is_some_and(|command| {
-            (0xB0..=0xB7).contains(command) || (0xD0..=0xD5).contains(command)
+            // Pictogram BEGIN/DATA/COMMIT are not idempotent: replay can
+            // restart storage, fail sequence checks, or reject a committed upload.
+            // Safe QUERY/READ commands retain the normal retry budget.
+            // A missing write ACK is an uncertain result, never permission to resend.
+            (0xB0..=0xB7).contains(command)
+                || matches!(command, 0xC2 | 0xC3 | 0xC4 | 0xC7 | 0xC8 | 0xC9)
+                || (0xD0..=0xD5).contains(command)
         })
     {
         1
     } else {
         VIAL_GUI_USB_RETRIES
     }
+}
+
+/// Trace only display-transfer metadata and unlock control, never keymaps,
+/// macro contents, image bytes or the physical unlock key coordinates.
+#[cfg(not(target_arch = "wasm32"))]
+fn display_diagnostic_request(data: &[u8]) -> Option<String> {
+    let command = *data.first()?;
+    if (0xC0..=0xCB).contains(&command) {
+        let mut trace = format!("opcode=0x{command:02X} bytes={}", data.len());
+        if matches!(command, 0xC3 | 0xC8) && data.len() >= 3 {
+            trace.push_str(&format!(
+                " sequence={}",
+                u16::from_le_bytes([data[1], data[2]])
+            ));
+        } else if command == 0xC7 && data.len() >= 4 {
+            trace.push_str(&format!(
+                " kind={} slot={}",
+                data[1],
+                u16::from_le_bytes([data[2], data[3]])
+            ));
+        }
+        Some(trace)
+    } else if command == CMD_VIA_VIAL_PREFIX
+        && data
+            .get(1)
+            .is_some_and(|subcommand| (0x05..=0x08).contains(subcommand))
+    {
+        Some(format!(
+            "opcode=0xFE subcommand=0x{:02X} bytes={}",
+            data[1],
+            data.len()
+        ))
+    } else {
+        None
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn display_diagnostic_response(request: &[u8], response: &[u8; MSG_LEN]) -> String {
+    let mut trace = format!("reply=0x{:02X} byte1={}", response[0], response[1]);
+    if request.first() == Some(&0xC0) && response[0] == 0xC0 {
+        trace.push_str(&format!(
+            " format={} valid={} slot_protocol={} write_format={}",
+            response[2], response[3], response[16], response[17]
+        ));
+    } else if request.starts_with(&[CMD_VIA_VIAL_PREFIX, 0x07]) {
+        trace.push_str(&format!(" counter={}", response[2]));
+    }
+    trace
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -961,11 +1055,7 @@ fn usb_send_local(
     write_buf[1..1 + data.len()].copy_from_slice(data);
     let write_frame = local_hid_write_frame(&mut write_buf, write_framing);
 
-    let read_timeout_ms = if transport.is_bluetooth() {
-        WINDOWS_BLE_READ_TIMEOUT_MS
-    } else {
-        VIAL_GUI_READ_TIMEOUT_MS
-    };
+    let read_timeout_ms = usb_read_timeout_ms(transport, data);
 
     let max_retries = usb_send_max_attempts(transport, data);
 
@@ -1482,6 +1572,9 @@ fn response_matches_command(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
         | CMD_VIA_LIGHTING_SAVE
         | CMD_VIA_MACRO_SET_BUFFER => resp[0] == cmd,
         CMD_VIA_VIAL_PREFIX => response_matches_vial_command(command, resp),
+        // Keep reading for this command within the original deadline when a
+        // delayed response from another pictogram command arrives. Never resend.
+        0xC0..=0xCB => resp[0] == cmd,
         _ => true,
     }
 }
@@ -1625,6 +1718,64 @@ fn macos_hid_open_not_permitted(error: &hidapi::HidError) -> bool {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_diagnostics_exclude_keymaps_macros_and_pixel_payloads() {
+        for request in [
+            vec![],
+            vec![0x04, 7, 8],
+            vec![0x0F, 1, 2],
+            vec![0xFE, 0x0D, 3],
+        ] {
+            assert!(display_diagnostic_request(&request).is_none());
+        }
+        let mut packet = [0x41; MSG_LEN];
+        packet[..3].copy_from_slice(&[0xC8, 2, 0]);
+        assert_eq!(
+            display_diagnostic_request(&packet).unwrap(),
+            "opcode=0xC8 bytes=32 sequence=2"
+        );
+        packet[..4].copy_from_slice(&[0xC7, 1, 24, 0]);
+        assert_eq!(
+            display_diagnostic_request(&packet).unwrap(),
+            "opcode=0xC7 bytes=32 kind=1 slot=24"
+        );
+        // C1/CB responses contain user pixels after the two protocol bytes.
+        packet[..2].copy_from_slice(&[0xCB, 0]);
+        assert_eq!(
+            display_diagnostic_response(&[0xCB], &packet),
+            "reply=0xCB byte1=0"
+        );
+        // FE05 contains physical unlock key coordinates after its flags.
+        packet[..2].copy_from_slice(&[0, 1]);
+        assert_eq!(
+            display_diagnostic_response(&[0xFE, 5], &packet),
+            "reply=0x00 byte1=1"
+        );
+    }
+
+    #[test]
+    fn display_diagnostics_include_capabilities_and_rejected_reply_prefix() {
+        let mut response = [0; MSG_LEN];
+        response[0] = 0xC0;
+        response[2] = 4;
+        response[3] = 1;
+        response[16] = 2;
+        response[17] = 4;
+        assert_eq!(
+            display_diagnostic_response(&[0xC0], &response),
+            "reply=0xC0 byte1=0 format=4 valid=1 slot_protocol=2 write_format=4"
+        );
+        response[..2].copy_from_slice(&[0xC9, 7]);
+        assert_eq!(
+            display_diagnostic_response(&[0xC0], &response),
+            "reply=0xC9 byte1=7"
+        );
+        assert_eq!(
+            display_diagnostic_request(&[0xFE, 8]).unwrap(),
+            "opcode=0xFE subcommand=0x08 bytes=2"
+        );
+    }
 
     #[test]
     fn write_only_output_report_uses_the_hid_transport_owner() {
@@ -1938,6 +2089,52 @@ mod tests {
             usb_send_max_attempts(HidTransport::Usb, &dynamic_entry_read),
             VIAL_GUI_USB_RETRIES
         );
+    }
+
+    #[test]
+    fn only_pictogram_slot_commit_gets_the_extended_usb_response_window() {
+        assert_eq!(
+            usb_read_timeout_ms(HidTransport::Usb, &[0xC9]),
+            PICTOGRAM_SLOT_COMMIT_READ_TIMEOUT_MS
+        );
+        for command in [0xC0, 0xC7, 0xC8, 0xCA, 0xCB] {
+            assert_eq!(
+                usb_read_timeout_ms(HidTransport::Usb, &[command]),
+                VIAL_GUI_READ_TIMEOUT_MS,
+                "unexpected extended timeout for opcode 0x{command:02X}"
+            );
+        }
+        assert_eq!(
+            usb_read_timeout_ms(HidTransport::Bluetooth, &[0xC9]),
+            WINDOWS_BLE_READ_TIMEOUT_MS
+        );
+    }
+
+    #[test]
+    fn pictogram_writes_are_one_shot_but_safe_reads_keep_retries() {
+        for command in [0xC2, 0xC3, 0xC4, 0xC7, 0xC8, 0xC9] {
+            assert_eq!(
+                usb_send_max_attempts(HidTransport::Usb, &[command]),
+                1,
+                "non-idempotent pictogram opcode 0x{command:02X} retried"
+            );
+        }
+        for command in [0xC0, 0xC1, 0xCA, 0xCB] {
+            assert_eq!(
+                usb_send_max_attempts(HidTransport::Usb, &[command]),
+                VIAL_GUI_USB_RETRIES,
+                "safe pictogram opcode 0x{command:02X} lost its retry budget"
+            );
+        }
+    }
+
+    #[test]
+    fn pictogram_response_requires_the_current_opcode() {
+        let mut response = [0u8; MSG_LEN];
+        response[0] = 0xC4;
+        assert!(!response_matches_command(&[0xC9], &response));
+        response[0] = 0xC9;
+        assert!(response_matches_command(&[0xC9], &response));
     }
 
     #[test]

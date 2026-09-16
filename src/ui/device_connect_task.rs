@@ -547,6 +547,10 @@ impl EntropyApp {
         device_idx: usize,
         reconnect: Option<BluetoothReconnectState>,
     ) {
+        let previous_selected_device = self
+            .selected_device
+            .and_then(|index| self.device_manager.devices().get(index))
+            .cloned();
         let dev = match self.device_manager.devices().get(device_idx) {
             Some(d) => d.clone(),
             None => {
@@ -615,6 +619,15 @@ impl EntropyApp {
                 return;
             }
         }
+        // A different keyboard does not need the previous physical HID owner.
+        // Hand it directly to that keyboard's existing background clock bridge
+        // before clearing the UI connection; this keeps its lease continuous.
+        if reconnect.is_none() {
+            if let Some(previous) = previous_selected_device.as_ref() {
+                self.handoff_selected_qmk_hid_host_bridge(previous, &dev);
+            }
+        }
+
         // The index is mutable discovery state, so bind it only when this
         // identity actually becomes the UI owner. A queued request must not
         // relabel the still-live layout/HID of the previous keyboard.
@@ -784,7 +797,10 @@ impl EntropyApp {
 
                 progress("Reading firmware version…")?;
                 let runtime_firmware_version = match dev_conn.get_firmware_version() {
-                    Ok(Some(version)) => Some(version),
+                    Ok(Some(version)) => {
+                        log::info!("Runtime firmware version: {version}");
+                        Some(version)
+                    }
                     Ok(None) => {
                         log::info!("Runtime firmware version is not reported");
                         None

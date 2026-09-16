@@ -14,7 +14,10 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(12);
-const USB_COMMAND_TIMEOUT: Duration = Duration::from_millis(1_500);
+// Must exceed the longest helper-side USB command. Pictogram SLOT_COMMIT may
+// synchronously program flash for up to 2.5 s; queued host-data writes share the
+// same ordered owner and must not retire it while that commit is still active.
+const USB_COMMAND_TIMEOUT: Duration = Duration::from_secs(4);
 const BLE_COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
 const REAPER_INTERVAL: Duration = Duration::from_millis(10);
 const MAX_FRAME: usize = 4_096;
@@ -1055,6 +1058,76 @@ mod tests {
             assert_eq!(helper.usb_send(&[value]).unwrap()[0], value);
         }
         drop(helpers);
+        empty_registry();
+    }
+
+    #[test]
+    fn real_helper_allows_display_macropad_with_other_ergohaven_bluetooth_product() {
+        let _guard = serial_test();
+        let mut macropad = device("macropad");
+        macropad.vendor_id = 0xE126;
+        macropad.product_id = 0x0042;
+        macropad.serial_number = "vial:f64c2b3c".into();
+        let mut bluetooth = device("bluetooth");
+        bluetooth.vendor_id = 0xE126;
+        bluetooth.product_id = 0x00A1;
+        bluetooth.serial_number = "AA:BB:CC:DD:EE:FF".into();
+        bluetooth.bus_type = "Bluetooth".into();
+
+        let macropad =
+            HidProxy::start(&macropad, spec("echo", None, None), Duration::from_secs(3)).unwrap();
+        let bluetooth =
+            HidProxy::start(&bluetooth, spec("echo", None, None), Duration::from_secs(3)).unwrap();
+
+        assert_eq!(macropad.usb_send(&[11]).unwrap()[0], 11);
+        assert_eq!(bluetooth.usb_send(&[22]).unwrap()[0], 22);
+        drop((macropad, bluetooth));
+        empty_registry();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn real_helper_generic_usb_serial_separates_parents_but_keeps_retiring_alias_reserved() {
+        let _guard = serial_test();
+        let a_device = crate::device::test_usb_device("3-3", 5, 0x42);
+        let b_device = crate::device::test_usb_device("3-2", 9, 0x42);
+        let a = HidProxy::start(
+            &a_device,
+            spec("echo", None, Some(&a_device)),
+            Duration::from_secs(3),
+        )
+        .unwrap();
+        let b = HidProxy::start(
+            &b_device,
+            spec("echo", None, Some(&b_device)),
+            Duration::from_secs(3),
+        )
+        .unwrap();
+        assert_eq!(a.usb_send(&[11]).unwrap()[0], 11);
+        assert_eq!(b.usb_send(&[22]).unwrap()[0], 22);
+        assert!(reserve_target(&a.slot, b_device).is_err());
+
+        let mut alias = crate::device::test_usb_device("3-3", 6, 0x42);
+        alias.instance_token = alias.instance_token.replace(":1.1/", ":1.2/");
+        reserve_target(&a.slot, alias.clone()).unwrap();
+        alias.serial_number = "different-interface-hint".into();
+        assert!(HidProxy::start(&alias, spec("echo", None, None), TEST_TIMEOUT).is_err());
+        let slot = a.slot.clone();
+        let held = slot.child.lock().unwrap();
+        drop(a);
+        assert!(HidProxy::start(&alias, spec("echo", None, None), TEST_TIMEOUT).is_err());
+        let c_device = crate::device::test_usb_device("3-4", 10, 0x42);
+        let c = HidProxy::start(
+            &c_device,
+            spec("echo", None, Some(&c_device)),
+            Duration::from_secs(3),
+        )
+        .unwrap();
+        assert_eq!(c.usb_send(&[33]).unwrap()[0], 33);
+        assert_eq!(b.usb_send(&[44]).unwrap()[0], 44);
+        drop(held);
+        drop(b);
+        drop(c);
         empty_registry();
     }
 

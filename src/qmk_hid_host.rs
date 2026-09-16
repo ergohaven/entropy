@@ -17,21 +17,257 @@ const DATA_MEDIA_TITLE: u8 = 0xAE;
 const DATA_DATE: u8 = 0xAF;
 const DEFAULT_LAYOUT_CODES: [&str; 2] = ["en", "ru"];
 const LAYOUT_RESEND_INTERVAL: Duration = Duration::from_secs(10);
-static CURRENT_MEDIA: OnceLock<Mutex<Option<(String, String)>>> = OnceLock::new();
+// One process-wide desktop sampler, not one uninterruptible query thread per
+// bridge/reconnect. It never owns HID or a host-output lease. Demand and cached
+// results share one short-held lock; no desktop call executes under that lock.
+static HOST_DATA_SERVICE: OnceLock<HostDataService> = OnceLock::new();
 
-fn set_media_snapshot(media: Option<(String, String)>) {
-    if let Ok(mut current) = CURRENT_MEDIA.get_or_init(|| Mutex::new(None)).lock() {
-        *current = media;
+pub fn media_snapshot() -> Option<(String, String)> {
+    HOST_DATA_SERVICE
+        .get()
+        .and_then(|service| service.snapshot().media)
+        .filter(|(artist, title)| !artist.is_empty() || !title.is_empty())
+}
+
+#[derive(Clone, Default)]
+struct DesktopSnapshot {
+    volume: Option<u8>,
+    layout: Option<u8>,
+    // None means no completed sample, Some(empty) means playback stopped.
+    media: Option<(String, String)>,
+    media_query_ms: u128,
+    media_sampled_at: Option<Instant>,
+}
+
+#[derive(Default)]
+struct DesktopState {
+    demand: [usize; 3],
+    epoch: [u64; 3],
+    snapshot: DesktopSnapshot,
+    stopped: bool,
+}
+
+#[derive(Default)]
+struct DesktopShared {
+    state: Mutex<DesktopState>,
+    wake: std::sync::Condvar,
+}
+
+struct DesktopOwner {
+    shared: Arc<DesktopShared>,
+}
+
+impl Drop for DesktopOwner {
+    fn drop(&mut self) {
+        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.stopped = true;
+        self.shared.wake.notify_one();
     }
 }
 
-pub fn media_snapshot() -> Option<(String, String)> {
-    CURRENT_MEDIA
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .ok()
-        .and_then(|current| current.clone())
+#[derive(Clone)]
+struct HostDataService {
+    owner: Arc<DesktopOwner>,
 }
+
+trait DesktopSource {
+    fn volume(&mut self) -> Option<u8>;
+    fn layout(&mut self) -> Option<u8>;
+    fn media(&mut self) -> Option<(String, String)>;
+}
+
+struct NativeDesktopSource {
+    layout: Option<LayoutTracker>,
+    last_layout_attempt: Instant,
+}
+
+impl NativeDesktopSource {
+    fn new() -> Self {
+        Self {
+            layout: None,
+            last_layout_attempt: Instant::now() - Duration::from_secs(60),
+        }
+    }
+}
+
+impl DesktopSource for NativeDesktopSource {
+    fn volume(&mut self) -> Option<u8> {
+        current_volume_percent()
+    }
+
+    fn layout(&mut self) -> Option<u8> {
+        if self.layout.is_none() && self.last_layout_attempt.elapsed() >= Duration::from_secs(2) {
+            self.last_layout_attempt = Instant::now();
+            self.layout = LayoutTracker::new();
+        }
+        self.layout
+            .as_mut()
+            .and_then(LayoutTracker::current_layout_index)
+    }
+
+    fn media(&mut self) -> Option<(String, String)> {
+        current_media_info()
+    }
+}
+
+impl HostDataService {
+    fn start<S: DesktopSource + 'static>(source: impl FnOnce() -> S + Send + 'static) -> Self {
+        let shared = Arc::new(DesktopShared::default());
+        let worker = shared.clone();
+        // Construct platform objects on their owning thread (not all desktop
+        // handles are Send). One sampler lives for the production process;
+        // when idle it waits for subscribers, without any OS polling.
+        thread::spawn(move || run_desktop_service(worker, source()));
+        Self {
+            owner: Arc::new(DesktopOwner { shared }),
+        }
+    }
+
+    fn subscribe(&self, mode: HostDataMode) -> DesktopSubscription {
+        let enabled = [mode.volume, mode.layout, mode.media];
+        let mut state = self
+            .owner
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        for (index, enabled) in enabled.iter().enumerate() {
+            if *enabled {
+                if state.demand[index] == 0 {
+                    state.epoch[index] = state.epoch[index].wrapping_add(1);
+                }
+                state.demand[index] += 1;
+            }
+        }
+        self.owner.shared.wake.notify_one();
+        DesktopSubscription {
+            service: self.clone(),
+            enabled,
+        }
+    }
+
+    fn snapshot(&self) -> DesktopSnapshot {
+        self.owner
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .snapshot
+            .clone()
+    }
+}
+
+struct DesktopSubscription {
+    service: HostDataService,
+    enabled: [bool; 3],
+}
+
+impl Drop for DesktopSubscription {
+    fn drop(&mut self) {
+        let shared = &self.service.owner.shared;
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        for (index, enabled) in self.enabled.iter().enumerate() {
+            if *enabled {
+                state.demand[index] -= 1;
+                if state.demand[index] == 0 {
+                    match index {
+                        0 => state.snapshot.volume = None,
+                        1 => state.snapshot.layout = None,
+                        _ => {
+                            state.snapshot.media = None;
+                            state.snapshot.media_sampled_at = None;
+                        }
+                    }
+                }
+            }
+        }
+        shared.wake.notify_one();
+    }
+}
+
+fn run_desktop_service(shared: Arc<DesktopShared>, mut source: impl DesktopSource) {
+    let intervals = [
+        VOLUME_POLL_INTERVAL,
+        Duration::from_millis(100),
+        Duration::from_secs(3),
+    ];
+    let mut last_poll = [Instant::now() - Duration::from_secs(60); 3];
+    let mut last_epoch = [0; 3];
+    loop {
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        while !state.stopped && state.demand == [0; 3] {
+            state = shared.wake.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+        if state.stopped {
+            break;
+        }
+        drop(state);
+        for index in 0..3 {
+            let state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+            if state.stopped {
+                return;
+            }
+            let epoch = state.epoch[index];
+            let due = state.demand[index] > 0
+                && (last_epoch[index] != epoch || last_poll[index].elapsed() >= intervals[index]);
+            drop(state);
+            if !due {
+                continue;
+            }
+            last_epoch[index] = epoch;
+            last_poll[index] = Instant::now();
+            let started = Instant::now();
+            let mut sample = DesktopSnapshot::default();
+            match index {
+                0 => sample.volume = source.volume(),
+                1 => sample.layout = source.layout(),
+                _ => {
+                    sample.media = Some(source.media().unwrap_or_default());
+                    sample.media_query_ms = started.elapsed().as_millis();
+                    sample.media_sampled_at = Some(Instant::now());
+                }
+            }
+            let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+            if state.stopped {
+                return;
+            }
+            // A completed old query may not populate a newly enabled session.
+            if state.demand[index] > 0 && state.epoch[index] == epoch {
+                match index {
+                    0 => state.snapshot.volume = sample.volume,
+                    1 => state.snapshot.layout = sample.layout,
+                    _ => {
+                        state.snapshot.media = sample.media;
+                        state.snapshot.media_query_ms = sample.media_query_ms;
+                        state.snapshot.media_sampled_at = sample.media_sampled_at;
+                    }
+                }
+            }
+        }
+        let state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.stopped {
+            break;
+        }
+        let _ = shared.wake.wait_timeout(state, Duration::from_millis(20));
+    }
+}
+
+#[cfg(test)]
+struct TestMediaSource<M>(M);
+
+#[cfg(test)]
+impl<M: FnMut() -> Option<(String, String)>> DesktopSource for TestMediaSource<M> {
+    fn volume(&mut self) -> Option<u8> {
+        panic!("media-only fixture must not query real desktop volume")
+    }
+    fn layout(&mut self) -> Option<u8> {
+        panic!("media-only fixture must not query real desktop layout")
+    }
+    fn media(&mut self) -> Option<(String, String)> {
+        (self.0)()
+    }
+}
+
 #[cfg(target_os = "linux")]
 const KDE_LAYOUT_DESTINATION: &str = "org.kde.keyboard";
 #[cfg(target_os = "linux")]
@@ -305,9 +541,36 @@ fn command_exists(program: &str) -> bool {
 struct BridgeTransportControl {
     stop: AtomicBool,
     retirement: std::sync::Mutex<Option<crate::hid::HidRetirement>>,
+    selected_handoff: std::sync::Mutex<Option<(crate::hid::HidDevice, bool)>>,
 }
 
 impl BridgeTransportControl {
+    fn handoff_selected(
+        &self,
+        hid: crate::hid::HidDevice,
+        extended: bool,
+    ) -> Result<(), crate::hid::HidDevice> {
+        if self.stop.load(Ordering::Acquire) {
+            return Err(hid);
+        }
+        let mut handoff = self
+            .selected_handoff
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if self.stop.load(Ordering::Acquire) || handoff.is_some() {
+            return Err(hid);
+        }
+        *handoff = Some((hid, extended));
+        Ok(())
+    }
+
+    fn take_selected_handoff(&self) -> Option<(crate::hid::HidDevice, bool)> {
+        self.selected_handoff
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+    }
+
     fn publish(&self, token: Option<crate::hid::HidRetirement>) -> anyhow::Result<()> {
         if self.stop.load(Ordering::Acquire) {
             if let Some(token) = token {
@@ -333,6 +596,10 @@ impl BridgeTransportControl {
 
     fn retire(&self) {
         self.stop.store(true, Ordering::Release);
+        self.selected_handoff
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
         if let Ok(mut token) = self.retirement.try_lock() {
             if let Some(token) = token.take() {
                 token.retire();
@@ -532,15 +799,45 @@ pub struct QmkHidHostBridge {
 }
 
 impl QmkHidHostBridge {
+    /// Registry-only seam: no worker, filesystem probe, desktop service or HID.
+    #[cfg(test)]
+    pub(crate) fn test_inert(
+        device: crate::device::Device,
+        mode: HostDataMode,
+        shared_output: Option<crate::hid::SharedHidOutput>,
+        protocol: HostProtocol,
+    ) -> Self {
+        Self {
+            device,
+            mode,
+            protocol,
+            shared_output,
+            control: Arc::new(BridgeTransportControl::default()),
+            thread: None,
+            send_shutdown_on_drop: Arc::new(AtomicBool::new(true)),
+            layout_snapshot: Arc::new(AtomicU8::new(u8::MAX)),
+        }
+    }
+
     pub fn start(
         device: crate::device::Device,
         mode: HostDataMode,
         shared_output: Option<crate::hid::SharedHidOutput>,
         protocol: HostProtocol,
     ) -> Self {
-        Self::start_with_media_source(device, mode, shared_output, protocol, current_media_info)
+        Self::start_with_desktop_service(
+            device,
+            mode,
+            shared_output,
+            protocol,
+            HOST_DATA_SERVICE
+                .get_or_init(|| HostDataService::start(NativeDesktopSource::new))
+                .clone(),
+            open_host_data_hid,
+        )
     }
 
+    #[cfg(test)]
     fn start_with_media_source(
         device: crate::device::Device,
         mode: HostDataMode,
@@ -558,12 +855,36 @@ impl QmkHidHostBridge {
         )
     }
 
+    #[cfg(test)]
     fn start_with_sources(
         device: crate::device::Device,
         mode: HostDataMode,
         shared_output: Option<crate::hid::SharedHidOutput>,
         protocol: HostProtocol,
         media_source: impl FnMut() -> Option<(String, String)> + Send + 'static,
+        open_hid: impl FnMut(
+                &crate::device::Device,
+                Option<&crate::hid::SharedHidOutput>,
+            ) -> anyhow::Result<HostDataHid>
+            + Send
+            + 'static,
+    ) -> Self {
+        Self::start_with_desktop_service(
+            device,
+            mode,
+            shared_output,
+            protocol,
+            HostDataService::start(move || TestMediaSource(media_source)),
+            open_hid,
+        )
+    }
+
+    fn start_with_desktop_service(
+        device: crate::device::Device,
+        mode: HostDataMode,
+        shared_output: Option<crate::hid::SharedHidOutput>,
+        protocol: HostProtocol,
+        desktop: HostDataService,
         open_hid: impl FnMut(
                 &crate::device::Device,
                 Option<&crate::hid::SharedHidOutput>,
@@ -591,7 +912,7 @@ impl QmkHidHostBridge {
                 worker_layout,
                 protocol,
                 worker_shutdown,
-                media_source,
+                desktop,
                 open_hid,
             )
         });
@@ -641,6 +962,25 @@ impl QmkHidHostBridge {
         }
     }
 
+    /// Move the selected connection's exact HID owner into this background
+    /// bridge. This avoids dropping and reopening the macropad during a switch
+    /// to a different physical keyboard, so its host-status lease never gaps.
+    pub(crate) fn adopt_selected_hid(
+        &mut self,
+        hid: crate::hid::HidDevice,
+    ) -> Result<(), crate::hid::HidDevice> {
+        let extended = matches!(self.protocol, HostProtocol::Selected(true));
+        if self.shared_output.is_none() {
+            return Err(hid);
+        }
+        self.control.handoff_selected(hid, extended)?;
+        self.shared_output = None;
+        // The transferred handle keeps its selected capability below. Any
+        // later reopen must discover capabilities from the replacement owner.
+        self.protocol = HostProtocol::Discover;
+        Ok(())
+    }
+
     /// Keep the display contents intact while replacing this bridge with a
     /// different HID owner for the same, still-connected device.
     pub fn suppress_shutdown(&mut self) {
@@ -665,12 +1005,12 @@ impl Drop for QmkHidHostBridge {
 fn run_bridge(
     target: crate::device::Device,
     mode: HostDataMode,
-    shared_output: Option<crate::hid::SharedHidOutput>,
+    mut shared_output: Option<crate::hid::SharedHidOutput>,
     control: Arc<BridgeTransportControl>,
     layout_snapshot: Arc<AtomicU8>,
     mut protocol: HostProtocol,
     send_shutdown: Arc<AtomicBool>,
-    mut media_source: impl FnMut() -> Option<(String, String)>,
+    desktop: HostDataService,
     mut open_hid: impl FnMut(
         &crate::device::Device,
         Option<&crate::hid::SharedHidOutput>,
@@ -691,10 +1031,38 @@ fn run_bridge(
     let mut last_media_poll = Instant::now() - Duration::from_secs(60);
     let mut last_media_full_send = Instant::now() - Duration::from_secs(60);
     let mut last_layout_full_send = Instant::now();
-    let mut last_layout_tracker_attempt = Instant::now() - Duration::from_secs(60);
-    let mut layout_tracker = mode.layout.then(LayoutTracker::new).flatten();
+    let mut desktop_subscription = None;
 
     while !stop.load(Ordering::Relaxed) {
+        if let Some((hid, selected_extended)) = control.take_selected_handoff() {
+            // This worker now owns a dedicated transport. Never fall back to
+            // the old selected connection's weak shared output after a later
+            // write failure; reopen a fresh dedicated owner for this target.
+            shared_output = None;
+            let retirement = hid.retirement_handle();
+            if control.publish(retirement).is_err() {
+                break;
+            }
+            device = Some(HostDataHid::Dedicated(hid));
+            extended_protocol = mode.time && selected_extended;
+            protocol = HostProtocol::Discover;
+            last_time = None;
+            last_volume = None;
+            last_layout = None;
+            last_artist.clear();
+            last_title.clear();
+            last_time_poll = Instant::now() - Duration::from_secs(60);
+            last_volume_poll = Instant::now() - Duration::from_secs(60);
+            last_layout_poll = Instant::now() - Duration::from_secs(60);
+            last_media_poll = Instant::now() - Duration::from_secs(60);
+            last_media_full_send = Instant::now() - Duration::from_secs(60);
+            reset_layout_sync_state(&mut last_layout, &mut last_layout_full_send);
+            log::info!(
+                "qmk-hid-host bridge adopted selected HID owner target={:?} extended={extended_protocol}",
+                target.path,
+            );
+        }
+
         if device.is_none() && last_open_attempt.elapsed() >= Duration::from_secs(2) {
             if stop.load(Ordering::Relaxed) {
                 break;
@@ -709,23 +1077,30 @@ fn run_bridge(
                     control.publish(retirement)?;
                     Ok(device)
                 })
-                .map_err(|e| log::warn!("qmk-hid-host open failed: {e}"))
+                .map_err(|e| {
+                    log::warn!(
+                        "qmk-hid-host open failed: target={:?} error={e:#}",
+                        target.path
+                    )
+                })
                 .ok();
             if let Some(dev) = device.as_ref() {
                 extended_protocol = mode.time && protocol.extended(dev);
                 reset_layout_sync_state(&mut last_layout, &mut last_layout_full_send);
                 log::info!(
-                    "qmk-hid-host bridge started ({})",
+                    "qmk-hid-host bridge started ({}) target={:?} protocol={protocol:?} extended={extended_protocol}",
                     if device.as_ref().is_some_and(HostDataHid::uses_shared_output) {
                         "shared HID owner"
                     } else {
                         "dedicated HID owner"
-                    }
+                    },
+                    target.path,
                 );
             }
         }
 
         let Some(dev) = device.as_ref() else {
+            desktop_subscription = None;
             thread::sleep(Duration::from_millis(250));
             continue;
         };
@@ -751,7 +1126,14 @@ fn run_bridge(
         if mode.time && last_time_poll.elapsed() >= Duration::from_secs(1) {
             last_time_poll = Instant::now();
             if extended_protocol {
-                write_failed |= write_payload(dev, &[DATA_HOST_STATUS, 1]).is_err();
+                let started = Instant::now();
+                let heartbeat = write_payload(dev, &[DATA_HOST_STATUS, 1]);
+                log::debug!(
+                    "qmk-hid-host heartbeat: target={:?} online=1 elapsed_ms={} result={heartbeat:?}",
+                    target.path,
+                    started.elapsed().as_millis(),
+                );
+                write_failed |= heartbeat.is_err();
             }
             let now = current_time_payload();
             if last_time != Some(now) {
@@ -778,9 +1160,14 @@ fn run_bridge(
             }
         }
 
+        // HID deadlines consume only cached desktop data. Subscribing cannot
+        // run an OS query, and the sampler never receives transport ownership.
+        desktop_subscription.get_or_insert_with(|| desktop.subscribe(mode));
+        let snapshot = desktop.snapshot();
+
         if mode.volume && last_volume_poll.elapsed() >= VOLUME_POLL_INTERVAL {
             last_volume_poll = Instant::now();
-            if let Some(volume) = current_volume_percent() {
+            if let Some(volume) = snapshot.volume {
                 if stop.load(Ordering::Acquire) {
                     break;
                 }
@@ -794,16 +1181,7 @@ fn run_bridge(
 
         if mode.layout && last_layout_poll.elapsed() >= Duration::from_millis(100) {
             last_layout_poll = Instant::now();
-            if layout_tracker.is_none()
-                && last_layout_tracker_attempt.elapsed() >= Duration::from_secs(2)
-            {
-                last_layout_tracker_attempt = Instant::now();
-                layout_tracker = LayoutTracker::new();
-            }
-            if let Some(layout) = layout_tracker
-                .as_mut()
-                .and_then(LayoutTracker::current_layout_index)
-            {
+            if let Some(layout) = snapshot.layout {
                 if stop.load(Ordering::Acquire) {
                     break;
                 }
@@ -819,16 +1197,19 @@ fn run_bridge(
             }
         }
 
-        if mode.media && last_media_poll.elapsed() >= Duration::from_secs(3) {
-            last_media_poll = Instant::now();
-            let (artist, title) = media_source().unwrap_or_default();
-            if stop.load(Ordering::Relaxed) {
-                break;
-            }
-            set_media_snapshot(
-                (!artist.is_empty() || !title.is_empty()).then(|| (artist.clone(), title.clone())),
+        if mode.media
+            && snapshot
+                .media_sampled_at
+                .is_some_and(|at| at > last_media_poll)
+        {
+            last_media_poll = snapshot.media_sampled_at.unwrap();
+            let (artist, title) = snapshot.media.unwrap_or_default();
+            log::debug!(
+                "qmk-hid-host media query: target={:?} elapsed_ms={}",
+                target.path,
+                snapshot.media_query_ms
             );
-            if stop.load(Ordering::Relaxed) {
+            if stop.load(Ordering::Acquire) {
                 break;
             }
             let full_resend = last_media_full_send.elapsed() >= Duration::from_secs(10);
@@ -848,7 +1229,10 @@ fn run_bridge(
         }
 
         if write_failed {
-            log::warn!("qmk-hid-host bridge write failed; reconnecting");
+            log::warn!(
+                "qmk-hid-host bridge write failed; reconnecting target={:?}",
+                target.path
+            );
             layout_snapshot.store(u8::MAX, Ordering::Relaxed);
             device = None;
             extended_protocol = false;
@@ -876,13 +1260,14 @@ fn run_bridge(
         }
     }
     layout_snapshot.store(u8::MAX, Ordering::Relaxed);
-    if shared_output
-        .as_ref()
-        .is_none_or(|output| output.host_session_is_current())
-    {
-        set_media_snapshot(None);
-    }
-    log::info!("qmk-hid-host bridge stopped");
+    // Dropping this subscription clears only demand owned by this bridge.
+    // In-flight desktop results cannot write HID or revive a retired lease.
+    drop(desktop_subscription);
+    log::info!(
+        "qmk-hid-host bridge stopped target={:?} shutdown_requested={}",
+        target.path,
+        send_shutdown.load(Ordering::Relaxed)
+    );
 }
 
 // Preview state belongs to this device bridge and is published only after
@@ -1036,7 +1421,7 @@ fn current_volume_percent() -> Option<u8> {
 
 #[cfg(target_os = "linux")]
 fn linux_volume_command(program: &str, args: &[&str]) -> Option<String> {
-    // These short queries run sequentially in the bridge, never concurrently.
+    // These short queries run sequentially in the desktop sampler, never concurrently.
     // Do not add the generic 25 ms wait to every fast wpctl/pactl response, or
     // let a stalled audio server block display updates for ten seconds.
     command_stdout_timeout_with_poll(
@@ -2208,7 +2593,9 @@ mod host_protocol_tests {
                     Arc::new(AtomicU8::new(u8::MAX)),
                     HostProtocol::Selected(extended),
                     Arc::new(AtomicBool::new(true)),
-                    current_media_info,
+                    HostDataService::start(|| {
+                        TestMediaSource(|| panic!("time-only bridge must not query desktop media"))
+                    }),
                     open_host_data_hid,
                 )
             });

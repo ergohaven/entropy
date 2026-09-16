@@ -5,6 +5,63 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.4.0 - Public Beta
+
+### Main Features
+
+- Added full M4CR0Pad firmware 4.0.6 display customization: standby images and animations, startup images, clocks and dates, 32×32 pictograms, macro and Tap Dance assignments, and synchronized host previews
+- Added an adaptive symbol typing trainer that follows the active layout and prioritizes characters with more errors
+- Added a Nix flake with declarative NixOS and Home Manager modules
+
+### Improvements
+
+- Added GUI chords to Mod-Tap choices and readable labels for Layer Lock
+- Added a dedicated label for firmware auto-layer deactivation on key press
+- Kept Matrix Tester geometry below the header, honored active layout options, and decoded firmware rows consistently
+- Allowed Layer-Tap and Mod-Tap keys as Key Override and RMK Fork triggers while continuing to reject invalid trigger values
+- Added bounded, serialized HID ownership for background display updates across keyboard switches and reconnects
+
+### Fixes
+
+- Restored wired QMK/Vial loading for legacy VIA responses and made unsupported compatibility probes fail fast
+- Restored update checks after transient GitHub API failures and kept the pinned Layout Indicator visible
+- Kept wired keyboards discoverable after unplugging and reconnecting them
+- Preserved M4CR0Pad clocks when switching Entropy to another Ergohaven keyboard over USB or Bluetooth
+- Kept pictogram saves on the active editor page, waited for firmware 4.0.6 flash commits, and prevented stale or failed transfers from corrupting confirmed state
+- Strengthened USB/Bluetooth device identity, HID owner fencing, reconnect drafts, secure Vial unlock handling, and shutdown ordering
+
+### Contributors
+
+- Special thanks to @AlexBSoD for Nix packaging and modules in #115
+- Special thanks to @St1ggy for GUI-chord Mod-Tap support in #131
+- Special thanks to @IgorArkhipov for update recovery, Layout Indicator, Layer Lock, and CI improvements in #142, #145, #155, and #157
+- Special thanks to @av-leschinskiy for the adaptive symbol typing trainer in #144
+- Special thanks to @techmech-keeb for Matrix Tester fixes in #160 and #161
+- Special thanks to @iakunin for the auto-layer setting label in #162
+- Special thanks to @Yurii-Q for wired reconnect recovery and M4CR0Pad display customization in #165 and #166
+
+## v0.3.21-rc.7 - Test Candidate
+
+### Fixes
+
+- Keep the M4CR0Pad clock alive when Entropy switches to a different Ergohaven keyboard over Bluetooth by recognizing the devices as separate product families across transports
+
+## v0.3.21-rc.6 - Test Candidate
+
+### Fixes
+
+- Keep pictogram slot commits on firmware 4.0.6 within their flash-write response window instead of treating them as a disconnect and reloading the whole keyboard
+- Keep macropad clocks alive when selecting another physical keyboard by transferring the existing HID owner directly to the background host-data bridge
+- Keep pictogram editing visible during a slot save and distinguish saving one slot from reading the full library
+
+## v0.3.21-rc.4 - Test Candidate
+
+### Fixes
+
+- Distinguish Linux USB device parents when Vial keyboards report the same generic serial, preserving separate background display owners while keeping composite interfaces exclusively reserved
+- Reject USB fallback to another physical parent with the same model and serial
+- Add metadata-only diagnostics for pictogram transfers, unlock operations and per-device clock workers; the reported second-upload hardware failure remains under investigation
+
 ## v0.3.21-rc.2 - Test Candidate
 
 ### Fixes

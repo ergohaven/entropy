@@ -374,8 +374,7 @@ impl KeycodePicker {
         ]
         .into_iter()
         .filter(|(_, left_value, right_value, _)| {
-            self.picker_value_supported(*left_value)
-                || self.picker_value_supported(*right_value)
+            self.picker_value_supported(*left_value) || self.picker_value_supported(*right_value)
         })
         .collect();
         if !plain.is_empty() {

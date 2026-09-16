@@ -94,15 +94,23 @@ impl HidDevice {
         Ok(value)
     }
 
-    /// Check if keyboard is unlocked
-    /// Returns (unlocked, unlock_keys: Vec<(row,col)>)
+    /// Check whether the keyboard is ready for normal Vial commands.
+    /// A firmware may retain the unlocked bit while a new physical unlock hold
+    /// is pending; that state is not ready until the pending sequence finishes.
+    /// Returns (ready, unlock_keys: Vec<(row,col)>).
     pub fn get_unlock_status(&self) -> Result<(bool, Vec<(u8, u8)>)> {
+        let (unlocked, in_progress, keys) = self.get_unlock_status_with_progress()?;
+        Ok((unlocked && !in_progress, keys))
+    }
+
+    pub(crate) fn get_unlock_status_with_progress(&self) -> Result<(bool, bool, Vec<(u8, u8)>)> {
         let resp = self
             .usb_send(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_GET_UNLOCK_STATUS])
             .context("failed to read Vial unlock status")?;
         // resp[0] = unlocked (1=yes), resp[1] = unlock_in_progress
         // resp[2..] = pairs of (row, col), rest filled with 0xFF
-        Ok(parse_unlock_status_response(&resp))
+        let (unlocked, keys) = parse_unlock_status_response(&resp);
+        Ok((unlocked, resp.get(1).copied() == Some(1), keys))
     }
 
     /// Start unlock sequence — returns keys to hold (row, col pairs)

@@ -5,6 +5,67 @@ use crate::hid::{HidDevice, SharedHidOutput, TestHidRecorder};
 use crate::qmk_hid_host::{test_start_bridge, HostDataMode, HostProtocol, QmkHidHostBridge};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
+#[test]
+fn generic_usb_serial_handoff_keeps_distinct_parents_and_excludes_composite_alias() {
+    let a = crate::device::test_usb_device("3-3", 5, 0x42);
+    let b = crate::device::test_usb_device("3-2", 9, 0xA1);
+    let mut app = EntropyApp::new_inert_for_test();
+    app.device_manager
+        .replace_devices(vec![a.clone(), b.clone()]);
+    let mut starts = 0;
+    let mut factory = |device, mode, shared, protocol| {
+        starts += 1;
+        QmkHidHostBridge::test_inert(device, mode, shared, protocol)
+    };
+    attach(&mut app, 0, true);
+    app.sync_qmk_hid_host_bridges_with(&mut factory);
+    assert!(app.qmk_hid_hosts[&a.path].uses_shared_output());
+    // Exact production automatic mode, without calling OS media/volume APIs.
+    let mode = app.qmk_hid_hosts[&a.path].mode();
+    assert!(mode.time && mode.volume && mode.media);
+    loading(&mut app, 1);
+    app.clear_qmk_hid_host_bridges_for_reconnect_with(&mut factory);
+    assert!(
+        app.qmk_hid_hosts.contains_key(&a.path),
+        "old clock owner was discarded as a serial alias"
+    );
+    assert!(!app.qmk_hid_hosts[&a.path].uses_shared_output());
+    assert_eq!(
+        app.qmk_hid_hosts[&a.path].protocol(),
+        HostProtocol::Discover
+    );
+    assert_eq!(app.qmk_hid_hosts[&a.path].mode(), mode);
+    for _ in 0..3 {
+        app.sync_qmk_hid_host_bridges_with(&mut factory);
+        assert_eq!(app.qmk_hid_hosts.len(), 1);
+    }
+    app.device_manager
+        .replace_devices(vec![b.clone(), a.clone()]);
+    app.selected_device = Some(0);
+    app.sync_qmk_hid_host_bridges_with(&mut factory);
+    attach(&mut app, 0, true);
+    app.sync_qmk_hid_host_bridges_with(&mut factory);
+    assert_eq!(app.qmk_hid_hosts.len(), 2);
+    assert!(!app.qmk_hid_hosts[&a.path].uses_shared_output());
+    assert!(app.qmk_hid_hosts[&b.path].uses_shared_output());
+
+    let mut alias = crate::device::test_usb_device("3-3", 6, 0x42);
+    alias.instance_token = alias.instance_token.replace(":1.1/", ":1.2/");
+    app.device_manager.replace_devices(vec![a.clone(), alias]);
+    loading(&mut app, 1);
+    app.clear_qmk_hid_host_bridges_for_reconnect_with(&mut factory);
+    app.sync_qmk_hid_host_bridges_with(&mut factory);
+    assert!(
+        app.qmk_hid_hosts.is_empty(),
+        "same composite device must remain exclusively owned by the connector"
+    );
+    assert_eq!(
+        starts, 3,
+        "one shared A, one dedicated A and one shared B only"
+    );
+}
+
 fn device(name: &str, source: &str) -> Device {
     Device {
         name: name.into(),
@@ -133,6 +194,102 @@ fn loading(app: &mut EntropyApp, index: usize) {
         cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         reconnect: None,
     };
+}
+
+#[test]
+fn selected_clock_bridge_adopts_exact_hid_owner_without_a_lease_gap() {
+    let target = device("A", "src/qmk_hid_host.rs");
+    let (hid, recorder) = HidDevice::test_device();
+    let shared = hid.shared_output().unwrap();
+    let mut bridge = test_start_bridge(
+        target,
+        time_mode(),
+        Some(shared),
+        None,
+        HostProtocol::Selected(true),
+        || None,
+    );
+    wait(&recorder, 0, 0xba, Some(1));
+
+    let before = recorder.requests().len();
+    bridge
+        .adopt_selected_hid(hid)
+        .unwrap_or_else(|_| panic!("selected HID owner was not adopted"));
+
+    assert!(!bridge.uses_shared_output());
+    assert_eq!(bridge.protocol(), HostProtocol::Discover);
+    wait(&recorder, before, 0xba, Some(1));
+    no_clear(&recorder);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn production_selection_moves_old_usb_owner_into_existing_background_bridge() {
+    let a = crate::device::test_usb_device("3-3", 5, 0x42);
+    let b = crate::device::test_usb_device("3-2", 9, 0xA1);
+    let mut app = EntropyApp::new_inert_for_test();
+    app.device_manager
+        .replace_devices(vec![a.clone(), b.clone()]);
+    attach(&mut app, 0, true);
+    app.sync_qmk_hid_host_bridges_with(&mut |device, mode, shared, protocol| {
+        QmkHidHostBridge::test_inert(device, mode, shared, protocol)
+    });
+    assert!(app.qmk_hid_hosts[&a.path].uses_shared_output());
+
+    let (launch, requests) = std::sync::mpsc::channel();
+    app.test_connect_requests = Some(launch);
+    app.start_connect(1);
+    let (requested, _events) = requests.recv_timeout(Duration::from_secs(1)).unwrap();
+
+    assert_eq!(requested.path, b.path);
+    assert!(app.hid_device.is_none());
+    assert!(app.shared_hid_output.is_none());
+    assert!(app.qmk_hid_hosts.contains_key(&a.path));
+    assert!(!app.qmk_hid_hosts[&a.path].uses_shared_output());
+    assert_eq!(
+        app.qmk_hid_hosts[&a.path].protocol(),
+        HostProtocol::Discover
+    );
+}
+
+#[test]
+fn production_selection_to_bluetooth_keeps_macropad_owner_in_background() {
+    let mut macropad = device("M4CR0Pad v3", "src/qmk_hid_host.rs");
+    macropad.vendor_id = 0xE126;
+    macropad.product_id = 0x0042;
+    macropad.manufacturer = "Ergohaven".into();
+    macropad.serial_number = "vial:f64c2b3c".into();
+
+    let mut bluetooth_keyboard = device("K:03 Pro", "src/hid.rs");
+    bluetooth_keyboard.vendor_id = 0xE126;
+    bluetooth_keyboard.product_id = 0x00A1;
+    bluetooth_keyboard.manufacturer = "Ergohaven".into();
+    bluetooth_keyboard.serial_number = "AA:BB:CC:DD:EE:FF".into();
+    bluetooth_keyboard.bus_type = "Bluetooth".into();
+
+    let mut app = EntropyApp::new_inert_for_test();
+    app.device_manager
+        .replace_devices(vec![macropad.clone(), bluetooth_keyboard.clone()]);
+    attach(&mut app, 0, true);
+    app.sync_qmk_hid_host_bridges_with(&mut |device, mode, shared, protocol| {
+        QmkHidHostBridge::test_inert(device, mode, shared, protocol)
+    });
+    assert!(app.qmk_hid_hosts[&macropad.path].uses_shared_output());
+
+    let (launch, requests) = std::sync::mpsc::channel();
+    app.test_connect_requests = Some(launch);
+    app.start_connect(1);
+    let (requested, _events) = requests.recv_timeout(Duration::from_secs(1)).unwrap();
+
+    assert_eq!(requested.path, bluetooth_keyboard.path);
+    assert!(app.hid_device.is_none());
+    assert!(app.shared_hid_output.is_none());
+    assert!(app.qmk_hid_hosts.contains_key(&macropad.path));
+    assert!(!app.qmk_hid_hosts[&macropad.path].uses_shared_output());
+    assert_eq!(
+        app.qmk_hid_hosts[&macropad.path].protocol(),
+        HostProtocol::Discover
+    );
 }
 
 #[test]

@@ -59,17 +59,26 @@ impl EntropyApp {
     pub(super) fn finish_vial_unlock_poll(
         &mut self,
         unlocked: bool,
-        _in_progress: bool,
+        in_progress: bool,
         counter: u8,
     ) {
         self.vial_unlock_counter = counter;
         if counter > self.vial_unlock_total {
             self.vial_unlock_total = counter;
         }
-        if unlocked {
+        if unlocked && !in_progress {
             self.complete_vial_unlock();
+        } else if in_progress {
+            // Some firmware keeps the unlocked bit set while a new physical
+            // hold is pending. Normal commands remain gated in that state.
+            self.vial_unlocked = Some(false);
         } else {
             self.vial_unlocked = Some(false);
+            self.macro_auto_unlock_cancelled = true;
+            self.stop_vial_unlock_with_status(crate::i18n::tr_catalog(
+                self.app_settings.language,
+                "status_messages.device_unlock_cancelled",
+            ));
         }
     }
 

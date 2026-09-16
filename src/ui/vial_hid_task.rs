@@ -82,6 +82,21 @@ pub(super) enum VialHidOperation {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+impl VialHidOperation {
+    fn display_diagnostic_label(&self) -> Option<&'static str> {
+        match self {
+            Self::UnlockStart => Some("unlock-start"),
+            Self::UnlockPoll => Some("unlock-poll"),
+            Self::Lock => Some("lock"),
+            Self::PictogramLoad { .. } => Some("pictogram-load"),
+            Self::PictogramUpload { .. } => Some("pictogram-upload"),
+            Self::PictogramSlotUpload { .. } => Some("pictogram-slot-upload"),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 enum VialHidOutcome {
     UnlockStarted {
         unlocked: bool,
@@ -146,11 +161,14 @@ fn run_vial_hid_operation_with_progress(
 ) -> anyhow::Result<VialHidOutcome> {
     match operation {
         VialHidOperation::UnlockStart => {
-            let (unlocked, keys) = hid.get_unlock_status()?;
-            if !unlocked {
+            let (unlocked, in_progress, keys) = hid.get_unlock_status_with_progress()?;
+            if !unlocked && !in_progress {
                 hid.unlock_start()?;
             }
-            Ok(VialHidOutcome::UnlockStarted { unlocked, keys })
+            Ok(VialHidOutcome::UnlockStarted {
+                unlocked: unlocked && !in_progress,
+                keys,
+            })
         }
         VialHidOperation::UnlockPoll => {
             let (unlocked, in_progress, counter) = hid.unlock_poll()?;
@@ -379,7 +397,11 @@ impl EntropyApp {
         ctx: &egui::Context,
         operation: VialHidOperation,
     ) -> VialHidTaskStart {
-        self.start_vial_hid_operation_with_runner(ctx, operation, run_vial_hid_operation_with_progress)
+        self.start_vial_hid_operation_with_runner(
+            ctx,
+            operation,
+            run_vial_hid_operation_with_progress,
+        )
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -415,7 +437,18 @@ impl EntropyApp {
         let worker_progress = progress.clone();
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let worker_cancel = cancel.clone();
+        let diagnostic_label = operation.display_diagnostic_label();
+        if let Some(label) = diagnostic_label {
+            let target = self
+                .selected_device
+                .and_then(|index| self.device_manager.devices().get(index))
+                .map(|device| device.path.as_str());
+            log::debug!(
+                "Display operation started: {label} generation={generation} target={target:?}"
+            );
+        }
         std::thread::spawn(move || {
+            let started = std::time::Instant::now();
             #[cfg(target_os = "macos")]
             let _hid_lock = hid_device.macos_hid_operation_lock();
 
@@ -430,6 +463,18 @@ impl EntropyApp {
                 .err()
                 .map(crate::hid::is_disconnect_error)
                 .unwrap_or(false);
+            if let Some(label) = diagnostic_label {
+                match &outcome {
+                    Ok(_) => log::debug!(
+                        "Display operation completed: {label} generation={generation} elapsed_ms={}",
+                        started.elapsed().as_millis(),
+                    ),
+                    Err(error) => log::debug!(
+                        "Display operation failed: {label} generation={generation} elapsed_ms={} disconnected={disconnected} error={error:#}",
+                        started.elapsed().as_millis(),
+                    ),
+                }
+            }
             let hid_device = (!disconnected).then_some(hid_device);
             let outcome = outcome.map_err(|error| format!("{error:#}"));
             let _ = sender.send(VialHidTaskResult {
@@ -789,6 +834,7 @@ impl EntropyApp {
                 self.display_settings.pictograms.supported = Some(true);
                 self.display_settings.pictograms.loaded = true;
                 self.display_settings.pictograms.loading = false;
+                self.display_settings.pictograms.saving = false;
                 self.display_settings.pictograms.library = library;
                 self.status_msg = crate::i18n::tr_catalog(
                     self.app_settings.language,
@@ -963,6 +1009,7 @@ impl EntropyApp {
                 // storage read preserves that editor and confirms the actual bytes.
                 pictograms.loaded = false;
                 pictograms.loading = false;
+                pictograms.saving = false;
                 pictograms.load_failure = None;
                 pictograms.preserve_editor_on_load = true;
                 pictograms.library = PictogramLibrary::default();
@@ -1016,6 +1063,7 @@ impl EntropyApp {
                 draft.supported = None;
                 draft.loaded = false;
                 draft.loading = false;
+                draft.saving = false;
                 draft.library = PictogramLibrary::default();
                 draft
             });
@@ -1444,7 +1492,10 @@ mod repeat_lifecycle_tests {
                     > 256
             );
             let package = std::fs::read(directory.path().join("cache.ehbg")).unwrap();
-            assert_ne!(package, previous_package, "second upload must replace different pixels");
+            assert_ne!(
+                package, previous_package,
+                "second upload must replace different pixels"
+            );
             previous_package = package;
         }
         assert_eq!(saved, 2);
@@ -1569,6 +1620,67 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         panic!("Vial HID task did not finish");
+    }
+
+    #[test]
+    fn pending_unlock_is_not_ready_and_does_not_restart_physical_hold() {
+        // The firmware keeps the unlocked bit set if another unlock sequence
+        // starts on an unlocked board, but gates normal commands while pending.
+        for unlocked in [0, 1] {
+            let (hid, recorder) = crate::hid::HidDevice::test_device();
+            let mut status = [0xFF; 32];
+            status[..4].copy_from_slice(&[unlocked, 1, 0, 0]);
+            recorder.respond_with([status]);
+            let result = run_vial_hid_operation(&hid, VialHidOperation::UnlockStart).unwrap();
+            assert!(matches!(
+                result,
+                VialHidOutcome::UnlockStarted {
+                    unlocked: false,
+                    ..
+                }
+            ));
+            assert_eq!(
+                recorder.requests().len(),
+                1,
+                "an existing physical hold must not receive another FE06"
+            );
+            assert!(recorder.requests()[0].starts_with(&[0xFE, 5]));
+        }
+    }
+
+    #[test]
+    fn pending_unlock_status_is_not_exposed_as_available_for_normal_commands() {
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        let mut status = [0xFF; 32];
+        status[..4].copy_from_slice(&[1, 1, 0, 0]);
+        recorder.respond_with([status]);
+        let (ready, keys) = hid.get_unlock_status().unwrap();
+        assert!(!ready);
+        assert_eq!(keys, vec![(0, 0)]);
+    }
+
+    #[test]
+    fn pending_unlock_poll_does_not_complete_on_the_unlocked_bit_alone() {
+        let mut app = EntropyApp::new_inert_for_test();
+        app.unlock_open = true;
+        app.finish_vial_unlock_start(false, vec![(0, 0)]);
+        app.finish_vial_unlock_poll(true, true, 10);
+        assert!(app.unlock_open && app.vial_unlock_polling);
+        assert_eq!(app.vial_unlocked, Some(false));
+        app.finish_vial_unlock_poll(true, false, 0);
+        assert!(!app.unlock_open && !app.vial_unlock_polling);
+        assert_eq!(app.vial_unlocked, Some(true));
+    }
+
+    #[test]
+    fn stopped_unlock_poll_releases_ui_instead_of_polling_forever() {
+        let mut app = EntropyApp::new_inert_for_test();
+        app.unlock_open = true;
+        app.finish_vial_unlock_start(false, vec![(0, 0)]);
+        app.finish_vial_unlock_poll(false, false, 0);
+        assert!(!app.unlock_open && !app.vial_unlock_polling);
+        assert_eq!(app.vial_unlocked, Some(false));
+        assert!(app.macro_auto_unlock_cancelled);
     }
 
     #[test]
