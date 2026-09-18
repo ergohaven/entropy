@@ -104,6 +104,10 @@ fn module_setting_catalog_keys(title: &str) -> Option<(&'static str, &'static st
             "modules_settings.auto_layer_timeout",
             "modules_settings.auto_layer_timeout_tooltip",
         )),
+        "auto layer threshold" => Some((
+            "modules_settings.auto_layer_threshold",
+            "modules_settings.auto_layer_threshold_tooltip",
+        )),
         "auto layer deactivate on key" => Some((
             "modules_settings.auto_layer_deactivate_on_key",
             "modules_settings.auto_layer_deactivate_on_key_tooltip",
