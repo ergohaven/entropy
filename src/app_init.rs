@@ -49,6 +49,26 @@ impl EntropyApp {
         })
     }
 
+    /// The app without a window, for `--export-layout`. Reads the same
+    /// settings as `new` (language, diagnostics) but starts none of the
+    /// desktop machinery: no text expander, no update check, no zoom.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn new_headless() -> Self {
+        let app_settings = load_app_settings();
+        crate::diagnostics::set_enabled(app_settings.diagnostics_enabled);
+        let mut app = Self::from_bootstrap(AppBootstrap {
+            typing_trainer: TypingTrainerState::from_settings(app_settings.typing_trainer),
+            app_settings,
+            device_manager: DeviceManager::new(),
+            text_expander_rules_signature: Vec::new(),
+            last_single_instance_signal: String::new(),
+            layer_names: Vec::new(),
+            update_check: UpdateCheckState::Idle,
+        });
+        app.headless = true;
+        app
+    }
+
     #[cfg(test)]
     pub(crate) fn new_inert_for_test() -> Self {
         let app_settings = AppSettings::default();
@@ -101,6 +121,8 @@ impl EntropyApp {
             #[cfg(not(target_arch = "wasm32"))]
             qmk_hid_hosts: std::collections::HashMap::new(),
             pending_device_connect: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            headless: false,
             firmware: FirmwareProtocol::Vial,
             #[cfg(not(target_arch = "wasm32"))]
             supported_qmk_settings: Vec::new(),

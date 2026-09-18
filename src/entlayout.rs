@@ -601,6 +601,19 @@ impl EntropyApp {
         ))
     }
 
+    /// The `.entlayout` document for the connected keyboard, as the file
+    /// dialog export would write it; `None` before a keyboard is connected.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn entlayout_export_json(&self) -> Option<Result<String>> {
+        let bundle = self.entlayout_snapshot()?;
+        Some(
+            serde_json::to_string_pretty(&bundle).context(crate::i18n::tr_catalog(
+                self.app_settings.language,
+                "entlayout.failed_to_serialize",
+            )),
+        )
+    }
+
     fn entlayout_snapshot(&self) -> Option<EntLayoutFile> {
         let layout = self.layout.as_ref()?;
         let keyboard = EntLayoutKeyboard {

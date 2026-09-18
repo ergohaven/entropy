@@ -104,6 +104,25 @@ open /Applications/Entropy.app
 6. Edit layers, keycodes, advanced firmware features, or app settings
 7. Save/write changes when the edited feature requires it
 
+## Headless Layout Export
+
+Scripts and backup jobs can save a keyboard's `.entlayout` without opening a
+window:
+
+```sh
+entropy --export-layout k04.entlayout
+entropy --export-layout - --device "K:04 (Qube)" > k04.entlayout
+```
+
+The file is the same one **Layout → Export layout** writes. `--device` picks
+the keyboard when several are attached, by a part of its name, a hex `VID:PID`
+such as `e126:0071`, or its HID path; `--timeout` (seconds, default 60) bounds
+the wait for a slow Bluetooth keyboard. Close the Entropy window first: the
+export refuses to run next to another instance that owns the keyboard.
+
+Exit status: `0` exported, `1` export failed, `2` no or ambiguous keyboard,
+`3` another Entropy instance is running, `64` usage error.
+
 ## Linux Device Access
 
 Vial devices use hidraw access on Linux. If your device appears but cannot be opened,

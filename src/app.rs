@@ -46,6 +46,13 @@ mod app_repaint;
 use app_repaint::*;
 #[path = "entlayout.rs"]
 mod entlayout;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "headless_export.rs"]
+mod headless_export;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use headless_export::{
+    run_headless_export, HeadlessExportRequest, EXIT_INSTANCE_RUNNING, EXIT_USAGE,
+};
 #[path = "entsettings.rs"]
 mod entsettings;
 

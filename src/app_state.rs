@@ -5129,6 +5129,10 @@ pub struct EntropyApp {
     pub(super) linux_setup_task: Option<LinuxSetupTask>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) connect_state: ConnectState,
+    /// Running without a window (`--export-layout`): connect, snapshot, exit.
+    /// Nothing may write to the keyboard or start background bridges.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) headless: bool,
     /// Cancelled workers no longer owning the UI. Keep their endpoint reservations
     /// until completion; at most MAX_CONNECT_WORKERS including Loading may exist.
     #[cfg(not(target_arch = "wasm32"))]

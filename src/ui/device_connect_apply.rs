@@ -1199,10 +1199,12 @@ impl EntropyApp {
                         self.vial_unlock_keys.clear();
                     }
                 }
-                crate::app::ensure_firmware_update_check(
-                    &mut self.firmware_update_check,
-                    r.about_info.firmware_update_target.clone(),
-                );
+                if !self.headless {
+                    crate::app::ensure_firmware_update_check(
+                        &mut self.firmware_update_check,
+                        r.about_info.firmware_update_target.clone(),
+                    );
+                }
                 self.device_about_info = Some(r.about_info.clone());
                 if staged_bluetooth_load {
                     self.schedule_initial_battery_refresh();
@@ -1419,10 +1421,14 @@ impl EntropyApp {
                 self.supported_qmk_settings = r.supported_qmk_settings;
                 self.deferred_device_load = r.deferred_load;
 
+                // A headless export only reads: no display preset write-back,
+                // no clock/layout bridges left running on the keyboard.
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    self.restore_entropy_display_preset_after_connect();
-                    self.sync_qmk_hid_host_bridges();
+                    if !self.headless {
+                        self.restore_entropy_display_preset_after_connect();
+                        self.sync_qmk_hid_host_bridges();
+                    }
                 }
 
                 log::info!(

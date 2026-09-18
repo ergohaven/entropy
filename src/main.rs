@@ -284,8 +284,32 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    let headless_export = match app::HeadlessExportRequest::from_args(std::env::args_os()) {
+        Ok(request) => request,
+        Err(usage) => {
+            eprintln!("{usage}");
+            std::process::exit(app::EXIT_USAGE);
+        }
+    };
+
     diagnostics::init(diagnostics::settings_file_enabled());
     let launch_minimized = launch_minimized_from_args(std::env::args_os());
+
+    // A headless export shares the single-instance lock with the GUI: two
+    // processes speaking Vial to one keyboard would interleave requests.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if let Some(request) = headless_export {
+            if single_instance_enabled() && !try_acquire_single_instance() {
+                log::error!(
+                    "Another Entropy instance is running; close it or export from its Layout menu"
+                );
+                std::process::exit(app::EXIT_INSTANCE_RUNNING);
+            }
+            std::process::exit(app::run_headless_export(request));
+        }
+    }
 
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     {

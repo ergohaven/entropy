@@ -710,7 +710,10 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn deferred_full_layout_action_ready(&self, action: DeferredFullLayoutAction) -> bool {
+    pub(super) fn deferred_full_layout_action_ready(
+        &self,
+        action: DeferredFullLayoutAction,
+    ) -> bool {
         deferred_full_layout_data_ready(&self.deferred_device_load, action)
     }
 
