@@ -23,6 +23,34 @@ source scripts/appimagetool_pin.sh
 APPIMAGETOOL_URL="${APPIMAGETOOL_URL:-$APPIMAGETOOL_PINNED_URL}"
 APPIMAGETOOL_SHA256="${APPIMAGETOOL_SHA256:-$APPIMAGETOOL_PINNED_SHA256}"
 
+# APPDIR и OUT приезжают снаружи, а по ним идёт rm -rf: путь канонизируется
+# (симлинки, `..`) и обязан лежать строго внутри сборочных каталогов репозитория
+# или каталога временных файлов. Иначе опечатка или унаследованное из окружения
+# значение сносит рекурсивно чужой каталог.
+REMOVABLE_ROOTS=("$ROOT/target" "$ROOT/dist" "$ROOT/.cache" "${TMPDIR:-/tmp}")
+case "${DIST:-}" in
+'' | /* | *..*) ;;
+*) REMOVABLE_ROOTS+=("$ROOT/$DIST") ;;
+esac
+
+removable_path() {
+  local name="$1" path="$2" resolved root root_resolved
+  resolved="$(realpath -m -- "$path")"
+  for root in "${REMOVABLE_ROOTS[@]}"; do
+    root_resolved="$(realpath -m -- "$root")"
+    # Только строго внутри: сам корень (`target`, `dist`) сносить нельзя.
+    if [[ "$resolved" == "$root_resolved"/* ]]; then
+      printf '%s\n' "$resolved"
+      return 0
+    fi
+  done
+  echo "$name='$path' resolves to '$resolved', outside ${REMOVABLE_ROOTS[*]}" >&2
+  return 1
+}
+
+APPDIR="$(removable_path APPDIR "$APPDIR")"
+OUT="$(removable_path OUT "$OUT")"
+
 cargo build --release --locked
 
 rm -rf "$APPDIR" "$OUT"
@@ -31,8 +59,7 @@ mkdir -p \
   "$APPDIR/usr/share/applications" \
   "$APPDIR/usr/share/metainfo" \
   "$APPDIR/usr/share/icons" \
-  "$(dirname "$OUT")" \
-  "$(dirname "$APPIMAGETOOL")"
+  "$(dirname "$OUT")"
 
 install -m 0755 "$ROOT/target/release/entropy" "$APPDIR/usr/bin/entropy"
 
@@ -66,6 +93,10 @@ ln -s entropy.png "$APPDIR/.DirIcon"
 find "$APPDIR" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
 
 if [[ ! -x "$APPIMAGETOOL" ]]; then
+  # Проверяется только путь загрузки: готовый инструмент из образа лежит в
+  # /usr/local/bin и не переписывается, а сюда мы пишем.
+  APPIMAGETOOL="$(removable_path APPIMAGETOOL "$APPIMAGETOOL")"
+  mkdir -p "$(dirname "$APPIMAGETOOL")"
   APPIMAGETOOL_DOWNLOAD="$(mktemp "${APPIMAGETOOL}.download.XXXXXX")"
   trap 'rm -f "$APPIMAGETOOL_DOWNLOAD"' EXIT
   curl -fsSL "$APPIMAGETOOL_URL" -o "$APPIMAGETOOL_DOWNLOAD"
