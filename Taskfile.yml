@@ -1,0 +1,308 @@
+# https://taskfile.dev
+#
+# Linux build & packaging for Entropy: deb, rpm, archlinux and AppImage.
+# `task` with no arguments lists every target; BUILD.md explains them.
+version: '3'
+
+vars:
+  APP: entropy
+  # По умолчанию версия берётся из Cargo.toml, но её можно задать снаружи
+  # (`task linux:pkg VERSION=0.3.10-rc.1` или переменной окружения), чтобы имена
+  # артефактов и версии пакетов совпадали с релизным тегом, а не с ещё не
+  # поднятой версией крейта. Всё, что приезжает снаружи, проверяется в
+  # linux:validate до того, как попадёт в имя файла или в пакет.
+  # Разбор Cargo.toml без awk/sed: встроенный интерпретатор go-task внешних утилит
+  # не подменяет, и на хосте без них не читался бы весь Taskfile, включая `task build`.
+  VERSION:
+    sh: |
+      if [ -n "${VERSION:-}" ]; then
+        printf '%s\n' "$VERSION"
+        exit 0
+      fi
+      while read -r line; do
+        case "$line" in
+        version\ =\ *)
+          v="${line#*\"}"
+          printf '%s\n' "${v%%\"*}"
+          break
+          ;;
+        esac
+      done < Cargo.toml
+  # Арка берётся у хоста, а не считается равной amd64: пакет с меткой amd64 и
+  # arm64-бинарником внутри ставится и не запускается.
+  HOST_ARCH:
+    sh: uname -m 2>/dev/null || echo x86_64
+  PKG_ARCH: '{{if or (eq .HOST_ARCH "aarch64") (eq .HOST_ARCH "arm64")}}arm64{{else}}amd64{{end}}'
+  APPIMAGE_ARCH: '{{if or (eq .HOST_ARCH "aarch64") (eq .HOST_ARCH "arm64")}}aarch64{{else}}x86_64{{end}}'
+  DIST: '{{default "dist" .DIST}}'
+  IMAGE: '{{default "entropy-build:local" .IMAGE}}'
+  # Время коммита вместо времени сборки: без него nfpm и mksquashfs пишут «сейчас»
+  # в каждую запись, и две сборки одного дерева дают разные суммы. Вне git —
+  # 1980-01-01, минимальная дата, которую принимает zip/squashfs.
+  SOURCE_DATE_EPOCH:
+    sh: |
+      if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
+        printf '%s\n' "$SOURCE_DATE_EPOCH"
+      else
+        git log -1 --pretty=%ct 2>/dev/null || echo 315532800
+      fi
+  # Загружаемые инструменты (nfpm, appimagetool) живут в кэше проекта, а не в
+  # системе: PATH дополняется только на время команды, и то, что уже стоит у
+  # разработчика, имеет приоритет.
+  TOOLS: '{{.ROOT_DIR}}/.cache/tools'
+
+# Значения из внешнего мира ходят по задачам окружением, а не подстановкой в
+# текст команды: подставленная строка с кавычкой или `;` выполнилась бы как код.
+# Команды читают только эти переменные, `{{.VAR}}` в них не подставляется.
+# go-task отдаёт приоритет уже выставленному окружению, поэтому `DIST=x task ...`
+# перебивает `task ... DIST=x`; обе формы работают, проверяет значение в любом
+# случае linux:validate.
+env:
+  VERSION: '{{.VERSION}}'
+  PKG_ARCH: '{{.PKG_ARCH}}'
+  APPIMAGE_ARCH: '{{.APPIMAGE_ARCH}}'
+  DIST: '{{.DIST}}'
+  IMAGE: '{{.IMAGE}}'
+  SOURCE_DATE_EPOCH: '{{.SOURCE_DATE_EPOCH}}'
+
+tasks:
+  default:
+    cmds:
+      - task --list
+    silent: true
+
+  version:
+    desc: Print the version derived from Cargo.toml
+    cmds:
+      - echo "$VERSION"
+    silent: true
+
+  prepare:
+    desc: Install the Linux build & packaging prerequisites for this host
+    cmds:
+      - scripts/prepare_env.sh {{.CLI_ARGS}}
+
+  clean:
+    desc: Remove build/packaging artifacts
+    # Пути литеральные, а не через $DIST: `task clean DIST=/` не должен
+    # существовать как возможность.
+    cmds:
+      - rm -rf dist target/appimage target/nfpm target/repro
+
+  icons:
+    desc: Regenerate the hicolor icon set from assets/entropy.ico (run when the logo changes)
+    cmds:
+      - scripts/generate_icons.sh
+
+  build:
+    desc: Release binary for this host
+    cmds:
+      - cargo build --release --locked
+
+  # Всё, что может приехать снаружи, проверяется один раз и до сборки: неверная
+  # версия иначе всплывает уже именем артефакта, а неверный DIST — удалённым
+  # каталогом.
+  linux:validate:
+    internal: true
+    cmds:
+      - |
+        set -eu
+        scripts/pkg_version.sh deb "$VERSION" >/dev/null
+
+        case "$PKG_ARCH" in
+        amd64 | arm64) ;;
+        *)
+          echo "PKG_ARCH='$PKG_ARCH' must be amd64 or arm64" >&2
+          exit 1
+          ;;
+        esac
+
+        case "$DIST" in
+        "" | /* | *..*)
+          echo "DIST='$DIST' must be a relative path inside the repository" >&2
+          exit 1
+          ;;
+        esac
+
+        case "${SOURCE_DATE_EPOCH:-}" in
+        '' | *[!0-9]*)
+          echo "SOURCE_DATE_EPOCH='${SOURCE_DATE_EPOCH:-}' must be a unix timestamp" >&2
+          exit 1
+          ;;
+        esac
+
+  # Метка архитектуры в пакете — обещание пользователю, а бинарник может приехать
+  # снаружи через ENTROPY_BIN, поэтому обещание сверяется с файлом.
+  linux:check-arch:
+    internal: true
+    env:
+      ENTROPY_BIN: '{{default "target/release/entropy" .ENTROPY_BIN}}'
+    cmds:
+      - |
+        set -eu
+        [ -f "$ENTROPY_BIN" ] || {
+          echo "ENTROPY_BIN='$ENTROPY_BIN' is not a file" >&2
+          exit 1
+        }
+        command -v readelf >/dev/null 2>&1 || exit 0
+        machine="$(readelf -h "$ENTROPY_BIN" | sed -n 's/^ *Machine: *//p')"
+        case "$machine" in
+        "Advanced Micro Devices X86-64") actual=amd64 ;;
+        AArch64) actual=arm64 ;;
+        *) actual="$machine" ;;
+        esac
+        if [ "$actual" != "$PKG_ARCH" ]; then
+          echo "packaging as $PKG_ARCH, but $ENTROPY_BIN is $actual ($machine)" >&2
+          echo "pass a matching binary: task linux:pkg PKG_ARCH=$actual ENTROPY_BIN=..." >&2
+          exit 1
+        fi
+
+  linux:nfpm:
+    internal: true
+    deps: [build]
+    env:
+      ENTROPY_BIN: '{{default "target/release/entropy" .ENTROPY_BIN}}'
+    vars:
+      FORMATS: '{{.FORMATS}}'
+    cmds:
+      - task: linux:validate
+      - task: linux:check-arch
+        vars: {ENTROPY_BIN: '{{.ENTROPY_BIN}}'}
+      - mkdir -p "$DIST/linux"
+      - install -D -m 0755 "$ENTROPY_BIN" target/nfpm/entropy
+      # Версия у каждого формата своя: см. scripts/pkg_version.sh. Граница glibc
+      # считается по самому бинарнику, а не по дистрибутиву сборки.
+      - for: {var: FORMATS}
+        cmd: |
+          set -eu
+          # Присваивание отдельно от export: `export V=$(cmd)` возвращает статус
+          # самого export, и падение скрипта прошло бы мимо set -e — в пакет
+          # уехала бы пустая версия или пустая граница glibc.
+          VERSION="$(scripts/pkg_version.sh '{{.ITEM}}' "$VERSION")"
+          GLIBC_VERSION="$(scripts/glibc_baseline.sh target/nfpm/entropy)"
+          export PATH="$PATH:{{.TOOLS}}" VERSION GLIBC_VERSION
+          nfpm package -f packaging/nfpm/nfpm.yaml -p '{{.ITEM}}' -t "$DIST/linux/"
+
+  linux:deb:
+    desc: Build the .deb package with nfpm
+    cmds:
+      - task: linux:nfpm
+        vars: {FORMATS: deb}
+
+  linux:rpm:
+    desc: Build the .rpm package with nfpm
+    cmds:
+      - task: linux:nfpm
+        vars: {FORMATS: rpm}
+
+  linux:arch:
+    desc: Build the archlinux package with nfpm
+    cmds:
+      - task: linux:nfpm
+        vars: {FORMATS: archlinux}
+
+  linux:pkg:
+    desc: Build deb, rpm and archlinux packages
+    cmds:
+      - task: linux:nfpm
+        vars: {FORMATS: deb rpm archlinux}
+
+  linux:appimage:
+    desc: Build a Linux AppImage
+    deps: [build]
+    env:
+      ARCH: '{{.APPIMAGE_ARCH}}'
+    cmds:
+      - task: linux:validate
+      - task: linux:check-arch
+      # Пин в appimagetool_pin.sh — x86_64-сборка самого инструмента, на другой
+      # арке он просто не запустится. Пакеты nfpm при этом собираются нормально,
+      # поэтому падаем только здесь и с объяснением.
+      - |
+        set -eu
+        if [ "$APPIMAGE_ARCH" != x86_64 ]; then
+          echo "AppImage packaging is pinned to the x86_64 appimagetool; $APPIMAGE_ARCH is not supported yet" >&2
+          echo "deb/rpm/arch packages for this host: task linux:pkg" >&2
+          exit 1
+        fi
+      - mkdir -p "$DIST/linux"
+      - scripts/build_linux_appimage.sh "v$VERSION" "$DIST/linux/{{.APP}}-v$VERSION-$APPIMAGE_ARCH.AppImage"
+
+  linux:appimage-skipped:
+    internal: true
+    cmds:
+      - |
+        echo "AppImage skipped: appimagetool is pinned to x86_64 and this host is $APPIMAGE_ARCH" >&2
+        echo "deb/rpm/arch packages were built as usual" >&2
+
+  linux:all:
+    desc: All Linux artifacts (deb/rpm/arch + AppImage on x86_64)
+    cmds:
+      - task: linux:pkg
+      # На arm64 нет пиннутого appimagetool, и «собери всё» не должно означать
+      # «упади в конце»: пакеты там полноценны, а AppImage пропускается вслух.
+      - task: '{{if eq .APPIMAGE_ARCH "x86_64"}}linux:appimage{{else}}linux:appimage-skipped{{end}}'
+
+  linux:test:
+    desc: Verify the built artifacts in dist/linux
+    cmds:
+      - scripts/test_linux_packages.sh "$DIST/linux"
+
+  linux:repro:
+    desc: Build the Linux artifacts twice from the same tree and compare checksums
+    cmds:
+      - scripts/test_linux_repro.sh
+
+  linux:install-test:
+    desc: Clean-install the built packages in minimal distro containers
+    cmds:
+      - scripts/test_linux_install.sh "$DIST/linux"
+
+  # ---- reproducible build via Docker --------------------------------------
+  docker:image:
+    desc: Build the local toolchain image
+    # В CI образ собирается отдельным шагом ради кэша слоёв, и повторная сборка
+    # здесь его бы только продублировала: DOCKER_IMAGE_READY=1 её выключает.
+    status:
+      - test -n "$DOCKER_IMAGE_READY"
+    cmds:
+      - docker build -t "$IMAGE" .
+
+  docker:run:
+    internal: true
+    vars:
+      # Сборка идёт от хозяина каталога, а не от root: иначе всё созданное в
+      # контейнере (dist, target, .task) остаётся root:root, и следующая
+      # локальная задача падает на правах.
+      USER_ARGS:
+        sh: 'id -u >/dev/null 2>&1 && echo "--user $(id -u):$(id -g)" || true'
+      # На SELinux-системах (openSUSE, Fedora) каталог репозитория помечен
+      # user_home_t, и контейнеру в домене container_t чтение запрещено. Метка
+      # снимается только на время запуска: ':z' вместо этого рекурсивно
+      # перемаркировал бы всё дерево, включая target и .git.
+      SELINUX:
+        sh: 'command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" != Disabled ] && echo --security-opt label=disable || true'
+    cmds:
+      # HOME задаётся явно: у переданного UID нет записи в /etc/passwd, и без
+      # него инструменты уходят писать в корень. VERSION и SOURCE_DATE_EPOCH
+      # передаются окружением, а не аргументами: внутри контейнера они не должны
+      # пересчитаться от другого git или другого Cargo.toml.
+      - >
+        docker run --rm {{.SELINUX}} {{.USER_ARGS}} -e HOME=/tmp
+        -e VERSION -e SOURCE_DATE_EPOCH -e DIST
+        -v "$PWD":/work -w /work "$IMAGE"
+        task {{.TASKS}}
+
+  docker:linux:
+    desc: All Linux artifacts from the toolchain container
+    deps: [docker:image]
+    cmds:
+      - task: docker:run
+        vars: {TASKS: linux:all}
+
+  docker:repro:
+    desc: Reproducibility check inside the toolchain container
+    deps: [docker:image]
+    cmds:
+      - task: docker:run
+        vars: {TASKS: linux:repro}

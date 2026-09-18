@@ -850,4 +850,11 @@ KERNEL=="hidraw*", SUBSYSTEM=="hidraw", KERNELS=="0005:E126:*", MODE="0660", GRO
         assert!(installer.contains("# Entropy Vial hidraw access v2"));
         assert!(installer.contains(r#"KERNELS==\"0005:E126:*\""#));
     }
+
+    #[test]
+    fn packaged_udev_rule_is_accepted() {
+        let packaged = include_str!("../../packaging/linux/59-vial.rules");
+
+        assert!(vial_udev_rule_is_current(packaged));
+    }
 }

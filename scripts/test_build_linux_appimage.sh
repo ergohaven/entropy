@@ -149,4 +149,57 @@ fi
 [[ ! -e "$CACHED_CORRUPT/curl-called" ]]
 [[ ! -e "$CACHED_CORRUPT/tool-ran" ]]
 
+# Пути, по которым сборка делает rm -rf, приезжают снаружи: всё, что после
+# канонизации уходит из сборочных каталогов, должно отвергаться до сборки.
+# Собственный TMPDIR у сценариев для того, чтобы «разрешённый временный
+# каталог» и «чужой каталог» различались внутри одного /tmp.
+SANDBOX="$TMP_DIR/paths"
+ALLOWED="$SANDBOX/allowed"
+OUTSIDE="$SANDBOX/outside"
+mkdir -p "$ALLOWED" "$OUTSIDE/appdir"
+: > "$OUTSIDE/keep"
+: > "$OUTSIDE/appdir/keep"
+ln -s "$OUTSIDE" "$ALLOWED/escape"
+
+reject_path() {
+  local label="$1" appdir="$2" out="$3" tool="${4:-$ALLOWED/appimagetool}"
+  local stderr="$SANDBOX/stderr"
+
+  if PATH="$STUB_BIN:$PATH" \
+    TMPDIR="$ALLOWED" \
+    DIST="" \
+    APPDIR="$appdir" \
+    APPIMAGETOOL="$tool" \
+    APPIMAGETOOL_URL="https://example.invalid/appimagetool" \
+    APPIMAGETOOL_SHA256="$TRUSTED_SHA256" \
+    APPIMAGETOOL_FIXTURE="$TRUSTED_TOOL" \
+    APPIMAGETOOL_CURL_MARKER="$SANDBOX/curl-called" \
+    APPIMAGETOOL_RUN_MARKER="$SANDBOX/tool-ran" \
+    "$BUILD" vtest "$out" 2> "$stderr"; then
+    echo "Expected $label to be rejected" >&2
+    exit 1
+  fi
+  if ! grep -q "outside" "$stderr"; then
+    cat "$stderr" >&2
+    echo "Expected a path validation error for $label" >&2
+    exit 1
+  fi
+  if [[ ! -f "$OUTSIDE/keep" || ! -f "$OUTSIDE/appdir/keep" ]]; then
+    echo "$label removed files outside the build directories" >&2
+    exit 1
+  fi
+}
+
+VALID_APPDIR="$ALLOWED/Entropy.AppDir"
+VALID_OUT="$ALLOWED/entropy.AppImage"
+reject_path "an absolute APPDIR outside the build directories" "$OUTSIDE/appdir" "$VALID_OUT"
+reject_path "a parent-traversing APPDIR" "$ALLOWED/../outside/appdir" "$VALID_OUT"
+reject_path "an APPDIR escaping through a symlink" "$ALLOWED/escape/appdir" "$VALID_OUT"
+reject_path "the repository root as APPDIR" "$ROOT" "$VALID_OUT"
+reject_path "the build root itself as APPDIR" "$ROOT/target" "$VALID_OUT"
+reject_path "an output outside the build directories" "$VALID_APPDIR" "$OUTSIDE/entropy.AppImage"
+reject_path "the repository root as output" "$VALID_APPDIR" "$ROOT"
+reject_path "a tool download outside the build directories" "$VALID_APPDIR" "$VALID_OUT" "$OUTSIDE/appimagetool"
+[[ ! -e "$OUTSIDE/appimagetool" ]]
+
 echo "AppImage tool integration tests passed"
