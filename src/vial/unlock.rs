@@ -3,6 +3,7 @@ use super::vial_hid_task::VialHidTaskStart;
 use super::*;
 
 const VIAL_UNLOCK_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+pub(super) const RMK_UNLOCK_HOLD_TIME: std::time::Duration = std::time::Duration::from_secs(3);
 const VIAL_UNLOCK_PROGRESS_ANIMATION_TIME: f32 = 0.16;
 
 impl EntropyApp {
@@ -11,6 +12,8 @@ impl EntropyApp {
         self.unlock_open = false;
         self.vial_unlock_polling = false;
         self.vial_unlock_last_poll = None;
+        self.vial_unlock_is_rmk = None;
+        self.vial_unlock_rmk_hold_started_at = None;
         self.vial_unlock_counter = self.vial_unlock_total;
         self.vial_unlock_best = self.vial_unlock_total;
         self.pending_layout_indicator_open_after_unlock = false;
@@ -26,6 +29,8 @@ impl EntropyApp {
         self.unlock_open = false;
         self.vial_unlock_polling = false;
         self.vial_unlock_last_poll = None;
+        self.vial_unlock_is_rmk = None;
+        self.vial_unlock_rmk_hold_started_at = None;
         self.macro_auto_unlock_cancelled = false;
         if self.pending_layout_indicator_open_after_unlock {
             self.pending_layout_indicator_open_after_unlock = false;
@@ -52,6 +57,8 @@ impl EntropyApp {
         self.vial_unlock_best = total;
         self.vial_unlock_total = total;
         self.vial_unlock_last_poll = Some(std::time::Instant::now());
+        self.vial_unlock_is_rmk = None;
+        self.vial_unlock_rmk_hold_started_at = None;
         self.vial_unlock_animation_nonce = self.vial_unlock_animation_nonce.wrapping_add(1);
     }
 
@@ -61,11 +68,30 @@ impl EntropyApp {
         unlocked: bool,
         in_progress: bool,
         counter: u8,
+        is_rmk: bool,
     ) {
         self.vial_unlock_counter = counter;
+        self.vial_unlock_is_rmk = Some(is_rmk);
         if counter > self.vial_unlock_total {
             self.vial_unlock_total = counter;
         }
+        if is_rmk {
+            if counter == 0 {
+                self.vial_unlock_rmk_hold_started_at
+                    .get_or_insert_with(std::time::Instant::now);
+            } else {
+                self.vial_unlock_rmk_hold_started_at = None;
+                self.vial_unlock_animation_nonce = self.vial_unlock_animation_nonce.wrapping_add(1);
+            }
+
+            if unlocked && !in_progress {
+                self.complete_vial_unlock();
+            } else {
+                self.vial_unlocked = Some(false);
+            }
+            return;
+        }
+
         if unlocked && !in_progress {
             self.complete_vial_unlock();
         } else if in_progress {
@@ -216,7 +242,13 @@ impl EntropyApp {
                     );
 
                     // Progress bar
-                    let target_progress = if total > 0 {
+                    let target_progress = if self.vial_unlock_is_rmk == Some(true) {
+                        self.vial_unlock_rmk_hold_started_at
+                            .map(|started| {
+                                started.elapsed().as_secs_f32() / RMK_UNLOCK_HOLD_TIME.as_secs_f32()
+                            })
+                            .unwrap_or(0.0)
+                    } else if total > 0 {
                         1.0 - (counter as f32 / total as f32)
                     } else {
                         0.0

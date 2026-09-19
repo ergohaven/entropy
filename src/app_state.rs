@@ -5351,6 +5351,11 @@ pub struct EntropyApp {
     pub(crate) vial_unlock_best: u8,
     pub(crate) vial_unlock_total: u8,
     pub(crate) vial_unlock_last_poll: Option<std::time::Instant>,
+    /// `Some(true)` after the first RMK-style unlock counter sample and
+    /// `Some(false)` after the first QMK-style sample.
+    pub(crate) vial_unlock_is_rmk: Option<bool>,
+    /// Start of the current uninterrupted RMK unlock-key hold.
+    pub(crate) vial_unlock_rmk_hold_started_at: Option<std::time::Instant>,
     pub(crate) vial_unlock_animation_nonce: u64,
 }
 

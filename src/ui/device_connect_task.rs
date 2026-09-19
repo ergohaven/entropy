@@ -714,6 +714,8 @@ impl EntropyApp {
             self.key_override_pick_target = None;
             self.vial_unlocked = None;
             self.vial_unlock_keys.clear();
+            self.vial_unlock_is_rmk = None;
+            self.vial_unlock_rmk_hold_started_at = None;
             self.reset_matrix_tester_state();
         }
 

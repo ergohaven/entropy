@@ -272,6 +272,8 @@ impl EntropyApp {
             vial_unlock_best: 50,
             vial_unlock_total: 50,
             vial_unlock_last_poll: None,
+            vial_unlock_is_rmk: None,
+            vial_unlock_rmk_hold_started_at: None,
             vial_unlock_animation_nonce: 0,
             #[cfg(not(target_arch = "wasm32"))]
             connect_state: ConnectState::Idle,
@@ -365,6 +367,8 @@ impl EntropyApp {
         self.unlock_open = false;
         self.vial_unlock_polling = false;
         self.vial_unlock_last_poll = None;
+        self.vial_unlock_is_rmk = None;
+        self.vial_unlock_rmk_hold_started_at = None;
         self.pending_layout_indicator_open_after_unlock = false;
         self.vial_unlock_counter = 0;
         self.vial_unlock_best = 50;

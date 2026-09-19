@@ -124,6 +124,8 @@ impl EntropyApp {
         self.unlock_open = false;
         self.vial_unlock_polling = false;
         self.vial_unlock_last_poll = None;
+        self.vial_unlock_is_rmk = None;
+        self.vial_unlock_rmk_hold_started_at = None;
         self.pending_layout_indicator_open_after_unlock = false;
         self.reset_matrix_tester_state();
         self.next_battery_refresh_at = None;
@@ -229,6 +231,8 @@ impl EntropyApp {
         self.vial_unlock_keys.clear();
         self.vial_unlock_polling = false;
         self.vial_unlock_last_poll = None;
+        self.vial_unlock_is_rmk = None;
+        self.vial_unlock_rmk_hold_started_at = None;
         self.pending_layout_indicator_open_after_unlock = false;
         self.keycode_picker.open = false;
         self.current_device_name.clear();

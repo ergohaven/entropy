@@ -22,7 +22,11 @@ fn battery_refresh_delay(battery: Option<crate::hid::BatteryHalves>) -> std::tim
 #[derive(Clone)]
 pub(super) enum VialHidOperation {
     UnlockStart,
-    UnlockPoll,
+    UnlockPoll {
+        known_rmk: Option<bool>,
+        unlock_key_count: u8,
+        keep_rmk_locked: bool,
+    },
     Lock,
     Matrix {
         rows: usize,
@@ -86,7 +90,7 @@ impl VialHidOperation {
     fn display_diagnostic_label(&self) -> Option<&'static str> {
         match self {
             Self::UnlockStart => Some("unlock-start"),
-            Self::UnlockPoll => Some("unlock-poll"),
+            Self::UnlockPoll { .. } => Some("unlock-poll"),
             Self::Lock => Some("lock"),
             Self::PictogramLoad { .. } => Some("pictogram-load"),
             Self::PictogramUpload { .. } => Some("pictogram-upload"),
@@ -106,6 +110,7 @@ enum VialHidOutcome {
         unlocked: bool,
         in_progress: bool,
         counter: u8,
+        is_rmk: bool,
     },
     Locked,
     Matrix(Vec<bool>),
@@ -170,12 +175,18 @@ fn run_vial_hid_operation_with_progress(
                 keys,
             })
         }
-        VialHidOperation::UnlockPoll => {
-            let (unlocked, in_progress, counter) = hid.unlock_poll()?;
+        VialHidOperation::UnlockPoll {
+            known_rmk,
+            unlock_key_count,
+            keep_rmk_locked,
+        } => {
+            let (unlocked, in_progress, counter, is_rmk) =
+                hid.unlock_poll(known_rmk, unlock_key_count, keep_rmk_locked)?;
             Ok(VialHidOutcome::UnlockPolled {
                 unlocked,
                 in_progress,
                 counter,
+                is_rmk,
             })
         }
         VialHidOperation::Lock => {
@@ -503,7 +514,19 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn start_vial_unlock_poll(&mut self, ctx: &egui::Context) -> VialHidTaskStart {
-        self.start_vial_hid_operation(ctx, VialHidOperation::UnlockPoll)
+        let rmk_hold_complete = self
+            .vial_unlock_rmk_hold_started_at
+            .is_some_and(|started| started.elapsed() >= super::vial_unlock::RMK_UNLOCK_HOLD_TIME);
+        self.start_vial_hid_operation(
+            ctx,
+            VialHidOperation::UnlockPoll {
+                known_rmk: self.vial_unlock_is_rmk,
+                unlock_key_count: u8::try_from(self.vial_unlock_keys.len())
+                    .unwrap_or(u8::MAX)
+                    .max(1),
+                keep_rmk_locked: !rmk_hold_complete,
+            },
+        )
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -632,8 +655,9 @@ impl EntropyApp {
                 unlocked,
                 in_progress,
                 counter,
+                is_rmk,
             }) => {
-                self.finish_vial_unlock_poll(unlocked, in_progress, counter);
+                self.finish_vial_unlock_poll(unlocked, in_progress, counter, is_rmk);
             }
             Ok(VialHidOutcome::Locked) => {
                 self.finish_vial_lock();
@@ -1078,7 +1102,7 @@ impl EntropyApp {
 
         match operation {
             VialHidOperation::UnlockStart => self.fail_vial_unlock_start(error),
-            VialHidOperation::UnlockPoll => self.fail_vial_unlock_poll(error),
+            VialHidOperation::UnlockPoll { .. } => self.fail_vial_unlock_poll(error),
             VialHidOperation::Lock => {
                 self.status_msg = crate::i18n::tr_catalog_format(
                     self.app_settings.language,
@@ -1664,10 +1688,10 @@ mod tests {
         let mut app = EntropyApp::new_inert_for_test();
         app.unlock_open = true;
         app.finish_vial_unlock_start(false, vec![(0, 0)]);
-        app.finish_vial_unlock_poll(true, true, 10);
+        app.finish_vial_unlock_poll(true, true, 10, false);
         assert!(app.unlock_open && app.vial_unlock_polling);
         assert_eq!(app.vial_unlocked, Some(false));
-        app.finish_vial_unlock_poll(true, false, 0);
+        app.finish_vial_unlock_poll(true, false, 0, false);
         assert!(!app.unlock_open && !app.vial_unlock_polling);
         assert_eq!(app.vial_unlocked, Some(true));
     }
@@ -1677,7 +1701,7 @@ mod tests {
         let mut app = EntropyApp::new_inert_for_test();
         app.unlock_open = true;
         app.finish_vial_unlock_start(false, vec![(0, 0)]);
-        app.finish_vial_unlock_poll(false, false, 0);
+        app.finish_vial_unlock_poll(false, false, 0, false);
         assert!(!app.unlock_open && !app.vial_unlock_polling);
         assert_eq!(app.vial_unlocked, Some(false));
         assert!(app.macro_auto_unlock_cancelled);
@@ -1726,13 +1750,145 @@ mod tests {
     #[test]
     fn unlock_poll_and_lock_use_vial_commands() {
         let (hid, recorder) = crate::hid::HidDevice::test_device();
+        let mut qmk_poll = [0u8; 32];
+        qmk_poll[..3].copy_from_slice(&[0, 1, 50]);
+        recorder.respond_with([qmk_poll, [0u8; 32]]);
 
-        let _ = run_vial_hid_operation(&hid, VialHidOperation::UnlockPoll).unwrap();
+        let outcome = run_vial_hid_operation(
+            &hid,
+            VialHidOperation::UnlockPoll {
+                known_rmk: None,
+                unlock_key_count: 2,
+                keep_rmk_locked: true,
+            },
+        )
+        .unwrap();
         let _ = run_vial_hid_operation(&hid, VialHidOperation::Lock).unwrap();
+
+        assert!(matches!(
+            outcome,
+            VialHidOutcome::UnlockPolled {
+                is_rmk: false,
+                counter: 50,
+                ..
+            }
+        ));
 
         let requests = recorder.requests();
         assert_eq!(&requests[0][..2], &[0xFE, 0x07]);
         assert_eq!(&requests[1][..2], &[0xFE, 0x08]);
+    }
+
+    #[test]
+    fn rmk_zero_counter_is_relocked_before_three_second_hold_finishes() {
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        let mut poll = [0u8; 32];
+        poll[..3].copy_from_slice(&[0, 1, 0]);
+        recorder.respond_with([poll, [0u8; 32], [0u8; 32]]);
+
+        let outcome = run_vial_hid_operation(
+            &hid,
+            VialHidOperation::UnlockPoll {
+                known_rmk: None,
+                unlock_key_count: 2,
+                keep_rmk_locked: true,
+            },
+        )
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            VialHidOutcome::UnlockPolled {
+                unlocked: false,
+                in_progress: true,
+                counter: 0,
+                is_rmk: true,
+            }
+        ));
+        let requests = recorder.requests();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(&requests[0][..2], &[0xFE, 0x07]);
+        assert_eq!(&requests[1][..2], &[0xFE, 0x08]);
+        assert_eq!(&requests[2][..2], &[0xFE, 0x06]);
+    }
+
+    #[test]
+    fn rmk_zero_counter_unlocks_after_three_second_hold_finishes() {
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        let mut poll = [0u8; 32];
+        poll[..3].copy_from_slice(&[0, 1, 0]);
+        recorder.respond_with([poll]);
+
+        let outcome = run_vial_hid_operation(
+            &hid,
+            VialHidOperation::UnlockPoll {
+                known_rmk: Some(true),
+                unlock_key_count: 2,
+                keep_rmk_locked: false,
+            },
+        )
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            VialHidOutcome::UnlockPolled {
+                unlocked: true,
+                in_progress: false,
+                counter: 0,
+                is_rmk: true,
+            }
+        ));
+        let requests = recorder.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(&requests[0][..2], &[0xFE, 0x07]);
+    }
+
+    #[test]
+    fn released_rmk_key_relocks_and_restarts_unlock_sequence() {
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        let mut poll = [0u8; 32];
+        poll[..3].copy_from_slice(&[1, 1, 1]);
+        recorder.respond_with([poll, [0u8; 32], [0u8; 32]]);
+
+        let outcome = run_vial_hid_operation(
+            &hid,
+            VialHidOperation::UnlockPoll {
+                known_rmk: Some(true),
+                unlock_key_count: 2,
+                keep_rmk_locked: false,
+            },
+        )
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            VialHidOutcome::UnlockPolled {
+                unlocked: false,
+                in_progress: true,
+                counter: 1,
+                is_rmk: true,
+            }
+        ));
+        let requests = recorder.requests();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(&requests[0][..2], &[0xFE, 0x07]);
+        assert_eq!(&requests[1][..2], &[0xFE, 0x08]);
+        assert_eq!(&requests[2][..2], &[0xFE, 0x06]);
+    }
+
+    #[test]
+    fn rmk_hold_timer_starts_at_zero_and_resets_on_release() {
+        let mut app = EntropyApp::new_inert_for_test();
+        app.unlock_open = true;
+        app.finish_vial_unlock_start(false, vec![(0, 0), (0, 1)]);
+
+        app.finish_vial_unlock_poll(false, true, 0, true);
+        assert!(app.vial_unlock_rmk_hold_started_at.is_some());
+        assert!(app.unlock_open && app.vial_unlock_polling);
+
+        app.finish_vial_unlock_poll(false, true, 1, true);
+        assert!(app.vial_unlock_rmk_hold_started_at.is_none());
+        assert!(app.unlock_open && app.vial_unlock_polling);
     }
 
     #[test]
