@@ -1,0 +1,8 @@
+.git
+target
+dist
+.cache
+.task
+*.AppImage
+*.swp
+.DS_Store
