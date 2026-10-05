@@ -92,6 +92,74 @@ static DISCOVERY: OnceLock<Mutex<DiscoveryState>> = OnceLock::new();
 static FOREGROUND_MONITOR: OnceLock<Mutex<ForegroundStatus>> = OnceLock::new();
 static FOREGROUND_MONITOR_STARTED: OnceLock<()> = OnceLock::new();
 
+#[cfg(target_os = "macos")]
+#[derive(Clone, Debug)]
+pub(crate) struct MacosTextExpanderForeground {
+    pub(crate) pid: u32,
+    pub(crate) generation: u64,
+    pub(crate) process_name: String,
+    pub(crate) picker_name: Option<String>,
+}
+
+#[cfg(target_os = "macos")]
+static TEXT_EXPANDER_FOREGROUND: Mutex<MacosForegroundCache> = Mutex::new(MacosForegroundCache {
+    generation: 0,
+    foreground: None,
+    session_active: true,
+});
+
+#[cfg(target_os = "macos")]
+struct MacosForegroundCache {
+    generation: u64,
+    foreground: Option<MacosTextExpanderForeground>,
+    session_active: bool,
+}
+
+#[cfg(target_os = "macos")]
+impl MacosForegroundCache {
+    fn replace(&mut self, foreground: Option<MacosTextExpanderForeground>) {
+        self.generation = self.generation.wrapping_add(1);
+        self.foreground = foreground.filter(|_| self.session_active).map(|mut app| {
+            app.generation = self.generation;
+            app
+        });
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn start_macos_foreground_monitor() {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    // App initialization calls this on the main thread, before starting the tap.
+    // NSWorkspace notifications are delivered by AppKit's main run loop.
+    STARTED.get_or_init(|| {
+        if !macos_register_foreground_observer() {
+            log::warn!("Cannot register native Text Expander foreground observer");
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn macos_text_expander_foreground() -> Option<MacosTextExpanderForeground> {
+    // Called by the event tap: never start a worker, query the OS, or wait for
+    // a writer here. The snapshot stays valid until a native focus/session event,
+    // so background timer throttling cannot expire an otherwise active app.
+    let guard = TEXT_EXPANDER_FOREGROUND.try_lock().ok()?;
+    guard.foreground.clone()
+}
+
+#[cfg(all(test, target_os = "macos"))]
+pub(crate) fn set_macos_text_expander_foreground_for_test(
+    foreground: Option<MacosTextExpanderForeground>,
+) {
+    TEXT_EXPANDER_FOREGROUND.lock().unwrap().replace(foreground);
+}
+
+#[cfg(all(test, target_os = "macos"))]
+pub(crate) fn with_macos_foreground_lock_for_test(action: impl FnOnce()) {
+    let _guard = TEXT_EXPANDER_FOREGROUND.lock().unwrap();
+    action();
+}
+
 fn foreground_monitor_snapshot() -> ForegroundStatus {
     let state = FOREGROUND_MONITOR.get_or_init(|| Mutex::new(ForegroundStatus::default()));
     FOREGROUND_MONITOR_STARTED.get_or_init(|| {
@@ -2279,6 +2347,313 @@ fn macos_foreground_status() -> ForegroundStatus {
 }
 
 #[cfg(target_os = "macos")]
+#[link(name = "AppKit", kind = "framework")]
+extern "C" {
+    static NSWorkspaceApplicationKey: *mut objc::runtime::Object;
+    static NSWorkspaceDidActivateApplicationNotification: *mut objc::runtime::Object;
+    static NSWorkspaceDidDeactivateApplicationNotification: *mut objc::runtime::Object;
+    static NSWorkspaceDidTerminateApplicationNotification: *mut objc::runtime::Object;
+    static NSWorkspaceSessionDidResignActiveNotification: *mut objc::runtime::Object;
+    static NSWorkspaceSessionDidBecomeActiveNotification: *mut objc::runtime::Object;
+}
+
+#[cfg(target_os = "macos")]
+fn macos_publish_foreground(application: *mut objc::runtime::Object) {
+    use objc::{msg_send, sel, sel_impl};
+
+    // Clear first: a key arriving during native identity lookup fails closed.
+    if let Ok(mut cache) = TEXT_EXPANDER_FOREGROUND.lock() {
+        cache.replace(None);
+    }
+    let foreground = unsafe {
+        if application.is_null() {
+            None
+        } else {
+            let terminated: objc::runtime::BOOL = msg_send![application, isTerminated];
+            if terminated != objc::runtime::NO {
+                None
+            } else {
+                let pid: i32 = msg_send![application, processIdentifier];
+                let name: *mut objc::runtime::Object = msg_send![application, localizedName];
+                macos_text_expander_identity(pid, macos_process_name(pid), macos_ns_string(name))
+            }
+        }
+    };
+    let recent = if let Ok(mut cache) = TEXT_EXPANDER_FOREGROUND.lock() {
+        cache.replace(foreground);
+        cache
+            .foreground
+            .as_ref()
+            .filter(|app| app.pid != std::process::id())
+            .map(|app| {
+                crate::smart_input::TextExpanderAppCandidate {
+                    exe: app.process_name.clone(),
+                    // The macOS blacklist doesn't use window titles.
+                    title: String::new(),
+                }
+            })
+    } else {
+        None
+    };
+    if let Some(recent) = recent {
+        crate::smart_input::remember_foreground_app(recent);
+    }
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn macos_notification_application(
+    notification: *mut objc::runtime::Object,
+) -> *mut objc::runtime::Object {
+    use objc::{msg_send, sel, sel_impl};
+    if notification.is_null() {
+        return std::ptr::null_mut();
+    }
+    let info: *mut objc::runtime::Object = msg_send![notification, userInfo];
+    if info.is_null() {
+        return std::ptr::null_mut();
+    }
+    msg_send![info, objectForKey: NSWorkspaceApplicationKey]
+}
+
+#[cfg(target_os = "macos")]
+extern "C" fn macos_app_activated(
+    _observer: &objc::runtime::Object,
+    _selector: objc::runtime::Sel,
+    notification: *mut objc::runtime::Object,
+) {
+    macos_publish_foreground(unsafe { macos_notification_application(notification) });
+}
+
+#[cfg(target_os = "macos")]
+extern "C" fn macos_app_deactivated(
+    _observer: &objc::runtime::Object,
+    _selector: objc::runtime::Sel,
+    notification: *mut objc::runtime::Object,
+) {
+    use objc::{msg_send, sel, sel_impl};
+    let application = unsafe { macos_notification_application(notification) };
+    let pid: i32 = if application.is_null() {
+        0
+    } else {
+        unsafe { msg_send![application, processIdentifier] }
+    };
+    if let Ok(mut cache) = TEXT_EXPANDER_FOREGROUND.lock() {
+        // A late deactivation/termination of a different app must not clear
+        // the app that has already become active.
+        if pid <= 0
+            || cache
+                .foreground
+                .as_ref()
+                .is_some_and(|app| app.pid == pid as u32)
+        {
+            cache.replace(None);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+extern "C" fn macos_session_changed(
+    _observer: &objc::runtime::Object,
+    _selector: objc::runtime::Sel,
+    notification: *mut objc::runtime::Object,
+) {
+    use objc::{msg_send, sel, sel_impl};
+    let active = unsafe {
+        let name: *mut objc::runtime::Object = msg_send![notification, name];
+        let active: objc::runtime::BOOL =
+            msg_send![name, isEqual: NSWorkspaceSessionDidBecomeActiveNotification];
+        active != objc::runtime::NO
+    };
+    if let Ok(mut cache) = TEXT_EXPANDER_FOREGROUND.lock() {
+        cache.session_active = active;
+        cache.replace(None);
+    }
+    if active {
+        unsafe {
+            if let Some(class) = objc::runtime::Class::get("NSWorkspace") {
+                let workspace: *mut objc::runtime::Object = msg_send![class, sharedWorkspace];
+                let application: *mut objc::runtime::Object =
+                    msg_send![workspace, frontmostApplication];
+                macos_publish_foreground(application);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_register_foreground_observer() -> bool {
+    use objc::runtime::{Class, Object, Sel};
+    use objc::{declare::ClassDecl, msg_send, sel, sel_impl};
+
+    unsafe {
+        let Some(workspace_class) = Class::get("NSWorkspace") else {
+            return false;
+        };
+        let Some(base_class) = Class::get("NSObject") else {
+            return false;
+        };
+        let workspace: *mut Object = msg_send![workspace_class, sharedWorkspace];
+        let center: *mut Object = msg_send![workspace, notificationCenter];
+        if center.is_null() {
+            return false;
+        }
+        let Some(mut declaration) =
+            ClassDecl::new("EntropyTextExpanderForegroundObserver", base_class)
+        else {
+            return false;
+        };
+        declaration.add_method(
+            sel!(appActivated:),
+            macos_app_activated as extern "C" fn(&Object, Sel, *mut Object),
+        );
+        declaration.add_method(
+            sel!(appDeactivated:),
+            macos_app_deactivated as extern "C" fn(&Object, Sel, *mut Object),
+        );
+        declaration.add_method(
+            sel!(sessionChanged:),
+            macos_session_changed as extern "C" fn(&Object, Sel, *mut Object),
+        );
+        let observer: *mut Object = msg_send![declaration.register(), new];
+        if observer.is_null() {
+            return false;
+        }
+        // Intentional process-lifetime +1 ownership. The monitor starts once,
+        // and selector observers must remain alive while registered.
+        for (name, selector) in [
+            (
+                NSWorkspaceDidActivateApplicationNotification,
+                sel!(appActivated:),
+            ),
+            (
+                NSWorkspaceDidDeactivateApplicationNotification,
+                sel!(appDeactivated:),
+            ),
+            (
+                NSWorkspaceDidTerminateApplicationNotification,
+                sel!(appDeactivated:),
+            ),
+            (
+                NSWorkspaceSessionDidResignActiveNotification,
+                sel!(sessionChanged:),
+            ),
+            (
+                NSWorkspaceSessionDidBecomeActiveNotification,
+                sel!(sessionChanged:),
+            ),
+        ] {
+            let _: () = msg_send![center, addObserver: observer selector: selector name: name object: std::ptr::null_mut::<Object>()];
+        }
+        // Register before seeding; all production writers run on the main
+        // thread. The layout monitor never overwrites this event-driven cache.
+        let application: *mut Object = msg_send![workspace, frontmostApplication];
+        macos_publish_foreground(application);
+        true
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+pub(crate) fn exercise_macos_foreground_notifications_for_test() {
+    use objc::runtime::{Class, Object, Sel};
+    use objc::{declare::ClassDecl, msg_send, sel, sel_impl};
+
+    extern "C" fn pid(_app: &Object, _selector: Sel) -> i32 {
+        std::process::id() as i32
+    }
+    extern "C" fn terminated(_app: &Object, _selector: Sel) -> objc::runtime::BOOL {
+        objc::runtime::NO
+    }
+    extern "C" fn name(_app: &Object, _selector: Sel) -> *mut Object {
+        unsafe {
+            msg_send![Class::get("NSString").unwrap(), stringWithUTF8String: c"Notification Fixture".as_ptr()]
+        }
+    }
+
+    // Called only in the isolated callback-test child. Exercise the actual
+    // notification-center registration and selector dispatch without changing
+    // desktop focus or posting keyboard events.
+    unsafe {
+        let pool: *mut Object = msg_send![Class::get("NSAutoreleasePool").unwrap(), new];
+        start_macos_foreground_monitor();
+        let workspace: *mut Object = msg_send![Class::get("NSWorkspace").unwrap(), sharedWorkspace];
+        let center: *mut Object = msg_send![workspace, notificationCenter];
+        // Unbundled test hosts have no valid NSRunningApplication identity.
+        // Supply native selectors with the test PID; libproc still runs for real.
+        let mut fixture = ClassDecl::new(
+            "EntropyForegroundNotificationFixture",
+            Class::get("NSObject").unwrap(),
+        )
+        .unwrap();
+        fixture.add_method(
+            sel!(processIdentifier),
+            pid as extern "C" fn(&Object, Sel) -> i32,
+        );
+        fixture.add_method(
+            sel!(isTerminated),
+            terminated as extern "C" fn(&Object, Sel) -> objc::runtime::BOOL,
+        );
+        fixture.add_method(
+            sel!(localizedName),
+            name as extern "C" fn(&Object, Sel) -> *mut Object,
+        );
+        let app: *mut Object = msg_send![fixture.register(), new];
+        TEXT_EXPANDER_FOREGROUND.lock().unwrap().replace(None);
+        let info: *mut Object = msg_send![Class::get("NSDictionary").unwrap(), dictionaryWithObject: app forKey: NSWorkspaceApplicationKey];
+        let post = |name: *mut Object| {
+            let _: () =
+                msg_send![center, postNotificationName: name object: workspace userInfo: info];
+        };
+        post(NSWorkspaceDidActivateApplicationNotification);
+        let activated =
+            macos_text_expander_foreground().expect("registered observer must publish activation");
+        assert_eq!(activated.pid, std::process::id());
+        assert_eq!(
+            activated.picker_name.as_deref(),
+            Some("notification fixture")
+        );
+        assert_eq!(
+            activated.process_name,
+            macos_process_name(activated.pid as i32)
+                .unwrap()
+                .to_ascii_lowercase()
+        );
+        let mut different_app = activated.clone();
+        different_app.pid = activated.pid + 1;
+        set_macos_text_expander_foreground_for_test(Some(different_app));
+        post(NSWorkspaceDidDeactivateApplicationNotification);
+        assert_eq!(
+            macos_text_expander_foreground().unwrap().pid,
+            activated.pid + 1,
+            "late deactivation of another app must not clear the active app"
+        );
+        post(NSWorkspaceDidActivateApplicationNotification);
+        post(NSWorkspaceDidDeactivateApplicationNotification);
+        assert!(macos_text_expander_foreground().is_none());
+        post(NSWorkspaceDidActivateApplicationNotification);
+        assert_ne!(
+            macos_text_expander_foreground().unwrap().generation,
+            activated.generation
+        );
+        post(NSWorkspaceDidTerminateApplicationNotification);
+        assert!(macos_text_expander_foreground().is_none());
+        post(NSWorkspaceSessionDidResignActiveNotification);
+        post(NSWorkspaceDidActivateApplicationNotification);
+        assert!(
+            macos_text_expander_foreground().is_none(),
+            "inactive session must remain suppressed"
+        );
+        post(NSWorkspaceSessionDidBecomeActiveNotification);
+        post(NSWorkspaceDidActivateApplicationNotification);
+        assert_eq!(
+            macos_text_expander_foreground().unwrap().pid,
+            std::process::id()
+        );
+        let _: () = msg_send![app, release];
+        let _: () = msg_send![pool, drain];
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn platform_available_apps() -> ApplicationScan {
     use objc::{msg_send, sel, sel_impl};
 
@@ -2328,28 +2703,35 @@ fn platform_available_apps() -> ApplicationScan {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn macos_application_name_for_pid(pid: u32) -> Option<String> {
-    use objc::{msg_send, sel, sel_impl};
-
-    let pid = i32::try_from(pid).ok().filter(|pid| *pid > 0)?;
-    unsafe {
-        let pool_class = objc::runtime::Class::get("NSAutoreleasePool")?;
-        let pool: *mut objc::runtime::Object = msg_send![pool_class, new];
-        let result = (|| {
-            let application_class = objc::runtime::Class::get("NSRunningApplication")?;
-            let application: *mut objc::runtime::Object =
-                msg_send![application_class, runningApplicationWithProcessIdentifier: pid];
-            if application.is_null() {
-                return None;
-            }
-            let name: *mut objc::runtime::Object = msg_send![application, localizedName];
-            macos_ns_string(name)
-        })();
-        if !pool.is_null() {
-            let _: () = msg_send![pool, drain];
-        }
-        result
+fn macos_process_name(pid: i32) -> Option<String> {
+    #[link(name = "proc")]
+    extern "C" {
+        fn proc_name(pid: i32, buffer: *mut std::ffi::c_void, size: u32) -> i32;
     }
+    let mut buffer = [0u8; 1024];
+    let length = unsafe { proc_name(pid, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
+    let length = usize::try_from(length).ok().filter(|length| *length > 0)?;
+    Some(String::from_utf8_lossy(&buffer[..length.min(buffer.len())]).into_owned())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_text_expander_identity(
+    pid: i32,
+    process_name: Option<String>,
+    picker_name: Option<String>,
+) -> Option<MacosTextExpanderForeground> {
+    let normalize = |name: String| {
+        let name = name.trim_matches(char::from(0)).trim().to_ascii_lowercase();
+        (!name.is_empty()).then_some(name)
+    };
+    let pid = u32::try_from(pid).ok().filter(|pid| *pid > 0)?;
+    let process_name = process_name.and_then(normalize)?;
+    Some(MacosTextExpanderForeground {
+        pid,
+        generation: 0,
+        process_name,
+        picker_name: picker_name.and_then(normalize),
+    })
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
@@ -2368,6 +2750,36 @@ fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
 #[cfg(all(test, target_os = "macos"))]
 mod macos_tests {
     use super::*;
+
+    #[test]
+    fn text_expander_identity_preserves_process_and_picker_names() {
+        let app = macos_text_expander_identity(
+            42,
+            Some(" Editor \0".to_owned()),
+            Some(" Localized Editor ".to_owned()),
+        )
+        .unwrap();
+        assert_eq!(app.pid, 42);
+        assert_eq!(app.process_name, "editor");
+        assert_eq!(app.picker_name.as_deref(), Some("localized editor"));
+        assert!(macos_text_expander_identity(0, Some("editor".to_owned()), None).is_none());
+        assert!(macos_text_expander_identity(-1, Some("editor".to_owned()), None).is_none());
+        assert!(macos_text_expander_identity(42, None, Some("editor".to_owned())).is_none());
+        assert!(macos_text_expander_identity(42, Some(" \0".to_owned()), None).is_none());
+        assert!(
+            macos_text_expander_identity(42, Some("editor".to_owned()), None)
+                .unwrap()
+                .picker_name
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn native_process_name_is_available_for_current_pid() {
+        assert!(!macos_process_name(std::process::id() as i32)
+            .unwrap()
+            .is_empty());
+    }
 
     #[test]
     fn text_expander_includes_accessory_apps_without_changing_layout_picker() {
