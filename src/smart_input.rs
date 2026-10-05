@@ -25,7 +25,7 @@ pub(crate) fn native_open_window_app_candidates() -> Vec<TextExpanderAppCandidat
 }
 
 #[cfg(target_os = "macos")]
-type ForegroundCacheState = Option<(std::time::Instant, Option<TextExpanderAppCandidate>)>;
+type ForegroundCacheState = Option<(std::time::Instant, Option<macos::ForegroundApp>)>;
 
 static TEXT_EXPANDER_CONFIG: OnceLock<RwLock<TextExpansionConfig>> = OnceLock::new();
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
@@ -393,6 +393,12 @@ mod macos {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
+    #[derive(Clone)]
+    pub(super) struct ForegroundApp {
+        pub(super) candidate: TextExpanderAppCandidate,
+        pub(super) picker_name: Option<String>,
+    }
+
     type CGEventTapProxy = *mut c_void;
     type CGEventRef = *mut c_void;
     type CFMachPortRef = *mut c_void;
@@ -632,32 +638,61 @@ mod macos {
         if app_blacklist.is_empty() {
             return false;
         }
-        foreground_app_candidate()
+        foreground_app_context()
             .map(|app| {
                 app_blacklist.iter().any(|blocked| {
-                    app.exe == *blocked
-                        || app
-                            .exe
-                            .strip_suffix(".app")
-                            .is_some_and(|stem| stem == blocked)
-                        || blocked
-                            .strip_suffix(".app")
-                            .is_some_and(|stem| stem == app.exe)
+                    app_name_matches_blacklist(
+                        &app.candidate.exe,
+                        app.picker_name.as_deref(),
+                        blocked,
+                    )
                 })
             })
             .unwrap_or(false)
     }
 
+    pub(super) fn app_name_matches_blacklist(
+        process_name: &str,
+        picker_name: Option<&str>,
+        blocked: &str,
+    ) -> bool {
+        [Some(process_name), picker_name]
+            .into_iter()
+            .flatten()
+            .any(|name| {
+                name == blocked
+                    || name
+                        .strip_suffix(".app")
+                        .is_some_and(|stem| stem == blocked)
+                    || blocked
+                        .strip_suffix(".app")
+                        .is_some_and(|stem| stem == name)
+            })
+    }
+
     pub(super) fn platform_open_window_candidates() -> Vec<TextExpanderAppCandidate> {
-        let script = r#"tell application "System Events" to get name of every application process whose background only is false"#;
-        let Some(output) = run_osascript(script) else {
-            return Vec::new();
-        };
+        // Settings call this on repaint; native enumeration already runs in the
+        // discovery worker, so only consume its last completed snapshot here.
+        let snapshot = crate::app_discovery::application_discovery_snapshot();
         let current = current_process_name_lower();
+        app_candidates_from_names(
+            snapshot.text_expander_names.iter().map(String::as_str),
+            current.as_deref(),
+        )
+    }
+
+    pub(super) fn app_candidates_from_names<'a>(
+        names: impl IntoIterator<Item = &'a str>,
+        current: Option<&str>,
+    ) -> Vec<TextExpanderAppCandidate> {
         let mut apps = Vec::new();
-        for raw_name in output.split(',') {
+        for raw_name in names {
+            // The matcher also accepts these native names for the same PID,
+            // while keeping existing process-name blacklist entries valid.
             let exe = raw_name.trim().to_ascii_lowercase();
-            if exe.is_empty() || current.as_deref() == Some(exe.as_str()) {
+            // The persisted blacklist uses these delimiters and cannot store
+            // such a name as one entry; do not offer a broken selection.
+            if exe.is_empty() || exe.contains([',', ';', '\n']) || current == Some(exe.as_str()) {
                 continue;
             }
             if !apps
@@ -787,6 +822,10 @@ mod macos {
     }
 
     fn foreground_app_candidate() -> Option<TextExpanderAppCandidate> {
+        foreground_app_context().map(|app| app.candidate)
+    }
+
+    fn foreground_app_context() -> Option<ForegroundApp> {
         let cache = FOREGROUND_CACHE.get_or_init(|| Mutex::new(None));
         if let Ok(guard) = cache.lock() {
             if let Some((checked_at, candidate)) = &*guard {
@@ -798,7 +837,7 @@ mod macos {
 
         let candidate = query_foreground_app_candidate();
         if let Some(candidate) = &candidate {
-            remember_foreground_app(candidate.clone());
+            remember_foreground_app(candidate.candidate.clone());
         }
         if let Ok(mut guard) = cache.lock() {
             *guard = Some((Instant::now(), candidate.clone()));
@@ -806,7 +845,7 @@ mod macos {
         candidate
     }
 
-    fn query_foreground_app_candidate() -> Option<TextExpanderAppCandidate> {
+    fn query_foreground_app_candidate() -> Option<ForegroundApp> {
         let script = r#"tell application "System Events"
 set frontApp to first application process whose frontmost is true
 set appName to name of frontApp
@@ -814,16 +853,33 @@ set appTitle to ""
 try
     set appTitle to name of front window of frontApp
 end try
-return appName & linefeed & appTitle
+return appName & linefeed & (unix id of frontApp as text) & linefeed & appTitle
 end tell"#;
         let output = run_osascript(script)?;
+        parse_foreground_app(
+            &output,
+            crate::app_discovery::macos_application_name_for_pid,
+        )
+    }
+
+    pub(super) fn parse_foreground_app(
+        output: &str,
+        name_for_pid: impl FnOnce(u32) -> Option<String>,
+    ) -> Option<ForegroundApp> {
         let mut lines = output.lines();
         let exe = lines.next()?.trim().to_ascii_lowercase();
         if exe.is_empty() {
             return None;
         }
+        let pid = lines.next()?.trim().parse().ok()?;
         let title = lines.next().unwrap_or_default().trim().to_owned();
-        Some(TextExpanderAppCandidate { exe, title })
+        let picker_name = name_for_pid(pid)
+            .map(|name| name.trim().to_ascii_lowercase())
+            .filter(|name| !name.is_empty());
+        Some(ForegroundApp {
+            candidate: TextExpanderAppCandidate { exe, title },
+            picker_name,
+        })
     }
 
     fn run_osascript(script: &str) -> Option<String> {
@@ -979,5 +1035,157 @@ mod tests {
     #[test]
     fn macos_active_event_tap_counts_as_input_monitoring_granted() {
         assert!(macos_effective_input_monitoring_granted(false, true));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_blacklist_accepts_picker_and_legacy_names_for_the_same_app() {
+        assert!(macos::app_name_matches_blacklist(
+            "editor",
+            Some("localized editor"),
+            "editor"
+        ));
+        assert!(macos::app_name_matches_blacklist(
+            "editor",
+            Some("localized editor"),
+            "localized editor.app"
+        ));
+        assert!(!macos::app_name_matches_blacklist(
+            "editor",
+            Some("localized editor"),
+            "other editor"
+        ));
+        assert!(macos::app_name_matches_blacklist(
+            "editor.app",
+            None,
+            "editor"
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_foreground_alias_uses_reported_pid_and_preserves_legacy_context() {
+        let app = macos::parse_foreground_app(" Editor \n42\nDocument", |pid| {
+            assert_eq!(pid, 42);
+            Some(" Localized Editor ".to_owned())
+        })
+        .unwrap();
+        assert_eq!(app.candidate.exe, "editor");
+        assert_eq!(app.candidate.title, "Document");
+        assert_eq!(app.picker_name.as_deref(), Some("localized editor"));
+        assert!(macos::app_name_matches_blacklist(
+            &app.candidate.exe,
+            app.picker_name.as_deref(),
+            "localized editor"
+        ));
+
+        let app = macos::parse_foreground_app("Editor\n42\n", |_| None).unwrap();
+        assert_eq!(app.candidate.exe, "editor");
+        assert!(app.picker_name.is_none());
+        assert!(macos::app_name_matches_blacklist(
+            &app.candidate.exe,
+            None,
+            "editor"
+        ));
+        assert!(
+            macos::parse_foreground_app("Editor\nnot a pid\nDocument", |_| panic!(
+                "must not resolve invalid PID"
+            ))
+            .is_none()
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_app_picker_normalizes_names_and_skips_blacklist_separators() {
+        let apps = macos::app_candidates_from_names(
+            [
+                " Safari ",
+                "",
+                "safari",
+                "Entropy",
+                "Preview",
+                "Editor, Inc.",
+                "Editor; Inc.",
+                "Editor\nInc.",
+            ],
+            Some("entropy"),
+        );
+        assert_eq!(
+            apps,
+            ["preview", "safari"].map(|name| TextExpanderAppCandidate {
+                exe: name.to_owned(),
+                title: String::new(),
+            })
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_app_picker_accepts_an_empty_initial_snapshot() {
+        assert!(macos::app_candidates_from_names([], Some("entropy")).is_empty());
+        assert_eq!(
+            macos::app_candidates_from_names(["Safari"], None)[0].exe,
+            "safari"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_app_picker_does_not_invoke_system_events() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const MARKER_ENV: &str = "ENTROPY_TEST_MACOS_PICKER_MARKER";
+        const COMPLETION: &str = "ENTROPY_MACOS_PICKER_PROBE_COMPLETE";
+        if let Some(marker) = std::env::var_os(MARKER_ENV) {
+            let started = std::time::Instant::now();
+            let _ = platform_open_window_candidates();
+            println!("macOS app-picker lookup: {:?}", started.elapsed());
+            // Exercise completed native scans too, not just the cold snapshot.
+            // The display server may have no applications on a CI runner.
+            let deadline = started + std::time::Duration::from_millis(500);
+            while std::time::Instant::now() < deadline {
+                let _ = platform_open_window_candidates();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert!(
+                !std::path::Path::new(&marker).exists(),
+                "the picker must use cached native discovery, not synchronous System Events"
+            );
+            println!("{COMPLETION}");
+            return;
+        }
+
+        // Isolate PATH in a child harness so other tests keep their real tools.
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("osascript");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\n/usr/bin/touch \"$ENTROPY_TEST_MACOS_PICKER_MARKER\"\n/bin/sleep 2\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "smart_input::tests::macos_app_picker_does_not_invoke_system_events",
+                "--nocapture",
+            ])
+            .env("PATH", directory.path())
+            .env(MARKER_ENV, directory.path().join("invoked"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.lines().any(|line| line == COMPLETION),
+            "the child must execute the picker regression check: {stdout}"
+        );
+        print!("{stdout}");
     }
 }

@@ -66,11 +66,22 @@ pub(crate) struct ApplicationDiscoverySnapshot {
     pub(crate) foreground: Option<DetectedApplication>,
     pub(crate) foreground_status: ForegroundStatus,
     pub(crate) available: Vec<DetectedApplication>,
+    #[cfg(target_os = "macos")]
+    pub(crate) text_expander_names: Vec<String>,
+}
+
+#[derive(Default)]
+struct ApplicationScan {
+    available: Vec<DetectedApplication>,
+    #[cfg(target_os = "macos")]
+    text_expander_names: Vec<String>,
 }
 
 struct DiscoveryState {
-    receiver: Option<mpsc::Receiver<Vec<DetectedApplication>>>,
+    receiver: Option<mpsc::Receiver<ApplicationScan>>,
     available: Vec<DetectedApplication>,
+    #[cfg(target_os = "macos")]
+    text_expander_names: Vec<String>,
     next_scan: Instant,
     force_refresh: bool,
 }
@@ -199,6 +210,8 @@ pub(crate) fn application_discovery_snapshot() -> ApplicationDiscoverySnapshot {
         Mutex::new(DiscoveryState {
             receiver: None,
             available: Vec::new(),
+            #[cfg(target_os = "macos")]
+            text_expander_names: Vec::new(),
             next_scan: Instant::now(),
             force_refresh: false,
         })
@@ -208,9 +221,13 @@ pub(crate) fn application_discovery_snapshot() -> ApplicationDiscoverySnapshot {
     };
     if let Some(receiver) = state.receiver.take() {
         match receiver.try_recv() {
-            Ok(mut available) => {
-                available.retain(platform_application_is_user_facing);
-                state.available = available;
+            Ok(mut scan) => {
+                scan.available.retain(platform_application_is_user_facing);
+                state.available = scan.available;
+                #[cfg(target_os = "macos")]
+                {
+                    state.text_expander_names = scan.text_expander_names;
+                }
                 state.next_scan = Instant::now() + APPLICATION_RESCAN_INTERVAL;
             }
             Err(mpsc::TryRecvError::Empty) => state.receiver = Some(receiver),
@@ -225,7 +242,13 @@ pub(crate) fn application_discovery_snapshot() -> ApplicationDiscoverySnapshot {
         if std::thread::Builder::new()
             .name("application-discovery".to_owned())
             .spawn(move || {
-                let _ = sender.send(platform_available_apps());
+                #[cfg(target_os = "macos")]
+                let scan = platform_available_apps();
+                #[cfg(not(target_os = "macos"))]
+                let scan = ApplicationScan {
+                    available: platform_available_apps(),
+                };
+                let _ = sender.send(scan);
             })
             .is_ok()
         {
@@ -247,6 +270,8 @@ pub(crate) fn application_discovery_snapshot() -> ApplicationDiscoverySnapshot {
         foreground: status.focused().cloned(),
         foreground_status: status,
         available: state.available.clone(),
+        #[cfg(target_os = "macos")]
+        text_expander_names: state.text_expander_names.clone(),
     }
 }
 
@@ -2162,8 +2187,14 @@ fn macos_ns_string(value: *mut objc::runtime::Object) -> Option<String> {
 }
 
 #[cfg(target_os = "macos")]
+fn macos_app_is_pickable(activation_policy: isize, include_accessory: bool) -> bool {
+    activation_policy == 0 || (include_accessory && activation_policy == 1)
+}
+
+#[cfg(target_os = "macos")]
 fn macos_detected_application(
     application: *mut objc::runtime::Object,
+    include_accessory: bool,
 ) -> Option<DetectedApplication> {
     use objc::{msg_send, sel, sel_impl};
 
@@ -2171,11 +2202,10 @@ fn macos_detected_application(
         if application.is_null() {
             return None;
         }
-        // NSApplicationActivationPolicyRegular (0) identifies normal GUI
-        // applications. Accessory agents and prohibited/background processes
-        // must not appear in the application-layout picker.
+        // Layouts only use regular GUI apps. Text expansion also offers
+        // accessory/menu-bar apps, but never prohibited/background processes.
         let activation_policy: isize = msg_send![application, activationPolicy];
-        if activation_policy != 0 {
+        if !macos_app_is_pickable(activation_policy, include_accessory) {
             return None;
         }
         let name: *mut objc::runtime::Object = msg_send![application, localizedName];
@@ -2239,7 +2269,7 @@ fn macos_foreground_status() -> ForegroundStatus {
             if application.is_null() {
                 return None;
             }
-            macos_detected_application(application)
+            macos_detected_application(application, false)
         })();
         if !pool.is_null() {
             let _: () = msg_send![pool, drain];
@@ -2249,12 +2279,12 @@ fn macos_foreground_status() -> ForegroundStatus {
 }
 
 #[cfg(target_os = "macos")]
-fn platform_available_apps() -> Vec<DetectedApplication> {
+fn platform_available_apps() -> ApplicationScan {
     use objc::{msg_send, sel, sel_impl};
 
     unsafe {
         let Some(pool_class) = objc::runtime::Class::get("NSAutoreleasePool") else {
-            return Vec::new();
+            return ApplicationScan::default();
         };
         let pool: *mut objc::runtime::Object = msg_send![pool_class, new];
         let applications = (|| {
@@ -2268,12 +2298,23 @@ fn platform_available_apps() -> Vec<DetectedApplication> {
                 return None;
             }
             let count: usize = msg_send![running, count];
-            let mut applications = Vec::with_capacity(count);
+            let mut applications = ApplicationScan::default();
             for index in 0..count {
                 let application: *mut objc::runtime::Object =
                     msg_send![running, objectAtIndex: index];
-                if let Some(application) = macos_detected_application(application) {
-                    applications.push(application);
+                let policy: isize = msg_send![application, activationPolicy];
+                let pid: i32 = msg_send![application, processIdentifier];
+                if let Some(detected) = macos_detected_application(application, true) {
+                    // Menu-bar apps remain pickable for text expansion, without
+                    // adding them to the application-layout catalog.
+                    if pid as u32 != std::process::id() {
+                        applications
+                            .text_expander_names
+                            .push(detected.display_name.clone());
+                    }
+                    if macos_app_is_pickable(policy, false) {
+                        applications.available.push(detected);
+                    }
                 }
             }
             Some(applications)
@@ -2283,6 +2324,31 @@ fn platform_available_apps() -> Vec<DetectedApplication> {
             let _: () = msg_send![pool, drain];
         }
         applications
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn macos_application_name_for_pid(pid: u32) -> Option<String> {
+    use objc::{msg_send, sel, sel_impl};
+
+    let pid = i32::try_from(pid).ok().filter(|pid| *pid > 0)?;
+    unsafe {
+        let pool_class = objc::runtime::Class::get("NSAutoreleasePool")?;
+        let pool: *mut objc::runtime::Object = msg_send![pool_class, new];
+        let result = (|| {
+            let application_class = objc::runtime::Class::get("NSRunningApplication")?;
+            let application: *mut objc::runtime::Object =
+                msg_send![application_class, runningApplicationWithProcessIdentifier: pid];
+            if application.is_null() {
+                return None;
+            }
+            let name: *mut objc::runtime::Object = msg_send![application, localizedName];
+            macos_ns_string(name)
+        })();
+        if !pool.is_null() {
+            let _: () = msg_send![pool, drain];
+        }
+        result
     }
 }
 
@@ -2297,6 +2363,20 @@ fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
         .status
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_tests {
+    use super::*;
+
+    #[test]
+    fn text_expander_includes_accessory_apps_without_changing_layout_picker() {
+        assert!(macos_app_is_pickable(0, true));
+        assert!(macos_app_is_pickable(1, true));
+        assert!(!macos_app_is_pickable(2, true));
+        assert!(macos_app_is_pickable(0, false));
+        assert!(!macos_app_is_pickable(1, false));
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]
