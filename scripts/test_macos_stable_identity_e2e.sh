@@ -17,7 +17,8 @@ IDENTITY="Entropy Open Source Release Signing"
 BUNDLE_ID="com.ergohaven.entropy"
 ORIGINAL_KEYCHAINS=()
 
-while IFS= read -r keychain; do
+# Strip security's output indentation, not spaces inside the quoted path.
+while read -r keychain; do
 	keychain="${keychain//\"/}"
 	ORIGINAL_KEYCHAINS+=("$keychain")
 done < <(security list-keychains -d user)
