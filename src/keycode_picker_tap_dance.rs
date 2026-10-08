@@ -100,7 +100,9 @@ impl KeycodePicker {
         let scale = metrics.scale;
         let content_width = metrics.settings_content_width();
         let row_content_width = metrics.settings_row_content_width();
-        let row_height = metrics.settings_row_height();
+        // Combo uses a 62px row around 54px keycaps, leaving a 4px gap above
+        // and below each control instead of touching the row separators.
+        let row_height = metrics.settings_row_height().max(metrics.value(62.0));
         let control_width = metrics.settings_control_width();
         let control_height = metrics.settings_control_height();
         let control_font_size = metrics.settings_control_font_size();
@@ -119,12 +121,13 @@ impl KeycodePicker {
             crate::ui_style::ModalLayout::new(content_width).with_top_padding(metrics.value(4.0)),
             |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
-                let list = crate::app::allocate_adaptive_settings_list_viewport(
+                let list = crate::app::allocate_adaptive_settings_list_viewport_with_row_height(
                     ui,
                     "tap_dance_settings",
                     metrics,
                     7,
                     metrics.value(54.0),
+                    row_height,
                 );
                 crate::ui_style::allocate_ui_at_rect(ui, list.content_rect, |ui| {
                     ui.set_clip_rect(list.viewport);

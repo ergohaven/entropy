@@ -152,14 +152,14 @@ impl EntropyApp {
         }
 
         let now = std::time::Instant::now();
-        let command_modifier_down = ctx
-            .input(|input| input.modifiers.command || input.modifiers.ctrl || input.modifiers.alt);
+        let shortcut_modifier_down =
+            ctx.input(|input| input.modifiers.command || input.modifiers.ctrl);
         let events = ctx.input(|input| input.events.clone());
         let mut typed_this_frame = false;
         let mut pointer_moved_this_frame = false;
         for event in events {
             match event {
-                egui::Event::Text(text) if !command_modifier_down => {
+                egui::Event::Text(text) if !shortcut_modifier_down => {
                     for ch in text.chars() {
                         if typing_trainer_accepts_char(ch) && !self.typing_trainer.is_finished() {
                             typed_this_frame = true;
@@ -1351,6 +1351,46 @@ mod typing_trainer_ui_tests {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx);
         EntropyApp::new(&creation_context)
+    }
+
+    fn run_typing_trainer_text_input(modifiers: egui::Modifiers, text: &str) -> Vec<char> {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        app.main_menu_tab = MainMenuTab::Advanced;
+        app.settings_tab = SettingsTab::TypingTrainer;
+        app.typing_trainer.mode = TypingTrainerMode::Words;
+        app.typing_trainer.target_text = text.to_owned();
+        app.typing_trainer.typed_chars.clear();
+
+        let mut input = egui::RawInput {
+            modifiers,
+            ..Default::default()
+        };
+        input.events.push(egui::Event::Text(text.to_owned()));
+        let _ = ctx.run_ui(input, |ui| app.handle_typing_trainer_input(ui.ctx()));
+
+        app.typing_trainer.typed_chars
+    }
+
+    #[test]
+    fn typing_trainer_accepts_alt_modified_text_from_os_layouts() {
+        let modifiers = egui::Modifiers {
+            alt: true,
+            ..Default::default()
+        };
+
+        assert_eq!(run_typing_trainer_text_input(modifiers, "!"), vec!['!']);
+    }
+
+    #[test]
+    fn typing_trainer_ignores_command_modified_text() {
+        let modifiers = egui::Modifiers {
+            command: true,
+            ..Default::default()
+        };
+
+        assert!(run_typing_trainer_text_input(modifiers, "x").is_empty());
     }
 
     #[test]

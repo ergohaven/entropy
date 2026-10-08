@@ -70,6 +70,14 @@ impl BatteryHalves {
 const BATTERY_HALVES_READ_ATTEMPTS: usize = 5;
 const BATTERY_HALVES_READ_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
 
+// A read-only event poll is also the firmware capability handshake. Old Vial
+// builds cannot produce this signature; a version string alone is insufficient.
+fn application_layout_poll_supported(response: &[u8; MSG_LEN]) -> bool {
+    response[0] == 0xE6
+        && response[1] == crate::application_layouts::APPLICATION_LAYOUT_PROTOCOL_VERSION
+        && response[2] == 0x5A
+}
+
 fn format_via_firmware_version(value: u32) -> Option<String> {
     if value == 0 {
         return None;
@@ -136,6 +144,20 @@ impl HidDevice {
         cmd[2] = ERGOHAVEN_CUSTOM_BATTERY_HALVES;
         let resp = self.usb_send(&cmd)?;
         parse_battery_halves_response(&resp)
+    }
+
+    pub fn supports_application_layout_protocol(&self) -> bool {
+        // The zero acknowledgement cannot consume a real event: firmware event
+        // sequence numbers begin at one. This does not change the active layout.
+        let request = [
+            0xE6,
+            crate::application_layouts::APPLICATION_LAYOUT_PROTOCOL_VERSION,
+            0xA5,
+            0,
+            0,
+        ];
+        self.usb_send(&request)
+            .is_ok_and(|response| application_layout_poll_supported(&response))
     }
 
     pub fn get_firmware_version(&self) -> Result<Option<String>> {
@@ -521,6 +543,23 @@ mod tests {
         response[1..9].copy_from_slice("Слой".as_bytes());
 
         assert_eq!(decode_qmk_setting_string(&response, 201).unwrap(), "Слой");
+    }
+
+    #[test]
+    fn application_layout_probe_requires_exact_live_protocol_response() {
+        let mut response = [0u8; MSG_LEN];
+        response[..3].copy_from_slice(&[
+            0xE6,
+            crate::application_layouts::APPLICATION_LAYOUT_PROTOCOL_VERSION,
+            0x5A,
+        ]);
+        assert!(application_layout_poll_supported(&response));
+        response[1] = 0;
+        assert!(!application_layout_poll_supported(&response));
+        response[1] = crate::application_layouts::APPLICATION_LAYOUT_PROTOCOL_VERSION;
+        response[2] = 0;
+        assert!(!application_layout_poll_supported(&response));
+        assert!(!application_layout_poll_supported(&[0u8; MSG_LEN]));
     }
 
     #[test]

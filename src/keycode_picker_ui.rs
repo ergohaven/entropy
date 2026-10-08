@@ -83,6 +83,9 @@ pub(super) fn picker_keycap_button_in_rect(
         egui::Sense::hover()
     };
     let resp = ui.allocate_rect(rect, sense);
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label.replace('\n', " "))
+    });
     let dark = ui.visuals().dark_mode;
     let hovered = enabled && resp.hovered();
     let pressed = enabled && resp.is_pointer_button_down_on();
@@ -163,6 +166,7 @@ pub(super) fn picker_keycap_button_in_rect(
             text_color,
         );
     }
+    paint_focus_ring(ui, &resp, 9.0);
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -277,6 +281,11 @@ pub(super) fn picker_button(
         egui::Sense::hover()
     };
     let (rect, resp) = ui.allocate_exact_size(size, sense);
+    if !label.is_empty() {
+        resp.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label.replace('\n', " "))
+        });
+    }
     let dark = ui.visuals().dark_mode;
     let hovered = enabled && resp.hovered();
     let pressed = enabled && resp.is_pointer_button_down_on();
@@ -309,6 +318,7 @@ pub(super) fn picker_button(
     };
     let label_scale = (size.y / 54.0).clamp(1.0, 1.22);
     picker_paint_centered_label(ui, rect, label, 12.0 * label_scale, color);
+    paint_focus_ring(ui, &resp, 9.0);
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -332,17 +342,117 @@ pub(super) fn picker_choice_button(
 }
 
 pub(super) fn picker_tab_width(label: &str) -> f32 {
-    (label.chars().count() as f32 * 7.0 + 24.0).clamp(52.0, 132.0)
+    // Label estimate plus chip padding and the category glyph in front.
+    (label.chars().count() as f32 * 7.0 + 24.0 + 20.0).clamp(64.0, 152.0)
 }
 
-pub(super) fn picker_tab_button(ui: &mut egui::Ui, label: &str, active: bool) -> egui::Response {
-    picker_button(
-        ui,
-        label,
-        Vec2::new(picker_tab_width(label), 30.0),
-        true,
-        active,
-    )
+pub(super) fn picker_tab_button(
+    ui: &mut egui::Ui,
+    style: TabStyle,
+    label: &str,
+    active: bool,
+    panel_id: egui::Id,
+) -> egui::Response {
+    let size = Vec2::new(picker_tab_width(label), 30.0);
+    let resp = picker_button(ui, "", size, true, active);
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, active, label)
+    });
+    // Announced as a tab with a selected state, not as a toggle button.
+    ui.ctx().accesskit_node_builder(resp.id, |node| {
+        node.set_role(egui::accesskit::Role::Tab);
+        node.set_selected(active);
+        node.set_controls(vec![panel_id.accesskit_id()]);
+    });
+    let rect = resp.rect;
+    let (glyph_color, label_color) = if active {
+        (Color32::WHITE, Color32::WHITE)
+    } else {
+        (
+            style.tint(ui.visuals().dark_mode),
+            ui.visuals().text_color(),
+        )
+    };
+    let painter = ui.painter();
+    let glyph_galley = painter.layout_no_wrap(
+        style.glyph.to_owned(),
+        egui::FontId::proportional(13.0),
+        glyph_color,
+    );
+    let label_galley = painter.layout_no_wrap(
+        label.to_owned(),
+        egui::FontId::proportional(12.0),
+        label_color,
+    );
+    let gap = 6.0;
+    let glyph_size = glyph_galley.size();
+    let label_size = label_galley.size();
+    let left = rect.center().x - (glyph_size.x + gap + label_size.x) * 0.5;
+    painter.galley(
+        egui::pos2(left, rect.center().y - glyph_size.y * 0.5),
+        glyph_galley,
+        glyph_color,
+    );
+    painter.galley(
+        egui::pos2(
+            left + glyph_size.x + gap,
+            rect.center().y - label_size.y * 0.5,
+        ),
+        label_galley,
+        label_color,
+    );
+    resp
+}
+
+/// Focus ring for keyboard navigation, drawn just outside the widget.
+pub(super) fn paint_focus_ring(ui: &egui::Ui, resp: &egui::Response, corner_radius: f32) {
+    if resp.has_focus() {
+        ui.painter().rect_stroke(
+            resp.rect.expand(2.0),
+            corner_radius + 2.0,
+            egui::Stroke::new(1.5_f32, crate::ui_style::accent()),
+            egui::StrokeKind::Outside,
+        );
+    }
+}
+
+/// Screen-reader description of a widget, e.g. its tooltip text.
+pub(super) fn set_accessible_description(ui: &egui::Ui, resp: &egui::Response, description: &str) {
+    if description.is_empty() {
+        return;
+    }
+    ui.ctx()
+        .accesskit_node_builder(resp.id, |node| node.set_description(description));
+}
+
+/// Keycap of a picker row: the frame egui buttons get under
+/// `apply_picker_button_visuals`, with the two-line caption painted on top.
+pub(super) fn picker_keycap_row_button(
+    ui: &mut egui::Ui,
+    size: Vec2,
+    row: &PickerRow,
+) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, row.accessible_name())
+    });
+    set_accessible_description(ui, &resp, &row.tooltip);
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact(&resp);
+        ui.painter().rect(
+            rect.expand(visuals.expansion),
+            visuals.corner_radius,
+            visuals.weak_bg_fill,
+            visuals.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
+        KeycodePicker::paint_compact_picker_label(ui, &resp, &row.label);
+        paint_focus_ring(ui, &resp, f32::from(visuals.corner_radius.nw));
+    }
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp
 }
 
 pub(super) fn picker_slot_button(
@@ -355,6 +465,14 @@ pub(super) fn picker_slot_button(
     let scale = responsive_picker_element_scale(ui.ctx());
     let (rect, resp) =
         ui.allocate_exact_size(Vec2::new(48.0 * scale, 30.0 * scale), egui::Sense::click());
+    resp.widget_info(|| {
+        let name = if display_name != id_text {
+            format!("{id_text} {display_name}")
+        } else {
+            id_text.to_owned()
+        };
+        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, active, name)
+    });
     let dark = ui.visuals().dark_mode;
     let hovered = resp.hovered();
     let fill = if active {
@@ -405,5 +523,18 @@ pub(super) fn picker_slot_button(
             text_color,
         );
     }
+    paint_focus_ring(ui, &resp, 8.0);
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tab_width_fits_the_longest_catalog_labels() {
+        // Longest current labels: "Универсальные" (ru), "Universal" (en).
+        assert!(picker_tab_width("Универсальные") <= 152.0);
+        assert!(picker_tab_width("RGB") >= 64.0);
+    }
 }

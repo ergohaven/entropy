@@ -543,12 +543,8 @@ impl EntropyApp {
             return;
         }
         if self.is_vial_locked() {
-            self.unlock_open = true;
-            self.status_msg = crate::i18n::tr_catalog(
-                self.app_settings.language,
-                "connection.keyboard_locked_edit_macros",
-            )
-            .into();
+            // Preserve the dirty edit for an explicit unlock; do not reopen a
+            // cancelled preflight just because the picker closed.
             return;
         }
 
@@ -964,6 +960,8 @@ impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn finish_vial_lock(&mut self) {
         self.vial_unlocked = Some(false);
+        // A protected settings page must not remain interactive after lock.
+        self.main_menu_tab = MainMenuTab::Keyboard;
         self.matrix_tester_pressed.clear();
         self.matrix_tester_unlock_prompted = false;
         self.matrix_tester_lock_checked = false;
@@ -1724,6 +1722,44 @@ mod tests {
     }
 
     #[test]
+    fn successful_lock_exits_protected_settings_pages() {
+        for tab in [SettingsTab::Macros, SettingsTab::TapDance] {
+            let ctx = egui::Context::default();
+            let mut app = EntropyApp::new_inert_for_test();
+            let (hid, recorder) = crate::hid::HidDevice::test_device();
+            app.hid_device = Some(hid);
+            app.firmware = FirmwareProtocol::Vial;
+            app.layout = Some(single_key_layout(0x0004));
+            app.vial_unlocked = Some(true);
+            app.main_menu_tab = MainMenuTab::Advanced;
+            app.settings_tab = tab;
+
+            assert_eq!(app.start_vial_lock(&ctx), VialHidTaskStart::Started);
+            poll_until_vial_hid_idle(&mut app, &ctx);
+
+            assert_eq!(app.vial_unlocked, Some(false));
+            assert!(app.main_menu_tab == MainMenuTab::Keyboard);
+            assert!(app.settings_tab == tab);
+            assert_eq!(&recorder.requests()[0][..2], &[0xFE, 0x08]);
+        }
+    }
+
+    #[test]
+    fn unavailable_device_does_not_exit_settings_page() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        app.firmware = FirmwareProtocol::Vial;
+        app.layout = Some(single_key_layout(0x0004));
+        app.vial_unlocked = Some(true);
+        app.main_menu_tab = MainMenuTab::Advanced;
+        app.settings_tab = SettingsTab::Macros;
+
+        assert_eq!(app.start_vial_lock(&ctx), VialHidTaskStart::NoDevice);
+        assert_eq!(app.vial_unlocked, Some(true));
+        assert!(app.main_menu_tab == MainMenuTab::Advanced);
+    }
+
+    #[test]
     fn unlock_poll_and_lock_use_vial_commands() {
         let (hid, recorder) = crate::hid::HidDevice::test_device();
 
@@ -1733,6 +1769,76 @@ mod tests {
         let requests = recorder.requests();
         assert_eq!(&requests[0][..2], &[0xFE, 0x07]);
         assert_eq!(&requests[1][..2], &[0xFE, 0x08]);
+    }
+
+    #[test]
+    fn stale_rmk_confirmation_timeout_retries_status_only() {
+        let (hid, recorder) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+            1,
+            crate::hid::TestHidFault::Timeout,
+        )));
+        let mut stale_poll = [0u8; 32];
+        stale_poll[..3].copy_from_slice(&[0, 1, 0]);
+        recorder.respond_with([stale_poll]);
+
+        let error = hid.unlock_poll().unwrap_err();
+        assert!(format!("{error:#}").contains("failed to read Vial unlock status"));
+
+        let requests = recorder.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(&requests[0][..2], &[0xFE, 0x07]);
+        assert_eq!(&requests[1][..2], &[0xFE, 0x05]);
+
+        // The physical keys are now released; firmware reports the latched
+        // result. The retry must not send another poll and re-arm old RMK.
+        let mut released_status = [0xFFu8; 32];
+        released_status[..2].copy_from_slice(&[1, 0]);
+        recorder.respond_with([released_status]);
+
+        assert_eq!(hid.unlock_poll().unwrap(), (true, false, 0));
+        let requests = recorder.requests();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(&requests[2][..2], &[0xFE, 0x05]);
+    }
+
+    #[test]
+    fn still_pending_unlock_remains_pending_after_confirmation() {
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        let mut poll = [0u8; 32];
+        poll[..3].copy_from_slice(&[1, 1, 0]);
+        let mut status = [0xFFu8; 32];
+        status[..4].copy_from_slice(&[1, 1, 0, 0]);
+        recorder.respond_with([poll, status]);
+
+        let outcome = run_vial_hid_operation(&hid, VialHidOperation::UnlockPoll).unwrap();
+
+        assert!(matches!(
+            outcome,
+            VialHidOutcome::UnlockPolled {
+                unlocked: true,
+                in_progress: true,
+                counter: 0,
+            }
+        ));
+
+        let mut completed_status = [0xFFu8; 32];
+        completed_status[..2].copy_from_slice(&[1, 0]);
+        recorder.respond_with([completed_status]);
+
+        let outcome = run_vial_hid_operation(&hid, VialHidOperation::UnlockPoll).unwrap();
+        assert!(matches!(
+            outcome,
+            VialHidOutcome::UnlockPolled {
+                unlocked: true,
+                in_progress: false,
+                counter: 0,
+            }
+        ));
+        let requests = recorder.requests();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(&requests[0][..2], &[0xFE, 0x07]);
+        assert_eq!(&requests[1][..2], &[0xFE, 0x05]);
+        assert_eq!(&requests[2][..2], &[0xFE, 0x05]);
     }
 
     #[test]

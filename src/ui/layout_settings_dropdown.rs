@@ -1,3 +1,4 @@
+use super::application_layout_runtime::app_layout_text;
 #[cfg(not(target_arch = "wasm32"))]
 use super::vial_hid_task::VialHidTaskStart;
 use super::*;
@@ -110,6 +111,7 @@ impl EntropyApp {
                     .any(|qsid| self.supported_qmk_settings.contains(qsid));
             let show_update_indicator = crate::app::update_available(&self.update_check);
             let show_matrix_item = self.firmware == FirmwareProtocol::Vial;
+            let show_application_layouts_item = self.application_layouts_supported();
             let is_unlocked = self.vial_unlocked == Some(true);
             #[cfg(not(target_arch = "wasm32"))]
             let vial_hid_idle = vial_lock_control_idle(
@@ -129,6 +131,7 @@ impl EntropyApp {
             let show_lock_item = lock_menu_state.visible;
             let default_lock_label = crate::i18n::tr_catalog(lang, "ui.unlock_keyboard_action");
             let settings_item_count = 2
+                + show_application_layouts_item as usize
                 + show_matrix_item as usize
                 + show_rgb_item as usize
                 + show_display_item as usize
@@ -142,10 +145,32 @@ impl EntropyApp {
                 + show_magic_item as usize
                 + show_tap_hold_item as usize
                 + show_lock_item as usize;
-            // Keep hover bridge in sync with actual item height (30px) and frame padding.
-            // Underestimating this makes lower items close the dropdown on hover.
-            let dropdown_height = settings_item_count as f32 * 30.0 + 12.0;
+            // Visible rows per group, in drawing order: lighting and display,
+            // input and connectivity, key behavior, service, app.
+            let dividers = top_menu_dividers([
+                show_rgb_item as usize
+                    + show_layer_leds_item as usize
+                    + show_display_item as usize
+                    + show_layout_options_item as usize,
+                show_encoders_item as usize
+                    + show_touchpad_item as usize
+                    + show_modules_item as usize
+                    + show_bluetooth_item as usize
+                    + show_live_features_item as usize,
+                show_tap_hold_item as usize + show_magic_item as usize,
+                show_matrix_item as usize + show_lock_item as usize,
+                2 + show_application_layouts_item as usize,
+            ]);
+            let divider_count = dividers.iter().filter(|shown| **shown).count();
+            let dropdown_height = top_dropdown_height(settings_item_count, divider_count);
             let mut settings_menu_labels = vec![crate::i18n::tr(lang, TrKey::AppSettingsTitle)];
+            if show_application_layouts_item {
+                settings_menu_labels.push(app_layout_text(
+                    lang,
+                    "Раскладки приложений",
+                    "Application layouts",
+                ));
+            }
             if show_matrix_item {
                 settings_menu_labels.push(crate::i18n::tr(lang, TrKey::MatrixTesterTitle));
             }
@@ -190,7 +215,7 @@ impl EntropyApp {
                 settings_menu_labels.push(default_lock_label);
             }
             settings_menu_labels.push(about_entropy_label(lang));
-            let dropdown_width = adaptive_top_dropdown_width(ui, settings_menu_labels, 184.0);
+            let dropdown_width = adaptive_top_icon_dropdown_width(ui, settings_menu_labels, 184.0);
             let dropdown_rect = egui::Rect::from_min_size(
                 egui::pos2(
                     settings_rect.center().x - dropdown_width / 2.0,
@@ -209,7 +234,6 @@ impl EntropyApp {
                 && (settings_tab_hovered || (was_open && pointer_over_bridge));
 
             if show_dropdown {
-                let dark = ui.visuals().dark_mode;
                 let rgb_available = rgb_available_for_menu || deferred_rgb;
                 let lock_label = if is_unlocked {
                     crate::i18n::tr_catalog(lang, "ui.lock_keyboard_action")
@@ -219,6 +243,7 @@ impl EntropyApp {
                 let item_width = dropdown_rect.width() - 16.0;
                 let (
                     app_hovered,
+                    application_layouts_hovered,
                     matrix_hovered,
                     rgb_hovered,
                     display_hovered,
@@ -234,377 +259,412 @@ impl EntropyApp {
                     lock_hovered,
                     about_entropy_hovered,
                     settings_clicked,
-                ) = egui::Area::new(egui::Id::new("settings_dropdown_area"))
-                    .order(egui::Order::Foreground)
-                    .fixed_pos(dropdown_rect.min)
-                    .show(ui.ctx(), |ui| {
-                        top_dropdown_frame(dark)
-                            .show(ui, |ui| {
-                                ui.set_min_width(item_width);
-                                ui.spacing_mut().item_spacing.y = 0.0;
-                                let app_resp = top_dropdown_item(
-                                    ui,
-                                    item_width,
-                                    crate::i18n::tr(lang, TrKey::AppSettingsTitle),
-                                    true,
-                                    self.main_menu_tab == MainMenuTab::Settings
-                                        && self.settings_tab == SettingsTab::AppSettings,
-                                );
-                                let matrix_resp = show_matrix_item.then(|| {
-                                    top_dropdown_item(
-                                        ui,
-                                        item_width,
-                                        crate::i18n::tr(lang, TrKey::MatrixTesterTitle),
-                                        true,
-                                        self.main_menu_tab == MainMenuTab::Settings
-                                            && self.settings_tab == SettingsTab::MatrixTester,
-                                    )
-                                });
-                                let rgb_resp = if show_rgb_item {
-                                    Some(top_dropdown_item(
-                                        ui,
-                                        item_width,
-                                        crate::i18n::tr(lang, TrKey::RgbTitle),
-                                        rgb_available,
-                                        self.main_menu_tab == MainMenuTab::Settings
-                                            && self.settings_tab == SettingsTab::Rgb,
-                                    ))
+                ) = show_top_dropdown(
+                    ui.ctx(),
+                    egui::Id::new("settings_dropdown_area"),
+                    dropdown_rect.min,
+                    |ui| {
+                        ui.set_min_width(item_width);
+                        let rgb_resp = show_rgb_item.then(|| {
+                            top_dropdown_icon_item(
+                                ui,
+                                item_width,
+                                TopMenuIcon::Rgb,
+                                crate::i18n::tr(lang, TrKey::RgbTitle),
+                                rgb_available,
+                                self.main_menu_tab == MainMenuTab::Settings
+                                    && self.settings_tab == SettingsTab::Rgb,
+                            )
+                        });
+                        let layer_leds_resp = show_layer_leds_item.then(|| {
+                            top_dropdown_icon_item(
+                                ui,
+                                item_width,
+                                TopMenuIcon::LayerLeds,
+                                crate::i18n::tr(lang, TrKey::LayerLedsTitle),
+                                true,
+                                self.main_menu_tab == MainMenuTab::Settings
+                                    && self.settings_tab == SettingsTab::LayerLeds,
+                            )
+                        });
+                        let display_resp = show_display_item.then(|| {
+                            top_dropdown_icon_item(
+                                ui,
+                                item_width,
+                                TopMenuIcon::Display,
+                                crate::i18n::tr_catalog(lang, "display_settings.title"),
+                                true,
+                                self.main_menu_tab == MainMenuTab::Settings
+                                    && self.settings_tab == SettingsTab::Display,
+                            )
+                        });
+                        let layout_options_resp = show_layout_options_item.then(|| {
+                            top_dropdown_icon_item(
+                                ui,
+                                item_width,
+                                TopMenuIcon::DisplayPresets,
+                                crate::i18n::tr(lang, TrKey::DisplayPresetsTitle),
+                                true,
+                                self.main_menu_tab == MainMenuTab::Settings
+                                    && self.settings_tab == SettingsTab::LayoutOptions,
+                            )
+                        });
+                        if dividers[0] {
+                            top_dropdown_divider(ui, item_width);
+                        }
+                        let encoders_resp = show_encoders_item.then(|| {
+                            top_dropdown_icon_item(
+                                ui,
+                                item_width,
+                                TopMenuIcon::Encoders,
+                                crate::i18n::tr(lang, TrKey::EncodersTitle),
+                                true,
+                                self.main_menu_tab == MainMenuTab::Settings
+                                    && self.settings_tab == SettingsTab::Encoders,
+                            )
+                        });
+                        let touchpad_resp = show_touchpad_item.then(|| {
+                            top_dropdown_icon_item(
+                                ui,
+                                item_width,
+                                TopMenuIcon::Touchpad,
+                                crate::i18n::tr(lang, TrKey::TouchpadTitle),
+                                true,
+                                self.main_menu_tab == MainMenuTab::Settings
+                                    && self.settings_tab == SettingsTab::Touchpad,
+                            )
+                        });
+                        let modules_resp = show_modules_item.then(|| {
+                            top_dropdown_icon_item(
+                                ui,
+                                item_width,
+                                TopMenuIcon::Modules,
+                                crate::i18n::tr_catalog(lang, self.module_settings_title_key()),
+                                true,
+                                self.main_menu_tab == MainMenuTab::Settings
+                                    && self.settings_tab == SettingsTab::Modules,
+                            )
+                        });
+                        let bluetooth_resp = show_bluetooth_item.then(|| {
+                            top_dropdown_icon_item(
+                                ui,
+                                item_width,
+                                TopMenuIcon::Bluetooth,
+                                crate::i18n::tr_catalog(lang, "bluetooth_settings.title"),
+                                true,
+                                self.main_menu_tab == MainMenuTab::Settings
+                                    && self.settings_tab == SettingsTab::Bluetooth,
+                            )
+                        });
+                        let live_features_resp = show_live_features_item.then(|| {
+                            top_dropdown_icon_item(
+                                ui,
+                                item_width,
+                                TopMenuIcon::LiveFeatures,
+                                crate::i18n::tr(lang, TrKey::LiveFeaturesTitle),
+                                true,
+                                self.main_menu_tab == MainMenuTab::Settings
+                                    && self.settings_tab == SettingsTab::LiveFeatures,
+                            )
+                        });
+                        if dividers[1] {
+                            top_dropdown_divider(ui, item_width);
+                        }
+                        let tap_hold_resp = show_tap_hold_item.then(|| {
+                            top_dropdown_icon_item(
+                                ui,
+                                item_width,
+                                TopMenuIcon::TapHold,
+                                crate::i18n::tr(lang, TrKey::TapHoldOneShotTitle),
+                                true,
+                                self.main_menu_tab == MainMenuTab::Settings
+                                    && self.settings_tab == SettingsTab::TapHold,
+                            )
+                        });
+                        let magic_resp = show_magic_item.then(|| {
+                            top_dropdown_icon_item(
+                                ui,
+                                item_width,
+                                TopMenuIcon::Magic,
+                                crate::i18n::tr(lang, TrKey::MagicTitle),
+                                true,
+                                self.main_menu_tab == MainMenuTab::Settings
+                                    && self.settings_tab == SettingsTab::Magic,
+                            )
+                        });
+                        if dividers[2] {
+                            top_dropdown_divider(ui, item_width);
+                        }
+                        let matrix_resp = show_matrix_item.then(|| {
+                            top_dropdown_icon_item(
+                                ui,
+                                item_width,
+                                TopMenuIcon::MatrixTester,
+                                crate::i18n::tr(lang, TrKey::MatrixTesterTitle),
+                                true,
+                                self.main_menu_tab == MainMenuTab::Settings
+                                    && self.settings_tab == SettingsTab::MatrixTester,
+                            )
+                        });
+                        let lock_resp = show_lock_item.then(|| {
+                            top_dropdown_icon_item(
+                                ui,
+                                item_width,
+                                if is_unlocked {
+                                    TopMenuIcon::Lock
                                 } else {
-                                    None
-                                };
-                                let display_resp = show_display_item.then(|| {
-                                    top_dropdown_item(
-                                        ui,
-                                        item_width,
-                                        crate::i18n::tr_catalog(lang, "display_settings.title"),
-                                        true,
-                                        self.main_menu_tab == MainMenuTab::Settings
-                                            && self.settings_tab == SettingsTab::Display,
-                                    )
-                                });
-                                let layer_leds_resp = show_layer_leds_item.then(|| {
-                                    top_dropdown_item(
-                                        ui,
-                                        item_width,
-                                        crate::i18n::tr(lang, TrKey::LayerLedsTitle),
-                                        true,
-                                        self.main_menu_tab == MainMenuTab::Settings
-                                            && self.settings_tab == SettingsTab::LayerLeds,
-                                    )
-                                });
-                                let encoders_resp = show_encoders_item.then(|| {
-                                    top_dropdown_item(
-                                        ui,
-                                        item_width,
-                                        crate::i18n::tr(lang, TrKey::EncodersTitle),
-                                        true,
-                                        self.main_menu_tab == MainMenuTab::Settings
-                                            && self.settings_tab == SettingsTab::Encoders,
-                                    )
-                                });
-                                let layout_options_resp = show_layout_options_item.then(|| {
-                                    top_dropdown_item(
-                                        ui,
-                                        item_width,
-                                        crate::i18n::tr(lang, TrKey::DisplayPresetsTitle),
-                                        true,
-                                        self.main_menu_tab == MainMenuTab::Settings
-                                            && self.settings_tab == SettingsTab::LayoutOptions,
-                                    )
-                                });
-                                let modules_resp = show_modules_item.then(|| {
-                                    top_dropdown_item(
-                                        ui,
-                                        item_width,
-                                        crate::i18n::tr_catalog(
-                                            lang,
-                                            self.module_settings_title_key(),
-                                        ),
-                                        true,
-                                        self.main_menu_tab == MainMenuTab::Settings
-                                            && self.settings_tab == SettingsTab::Modules,
-                                    )
-                                });
-                                let touchpad_resp = show_touchpad_item.then(|| {
-                                    top_dropdown_item(
-                                        ui,
-                                        item_width,
-                                        crate::i18n::tr(lang, TrKey::TouchpadTitle),
-                                        true,
-                                        self.main_menu_tab == MainMenuTab::Settings
-                                            && self.settings_tab == SettingsTab::Touchpad,
-                                    )
-                                });
-                                let bluetooth_resp = show_bluetooth_item.then(|| {
-                                    top_dropdown_item(
-                                        ui,
-                                        item_width,
-                                        crate::i18n::tr_catalog(lang, "bluetooth_settings.title"),
-                                        true,
-                                        self.main_menu_tab == MainMenuTab::Settings
-                                            && self.settings_tab == SettingsTab::Bluetooth,
-                                    )
-                                });
-                                let live_features_resp = show_live_features_item.then(|| {
-                                    top_dropdown_item(
-                                        ui,
-                                        item_width,
-                                        crate::i18n::tr(lang, TrKey::LiveFeaturesTitle),
-                                        true,
-                                        self.main_menu_tab == MainMenuTab::Settings
-                                            && self.settings_tab == SettingsTab::LiveFeatures,
-                                    )
-                                });
-                                let magic_resp = show_magic_item.then(|| {
-                                    top_dropdown_item(
-                                        ui,
-                                        item_width,
-                                        crate::i18n::tr(lang, TrKey::MagicTitle),
-                                        true,
-                                        self.main_menu_tab == MainMenuTab::Settings
-                                            && self.settings_tab == SettingsTab::Magic,
-                                    )
-                                });
-                                let tap_hold_resp = show_tap_hold_item.then(|| {
-                                    top_dropdown_item(
-                                        ui,
-                                        item_width,
-                                        crate::i18n::tr(lang, TrKey::TapHoldOneShotTitle),
-                                        true,
-                                        self.main_menu_tab == MainMenuTab::Settings
-                                            && self.settings_tab == SettingsTab::TapHold,
-                                    )
-                                });
-                                let lock_resp = show_lock_item.then(|| {
-                                    top_dropdown_item(
-                                        ui,
-                                        item_width,
-                                        lock_label,
-                                        lock_menu_state.enabled,
-                                        false,
-                                    )
-                                });
-                                let about_entropy_resp = top_dropdown_item_with_indicator(
-                                    ui,
-                                    item_width,
-                                    about_entropy_label(lang),
-                                    true,
-                                    self.main_menu_tab == MainMenuTab::Settings
-                                        && self.settings_tab == SettingsTab::AboutEntropy,
-                                    show_update_indicator,
-                                );
-                                if app_resp.clicked() {
-                                    self.close_top_dropdowns(ui.ctx());
-                                    self.open_app_settings_page();
+                                    TopMenuIcon::Unlock
+                                },
+                                lock_label,
+                                lock_menu_state.enabled,
+                                false,
+                            )
+                        });
+                        if dividers[3] {
+                            top_dropdown_divider(ui, item_width);
+                        }
+                        let app_resp = top_dropdown_icon_item(
+                            ui,
+                            item_width,
+                            TopMenuIcon::AppSettings,
+                            crate::i18n::tr(lang, TrKey::AppSettingsTitle),
+                            true,
+                            self.main_menu_tab == MainMenuTab::Settings
+                                && self.settings_tab == SettingsTab::AppSettings,
+                        );
+                        let application_layouts_resp = show_application_layouts_item.then(|| {
+                            top_dropdown_icon_item(
+                                ui,
+                                item_width,
+                                TopMenuIcon::ApplicationLayouts,
+                                app_layout_text(
+                                    lang,
+                                    "Раскладки приложений",
+                                    "Application layouts",
+                                ),
+                                true,
+                                self.main_menu_tab == MainMenuTab::Settings
+                                    && self.settings_tab == SettingsTab::ApplicationLayouts,
+                            )
+                        });
+                        let about_entropy_resp = top_dropdown_icon_item_with_indicator(
+                            ui,
+                            item_width,
+                            TopMenuIcon::AboutEntropy,
+                            about_entropy_label(lang),
+                            true,
+                            self.main_menu_tab == MainMenuTab::Settings
+                                && self.settings_tab == SettingsTab::AboutEntropy,
+                            show_update_indicator,
+                        );
+                        if app_resp.clicked() {
+                            self.close_top_dropdowns(ui.ctx());
+                            self.open_app_settings_page();
+                        }
+                        if application_layouts_resp
+                            .as_ref()
+                            .map(|response| response.clicked())
+                            .unwrap_or(false)
+                        {
+                            self.close_top_dropdowns(ui.ctx());
+                            self.open_application_layouts_page();
+                        }
+                        if matrix_resp.as_ref().map(|r| r.clicked()).unwrap_or(false) {
+                            self.close_top_dropdowns(ui.ctx());
+                            self.settings_tab = SettingsTab::MatrixTester;
+                            if self.main_menu_tab != MainMenuTab::Settings {
+                                self.reset_matrix_tester_state();
+                            }
+                            self.matrix_tester_unlock_prompted = false;
+                            self.matrix_tester_lock_checked = false;
+                            self.main_menu_tab = MainMenuTab::Settings;
+                        }
+                        if let Some(rgb_resp) = &rgb_resp {
+                            if rgb_resp.clicked() && rgb_available {
+                                self.close_top_dropdowns(ui.ctx());
+                                self.settings_tab = SettingsTab::Rgb;
+                                self.main_menu_tab = MainMenuTab::Settings;
+                            }
+                            if !rgb_available {
+                                let _ = rgb_resp.clone().on_hover_text(crate::i18n::tr(
+                                    lang,
+                                    TrKey::RgbUnavailableTooltip,
+                                ));
+                            }
+                        }
+                        if display_resp
+                            .as_ref()
+                            .map(|response| response.clicked())
+                            .unwrap_or(false)
+                        {
+                            self.close_top_dropdowns(ui.ctx());
+                            self.settings_tab = SettingsTab::Display;
+                            self.main_menu_tab = MainMenuTab::Settings;
+                        }
+                        if layer_leds_resp
+                            .as_ref()
+                            .map(|r| r.clicked())
+                            .unwrap_or(false)
+                        {
+                            self.close_top_dropdowns(ui.ctx());
+                            self.open_layer_led_settings_page();
+                        }
+                        if encoders_resp.as_ref().map(|r| r.clicked()).unwrap_or(false) {
+                            self.close_top_dropdowns(ui.ctx());
+                            self.settings_tab = SettingsTab::Encoders;
+                            self.main_menu_tab = MainMenuTab::Settings;
+                        }
+                        if layout_options_resp
+                            .as_ref()
+                            .map(|r| r.clicked())
+                            .unwrap_or(false)
+                        {
+                            self.close_top_dropdowns(ui.ctx());
+                            self.open_layout_options_settings_page();
+                        }
+                        if modules_resp.as_ref().map(|r| r.clicked()).unwrap_or(false) {
+                            self.close_top_dropdowns(ui.ctx());
+                            self.open_modules_settings_page();
+                        }
+                        if touchpad_resp.as_ref().map(|r| r.clicked()).unwrap_or(false) {
+                            self.close_top_dropdowns(ui.ctx());
+                            self.open_touchpad_settings_page();
+                        }
+                        if bluetooth_resp
+                            .as_ref()
+                            .map(|r| r.clicked())
+                            .unwrap_or(false)
+                        {
+                            self.close_top_dropdowns(ui.ctx());
+                            self.open_bluetooth_settings_page();
+                        }
+                        if live_features_resp
+                            .as_ref()
+                            .map(|r| r.clicked())
+                            .unwrap_or(false)
+                        {
+                            self.close_top_dropdowns(ui.ctx());
+                            self.open_live_features_settings_page();
+                        }
+                        if magic_resp.as_ref().map(|r| r.clicked()).unwrap_or(false) {
+                            self.close_top_dropdowns(ui.ctx());
+                            self.open_magic_settings_page();
+                        }
+                        if tap_hold_resp.as_ref().map(|r| r.clicked()).unwrap_or(false) {
+                            self.close_top_dropdowns(ui.ctx());
+                            self.open_tap_hold_settings_page();
+                        }
+                        if lock_resp.as_ref().map(|r| r.clicked()).unwrap_or(false) {
+                            self.close_top_dropdowns(ui.ctx());
+                            if is_unlocked {
+                                #[cfg(not(target_arch = "wasm32"))]
+                                if self.start_vial_lock(ui.ctx()) == VialHidTaskStart::NoDevice {
+                                    self.status_msg = crate::i18n::tr_catalog_format(
+                                        self.app_settings.language,
+                                        "dynamic_status.lock_failed",
+                                        &[(
+                                            "error",
+                                            crate::i18n::tr_catalog(
+                                                self.app_settings.language,
+                                                "status_messages.device_unavailable",
+                                            ),
+                                        )],
+                                    );
                                 }
-                                if matrix_resp.as_ref().map(|r| r.clicked()).unwrap_or(false) {
-                                    self.close_top_dropdowns(ui.ctx());
-                                    self.settings_tab = SettingsTab::MatrixTester;
-                                    if self.main_menu_tab != MainMenuTab::Settings {
-                                        self.reset_matrix_tester_state();
-                                    }
-                                    self.matrix_tester_unlock_prompted = false;
-                                    self.matrix_tester_lock_checked = false;
-                                    self.main_menu_tab = MainMenuTab::Settings;
-                                }
-                                if let Some(rgb_resp) = &rgb_resp {
-                                    if rgb_resp.clicked() && rgb_available {
-                                        self.close_top_dropdowns(ui.ctx());
-                                        self.settings_tab = SettingsTab::Rgb;
-                                        self.main_menu_tab = MainMenuTab::Settings;
-                                    }
-                                    if !rgb_available {
-                                        let _ = rgb_resp.clone().on_hover_text(crate::i18n::tr(
-                                            lang,
-                                            TrKey::RgbUnavailableTooltip,
-                                        ));
-                                    }
-                                }
-                                if display_resp
+                            } else {
+                                self.unlock_open = true;
+                            }
+                        }
+                        if about_entropy_resp.clicked() {
+                            self.close_top_dropdowns(ui.ctx());
+                            self.open_about_entropy_page();
+                        }
+                        (
+                            app_resp.hovered(),
+                            application_layouts_resp
+                                .as_ref()
+                                .map(|response| response.hovered())
+                                .unwrap_or(false),
+                            matrix_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
+                            rgb_resp
+                                .as_ref()
+                                .map(|resp| resp.hovered())
+                                .unwrap_or(false),
+                            display_resp
+                                .as_ref()
+                                .map(|resp| resp.hovered())
+                                .unwrap_or(false),
+                            layer_leds_resp
+                                .as_ref()
+                                .map(|r| r.hovered())
+                                .unwrap_or(false),
+                            encoders_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
+                            layout_options_resp
+                                .as_ref()
+                                .map(|r| r.hovered())
+                                .unwrap_or(false),
+                            modules_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
+                            touchpad_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
+                            bluetooth_resp
+                                .as_ref()
+                                .map(|r| r.hovered())
+                                .unwrap_or(false),
+                            live_features_resp
+                                .as_ref()
+                                .map(|r| r.hovered())
+                                .unwrap_or(false),
+                            magic_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
+                            tap_hold_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
+                            lock_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
+                            about_entropy_resp.hovered(),
+                            app_resp.clicked()
+                                || application_layouts_resp
                                     .as_ref()
                                     .map(|response| response.clicked())
                                     .unwrap_or(false)
-                                {
-                                    self.close_top_dropdowns(ui.ctx());
-                                    self.settings_tab = SettingsTab::Display;
-                                    self.main_menu_tab = MainMenuTab::Settings;
-                                }
-                                if layer_leds_resp
+                                || matrix_resp.as_ref().map(|r| r.clicked()).unwrap_or(false)
+                                || rgb_resp
+                                    .as_ref()
+                                    .map(|resp| resp.clicked() && rgb_available)
+                                    .unwrap_or(false)
+                                || display_resp
+                                    .as_ref()
+                                    .map(|resp| resp.clicked())
+                                    .unwrap_or(false)
+                                || layer_leds_resp
                                     .as_ref()
                                     .map(|r| r.clicked())
                                     .unwrap_or(false)
-                                {
-                                    self.close_top_dropdowns(ui.ctx());
-                                    self.open_layer_led_settings_page();
-                                }
-                                if encoders_resp.as_ref().map(|r| r.clicked()).unwrap_or(false) {
-                                    self.close_top_dropdowns(ui.ctx());
-                                    self.settings_tab = SettingsTab::Encoders;
-                                    self.main_menu_tab = MainMenuTab::Settings;
-                                }
-                                if layout_options_resp
+                                || encoders_resp.as_ref().map(|r| r.clicked()).unwrap_or(false)
+                                || layout_options_resp
                                     .as_ref()
                                     .map(|r| r.clicked())
                                     .unwrap_or(false)
-                                {
-                                    self.close_top_dropdowns(ui.ctx());
-                                    self.open_layout_options_settings_page();
-                                }
-                                if modules_resp.as_ref().map(|r| r.clicked()).unwrap_or(false) {
-                                    self.close_top_dropdowns(ui.ctx());
-                                    self.open_modules_settings_page();
-                                }
-                                if touchpad_resp.as_ref().map(|r| r.clicked()).unwrap_or(false) {
-                                    self.close_top_dropdowns(ui.ctx());
-                                    self.open_touchpad_settings_page();
-                                }
-                                if bluetooth_resp
+                                || modules_resp.as_ref().map(|r| r.clicked()).unwrap_or(false)
+                                || touchpad_resp.as_ref().map(|r| r.clicked()).unwrap_or(false)
+                                || bluetooth_resp
                                     .as_ref()
                                     .map(|r| r.clicked())
                                     .unwrap_or(false)
-                                {
-                                    self.close_top_dropdowns(ui.ctx());
-                                    self.open_bluetooth_settings_page();
-                                }
-                                if live_features_resp
+                                || live_features_resp
                                     .as_ref()
                                     .map(|r| r.clicked())
                                     .unwrap_or(false)
-                                {
-                                    self.close_top_dropdowns(ui.ctx());
-                                    self.open_live_features_settings_page();
-                                }
-                                if magic_resp.as_ref().map(|r| r.clicked()).unwrap_or(false) {
-                                    self.close_top_dropdowns(ui.ctx());
-                                    self.open_magic_settings_page();
-                                }
-                                if tap_hold_resp.as_ref().map(|r| r.clicked()).unwrap_or(false) {
-                                    self.close_top_dropdowns(ui.ctx());
-                                    self.open_tap_hold_settings_page();
-                                }
-                                if lock_resp.as_ref().map(|r| r.clicked()).unwrap_or(false) {
-                                    self.close_top_dropdowns(ui.ctx());
-                                    if is_unlocked {
-                                        #[cfg(not(target_arch = "wasm32"))]
-                                        if self.start_vial_lock(ui.ctx())
-                                            == VialHidTaskStart::NoDevice
-                                        {
-                                            self.status_msg = crate::i18n::tr_catalog_format(
-                                                self.app_settings.language,
-                                                "dynamic_status.lock_failed",
-                                                &[(
-                                                    "error",
-                                                    crate::i18n::tr_catalog(
-                                                        self.app_settings.language,
-                                                        "status_messages.device_unavailable",
-                                                    ),
-                                                )],
-                                            );
-                                        }
-                                    } else {
-                                        self.unlock_open = true;
-                                    }
-                                }
-                                if about_entropy_resp.clicked() {
-                                    self.close_top_dropdowns(ui.ctx());
-                                    self.open_about_entropy_page();
-                                }
-                                (
-                                    app_resp.hovered(),
-                                    matrix_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
-                                    rgb_resp
-                                        .as_ref()
-                                        .map(|resp| resp.hovered())
-                                        .unwrap_or(false),
-                                    display_resp
-                                        .as_ref()
-                                        .map(|resp| resp.hovered())
-                                        .unwrap_or(false),
-                                    layer_leds_resp
-                                        .as_ref()
-                                        .map(|r| r.hovered())
-                                        .unwrap_or(false),
-                                    encoders_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
-                                    layout_options_resp
-                                        .as_ref()
-                                        .map(|r| r.hovered())
-                                        .unwrap_or(false),
-                                    modules_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
-                                    touchpad_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
-                                    bluetooth_resp
-                                        .as_ref()
-                                        .map(|r| r.hovered())
-                                        .unwrap_or(false),
-                                    live_features_resp
-                                        .as_ref()
-                                        .map(|r| r.hovered())
-                                        .unwrap_or(false),
-                                    magic_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
-                                    tap_hold_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
-                                    lock_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
-                                    about_entropy_resp.hovered(),
-                                    app_resp.clicked()
-                                        || matrix_resp
-                                            .as_ref()
-                                            .map(|r| r.clicked())
-                                            .unwrap_or(false)
-                                        || rgb_resp
-                                            .as_ref()
-                                            .map(|resp| resp.clicked() && rgb_available)
-                                            .unwrap_or(false)
-                                        || display_resp
-                                            .as_ref()
-                                            .map(|resp| resp.clicked())
-                                            .unwrap_or(false)
-                                        || layer_leds_resp
-                                            .as_ref()
-                                            .map(|r| r.clicked())
-                                            .unwrap_or(false)
-                                        || encoders_resp
-                                            .as_ref()
-                                            .map(|r| r.clicked())
-                                            .unwrap_or(false)
-                                        || layout_options_resp
-                                            .as_ref()
-                                            .map(|r| r.clicked())
-                                            .unwrap_or(false)
-                                        || modules_resp
-                                            .as_ref()
-                                            .map(|r| r.clicked())
-                                            .unwrap_or(false)
-                                        || touchpad_resp
-                                            .as_ref()
-                                            .map(|r| r.clicked())
-                                            .unwrap_or(false)
-                                        || bluetooth_resp
-                                            .as_ref()
-                                            .map(|r| r.clicked())
-                                            .unwrap_or(false)
-                                        || live_features_resp
-                                            .as_ref()
-                                            .map(|r| r.clicked())
-                                            .unwrap_or(false)
-                                        || magic_resp
-                                            .as_ref()
-                                            .map(|r| r.clicked())
-                                            .unwrap_or(false)
-                                        || tap_hold_resp
-                                            .as_ref()
-                                            .map(|r| r.clicked())
-                                            .unwrap_or(false)
-                                        || lock_resp.as_ref().map(|r| r.clicked()).unwrap_or(false)
-                                        || about_entropy_resp.clicked(),
-                                )
-                            })
-                            .inner
-                    })
-                    .inner;
+                                || magic_resp.as_ref().map(|r| r.clicked()).unwrap_or(false)
+                                || tap_hold_resp.as_ref().map(|r| r.clicked()).unwrap_or(false)
+                                || lock_resp.as_ref().map(|r| r.clicked()).unwrap_or(false)
+                                || about_entropy_resp.clicked(),
+                        )
+                    },
+                )
+                .inner;
                 ui.ctx().data_mut(|d| {
                     d.insert_temp(
                         dropdown_id,
                         !settings_clicked
                             && (settings_tab_hovered
                                 || app_hovered
+                                || application_layouts_hovered
                                 || matrix_hovered
                                 || rgb_hovered
                                 || display_hovered

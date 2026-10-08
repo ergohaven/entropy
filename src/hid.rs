@@ -140,6 +140,13 @@ impl std::fmt::Display for MacosHidInputMonitoringRequired {
 #[cfg(target_os = "macos")]
 impl std::error::Error for MacosHidInputMonitoringRequired {}
 
+#[cfg(target_os = "macos")]
+fn is_macos_hid_input_monitoring_required(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.is::<MacosHidInputMonitoringRequired>())
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 #[derive(Debug)]
 struct UnsafeBluetoothReportMap;
@@ -187,7 +194,95 @@ mod hid_vial;
 #[cfg(not(target_arch = "wasm32"))]
 pub struct HidDevice {
     backend: HidBackend,
+    unlock_confirmation_pending: std::sync::atomic::AtomicBool,
+    read_only: Option<ReadOnlyHidSession>,
 }
+
+/// A read-only HID session (`--export-layout`): every handle opened while it
+/// is active refuses anything but a known read before it reaches the
+/// transport, and keeps the reads that failed so an export can tell which of
+/// its data is missing.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Default)]
+pub(crate) struct ReadOnlyHidSession {
+    ledger: std::sync::Arc<std::sync::Mutex<ReadOnlyHidLedger>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct ReadOnlyHidLedger {
+    refused: Vec<[u8; MSG_LEN]>,
+    failed_reads: Vec<[u8; MSG_LEN]>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+static READ_ONLY_HID_SESSION: std::sync::OnceLock<ReadOnlyHidSession> = std::sync::OnceLock::new();
+
+/// Makes every HID handle this process opens from now on read-only. There is
+/// no way back: the process is expected to exit when its read is done.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn enforce_read_only_hid() -> ReadOnlyHidSession {
+    READ_ONLY_HID_SESSION.get_or_init(Default::default).clone()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_only_hid_session() -> Option<ReadOnlyHidSession> {
+    READ_ONLY_HID_SESSION.get().cloned()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ReadOnlyHidSession {
+    fn ledger(&self) -> std::sync::MutexGuard<'_, ReadOnlyHidLedger> {
+        self.ledger
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn refuse(&self, data: &[u8]) -> anyhow::Error {
+        self.ledger().refused.push(padded_request(data));
+        anyhow::anyhow!(
+            "Read-only HID session refused request {:#04x}",
+            data.first().copied().unwrap_or_default()
+        )
+    }
+
+    fn send(
+        &self,
+        data: &[u8],
+        send: impl FnOnce() -> Result<[u8; MSG_LEN]>,
+    ) -> Result<[u8; MSG_LEN]> {
+        if !is_read_request(data) {
+            return Err(self.refuse(data));
+        }
+        let result = send();
+        if result.is_err() {
+            self.ledger().failed_reads.push(padded_request(data));
+        }
+        result
+    }
+
+    /// Requests refused as writes (or as unknown commands).
+    pub(crate) fn refused_requests(&self) -> Vec<[u8; MSG_LEN]> {
+        self.ledger().refused.clone()
+    }
+
+    /// Reads that reached the transport and failed there.
+    pub(crate) fn failed_reads(&self) -> Vec<[u8; MSG_LEN]> {
+        self.ledger().failed_reads.clone()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn padded_request(data: &[u8]) -> [u8; MSG_LEN] {
+    let mut request = [0; MSG_LEN];
+    let len = data.len().min(MSG_LEN);
+    request[..len].copy_from_slice(&data[..len]);
+    request
+}
+
+#[cfg(test)]
+type TestHidResponder =
+    Box<dyn FnMut(&[u8; MSG_LEN]) -> Option<Result<[u8; MSG_LEN], String>> + Send>;
 
 #[cfg(test)]
 #[derive(Clone)]
@@ -196,6 +291,8 @@ pub(crate) struct TestHidRecorder {
     pictogram_backup_directory: std::sync::Arc<std::sync::Mutex<Option<PathBuf>>>,
     requests: std::sync::Arc<std::sync::Mutex<Vec<[u8; MSG_LEN]>>>,
     responses: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<[u8; MSG_LEN]>>>,
+    responder: std::sync::Arc<std::sync::Mutex<Option<TestHidResponder>>>,
+    output_connected: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(test)]
@@ -207,6 +304,30 @@ impl TestHidRecorder {
 
     pub(crate) fn respond_with(&self, responses: impl IntoIterator<Item = [u8; MSG_LEN]>) {
         self.responses.lock().unwrap().extend(responses);
+    }
+
+    /// Scripts a whole keyboard: the responder answers (or fails) any request
+    /// it returns `Some` for; the rest fall back to the built-in replies.
+    pub(crate) fn respond_by(
+        &self,
+        responder: impl FnMut(&[u8; MSG_LEN]) -> Option<Result<[u8; MSG_LEN], String>> + Send + 'static,
+    ) {
+        *self.responder.lock().unwrap() = Some(Box::new(responder));
+    }
+
+    pub(crate) fn disconnect_output(&self) {
+        self.output_connected
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    fn ensure_output_connected(&self) -> Result<()> {
+        if !self
+            .output_connected
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            bail!("HID device disconnected");
+        }
+        Ok(())
     }
 
     pub(crate) fn requests(&self) -> Vec<[u8; MSG_LEN]> {
@@ -425,10 +546,7 @@ impl SharedHidOutput {
                 .context("Shared HID output owner is no longer available")?
                 .write_output_report(data),
             #[cfg(test)]
-            SharedHidOutputBackend::Test(recorder) => {
-                record_test_output_report(recorder, data);
-                Ok(())
-            }
+            SharedHidOutputBackend::Test(recorder) => record_test_output_report(recorder, data),
         }
     }
 }
@@ -508,8 +626,12 @@ impl HidDevice {
             pictogram_backup_directory: Default::default(),
             requests: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             responses: Default::default(),
+            responder: Default::default(),
+            output_connected: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         };
         let device = Self {
+            unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            read_only: None,
             backend: HidBackend::Test {
                 recorder: recorder.clone(),
                 combo: std::sync::Mutex::new(([0; 4], 0)),
@@ -517,6 +639,15 @@ impl HidDevice {
                 fault_after_requests: std::sync::Mutex::new(fault_after_requests),
             },
         };
+        (device, recorder)
+    }
+
+    /// A scripted device inside `session`, as `enforce_read_only_hid` would
+    /// open it, without switching the whole test process to read-only.
+    #[cfg(test)]
+    pub(crate) fn test_read_only_device(session: ReadOnlyHidSession) -> (Self, TestHidRecorder) {
+        let (mut device, recorder) = Self::test_device();
+        device.read_only = Some(session);
         (device, recorder)
     }
 
@@ -546,6 +677,8 @@ impl HidDevice {
             match crate::linux_ble::LinuxBleDevice::open(device) {
                 Ok(bluez_device) => {
                     return Ok(Self {
+                        unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+                        read_only: read_only_hid_session(),
                         backend: HidBackend::LinuxBle(bluez_device),
                     })
                 }
@@ -567,6 +700,10 @@ impl HidDevice {
     }
 
     pub(crate) fn shared_output(&self) -> Option<SharedHidOutput> {
+        // The shared path is write-only; a read-only handle has none to share.
+        if self.read_only.is_some() {
+            return None;
+        }
         match &self.backend {
             HidBackend::Proxy(proxy) => Some(SharedHidOutput {
                 host_output: proxy.host_output.clone(),
@@ -585,13 +722,29 @@ impl HidDevice {
 
     fn open_fresh_for_local(device: &crate::device::Device) -> Result<Self> {
         #[cfg(target_os = "macos")]
-        prepare_macos_bluetooth_hid_access(device)?;
+        let open_result = with_macos_bluetooth_hid_access(
+            device.is_bluetooth_transport(),
+            crate::smart_input::input_monitoring_access_granted,
+            crate::smart_input::request_input_monitoring_access,
+            || Self::open_fresh_for_local_after_access_request(device),
+        );
 
+        #[cfg(not(target_os = "macos"))]
+        let open_result = Self::open_fresh_for_local_after_access_request(device);
+
+        open_result
+    }
+
+    fn open_fresh_for_local_after_access_request(device: &crate::device::Device) -> Result<Self> {
         let mut last_error = None;
         for attempt in 0..HID_OPEN_RETRIES {
             match Self::try_open_fresh_for(device) {
                 Ok(device) => return Ok(device),
                 Err(e) => {
+                    #[cfg(target_os = "macos")]
+                    if is_macos_hid_input_monitoring_required(&e) {
+                        return Err(e);
+                    }
                     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
                     if is_unsafe_bluetooth_report_map(&e) {
                         return Err(e);
@@ -608,6 +761,8 @@ impl HidDevice {
 
     fn open_proxy_for(device: &crate::device::Device) -> Result<Self> {
         Ok(Self {
+            unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            read_only: read_only_hid_session(),
             backend: HidBackend::Proxy(std::sync::Arc::new(HidProxy::open(device)?)),
         })
     }
@@ -654,6 +809,8 @@ impl HidDevice {
             let transport = device_transport(device);
             let write_framing = detect_hid_write_framing(&hid_device, transport)?;
             return Ok(Self {
+                unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+                read_only: read_only_hid_session(),
                 backend: HidBackend::Local {
                     device: hid_device,
                     transport,
@@ -671,6 +828,9 @@ impl HidDevice {
     /// Live host data is write-only, but it must use the same transport-specific
     /// report framing as normal Vial commands (notably report ID 5 over RMK BLE).
     pub(crate) fn write_output_report(&self, data: &[u8]) -> Result<()> {
+        if let Some(session) = &self.read_only {
+            return Err(session.refuse(data));
+        }
         ensure_output_report_len(data)?;
 
         match &self.backend {
@@ -684,15 +844,19 @@ impl HidDevice {
             #[cfg(target_os = "linux")]
             HidBackend::LinuxBle(device) => device.write_output_report(data),
             #[cfg(test)]
-            HidBackend::Test { recorder, .. } => {
-                record_test_output_report(recorder, data);
-                Ok(())
-            }
+            HidBackend::Test { recorder, .. } => record_test_output_report(recorder, data),
         }
     }
 
     /// Send exactly MSG_LEN bytes (with 0x00 report ID prepended), receive MSG_LEN bytes back.
     pub(crate) fn usb_send(&self, data: &[u8]) -> Result<[u8; MSG_LEN]> {
+        match &self.read_only {
+            Some(session) => session.send(data, || self.usb_send_traced(data)),
+            None => self.usb_send_traced(data),
+        }
+    }
+
+    fn usb_send_traced(&self, data: &[u8]) -> Result<[u8; MSG_LEN]> {
         let trace = log::log_enabled!(log::Level::Debug)
             .then(|| display_diagnostic_request(data))
             .flatten();
@@ -782,6 +946,11 @@ impl HidDevice {
                     }
                 }
 
+                if let Some(responder) = recorder.responder.lock().unwrap().as_mut() {
+                    if let Some(response) = responder(&request) {
+                        return response.map_err(anyhow::Error::msg);
+                    }
+                }
                 if let Some(response) = recorder.responses.lock().unwrap().pop_front() {
                     return Ok(response);
                 }
@@ -877,7 +1046,8 @@ fn ensure_output_report_len(data: &[u8]) -> Result<()> {
 }
 
 #[cfg(test)]
-fn record_test_output_report(recorder: &TestHidRecorder, data: &[u8]) {
+fn record_test_output_report(recorder: &TestHidRecorder, data: &[u8]) -> Result<()> {
+    recorder.ensure_output_connected()?;
     let mut report = [0; MSG_LEN];
     report[..data.len()].copy_from_slice(data);
     recorder
@@ -885,6 +1055,7 @@ fn record_test_output_report(recorder: &TestHidRecorder, data: &[u8]) {
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .push(report);
+    Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -936,6 +1107,17 @@ fn is_keymap_read_request(data: &[u8]) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn is_application_layout_capability_probe(data: &[u8]) -> bool {
+    data.starts_with(&[
+        0xE6,
+        crate::application_layouts::APPLICATION_LAYOUT_PROTOCOL_VERSION,
+        0xA5,
+        0,
+        0,
+    ])
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn is_optional_dynamic_entry_count_request(data: &[u8]) -> bool {
     data.starts_with(&[
         CMD_VIA_VIAL_PREFIX,
@@ -967,6 +1149,7 @@ fn usb_send_max_attempts(transport: HidTransport, data: &[u8]) -> usize {
         || is_keymap_read_request(data)
         || crate::rmk_native::is_rmk_native_capabilities_request(data)
         || is_optional_dynamic_entry_count_request(data)
+        || is_application_layout_capability_probe(data)
         || data.first().is_some_and(|command| {
             // Pictogram BEGIN/DATA/COMMIT are not idempotent: replay can
             // restart storage, fail sequence checks, or reject a committed upload.
@@ -1572,6 +1755,11 @@ fn response_matches_command(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
         | CMD_VIA_LIGHTING_SAVE
         | CMD_VIA_MACRO_SET_BUFFER => resp[0] == cmd,
         CMD_VIA_VIAL_PREFIX => response_matches_vial_command(command, resp),
+        0xE6 if is_application_layout_capability_probe(command) => {
+            resp[0] == 0xE6
+                && resp[1] == crate::application_layouts::APPLICATION_LAYOUT_PROTOCOL_VERSION
+                && resp[2] == 0x5A
+        }
         // Keep reading for this command within the original deadline when a
         // delayed response from another pictogram command arrives. Never resend.
         0xC0..=0xCB => resp[0] == cmd,
@@ -1697,16 +1885,19 @@ fn drain_pending_reports(device: &hidapi::HidDevice) {
 }
 
 #[cfg(target_os = "macos")]
-fn prepare_macos_bluetooth_hid_access(device: &crate::device::Device) -> Result<()> {
-    if !device.is_bluetooth_transport() || crate::smart_input::input_monitoring_access_granted() {
-        return Ok(());
+fn with_macos_bluetooth_hid_access<T>(
+    is_bluetooth: bool,
+    input_monitoring_access_granted: impl FnOnce() -> bool,
+    request_input_monitoring_access: impl FnOnce() -> bool,
+    open_hid: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    if is_bluetooth && !input_monitoring_access_granted() {
+        // These APIs can remain false after System Settings shows access as enabled.
+        // Let the real HID open decide whether macOS permits the device.
+        let _ = request_input_monitoring_access();
     }
 
-    if crate::smart_input::request_input_monitoring_access() {
-        return Ok(());
-    }
-
-    Err(MacosHidInputMonitoringRequired.into())
+    open_hid()
 }
 
 #[cfg(target_os = "macos")]
@@ -1718,6 +1909,68 @@ fn macos_hid_open_not_permitted(error: &hidapi::HidError) -> bool {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn stale_input_monitoring_preflight_does_not_block_bluetooth_hid_open() {
+        let requested = std::cell::Cell::new(false);
+        let opened = std::cell::Cell::new(false);
+
+        let result = with_macos_bluetooth_hid_access(
+            true,
+            || false,
+            || {
+                requested.set(true);
+                false
+            },
+            || {
+                opened.set(true);
+                Ok(())
+            },
+        );
+
+        assert!(requested.get());
+        assert!(opened.get());
+        assert!(result.is_ok());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn input_monitoring_request_only_runs_for_ungranted_bluetooth() {
+        let requested = std::cell::Cell::new(false);
+
+        let result = with_macos_bluetooth_hid_access(
+            false,
+            || panic!("non-Bluetooth devices must skip the permission preflight"),
+            || {
+                requested.set(true);
+                false
+            },
+            || Ok(()),
+        );
+        assert!(result.is_ok());
+        assert!(!requested.get());
+
+        let result = with_macos_bluetooth_hid_access(
+            true,
+            || true,
+            || {
+                requested.set(true);
+                false
+            },
+            || Ok(()),
+        );
+        assert!(result.is_ok());
+        assert!(!requested.get());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn input_monitoring_denial_is_a_terminal_hid_open_error() {
+        let error: anyhow::Error = MacosHidInputMonitoringRequired.into();
+
+        assert!(is_macos_hid_input_monitoring_required(&error));
+    }
 
     #[test]
     fn display_diagnostics_exclude_keymaps_macros_and_pixel_payloads() {
@@ -1786,6 +2039,17 @@ mod tests {
         let requests = recorder.requests();
         assert_eq!(requests.len(), 1);
         assert_eq!(&requests[0][..4], &[0xAC, 1, 0, 0]);
+    }
+
+    #[test]
+    fn disconnected_test_hid_rejects_dedicated_and_shared_output_reports() {
+        let (device, recorder) = HidDevice::test_device();
+        let shared = device.shared_output().unwrap();
+        recorder.disconnect_output();
+
+        assert!(device.write_output_report(&[0xAC, 1]).is_err());
+        assert!(shared.write_output_report(&[0xAC, 1]).is_err());
+        assert!(recorder.requests().is_empty());
     }
 
     #[test]
@@ -2046,6 +2310,27 @@ mod tests {
             usb_send_max_attempts(HidTransport::Usb, &dynamic_entry_counts),
             1
         );
+    }
+
+    #[test]
+    fn application_layout_probe_is_optional_and_requires_live_response() {
+        let request = [
+            0xE6,
+            crate::application_layouts::APPLICATION_LAYOUT_PROTOCOL_VERSION,
+            0xA5,
+            0,
+            0,
+        ];
+        assert_eq!(usb_send_max_attempts(HidTransport::Usb, &request), 1);
+        let mut response = [0u8; MSG_LEN];
+        response[..3].copy_from_slice(&[
+            0xE6,
+            crate::application_layouts::APPLICATION_LAYOUT_PROTOCOL_VERSION,
+            0x5A,
+        ]);
+        assert!(response_matches_command(&request, &response));
+        response[2] = 0;
+        assert!(!response_matches_command(&request, &response));
     }
 
     #[test]
@@ -2381,5 +2666,89 @@ mod tests {
         let (hid, _) = HidDevice::test_device();
 
         assert!(hid.macos_hid_operation_lock().is_none());
+    }
+
+    #[test]
+    fn read_only_session_refuses_every_write_before_the_transport() {
+        let session = ReadOnlyHidSession::default();
+        let (hid, recorder) = HidDevice::test_read_only_device(session.clone());
+        let writes: &[&[u8]] = &[
+            &[CMD_VIA_SET_KEYBOARD_VALUE, VIA_LAYOUT_OPTIONS, 0, 0, 0, 1],
+            &[CMD_VIA_SET_KEYCODE, 0, 0, 0, 0, 4],
+            &[0x06], // VIA dynamic keymap reset
+            &[CMD_VIA_CUSTOM_SET_VALUE, ERGOHAVEN_CUSTOM_NAMESPACE, 0x03],
+            &[CMD_VIA_LIGHTING_SET_VALUE, QMK_RGBLIGHT_BRIGHTNESS, 10],
+            &[CMD_VIA_LIGHTING_SAVE],
+            &[0x0B], // VIA bootloader jump
+            &[CMD_VIA_MACRO_SET_BUFFER, 0, 0, 1, 0],
+            &[0x10], // VIA macro reset
+            &[CMD_VIA_VIAL_PREFIX, CMD_VIAL_SET_ENCODER, 0, 0, 0, 0, 4],
+            &[CMD_VIA_VIAL_PREFIX, CMD_VIAL_UNLOCK_START],
+            &[CMD_VIA_VIAL_PREFIX, CMD_VIAL_UNLOCK_POLL],
+            &[CMD_VIA_VIAL_PREFIX, CMD_VIAL_LOCK],
+            &[CMD_VIA_VIAL_PREFIX, CMD_VIAL_QMK_SETTINGS_SET, 200, 0, b'A'],
+            &[CMD_VIA_VIAL_PREFIX, 0x0C], // Vial QMK settings reset
+            &[
+                CMD_VIA_VIAL_PREFIX,
+                CMD_VIAL_DYNAMIC_ENTRY_OP,
+                DYNAMIC_VIAL_TAP_DANCE_SET,
+            ],
+            &[
+                CMD_VIA_VIAL_PREFIX,
+                CMD_VIAL_DYNAMIC_ENTRY_OP,
+                DYNAMIC_VIAL_COMBO_SET,
+            ],
+            &[
+                CMD_VIA_VIAL_PREFIX,
+                CMD_VIAL_DYNAMIC_ENTRY_OP,
+                DYNAMIC_VIAL_KEY_OVERRIDE_SET,
+            ],
+            &[
+                CMD_VIA_VIAL_PREFIX,
+                CMD_VIAL_DYNAMIC_ENTRY_OP,
+                DYNAMIC_VIAL_ALT_REPEAT_KEY_SET,
+            ],
+            &[0xB6, 1],      // standby animation session
+            &[0xC2],         // pictogram upload
+            &[0xD4],         // startup image clear
+            &[0xAA, 12, 34], // host clock
+            &[],
+        ];
+
+        for write in writes {
+            assert!(hid.usb_send(write).is_err(), "{write:02x?} was not refused");
+        }
+        assert!(hid.write_output_report(&[0xAA, 12, 34]).is_err());
+        assert!(hid.shared_output().is_none());
+
+        assert!(
+            recorder.requests().is_empty(),
+            "{:02x?}",
+            recorder.requests()
+        );
+        assert_eq!(session.refused_requests().len(), writes.len() + 1);
+        assert!(session.failed_reads().is_empty());
+    }
+
+    #[test]
+    fn read_only_session_passes_reads_and_keeps_the_failed_ones() {
+        let session = ReadOnlyHidSession::default();
+        let (hid, recorder) = HidDevice::test_read_only_device(session.clone());
+        recorder.respond_by(|request| {
+            (request[0] == CMD_VIA_MACRO_GET_BUFFER).then(|| Err("HID timeout".to_owned()))
+        });
+
+        hid.get_protocol_version().unwrap();
+        hid.get_keyboard_id().unwrap();
+        hid.get_keymap_buffer(1, 1, 1).unwrap();
+        hid.get_combo(0).unwrap();
+        hid.get_qmk_setting_u16(2).unwrap();
+        assert!(hid.get_macro_buffer(4, 1).is_err());
+
+        assert_eq!(recorder.requests().len(), 6);
+        assert!(session.refused_requests().is_empty());
+        let failed = session.failed_reads();
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0][..4], [CMD_VIA_MACRO_GET_BUFFER, 0, 0, 4]);
     }
 }

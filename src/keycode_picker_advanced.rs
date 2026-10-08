@@ -10,15 +10,9 @@ impl KeycodePicker {
         data_state: DeferredPickerDataState,
     ) {
         let ready = data_state == DeferredPickerDataState::Ready;
-        let compact_label = label.replace(' ', "\n");
-        let response = picker_button(
-            ui,
-            &compact_label,
-            Self::picker_key_size(ui.ctx()),
-            ready,
-            false,
-        )
-        .on_hover_text(tooltip);
+        let response = picker_button(ui, label, Self::picker_key_size(ui.ctx()), ready, false)
+            .on_hover_text(tooltip);
+        set_accessible_description(ui, &response, tooltip);
         if response.clicked() && ready {
             self.advanced_slot_picker = Some(kind);
         }

@@ -43,7 +43,7 @@ unsafe fn process_name_lower_for_hwnd(hwnd: HWND) -> Option<String> {
         .map(|name| name.to_ascii_lowercase())
 }
 #[cfg(target_os = "windows")]
-fn foreground_app_candidate() -> Option<TextExpanderAppCandidate> {
+pub(super) fn foreground_app_candidate() -> Option<TextExpanderAppCandidate> {
     unsafe { app_candidate_for_hwnd(GetForegroundWindow()) }
 }
 
@@ -52,6 +52,103 @@ unsafe fn app_candidate_for_hwnd(hwnd: HWND) -> Option<TextExpanderAppCandidate>
     let exe = process_name_lower_for_hwnd(hwnd)?;
     let title = window_title(hwnd).unwrap_or_default();
     Some(TextExpanderAppCandidate { exe, title })
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_picker_process_is_system(exe: &str) -> bool {
+    matches!(
+        exe.trim().to_ascii_lowercase().as_str(),
+        "applicationframehost.exe"
+            | "systemsettings.exe"
+            | "textinputhost.exe"
+            | "shellexperiencehost.exe"
+            | "startmenuexperiencehost.exe"
+            | "searchhost.exe"
+            | "searchapp.exe"
+            | "lockapp.exe"
+            | "runtimebroker.exe"
+            | "securityhealthsystray.exe"
+            | "widgets.exe"
+            | "widgetservice.exe"
+            | "taskhostw.exe"
+            | "dllhost.exe"
+            | "ctfmon.exe"
+    )
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn window_is_user_facing(hwnd: HWND) -> bool {
+    if hwnd.is_null() || IsWindowVisible(hwnd) == 0 {
+        return false;
+    }
+    let mut cloaked = 0u32;
+    if DwmGetWindowAttribute(
+        hwnd,
+        DWMWA_CLOAKED,
+        &mut cloaked as *mut u32 as *mut core::ffi::c_void,
+        std::mem::size_of::<u32>() as u32,
+    ) == 0
+        && cloaked != 0
+    {
+        return false;
+    }
+    let extended_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+    if extended_style & WS_EX_TOOLWINDOW != 0 && extended_style & WS_EX_APPWINDOW == 0 {
+        return false;
+    }
+    if !GetWindow(hwnd, GW_OWNER).is_null() && extended_style & WS_EX_APPWINDOW == 0 {
+        return false;
+    }
+    true
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn uwp_child_candidate(hwnd: HWND, parent_title: &str) -> Option<TextExpanderAppCandidate> {
+    struct Search<'a> {
+        parent_title: &'a str,
+        candidate: Option<TextExpanderAppCandidate>,
+    }
+
+    unsafe extern "system" fn enum_child(child: HWND, lparam: isize) -> i32 {
+        let search = &mut *(lparam as *mut Search<'_>);
+        let Some(exe) = process_name_lower_for_hwnd(child) else {
+            return 1;
+        };
+        if windows_picker_process_is_system(&exe) {
+            return 1;
+        }
+        search.candidate = Some(TextExpanderAppCandidate {
+            exe,
+            title: search.parent_title.to_owned(),
+        });
+        0
+    }
+
+    let mut search = Search {
+        parent_title,
+        candidate: None,
+    };
+    EnumChildWindows(
+        hwnd,
+        Some(enum_child),
+        &mut search as *mut Search<'_> as isize,
+    );
+    search.candidate
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn picker_candidate_for_hwnd(hwnd: HWND) -> Option<TextExpanderAppCandidate> {
+    if !window_is_user_facing(hwnd) {
+        return None;
+    }
+    let candidate = app_candidate_for_hwnd(hwnd)?;
+    if candidate.title.is_empty() {
+        return None;
+    }
+    if candidate.exe == "applicationframehost.exe" {
+        return uwp_child_candidate(hwnd, &candidate.title);
+    }
+    (!windows_picker_process_is_system(&candidate.exe)).then_some(candidate)
 }
 
 #[cfg(target_os = "windows")]
@@ -76,15 +173,9 @@ unsafe fn window_title(hwnd: HWND) -> Option<String> {
 pub(super) fn platform_open_window_candidates() -> Vec<TextExpanderAppCandidate> {
     unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: isize) -> i32 {
         let apps = &mut *(lparam as *mut Vec<TextExpanderAppCandidate>);
-        if IsWindowVisible(hwnd) == 0 {
-            return 1;
-        }
-        let Some(candidate) = app_candidate_for_hwnd(hwnd) else {
+        let Some(candidate) = picker_candidate_for_hwnd(hwnd) else {
             return 1;
         };
-        if candidate.title.is_empty() {
-            return 1;
-        }
         if current_process_name_lower().as_deref() == Some(candidate.exe.as_str()) {
             return 1;
         }
@@ -620,6 +711,16 @@ const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
 const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
 #[cfg(target_os = "windows")]
 const WINEVENT_OUTOFCONTEXT: u32 = 0x0000;
+#[cfg(target_os = "windows")]
+const GWL_EXSTYLE: i32 = -20;
+#[cfg(target_os = "windows")]
+const GW_OWNER: u32 = 4;
+#[cfg(target_os = "windows")]
+const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+#[cfg(target_os = "windows")]
+const WS_EX_APPWINDOW: u32 = 0x0004_0000;
+#[cfg(target_os = "windows")]
+const DWMWA_CLOAKED: u32 = 14;
 
 #[cfg(target_os = "windows")]
 static CLIPBOARD_PASTE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -784,7 +885,14 @@ extern "system" {
         lpEnumFunc: Option<unsafe extern "system" fn(HWND, isize) -> i32>,
         lParam: isize,
     ) -> i32;
+    fn EnumChildWindows(
+        hWndParent: HWND,
+        lpEnumFunc: Option<unsafe extern "system" fn(HWND, isize) -> i32>,
+        lParam: isize,
+    ) -> i32;
     fn IsWindowVisible(hWnd: HWND) -> i32;
+    fn GetWindow(hWnd: HWND, uCmd: u32) -> HWND;
+    fn GetWindowLongPtrW(hWnd: HWND, nIndex: i32) -> isize;
     fn GetWindowTextLengthW(hWnd: HWND) -> i32;
     fn GetWindowTextW(hWnd: HWND, lpString: *mut u16, nMaxCount: i32) -> i32;
     fn OpenClipboard(hWndNewOwner: HWND) -> i32;
@@ -792,6 +900,17 @@ extern "system" {
     fn EmptyClipboard() -> i32;
     fn GetClipboardData(uFormat: u32) -> HANDLE;
     fn SetClipboardData(uFormat: u32, hMem: HANDLE) -> HANDLE;
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "dwmapi")]
+extern "system" {
+    fn DwmGetWindowAttribute(
+        hwnd: HWND,
+        dwAttribute: u32,
+        pvAttribute: *mut core::ffi::c_void,
+        cbAttribute: u32,
+    ) -> i32;
 }
 
 #[cfg(target_os = "windows")]
@@ -814,7 +933,26 @@ extern "system" {
 
 #[cfg(test)]
 mod tests {
-    use super::{windows_clipboard_text, windows_text_units, WindowsTextUnit};
+    use super::{
+        windows_clipboard_text, windows_picker_process_is_system, windows_text_units,
+        WindowsTextUnit,
+    };
+
+    #[test]
+    fn windows_picker_excludes_shell_hosts_but_keeps_user_apps() {
+        for exe in [
+            "SystemSettings.exe",
+            "ApplicationFrameHost.exe",
+            "TextInputHost.exe",
+            "SearchHost.exe",
+            "RuntimeBroker.exe",
+        ] {
+            assert!(windows_picker_process_is_system(exe), "{exe}");
+        }
+        for exe in ["Telegram.exe", "firefox.exe", "Entropy.exe", "portable.exe"] {
+            assert!(!windows_picker_process_is_system(exe), "{exe}");
+        }
+    }
 
     #[test]
     fn normalizes_clipboard_line_endings_for_windows() {

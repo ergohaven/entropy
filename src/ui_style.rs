@@ -92,10 +92,16 @@ fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
 }
 
 pub fn hover_fill(dark: bool) -> Color32 {
+    hover_fill_for_accent(dark, accent())
+}
+
+/// Hover fill as it looks with the given accent color. Lets checks cover
+/// every accent without touching the global accent.
+pub fn hover_fill_for_accent(dark: bool, accent: Color32) -> Color32 {
     if dark {
-        mix(Color32::from_rgb(45, 45, 48), accent(), 0.22)
+        mix(Color32::from_rgb(45, 45, 48), accent, 0.22)
     } else {
-        mix(Color32::from_rgb(255, 255, 255), accent(), 0.16)
+        mix(Color32::from_rgb(255, 255, 255), accent, 0.16)
     }
 }
 
@@ -1364,4 +1370,66 @@ fn settings_switch_impl(
     }
 
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn switch_frame(
+        ctx: &egui::Context,
+        checked: &mut bool,
+        interactive: bool,
+        events: Vec<egui::Event>,
+    ) -> egui::Rect {
+        let rect = std::cell::Cell::new(egui::Rect::NOTHING);
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(160.0, 100.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                let response = settings_switch_sized_stable_interactive(
+                    ui,
+                    "disabled_switch_test",
+                    checked,
+                    egui::vec2(46.0, 24.0),
+                    interactive,
+                );
+                rect.set(response.rect);
+            },
+        );
+        rect.get()
+    }
+
+    #[test]
+    fn disabled_stable_switch_ignores_pointer_click() {
+        let ctx = egui::Context::default();
+        let mut checked = false;
+        let rect = switch_frame(&ctx, &mut checked, false, Vec::new());
+        let pos = rect.center();
+
+        for pressed in [true, false] {
+            switch_frame(
+                &ctx,
+                &mut checked,
+                false,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+
+        assert!(!checked, "a disabled switch must not toggle on click");
+    }
 }

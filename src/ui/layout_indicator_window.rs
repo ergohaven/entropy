@@ -534,6 +534,31 @@ impl EntropyApp {
         should_close
     }
 
+    pub(super) fn toggle_sticky_layout_window(&mut self) {
+        if self.app_settings.sticky_layout_window {
+            self.app_settings.sticky_layout_window = false;
+            self.pending_layout_indicator_open_after_unlock = false;
+        } else if self.is_vial_locked() {
+            self.defer_sticky_layout_until_unlock();
+            return;
+        } else {
+            self.app_settings.sticky_layout_window = true;
+        }
+        self.sticky_layout_last_size = None;
+        save_app_settings(&self.app_settings);
+    }
+
+    pub(super) fn defer_sticky_layout_until_unlock(&mut self) {
+        self.app_settings.sticky_layout_window = false;
+        self.pending_layout_indicator_open_after_unlock = true;
+        self.unlock_open = true;
+        self.status_msg = crate::i18n::tr_catalog(
+            self.app_settings.language,
+            "matrix_tester.keyboard_is_locked_unlock_it_to_use_matrix_tester",
+        )
+        .into();
+    }
+
     pub(super) fn draw_sticky_layout_window(&mut self, ctx: &egui::Context) {
         if !self.app_settings.sticky_layout_window {
             let _ = drain_sticky_layout_viewport_events(&self.sticky_layout_viewport_events);
@@ -548,21 +573,21 @@ impl EntropyApp {
 
         #[cfg(not(target_arch = "wasm32"))]
         if self.is_vial_locked() {
-            self.app_settings.sticky_layout_window = false;
-            self.pending_layout_indicator_open_after_unlock = true;
-            self.unlock_open = true;
-            self.status_msg = crate::i18n::tr_catalog(
-                self.app_settings.language,
-                "matrix_tester.keyboard_is_locked_unlock_it_to_use_matrix_tester",
-            )
-            .into();
+            self.defer_sticky_layout_until_unlock();
             save_app_settings(&self.app_settings);
             return;
         }
 
         let viewport_id = sticky_layout_viewport_id();
         let lang = self.app_settings.language;
-        let layout = self.layout.clone();
+        let application_layout_active = self.application_layouts_supported();
+        let layout = self.layout.as_ref().map(|layout| {
+            if application_layout_active {
+                self.application_layout_active_rendered_copy(layout)
+            } else {
+                layout.clone()
+            }
+        });
         let selected_device_name = self
             .selected_device
             .and_then(|idx| self.device_manager.devices().get(idx))
@@ -597,7 +622,11 @@ impl EntropyApp {
             .map(|layout| self.sync_sticky_layout_layer_state(layout))
             .unwrap_or(0);
         self.sticky_layout_active_layer = sticky_layer;
-        let layer_names = self.layer_names.clone();
+        let layer_names = if application_layout_active {
+            self.application_layout_active_layer_names()
+        } else {
+            self.layer_names.clone()
+        };
         let macro_names = self.keycode_picker.macro_names.clone();
         let tap_dance_names = self.keycode_picker.tap_dance_names.clone();
         let key_legend_layout = self.app_settings.key_legend_layout;
@@ -1015,6 +1044,38 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layout_indicator_menu_and_retained_setting_only_open_preflight() {
+        let mut app = EntropyApp::new_inert_for_test();
+        app.firmware = FirmwareProtocol::Vial;
+        app.layout = Some(
+            KeyboardLayout::from_vial_json(&serde_json::json!({
+                "name": "Test keyboard",
+                "matrix": { "rows": 1, "cols": 1 },
+                "layouts": { "keymap": [["0,0"]] }
+            }))
+            .unwrap(),
+        );
+        app.vial_unlocked = Some(false);
+
+        app.toggle_sticky_layout_window();
+        assert!(app.unlock_open);
+        assert!(app.pending_layout_indicator_open_after_unlock);
+        assert!(!app.app_settings.sticky_layout_window);
+        assert!(!app.vial_unlock_session_started);
+        app.dismiss_vial_unlock_preflight();
+        assert!(!app.pending_layout_indicator_open_after_unlock);
+
+        app.app_settings.sticky_layout_window = true;
+        app.defer_sticky_layout_until_unlock();
+        assert!(app.unlock_open);
+        assert!(app.pending_layout_indicator_open_after_unlock);
+        assert!(!app.app_settings.sticky_layout_window);
+        app.dismiss_vial_unlock_preflight();
+        assert!(!app.pending_layout_indicator_open_after_unlock);
+        assert!(!app.app_settings.sticky_layout_window);
+    }
 
     fn assert_pin_commands(
         always_on_top: bool,

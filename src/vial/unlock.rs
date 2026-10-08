@@ -9,11 +9,63 @@ impl EntropyApp {
     pub(super) fn stop_vial_unlock_with_status(&mut self, status: impl Into<String>) {
         self.status_msg = status.into();
         self.unlock_open = false;
+        self.vial_unlock_session_started = false;
         self.vial_unlock_polling = false;
         self.vial_unlock_last_poll = None;
         self.vial_unlock_counter = self.vial_unlock_total;
         self.vial_unlock_best = self.vial_unlock_total;
         self.pending_layout_indicator_open_after_unlock = false;
+        self.macro_auto_unlock_cancelled = true;
+    }
+
+    /// Dismiss only before the HID worker can have sent UNLOCK_START. Once it has
+    /// been submitted, closing this overlay could strand the keyboard mid-unlock.
+    pub(super) fn dismiss_vial_unlock_preflight(&mut self) {
+        if !self.unlock_open || self.vial_unlock_session_started || self.vial_unlock_polling {
+            return;
+        }
+        self.vial_unlocked = Some(false);
+        self.stop_vial_unlock_with_status(crate::i18n::tr_catalog(
+            self.app_settings.language,
+            "status_messages.device_unlock_cancelled",
+        ));
+        // A protected feature selected from the menus must not become visible
+        // merely because the preflight overlay was dismissed. Keep its selection
+        // for a later explicit click, but return to the keyboard canvas now.
+        if matches!(
+            self.main_menu_tab,
+            MainMenuTab::Advanced | MainMenuTab::Settings
+        ) && matches!(
+            self.settings_tab,
+            SettingsTab::MatrixTester
+                | SettingsTab::Macros
+                | SettingsTab::TapDance
+                | SettingsTab::AutoShift
+        ) {
+            self.main_menu_tab = MainMenuTab::Keyboard;
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn begin_vial_unlock(&mut self, ctx: &egui::Context) {
+        if !self.unlock_open || self.vial_unlock_session_started || self.vial_unlock_polling {
+            return;
+        }
+        match self.start_vial_unlock(ctx) {
+            VialHidTaskStart::Started => {
+                self.vial_unlock_session_started = true;
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            }
+            VialHidTaskStart::Busy => {
+                ctx.request_repaint_after(std::time::Duration::from_millis(16))
+            }
+            VialHidTaskStart::NoDevice => {
+                self.stop_vial_unlock_with_status(crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "status_messages.unlock_cancelled_disconnected",
+                ));
+            }
+        }
     }
 
     fn complete_vial_unlock(&mut self) {
@@ -24,6 +76,7 @@ impl EntropyApp {
         )
         .into();
         self.unlock_open = false;
+        self.vial_unlock_session_started = false;
         self.vial_unlock_polling = false;
         self.vial_unlock_last_poll = None;
         self.macro_auto_unlock_cancelled = false;
@@ -105,21 +158,10 @@ impl EntropyApp {
     pub(super) fn draw_vial_unlock_overlay(&mut self, ctx: &egui::Context) {
         // Vial unlock modal
         if self.unlock_open && self.firmware == FirmwareProtocol::Vial {
-            // Start unlock through the serialized HID worker so Bluetooth
-            // round-trips never block the UI thread.
-            #[cfg(not(target_arch = "wasm32"))]
-            if !self.vial_unlock_polling {
-                match self.start_vial_unlock(ctx) {
-                    VialHidTaskStart::Started | VialHidTaskStart::Busy => {}
-                    VialHidTaskStart::NoDevice => {
-                        self.stop_vial_unlock_with_status(crate::i18n::tr_catalog(
-                            self.app_settings.language,
-                            "status_messages.unlock_cancelled_disconnected",
-                        ));
-                        return;
-                    }
-                }
-                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            let preflight = !self.vial_unlock_session_started && !self.vial_unlock_polling;
+            if preflight && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.dismiss_vial_unlock_preflight();
+                return;
             }
 
             // Match Vial's polling cadence. Vial QMK resets the unlock counter whenever
@@ -188,9 +230,20 @@ impl EntropyApp {
                         Color32::from_rgb(230, 230, 233)
                     };
                     ui.painter().rect_filled(screen, 0.0, screen_bg);
+                    ui.interact(
+                        screen,
+                        egui::Id::new("unlock_overlay_blocker"),
+                        Sense::click_and_drag(),
+                    );
 
                     let center_x = screen.center().x;
-                    let top_y = screen.min.y + 40.0;
+                    // Center the preflight title, text, and buttons as a group.
+                    // Leave the active unlock layout in its existing position.
+                    let top_y = if preflight {
+                        screen.center().y - 65.0
+                    } else {
+                        screen.min.y + 40.0
+                    };
 
                     // Title
                     ui.painter().text(
@@ -203,6 +256,60 @@ impl EntropyApp {
                         FontId::proportional(24.0),
                         title_color,
                     );
+
+                    if preflight {
+                        let warning_rect = egui::Rect::from_center_size(
+                            egui::pos2(center_x, top_y + 65.0),
+                            egui::vec2(screen.width().min(560.0), 54.0),
+                        );
+                        crate::ui_style::allocate_ui_at_rect(ui, warning_rect, |ui| {
+                            ui.add_sized(
+                                warning_rect.size(),
+                                egui::Label::new(crate::i18n::tr_catalog(
+                                    self.app_settings.language,
+                                    "unlock.safety_warning",
+                                ))
+                                .wrap()
+                                .halign(egui::Align::Center),
+                            );
+                        });
+                        let buttons_rect = egui::Rect::from_center_size(
+                            egui::pos2(center_x, top_y + 130.0),
+                            egui::vec2(260.0, 36.0),
+                        );
+                        crate::ui_style::allocate_ui_at_rect(ui, buttons_rect, |ui| {
+                            ui.horizontal(|ui| {
+                                if crate::ui_style::modern_button(
+                                    ui,
+                                    crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "unlock.cancel",
+                                    ),
+                                    egui::vec2(120.0, 34.0),
+                                    true,
+                                )
+                                .clicked()
+                                {
+                                    self.dismiss_vial_unlock_preflight();
+                                }
+                                if crate::ui_style::modern_button(
+                                    ui,
+                                    crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "unlock.start",
+                                    ),
+                                    egui::vec2(120.0, 34.0),
+                                    true,
+                                )
+                                .clicked()
+                                {
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    self.begin_vial_unlock(ctx);
+                                }
+                            });
+                        });
+                        return;
+                    }
 
                     ui.painter().text(
                         egui::pos2(center_x, top_y + 30.0),
@@ -312,5 +419,168 @@ impl EntropyApp {
                     }
                 });
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    fn frame(
+        app: &mut EntropyApp,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1100.0, 800.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| app.draw_vial_unlock_overlay(ui.ctx()),
+        )
+    }
+
+    fn click_preflight_button(app: &mut EntropyApp, ctx: &egui::Context, start: bool) {
+        frame(app, ctx, Vec::new());
+        // The preflight row is centered in the 1100px test viewport.
+        let pos = egui::pos2(if start { 600.0 } else { 480.0 }, 465.0);
+        frame(app, ctx, vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            frame(
+                app,
+                ctx,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+    }
+
+    #[test]
+    fn opening_unlock_preflight_sends_no_hid_command_and_escape_dismisses_it() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid);
+        app.firmware = FirmwareProtocol::Vial;
+        app.unlock_open = true;
+        app.pending_layout_indicator_open_after_unlock = true;
+
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.draw_vial_unlock_overlay(ui.ctx());
+        });
+        assert!(app.unlock_open);
+        assert!(!app.vial_unlock_session_started);
+        assert!(app.vial_hid_task.is_none());
+        assert!(recorder.requests().is_empty());
+
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ui| app.draw_vial_unlock_overlay(ui.ctx()),
+        );
+        assert!(!app.unlock_open);
+        assert!(!app.pending_layout_indicator_open_after_unlock);
+        assert!(app.macro_auto_unlock_cancelled);
+        assert!(recorder.requests().is_empty());
+    }
+
+    #[test]
+    fn cancel_button_dismisses_preflight_without_hid_command() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid);
+        app.firmware = FirmwareProtocol::Vial;
+        app.unlock_open = true;
+
+        click_preflight_button(&mut app, &ctx, false);
+        assert!(!app.unlock_open);
+        assert!(app.vial_hid_task.is_none());
+        assert!(recorder.requests().is_empty());
+    }
+
+    #[test]
+    fn cancelling_locked_feature_navigation_returns_to_keyboard() {
+        for tab in [
+            SettingsTab::Macros,
+            SettingsTab::TapDance,
+            SettingsTab::AutoShift,
+            SettingsTab::MatrixTester,
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = EntropyApp::new_inert_for_test();
+            let (hid, recorder) = crate::hid::HidDevice::test_device();
+            app.hid_device = Some(hid);
+            app.firmware = FirmwareProtocol::Vial;
+            app.vial_unlocked = Some(false);
+            app.settings_tab = tab;
+            app.main_menu_tab = if tab == SettingsTab::MatrixTester {
+                MainMenuTab::Settings
+            } else {
+                MainMenuTab::Advanced
+            };
+            app.unlock_open = true;
+
+            click_preflight_button(&mut app, &ctx, false);
+            assert!(!app.unlock_open);
+            assert!(app.main_menu_tab == MainMenuTab::Keyboard);
+            assert!(app.settings_tab == tab);
+            assert_eq!(app.vial_unlocked, Some(false));
+            assert!(recorder.requests().is_empty());
+        }
+    }
+
+    #[test]
+    fn cancelling_direct_unlock_does_not_change_unrelated_page() {
+        let mut app = EntropyApp::new_inert_for_test();
+        app.firmware = FirmwareProtocol::Vial;
+        app.main_menu_tab = MainMenuTab::Settings;
+        app.settings_tab = SettingsTab::AboutDevice;
+        app.unlock_open = true;
+
+        app.dismiss_vial_unlock_preflight();
+        assert!(!app.unlock_open);
+        assert!(app.main_menu_tab == MainMenuTab::Settings);
+        assert!(app.settings_tab == SettingsTab::AboutDevice);
+    }
+
+    #[test]
+    fn start_submits_hid_work_and_cannot_be_dismissed_afterward() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        let (hid, _) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid);
+        app.firmware = FirmwareProtocol::Vial;
+        app.unlock_open = true;
+
+        click_preflight_button(&mut app, &ctx, true);
+        assert!(app.vial_unlock_session_started);
+        assert!(app.vial_hid_task.is_some());
+        app.dismiss_vial_unlock_preflight();
+        assert!(app.unlock_open);
+
+        app.finish_vial_unlock_start(false, vec![(0, 0)]);
+        assert!(app.vial_unlock_polling);
+        app.dismiss_vial_unlock_preflight();
+        assert!(app.unlock_open);
     }
 }

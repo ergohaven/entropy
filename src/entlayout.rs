@@ -48,6 +48,8 @@ struct EntLayoutData {
     native_keymap: Vec<Vec<Option<String>>>,
     encoder_keymap: Vec<Vec<u16>>,
     encoder_visibility: Vec<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    layout_element_visibility: Option<LayoutElementVisibility>,
     layout_options: Option<u32>,
     layer_names: Vec<String>,
     text_expander: EntTextExpanderData,
@@ -284,6 +286,126 @@ impl EntLayoutImportMapping {
             .filter(|idx| idx.is_some())
             .count()
     }
+}
+
+fn map_entlayout_element_visibility(
+    source: &LayoutElementVisibility,
+    source_layout: Option<&EntLayoutSourceLayout>,
+    mapping: &EntLayoutImportMapping,
+    target: &KeyboardLayout,
+    current: &LayoutElementVisibility,
+) -> LayoutElementVisibility {
+    if mapping.exact_layout {
+        return LayoutElementVisibility {
+            hidden_keys: source
+                .hidden_keys
+                .iter()
+                .copied()
+                .filter(|&(row, col)| {
+                    target
+                        .keys
+                        .iter()
+                        .any(|key| key.row == row && key.col == col)
+                })
+                .collect(),
+            hidden_encoders: source
+                .hidden_encoders
+                .iter()
+                .copied()
+                .filter(|index| {
+                    target
+                        .encoders
+                        .iter()
+                        .any(|encoder| encoder.encoder_idx == *index)
+                })
+                .collect(),
+        };
+    }
+
+    // Universal import changes only positions that were actually mapped.
+    let Some(source_layout) = source_layout else {
+        return current.clone();
+    };
+    let mut result = current.clone();
+    for (source_idx, key) in source_layout.keys.iter().enumerate() {
+        let Some(target_idx) = mapping.key_mapping.get(source_idx).copied().flatten() else {
+            continue;
+        };
+        let Some(target_key) = target.keys.get(target_idx) else {
+            continue;
+        };
+        let position = (target_key.row, target_key.col);
+        if source.hidden_keys.contains(&(key.row, key.col)) {
+            result.hidden_keys.insert(position);
+        } else {
+            result.hidden_keys.remove(&position);
+        }
+    }
+
+    // Both directions of an encoder belong to one cosmetic group. Do not
+    // transfer a preference if either side is unmapped, split across groups,
+    // or conflated with another source group on the target.
+    let mut source_groups: std::collections::BTreeMap<u8, Vec<u8>> =
+        std::collections::BTreeMap::new();
+    let mut target_sources: std::collections::BTreeMap<u8, Vec<u8>> =
+        std::collections::BTreeMap::new();
+    let mut target_visuals: std::collections::BTreeMap<u8, std::collections::BTreeSet<usize>> =
+        std::collections::BTreeMap::new();
+    for (source_idx, encoder) in source_layout.encoders.iter().enumerate() {
+        let Some(target_idx) = mapping.encoder_mapping.get(source_idx).copied().flatten() else {
+            continue;
+        };
+        let Some(target_encoder) = target.encoders.get(target_idx) else {
+            continue;
+        };
+        source_groups
+            .entry(encoder.encoder_idx)
+            .or_default()
+            .push(target_encoder.encoder_idx);
+        target_sources
+            .entry(target_encoder.encoder_idx)
+            .or_default()
+            .push(encoder.encoder_idx);
+        target_visuals
+            .entry(target_encoder.encoder_idx)
+            .or_default()
+            .insert(target_idx);
+    }
+    for (source_index, target_indices) in source_groups {
+        let source_count = source_layout
+            .encoders
+            .iter()
+            .filter(|encoder| encoder.encoder_idx == source_index)
+            .count();
+        if target_indices.len() != source_count
+            || target_indices
+                .iter()
+                .any(|index| *index != target_indices[0])
+        {
+            continue;
+        }
+        let target_index = target_indices[0];
+        let target_count = target
+            .encoders
+            .iter()
+            .filter(|encoder| encoder.encoder_idx == target_index)
+            .count();
+        if !target_sources.get(&target_index).is_some_and(|sources| {
+            sources.len() == target_count
+                && target_visuals
+                    .get(&target_index)
+                    .is_some_and(|indices| indices.len() == target_count)
+                && sources.iter().all(|index| *index == source_index)
+        }) {
+            continue;
+        }
+        if source.hidden_encoders.contains(&source_index) {
+            result.hidden_encoders.insert(target_index);
+        } else {
+            result.hidden_encoders.remove(&target_index);
+        }
+    }
+    result
 }
 
 #[derive(Clone, Copy)]
@@ -601,6 +723,19 @@ impl EntropyApp {
         ))
     }
 
+    /// The `.entlayout` document for the connected keyboard, as the file
+    /// dialog export would write it; `None` before a keyboard is connected.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn entlayout_export_json(&self) -> Option<Result<String>> {
+        let bundle = self.entlayout_snapshot()?;
+        Some(
+            serde_json::to_string_pretty(&bundle).context(crate::i18n::tr_catalog(
+                self.app_settings.language,
+                "entlayout.failed_to_serialize",
+            )),
+        )
+    }
+
     fn entlayout_snapshot(&self) -> Option<EntLayoutFile> {
         let layout = self.layout.as_ref()?;
         let keyboard = EntLayoutKeyboard {
@@ -639,6 +774,11 @@ impl EntropyApp {
                     .collect(),
                 encoder_keymap: layout.encoder_layers.clone(),
                 encoder_visibility: self.encoder_visibility.clone(),
+                layout_element_visibility: Some(
+                    self.current_layout_element_visibility()
+                        .cloned()
+                        .unwrap_or_default(),
+                ),
                 layout_options: self.layout_options_value,
                 layer_names: self.layer_names.clone(),
                 text_expander: self.text_expander_entlayout_snapshot(),
@@ -1090,6 +1230,24 @@ impl EntropyApp {
             tr("entlayout.text_expander"),
         ];
         let mut skipped = Vec::new();
+        if bundle.data.layout_element_visibility.is_some() {
+            let has_target = self.layout_element_visibility_device_key().is_some();
+            let has_source = mapping.exact_layout || bundle.data.source_layout.is_some();
+            let has_mapped_positions = mapping.exact_layout
+                || mapping.key_mapping.iter().any(Option::is_some)
+                || mapping.encoder_mapping.iter().any(Option::is_some);
+            if has_target && has_source && has_mapped_positions {
+                imported.push(tr("entlayout.layout_element_visibility"));
+                if !mapping.exact_layout
+                    && (mapping.key_mapping.iter().any(Option::is_none)
+                        || mapping.encoder_mapping.iter().any(Option::is_none))
+                {
+                    skipped.push(tr("entlayout.layout_element_visibility_unmapped"));
+                }
+            } else {
+                skipped.push(tr("entlayout.layout_element_visibility"));
+            }
+        }
 
         if mapping.exact_layout {
             if bundle.data.layout_options.is_some() && self.layout_options_value.is_some() {
@@ -1784,6 +1942,35 @@ impl EntropyApp {
         self.layer_names.truncate(self.layer_count);
         if !self.current_device_name.is_empty() {
             save_layer_names(&self.layer_names, &self.current_device_name);
+        }
+
+        if let (Some(source), Some(layout), Some(device_key)) = (
+            bundle.data.layout_element_visibility.as_ref(),
+            self.layout.as_ref(),
+            self.layout_element_visibility_device_key(),
+        ) {
+            let current = self
+                .app_settings
+                .layout_element_visibility
+                .get(&device_key)
+                .cloned()
+                .unwrap_or_default();
+            let mapped = map_entlayout_element_visibility(
+                source,
+                bundle.data.source_layout.as_ref(),
+                mapping,
+                layout,
+                &current,
+            );
+            if mapped == LayoutElementVisibility::default() {
+                self.app_settings
+                    .layout_element_visibility
+                    .remove(&device_key);
+            } else {
+                self.app_settings
+                    .layout_element_visibility
+                    .insert(device_key, mapped);
+            }
         }
 
         self.app_settings.text_expander_enabled = bundle.data.text_expander.enabled;
@@ -2708,6 +2895,161 @@ mod tests {
         }
     }
 
+    fn cosmetic_test_layout() -> KeyboardLayout {
+        let mut layout: KeyboardLayout = serde_json::from_str(
+            r#"{"name":"Test","rows":1,"cols":3,"keys":[{"x":0.0,"y":0.0,"w":1.0,"h":1.0,"row":0,"col":0,"label":"0,0","rotation":0.0,"rotation_x":0.0,"rotation_y":0.0},{"x":2.0,"y":0.0,"w":1.0,"h":1.0,"row":0,"col":1,"label":"0,1","rotation":0.0,"rotation_x":0.0,"rotation_y":0.0},{"x":4.0,"y":0.0,"w":1.0,"h":1.0,"row":0,"col":2,"label":"0,2","rotation":0.0,"rotation_x":0.0,"rotation_y":0.0}],"encoders":[{"x":6.0,"y":0.0,"w":1.0,"h":1.0,"label":"encoder","encoder_idx":0,"direction":0,"rotation":0.0,"rotation_x":0.0,"rotation_y":0.0}],"layers":[],"encoder_layers":[[6]],"custom_keycodes":[]}"#,
+        ).unwrap();
+        layout.layers = vec![vec![4u16.into(), 5u16.into(), 6u16.into()]];
+        layout
+    }
+
+    #[test]
+    fn entlayout_export_carries_cosmetic_visibility_without_changing_keymap() {
+        let layout = cosmetic_test_layout();
+        let mut app = EntropyApp::new_inert_for_test();
+        app.current_encoder_visibility_id = "portable_cosmetic_test".to_owned();
+        app.layout = Some(layout);
+        app.app_settings.layout_element_visibility.insert(
+            "another_keyboard".to_owned(),
+            LayoutElementVisibility {
+                hidden_keys: [(0, 2)].into_iter().collect(),
+                hidden_encoders: Default::default(),
+            },
+        );
+        let visible = app.entlayout_snapshot().unwrap();
+        assert_eq!(
+            visible.data.layout_element_visibility,
+            Some(LayoutElementVisibility::default())
+        );
+        app.app_settings
+            .layout_element_visibility
+            .entry(app.current_encoder_visibility_id.clone())
+            .or_default()
+            .hidden_keys
+            .insert((0, 1));
+        app.app_settings
+            .layout_element_visibility
+            .get_mut(&app.current_encoder_visibility_id)
+            .unwrap()
+            .hidden_encoders
+            .insert(0);
+        let bundle = app.entlayout_snapshot().unwrap();
+        let json = serde_json::to_string(&bundle).unwrap();
+        let restored: EntLayoutFile = serde_json::from_str(&json).unwrap();
+        let saved = restored.data.layout_element_visibility.unwrap();
+        assert!(saved.hidden_keys.contains(&(0, 1)));
+        assert!(!saved.hidden_keys.contains(&(0, 2)));
+        assert!(saved.hidden_encoders.contains(&0));
+        assert_eq!(restored.data.keymap[0], vec![4, 5, 6]);
+        assert_eq!(restored.data.encoder_keymap[0], vec![6]);
+    }
+
+    #[test]
+    fn exact_cosmetic_import_replaces_only_known_target_positions() {
+        let layout = cosmetic_test_layout();
+        let source = LayoutElementVisibility {
+            hidden_keys: [(0, 1), (7, 7)].into_iter().collect(),
+            hidden_encoders: [0, 8].into_iter().collect(),
+        };
+        let current = LayoutElementVisibility {
+            hidden_keys: [(0, 0)].into_iter().collect(),
+            hidden_encoders: [9].into_iter().collect(),
+        };
+        let mapping = EntLayoutImportMapping {
+            exact_layout: true,
+            key_mapping: vec![Some(0), Some(1), Some(2)],
+            encoder_mapping: vec![Some(0)],
+        };
+        let result = map_entlayout_element_visibility(&source, None, &mapping, &layout, &current);
+        assert_eq!(result.hidden_keys, [(0, 1)].into_iter().collect());
+        assert_eq!(result.hidden_encoders, [0].into_iter().collect());
+        assert_eq!(
+            map_entlayout_element_visibility(
+                &LayoutElementVisibility::default(),
+                None,
+                &mapping,
+                &layout,
+                &current
+            ),
+            LayoutElementVisibility::default()
+        );
+    }
+
+    #[test]
+    fn universal_cosmetic_import_remaps_groups_and_preserves_unmapped_positions() {
+        let source_layout = cosmetic_test_layout();
+        let source = entlayout_source_layout(&source_layout);
+        let mut target = source_layout.clone();
+        target.keys[0].row = 1;
+        target.keys[0].col = 0;
+        target.keys[1].row = 1;
+        target.keys[1].col = 1;
+        target.keys[2].row = 1;
+        target.keys[2].col = 2;
+        target.encoders[0].encoder_idx = 5;
+        let current = LayoutElementVisibility {
+            hidden_keys: [(1, 0), (1, 2)].into_iter().collect(),
+            hidden_encoders: [5, 9].into_iter().collect(),
+        };
+        let saved = LayoutElementVisibility {
+            hidden_keys: [(0, 0)].into_iter().collect(),
+            hidden_encoders: [0].into_iter().collect(),
+        };
+        let mapping = EntLayoutImportMapping {
+            exact_layout: false,
+            key_mapping: vec![Some(1), Some(0), None],
+            encoder_mapping: vec![Some(0)],
+        };
+        let result =
+            map_entlayout_element_visibility(&saved, Some(&source), &mapping, &target, &current);
+        assert_eq!(result.hidden_keys, [(1, 1), (1, 2)].into_iter().collect());
+        assert_eq!(result.hidden_encoders, [5, 9].into_iter().collect());
+        assert_eq!(
+            map_entlayout_element_visibility(&saved, None, &mapping, &target, &current),
+            current
+        );
+    }
+
+    #[test]
+    fn universal_encoder_visibility_maps_entire_group_or_preserves_existing_choice() {
+        let mut source_layout = cosmetic_test_layout();
+        let mut clockwise = source_layout.encoders[0].clone();
+        clockwise.direction = 1;
+        source_layout.encoders.push(clockwise);
+        let source = entlayout_source_layout(&source_layout);
+        let mut target = source_layout.clone();
+        for encoder in &mut target.encoders {
+            encoder.encoder_idx = 5;
+        }
+        let saved = LayoutElementVisibility {
+            hidden_keys: Default::default(),
+            hidden_encoders: [0].into_iter().collect(),
+        };
+        let current = LayoutElementVisibility::default();
+        let mut mapping = EntLayoutImportMapping {
+            exact_layout: false,
+            key_mapping: vec![Some(0), Some(1), Some(2)],
+            encoder_mapping: vec![Some(0), Some(1)],
+        };
+        let mapped =
+            map_entlayout_element_visibility(&saved, Some(&source), &mapping, &target, &current);
+        assert_eq!(mapped.hidden_encoders, [5].into_iter().collect());
+
+        mapping.encoder_mapping[1] = None;
+        let partial =
+            map_entlayout_element_visibility(&saved, Some(&source), &mapping, &target, &current);
+        assert!(partial.hidden_encoders.is_empty());
+        mapping.encoder_mapping[1] = Some(0);
+        let duplicate =
+            map_entlayout_element_visibility(&saved, Some(&source), &mapping, &target, &current);
+        assert!(duplicate.hidden_encoders.is_empty());
+        mapping.encoder_mapping[1] = Some(1);
+        target.encoders[1].encoder_idx = 6;
+        let split =
+            map_entlayout_element_visibility(&saved, Some(&source), &mapping, &target, &current);
+        assert!(split.hidden_encoders.is_empty());
+    }
+
     #[test]
     fn legacy_entlayout_data_defaults_portable_settings() {
         let data: EntLayoutData = serde_json::from_value(serde_json::json!({
@@ -2749,6 +3091,7 @@ mod tests {
         .expect("legacy layout data");
 
         assert!(data.portable_settings.is_empty());
+        assert!(data.layout_element_visibility.is_none());
     }
 
     #[test]

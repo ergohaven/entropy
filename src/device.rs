@@ -2,6 +2,8 @@ use crate::firmware::FirmwareProtocol;
 
 const ERGOHAVEN_VENDOR_ID: u16 = 0xE126;
 const ERGOHAVEN_DISPLAY_MACROPAD_PRODUCT_IDS: [u16; 2] = [0x0041, 0x0042];
+const M4CR0PAD_V2_PRODUCT_ID: u16 = 0x0041;
+const M4CR0PAD_V3_PRODUCT_ID: u16 = 0x0042;
 const K04_QUBE_PRODUCT_ID_START: u16 = 0x0071;
 const K04_QUBE_PRODUCT_ID_END: u16 = 0x0073;
 
@@ -56,6 +58,23 @@ pub struct Device {
 }
 
 impl Device {
+    /// Repair discovery metadata before it reaches UI and connection identity.
+    /// Linux can expose a truncated USB product string and may transiently
+    /// report zero VID/PID while the canonical sysfs HID path has both values.
+    fn normalize_discovered_identity(&mut self) {
+        #[cfg(target_os = "linux")]
+        if self.vendor_id == 0 || self.product_id == 0 {
+            if let Some((vendor_id, product_id)) = linux_hid_vid_pid(&self.instance_token) {
+                self.vendor_id = vendor_id;
+                self.product_id = product_id;
+            }
+        }
+
+        if self.is_m4cr0pad_v3() {
+            self.name = "M4CR0Pad v3".to_owned();
+        }
+    }
+
     /// Conservative physical reservation policy shared by the UI and transport.
     /// Endpoint equality always wins; a proven USB parent precedes serial hints.
     /// Missing serials do not prove that two same-model keyboards are distinct.
@@ -312,6 +331,17 @@ impl Device {
     }
 
     pub fn display_name_with_transport(&self, display_name: &str) -> String {
+        // Keep the firmware-reported model name for storage and device identity,
+        // but expose the short product name requested by the desktop UI.
+        if self.vendor_id == ERGOHAVEN_VENDOR_ID {
+            match self.product_id {
+                M4CR0PAD_V2_PRODUCT_ID => return "Macropad v2".to_owned(),
+                M4CR0PAD_V3_PRODUCT_ID => return "Macropad".to_owned(),
+                _ => {}
+            }
+        }
+        // Linux can occasionally expose a truncated USB product string. The
+        // assigned VID/PID is the stable identity for both Macropad revisions.
         let display_name = display_name.trim();
         if self.is_bluetooth_transport() {
             format!("{display_name} (Bluetooth)")
@@ -325,6 +355,10 @@ impl Device {
     pub(crate) fn is_ergohaven_display_macropad(&self) -> bool {
         self.vendor_id == ERGOHAVEN_VENDOR_ID
             && ERGOHAVEN_DISPLAY_MACROPAD_PRODUCT_IDS.contains(&self.product_id)
+    }
+
+    pub(crate) fn is_m4cr0pad_v3(&self) -> bool {
+        self.vendor_id == ERGOHAVEN_VENDOR_ID && self.product_id == M4CR0PAD_V3_PRODUCT_ID
     }
 
     fn is_k04_qube(&self) -> bool {
@@ -381,6 +415,18 @@ pub(crate) fn device_instance_token(path: &str) -> String {
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn device_instance_token(path: &str) -> String {
     path.to_owned()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_hid_vid_pid(instance_token: &str) -> Option<(u16, u16)> {
+    let basename = instance_token.strip_prefix("sysfs:")?.rsplit('/').next()?;
+    let mut parts = basename.split(':');
+    if parts.next()? != "0003" {
+        return None;
+    }
+    let vendor = u16::from_str_radix(parts.next()?, 16).ok()?;
+    let product = parts.next()?.split_once('.')?.0;
+    Some((vendor, u16::from_str_radix(product, 16).ok()?))
 }
 
 /// Address alias encoded in BlueZ's owning Device1 object path. This is
@@ -466,7 +512,7 @@ impl DeviceManager {
             // Filter: Vial usage page 0xFF60, usage 0x61
             if info.usage_page() == 0xFF60 && info.usage() == 0x61 {
                 let path = info.path().to_string_lossy().to_string();
-                devices.push(Device {
+                let mut device = Device {
                     name: info
                         .product_string()
                         .unwrap_or("Unknown Keyboard")
@@ -479,7 +525,9 @@ impl DeviceManager {
                     instance_token: device_instance_token(&path),
                     path,
                     firmware: FirmwareProtocol::Vial,
-                });
+                };
+                device.normalize_discovered_identity();
+                devices.push(device);
             }
         }
 
@@ -780,6 +828,45 @@ mod tests {
             device.display_name_with_transport("Ergohaven K:04"),
             "Ergohaven K:04 (USB)"
         );
+    }
+
+    #[test]
+    fn m4cr0pad_v2_uses_revision_name_when_usb_product_string_is_corrupt() {
+        let mut device = test_device("Usb", "/dev/hidraw4");
+        device.name = "Ль".to_owned();
+        device.vendor_id = ERGOHAVEN_VENDOR_ID;
+        device.product_id = M4CR0PAD_V2_PRODUCT_ID;
+
+        assert_eq!(device.display_name_with_transport(&device.name), "Macropad v2");
+    }
+
+    #[test]
+    fn m4cr0pad_v3_uses_short_product_name_when_usb_product_string_is_corrupt() {
+        let mut device = test_device("Usb", "/dev/hidraw4");
+        device.name = "Ль".to_owned();
+        device.vendor_id = ERGOHAVEN_VENDOR_ID;
+        device.product_id = M4CR0PAD_V3_PRODUCT_ID;
+
+        assert!(device.is_m4cr0pad_v3());
+        assert_eq!(device.display_name_with_transport(&device.name), "Macropad");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn discovery_normalizes_corrupt_name_before_device_list_is_built() {
+        let mut device = test_device("Usb", "/dev/hidraw4");
+        device.name = "Ль".to_owned();
+        device.vendor_id = 0;
+        device.product_id = 0;
+        device.instance_token =
+            "sysfs:/sys/devices/pci0000:00/usb1/1-2/1-2:1.1/0003:E126:0042.0007:23:1000".to_owned();
+
+        device.normalize_discovered_identity();
+
+        assert_eq!(device.vendor_id, ERGOHAVEN_VENDOR_ID);
+        assert_eq!(device.product_id, M4CR0PAD_V3_PRODUCT_ID);
+        assert_eq!(device.name, "M4CR0Pad v3");
+        assert_eq!(device.display_name_with_transport(&device.name), "Macropad");
     }
 
     #[test]

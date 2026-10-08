@@ -2,6 +2,83 @@ use super::*;
 
 type EncoderGroup = (u8, egui::Rect, Option<(usize, u16)>, Option<(usize, u16)>);
 
+fn visibility_edit_outline_rect(
+    editing: bool,
+    keyboard_bounds: Option<egui::Rect>,
+    viewport: egui::Rect,
+) -> Option<egui::Rect> {
+    editing
+        .then_some(keyboard_bounds?)
+        .map(|bounds| bounds.expand(18.0).intersect(viewport.shrink(8.0)))
+}
+
+#[cfg(test)]
+mod visibility_outline_tests {
+    use super::*;
+
+    #[test]
+    fn outline_tracks_keyboard_and_encoder_bounds_only_in_edit_mode() {
+        let viewport = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(400.0, 300.0));
+        let keys = egui::Rect::from_min_max(egui::pos2(30.0, 60.0), egui::pos2(110.0, 110.0));
+        let encoder = egui::Rect::from_min_max(egui::pos2(220.0, 80.0), egui::pos2(260.0, 120.0));
+        let bounds = keys.union(encoder);
+
+        assert_eq!(
+            visibility_edit_outline_rect(false, Some(bounds), viewport),
+            None
+        );
+        assert_eq!(visibility_edit_outline_rect(true, None, viewport), None);
+        assert_eq!(
+            visibility_edit_outline_rect(true, Some(bounds), viewport),
+            Some(bounds.expand(18.0))
+        );
+        let edge = egui::Rect::from_min_max(egui::pos2(4.0, 60.0), egui::pos2(396.0, 120.0));
+        assert_eq!(
+            visibility_edit_outline_rect(true, Some(edge), viewport),
+            Some(edge.expand(18.0).intersect(viewport.shrink(8.0)))
+        );
+    }
+}
+
+fn group_encoder_rects(
+    layout: &KeyboardLayout,
+    encoder_rects: &[(usize, egui::Rect)],
+    layer: usize,
+) -> Vec<EncoderGroup> {
+    let mut groups: Vec<EncoderGroup> = Vec::new();
+    for (ei, rect) in encoder_rects {
+        let encoder = &layout.encoders[*ei];
+        let kc = layout.get_encoder_keycode(layer, *ei);
+        if let Some((_, group_rect, ccw, cw)) = groups
+            .iter_mut()
+            .find(|(idx, _, _, _)| *idx == encoder.encoder_idx)
+        {
+            *group_rect = group_rect.union(*rect);
+            if encoder.direction == 0 {
+                *ccw = Some((*ei, kc));
+            } else {
+                *cw = Some((*ei, kc));
+            }
+        } else {
+            groups.push((
+                encoder.encoder_idx,
+                *rect,
+                if encoder.direction == 0 {
+                    Some((*ei, kc))
+                } else {
+                    None
+                },
+                if encoder.direction == 0 {
+                    None
+                } else {
+                    Some((*ei, kc))
+                },
+            ));
+        }
+    }
+    groups
+}
+
 impl EntropyApp {
     pub(super) fn draw_layout_keyboard_canvas(
         &mut self,
@@ -16,7 +93,7 @@ impl EntropyApp {
         layout_h: f32,
     ) {
         // Pass 1: allocate
-        let key_rects: Vec<(usize, egui::Rect)> = layout
+        let mut key_rects: Vec<(usize, egui::Rect)> = layout
             .keys
             .iter()
             .enumerate()
@@ -40,7 +117,7 @@ impl EntropyApp {
                 Some((ki, rect))
             })
             .collect();
-        let encoder_rects: Vec<(usize, egui::Rect)> = layout
+        let mut encoder_rects: Vec<(usize, egui::Rect)> = layout
             .encoders
             .iter()
             .enumerate()
@@ -78,43 +155,42 @@ impl EntropyApp {
                 Vec2::new(ui.max_rect().width().min(560.0), 52.0),
             ),
         );
-        let mut encoder_groups: Vec<EncoderGroup> = Vec::new();
-        for (ei, rect) in &encoder_rects {
-            let encoder = &layout.encoders[*ei];
-            let kc = layout.get_encoder_keycode(self.selected_layer, *ei);
-            if let Some((_, group_rect, ccw, cw)) = encoder_groups
-                .iter_mut()
-                .find(|(idx, _, _, _)| *idx == encoder.encoder_idx)
-            {
-                *group_rect = group_rect.union(*rect);
-                if encoder.direction == 0 {
-                    *ccw = Some((*ei, kc));
-                } else {
-                    *cw = Some((*ei, kc));
-                }
-            } else {
-                encoder_groups.push((
-                    encoder.encoder_idx,
-                    *rect,
-                    if encoder.direction == 0 {
-                        Some((*ei, kc))
-                    } else {
-                        None
-                    },
-                    if encoder.direction == 0 {
-                        None
-                    } else {
-                        Some((*ei, kc))
-                    },
-                ));
-            }
-        }
+        // Match encoder press keys before applying local cosmetic hiding. This
+        // also covers K:03/Imperial44 geometric press keys with no module option:
+        // hiding their encoder must not leave an orphan keycap behind.
+        let automatic_groups = group_encoder_rects(layout, &encoder_rects, self.selected_layer);
+        let automatic_group_rects: Vec<_> = automatic_groups
+            .iter()
+            .map(|(idx, rect, _, _)| (*idx, *rect))
+            .collect();
+        let explicit_press_keys =
+            Self::module_settings_encoder_press_keys(&self.module_settings, layout);
+        let automatic_press_rects = encoder_press_key_rects(
+            layout,
+            &key_rects,
+            &automatic_group_rects,
+            &explicit_press_keys,
+        );
+        key_rects.retain(|(ki, _)| {
+            self.main_layout_key_visible(layout, &layout.keys[*ki])
+                && !automatic_press_rects.iter().any(|press| {
+                    press.key_idx == *ki
+                        && layout
+                            .encoders
+                            .iter()
+                            .find(|encoder| encoder.encoder_idx == press.encoder_idx)
+                            .is_some_and(|encoder| {
+                                !self.main_layout_encoder_visible(layout, encoder)
+                            })
+                })
+        });
+        encoder_rects
+            .retain(|(ei, _)| self.main_layout_encoder_visible(layout, &layout.encoders[*ei]));
+        let mut encoder_groups = group_encoder_rects(layout, &encoder_rects, self.selected_layer);
         let encoder_group_rects: Vec<(u8, egui::Rect)> = encoder_groups
             .iter()
             .map(|(encoder_idx, rect, _, _)| (*encoder_idx, *rect))
             .collect();
-        let explicit_press_keys =
-            Self::module_settings_encoder_press_keys(&self.module_settings, layout);
         let encoder_press_rects = encoder_press_key_rects(
             layout,
             &key_rects,
@@ -131,6 +207,20 @@ impl EntropyApp {
             .reduce(|acc, rect| acc.union(rect));
         if let Some(rect) = keyboard_target_rect {
             self.register_tour_target(TourTarget::KeyboardArea, rect.expand(10.0));
+        }
+        // The keyboard bounds already include visible keys and complete encoder
+        // groups. Paint only a visual mode cue; do not change layout or hitboxes.
+        if let Some(rect) = visibility_edit_outline_rect(
+            self.editing_layout_visibility,
+            keyboard_target_rect,
+            ui.max_rect(),
+        ) {
+            ui.painter().rect_stroke(
+                rect,
+                egui::CornerRadius::same(10),
+                egui::Stroke::new(1.5, crate::ui_style::accent()),
+                egui::StrokeKind::Inside,
+            );
         }
         let mut rects: Vec<(usize, egui::Rect, egui::Response)> =
             Vec::with_capacity(layout.keys.len());
@@ -151,6 +241,23 @@ impl EntropyApp {
         // Pass 2: hover + clicks + tooltips
         let mut hovered_key: Option<usize> = None;
         for (ki, _, response) in &mut rects {
+            if self.editing_layout_visibility {
+                if response.hovered() {
+                    hovered_key = Some(*ki);
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if response.clicked() {
+                    if let Some(press) = encoder_press_rects
+                        .iter()
+                        .find(|press| press.key_idx == *ki)
+                    {
+                        self.toggle_layout_encoder_visibility(press.encoder_idx);
+                    } else {
+                        self.toggle_layout_key_visibility(*ki);
+                    }
+                }
+                continue;
+            }
             let binding = layout.get_key_binding(self.selected_layer, *ki);
             if response.hovered() {
                 hovered_key = Some(*ki);
@@ -296,6 +403,14 @@ impl EntropyApp {
             if press_rect_override.is_some() {
                 continue;
             }
+
+            let mut faded_painter = painter.clone();
+            faded_painter.set_opacity(0.22);
+            let painter = if self.main_layout_key_dimmed(key) {
+                &faded_painter
+            } else {
+                painter
+            };
 
             let binding = layout.get_key_binding(layer, *ki);
             let kc = binding.vial_keycode();
@@ -515,6 +630,14 @@ impl EntropyApp {
             let middle_resp =
                 middle_rect.map(|middle_rect| ui.allocate_rect(middle_rect, Sense::click()));
             let bottom_resp = ui.allocate_rect(bottom_rect, Sense::click());
+            let interaction_enabled = !self.editing_layout_visibility;
+            if !interaction_enabled
+                && (top_resp.clicked()
+                    || middle_resp.as_ref().is_some_and(egui::Response::clicked)
+                    || bottom_resp.clicked())
+            {
+                self.toggle_layout_encoder_visibility(*encoder_idx);
+            }
             let encoder_hovered = top_resp.hovered()
                 || middle_resp.as_ref().map(|r| r.hovered()).unwrap_or(false)
                 || bottom_resp.hovered();
@@ -549,7 +672,7 @@ impl EntropyApp {
                         .on_hover_text(crate::i18n::tr_text(self.app_settings.language, &tip));
                 }
             }
-            if top_resp.secondary_clicked() {
+            if interaction_enabled && top_resp.secondary_clicked() {
                 if let Some((visual_idx, kc)) = cw {
                     self.handle_secondary_target(
                         ui.ctx(),
@@ -560,12 +683,12 @@ impl EntropyApp {
                     );
                 }
             }
-            if top_resp.clicked() {
+            if interaction_enabled && top_resp.clicked() {
                 if let Some((visual_idx, _)) = cw {
                     self.open_picker_for_target(None, Some(*visual_idx));
                 }
             }
-            if top_resp.middle_clicked() {
+            if interaction_enabled && top_resp.middle_clicked() {
                 if let Some((visual_idx, _)) = cw {
                     self.request_middle_click_encoder_assignment(ui.ctx(), *visual_idx);
                 }
@@ -587,7 +710,7 @@ impl EntropyApp {
                         .clone()
                         .on_hover_text(crate::i18n::tr_text(self.app_settings.language, &tip));
                 }
-                if middle_resp.secondary_clicked() {
+                if interaction_enabled && middle_resp.secondary_clicked() {
                     let binding = layout.get_key_binding(self.selected_layer, press_ki);
                     self.handle_secondary_target(
                         ui.ctx(),
@@ -597,11 +720,11 @@ impl EntropyApp {
                         None,
                     );
                 }
-                if middle_resp.clicked() {
+                if interaction_enabled && middle_resp.clicked() {
                     self.open_picker_for_target(Some(press_ki), None);
                     self.selected_encoder = None;
                 }
-                if middle_resp.middle_clicked() {
+                if interaction_enabled && middle_resp.middle_clicked() {
                     self.request_middle_click_key_assignment(ui.ctx(), press_ki);
                 }
             }
@@ -621,7 +744,7 @@ impl EntropyApp {
                         .on_hover_text(crate::i18n::tr_text(self.app_settings.language, &tip));
                 }
             }
-            if bottom_resp.secondary_clicked() {
+            if interaction_enabled && bottom_resp.secondary_clicked() {
                 if let Some((visual_idx, kc)) = ccw {
                     self.handle_secondary_target(
                         ui.ctx(),
@@ -632,12 +755,12 @@ impl EntropyApp {
                     );
                 }
             }
-            if bottom_resp.clicked() {
+            if interaction_enabled && bottom_resp.clicked() {
                 if let Some((visual_idx, _)) = ccw {
                     self.open_picker_for_target(None, Some(*visual_idx));
                 }
             }
-            if bottom_resp.middle_clicked() {
+            if interaction_enabled && bottom_resp.middle_clicked() {
                 if let Some((visual_idx, _)) = ccw {
                     self.request_middle_click_encoder_assignment(ui.ctx(), *visual_idx);
                 }
@@ -684,7 +807,13 @@ impl EntropyApp {
                 visuals.inactive.bg_stroke
             };
 
-            let painter = ui.painter();
+            let mut faded_painter = ui.painter().clone();
+            faded_painter.set_opacity(0.22);
+            let painter = if self.main_layout_encoder_dimmed(*encoder_idx) {
+                &faded_painter
+            } else {
+                ui.painter()
+            };
             painter.circle_filled(center, fill_radius, visuals.inactive.bg_fill);
             painter
                 .with_clip_rect(top_rect)

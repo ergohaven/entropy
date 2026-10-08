@@ -1,4 +1,4 @@
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Language {
     English,
@@ -815,6 +815,7 @@ fn static_catalog_key(text: &str) -> Option<&'static str> {
         "Auto layer in Scroll" => Some("modules_settings.auto_layer_in_scroll"),
         "Auto layer in Text" => Some("modules_settings.auto_layer_in_text"),
         "Auto layer timeout" => Some("modules_settings.auto_layer_timeout"),
+        "Auto layer threshold" => Some("modules_settings.auto_layer_threshold"),
         "Auto layer deactivate on key" => Some("modules_settings.auto_layer_deactivate_on_key"),
         "Normal" => Some("modules_settings.normal"),
         "Sniper" => Some("modules_settings.sniper"),

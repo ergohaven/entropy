@@ -95,17 +95,17 @@ impl EntropyApp {
                 .data(|d| d.get_temp::<bool>(dropdown_id))
                 .unwrap_or(false);
             let device_count = self.device_manager.devices().len();
-            let device_rows = device_count.max(1) as f32;
-            let devices_h = 12.0 + device_rows * 30.0;
-            let sticky_layout_h = 36.0;
-            let layer_operations_h = 36.0;
-            #[cfg(not(target_arch = "wasm32"))]
-            let import_export_h = 102.0;
-            #[cfg(target_arch = "wasm32")]
-            let import_export_h = 0.0;
-            let about_device_h = 36.0;
             let show_key_legend_switcher = self.app_settings.key_legend_layout.is_multilingual();
-            let key_legend_switcher_h = if show_key_legend_switcher { 36.0 } else { 0.0 };
+            // Rows in drawing order: the device list (or its placeholder) |
+            // key legend order, layer operations, show/hide keys | import, export, image
+            // (native builds only) | layout indicator, about device.
+            #[cfg(not(target_arch = "wasm32"))]
+            let (file_rows, file_dividers) = (3, 1);
+            #[cfg(target_arch = "wasm32")]
+            let (file_rows, file_dividers) = (0, 0);
+            let row_count =
+                device_count.max(1) + show_key_legend_switcher as usize + 2 + file_rows + 2;
+            let divider_count = 2 + file_dividers;
             let mut device_menu_labels: Vec<String> = if self.device_manager.devices().is_empty() {
                 vec![crate::i18n::tr(lang, TrKey::NoDevicesFound).to_owned()]
             } else {
@@ -128,6 +128,8 @@ impl EntropyApp {
                 }
             }
             device_menu_labels.push(crate::i18n::tr_catalog(lang, "layer_actions.menu").to_owned());
+            device_menu_labels
+                .push(crate::i18n::tr_catalog(lang, "main_menu.show_hide_keys").to_owned());
             #[cfg(not(target_arch = "wasm32"))]
             {
                 device_menu_labels.push(entlayout_import_label(lang).to_owned());
@@ -138,18 +140,12 @@ impl EntropyApp {
                 .push(crate::i18n::tr_catalog(lang, "ui.sticky_layout_window_label").to_owned());
             device_menu_labels.push(about_device_label(lang).to_owned());
             let dropdown_size = Vec2::new(
-                adaptive_top_dropdown_width(
+                adaptive_top_icon_dropdown_width(
                     ui,
                     device_menu_labels.iter().map(String::as_str),
                     152.0,
                 ),
-                devices_h
-                    + key_legend_switcher_h
-                    + layer_operations_h
-                    + import_export_h
-                    + sticky_layout_h
-                    + about_device_h
-                    + 12.0,
+                top_dropdown_height(row_count, divider_count),
             );
             let dropdown_rect = egui::Rect::from_min_size(
                 egui::pos2(
@@ -207,210 +203,204 @@ impl EntropyApp {
                 let mut device_clicked = false;
                 let mut layer_operations_row_rect = None;
                 let mut layer_operations_hovered = false;
-                egui::Area::new(area_id)
-                        .order(egui::Order::Foreground)
-                        .fixed_pos(dropdown_rect.min)
-                        .show(ctx, |ui| {
-                            let dark = ui.visuals().dark_mode;
-                            top_dropdown_frame(dark).show(ui, |ui| {
-                                ui.set_min_width(dropdown_size.x - 16.0);
+                show_top_dropdown(ctx, area_id, dropdown_rect.min, |ui| {
+                    ui.set_min_width(dropdown_size.x - 16.0);
 
-                                let mut requested_device = None;
-                                if self.device_manager.devices().is_empty() {
-                                    ui.allocate_ui_with_layout(
-                                        egui::vec2(dropdown_size.x - 16.0, 30.0),
-                                        egui::Layout::left_to_right(egui::Align::Center),
-                                        |ui| {
-                                            ui.add_space(10.0);
-                                            ui.label(
-                                                RichText::new(crate::i18n::tr(
-                                                    lang,
-                                                    TrKey::NoDevicesFound,
-                                                ))
-                                                .size(13.0)
-                                                .color(app_muted_text(ui.visuals().dark_mode)),
-                                            );
-                                        },
-                                    );
-                                } else {
-                                    for (i, dev) in self.device_manager.devices().iter().enumerate()
-                                    {
-                                        let is_selected = self.selected_device == Some(i);
-                                        #[cfg(not(target_arch = "wasm32"))]
-                                        let switch_enabled = !self.hid_user_action_busy();
-                                        #[cfg(target_arch = "wasm32")]
-                                        let switch_enabled = true;
-                                        let cached_display_name = self
-                                            .device_display_names
-                                            .get(&dev.display_name_cache_key())
-                                            .map(String::as_str);
-                                        let display_name = dev.display_name_with_transport(
-                                            cached_display_name.unwrap_or(dev.name.as_str()),
-                                        );
-                                        let resp = top_dropdown_item(
-                                            ui,
-                                            dropdown_size.x - 16.0,
-                                            &display_name,
-                                            switch_enabled,
-                                            is_selected,
-                                        );
-                                        if switch_enabled && resp.clicked() {
-                                            requested_device = Some(i);
-                                            self.main_menu_tab = MainMenuTab::Keyboard;
-                                            device_clicked = true;
-                                        }
-                                    }
-                                }
-
-                                if let Some(idx) = requested_device {
-                                    #[cfg(not(target_arch = "wasm32"))]
-                                    if self.selected_device != Some(idx) || self.pending_device_connect.is_some() {
-                                        self.start_connect(idx);
-                                    }
-                                    #[cfg(target_arch = "wasm32")]
-                                    { self.selected_device = Some(idx); }
-                                }
-
-                                if show_key_legend_switcher {
-                                    if let Some(order_key) =
-                                        self.app_settings.key_legend_layout.order_i18n_key()
-                                    {
-                                        ui.add_space(6.0);
-                                        let order_label = crate::i18n::tr_catalog(lang, order_key);
-                                        if top_dropdown_item(
-                                            ui,
-                                            dropdown_size.x - 16.0,
-                                            order_label,
-                                            true,
-                                            false,
-                                        )
-                                        .clicked()
-                                        {
-                                            self.app_settings.key_legend_layout =
-                                                self.app_settings.key_legend_layout.toggled_order();
-                                            save_app_settings(&self.app_settings);
-                                            ctx.request_repaint();
-                                        }
-                                    }
-                                }
-
-                                ui.add_space(6.0);
-                                let layer_operations_response = top_dropdown_submenu_item(
-                                    ui,
-                                    dropdown_size.x - 16.0,
-                                    crate::i18n::tr_catalog(lang, "layer_actions.menu"),
-                                    layer_operations_available,
-                                    submenu_was_open
-                                        && pointer_over_stored_layer_operations_bridge,
+                    let mut requested_device = None;
+                    if self.device_manager.devices().is_empty() {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(dropdown_size.x - 16.0, TOP_DROPDOWN_ITEM_HEIGHT),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.add_space(TOP_DROPDOWN_ICON_TEXT_LEFT);
+                                ui.label(
+                                    RichText::new(crate::i18n::tr(lang, TrKey::NoDevicesFound))
+                                        .size(13.0)
+                                        .color(app_muted_text(ui.visuals().dark_mode)),
                                 );
-                                layer_operations_row_rect =
-                                    Some(layer_operations_response.rect);
-                                layer_operations_hovered =
-                                    layer_operations_response.hovered()
-                                        && layer_operations_available;
+                            },
+                        );
+                    } else {
+                        for (i, dev) in self.device_manager.devices().iter().enumerate() {
+                            let is_selected = self.selected_device == Some(i);
+                            #[cfg(not(target_arch = "wasm32"))]
+                            let switch_enabled = !self.hid_user_action_busy();
+                            #[cfg(target_arch = "wasm32")]
+                            let switch_enabled = true;
+                            let cached_display_name = self
+                                .device_display_names
+                                .get(&dev.display_name_cache_key())
+                                .map(String::as_str);
+                            let display_name = dev.display_name_with_transport(
+                                cached_display_name.unwrap_or(dev.name.as_str()),
+                            );
+                            let resp = top_dropdown_icon_item(
+                                ui,
+                                dropdown_size.x - 16.0,
+                                TopMenuIcon::Device,
+                                &display_name,
+                                switch_enabled,
+                                is_selected,
+                            );
+                            if switch_enabled && resp.clicked() {
+                                requested_device = Some(i);
+                                self.main_menu_tab = MainMenuTab::Keyboard;
+                                device_clicked = true;
+                            }
+                        }
+                    }
 
-                                #[cfg(not(target_arch = "wasm32"))]
-                                {
-                                    ui.add_space(6.0);
-                                    if top_dropdown_item(
-                                        ui,
-                                        dropdown_size.x - 16.0,
-                                        entlayout_import_label(lang),
-                                        self.layout.is_some(),
-                                        false,
-                                    )
-                                    .clicked()
-                                    {
-                                        self.close_top_dropdowns(ctx);
-                                        self.request_entlayout_import_after_full_load();
-                                        ctx.request_repaint();
-                                    }
-                                    if top_dropdown_item(
-                                        ui,
-                                        dropdown_size.x - 16.0,
-                                        entlayout_export_label(lang),
-                                        self.layout.is_some(),
-                                        false,
-                                    )
-                                    .clicked()
-                                    {
-                                        self.close_top_dropdowns(ctx);
-                                        self.request_entlayout_export_after_full_load();
-                                        ctx.request_repaint();
-                                    }
-                                    if top_dropdown_item(
-                                        ui,
-                                        dropdown_size.x - 16.0,
-                                        layout_image_export_label(lang),
-                                        self.layout.is_some(),
-                                        false,
-                                    )
-                                    .clicked()
-                                    {
-                                        self.close_top_dropdowns(ctx);
-                                        self.request_image_export_after_full_load();
-                                        ctx.request_repaint();
-                                    }
-                                }
+                    if let Some(idx) = requested_device {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if self.selected_device != Some(idx)
+                            || self.pending_device_connect.is_some()
+                        {
+                            self.start_connect(idx);
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            self.selected_device = Some(idx);
+                        }
+                    }
 
-                                ui.add_space(6.0);
-                                if top_dropdown_item(
-                                    ui,
-                                    dropdown_size.x - 16.0,
-                                    crate::i18n::tr_catalog(lang, "ui.sticky_layout_window_label"),
-                                    true,
-                                    self.app_settings.sticky_layout_window,
-                                )
-                                .clicked()
-                                {
-                                    if self.app_settings.sticky_layout_window {
-                                        self.app_settings.sticky_layout_window = false;
-                                        self.pending_layout_indicator_open_after_unlock = false;
-                                        self.sticky_layout_last_size = None;
-                                        save_app_settings(&self.app_settings);
-                                    } else if self.is_vial_locked() {
-                                        self.pending_layout_indicator_open_after_unlock = true;
-                                        self.unlock_open = true;
-                                        self.status_msg = crate::i18n::tr_catalog(
-                                            self.app_settings.language,
-                                            "matrix_tester.keyboard_is_locked_unlock_it_to_use_matrix_tester",
-                                        )
-                                        .into();
-                                    } else {
-                                        self.app_settings.sticky_layout_window = true;
-                                        self.sticky_layout_last_size = None;
-                                        save_app_settings(&self.app_settings);
-                                    }
-                                    ctx.request_repaint();
-                                    device_clicked = true;
-                                }
+                    top_dropdown_divider(ui, dropdown_size.x - 16.0);
+                    if show_key_legend_switcher {
+                        if let Some(order_key) =
+                            self.app_settings.key_legend_layout.order_i18n_key()
+                        {
+                            let order_label = crate::i18n::tr_catalog(lang, order_key);
+                            if top_dropdown_icon_item(
+                                ui,
+                                dropdown_size.x - 16.0,
+                                TopMenuIcon::KeyLegendOrder,
+                                order_label,
+                                true,
+                                false,
+                            )
+                            .clicked()
+                            {
+                                self.app_settings.key_legend_layout =
+                                    self.app_settings.key_legend_layout.toggled_order();
+                                save_app_settings(&self.app_settings);
+                                ctx.request_repaint();
+                            }
+                        }
+                    }
 
-                                if top_dropdown_item_with_indicator(
-                                    ui,
-                                    dropdown_size.x - 16.0,
-                                    about_device_label(lang),
-                                    self.layout.is_some(),
-                                    self.main_menu_tab == MainMenuTab::Settings
-                                        && self.settings_tab == SettingsTab::AboutDevice,
-                                    crate::app::firmware_update_available(
-                                        &self.firmware_update_check,
-                                    ) && self
-                                        .device_about_info
-                                        .as_ref()
-                                        .and_then(|info| info.firmware_update_target.as_ref())
-                                        == crate::app::firmware_update_target(
-                                            &self.firmware_update_check,
-                                        ),
-                                )
-                                .clicked()
-                                {
-                                    self.close_top_dropdowns(ctx);
-                                    self.open_about_device_page();
-                                    ctx.request_repaint();
-                                    device_clicked = true;
-                                }
-                            });
-                        });
+                    let layer_operations_response = top_dropdown_icon_submenu_item(
+                        ui,
+                        dropdown_size.x - 16.0,
+                        TopMenuIcon::LayerOperations,
+                        crate::i18n::tr_catalog(lang, "layer_actions.menu"),
+                        layer_operations_available,
+                        submenu_was_open && pointer_over_stored_layer_operations_bridge,
+                    );
+                    layer_operations_row_rect = Some(layer_operations_response.rect);
+                    layer_operations_hovered =
+                        layer_operations_response.hovered() && layer_operations_available;
+
+                    if top_dropdown_icon_item(
+                        ui,
+                        dropdown_size.x - 16.0,
+                        TopMenuIcon::ShowHideKeys,
+                        crate::i18n::tr_catalog(lang, "main_menu.show_hide_keys"),
+                        self.layout.is_some() && !self.current_encoder_visibility_id.is_empty(),
+                        self.editing_layout_visibility,
+                    )
+                    .clicked()
+                    {
+                        self.close_top_dropdowns(ctx);
+                        self.start_layout_visibility_edit();
+                        ctx.request_repaint();
+                        device_clicked = true;
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        top_dropdown_divider(ui, dropdown_size.x - 16.0);
+                        if top_dropdown_icon_item(
+                            ui,
+                            dropdown_size.x - 16.0,
+                            TopMenuIcon::ImportLayout,
+                            entlayout_import_label(lang),
+                            self.layout.is_some(),
+                            false,
+                        )
+                        .clicked()
+                        {
+                            self.close_top_dropdowns(ctx);
+                            self.request_entlayout_import_after_full_load();
+                            ctx.request_repaint();
+                        }
+                        if top_dropdown_icon_item(
+                            ui,
+                            dropdown_size.x - 16.0,
+                            TopMenuIcon::ExportLayout,
+                            entlayout_export_label(lang),
+                            self.layout.is_some(),
+                            false,
+                        )
+                        .clicked()
+                        {
+                            self.close_top_dropdowns(ctx);
+                            self.request_entlayout_export_after_full_load();
+                            ctx.request_repaint();
+                        }
+                        if top_dropdown_icon_item(
+                            ui,
+                            dropdown_size.x - 16.0,
+                            TopMenuIcon::ExportImage,
+                            layout_image_export_label(lang),
+                            self.layout.is_some(),
+                            false,
+                        )
+                        .clicked()
+                        {
+                            self.close_top_dropdowns(ctx);
+                            self.request_image_export_after_full_load();
+                            ctx.request_repaint();
+                        }
+                    }
+
+                    top_dropdown_divider(ui, dropdown_size.x - 16.0);
+                    if top_dropdown_icon_item(
+                        ui,
+                        dropdown_size.x - 16.0,
+                        TopMenuIcon::LayoutIndicator,
+                        crate::i18n::tr_catalog(lang, "ui.sticky_layout_window_label"),
+                        true,
+                        self.app_settings.sticky_layout_window,
+                    )
+                    .clicked()
+                    {
+                        self.toggle_sticky_layout_window();
+                        ctx.request_repaint();
+                        device_clicked = true;
+                    }
+
+                    if top_dropdown_icon_item_with_indicator(
+                        ui,
+                        dropdown_size.x - 16.0,
+                        TopMenuIcon::AboutDevice,
+                        about_device_label(lang),
+                        self.layout.is_some(),
+                        self.main_menu_tab == MainMenuTab::Settings
+                            && self.settings_tab == SettingsTab::AboutDevice,
+                        crate::app::firmware_update_available(&self.firmware_update_check)
+                            && self
+                                .device_about_info
+                                .as_ref()
+                                .and_then(|info| info.firmware_update_target.as_ref())
+                                == crate::app::firmware_update_target(&self.firmware_update_check),
+                    )
+                    .clicked()
+                    {
+                        self.close_top_dropdowns(ctx);
+                        self.open_about_device_page();
+                        ctx.request_repaint();
+                        device_clicked = true;
+                    }
+                });
 
                 let mut submenu_open = false;
                 let mut submenu_rect_for_state = None;

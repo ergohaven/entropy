@@ -14,6 +14,15 @@ pub use keycode_picker_keyboard::egui_key_to_qmk;
 #[path = "keycode_picker_model.rs"]
 mod keycode_picker_model;
 pub use keycode_picker_model::{BasicPickerLayout, KeycodeTab, PickerViewMode};
+#[path = "keycode_picker_catalog.rs"]
+mod keycode_picker_catalog;
+use keycode_picker_catalog::*;
+#[path = "keycode_picker_search.rs"]
+mod keycode_picker_search;
+use keycode_picker_search::*;
+#[path = "keycode_picker_rows.rs"]
+mod keycode_picker_rows;
+use keycode_picker_rows::*;
 #[path = "keycode_picker_ui.rs"]
 mod keycode_picker_ui;
 use keycode_picker_ui::*;
@@ -24,6 +33,7 @@ use keycode_picker_popups::*;
 mod keycode_picker_advanced;
 #[path = "keycode_picker_basic.rs"]
 mod keycode_picker_basic;
+use keycode_picker_basic::*;
 #[path = "keycode_picker_lighting_quantum.rs"]
 mod keycode_picker_lighting_quantum;
 #[path = "keycode_picker_macro.rs"]
@@ -33,6 +43,7 @@ pub(crate) use keycode_picker_macro::decode_macro_actions;
 mod keycode_picker_special;
 #[path = "keycode_picker_tabs.rs"]
 mod keycode_picker_tabs;
+use keycode_picker_tabs::*;
 #[path = "keycode_picker_tap_dance.rs"]
 mod keycode_picker_tap_dance;
 #[path = "keycode_picker_tap_dance_picker.rs"]
@@ -120,7 +131,7 @@ enum AdvancedSlotKind {
     TapDance,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 enum PickerValuePolicy {
     #[default]
     Any,
@@ -132,7 +143,11 @@ pub struct KeycodePicker {
     pub selected_tab: KeycodeTab,
     pub basic_layout: BasicPickerLayout,
     pub popup_view_mode: PickerViewMode,
-    pub search_query: String,
+    /// Search field state and cached results (keycode_picker_search.rs).
+    search: PickerSearch,
+    /// Rows of every tab, rebuilt when the picker state changes
+    /// (keycode_picker_rows.rs).
+    row_cache: RowCache,
     pub result: Option<crate::keyboard::KeyBinding>,
     pub custom_keycodes: Vec<(String, String, String, u16)>,
     pub supports_rgb: bool,
@@ -214,6 +229,261 @@ fn tr_picker(language: crate::i18n::Language, key: &'static str) -> &'static str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escape_mid_search_closes_the_picker_and_keeps_it_closed() {
+        let mut picker = KeycodePicker {
+            open: true,
+            ..Default::default()
+        };
+        picker.search.query = "tap dan".into();
+        let mut harness = egui_kittest::Harness::new_state(
+            |ctx, picker: &mut KeycodePicker| {
+                picker.show(
+                    ctx,
+                    DeferredPickerDataState::Ready,
+                    DeferredPickerDataState::Ready,
+                );
+            },
+            picker,
+        );
+        harness.run();
+        assert!(harness.state().open, "picker should be showing before Esc");
+
+        harness.key_press(egui::Key::Escape);
+        harness.run();
+        assert!(
+            !harness.state().open,
+            "Esc during search must close the picker"
+        );
+
+        // A ghost reopen on the next frames is exactly the reported bug.
+        harness.run_steps(3);
+        assert!(!harness.state().open, "picker must stay closed");
+    }
+
+    #[test]
+    fn escape_in_pending_modifier_pick_closes_the_whole_picker() {
+        let picker = KeycodePicker {
+            open: true,
+            vial_quantum_pending_mod: Some(0x0100),
+            ..Default::default()
+        };
+        let mut harness = egui_kittest::Harness::new_state(
+            |ctx, picker: &mut KeycodePicker| {
+                picker.show(
+                    ctx,
+                    DeferredPickerDataState::Ready,
+                    DeferredPickerDataState::Ready,
+                );
+            },
+            picker,
+        );
+        harness.run();
+        harness.key_press(egui::Key::Escape);
+        harness.run();
+        assert!(harness.state().vial_quantum_pending_mod.is_none());
+        assert!(
+            !harness.state().open,
+            "Esc in the pending pick closes the whole picker, same as the layer pick"
+        );
+        harness.run_steps(3);
+        assert!(!harness.state().open, "picker must stay closed");
+    }
+
+    fn english_picker() -> KeycodePicker {
+        KeycodePicker {
+            open: true,
+            language: crate::i18n::Language::English,
+            ..Default::default()
+        }
+    }
+
+    fn open_picker_harness(picker: KeycodePicker) -> egui_kittest::Harness<'static, KeycodePicker> {
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1_400.0, 1_000.0))
+            .build_state(
+                |ctx, picker: &mut KeycodePicker| {
+                    picker.show(
+                        ctx,
+                        DeferredPickerDataState::Ready,
+                        DeferredPickerDataState::Ready,
+                    );
+                },
+                picker,
+            );
+        harness.run();
+        harness
+    }
+
+    #[test]
+    fn tabs_expose_names_and_selected_state_to_assistive_tech() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{NodeT, Queryable};
+
+        let mut harness = open_picker_harness(english_picker());
+        let basic = harness.get_by_role_and_label(Role::Tab, "Basic");
+        assert_eq!(basic.accesskit_node().is_selected(), Some(true));
+        let special = harness.get_by_role_and_label(Role::Tab, "Special");
+        assert_eq!(special.accesskit_node().is_selected(), Some(false));
+
+        special.click();
+        harness.run();
+        assert_eq!(harness.state().selected_tab, KeycodeTab::Special);
+        let special = harness.get_by_role_and_label(Role::Tab, "Special");
+        assert_eq!(special.accesskit_node().is_selected(), Some(true));
+    }
+
+    #[test]
+    fn tabs_are_grouped_and_control_the_labelled_panel() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{NodeT, Queryable};
+
+        let mut harness = open_picker_harness(english_picker());
+        let list = harness.get_by_role(Role::TabList);
+        assert!(list
+            .children()
+            .any(|node| node.accesskit_node().role() == Role::Tab));
+        let panel = harness.get_by_role(Role::TabPanel);
+        let basic = harness.get_by_role_and_label(Role::Tab, "Basic");
+        assert_eq!(
+            basic.accesskit_node().controls().next().unwrap().id(),
+            panel.accesskit_node().id()
+        );
+        assert_eq!(
+            panel.accesskit_node().labelled_by().next().unwrap().id(),
+            basic.accesskit_node().id()
+        );
+
+        harness.get_by_role_and_label(Role::Tab, "Special").click();
+        harness.run();
+        let panel = harness.get_by_role(Role::TabPanel);
+        let special = harness.get_by_role_and_label(Role::Tab, "Special");
+        assert_eq!(
+            special.accesskit_node().controls().next().unwrap().id(),
+            panel.accesskit_node().id()
+        );
+        assert_eq!(
+            panel.accesskit_node().labelled_by().next().unwrap().id(),
+            special.accesskit_node().id()
+        );
+    }
+
+    #[test]
+    fn single_section_search_results_show_their_heading() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+
+        let mut picker = english_picker();
+        picker.search.query = "standard keyboard layout".into();
+        let harness = open_picker_harness(picker);
+        assert!(!harness.state().search.results().is_empty());
+        harness.get_by_role_and_label(Role::Label, "Basic · Basic keys — standard keyboard layout");
+    }
+
+    #[test]
+    fn search_results_and_clear_control_are_accessible() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{NodeT, Queryable};
+
+        let mut picker = english_picker();
+        picker.search.query = "kc_volu".into();
+        let mut harness = open_picker_harness(picker);
+        let hit = harness.state().search.results()[0].clone();
+        let name = hit.accessible_name();
+        let node = harness.get_by_role_and_label(Role::Button, &name);
+        assert_eq!(
+            node.accesskit_node().description(),
+            Some(hit.tooltip.clone())
+        );
+
+        harness
+            .get_by_role_and_label(Role::Button, "Clear search")
+            .click();
+        harness.run();
+        assert!(harness.state().search.query.is_empty());
+        assert!(!harness.state().search.is_active());
+    }
+
+    #[test]
+    fn focused_tab_is_selected_with_enter_and_arrows_move_between_tabs() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+
+        let mut harness = open_picker_harness(english_picker());
+        harness.get_by_role_and_label(Role::Tab, "Basic").focus();
+        harness.run();
+        harness.key_press(egui::Key::ArrowRight);
+        harness.run();
+        assert!(
+            harness
+                .get_by_role_and_label(Role::Tab, "Symbols")
+                .is_focused(),
+            "Right arrow should move focus to the next tab"
+        );
+        assert_eq!(harness.state().selected_tab, KeycodeTab::Basic);
+
+        harness.key_press(egui::Key::Enter);
+        harness.run();
+        assert_eq!(harness.state().selected_tab, KeycodeTab::Symbols);
+        assert!(harness.state().open);
+    }
+
+    #[test]
+    fn focused_search_result_is_assigned_with_enter() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+
+        let mut picker = english_picker();
+        picker.search.query = "kc_volu".into();
+        let mut harness = open_picker_harness(picker);
+        let hit = harness.state().search.results()[0].clone();
+        let name = hit.accessible_name();
+        harness.get_by_role_and_label(Role::Button, &name).focus();
+        harness.run();
+        harness.key_press(egui::Key::Enter);
+        harness.run();
+        assert_eq!(
+            harness.state().result,
+            Some(crate::keyboard::KeyBinding::Vial(0x00A9))
+        );
+        assert!(!harness.state().open);
+    }
+
+    #[test]
+    fn clicking_a_tab_keeps_physical_key_capture_working() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+
+        let mut harness = open_picker_harness(english_picker());
+        harness.get_by_role_and_label(Role::Tab, "Special").click();
+        harness.run();
+        assert_eq!(harness.state().selected_tab, KeycodeTab::Special);
+
+        harness.key_press(egui::Key::A);
+        harness.run();
+        assert_eq!(
+            harness.state().result,
+            Some(crate::keyboard::KeyBinding::Vial(0x0004)),
+            "a physical key press must still assign after a mouse click on a tab"
+        );
+    }
+
+    #[test]
+    fn focused_keycap_is_activated_with_enter() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+
+        let mut harness = open_picker_harness(english_picker());
+        harness.get_by_role_and_label(Role::Button, "Q").focus();
+        harness.run();
+        harness.key_press(egui::Key::Enter);
+        harness.run();
+        assert_eq!(
+            harness.state().result,
+            Some(crate::keyboard::KeyBinding::Vial(0x0014))
+        );
+    }
 
     fn macro_picker(selected: u8) -> KeycodePicker {
         KeycodePicker {
@@ -617,100 +887,36 @@ mod tests {
     }
 }
 
+/// Universal Symbols as a section inside another chooser (e.g. the Tap Dance
+/// key picker). Returns the picked binding.
 fn show_universal_symbol_section(
     ui: &mut egui::Ui,
     language: crate::i18n::Language,
 ) -> Option<crate::keyboard::KeyBinding> {
-    let mut picked = None;
-
-    ui.label(
-        RichText::new(tr_picker(language, "key_picker.section_universal_symbols"))
-            .size(11.0)
-            .color(Color32::from_gray(150)),
+    show_section_heading(
+        ui,
+        tr_picker(language, "key_picker.section_universal_symbols"),
     );
-    ui.add_space(4.0);
-    ui.horizontal_wrapped(|ui| {
-        for control in crate::universal_symbols::CONTROLS {
-            let label = crate::universal_symbols::label_for_user_id(control.user_id)
-                .expect("universal symbol control should have a display label");
-            let resp = ui
-                .add_sized(
-                    KeycodePicker::picker_key_size(ui.ctx()),
-                    egui::Button::new(""),
-                )
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-            KeycodePicker::paint_compact_picker_label(ui, &resp, &label);
-            if resp.clicked() {
-                picked = Some(crate::universal_symbols::binding(control.user_id));
-            }
-            resp.on_hover_text(crate::i18n::tr_text(language, control.name));
-        }
-        for symbol in crate::universal_symbols::SYMBOLS {
-            let label = crate::universal_symbols::label_for_user_id(symbol.user_id)
-                .expect("universal symbol should have a display label");
-            let resp = ui
-                .add_sized(
-                    KeycodePicker::picker_key_size(ui.ctx()),
-                    egui::Button::new(""),
-                )
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-            KeycodePicker::paint_compact_picker_label(ui, &resp, &label);
-            if resp.clicked() {
-                picked = Some(crate::universal_symbols::binding(symbol.user_id));
-            }
-            resp.on_hover_text(crate::i18n::tr_text(
-                language,
-                &format!(
-                    "Universal Symbols: firmware types {} in English and Russian layouts",
-                    symbol.symbol
-                ),
-            ));
-        }
-    });
-
-    picked
+    match show_row_grid(ui, &universal_symbol_rows(language)) {
+        Some(PickerAction::Assign(binding)) => Some(binding),
+        _ => None,
+    }
 }
 
+/// Universal Russian letters as a section inside another chooser. Returns
+/// the picked binding.
 fn show_universal_russian_letter_section(
     ui: &mut egui::Ui,
     language: crate::i18n::Language,
 ) -> Option<crate::keyboard::KeyBinding> {
-    let mut picked = None;
     ui.add_space(crate::ui_style::modal_space_sm());
-    ui.label(
-        RichText::new(crate::i18n::tr_catalog(
-            language,
-            "key_picker_text.international",
-        ))
-        .size(11.0)
-        .color(Color32::from_gray(150)),
-    );
-    ui.add_space(4.0);
-    ui.horizontal_wrapped(|ui| {
-        for letter in crate::universal_symbols::RUSSIAN_LETTERS {
-            let binding = crate::universal_symbols::binding(letter.user_id);
-            let label = crate::universal_symbols::label_for_user_id(letter.user_id)
-                .expect("universal Russian letter should have a display label");
-            let resp = ui
-                .add_sized(
-                    KeycodePicker::picker_key_size(ui.ctx()),
-                    egui::Button::new(""),
-                )
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-            KeycodePicker::paint_compact_picker_label(ui, &resp, &label);
-            if resp.clicked() {
-                picked = Some(binding);
-            }
-            resp.on_hover_text(crate::i18n::tr_text(
-                language,
-                &binding
-                    .rmk_action()
-                    .and_then(crate::universal_symbols::tooltip)
-                    .unwrap_or_default(),
-            ));
-        }
-    });
-    picked
+    let section = crate::i18n::tr_catalog(language, "key_picker_text.international");
+    show_section_heading(ui, section);
+    let rows = universal_russian_letter_rows(language, KeycodeTab::Special, section);
+    match show_row_grid(ui, &rows) {
+        Some(PickerAction::Assign(binding)) => Some(binding),
+        _ => None,
+    }
 }
 
 fn picker_tab_label(language: crate::i18n::Language, tab: KeycodeTab) -> &'static str {
@@ -872,7 +1078,8 @@ impl Default for KeycodePicker {
             selected_tab: KeycodeTab::Basic,
             basic_layout: BasicPickerLayout::Qwerty,
             popup_view_mode: PickerViewMode::default(),
-            search_query: String::new(),
+            search: PickerSearch::default(),
+            row_cache: RowCache::default(),
             result: None,
             custom_keycodes: vec![],
             supports_rgb: true,
@@ -1145,7 +1352,7 @@ impl KeycodePicker {
         self.regular_key_pick = true;
         self.regular_key_pick_allow_mod_key = allow_mod_key;
         self.regular_mod_key_pick = None;
-        self.search_query.clear();
+        self.search.reset();
         self.vial_quantum_pending_mod = None;
         self.vial_quantum_pending_mt = None;
         self.vial_layer_pending = None;
@@ -1160,7 +1367,7 @@ impl KeycodePicker {
         self.regular_key_pick = false;
         self.regular_key_pick_allow_mod_key = false;
         self.regular_mod_key_pick = None;
-        self.search_query.clear();
+        self.search.reset();
         self.vial_quantum_pending_mod = None;
         self.vial_quantum_pending_mt = None;
         self.vial_layer_pending = None;
@@ -1436,12 +1643,11 @@ impl KeycodePicker {
         }
 
         if allow_escape_close && ctx.input(|i| i.key_pressed(Key::Escape)) {
-            if self.vial_quantum_pending_mod.is_some() || self.vial_quantum_pending_mt.is_some() {
-                self.vial_quantum_pending_mod = None;
-                self.vial_quantum_pending_mt = None;
-            } else {
-                self.open = false;
-            }
+            // Esc always closes the picker, even mid-search; a reopened
+            // picker starts with a cleared query anyway. Pending Mod+Key
+            // picks never reach here: show() routes them to the dedicated
+            // pending picker, which owns its own Esc handling.
+            self.open = false;
             return;
         }
 
@@ -1460,7 +1666,7 @@ impl KeycodePicker {
                         if self.vial_quantum_pending_mod.is_none()
                             && self.vial_quantum_pending_mt.is_none()
                         {
-                            if self.search_query.is_empty() || modifiers.any() {
+                            if self.search.query.is_empty() || modifiers.any() {
                                 if let Some(qmk) = egui_key_to_qmk(*key, *modifiers) {
                                     self.assign_keycode_value(qmk);
                                 }
@@ -1488,6 +1694,10 @@ impl KeycodePicker {
 
         let mut still_open = true;
         let picker_size = key_picker_main_size(ctx);
+        let slot_states = SlotDataStates {
+            macro_state: macro_data_state,
+            tap_dance_state: tap_dance_data_state,
+        };
         crate::ui_style::centered_modal_window(
             ctx,
             tr_picker(self.language, "key_picker.title"),
@@ -1498,12 +1708,53 @@ impl KeycodePicker {
         .show(ctx, |ui| {
             apply_picker_button_visuals(ui);
             ui.vertical_centered(|ui| {
-                crate::ui_style::modal_intro(
-                    ui,
-                    tr_picker(self.language, "key_picker.press_key_or_pick"),
+                let search_width = 340.0_f32.min(ui.available_width() - 32.0);
+                let search_resp = ui.add_sized(
+                    Vec2::new(search_width, 26.0),
+                    egui::TextEdit::singleline(&mut self.search.query)
+                        .hint_text(tr_picker(self.language, "key_picker.search_hint"))
+                        .font(egui::FontId::proportional(12.5))
+                        .vertical_align(egui::Align::Center)
+                        .margin(egui::Margin {
+                            left: 8,
+                            right: 26,
+                            top: 2,
+                            bottom: 2,
+                        }),
                 );
+                // Inline clear control, shown only while a query is present.
+                if !self.search.query.is_empty() {
+                    let clear_rect = egui::Rect::from_center_size(
+                        egui::pos2(search_resp.rect.right() - 14.0, search_resp.rect.center().y),
+                        Vec2::splat(18.0),
+                    );
+                    let clear_label = tr_picker(self.language, "key_picker.search_clear");
+                    let clear_resp = ui
+                        .allocate_rect(clear_rect, egui::Sense::click())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text(clear_label);
+                    clear_resp.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, clear_label)
+                    });
+                    paint_focus_ring(ui, &clear_resp, 4.0);
+                    let color = if clear_resp.hovered() {
+                        ui.visuals().text_color()
+                    } else {
+                        crate::ui_style::muted_text(ui.visuals().dark_mode)
+                    };
+                    ui.painter().text(
+                        clear_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "✕",
+                        egui::FontId::proportional(12.0),
+                        color,
+                    );
+                    if clear_resp.clicked() {
+                        self.search.reset();
+                    }
+                }
             });
-            ui.add_space(4.0);
+            ui.add_space(12.0);
 
             if !self.vial_tab_supported(self.selected_tab) {
                 self.selected_tab = KeycodeTab::Basic;
@@ -1511,6 +1762,8 @@ impl KeycodePicker {
 
             // Tab bar
             let visible_tabs = self.visible_vial_tabs();
+            let panel_id = ui.id().with("picker_tab_panel");
+            let mut selected_tab_id = None;
             let tab_spacing = 6.0;
             let tab_bar_width: f32 = visible_tabs
                 .iter()
@@ -1518,6 +1771,9 @@ impl KeycodePicker {
                 .sum::<f32>()
                 + tab_spacing * visible_tabs.len().saturating_sub(1) as f32;
             ui.horizontal(|ui| {
+                ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+                    node.set_role(egui::accesskit::Role::TabList);
+                });
                 ui.spacing_mut().item_spacing = egui::vec2(tab_spacing, 6.0);
                 let x_offset = ((ui.available_width() - tab_bar_width).max(0.0) * 0.5).floor();
                 if x_offset > 0.0 {
@@ -1526,7 +1782,12 @@ impl KeycodePicker {
                 for tab in &visible_tabs {
                     let active = self.selected_tab == *tab;
                     let tab_label = picker_tab_label(self.language, *tab);
-                    if picker_tab_button(ui, tab_label, active).clicked() {
+                    let tab_resp = picker_tab_button(ui, tab.style(), tab_label, active, panel_id);
+                    if active {
+                        selected_tab_id = Some(tab_resp.id);
+                    }
+                    if tab_resp.clicked() {
+                        selected_tab_id = Some(tab_resp.id);
                         if self.selected_tab != *tab {
                             if *tab == KeycodeTab::Macro {
                                 self.macro_inline_selected = None;
@@ -1536,6 +1797,7 @@ impl KeycodePicker {
                             }
                         }
                         self.selected_tab = *tab;
+                        self.search.reset();
                         self.vial_quantum_pending_mod = None;
                         self.vial_quantum_pending_mt = None;
                         self.vial_layer_pending = None;
@@ -1544,52 +1806,80 @@ impl KeycodePicker {
             });
             ui.add_space(crate::ui_style::modal_space_sm());
 
-            let content_height = key_picker_main_content_height(picker_size);
-            ui.allocate_ui_with_layout(
-                Vec2::new(ui.available_width(), content_height),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    ui.set_min_height(content_height);
-                    egui::ScrollArea::vertical()
-                        .max_height(content_height)
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            ui.scope(|ui| {
-                                apply_picker_button_visuals(ui);
+            self.refresh_vial_search_results();
+            let searching = self.search.is_active();
 
-                                if self.selected_tab == KeycodeTab::Basic {
-                                    ui.add_space(28.0);
-                                    self.show_vial_tab_content(
-                                        ui,
-                                        macro_data_state,
-                                        tap_dance_data_state,
-                                    );
-                                } else {
-                                    let centered_width = self.tab_content_width(ui);
-                                    let x_offset =
-                                        ((ui.available_width() - centered_width).max(0.0) * 0.5)
+            let content_height = key_picker_main_content_height(picker_size);
+            ui.scope_builder(egui::UiBuilder::new().id(panel_id), |ui| {
+                ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+                    node.set_role(egui::accesskit::Role::TabPanel);
+                    if let Some(tab_id) = selected_tab_id {
+                        node.set_labelled_by(vec![tab_id.accesskit_id()]);
+                    }
+                });
+                ui.allocate_ui_with_layout(
+                    Vec2::new(ui.available_width(), content_height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_min_height(content_height);
+                        egui::ScrollArea::vertical()
+                            .max_height(content_height)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.scope(|ui| {
+                                    apply_picker_button_visuals(ui);
+
+                                    if searching {
+                                        let centered_width = self.tab_content_width(ui);
+                                        let x_offset = ((ui.available_width() - centered_width)
+                                            .max(0.0)
+                                            * 0.5)
                                             .floor();
-                                    ui.horizontal(|ui| {
-                                        if x_offset > 0.0 {
-                                            ui.add_space(x_offset);
-                                        }
-                                        ui.allocate_ui_with_layout(
-                                            Vec2::new(centered_width, 0.0),
-                                            egui::Layout::top_down(egui::Align::Min),
-                                            |ui| {
-                                                self.show_vial_tab_content(
-                                                    ui,
-                                                    macro_data_state,
-                                                    tap_dance_data_state,
-                                                )
-                                            },
+                                        ui.horizontal(|ui| {
+                                            if x_offset > 0.0 {
+                                                ui.add_space(x_offset);
+                                            }
+                                            ui.allocate_ui_with_layout(
+                                                Vec2::new(centered_width, 0.0),
+                                                egui::Layout::top_down(egui::Align::Min),
+                                                |ui| self.show_vial_search_results(ui, slot_states),
+                                            );
+                                        });
+                                    } else if self.selected_tab == KeycodeTab::Basic {
+                                        ui.add_space(28.0);
+                                        self.show_vial_tab_content(
+                                            ui,
+                                            macro_data_state,
+                                            tap_dance_data_state,
                                         );
-                                    });
-                                }
+                                    } else {
+                                        let centered_width = self.tab_content_width(ui);
+                                        let x_offset = ((ui.available_width() - centered_width)
+                                            .max(0.0)
+                                            * 0.5)
+                                            .floor();
+                                        ui.horizontal(|ui| {
+                                            if x_offset > 0.0 {
+                                                ui.add_space(x_offset);
+                                            }
+                                            ui.allocate_ui_with_layout(
+                                                Vec2::new(centered_width, 0.0),
+                                                egui::Layout::top_down(egui::Align::Min),
+                                                |ui| {
+                                                    self.show_vial_tab_content(
+                                                        ui,
+                                                        macro_data_state,
+                                                        tap_dance_data_state,
+                                                    )
+                                                },
+                                            );
+                                        });
+                                    }
+                                });
                             });
-                        });
-                },
-            );
+                    },
+                );
+            });
         });
 
         if !still_open {
@@ -2109,19 +2399,12 @@ impl KeycodePicker {
         }
         match self.selected_tab {
             KeycodeTab::Basic => self.show_vial_basic(ui),
-            KeycodeTab::Symbols => self.show_vial_symbols(ui),
-            KeycodeTab::UniversalSymbols => self.show_vial_universal_symbols(ui),
-            KeycodeTab::Layers => self.show_vial_layers(ui),
-            KeycodeTab::Modifiers => self.show_vial_modifiers(ui),
-            KeycodeTab::Rgb => self.show_vial_rgb(ui),
             KeycodeTab::Macro => self.show_vial_macros(ui),
             KeycodeTab::TapDance => self.show_vial_tap_dance(ui),
             KeycodeTab::Special => {
                 self.show_vial_special(ui, macro_data_state, tap_dance_data_state)
             }
-            KeycodeTab::Bluetooth => self.show_vial_bluetooth(ui),
-            KeycodeTab::Custom => self.show_vial_custom(ui),
-            _ => self.show_vial_generic(ui),
+            tab => self.show_tab_rows(ui, tab),
         }
     }
 }

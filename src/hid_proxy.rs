@@ -1160,6 +1160,8 @@ mod tests {
         let mut bridges = Vec::new();
         for name in ["A", "B", "C"] {
             let hid = HidDevice {
+                unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+                read_only: None,
                 backend: super::super::HidBackend::Proxy(Arc::new(start("echo", name))),
             };
             let output = hid.shared_output().unwrap();
@@ -1422,6 +1424,8 @@ mod tests {
         let _guard = serial_test();
         let proxy = start("echo", "A");
         let hid = HidDevice {
+            unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            read_only: None,
             backend: super::super::HidBackend::Proxy(Arc::new(proxy)),
         };
         let output = hid.shared_output().unwrap();
@@ -1440,6 +1444,8 @@ mod tests {
         let proxy = start("echo", "A");
         let slot = proxy.slot.clone();
         let hid = HidDevice {
+            unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            read_only: None,
             backend: super::super::HidBackend::Proxy(Arc::new(proxy)),
         };
         let (mut bridge, release_query, query_finished) =
@@ -1496,6 +1502,8 @@ mod tests {
         let first = Arc::new(start("host-extended", "A"));
         let first_slot = first.slot.clone();
         let hid = HidDevice {
+            unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            read_only: None,
             backend: super::super::HidBackend::Proxy(first.clone()),
         };
         let mut automatic = test_start_bridge(
@@ -1525,6 +1533,8 @@ mod tests {
         assert!(first_slot.reaped.load(Ordering::Acquire));
         assert!(!first.is_available());
         let keyboard = HidDevice {
+            unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            read_only: None,
             backend: super::super::HidBackend::Proxy(selected.clone()),
         };
         let supported = supports_extended_host_protocol(&keyboard.query_qmk_settings().unwrap());
@@ -1572,6 +1582,8 @@ mod tests {
         let last = Arc::new(start("host-extended", "A"));
         let last_slot = last.slot.clone();
         let hid = HidDevice {
+            unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            read_only: None,
             backend: super::super::HidBackend::Proxy(last.clone()),
         };
         let mut again = test_start_bridge(
@@ -1607,6 +1619,8 @@ mod tests {
         let proxy = Arc::new(proxy);
         let slot = proxy.slot.clone();
         let hid = HidDevice {
+            unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            read_only: None,
             backend: super::super::HidBackend::Proxy(proxy.clone()),
         };
         let mut bridge = test_start_bridge(
@@ -1651,6 +1665,8 @@ mod tests {
         let _guard = serial_test();
         let proxy = Arc::new(start("echo", "A"));
         let hid = HidDevice {
+            unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            read_only: None,
             backend: super::super::HidBackend::Proxy(proxy.clone()),
         };
         let output = hid.shared_output().unwrap();
@@ -1676,9 +1692,13 @@ mod tests {
         let slot = proxy.slot.clone();
         // Two wrappers of the SAME physical proxy must share the ordering domain.
         let first = HidDevice {
+            unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            read_only: None,
             backend: super::super::HidBackend::Proxy(proxy.clone()),
         };
         let second = HidDevice {
+            unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            read_only: None,
             backend: super::super::HidBackend::Proxy(proxy.clone()),
         };
         let (entered_tx, entered_rx) = mpsc::channel();

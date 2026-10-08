@@ -110,30 +110,67 @@ impl HidDevice {
         // resp[0] = unlocked (1=yes), resp[1] = unlock_in_progress
         // resp[2..] = pairs of (row, col), rest filled with 0xFF
         let (unlocked, keys) = parse_unlock_status_response(&resp);
-        Ok((unlocked, resp.get(1).copied() == Some(1), keys))
+        let in_progress = resp.get(1).copied() == Some(1);
+        if !in_progress {
+            self.unlock_confirmation_pending
+                .store(false, std::sync::atomic::Ordering::Release);
+        }
+        Ok((unlocked, in_progress, keys))
     }
 
     /// Start unlock sequence — returns keys to hold (row, col pairs)
     pub fn unlock_start(&self) -> Result<()> {
         self.usb_send(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_UNLOCK_START])
             .context("failed to start Vial unlock sequence")?;
+        self.unlock_confirmation_pending
+            .store(false, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 
     /// Poll unlock status — returns (unlocked, in_progress)
     /// Returns (unlocked, in_progress, counter)
     pub fn unlock_poll(&self) -> Result<(bool, bool, u8)> {
+        if self
+            .unlock_confirmation_pending
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            let (unlocked, in_progress, _) = self.get_unlock_status_with_progress()?;
+            return Ok((unlocked, in_progress, 0));
+        }
+
         let resp = self
             .usb_send(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_UNLOCK_POLL])
             .context("failed to poll Vial unlock status")?;
         // resp[0] = unlocked, resp[1] = in_progress, resp[2] = counter
-        Ok((resp[0] == 1, resp[1] == 1, resp[2]))
+        let mut unlocked = resp[0] == 1;
+        let mut in_progress = resp[1] == 1;
+        let counter = resp[2];
+
+        // RMK 0.8.x samples `unlocked` and `in_progress` before checking the
+        // physical keys. Its successful poll can therefore return (0, 1, 0),
+        // even though the lock transitions while producing that reply.
+        // Confirm the resulting state without issuing another UNLOCK_POLL,
+        // which would restart RMK's in-progress flag.
+        if in_progress && counter == 0 {
+            // Persist this before confirmation: if the status request times
+            // out, every retry must remain status-only until the result is known.
+            self.unlock_confirmation_pending
+                .store(true, std::sync::atomic::Ordering::Release);
+            let (confirmed_unlocked, confirmed_in_progress, _) =
+                self.get_unlock_status_with_progress()?;
+            unlocked = confirmed_unlocked;
+            in_progress = confirmed_in_progress;
+        }
+
+        Ok((unlocked, in_progress, counter))
     }
 
     /// Lock the keyboard
     pub fn lock(&self) -> Result<()> {
         self.usb_send(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_LOCK])
             .context("failed to lock Vial device")?;
+        self.unlock_confirmation_pending
+            .store(false, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 }

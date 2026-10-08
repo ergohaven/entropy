@@ -24,7 +24,7 @@ pub fn gui_mod_name() -> &'static str {
     gui_name_for_target_os(std::env::consts::OS)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum KeyLegendLayout {

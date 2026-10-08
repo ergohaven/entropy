@@ -15,6 +15,25 @@ const EXPORT_LAYER_HEADER_H_HIDDEN: f32 = 16.0;
 const EXPORT_LAYER_GAP: f32 = 42.0;
 const EXPORT_MAX_SIDE: f32 = 12_000.0;
 
+/// One cosmetic visibility snapshot for the selected keyboard. All export
+/// formats use the same elements, regardless of the active editing mode.
+#[cfg(not(target_arch = "wasm32"))]
+struct ExportVisibleElements {
+    keys: Vec<bool>,
+    encoders: std::collections::BTreeSet<u8>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ExportVisibleElements {
+    fn key(&self, index: usize) -> bool {
+        self.keys.get(index).copied().unwrap_or(false)
+    }
+
+    fn encoder(&self, index: u8) -> bool {
+        self.encoders.contains(&index)
+    }
+}
+
 fn export_text(lang: crate::i18n::Language, key: &str) -> &'static str {
     match (lang, key) {
         (crate::i18n::Language::Russian, "title") => "Экспорт картинки раскладки",
@@ -801,18 +820,93 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    fn export_visible_elements(&self, layout: &KeyboardLayout) -> ExportVisibleElements {
+        // Match combined encoder press keys before applying manual hiding, as
+        // the main canvas does. Otherwise a hidden K:03/Imperial44 encoder
+        // leaves its press key behind in the exported image.
+        let key_rects: Vec<_> = layout
+            .keys
+            .iter()
+            .enumerate()
+            .filter(|(_, key)| {
+                Self::layout_key_visible(
+                    &self.module_settings,
+                    layout,
+                    key,
+                    self.layout_options_value,
+                )
+            })
+            .map(|(index, key)| {
+                (
+                    index,
+                    layout_aabb_rect(
+                        key.x,
+                        key.y,
+                        key.w,
+                        key.h,
+                        key.rotation,
+                        key.rotation_x,
+                        key.rotation_y,
+                    ),
+                )
+            })
+            .collect();
+        let mut groups: Vec<(u8, egui::Rect)> = Vec::new();
+        for encoder in layout
+            .encoders
+            .iter()
+            .filter(|encoder| self.automatic_layout_encoder_visible(layout, encoder))
+        {
+            let rect = layout_aabb_rect(
+                encoder.x,
+                encoder.y,
+                encoder.w,
+                encoder.h,
+                encoder.rotation,
+                encoder.rotation_x,
+                encoder.rotation_y,
+            );
+            if let Some((_, group_rect)) = groups
+                .iter_mut()
+                .find(|(index, _)| *index == encoder.encoder_idx)
+            {
+                *group_rect = group_rect.union(rect);
+            } else {
+                groups.push((encoder.encoder_idx, rect));
+            }
+        }
+        let explicit_press_keys =
+            Self::module_settings_encoder_press_keys(&self.module_settings, layout);
+        let press_keys = encoder_press_key_rects(layout, &key_rects, &groups, &explicit_press_keys);
+        let encoders = layout
+            .encoders
+            .iter()
+            .filter(|encoder| self.exported_layout_encoder_visible(layout, encoder))
+            .map(|encoder| encoder.encoder_idx)
+            .collect::<std::collections::BTreeSet<_>>();
+        let keys = layout
+            .keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| {
+                self.exported_layout_key_visible(layout, key)
+                    && !press_keys.iter().any(|press| {
+                        press.key_idx == index && !encoders.contains(&press.encoder_idx)
+                    })
+            })
+            .collect();
+        ExportVisibleElements { keys, encoders }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn export_layout_geometry(
         &self,
         layout: &KeyboardLayout,
         selected_layers: &[usize],
+        visible: &ExportVisibleElements,
     ) -> anyhow::Result<ExportGeometry> {
-        let bounds = export_layout_bounds(
-            layout,
-            self.layout_options_value,
-            &self.encoder_visibility,
-            &self.module_settings,
-        )
-        .ok_or_else(|| anyhow::anyhow!("layout has no visible keys"))?;
+        let bounds = export_layout_bounds(layout, visible, &self.module_settings)
+            .ok_or_else(|| anyhow::anyhow!("layout has no visible keys"))?;
         let span_x = (bounds.right() - bounds.left()).max(1.0);
         let span_y = (bounds.bottom() - bounds.top()).max(1.0);
         let header_h = if self.app_settings.layout_image_export.show_layer_names {
@@ -857,7 +951,8 @@ impl EntropyApp {
     ) -> anyhow::Result<String> {
         let font = FontArc::try_from_slice(include_bytes!("../../assets/DejaVuSans.ttf"))
             .map_err(|_| anyhow::anyhow!("failed to load export font"))?;
-        let geometry = self.export_layout_geometry(layout, selected_layers)?;
+        let visible = self.export_visible_elements(layout);
+        let geometry = self.export_layout_geometry(layout, selected_layers, &visible)?;
         let palette = geometry.palette;
 
         let mut svg = String::new();
@@ -898,6 +993,7 @@ impl EntropyApp {
                 layer_idx,
                 layout_y,
                 palette,
+                &visible,
             )?;
         }
 
@@ -915,27 +1011,19 @@ impl EntropyApp {
         layer_idx: usize,
         layout_y: f32,
         palette: ExportPalette,
+        visible: &ExportVisibleElements,
     ) -> anyhow::Result<()> {
-        let encoder_groups = export_encoder_groups(
-            layout,
-            bounds,
-            layout_y,
-            self.layout_options_value,
-            &self.encoder_visibility,
-            &self.module_settings,
-        );
+        let encoder_groups =
+            export_encoder_groups(layout, bounds, layout_y, &self.module_settings, visible);
 
         for (key_idx, key) in layout.keys.iter().enumerate() {
-            if !Self::layout_key_visible(
-                &self.module_settings,
-                layout,
-                key,
-                self.layout_options_value,
-            ) || encoder_groups.iter().any(|group| {
-                group
-                    .press
-                    .is_some_and(|(press_key_idx, _)| press_key_idx == key_idx)
-            }) {
+            if !visible.key(key_idx)
+                || encoder_groups.iter().any(|group| {
+                    group
+                        .press
+                        .is_some_and(|(press_key_idx, _)| press_key_idx == key_idx)
+                })
+            {
                 continue;
             }
             let rect = export_item_rect(
@@ -1019,7 +1107,8 @@ impl EntropyApp {
     ) -> anyhow::Result<RgbaImage> {
         let font = FontArc::try_from_slice(include_bytes!("../../assets/DejaVuSans.ttf"))
             .map_err(|_| anyhow::anyhow!("failed to load export font"))?;
-        let geometry = self.export_layout_geometry(layout, selected_layers)?;
+        let visible = self.export_visible_elements(layout);
+        let geometry = self.export_layout_geometry(layout, selected_layers, &visible)?;
         let palette = geometry.palette;
         let mut image = RgbaImage::from_pixel(
             geometry.width as u32,
@@ -1053,6 +1142,7 @@ impl EntropyApp {
                 layer_idx,
                 layout_y,
                 palette,
+                &visible,
             );
         }
 
@@ -1071,8 +1161,12 @@ impl EntropyApp {
         // one geometry. Compute it once up front so the PDF builder can enforce
         // the pixel budget from the declared size *before* rendering allocates a
         // page. Render one layer at a time so only one page's pixels are live.
-        let geometry =
-            self.export_layout_geometry(layout, &[*selected_layers.first().unwrap_or(&0)])?;
+        let visible = self.export_visible_elements(layout);
+        let geometry = self.export_layout_geometry(
+            layout,
+            &[*selected_layers.first().unwrap_or(&0)],
+            &visible,
+        )?;
         let page_size = (geometry.width as u32, geometry.height as u32);
         crate::pdf::build_layer_pdf(
             selected_layers.len(),
@@ -1091,27 +1185,19 @@ impl EntropyApp {
         layer_idx: usize,
         layout_y: f32,
         palette: ExportPalette,
+        visible: &ExportVisibleElements,
     ) {
-        let encoder_groups = export_encoder_groups(
-            layout,
-            bounds,
-            layout_y,
-            self.layout_options_value,
-            &self.encoder_visibility,
-            &self.module_settings,
-        );
+        let encoder_groups =
+            export_encoder_groups(layout, bounds, layout_y, &self.module_settings, visible);
 
         for (key_idx, key) in layout.keys.iter().enumerate() {
-            if !Self::layout_key_visible(
-                &self.module_settings,
-                layout,
-                key,
-                self.layout_options_value,
-            ) || encoder_groups.iter().any(|group| {
-                group
-                    .press
-                    .is_some_and(|(press_key_idx, _)| press_key_idx == key_idx)
-            }) {
+            if !visible.key(key_idx)
+                || encoder_groups.iter().any(|group| {
+                    group
+                        .press
+                        .is_some_and(|(press_key_idx, _)| press_key_idx == key_idx)
+                })
+            {
                 continue;
             }
             let rect = export_item_rect(
@@ -1262,13 +1348,12 @@ fn rgba(r: u8, g: u8, b: u8) -> Rgba<u8> {
 #[cfg(not(target_arch = "wasm32"))]
 fn export_layout_bounds(
     layout: &KeyboardLayout,
-    layout_options_value: Option<u32>,
-    encoder_visibility: &[bool],
+    visible: &ExportVisibleElements,
     module_settings: &ModuleSettingsState,
 ) -> Option<egui::Rect> {
     let mut rect: Option<egui::Rect> = None;
-    for key in &layout.keys {
-        if !EntropyApp::layout_key_visible(module_settings, layout, key, layout_options_value) {
+    for (index, key) in layout.keys.iter().enumerate() {
+        if !visible.key(index) {
             continue;
         }
         let item_rect = layout_aabb_rect(
@@ -1283,22 +1368,19 @@ fn export_layout_bounds(
         rect = Some(rect.map(|rect| rect.union(item_rect)).unwrap_or(item_rect));
     }
     for encoder in &layout.encoders {
-        if !EntropyApp::encoder_layout_condition_visible(layout, encoder, layout_options_value)
-            || !EntropyApp::module_settings_encoder_visible(
+        if !visible.encoder(encoder.encoder_idx)
+            || (EntropyApp::module_settings_encoder_has_press_key(
                 module_settings,
                 layout,
                 encoder.encoder_idx,
-            )
-            || !EntropyApp::encoder_visibility_allows(
-                layout,
-                encoder.encoder_idx,
-                encoder_visibility,
-            )
-            || EntropyApp::module_settings_encoder_has_press_key(
-                module_settings,
-                layout,
-                encoder.encoder_idx,
-            )
+            ) && layout.keys.iter().enumerate().any(|(index, key)| {
+                visible.key(index)
+                    && EntropyApp::module_settings_encoder_press_key_encoder_idx(
+                        module_settings,
+                        layout,
+                        key,
+                    ) == Some(encoder.encoder_idx)
+            }))
         {
             continue;
         }
@@ -1362,24 +1444,12 @@ fn export_encoder_groups(
     layout: &KeyboardLayout,
     bounds: egui::Rect,
     layout_y: f32,
-    layout_options_value: Option<u32>,
-    encoder_visibility: &[bool],
     module_settings: &ModuleSettingsState,
+    visible: &ExportVisibleElements,
 ) -> Vec<ExportEncoderGroup> {
     let mut groups: Vec<(u8, ExportEncoderGroup)> = Vec::new();
     for (encoder_idx, encoder) in layout.encoders.iter().enumerate() {
-        if !EntropyApp::encoder_layout_condition_visible(layout, encoder, layout_options_value)
-            || !EntropyApp::module_settings_encoder_visible(
-                module_settings,
-                layout,
-                encoder.encoder_idx,
-            )
-            || !EntropyApp::encoder_visibility_allows(
-                layout,
-                encoder.encoder_idx,
-                encoder_visibility,
-            )
-        {
+        if !visible.encoder(encoder.encoder_idx) {
             continue;
         }
         let layout_rect = layout_aabb_rect(
@@ -1436,9 +1506,7 @@ fn export_encoder_groups(
         .keys
         .iter()
         .enumerate()
-        .filter(|(_, key)| {
-            EntropyApp::layout_key_visible(module_settings, layout, key, layout_options_value)
-        })
+        .filter(|(index, _)| visible.key(*index))
         .map(|(key_idx, key)| {
             (
                 key_idx,
@@ -2319,5 +2387,70 @@ mod tests {
             let file_name = format!("board-layout.{extension}");
             assert!(file_name.ends_with(&format!(".{extension}")));
         }
+    }
+
+    #[test]
+    fn image_formats_omit_hidden_keys_and_encoders_even_during_editing() {
+        let mut layout: KeyboardLayout = serde_json::from_str(
+            r#"{"name":"Test","rows":1,"cols":2,"keys":[{"x":0.0,"y":0.0,"w":1.0,"h":1.0,"row":0,"col":0,"label":"0,0","rotation":0.0,"rotation_x":0.0,"rotation_y":0.0},{"x":2.0,"y":0.0,"w":1.0,"h":1.0,"row":0,"col":1,"label":"0,1","rotation":0.0,"rotation_x":0.0,"rotation_y":0.0}],"encoders":[{"x":4.0,"y":0.0,"w":1.0,"h":1.0,"label":"encoder","encoder_idx":0,"direction":0,"rotation":0.0,"rotation_x":0.0,"rotation_y":0.0}],"layers":[],"encoder_layers":[[6]],"custom_keycodes":[]}"#,
+        ).unwrap();
+        layout.layers = vec![vec![4u16.into(), 5u16.into()]];
+        let mut app = EntropyApp::new_inert_for_test();
+        app.current_encoder_visibility_id = "image_export_visibility_test".to_owned();
+        app.app_settings
+            .layout_element_visibility
+            .entry(app.current_encoder_visibility_id.clone())
+            .or_default()
+            .hidden_keys
+            .insert((0, 0));
+        app.app_settings
+            .layout_element_visibility
+            .get_mut(&app.current_encoder_visibility_id)
+            .unwrap()
+            .hidden_encoders
+            .insert(0);
+        app.editing_layout_visibility = true;
+
+        let visible = app.export_visible_elements(&layout);
+        assert!(!visible.key(0));
+        assert!(visible.key(1));
+        assert!(!visible.encoder(0));
+        let svg = app.render_layout_svg(&layout, &[0]).unwrap();
+        assert_eq!(svg.matches("<rect x=").count(), 1);
+        assert_eq!(svg.matches("<circle ").count(), 0);
+        let png = app.render_layout_image(&layout, &[0]).unwrap();
+        assert_eq!(png.width(), 170);
+        let pdf = app.render_layout_pdf(&layout, &[0]).unwrap();
+        assert!(pdf.starts_with(b"%PDF-"));
+        assert_eq!(layout.layers[0][0].vial_keycode(), 4);
+        assert_eq!(layout.encoder_layers[0][0], 6);
+
+        app.app_settings.layout_element_visibility.clear();
+        let restored = app.render_layout_svg(&layout, &[0]).unwrap();
+        assert_eq!(restored.matches("<rect x=").count(), 2);
+        assert_eq!(restored.matches("<circle ").count(), 1);
+        assert!(app.render_layout_image(&layout, &[0]).unwrap().width() > png.width());
+    }
+
+    #[test]
+    fn hiding_combined_encoder_also_hides_its_press_key_in_image() {
+        let mut layout: KeyboardLayout = serde_json::from_str(
+            r#"{"name":"K03","rows":1,"cols":2,"keys":[{"x":0.0,"y":0.0,"w":1.0,"h":1.0,"row":0,"col":0,"label":"0,0","rotation":0.0,"rotation_x":0.0,"rotation_y":0.0},{"x":2.0,"y":0.0,"w":1.0,"h":1.0,"row":0,"col":1,"label":"0,1","rotation":0.0,"rotation_x":0.0,"rotation_y":0.0}],"encoders":[{"x":2.0,"y":0.0,"w":1.0,"h":1.0,"label":"encoder","encoder_idx":0,"direction":0,"rotation":0.0,"rotation_x":0.0,"rotation_y":0.0}],"layers":[],"encoder_layers":[[6]],"custom_keycodes":[]}"#,
+        ).unwrap();
+        layout.layers = vec![vec![4u16.into(), 5u16.into()]];
+        let mut app = EntropyApp::new_inert_for_test();
+        app.current_encoder_visibility_id = "combined_export_visibility_test".to_owned();
+        app.app_settings
+            .layout_element_visibility
+            .entry(app.current_encoder_visibility_id.clone())
+            .or_default()
+            .hidden_encoders
+            .insert(0);
+        let visible = app.export_visible_elements(&layout);
+        assert!(visible.key(0));
+        assert!(!visible.key(1));
+        let svg = app.render_layout_svg(&layout, &[0]).unwrap();
+        assert_eq!(svg.matches("<rect x=").count(), 1);
+        assert_eq!(svg.matches("<circle ").count(), 0);
     }
 }

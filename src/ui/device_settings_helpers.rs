@@ -1992,9 +1992,21 @@ impl EntropyApp {
         });
 
         for (path, (device, mode, shared_output, protocol)) in desired {
-            self.qmk_hid_hosts
+            let selected_support = shared_output.as_ref().map(|_| {
+                self.device_about_info.as_ref().is_some_and(|info| {
+                    info.supports_application_layouts
+                        && info.path == device.path
+                        && info.vendor_id == device.vendor_id
+                        && info.product_id == device.product_id
+                })
+            });
+            let bridge = self
+                .qmk_hid_hosts
                 .entry(path)
                 .or_insert_with(|| start(device, mode, shared_output, protocol));
+            if let Some(supported) = selected_support {
+                bridge.set_selected_application_layout_support(supported);
+            }
         }
     }
 

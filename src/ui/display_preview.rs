@@ -941,7 +941,7 @@ impl EntropyApp {
             ui.painter().text(
                 screen_rect(screen, 0.0, 232.0, 240.0, 24.0).center(),
                 egui::Align2::CENTER_CENTER,
-                "v4.0.6",
+                "v4.0.7",
                 egui::FontId::new(
                     14.0 * screen.width() / DISPLAY_WIDTH,
                     egui::FontFamily::Name("display_preview".into()),

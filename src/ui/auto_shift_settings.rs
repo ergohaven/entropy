@@ -60,13 +60,11 @@ impl EntropyApp {
                 }
 
                 if self.is_vial_locked() {
-                    self.unlock_open = true;
-                    self.status_msg = format!(
-                        "{} — {}",
+                    crate::ui_style::modal_empty_state(
+                        ui,
                         crate::i18n::tr(lang, crate::i18n::Key::KeyboardLocked),
-                        crate::i18n::tr(lang, crate::i18n::Key::AutoShiftUnlockHint),
+                        Some(crate::i18n::tr(lang, crate::i18n::Key::AutoShiftUnlockHint)),
                     );
-                    ui.ctx().request_repaint();
                     return;
                 }
 

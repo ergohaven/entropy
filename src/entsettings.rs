@@ -182,6 +182,9 @@ impl EntropyApp {
     ) -> Result<()> {
         let mut settings = bundle.settings;
         settings.ui_scale = clamp_ui_scale(settings.ui_scale);
+        for layouts in settings.application_layouts.values_mut() {
+            layouts.normalize();
+        }
         settings.text_expander_rule_files =
             normalize_text_expander_rule_files(&settings.text_expander_rule_files);
         let language = self.app_settings.language;
@@ -522,5 +525,44 @@ mod tests {
         assert_eq!(persisted_extra_rules, extra_rules);
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn export_and_import_preserve_application_layout_profiles() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut source = EntropyApp::new(&creation_context);
+        let device_key = "vial-0123456789abcdef".to_owned();
+        let mut layouts = crate::application_layouts::DeviceApplicationLayouts::default();
+        let telegram =
+            layouts.create_for_application(&crate::application_layouts::DetectedApplication {
+                executable: "org.telegram.desktop".to_owned(),
+                identities: vec!["telegram-desktop".to_owned()],
+                display_name: "Telegram".to_owned(),
+                window_title: "Telegram".to_owned(),
+            });
+        layouts
+            .layouts
+            .get_mut(&telegram)
+            .unwrap()
+            .automatic_switching = true;
+        layouts.layouts.get_mut(&telegram).unwrap().layer_names[3] = "Calls".to_owned();
+        layouts.layouts.get_mut(&telegram).unwrap().layers[3][0] = 0x1234;
+        layouts.automatically_return_to_default = false;
+        source
+            .app_settings
+            .application_layouts
+            .insert(device_key.clone(), layouts);
+
+        let json = serde_json::to_string(&source.entsettings_snapshot()).unwrap();
+        let bundle: EntSettingsFile = serde_json::from_str(&json).unwrap();
+        let restored = &bundle.settings.application_layouts[&device_key];
+        let profile = &restored.layouts[&telegram];
+
+        assert_eq!(profile.name, "Telegram");
+        assert!(profile.automatic_switching);
+        assert_eq!(profile.layer_names[3], "Calls");
+        assert_eq!(profile.layers[3][0], 0x1234);
+        assert!(!restored.automatically_return_to_default);
     }
 }

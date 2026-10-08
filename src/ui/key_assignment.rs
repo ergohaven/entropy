@@ -9,7 +9,8 @@ impl EntropyApp {
 
         if let Some(binding) = self.keycode_picker.result.take() {
             let kc_value = binding.vial_keycode();
-            let native_target_supported = if self.key_override_pick_target.is_some()
+            let native_target_supported = if self.application_layout_editor_active
+                || self.key_override_pick_target.is_some()
                 || self.alt_repeat_pick_target.is_some()
             {
                 false
@@ -72,7 +73,9 @@ impl EntropyApp {
                 self.write_alt_repeat_entry(idx);
             } else if let Some((layer, encoder_visual_idx)) = self.selected_encoder {
                 #[cfg(not(target_arch = "wasm32"))]
-                if !self.assign_encoder_keycode(ctx, layer, encoder_visual_idx, kc_value) {
+                if self.application_layout_editor_active {
+                    self.assign_application_layout_encoder(encoder_visual_idx, kc_value);
+                } else if !self.assign_encoder_keycode(ctx, layer, encoder_visual_idx, kc_value) {
                     self.keycode_picker.result = Some(binding);
                     return;
                 }
@@ -85,7 +88,9 @@ impl EntropyApp {
                 }
             } else if let Some((layer, ki)) = self.selected_key {
                 #[cfg(not(target_arch = "wasm32"))]
-                if !self.assign_key_binding(ctx, layer, ki, binding) {
+                if self.application_layout_editor_active {
+                    self.assign_application_layout_key(ki, kc_value);
+                } else if !self.assign_key_binding(ctx, layer, ki, binding) {
                     self.keycode_picker.result = Some(binding);
                     return;
                 }
@@ -110,6 +115,10 @@ impl EntropyApp {
         encoder_visual_idx: usize,
         kc_value: u16,
     ) -> bool {
+        if let Some(assigned) = self.assign_application_layout_encoder(encoder_visual_idx, kc_value)
+        {
+            return assigned;
+        }
         self.assign_encoder_keycode_with_mode(ctx, layer, encoder_visual_idx, kc_value, false)
     }
 
@@ -184,21 +193,37 @@ impl EntropyApp {
         key_target: Option<usize>,
         encoder_target: Option<usize>,
     ) {
-        let current_binding = self.layout.as_ref().and_then(|layout| {
-            key_target.map(|key_index| layout.get_key_binding(self.selected_layer, key_index))
-        });
-        let current_encoder_keycode = self.layout.as_ref().and_then(|layout| {
-            encoder_target
-                .map(|encoder_index| layout.get_encoder_keycode(self.selected_layer, encoder_index))
-        });
+        let current_binding = key_target
+            .and_then(|key_index| self.application_layout_current_key_binding(key_index))
+            .or_else(|| {
+                self.layout.as_ref().and_then(|layout| {
+                    key_target
+                        .map(|key_index| layout.get_key_binding(self.selected_layer, key_index))
+                })
+            });
+        let current_encoder_keycode = encoder_target
+            .and_then(|encoder_index| {
+                self.application_layout_current_encoder_keycode(encoder_index)
+            })
+            .or_else(|| {
+                self.layout.as_ref().and_then(|layout| {
+                    encoder_target.map(|encoder_index| {
+                        layout.get_encoder_keycode(self.selected_layer, encoder_index)
+                    })
+                })
+            });
         self.selected_key = key_target.map(|ki| (self.selected_layer, ki));
         self.selected_encoder = encoder_target.map(|ei| (self.selected_layer, ei));
         self.keycode_picker.open = true;
         self.keycode_picker.result = None;
         self.keycode_picker
             .rmk_native_key_actions_allowed_for_target = key_target.is_some();
-        self.keycode_picker.search_query.clear();
-        self.keycode_picker.layer_names = self.layer_names.clone();
+        self.keycode_picker.reset_search();
+        self.keycode_picker.layer_names = if self.application_layout_editor_active {
+            self.application_layout_editor_layer_names()
+        } else {
+            self.layer_names.clone()
+        };
         self.keycode_picker.vial_quantum_pending_mod = None;
         self.keycode_picker.vial_quantum_pending_mt = None;
         self.keycode_picker.vial_layer_pending = None;
@@ -362,6 +387,9 @@ impl EntropyApp {
         ki: usize,
         binding: crate::keyboard::KeyBinding,
     ) -> bool {
+        if let Some(assigned) = self.assign_application_layout_key(ki, binding.vial_keycode()) {
+            return assigned;
+        }
         self.assign_key_binding_with_mode(ctx, layer, ki, binding, false)
     }
 
@@ -654,6 +682,19 @@ impl EntropyApp {
             return;
         };
         match action {
+            UndoAction::ApplicationLayoutControl {
+                device_key,
+                layout_id,
+                layer,
+                control,
+                old_keycode,
+            } => self.undo_application_layout_control(
+                &device_key,
+                &layout_id,
+                layer,
+                control,
+                old_keycode,
+            ),
             UndoAction::Key {
                 layer,
                 key_idx,

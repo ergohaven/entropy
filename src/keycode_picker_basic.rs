@@ -1,12 +1,12 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct QwertyPickerGridKey {
-    row: usize,
-    col: usize,
-    span: usize,
-    label: &'static str,
-    value: u16,
+pub(super) struct QwertyPickerGridKey {
+    pub(super) row: usize,
+    pub(super) col: usize,
+    pub(super) span: usize,
+    pub(super) label: &'static str,
+    pub(super) value: u16,
 }
 
 const fn qwerty_picker_grid_key(
@@ -163,7 +163,41 @@ fn qwerty_picker_key_label(
         .unwrap_or_else(|| fallback_label.to_string())
 }
 
+/// One key of the Keys grid: its slot in the QWERTY layout and the row it
+/// renders as. Disabled cells stay visible but cannot be picked.
+pub(super) struct BasicGridCell {
+    pub grid: QwertyPickerGridKey,
+    pub row: PickerRow,
+    pub enabled: bool,
+}
+
 impl KeycodePicker {
+    /// The Keys grid for the selected layout, in QWERTY slot order.
+    pub(super) fn basic_grid_cells(&self) -> Vec<BasicGridCell> {
+        QWERTY_PICKER_GRID_KEYS
+            .iter()
+            .map(|key| {
+                let value = self.basic_layout.map_value(key.value);
+                let label = qwerty_picker_key_label(
+                    value,
+                    key.label,
+                    self.key_legend_layout,
+                    self.show_shifted_number_symbols,
+                    &self.layer_names,
+                );
+                let tooltip = crate::i18n::tr_text(
+                    self.language,
+                    &keycode_tooltip(value, &[], &self.layer_names),
+                );
+                BasicGridCell {
+                    grid: *key,
+                    enabled: self.picker_value_supported(value),
+                    row: self.vial_row(KeycodeTab::Basic, "", value, label, tooltip),
+                }
+            })
+            .collect()
+    }
+
     fn basic_key_button_at(
         &mut self,
         ui: &mut egui::Ui,
@@ -171,31 +205,25 @@ impl KeycodePicker {
         cell_w: f32,
         cell_h: f32,
         gap: f32,
-        row: usize,
-        col: usize,
-        span: usize,
-        label: &str,
-        value: u16,
+        cell: &BasicGridCell,
     ) {
-        let x = origin.x + col as f32 * (cell_w + gap);
-        let right_nav_extra_gap = if col >= 16 && matches!(row, 1 | 2) {
+        let key = cell.grid;
+        let x = origin.x + key.col as f32 * (cell_w + gap);
+        let right_nav_extra_gap = if key.col >= 16 && matches!(key.row, 1 | 2) {
             14.0
         } else {
             0.0
         };
-        let y = origin.y + row as f32 * (cell_h + gap) + right_nav_extra_gap;
-        let width = span as f32 * cell_w + span.saturating_sub(1) as f32 * gap;
+        let y = origin.y + key.row as f32 * (cell_h + gap) + right_nav_extra_gap;
+        let width = key.span as f32 * cell_w + key.span.saturating_sub(1) as f32 * gap;
         let rect = egui::Rect::from_min_size(egui::pos2(x, y), Vec2::new(width, cell_h));
-        let enabled = self.picker_value_supported(value);
-        let resp = picker_keycap_button_in_rect(ui, rect, label, enabled, false);
+        let resp = picker_keycap_button_in_rect(ui, rect, &cell.row.label, cell.enabled, false);
+        set_accessible_description(ui, &resp, &cell.row.tooltip);
         if resp.clicked() {
-            self.assign_keycode_value(value);
+            self.perform_picker_action(cell.row.action);
         }
         if resp.hovered() {
-            resp.on_hover_text(crate::i18n::tr_text(
-                self.language,
-                &keycode_tooltip(value, &[], &self.layer_names),
-            ));
+            resp.on_hover_text(cell.row.tooltip.clone());
         }
     }
 
@@ -294,27 +322,9 @@ impl KeycodePicker {
         let (rect, _) =
             ui.allocate_exact_size(Vec2::new(content_width, height), egui::Sense::hover());
         let origin = egui::pos2(rect.min.x + x_offset, rect.min.y);
-        for key in qwerty_picker_grid_keys() {
-            let assigned_value = self.basic_layout.map_value(key.value);
-            let display_label = qwerty_picker_key_label(
-                assigned_value,
-                key.label,
-                self.key_legend_layout,
-                self.show_shifted_number_symbols,
-                &self.layer_names,
-            );
-            self.basic_key_button_at(
-                ui,
-                origin,
-                cell_w,
-                cell_h,
-                gap,
-                key.row,
-                key.col,
-                key.span,
-                &display_label,
-                assigned_value,
-            );
+        let cells = self.cached_basic_grid_cells();
+        for cell in cells.iter() {
+            self.basic_key_button_at(ui, origin, cell_w, cell_h, gap, cell);
         }
     }
 

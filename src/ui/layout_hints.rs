@@ -167,6 +167,23 @@ impl EntropyApp {
         };
         let hint_font = FontId::proportional(12.0);
         let hint_y = ui.max_rect().bottom() - 36.0;
+        if self.editing_layout_visibility {
+            paint_layout_hint_lines(
+                ui,
+                center_x,
+                hint_y,
+                &[
+                    "key_hints.show_hide_keys_mode",
+                    "key_hints.show_hide_keys_click",
+                    "key_hints.show_hide_keys_exit",
+                ],
+                &hint_font,
+                hint_color,
+                self.app_settings.language,
+                false,
+            );
+            return;
+        }
         let any_hovered = self.prev_hovered_key.is_some() || self.prev_hovered_encoder;
         let hint_language = self.app_settings.language;
         let tr_hint = |key: &'static str| crate::i18n::tr_catalog(hint_language, key);

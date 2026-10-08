@@ -70,6 +70,10 @@ impl EntropyApp {
                                 button_size,
                                 true,
                             )
+                            .on_hover_text(crate::i18n::tr_catalog(
+                                lang,
+                                "ui.import_app_settings_tooltip",
+                            ))
                             .clicked()
                             {
                                 self.import_entsettings_dialog();
@@ -80,6 +84,10 @@ impl EntropyApp {
                                 button_size,
                                 true,
                             )
+                            .on_hover_text(crate::i18n::tr_catalog(
+                                lang,
+                                "ui.export_app_settings_tooltip",
+                            ))
                             .clicked()
                             {
                                 self.export_entsettings_dialog();

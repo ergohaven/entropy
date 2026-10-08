@@ -49,6 +49,26 @@ impl EntropyApp {
         })
     }
 
+    /// The app without a window, for `--export-layout`. Reads the same
+    /// settings as `new` (language, diagnostics) but starts none of the
+    /// desktop machinery: no text expander, no update check, no zoom.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn new_headless() -> Self {
+        let app_settings = load_app_settings();
+        crate::diagnostics::set_enabled(app_settings.diagnostics_enabled);
+        let mut app = Self::from_bootstrap(AppBootstrap {
+            typing_trainer: TypingTrainerState::from_settings(app_settings.typing_trainer),
+            app_settings,
+            device_manager: DeviceManager::new(),
+            text_expander_rules_signature: Vec::new(),
+            last_single_instance_signal: String::new(),
+            layer_names: Vec::new(),
+            update_check: UpdateCheckState::Idle,
+        });
+        app.headless = true;
+        app
+    }
+
     #[cfg(test)]
     pub(crate) fn new_inert_for_test() -> Self {
         let app_settings = AppSettings::default();
@@ -100,7 +120,28 @@ impl EntropyApp {
             settings_write_generation: 0,
             #[cfg(not(target_arch = "wasm32"))]
             qmk_hid_hosts: std::collections::HashMap::new(),
+            application_layout_editor_active: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            application_discovery: Default::default(),
+            #[cfg(target_os = "linux")]
+            gnome_integration_install_task: None,
+            #[cfg(target_os = "linux")]
+            gnome_integration_install_result: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            application_layout_foreground: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            application_layout_manual_override: None,
+            application_picker_open: false,
+            application_picker_assign_existing: false,
+            application_picker_target_layout_id: None,
+            application_picker_search: String::new(),
+            application_picker_selected: None,
+            application_layout_rename_focus_requested: false,
+            application_layout_rename_target_id: None,
+            application_layout_rename_value: String::new(),
             pending_device_connect: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            headless: false,
             firmware: FirmwareProtocol::Vial,
             #[cfg(not(target_arch = "wasm32"))]
             supported_qmk_settings: Vec::new(),
@@ -255,9 +296,11 @@ impl EntropyApp {
             editing_layer: None,
             editing_layer_text: String::new(),
             editing_layer_focus_requested: false,
+            editing_layer_layout_id: None,
             current_device_name: String::new(),
             current_keyboard_id: None,
             current_encoder_visibility_id: String::new(),
+            editing_layout_visibility: false,
             device_display_names: std::collections::HashMap::new(),
             device_about_info: None,
             update_check,
@@ -267,6 +310,7 @@ impl EntropyApp {
             unlock_open: false,
             vial_unlocked: None,
             vial_unlock_keys: vec![],
+            vial_unlock_session_started: false,
             vial_unlock_polling: false,
             vial_unlock_counter: 0,
             vial_unlock_best: 50,
@@ -279,6 +323,8 @@ impl EntropyApp {
             retiring_connects: Vec::new(),
             #[cfg(all(test, not(target_arch = "wasm32")))]
             test_connect_requests: None,
+            #[cfg(all(test, not(target_arch = "wasm32")))]
+            test_connect_hid: None,
             #[cfg(not(target_arch = "wasm32"))]
             device_scan_state: DeviceScanState::Idle,
         }
@@ -338,40 +384,6 @@ impl EntropyApp {
                     &[("error", &e.to_string())],
                 );
             }
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn cancel_vial_unlock(&mut self, suppress_macro_auto_unlock: bool) {
-        if let Some(hid) = &self.hid_device {
-            match hid.lock() {
-                Ok(()) => {
-                    self.vial_unlocked = Some(false);
-                    self.status_msg = crate::i18n::tr_catalog(
-                        self.app_settings.language,
-                        "status_messages.device_unlock_cancelled",
-                    )
-                    .into();
-                }
-                Err(e) => {
-                    self.status_msg = crate::i18n::tr_catalog_format(
-                        self.app_settings.language,
-                        "status_messages.cancel_unlock_failed",
-                        &[("error", &e.to_string())],
-                    );
-                }
-            }
-        }
-        self.unlock_open = false;
-        self.vial_unlock_polling = false;
-        self.vial_unlock_last_poll = None;
-        self.pending_layout_indicator_open_after_unlock = false;
-        self.vial_unlock_counter = 0;
-        self.vial_unlock_best = 50;
-        self.matrix_tester_unlock_prompted = false;
-        self.matrix_tester_lock_checked = false;
-        if suppress_macro_auto_unlock {
-            self.macro_auto_unlock_cancelled = true;
         }
     }
 }

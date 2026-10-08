@@ -144,6 +144,73 @@ fn one_shot_modifier_choices(gui_label: &str, gui_mod_name: &str) -> Vec<OneShot
     ]
 }
 
+/// Universal Symbols controls and punctuation (native RMK actions).
+pub(super) fn universal_symbol_rows(language: crate::i18n::Language) -> Vec<PickerRow> {
+    let tab = KeycodeTab::UniversalSymbols;
+    let mut rows = Vec::new();
+    for control in crate::universal_symbols::CONTROLS {
+        let label = crate::universal_symbols::label_for_user_id(control.user_id)
+            .expect("universal symbol control should have a display label");
+        rows.push(
+            PickerRow::new(
+                tab,
+                "",
+                label,
+                crate::i18n::tr_text(language, control.name),
+                PickerAction::Assign(crate::universal_symbols::binding(control.user_id)),
+            )
+            .with_aliases(control.action_label),
+        );
+    }
+    for symbol in crate::universal_symbols::SYMBOLS {
+        let label = crate::universal_symbols::label_for_user_id(symbol.user_id)
+            .expect("universal symbol should have a display label");
+        let tooltip = format!(
+            "Universal Symbols: firmware types {} in English and Russian layouts",
+            symbol.symbol
+        );
+        rows.push(
+            PickerRow::new(
+                tab,
+                "",
+                label,
+                crate::i18n::tr_text(language, &tooltip),
+                PickerAction::Assign(crate::universal_symbols::binding(symbol.user_id)),
+            )
+            .with_aliases(symbol.symbol.to_string()),
+        );
+    }
+    rows
+}
+
+/// Universal Russian letters, attributed to the tab and section showing them.
+pub(super) fn universal_russian_letter_rows(
+    language: crate::i18n::Language,
+    tab: KeycodeTab,
+    section: &'static str,
+) -> Vec<PickerRow> {
+    crate::universal_symbols::RUSSIAN_LETTERS
+        .iter()
+        .map(|letter| {
+            let binding = crate::universal_symbols::binding(letter.user_id);
+            let label = crate::universal_symbols::label_for_user_id(letter.user_id)
+                .expect("universal Russian letter should have a display label");
+            let tooltip = binding
+                .rmk_action()
+                .and_then(crate::universal_symbols::tooltip)
+                .unwrap_or_default();
+            PickerRow::new(
+                tab,
+                section,
+                label,
+                crate::i18n::tr_text(language, &tooltip),
+                PickerAction::Assign(binding),
+            )
+            .with_aliases(letter.letter.to_string())
+        })
+        .collect()
+}
+
 impl KeycodePicker {
     pub(super) fn custom_keycode_pairs(&self) -> Vec<crate::keyboard::CustomKeycode> {
         self.custom_keycodes
@@ -168,349 +235,202 @@ impl KeycodePicker {
         })
     }
 
-    fn show_custom_keycode_choice_section_filtered(
-        &self,
-        ui: &mut egui::Ui,
-        section_key: &'static str,
-        bluetooth: bool,
-    ) -> Option<u16> {
-        let visible = if bluetooth {
-            self.has_visible_bluetooth_keycodes()
+    /// Device-defined keycodes: Bluetooth controls on their own tab, the
+    /// rest on the Custom tab.
+    pub(super) fn custom_keycode_rows(&self, bluetooth: bool) -> Vec<PickerRow> {
+        let tab = if bluetooth {
+            KeycodeTab::Bluetooth
         } else {
-            self.has_visible_custom_keycodes()
+            KeycodeTab::Custom
         };
-        if !visible {
-            return None;
-        }
-
-        let custom_keycodes = self.custom_keycodes.clone();
-        let mut selected = None;
-        ui.add_space(2.0);
-        ui.label(
-            RichText::new(tr_picker(self.language, section_key))
-                .size(11.0)
-                .color(Color32::from_gray(150)),
-        );
-        ui.add_space(4.0);
-        ui.horizontal_wrapped(|ui| {
-            for (name, label, title, value) in custom_keycodes {
-                if label.trim().is_empty()
-                    || is_bluetooth_custom_keycode(&name, &label, &title) != bluetooth
-                {
-                    continue;
-                }
+        self.custom_keycodes
+            .iter()
+            .filter(|(name, label, title, _)| {
+                !label.trim().is_empty()
+                    && is_bluetooth_custom_keycode(name, label, title) == bluetooth
+            })
+            .map(|(name, label, title, value)| {
                 let tip = if title.trim().is_empty() {
                     name.as_str()
                 } else {
                     title.as_str()
                 };
-                let resp = ui
-                    .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                Self::paint_compact_picker_label(ui, &resp, &label);
-                if resp.clicked() {
-                    selected = Some(value);
-                }
-                resp.on_hover_text(crate::i18n::tr_text(self.language, tip));
-            }
-        });
-        ui.add_space(8.0);
-
-        selected
+                PickerRow::new(
+                    tab,
+                    "",
+                    label.clone(),
+                    crate::i18n::tr_text(self.language, tip),
+                    PickerAction::Assign(crate::keyboard::KeyBinding::Vial(*value)),
+                )
+                .with_aliases(name)
+            })
+            .collect()
     }
 
+    /// Custom keycodes as a section inside another chooser (e.g. the Tap
+    /// Dance key picker). Returns the picked keycode.
     pub(super) fn show_custom_keycode_choice_section(&self, ui: &mut egui::Ui) -> Option<u16> {
-        self.show_custom_keycode_choice_section_filtered(
+        let rows = self.custom_keycode_rows(false);
+        if rows.is_empty() {
+            return None;
+        }
+        ui.add_space(2.0);
+        show_section_heading(
             ui,
-            "key_picker.section_custom_keycodes",
-            false,
-        )
-    }
-
-    pub(super) fn show_bluetooth_keycode_choice_section(&self, ui: &mut egui::Ui) -> Option<u16> {
-        self.show_custom_keycode_choice_section_filtered(
-            ui,
-            "key_picker.section_bluetooth_keycodes",
-            true,
-        )
-    }
-
-    pub(super) fn show_vial_symbols(&mut self, ui: &mut egui::Ui) {
-        let custom_pairs = self.custom_keycode_pairs();
-
-        ui.label(
-            RichText::new(tr_picker(
-                self.language,
-                "key_picker.section_layout_symbols",
-            ))
-            .size(11.0)
-            .color(Color32::from_gray(150)),
+            tr_picker(self.language, "key_picker.section_custom_keycodes"),
         );
-        ui.add_space(4.0);
-        ui.horizontal_wrapped(|ui| {
-            for kc in KEYCODES.iter() {
-                if !self.selected_tab.vial_matches(kc) || !self.vial_keycode_supported(kc) {
-                    continue;
-                }
-                let label = keycode_label_with_names_and_layout(
-                    kc.value,
-                    &custom_pairs,
-                    &self.layer_names,
-                    self.key_legend_layout,
-                );
-                let resp = ui
-                    .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                Self::paint_compact_picker_label(ui, &resp, &label);
-                if resp.clicked() {
-                    self.assign_keycode_value(kc.value);
-                }
-                if resp.hovered() {
-                    resp.on_hover_text(crate::i18n::tr_text(
-                        self.language,
-                        &self.picker_keycode_tooltip(kc.value, &custom_pairs),
-                    ));
-                }
-            }
-        });
-    }
-
-    pub(super) fn show_vial_universal_symbols(&mut self, ui: &mut egui::Ui) {
-        if let Some(binding) = show_universal_symbol_section(ui, self.language) {
-            self.result = Some(binding);
-            self.open = false;
+        let picked = show_row_grid(ui, &rows);
+        ui.add_space(8.0);
+        match picked {
+            Some(PickerAction::Assign(crate::keyboard::KeyBinding::Vial(value))) => Some(value),
+            _ => None,
         }
     }
 
-    pub(super) fn show_vial_generic(&mut self, ui: &mut egui::Ui) {
-        let custom_pairs = self.custom_keycode_pairs();
-        ui.horizontal_wrapped(|ui| {
-            for kc in KEYCODES.iter() {
-                if !self.selected_tab.vial_matches(kc) || !self.vial_keycode_supported(kc) {
-                    continue;
-                }
-                let label = keycode_label_with_names_and_layout(
-                    kc.value,
-                    &custom_pairs,
-                    &self.layer_names,
-                    self.key_legend_layout,
-                );
-                let resp = ui
-                    .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                Self::paint_compact_picker_label(ui, &resp, &label);
-                if resp.clicked() {
-                    self.assign_keycode_value(kc.value);
-                }
-                if resp.hovered() {
-                    resp.on_hover_text(crate::i18n::tr_text(
-                        self.language,
-                        &self.picker_keycode_tooltip(kc.value, &custom_pairs),
-                    ));
-                }
-            }
-        });
+    /// Keycodes from the shared table that belong to the tab.
+    pub(super) fn keycode_table_rows(&self, tab: KeycodeTab) -> Vec<PickerRow> {
+        KEYCODES
+            .iter()
+            .filter(|kc| tab.vial_matches(kc) && self.vial_keycode_supported(kc))
+            .map(|kc| self.table_keycode_row(tab, "", kc.value))
+            .collect()
     }
 
-    pub(super) fn show_vial_custom(&mut self, ui: &mut egui::Ui) {
-        if let Some(value) = self.show_custom_keycode_choice_section(ui) {
-            self.assign_keycode_value(value);
-        }
-    }
-
-    pub(super) fn show_vial_bluetooth(&mut self, ui: &mut egui::Ui) {
-        if let Some(value) = self.show_bluetooth_keycode_choice_section(ui) {
-            self.assign_keycode_value(value);
-        }
-    }
-
-    pub(super) fn show_vial_layers(&mut self, ui: &mut egui::Ui) {
-        let ops: &[(u16, &str, &str)] = &[
-            (0x5220, "Layer\nMO", "Hold to activate, release to return"),
-            (0x5260, "Layer\nTG", "Tap to toggle on/off"),
-            (0x5280, "Layer\nOSL", "Active for next keypress only"),
-            (0x52C0, "Layer\nTT", "Hold = MO, tap = toggle"),
-            (0x5200, "Layer\nTO", "Switch and stay on this layer"),
-            (0x5240, "Layer\nDF", "Set as permanent base layer"),
+    /// Layer actions. Each opens the layer chooser for its operation.
+    pub(super) fn layer_rows(&self, tab: KeycodeTab) -> Vec<PickerRow> {
+        let section = tr_picker(self.language, "key_picker.section_layers");
+        let ops: [(u16, &'static str, &'static str); 6] = [
+            (0x5220, "MO", "Hold to activate, release to return"),
+            (0x5260, "TG", "Tap to toggle on/off"),
+            (0x5280, "OSL", "Active for next keypress only"),
+            (0x52C0, "TT", "Hold = MO, tap = toggle"),
+            (0x5200, "TO", "Switch and stay on this layer"),
+            (0x5240, "DF", "Set as permanent base layer"),
         ];
-
-        ui.label(
-            RichText::new(tr_picker(self.language, "key_picker.section_layers"))
-                .size(11.0)
-                .color(Color32::from_gray(150)),
+        let mut rows: Vec<PickerRow> = ops
+            .iter()
+            .map(|(base, op, hint)| {
+                PickerRow::new(
+                    tab,
+                    section,
+                    format!("Layer\n{op}"),
+                    crate::i18n::tr_catalog(self.language, hint),
+                    PickerAction::PickLayer(*base),
+                )
+                .with_aliases(*op)
+            })
+            .collect();
+        rows.push(
+            PickerRow::new(
+                tab,
+                section,
+                "Layer\nLT",
+                crate::i18n::tr_catalog(
+                    self.language,
+                    "key_picker_text.hold_activate_layer_tap_keycode_set_key_via_right_click_afterwards",
+                ),
+                PickerAction::PickLayer(0x4000),
+            )
+            .with_aliases("LT layer tap"),
         );
-        ui.add_space(4.0);
-        ui.horizontal_wrapped(|ui| {
-            for (base, label, hint) in ops {
-                let resp = ui
-                    .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                Self::paint_compact_picker_label(ui, &resp, label);
-                if resp.clicked() {
-                    self.vial_layer_pending = Some(*base);
-                }
-                resp.on_hover_text(crate::i18n::tr_catalog(self.language, hint));
-            }
-            let lt_resp = ui
-                .add(egui::Button::new("").min_size(Self::picker_key_size(ui.ctx())))
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-            Self::paint_compact_picker_label(ui, &lt_resp, "Layer\nLT");
-            if lt_resp.clicked() {
-                self.vial_layer_pending = Some(0x4000);
-            }
-            lt_resp.on_hover_text(crate::i18n::tr_catalog(self.language, "key_picker_text.hold_activate_layer_tap_keycode_set_key_via_right_click_afterwards"));
-        });
+        rows
     }
 
-    pub(super) fn show_vial_modifiers(&mut self, ui: &mut egui::Ui) {
+    /// The Mods tab: plain modifiers, layer actions, Mod+Key chords,
+    /// Mod-Taps and One-Shot modifiers. Right click picks the right-hand
+    /// variant where the firmware has one.
+    pub(super) fn modifier_rows(&self) -> Vec<PickerRow> {
+        let tab = KeycodeTab::Modifiers;
+        let lang = self.language;
         let gui = gui_label(false);
-        let lgui = gui_label(false);
+        let mut rows = Vec::new();
 
-        let plain: Vec<(String, u16, u16, String)> = vec![
-            ("Ctrl".into(), 0x00E0, 0x00E4, "Ctrl".into()),
-            ("Shift".into(), 0x00E1, 0x00E5, "Shift".into()),
-            ("Alt".into(), 0x00E2, 0x00E6, "Alt".into()),
-            (gui.into(), 0x00E3, 0x00E7, lgui.to_string()),
-        ]
-        .into_iter()
-        .filter(|(_, left_value, right_value, _)| {
-            self.picker_value_supported(*left_value) || self.picker_value_supported(*right_value)
-        })
-        .collect();
-        if !plain.is_empty() {
-            ui.label(
-                RichText::new(tr_picker(
-                    self.language,
-                    "key_picker.section_plain_modifiers",
-                ))
-                .size(11.0)
-                .color(Color32::from_gray(150)),
+        let plain_section = tr_picker(lang, "key_picker.section_plain_modifiers");
+        for (label, left_value, right_value, mod_name) in [
+            ("Ctrl", 0x00E0_u16, 0x00E4_u16, "Ctrl"),
+            ("Shift", 0x00E1, 0x00E5, "Shift"),
+            ("Alt", 0x00E2, 0x00E6, "Alt"),
+            (gui, 0x00E3, 0x00E7, gui),
+        ] {
+            if !self.picker_value_supported(left_value) && !self.picker_value_supported(right_value)
+            {
+                continue;
+            }
+            let right_name = crate::keycode::find_keycode(right_value)
+                .map(|kc| kc.name)
+                .unwrap_or_default();
+            rows.push(
+                self.vial_row(
+                    tab,
+                    plain_section,
+                    left_value,
+                    label,
+                    crate::i18n::tr_text(lang, &plain_modifier_tooltip(mod_name)),
+                )
+                .with_aliases(right_name)
+                .with_secondary(PickerAction::Assign(
+                    crate::keyboard::KeyBinding::Vial(right_value),
+                )),
             );
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                for (label, left_value, right_value, mod_name) in &plain {
-                    let resp = ui
-                        .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
-                        .on_hover_cursor(egui::CursorIcon::PointingHand);
-                    Self::paint_compact_picker_label(ui, &resp, label);
-                    if resp.clicked_by(egui::PointerButton::Primary) {
-                        self.assign_keycode_value(*left_value);
-                    }
-                    if resp.clicked_by(egui::PointerButton::Secondary) {
-                        self.assign_keycode_value(*right_value);
-                    }
-                    resp.on_hover_text(crate::i18n::tr_text(
-                        self.language,
-                        &plain_modifier_tooltip(mod_name),
-                    ));
-                }
-            });
-            ui.add_space(10.0);
         }
 
-        self.show_vial_layers(ui);
+        rows.extend(self.layer_rows(tab));
 
-        ui.add_space(10.0);
-        ui.label(
-            RichText::new(tr_picker(self.language, "key_picker.section_mod_key"))
-                .size(11.0)
-                .color(Color32::from_gray(150)),
-        );
-        ui.add_space(4.0);
-        let mk = mod_key_choices(false);
-        ui.horizontal_wrapped(|ui| {
-            for choice in &mk {
-                let resp = ui
-                    .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                Self::paint_compact_picker_label(ui, &resp, &choice.label);
-                if resp.clicked_by(egui::PointerButton::Primary) {
-                    self.vial_quantum_pending_mod = Some(choice.left_value);
-                }
-                if let Some(right_value) = choice.right_value {
-                    if resp.clicked_by(egui::PointerButton::Secondary) {
-                        self.vial_quantum_pending_mod = Some(right_value);
-                    }
-                    resp.on_hover_text(crate::i18n::tr_text(
-                        self.language,
-                        &mod_combo_tooltip(&choice.mod_name, true),
-                    ));
-                } else {
-                    resp.on_hover_text(crate::i18n::tr_text(
-                        self.language,
-                        &mod_combo_tooltip(&choice.mod_name, false),
-                    ));
-                }
+        let mod_key_section = tr_picker(lang, "key_picker.section_mod_key");
+        for choice in mod_key_choices(false) {
+            let tooltip = mod_combo_tooltip(&choice.mod_name, choice.right_value.is_some());
+            let mut row = PickerRow::new(
+                tab,
+                mod_key_section,
+                choice.label,
+                crate::i18n::tr_text(lang, &tooltip),
+                PickerAction::PickModKey(choice.left_value),
+            )
+            .with_aliases(format!("Mod+Key {}", choice.mod_name));
+            if let Some(right_value) = choice.right_value {
+                row = row.with_secondary(PickerAction::PickModKey(right_value));
             }
-        });
+            rows.push(row);
+        }
 
-        ui.add_space(10.0);
-        ui.label(
-            RichText::new(tr_picker(self.language, "key_picker.section_mod_tap"))
-                .size(11.0)
-                .color(Color32::from_gray(150)),
-        );
-        ui.add_space(4.0);
-        let mt = mod_tap_choices(lgui);
-        ui.horizontal_wrapped(|ui| {
-            for (label, left_value, right_value, mod_name) in &mt {
-                let resp = ui
-                    .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                Self::paint_compact_picker_label(ui, &resp, label);
-                if resp.clicked_by(egui::PointerButton::Primary) {
-                    self.vial_quantum_pending_mt = Some(*left_value);
-                }
-                if let Some(right_value) = right_value {
-                    if resp.clicked_by(egui::PointerButton::Secondary) {
-                        self.vial_quantum_pending_mt = Some(*right_value);
-                    }
-                    resp.on_hover_text(crate::i18n::tr_text(
-                        self.language,
-                        &mod_tap_tooltip(mod_name, true),
-                    ));
-                } else {
-                    resp.on_hover_text(crate::i18n::tr_text(
-                        self.language,
-                        &mod_tap_tooltip(mod_name, false),
-                    ));
-                }
+        let mod_tap_section = tr_picker(lang, "key_picker.section_mod_tap");
+        for (label, left_value, right_value, mod_name) in mod_tap_choices(gui) {
+            let tooltip = mod_tap_tooltip(&mod_name, right_value.is_some());
+            let mut row = PickerRow::new(
+                tab,
+                mod_tap_section,
+                label,
+                crate::i18n::tr_text(lang, &tooltip),
+                PickerAction::PickModTap(left_value),
+            )
+            .with_aliases(format!("Mod-Tap MT {mod_name}"));
+            if let Some(right_value) = right_value {
+                row = row.with_secondary(PickerAction::PickModTap(right_value));
             }
-        });
+            rows.push(row);
+        }
 
-        ui.add_space(10.0);
-        ui.label(
-            RichText::new(tr_picker(self.language, "key_picker.section_one_shot_mod"))
-                .size(11.0)
-                .color(Color32::from_gray(150)),
-        );
-        ui.add_space(4.0);
-        let osm = one_shot_modifier_choices(lgui, gui_mod_name());
-        ui.horizontal_wrapped(|ui| {
-            for choice in &osm {
-                let resp = ui
-                    .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                Self::paint_compact_picker_label(ui, &resp, &choice.label);
-                if resp.clicked_by(egui::PointerButton::Primary) {
-                    self.assign_keycode_value(choice.left_value);
-                }
-                if let Some(right_value) = choice.right_value {
-                    if resp.clicked_by(egui::PointerButton::Secondary) {
-                        self.assign_keycode_value(right_value);
-                    }
-                    resp.on_hover_text(crate::i18n::tr_text(
-                        self.language,
-                        &one_shot_modifier_tooltip(&choice.mod_name, true),
-                    ));
-                } else {
-                    resp.on_hover_text(crate::i18n::tr_text(
-                        self.language,
-                        &one_shot_modifier_tooltip(&choice.mod_name, false),
-                    ));
-                }
+        let one_shot_section = tr_picker(lang, "key_picker.section_one_shot_mod");
+        for choice in one_shot_modifier_choices(gui, gui_mod_name()) {
+            let tooltip = one_shot_modifier_tooltip(&choice.mod_name, choice.right_value.is_some());
+            let mut row = self
+                .vial_row(
+                    tab,
+                    one_shot_section,
+                    choice.left_value,
+                    choice.label,
+                    crate::i18n::tr_text(lang, &tooltip),
+                )
+                .with_aliases(format!("One-Shot OSM {}", choice.mod_name));
+            if let Some(right_value) = choice.right_value {
+                row = row.with_secondary(PickerAction::Assign(crate::keyboard::KeyBinding::Vial(
+                    right_value,
+                )));
             }
-        });
+            rows.push(row);
+        }
+
+        rows
     }
 }
 

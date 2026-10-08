@@ -74,3 +74,74 @@ pub(crate) fn vial_reply_is_uncorrelated(command: &[u8]) -> bool {
             Some(&CMD_VIAL_GET_ENCODER | &CMD_VIAL_QMK_SETTINGS_GET)
         )
 }
+
+/// Requests that only read keyboard state. A read-only HID session refuses
+/// everything else, so a new or unknown command fails closed.
+pub(crate) fn is_read_request(command: &[u8]) -> bool {
+    match command {
+        [CMD_VIA_GET_PROTOCOL_VERSION
+        | CMD_VIA_GET_KEYBOARD_VALUE
+        | CMD_VIA_GET_KEYCODE
+        | CMD_VIA_CUSTOM_GET_VALUE
+        | CMD_VIA_MACRO_GET_COUNT
+        | CMD_VIA_MACRO_GET_BUFFER_SIZE
+        | CMD_VIA_MACRO_GET_BUFFER
+        | CMD_VIA_GET_LAYER_COUNT
+        | CMD_VIA_KEYMAP_GET_BUFFER, ..] => true,
+        [CMD_VIA_VIAL_PREFIX, CMD_VIAL_DYNAMIC_ENTRY_OP, operation, ..] => matches!(
+            *operation,
+            DYNAMIC_VIAL_GET_NUM_ENTRIES
+                | DYNAMIC_VIAL_TAP_DANCE_GET
+                | DYNAMIC_VIAL_COMBO_GET
+                | DYNAMIC_VIAL_KEY_OVERRIDE_GET
+                | DYNAMIC_VIAL_ALT_REPEAT_KEY_GET
+        ),
+        [CMD_VIA_VIAL_PREFIX, subcommand, ..] => matches!(
+            *subcommand,
+            CMD_VIAL_GET_KEYBOARD_ID
+                | CMD_VIAL_GET_SIZE
+                | CMD_VIAL_GET_DEFINITION
+                | CMD_VIAL_GET_ENCODER
+                | CMD_VIAL_GET_UNLOCK_STATUS
+                | CMD_VIAL_QMK_SETTINGS_QUERY
+                | CMD_VIAL_QMK_SETTINGS_GET
+        ),
+        _ => false,
+    }
+}
+
+/// The `.entlayout` section left incomplete when this read fails. `None` for
+/// reads outside the bundle, or whose failure the connect already turns into
+/// an error or a complete fallback (identity, definition, optional probes,
+/// the keymap buffer with its per-key fallback).
+pub(crate) fn entlayout_section_of_read(command: &[u8]) -> Option<&'static str> {
+    match command {
+        [CMD_VIA_GET_KEYCODE, ..] => Some("Keymap"),
+        [CMD_VIA_GET_KEYBOARD_VALUE, VIA_LAYOUT_OPTIONS, ..] => Some("LayoutOptions"),
+        [CMD_VIA_MACRO_GET_COUNT | CMD_VIA_MACRO_GET_BUFFER_SIZE | CMD_VIA_MACRO_GET_BUFFER, ..] => {
+            Some("Macros")
+        }
+        // Native key actions, dynamic actions and combo layers (see rmk_native).
+        [CMD_VIA_CUSTOM_GET_VALUE, ERGOHAVEN_CUSTOM_NAMESPACE, 0x03..=0x07, ..] => {
+            Some("RmkNativeActions")
+        }
+        [CMD_VIA_VIAL_PREFIX, CMD_VIAL_GET_ENCODER, ..] => Some("Encoders"),
+        [CMD_VIA_VIAL_PREFIX, CMD_VIAL_DYNAMIC_ENTRY_OP, operation, ..] => match *operation {
+            DYNAMIC_VIAL_GET_NUM_ENTRIES => Some("DynamicEntries"),
+            DYNAMIC_VIAL_TAP_DANCE_GET => Some("TapDance"),
+            DYNAMIC_VIAL_COMBO_GET => Some("Combos"),
+            DYNAMIC_VIAL_KEY_OVERRIDE_GET => Some("KeyOverrides"),
+            DYNAMIC_VIAL_ALT_REPEAT_KEY_GET => Some("AltRepeat"),
+            _ => None,
+        },
+        [CMD_VIA_VIAL_PREFIX, CMD_VIAL_QMK_SETTINGS_GET, low, high, ..]
+            if (200..232).contains(&u16::from_le_bytes([*low, *high])) =>
+        {
+            Some("LayerNames")
+        }
+        [CMD_VIA_VIAL_PREFIX, CMD_VIAL_QMK_SETTINGS_QUERY | CMD_VIAL_QMK_SETTINGS_GET, ..] => {
+            Some("QmkSettings")
+        }
+        _ => None,
+    }
+}

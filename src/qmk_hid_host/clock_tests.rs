@@ -466,8 +466,11 @@ fn selected_to_dedicated_clock_handoff_keeps_heartbeat_during_same_stalled_query
     done.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
-#[test]
-fn adopted_clock_bridge_reopens_dedicated_after_transport_loss() {
+fn assert_adopted_clock_bridge_reopens_dedicated(
+    bridge_target: crate::device::Device,
+    disconnect: impl FnOnce(&crate::hid::TestHidRecorder),
+    prepare_replacement: impl FnOnce() + Send + 'static,
+) {
     let mode = HostDataMode {
         time: true,
         ..Default::default()
@@ -481,20 +484,9 @@ fn adopted_clock_bridge_reopens_dedicated_after_transport_loss() {
     }
     replacement_reports.respond_with([capability]);
 
-    let path = std::env::temp_dir().join(format!(
-        "entropy-adopted-reopen-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::write(&path, []).unwrap();
-    let mut bridge_target = target("adopted-reopen");
-    bridge_target.path = path.to_string_lossy().into_owned();
-
     let (opened_tx, opened_rx) = std::sync::mpsc::channel();
     let mut replacement = Some(replacement);
+    let mut prepare_replacement = Some(prepare_replacement);
     let mut bridge = QmkHidHostBridge::start_with_sources(
         bridge_target,
         mode,
@@ -505,9 +497,14 @@ fn adopted_clock_bridge_reopens_dedicated_after_transport_loss() {
             opened_tx.send(shared.is_some()).unwrap();
             match shared {
                 Some(output) => Ok(HostDataHid::Shared(output.clone())),
-                None => Ok(HostDataHid::Dedicated(
-                    replacement.take().expect("replacement owner exhausted"),
-                )),
+                None => {
+                    prepare_replacement
+                        .take()
+                        .expect("replacement preparation exhausted")();
+                    Ok(HostDataHid::Dedicated(
+                        replacement.take().expect("replacement owner exhausted"),
+                    ))
+                }
             }
         },
     );
@@ -516,11 +513,39 @@ fn adopted_clock_bridge_reopens_dedicated_after_transport_loss() {
     await_report(&selected_reports, 0, DATA_DATE);
     assert!(bridge.adopt_selected_hid(adopted).is_ok());
     await_report(&adopted_reports, 0, DATA_HOST_STATUS);
-    std::fs::remove_file(&path).unwrap();
+    disconnect(&adopted_reports);
 
     assert!(
         !opened_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
         "worker retried the expired selected shared owner after handoff"
     );
+    await_report(&replacement_reports, 0, DATA_HOST_STATUS);
     stop_and_join(&mut bridge);
+}
+
+#[test]
+fn adopted_clock_bridge_reopens_dedicated_after_transport_loss() {
+    assert_adopted_clock_bridge_reopens_dedicated(
+        target("adopted-reopen"),
+        |reports| reports.disconnect_output(),
+        || {},
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn adopted_clock_bridge_reopens_dedicated_after_path_disappears() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("hid-device");
+    std::fs::write(&path, []).unwrap();
+    let mut bridge_target = target("adopted-reopen-path");
+    bridge_target.path = path.to_string_lossy().into_owned();
+    let disconnected_path = path.clone();
+    let replacement_path = path.clone();
+
+    assert_adopted_clock_bridge_reopens_dedicated(
+        bridge_target,
+        move |_| std::fs::remove_file(disconnected_path).unwrap(),
+        move || std::fs::write(replacement_path, []).unwrap(),
+    );
 }

@@ -14,6 +14,16 @@ pub struct TextExpanderAppCandidate {
     pub title: String,
 }
 
+#[cfg(target_os = "windows")]
+pub(crate) fn native_foreground_app_candidate() -> Option<TextExpanderAppCandidate> {
+    smart_input_windows::foreground_app_candidate()
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn native_open_window_app_candidates() -> Vec<TextExpanderAppCandidate> {
+    smart_input_windows::platform_open_window_candidates()
+}
+
 #[cfg(target_os = "macos")]
 type ForegroundCacheState = Option<(std::time::Instant, Option<TextExpanderAppCandidate>)>;
 

@@ -122,6 +122,7 @@ impl EntropyApp {
         self.selected_key = None;
         self.selected_encoder = None;
         self.unlock_open = false;
+        self.vial_unlock_session_started = false;
         self.vial_unlock_polling = false;
         self.vial_unlock_last_poll = None;
         self.pending_layout_indicator_open_after_unlock = false;
@@ -227,6 +228,7 @@ impl EntropyApp {
         self.unlock_open = false;
         self.vial_unlocked = None;
         self.vial_unlock_keys.clear();
+        self.vial_unlock_session_started = false;
         self.vial_unlock_polling = false;
         self.vial_unlock_last_poll = None;
         self.pending_layout_indicator_open_after_unlock = false;

@@ -55,7 +55,7 @@ impl EntropyApp {
         &self,
         layout: &KeyboardLayout,
     ) -> bool {
-        layout.encoder_count() > 0 && layout_uses_combined_encoder_press(layout)
+        separate_encoder_visibility_settings_available(layout)
     }
 
     pub(super) fn encoder_visibility_allows(
@@ -307,6 +307,19 @@ impl EntropyApp {
     }
 }
 
+fn separate_encoder_visibility_settings_available(layout: &KeyboardLayout) -> bool {
+    let normalized_name = layout
+        .name
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    let is_m4cr0pad =
+        normalized_name.starts_with("m4cr0pad") || normalized_name.starts_with("ergohavenm4cr0pad");
+
+    !is_m4cr0pad && layout.encoder_count() > 0 && layout_uses_combined_encoder_press(layout)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +356,14 @@ mod tests {
             lighting_mode: None,
             firmware: FirmwareProtocol::Vial,
         }
+    }
+
+    #[test]
+    fn m4cr0pad_does_not_expose_a_separate_encoder_settings_tab() {
+        let mut layout = layout_with_encoder_hide_option();
+        layout.name = "M4CR0Pad v3".to_owned();
+
+        assert!(!separate_encoder_visibility_settings_available(&layout));
     }
 
     #[test]

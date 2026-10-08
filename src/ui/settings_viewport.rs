@@ -10,11 +10,20 @@ pub(crate) fn responsive_settings_visible_rows(
     total_rows: usize,
     bottom_reserve: f32,
 ) -> usize {
+    let row_height = crate::ui_style::ResponsiveMetrics::from_ctx(ctx).settings_row_height();
+    visible_settings_rows_for_height(available_height, total_rows, bottom_reserve, row_height)
+}
+
+fn visible_settings_rows_for_height(
+    available_height: f32,
+    total_rows: usize,
+    bottom_reserve: f32,
+    row_height: f32,
+) -> usize {
     if total_rows == 0 {
         return 1;
     }
 
-    let row_height = crate::ui_style::ResponsiveMetrics::from_ctx(ctx).settings_row_height();
     let usable_height = (available_height - bottom_reserve).max(row_height);
     let rows_that_fit = (usable_height / row_height).floor().max(1.0) as usize;
     rows_that_fit.min(total_rows)
@@ -61,14 +70,31 @@ pub(crate) fn allocate_adaptive_settings_list_viewport(
     total_rows: usize,
     bottom_reserve: f32,
 ) -> AdaptiveSettingsListViewport {
+    allocate_adaptive_settings_list_viewport_with_row_height(
+        ui,
+        id_salt,
+        metrics,
+        total_rows,
+        bottom_reserve,
+        metrics.settings_row_height(),
+    )
+}
+
+pub(crate) fn allocate_adaptive_settings_list_viewport_with_row_height(
+    ui: &mut egui::Ui,
+    id_salt: &'static str,
+    metrics: crate::ui_style::ResponsiveMetrics,
+    total_rows: usize,
+    bottom_reserve: f32,
+    row_height: f32,
+) -> AdaptiveSettingsListViewport {
     let viewport_width = metrics.settings_content_width();
     let row_content_width = metrics.settings_row_content_width();
-    let row_height = metrics.settings_row_height();
-    let visible_rows = responsive_settings_visible_rows(
-        ui.ctx(),
+    let visible_rows = visible_settings_rows_for_height(
         ui.available_height(),
         total_rows,
         bottom_reserve,
+        row_height,
     );
     let list_height = row_height * visible_rows as f32;
     let content_height = row_height * total_rows as f32;
@@ -210,6 +236,22 @@ mod tests {
         assert_eq!(
             responsive_settings_visible_rows(&ctx, row_height * 5.0, 8, row_height),
             4
+        );
+    }
+
+    #[test]
+    fn taller_keycap_rows_scroll_by_their_actual_height() {
+        let ctx = egui::Context::default();
+        let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(&ctx);
+        let row_height = metrics.value(62.0);
+        assert!(((row_height - metrics.value(54.0)) / 2.0 - metrics.value(4.0)).abs() < 0.001);
+        assert_eq!(
+            visible_settings_rows_for_height(row_height * 5.0 + 54.1, 7, 54.0, row_height),
+            5
+        );
+        assert_eq!(
+            visible_settings_rows_for_height(row_height * 7.0 + 54.1, 7, 54.0, row_height),
+            7
         );
     }
 

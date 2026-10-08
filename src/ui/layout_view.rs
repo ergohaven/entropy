@@ -53,9 +53,20 @@ impl EntropyApp {
         layout: &KeyboardLayout,
         ctx: &egui::Context,
     ) {
+        self.application_layout_editor_active = self.application_layouts_supported();
+        let application_layout = self
+            .application_layout_editor_active
+            .then(|| self.application_layout_rendered_copy(layout));
+        let layout = application_layout.as_ref().unwrap_or(layout);
         let viewport = ui.max_rect();
         let avail = viewport.size();
+        let application_layout_selector_h = if self.application_layout_editor_active {
+            58.0
+        } else {
+            0.0
+        };
         let layout_top_reserved_h = LAYOUT_TOP_RESERVED_H
+            + application_layout_selector_h
             + if self.main_menu_reserves_battery_status_space() {
                 layout_layer_switcher::MAIN_MENU_BATTERY_RESERVED_H
             } else {
@@ -104,7 +115,7 @@ impl EntropyApp {
         let layout_h = geometry.layout_h;
         let main_tabs_h = 32.0_f32;
         let layer_bar_h = 68.0_f32;
-        let top_reserved_h = LAYOUT_TOP_RESERVED_H;
+        let top_reserved_h = LAYOUT_TOP_RESERVED_H + application_layout_selector_h;
         let top_base_y = viewport.top() + 6.0;
         self.last_layout_geometry = Some((offset_x, offset_y, unit, padding));
 

@@ -325,6 +325,14 @@ fn use_device_name_for_unnamed_layout(layout: &mut KeyboardLayout, device_name: 
     }
 }
 
+fn canonical_layout_device_name(device: &crate::device::Device) -> &str {
+    if device.is_m4cr0pad_v3() {
+        "M4CR0Pad v3"
+    } else {
+        device.name.as_str()
+    }
+}
+
 fn is_default_layer_name(index: usize, name: &str) -> bool {
     let trimmed = name.trim();
     trimmed.is_empty()
@@ -739,6 +747,9 @@ impl EntropyApp {
                 .expect("test connect worker receiver");
             return;
         }
+        #[cfg(test)]
+        let test_hid = self.test_connect_hid.take();
+        let headless = self.headless;
 
         std::thread::spawn(move || {
             let progress = |message: &str| -> Result<(), String> {
@@ -758,8 +769,14 @@ impl EntropyApp {
                     dev.vendor_id,
                     dev.product_id
                 );
-                let dev_conn =
-                    HidDevice::open_fresh_for(&dev).map_err(|e| format!("Open failed: {e:#}"))?;
+                #[cfg(test)]
+                let opened = match test_hid {
+                    Some(hid) => Ok(hid),
+                    None => HidDevice::open_fresh_for(&dev),
+                };
+                #[cfg(not(test))]
+                let opened = HidDevice::open_fresh_for(&dev);
+                let dev_conn = opened.map_err(|e| format!("Open failed: {e:#}"))?;
                 let standby_animation_load = Self::device_uses_automatic_display_host_data(&dev)
                     .then(|| dev_conn.pause_standby_animation_for_load());
                 let staged_bluetooth_load = dev_conn.is_bluetooth_transport();
@@ -811,6 +828,14 @@ impl EntropyApp {
                         );
                         None
                     }
+                };
+
+                let supports_application_layouts = if !headless && dev.is_ergohaven_display_macropad() {
+                    let supported = dev_conn.supports_application_layout_protocol();
+                    log::info!("Application layout protocol supported: {supported}");
+                    supported
+                } else {
+                    false
                 };
 
                 progress("Reading Vial layout definition…")?;
@@ -930,7 +955,7 @@ impl EntropyApp {
                 let mut layout = KeyboardLayout::from_vial_json(&json)
                     .map_err(|e| format!("Layout parse failed: {e}"))?;
                 live_host_capabilities.apply(&mut layout);
-                use_device_name_for_unnamed_layout(&mut layout, &dev.name);
+                use_device_name_for_unnamed_layout(&mut layout, canonical_layout_device_name(&dev));
 
                 progress("Reading layer count…")?;
                 log::info!("Getting layer count…");
@@ -1466,6 +1491,7 @@ impl EntropyApp {
                     product_id: dev.product_id,
                     path: dev.path.clone(),
                     firmware_version,
+                    supports_application_layouts,
                     firmware_update_target,
                     supports_battery_halves,
                     battery_halves,
@@ -1726,6 +1752,39 @@ mod tests {
         let press_key = &layout.keys[press_rects[0].key_idx];
         assert_eq!((press_key.row, press_key.col), (0, 2));
         assert_eq!(press_rects[0].press_rect.center(), encoder_rect.center());
+    }
+
+    #[test]
+    fn corrupt_m4cr0pad_product_name_still_selects_combined_encoder_layout() {
+        let device = crate::device::Device {
+            name: "Ль".to_owned(),
+            vendor_id: 0xE126,
+            product_id: 0x0042,
+            manufacturer: "Ergohaven".to_owned(),
+            serial_number: "test-pad".to_owned(),
+            bus_type: "Usb".to_owned(),
+            path: "/dev/hidraw4".to_owned(),
+            instance_token: "test-instance".to_owned(),
+            firmware: FirmwareProtocol::Vial,
+        };
+        let mut layout = KeyboardLayout::from_vial_json(&serde_json::json!({
+            "matrix": { "rows": 5, "cols": 3 },
+            "layouts": {
+                "keymap": [
+                    [{ "x": 1.25 }, "1,0", "1,1", "1,2"],
+                    ["0,1\n\n\n\n\n\n\n\n\ne", { "x": 0.25 }, "2,0", "2,1", "2,2"],
+                    ["0,2", { "x": 0.25 }, "3,0", "3,1", "3,2"],
+                    ["0,0\n\n\n\n\n\n\n\n\ne", { "x": 0.25 }, "4,0", "4,1", "4,2"]
+                ]
+            }
+        }))
+        .unwrap();
+
+        use_device_name_for_unnamed_layout(&mut layout, canonical_layout_device_name(&device));
+
+        assert_eq!(layout.name, "M4CR0Pad v3");
+        assert!(layout_uses_combined_encoder_press(&layout));
+        assert!(layout.keys.iter().any(|key| (key.row, key.col) == (0, 2)));
     }
 
     #[test]
