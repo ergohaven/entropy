@@ -24,9 +24,6 @@ pub(crate) fn native_open_window_app_candidates() -> Vec<TextExpanderAppCandidat
     smart_input_windows::platform_open_window_candidates()
 }
 
-#[cfg(target_os = "macos")]
-type ForegroundCacheState = Option<(std::time::Instant, Option<TextExpanderAppCandidate>)>;
-
 static TEXT_EXPANDER_CONFIG: OnceLock<RwLock<TextExpansionConfig>> = OnceLock::new();
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 static TEXT_EXPANDER_ENGINE: OnceLock<Mutex<TextExpansionEngine>> = OnceLock::new();
@@ -54,7 +51,7 @@ fn current_process_name_lower() -> Option<String> {
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
-fn remember_foreground_app(candidate: TextExpanderAppCandidate) {
+pub(crate) fn remember_foreground_app(candidate: TextExpanderAppCandidate) {
     let exe = candidate.exe.trim().to_ascii_lowercase();
     if exe.is_empty() {
         return;
@@ -116,7 +113,7 @@ fn text_expander_enabled() -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[cfg(target_os = "windows")]
 fn text_expander_suppressed_for_context() -> bool {
     text_expander_config()
         .read()
@@ -127,11 +124,6 @@ fn text_expander_suppressed_for_context() -> bool {
 #[cfg(target_os = "windows")]
 fn foreground_app_blacklisted(app_blacklist: &[String]) -> bool {
     smart_input_windows::foreground_app_blacklisted(app_blacklist)
-}
-
-#[cfg(target_os = "macos")]
-fn foreground_app_blacklisted(app_blacklist: &[String]) -> bool {
-    macos::foreground_app_blacklisted(app_blacklist)
 }
 
 #[cfg(target_os = "windows")]
@@ -375,6 +367,7 @@ pub fn restart_event_tap() {
 
 #[cfg(target_os = "macos")]
 pub fn start() {
+    crate::app_discovery::start_macos_foreground_monitor();
     macos::ensure_event_tap_thread();
 }
 
@@ -389,7 +382,7 @@ mod macos {
     use super::*;
     use std::ffi::c_void;
     use std::ptr::null_mut;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
@@ -423,7 +416,7 @@ mod macos {
     const MAC_KEY_UP: u16 = 0x7E;
 
     static MACOS_EXPANDING_TEXT: AtomicBool = AtomicBool::new(false);
-    static FOREGROUND_CACHE: OnceLock<Mutex<ForegroundCacheState>> = OnceLock::new();
+    static TEXT_EXPANDER_FOREGROUND_GENERATION: AtomicU64 = AtomicU64::new(0);
     static TAP_THREAD_RUNNING: AtomicBool = AtomicBool::new(false);
     static EVENT_TAP_ACTIVE: AtomicBool = AtomicBool::new(false);
     static TAP_PORT_ADDR: AtomicUsize = AtomicUsize::new(0);
@@ -628,36 +621,67 @@ mod macos {
         event
     }
 
-    pub(super) fn foreground_app_blacklisted(app_blacklist: &[String]) -> bool {
-        if app_blacklist.is_empty() {
-            return false;
+    #[cfg(test)]
+    pub(super) fn simulate_text_expander_key_down(keycode: u16, text: &str, flags: u64) {
+        unsafe {
+            let event = CGEventCreateKeyboardEvent(null_mut(), keycode, true);
+            assert!(!event.is_null());
+            CGEventSetFlags(event, flags);
+            let units = text.encode_utf16().collect::<Vec<_>>();
+            CGEventKeyboardSetUnicodeString(event, units.len(), units.as_ptr());
+            assert_eq!(text_expander_char_for_event(event), text.chars().next());
+            assert_eq!(CGEventGetFlags(event), flags);
+            assert_eq!(
+                CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE),
+                keycode as i64
+            );
+            event_tap_callback(null_mut(), K_CG_EVENT_KEY_DOWN, event, null_mut());
+            CFRelease(event as *const c_void);
         }
-        foreground_app_candidate()
-            .map(|app| {
-                app_blacklist.iter().any(|blocked| {
-                    app.exe == *blocked
-                        || app
-                            .exe
-                            .strip_suffix(".app")
-                            .is_some_and(|stem| stem == blocked)
-                        || blocked
-                            .strip_suffix(".app")
-                            .is_some_and(|stem| stem == app.exe)
-                })
+    }
+
+    pub(super) fn app_name_matches_blacklist(
+        process_name: &str,
+        picker_name: Option<&str>,
+        blocked: &str,
+    ) -> bool {
+        [Some(process_name), picker_name]
+            .into_iter()
+            .flatten()
+            .any(|name| {
+                name == blocked
+                    || name
+                        .strip_suffix(".app")
+                        .is_some_and(|stem| stem == blocked)
+                    || blocked
+                        .strip_suffix(".app")
+                        .is_some_and(|stem| stem == name)
             })
-            .unwrap_or(false)
     }
 
     pub(super) fn platform_open_window_candidates() -> Vec<TextExpanderAppCandidate> {
-        let script = r#"tell application "System Events" to get name of every application process whose background only is false"#;
-        let Some(output) = run_osascript(script) else {
-            return Vec::new();
-        };
+        // Settings call this on repaint; native enumeration already runs in the
+        // discovery worker, so only consume its last completed snapshot here.
+        let snapshot = crate::app_discovery::application_discovery_snapshot();
         let current = current_process_name_lower();
+        app_candidates_from_names(
+            snapshot.text_expander_names.iter().map(String::as_str),
+            current.as_deref(),
+        )
+    }
+
+    pub(super) fn app_candidates_from_names<'a>(
+        names: impl IntoIterator<Item = &'a str>,
+        current: Option<&str>,
+    ) -> Vec<TextExpanderAppCandidate> {
         let mut apps = Vec::new();
-        for raw_name in output.split(',') {
+        for raw_name in names {
+            // The matcher also accepts these native names for the same PID,
+            // while keeping existing process-name blacklist entries valid.
             let exe = raw_name.trim().to_ascii_lowercase();
-            if exe.is_empty() || current.as_deref() == Some(exe.as_str()) {
+            // The persisted blacklist uses these delimiters and cannot store
+            // such a name as one entry; do not offer a broken selection.
+            if exe.is_empty() || exe.contains([',', ';', '\n']) || current == Some(exe.as_str()) {
                 continue;
             }
             if !apps
@@ -678,13 +702,31 @@ mod macos {
         if !text_expander_enabled() {
             return;
         }
-        if foreground_is_current_process() {
-            return;
-        }
-        if text_expander_suppressed_for_context() {
+        let foreground = crate::app_discovery::macos_text_expander_foreground();
+        let generation = foreground.as_ref().map_or(0, |app| app.generation);
+        let previous_generation =
+            TEXT_EXPANDER_FOREGROUND_GENERATION.swap(generation, Ordering::Relaxed);
+        let suppressed = foreground.as_ref().is_none_or(|app| {
+            app.pid == std::process::id()
+                || text_expander_config()
+                    .read()
+                    .map(|config| {
+                        config.app_blacklist.iter().any(|blocked| {
+                            app_name_matches_blacklist(
+                                &app.process_name,
+                                app.picker_name.as_deref(),
+                                blocked,
+                            )
+                        })
+                    })
+                    .unwrap_or(true)
+        });
+        if suppressed || previous_generation != generation {
             if let Ok(mut engine) = text_expander_engine().lock() {
                 engine.reset();
             }
+        }
+        if suppressed {
             return;
         }
         if keycode == MAC_KEY_DELETE {
@@ -777,65 +819,6 @@ mod macos {
         for ch in text.chars() {
             send_unicode_char(ch);
         }
-    }
-
-    fn foreground_is_current_process() -> bool {
-        let Some(app) = foreground_app_candidate() else {
-            return false;
-        };
-        current_process_name_lower().as_deref() == Some(app.exe.as_str())
-    }
-
-    fn foreground_app_candidate() -> Option<TextExpanderAppCandidate> {
-        let cache = FOREGROUND_CACHE.get_or_init(|| Mutex::new(None));
-        if let Ok(guard) = cache.lock() {
-            if let Some((checked_at, candidate)) = &*guard {
-                if checked_at.elapsed() < Duration::from_millis(500) {
-                    return candidate.clone();
-                }
-            }
-        }
-
-        let candidate = query_foreground_app_candidate();
-        if let Some(candidate) = &candidate {
-            remember_foreground_app(candidate.clone());
-        }
-        if let Ok(mut guard) = cache.lock() {
-            *guard = Some((Instant::now(), candidate.clone()));
-        }
-        candidate
-    }
-
-    fn query_foreground_app_candidate() -> Option<TextExpanderAppCandidate> {
-        let script = r#"tell application "System Events"
-set frontApp to first application process whose frontmost is true
-set appName to name of frontApp
-set appTitle to ""
-try
-    set appTitle to name of front window of frontApp
-end try
-return appName & linefeed & appTitle
-end tell"#;
-        let output = run_osascript(script)?;
-        let mut lines = output.lines();
-        let exe = lines.next()?.trim().to_ascii_lowercase();
-        if exe.is_empty() {
-            return None;
-        }
-        let title = lines.next().unwrap_or_default().trim().to_owned();
-        Some(TextExpanderAppCandidate { exe, title })
-    }
-
-    fn run_osascript(script: &str) -> Option<String> {
-        let output = std::process::Command::new("osascript")
-            .arg("-e")
-            .arg(script)
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_owned())
     }
 
     unsafe fn send_unicode_char(symbol: char) {
@@ -979,5 +962,253 @@ mod tests {
     #[test]
     fn macos_active_event_tap_counts_as_input_monitoring_granted() {
         assert!(macos_effective_input_monitoring_granted(false, true));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_blacklist_accepts_picker_and_legacy_names_for_the_same_app() {
+        assert!(macos::app_name_matches_blacklist(
+            "editor",
+            Some("localized editor"),
+            "editor"
+        ));
+        assert!(macos::app_name_matches_blacklist(
+            "editor",
+            Some("localized editor"),
+            "localized editor.app"
+        ));
+        assert!(!macos::app_name_matches_blacklist(
+            "editor",
+            Some("localized editor"),
+            "other editor"
+        ));
+        assert!(macos::app_name_matches_blacklist(
+            "editor.app",
+            None,
+            "editor"
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_app_picker_normalizes_names_and_skips_blacklist_separators() {
+        let apps = macos::app_candidates_from_names(
+            [
+                " Safari ",
+                "",
+                "safari",
+                "Entropy",
+                "Preview",
+                "Editor, Inc.",
+                "Editor; Inc.",
+                "Editor\nInc.",
+            ],
+            Some("entropy"),
+        );
+        assert_eq!(
+            apps,
+            ["preview", "safari"].map(|name| TextExpanderAppCandidate {
+                exe: name.to_owned(),
+                title: String::new(),
+            })
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_app_picker_accepts_an_empty_initial_snapshot() {
+        assert!(macos::app_candidates_from_names([], Some("entropy")).is_empty());
+        assert_eq!(
+            macos::app_candidates_from_names(["Safari"], None)[0].exe,
+            "safari"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_app_picker_does_not_invoke_system_events() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const MARKER_ENV: &str = "ENTROPY_TEST_MACOS_PICKER_MARKER";
+        const COMPLETION: &str = "ENTROPY_MACOS_PICKER_PROBE_COMPLETE";
+        if let Some(marker) = std::env::var_os(MARKER_ENV) {
+            let started = std::time::Instant::now();
+            let _ = platform_open_window_candidates();
+            println!("macOS app-picker lookup: {:?}", started.elapsed());
+            // Exercise completed native scans too, not just the cold snapshot.
+            // The display server may have no applications on a CI runner.
+            let deadline = started + std::time::Duration::from_millis(500);
+            while std::time::Instant::now() < deadline {
+                let _ = platform_open_window_candidates();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert!(
+                !std::path::Path::new(&marker).exists(),
+                "the picker must use cached native discovery, not synchronous System Events"
+            );
+            println!("{COMPLETION}");
+            return;
+        }
+
+        // Isolate PATH in a child harness so other tests keep their real tools.
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("osascript");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\n/usr/bin/touch \"$ENTROPY_TEST_MACOS_PICKER_MARKER\"\n/bin/sleep 2\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "smart_input::tests::macos_app_picker_does_not_invoke_system_events",
+                "--nocapture",
+            ])
+            .env("PATH", directory.path())
+            .env(MARKER_ENV, directory.path().join("invoked"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.lines().any(|line| line == COMPLETION),
+            "the child must execute the picker regression check: {stdout}"
+        );
+        print!("{stdout}");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_keyboard_callback_does_not_invoke_system_events() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const MARKER_ENV: &str = "ENTROPY_TEST_MACOS_CALLBACK_MARKER";
+        const COMPLETION: &str = "ENTROPY_MACOS_CALLBACK_PROBE_COMPLETE";
+        if let Some(marker) = std::env::var_os(MARKER_ENV) {
+            use crate::app_discovery::{
+                set_macos_text_expander_foreground_for_test, MacosTextExpanderForeground,
+            };
+            use std::time::{Duration, Instant};
+
+            let foreground = |pid| MacosTextExpanderForeground {
+                pid,
+                generation: 0,
+                process_name: "editor".to_owned(),
+                picker_name: Some("localized editor".to_owned()),
+            };
+            let append = |text: &str| {
+                let mut engine = text_expander_engine().lock().unwrap();
+                text.chars().fold(None, |_, ch| engine.push_char(ch))
+            };
+            set_text_expander_config(true, vec![rule(":-)", "🙂")], Vec::new());
+            let started = Instant::now();
+            // Cold context skips input; it must not synchronously warm the cache.
+            macos::simulate_text_expander_key_down(0x29, ":", 0);
+            println!("macOS keyboard callback: {:?}", started.elapsed());
+            assert!(append("-)").is_none());
+
+            // A warm snapshot must actually feed the matcher, not disable it.
+            set_macos_text_expander_foreground_for_test(Some(foreground(42)));
+            let warm_started = Instant::now();
+            macos::simulate_text_expander_key_down(0x29, ":", 0);
+            macos::simulate_text_expander_key_down(0x1B, "-", 0);
+            println!(
+                "macOS warm keyboard callbacks: {:?}",
+                warm_started.elapsed()
+            );
+            // Finish directly in the engine: do not post synthetic keys to the desktop.
+            assert_eq!(append(")").unwrap().replacement, "🙂");
+
+            // An unchanged active app remains usable while Entropy is idle.
+            std::thread::sleep(Duration::from_millis(550));
+            macos::simulate_text_expander_key_down(0x29, ":", 0);
+            macos::simulate_text_expander_key_down(0x1B, "-", 0);
+            assert_eq!(append(")").unwrap().replacement, "🙂");
+
+            for blocked in ["editor", "localized editor.app"] {
+                set_text_expander_config(true, vec![rule(":-)", "🙂")], vec![blocked.to_owned()]);
+                macos::simulate_text_expander_key_down(0x29, ":", 0);
+                assert!(append("-)").is_none(), "must suppress {blocked}");
+            }
+            set_text_expander_config(true, vec![rule(":-)", "🙂")], Vec::new());
+            for snapshot in [
+                None,
+                // Own-process protection is PID-based even when the name differs.
+                Some(foreground(std::process::id())),
+            ] {
+                text_expander_engine().lock().unwrap().reset();
+                set_macos_text_expander_foreground_for_test(snapshot);
+                // Establish the generation first, so focus-change reset cannot mask a
+                // missing suppression reset. Command keys otherwise keep the buffer.
+                macos::simulate_text_expander_key_down(0x29, ":", 0);
+                assert!(append("-)").is_none(), "untrusted context must skip input");
+                text_expander_engine().lock().unwrap().reset();
+                let _ = append(":-");
+                macos::simulate_text_expander_key_down(0x1B, "-", 1 << 20);
+                assert!(
+                    append(")").is_none(),
+                    "untrusted context must reset the buffer"
+                );
+            }
+
+            set_macos_text_expander_foreground_for_test(Some(foreground(42)));
+            macos::simulate_text_expander_key_down(0x29, ":", 0);
+            set_macos_text_expander_foreground_for_test(Some(foreground(43)));
+            set_macos_text_expander_foreground_for_test(Some(foreground(42)));
+            macos::simulate_text_expander_key_down(0x1B, "-", 0);
+            assert!(append(")").is_none(), "focus changes must reset the buffer");
+            text_expander_engine().lock().unwrap().reset();
+            let _ = append(":-");
+            crate::app_discovery::with_macos_foreground_lock_for_test(|| {
+                macos::simulate_text_expander_key_down(0x1B, "-", 1 << 20);
+            });
+            assert!(
+                append(")").is_none(),
+                "cache contention must skip and reset"
+            );
+            assert!(
+                !std::path::Path::new(&marker).exists(),
+                "the keyboard callback must not wait on synchronous System Events"
+            );
+            crate::app_discovery::exercise_macos_foreground_notifications_for_test();
+            println!("{COMPLETION}");
+            return;
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("osascript");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\n/usr/bin/touch \"$ENTROPY_TEST_MACOS_CALLBACK_MARKER\"\n/bin/sleep 2\nprintf 'Editor\\n42\\nDocument\\n'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "smart_input::tests::macos_keyboard_callback_does_not_invoke_system_events",
+                "--nocapture",
+            ])
+            .env("PATH", directory.path())
+            .env(MARKER_ENV, directory.path().join("invoked"))
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            stdout.lines().any(|line| line == COMPLETION),
+            "the child must execute the keyboard regression check: {stdout}"
+        );
+        print!("{stdout}");
     }
 }
