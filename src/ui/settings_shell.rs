@@ -215,7 +215,7 @@ impl EntropyApp {
     pub(super) fn open_application_layouts_page(&mut self) {
         self.application_layout_editor_active = false;
         self.settings_tab = SettingsTab::ApplicationLayouts;
-        self.main_menu_tab = MainMenuTab::Settings;
+        self.main_menu_tab = MainMenuTab::Advanced;
     }
 
     pub(super) fn open_text_expander_setup_page(&mut self) {
@@ -332,7 +332,8 @@ impl EntropyApp {
         ) && self.settings_tab != SettingsTab::MatrixTester
             && self.settings_tab != SettingsTab::TypingTrainer
             && !self.secondary_click_handled
-            && self.application_layout_rename_target_id.is_none()
+            && !self.application_picker_open
+            && !self.application_categories_open
             && self.editing_layer.is_none()
             && !self.keycode_picker.has_open_modal()
             && !self.unlock_open
@@ -349,6 +350,61 @@ impl EntropyApp {
 mod tests {
     use super::*;
 
+    #[test]
+    fn leaving_autolayer_closes_dialogs_and_discards_drafts() {
+        let layout = KeyboardLayout::from_vial_json(&serde_json::json!({
+            "name": "Test keyboard",
+            "matrix": { "rows": 1, "cols": 1 },
+            "layouts": { "keymap": [["0,0"]] }
+        }))
+        .unwrap();
+        for (picker, assign_existing) in [(false, false), (true, false), (true, true)] {
+            for (tab, menu) in [
+                (SettingsTab::AppSettings, MainMenuTab::Settings),
+                (SettingsTab::ApplicationLayouts, MainMenuTab::Keyboard),
+            ] {
+                let ctx = egui::Context::default();
+                let mut app = EntropyApp::new_inert_for_test();
+                app.open_application_layouts_page();
+                if picker {
+                    app.application_picker_open = true;
+                    app.application_picker_assign_existing = assign_existing;
+                    app.application_picker_target_layout_id =
+                        assign_existing.then(|| "draft-target".to_owned());
+                    app.application_picker_name = "Unsaved name".to_owned();
+                } else {
+                    app.application_categories_open = true;
+                    app.application_categories_selected_id = Some("browsers".to_owned());
+                    app.application_categories_name = "Unsaved category".to_owned();
+                }
+                app.dismiss_application_layouts_dialogs_if_page_inactive();
+                assert_eq!(app.application_picker_open, picker);
+                assert_eq!(app.application_categories_open, !picker);
+
+                app.settings_tab = tab;
+                app.main_menu_tab = menu;
+                let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let ctx = ui.ctx().clone();
+                    app.draw_layout(ui, &layout, &ctx);
+                });
+                assert!(!app.application_picker_open);
+                assert!(!app.application_categories_open);
+                assert!(app.application_picker_target_layout_id.is_none());
+                assert!(app.application_picker_name.is_empty());
+                assert!(app.application_categories_selected_id.is_none());
+                assert!(app.application_categories_name.is_empty());
+
+                app.open_application_layouts_page();
+                let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let ctx = ui.ctx().clone();
+                    app.draw_layout(ui, &layout, &ctx);
+                });
+                assert!(!app.application_picker_open);
+                assert!(!app.application_categories_open);
+            }
+        }
+    }
+
     fn vial_app(locked: bool) -> EntropyApp {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx);
@@ -364,6 +420,77 @@ mod tests {
         );
         app.vial_unlocked = Some(!locked);
         app
+    }
+
+    #[test]
+    fn autolayer_settings_stays_in_place_when_master_switch_changes() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        let device_key = "offline-macropad-vertical-position-test".to_owned();
+        app.app_settings.application_layouts.insert(
+            device_key.clone(),
+            crate::application_layouts::DeviceApplicationLayouts::default(),
+        );
+        app.app_settings.last_application_layout_device_key = Some(device_key.clone());
+        app.open_application_layouts_page();
+        let layout = KeyboardLayout::from_vial_json(&serde_json::json!({
+            "name": "Test keyboard",
+            "matrix": { "rows": 1, "cols": 1 },
+            "layouts": { "keymap": [["0,0"]] }
+        }))
+        .unwrap();
+        let frame = |app: &mut EntropyApp| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 700.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    let ctx = ui.ctx().clone();
+                    app.draw_layout(ui, &layout, &ctx);
+                },
+            );
+            ["Autolayer", "Enable", "Add"].map(|label| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == label => {
+                            Some(text.visual_bounding_rect().center().y)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing {label}"))
+            })
+        };
+        let on = frame(&mut app);
+        app.app_settings
+            .application_layouts
+            .get_mut(&device_key)
+            .unwrap()
+            .automatic_switching_enabled = false;
+        let off = frame(&mut app);
+        app.app_settings
+            .application_layouts
+            .get_mut(&device_key)
+            .unwrap()
+            .automatic_switching_enabled = true;
+        let restored = frame(&mut app);
+        for (label, (on_y, off_y, restored_y)) in ["Autolayer", "Enable", "Add"].into_iter().zip(
+            on.into_iter()
+                .zip(off)
+                .zip(restored)
+                .map(|((a, b), c)| (a, b, c)),
+        ) {
+            assert!(
+                (on_y - off_y).abs() < 1.0,
+                "{label} jumped: {on_y} → {off_y}"
+            );
+            assert!((on_y - restored_y).abs() < 1.0, "{label} did not return");
+        }
     }
 
     #[test]

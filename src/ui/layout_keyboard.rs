@@ -2,6 +2,68 @@ use super::*;
 
 type EncoderGroup = (u8, egui::Rect, Option<(usize, u16)>, Option<(usize, u16)>);
 
+fn encoder_section_rects(
+    circle_bounds: egui::Rect,
+    interactive_radius: f32,
+    has_press_button: bool,
+) -> (egui::Rect, Option<egui::Rect>, egui::Rect) {
+    let center_y = circle_bounds.center().y;
+    if has_press_button {
+        // Give the press action just over a quarter of the dial. Use the interaction radius so
+        // its clickable area and painted dividers agree even on hover enlargement.
+        let half_band = interactive_radius * 0.27;
+        let top_divider_y = center_y - half_band;
+        let bottom_divider_y = center_y + half_band;
+        (
+            egui::Rect::from_min_max(
+                circle_bounds.min,
+                egui::pos2(circle_bounds.max.x, top_divider_y),
+            ),
+            Some(egui::Rect::from_min_max(
+                egui::pos2(circle_bounds.min.x, top_divider_y),
+                egui::pos2(circle_bounds.max.x, bottom_divider_y),
+            )),
+            egui::Rect::from_min_max(
+                egui::pos2(circle_bounds.min.x, bottom_divider_y),
+                circle_bounds.max,
+            ),
+        )
+    } else {
+        (
+            egui::Rect::from_min_max(circle_bounds.min, egui::pos2(circle_bounds.max.x, center_y)),
+            None,
+            egui::Rect::from_min_max(egui::pos2(circle_bounds.min.x, center_y), circle_bounds.max),
+        )
+    }
+}
+
+#[cfg(test)]
+mod encoder_section_tests {
+    use super::*;
+
+    #[test]
+    fn press_section_occupies_center_band_without_changing_outer_bounds() {
+        for radius in [70.0, 105.0] {
+            let bounds = egui::Rect::from_center_size(
+                egui::pos2(200.0, 150.0),
+                egui::vec2(radius * 2.0, radius * 2.0),
+            );
+            let (top, middle, bottom) = encoder_section_rects(bounds, radius, true);
+            let middle = middle.expect("press section");
+            assert_eq!(top.top(), bounds.top());
+            assert_eq!(top.bottom(), middle.top());
+            assert_eq!(middle.bottom(), bottom.top());
+            assert_eq!(bottom.bottom(), bounds.bottom());
+            assert!((middle.height() / bounds.height() - 0.27).abs() < 0.001);
+            assert_eq!(middle.center(), bounds.center());
+            let (top, middle, bottom) = encoder_section_rects(bounds, radius, false);
+            assert!(middle.is_none());
+            assert_eq!(top.bottom(), bounds.center().y);
+            assert_eq!(bottom.top(), bounds.center().y);
+        }
+    }
+}
+
 fn visibility_edit_outline_rect(
     editing: bool,
     keyboard_bounds: Option<egui::Rect>,
@@ -594,38 +656,9 @@ impl EntropyApp {
             let press_slot = encoder_press_rects
                 .iter()
                 .find(|press| press.encoder_idx == *encoder_idx)
-                .map(|press| (press.key_idx, press.press_rect));
-            let (top_rect, middle_rect, bottom_rect) = if let Some((_, press_rect)) = press_slot {
-                let divider_gap = base_radius * 0.06;
-                let top_divider_y = press_rect.top() - divider_gap;
-                let bottom_divider_y = press_rect.bottom() + divider_gap;
-                (
-                    egui::Rect::from_min_max(
-                        circle_bounds.min,
-                        egui::pos2(circle_bounds.max.x, top_divider_y),
-                    ),
-                    Some(egui::Rect::from_min_max(
-                        egui::pos2(circle_bounds.min.x, top_divider_y),
-                        egui::pos2(circle_bounds.max.x, bottom_divider_y),
-                    )),
-                    egui::Rect::from_min_max(
-                        egui::pos2(circle_bounds.min.x, bottom_divider_y),
-                        circle_bounds.max,
-                    ),
-                )
-            } else {
-                (
-                    egui::Rect::from_min_max(
-                        circle_bounds.min,
-                        egui::pos2(circle_bounds.max.x, center.y),
-                    ),
-                    None,
-                    egui::Rect::from_min_max(
-                        egui::pos2(circle_bounds.min.x, center.y),
-                        circle_bounds.max,
-                    ),
-                )
-            };
+                .map(|press| press.key_idx);
+            let (top_rect, middle_rect, bottom_rect) =
+                encoder_section_rects(circle_bounds, interactive_radius, press_slot.is_some());
             let top_resp = ui.allocate_rect(top_rect, Sense::click());
             let middle_resp =
                 middle_rect.map(|middle_rect| ui.allocate_rect(middle_rect, Sense::click()));
@@ -693,7 +726,7 @@ impl EntropyApp {
                     self.request_middle_click_encoder_assignment(ui.ctx(), *visual_idx);
                 }
             }
-            if let (Some((press_ki, _)), Some(middle_resp)) = (press_slot, middle_resp.as_ref()) {
+            if let (Some(press_ki), Some(middle_resp)) = (press_slot, middle_resp.as_ref()) {
                 if middle_resp.hovered() {
                     hovered_key = Some(press_ki);
                     let binding = layout.get_key_binding(self.selected_layer, press_ki);
@@ -773,7 +806,7 @@ impl EntropyApp {
                 .map(|(visual_idx, _)| Some((layer, visual_idx)) == self.selected_encoder)
                 .unwrap_or(false);
             let middle_selected = press_slot
-                .map(|(press_ki, _)| self.selected_key == Some((layer, press_ki)))
+                .map(|press_ki| self.selected_key == Some((layer, press_ki)))
                 .unwrap_or(false);
             let middle_hovered = middle_resp.as_ref().map(|r| r.hovered()).unwrap_or(false);
             let visuals = &ui.visuals().widgets;
@@ -869,8 +902,8 @@ impl EntropyApp {
                     } * font_scale,
                 )
             };
-            let top_label_y = center.y - radius * if has_press_button { 0.52 } else { 0.30 };
-            let bottom_label_y = center.y + radius * if has_press_button { 0.52 } else { 0.30 };
+            let top_label_y = center.y - radius * if has_press_button { 0.70 } else { 0.30 };
+            let bottom_label_y = center.y + radius * if has_press_button { 0.70 } else { 0.30 };
             let top_text_color = if top_dimmed {
                 encoder_dim_text_color
             } else if top_selected {
@@ -909,7 +942,7 @@ impl EntropyApp {
             draw_encoder_arrow(painter, center, radius, true, arrow_color_top);
             draw_encoder_arrow(painter, center, radius, false, arrow_color_bottom);
 
-            if let (Some((press_ki, _)), Some(middle_rect)) = (press_slot, middle_rect) {
+            if let (Some(press_ki), Some(middle_rect)) = (press_slot, middle_rect) {
                 let top_divider_y = middle_rect.top();
                 let bottom_divider_y = middle_rect.bottom();
                 let divider_radius = (radius - 0.5).max(0.0);

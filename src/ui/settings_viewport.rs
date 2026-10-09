@@ -88,6 +88,26 @@ pub(crate) fn allocate_adaptive_settings_list_viewport_with_row_height(
     bottom_reserve: f32,
     row_height: f32,
 ) -> AdaptiveSettingsListViewport {
+    allocate_adaptive_settings_list_viewport_capped(
+        ui,
+        id_salt,
+        metrics,
+        total_rows,
+        bottom_reserve,
+        row_height,
+        usize::MAX,
+    )
+}
+
+pub(crate) fn allocate_adaptive_settings_list_viewport_capped(
+    ui: &mut egui::Ui,
+    id_salt: &'static str,
+    metrics: crate::ui_style::ResponsiveMetrics,
+    total_rows: usize,
+    bottom_reserve: f32,
+    row_height: f32,
+    max_visible_rows: usize,
+) -> AdaptiveSettingsListViewport {
     let viewport_width = metrics.settings_content_width();
     let row_content_width = metrics.settings_row_content_width();
     let visible_rows = visible_settings_rows_for_height(
@@ -95,7 +115,8 @@ pub(crate) fn allocate_adaptive_settings_list_viewport_with_row_height(
         total_rows,
         bottom_reserve,
         row_height,
-    );
+    )
+    .min(max_visible_rows.max(1));
     let list_height = row_height * visible_rows as f32;
     let content_height = row_height * total_rows as f32;
     let max_offset = (content_height - list_height).max(0.0);

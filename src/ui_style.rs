@@ -57,6 +57,32 @@ pub fn popup_below_widget_with_width<R>(
     Some(response.inner)
 }
 
+/// Keep a hover submenu open while the pointer crosses the small gap between menus.
+pub fn pointer_over_submenu_bridge(
+    pointer: Option<egui::Pos2>,
+    row_rect: Option<egui::Rect>,
+    submenu_rect: Option<egui::Rect>,
+) -> bool {
+    let (Some(pointer), Some(row_rect), Some(submenu_rect)) = (pointer, row_rect, submenu_rect)
+    else {
+        return false;
+    };
+    let connector = if submenu_rect.left() >= row_rect.right() {
+        egui::Rect::from_min_max(
+            egui::pos2(row_rect.right() - 1.0, row_rect.top() - 3.0),
+            egui::pos2(submenu_rect.left() + 1.0, row_rect.bottom() + 3.0),
+        )
+    } else {
+        egui::Rect::from_min_max(
+            egui::pos2(submenu_rect.right() - 1.0, row_rect.top() - 3.0),
+            egui::pos2(row_rect.left() + 1.0, row_rect.bottom() + 3.0),
+        )
+    };
+    row_rect.expand(3.0).contains(pointer)
+        || submenu_rect.expand(3.0).contains(pointer)
+        || connector.contains(pointer)
+}
+
 pub fn panel_fill(dark: bool) -> Color32 {
     if dark {
         Color32::from_rgb(30, 30, 30)
@@ -557,6 +583,82 @@ pub fn modern_text_field_sized(
     )
 }
 
+pub fn modern_text_preview_field_sized(
+    ui: &mut Ui,
+    id: egui::Id,
+    text: &str,
+    width: f32,
+    height: f32,
+    hint: &str,
+) -> egui::Response {
+    let mut display = text.replace(['\r', '\n'], " ");
+    let field_rect = paint_modern_text_field_frame(ui, id, width, height, true);
+    let inner_rect = field_rect.shrink2(Vec2::new(10.0, 0.0));
+    allocate_ui_at_rect(ui, inner_rect, |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(inner_rect));
+        ui.add_sized(
+            inner_rect.size(),
+            egui::TextEdit::singleline(&mut display)
+                .id(id)
+                .hint_text(hint)
+                .font(FontId::proportional(12.5 * (height / 32.0).clamp(1.0, 1.3)))
+                .frame(egui::Frame::NONE)
+                .interactive(false)
+                .vertical_align(egui::Align::Center),
+        );
+    });
+    let response = ui.interact(field_rect, id.with("preview_click"), Sense::click());
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
+}
+
+pub fn modern_multiline_text_field_sized(
+    ui: &mut Ui,
+    id: egui::Id,
+    text: &mut String,
+    size: Vec2,
+    hint: &str,
+    char_limit: usize,
+) -> egui::Response {
+    // Let the modal surface show through; the large editor needs an outline,
+    // not a second gray panel behind the text.
+    let rect = paint_modern_text_field_frame_with_fill(
+        ui,
+        id,
+        size.x,
+        size.y,
+        true,
+        Some(Color32::TRANSPARENT),
+    );
+    let inner_size = (size - Vec2::new(20.0, 20.0)).max(Vec2::new(1.0, 1.0));
+    let response = allocate_ui_at_rect(ui, rect.shrink2(Vec2::splat(10.0)), |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt(id.with("scroll"))
+            .max_height(inner_size.y)
+            .show(ui, |ui| {
+                ui.add_sized(
+                    inner_size,
+                    egui::TextEdit::multiline(text)
+                        .id(id)
+                        .desired_width(inner_size.x)
+                        .min_size(inner_size)
+                        .hint_text(hint)
+                        .font(FontId::proportional(13.0))
+                        .char_limit(char_limit)
+                        .frame(egui::Frame::NONE),
+                )
+            })
+            .inner
+    })
+    .inner;
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+    }
+    response
+}
+
 pub fn modern_text_field_interactive(
     ui: &mut Ui,
     id: egui::Id,
@@ -627,12 +729,15 @@ pub fn modern_text_field_sized_with_layouter(
     hint: &str,
     char_limit: usize,
     horizontal_align: egui::Align,
+    interactive: bool,
     layouter: &mut dyn FnMut(&Ui, &dyn egui::TextBuffer, f32) -> std::sync::Arc<egui::Galley>,
 ) -> egui::widgets::text_edit::TextEditOutput {
     let font_size = 12.5 * (height / 32.0).clamp(1.0, 1.3);
     let field_rect = paint_modern_text_field_frame(ui, id, width, height, true);
     let inner_size = Vec2::new(width - 20.0, height);
-    let output = allocate_ui_at_rect(ui, field_rect.shrink2(Vec2::new(10.0, 0.0)), |ui| {
+    let inner_rect = field_rect.shrink2(Vec2::new(10.0, 0.0));
+    let output = allocate_ui_at_rect(ui, inner_rect, |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(inner_rect));
         egui::TextEdit::singleline(text)
             .id(id)
             .desired_width(inner_size.x)
@@ -641,13 +746,14 @@ pub fn modern_text_field_sized_with_layouter(
             .font(FontId::proportional(font_size))
             .char_limit(char_limit)
             .frame(egui::Frame::NONE)
+            .interactive(interactive)
             .horizontal_align(horizontal_align)
             .vertical_align(egui::Align::Center)
             .layouter(layouter)
             .show(ui)
     })
     .inner;
-    if output.response.hovered() {
+    if output.response.hovered() && interactive {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
     }
     output
@@ -659,6 +765,17 @@ fn paint_modern_text_field_frame(
     width: f32,
     height: f32,
     interactive: bool,
+) -> egui::Rect {
+    paint_modern_text_field_frame_with_fill(ui, id, width, height, interactive, None)
+}
+
+fn paint_modern_text_field_frame_with_fill(
+    ui: &mut Ui,
+    id: egui::Id,
+    width: f32,
+    height: f32,
+    interactive: bool,
+    fill_override: Option<Color32>,
 ) -> egui::Rect {
     let dark = ui.visuals().dark_mode;
     let field_size = Vec2::new(width, height);
@@ -684,7 +801,7 @@ fn paint_modern_text_field_frame(
     ui.painter().rect(
         field_rect,
         9.0,
-        field_fill,
+        fill_override.unwrap_or(field_fill),
         modal_outline_stroke(dark),
         egui::StrokeKind::Inside,
     );
@@ -745,23 +862,29 @@ pub fn modern_dropdown_button_sized(
         FontId::proportional(font_size),
         text_color,
     );
-    let chevron_y = dropdown_rect.center().y + 1.0;
-    let chevron_color = muted_text(dark);
-    ui.painter().line_segment(
-        [
-            egui::pos2(chevron_x - 4.5, chevron_y - 2.0),
-            egui::pos2(chevron_x, chevron_y + 2.5),
-        ],
-        Stroke::new(1.4_f32, chevron_color),
-    );
-    ui.painter().line_segment(
-        [
-            egui::pos2(chevron_x, chevron_y + 2.5),
-            egui::pos2(chevron_x + 4.5, chevron_y - 2.0),
-        ],
-        Stroke::new(1.4_f32, chevron_color),
+    paint_dropdown_chevron(
+        ui.painter(),
+        egui::pos2(chevron_x, dropdown_rect.center().y + 1.0),
+        muted_text(dark),
     );
     dropdown_resp
+}
+
+pub fn paint_dropdown_chevron(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
+    painter.line_segment(
+        [
+            egui::pos2(center.x - 4.5, center.y - 2.0),
+            egui::pos2(center.x, center.y + 2.5),
+        ],
+        Stroke::new(1.4_f32, color),
+    );
+    painter.line_segment(
+        [
+            egui::pos2(center.x, center.y + 2.5),
+            egui::pos2(center.x + 4.5, center.y - 2.0),
+        ],
+        Stroke::new(1.4_f32, color),
+    );
 }
 
 pub fn modern_dropdown_select_sized(
@@ -773,7 +896,6 @@ pub fn modern_dropdown_select_sized(
     height: f32,
     font_size: f32,
 ) -> (egui::Response, Option<usize>) {
-    let dark = ui.visuals().dark_mode;
     let selected_text = labels.get(selected).map(String::as_str).unwrap_or("");
     let dropdown_resp = modern_dropdown_button_sized(
         ui,
@@ -784,6 +906,37 @@ pub fn modern_dropdown_select_sized(
         height,
         font_size,
     );
+    let picked =
+        modern_dropdown_popup_options(ui, id, &dropdown_resp, labels, selected, width, font_size);
+    (dropdown_resp, picked)
+}
+
+/// Render the standard compact dropdown list under an existing custom trigger.
+pub fn modern_dropdown_popup_options(
+    ui: &mut Ui,
+    id: egui::Id,
+    trigger: &egui::Response,
+    labels: &[String],
+    selected: usize,
+    min_width: f32,
+    font_size: f32,
+) -> Option<usize> {
+    modern_dropdown_popup_options_with_max_height(
+        ui, id, trigger, labels, selected, min_width, font_size, 142.0,
+    )
+}
+
+/// Render the compact dropdown list with a caller-specific scroll viewport height.
+pub fn modern_dropdown_popup_options_with_max_height(
+    ui: &mut Ui,
+    id: egui::Id,
+    trigger: &egui::Response,
+    labels: &[String],
+    selected: usize,
+    min_width: f32,
+    font_size: f32,
+    viewport_max_height: f32,
+) -> Option<usize> {
     let option_font = FontId::proportional(font_size);
     let longest_label_width = labels
         .iter()
@@ -799,13 +952,13 @@ pub fn modern_dropdown_select_sized(
         })
         .fold(0.0_f32, f32::max);
     let popup_width = (longest_label_width + 24.0)
-        .max(width)
-        .min((ui.ctx().content_rect().width() - 24.0).max(width));
+        .max(min_width)
+        .min((ui.ctx().content_rect().width() - 24.0).max(min_width));
     let mut picked = None;
-    crate::ui_style::popup_below_widget_with_width(
+    popup_below_widget_with_width(
         ui,
         id,
-        &dropdown_resp,
+        trigger,
         egui::PopupCloseBehavior::CloseOnClickOutside,
         popup_width,
         |ui| {
@@ -813,7 +966,7 @@ pub fn modern_dropdown_select_sized(
             ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
             let option_height = 28.0;
             let max_height = (labels.len() as f32 * (option_height + 2.0))
-                .min(142.0)
+                .min(viewport_max_height)
                 .max(option_height);
             egui::ScrollArea::vertical()
                 .id_salt(("modern_dropdown_select_scroll", id))
@@ -821,36 +974,13 @@ pub fn modern_dropdown_select_sized(
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     for (idx, label) in labels.iter().enumerate() {
-                        let is_selected = idx == selected;
-                        let (option_rect, option_resp) = ui.allocate_exact_size(
-                            Vec2::new(popup_width, option_height),
-                            Sense::click(),
-                        );
-                        if option_resp.hovered() {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        }
-                        let option_fill = if is_selected {
-                            if dark {
-                                Color32::from_rgb(58, 58, 61)
-                            } else {
-                                Color32::from_rgb(236, 236, 238)
-                            }
-                        } else if option_resp.hovered() {
-                            hover_fill(dark)
-                        } else {
-                            Color32::TRANSPARENT
-                        };
-                        ui.painter().rect_filled(option_rect, 7.0, option_fill);
-                        ui.painter().text(
-                            egui::pos2(option_rect.left() + 10.0, option_rect.center().y),
-                            egui::Align2::LEFT_CENTER,
+                        let option_resp = modern_dropdown_option_row(
+                            ui,
                             label,
-                            option_font.clone(),
-                            if is_selected {
-                                ui.visuals().text_color()
-                            } else {
-                                muted_text(dark)
-                            },
+                            popup_width,
+                            &option_font,
+                            idx == selected,
+                            false,
                         );
                         if option_resp.clicked() {
                             picked = Some(idx);
@@ -860,7 +990,243 @@ pub fn modern_dropdown_select_sized(
                 });
         },
     );
-    (dropdown_resp, picked)
+    picked
+}
+
+fn modern_dropdown_option_row(
+    ui: &mut Ui,
+    label: &str,
+    width: f32,
+    font: &FontId,
+    selected: bool,
+    submenu: bool,
+) -> egui::Response {
+    let dark = ui.visuals().dark_mode;
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 28.0), Sense::click());
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let fill = if selected {
+        if dark {
+            Color32::from_rgb(58, 58, 61)
+        } else {
+            Color32::from_rgb(236, 236, 238)
+        }
+    } else if response.hovered() {
+        hover_fill(dark)
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, 7.0, fill);
+    ui.painter().text(
+        egui::pos2(rect.left() + 10.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font.clone(),
+        if selected {
+            ui.visuals().text_color()
+        } else {
+            muted_text(dark)
+        },
+    );
+    if submenu {
+        ui.painter().text(
+            egui::pos2(rect.right() - 10.0, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            "›",
+            FontId::proportional(18.0),
+            if selected || response.hovered() {
+                accent()
+            } else {
+                muted_text(dark)
+            },
+        );
+    }
+    response
+}
+
+/// Compact category menu with hover submenus, using the same rows as flat dropdowns.
+pub fn modern_dropdown_grouped_options(
+    ui: &mut Ui,
+    id: egui::Id,
+    trigger: &egui::Response,
+    default: &(String, String),
+    groups: &[(String, Vec<(String, String)>)],
+    selected_id: &str,
+    min_width: f32,
+    font_size: f32,
+) -> Option<String> {
+    modern_dropdown_grouped_options_with_action(
+        ui,
+        id,
+        trigger,
+        default,
+        groups,
+        selected_id,
+        min_width,
+        font_size,
+        None,
+    )
+    .and_then(|choice| match choice {
+        GroupedDropdownChoice::Item(id) => Some(id),
+        GroupedDropdownChoice::Action => None,
+    })
+}
+
+pub enum GroupedDropdownChoice {
+    Item(String),
+    Action,
+}
+
+/// Grouped menu with an optional fixed action below the category rows.
+pub fn modern_dropdown_grouped_options_with_action(
+    ui: &mut Ui,
+    id: egui::Id,
+    trigger: &egui::Response,
+    default: &(String, String),
+    groups: &[(String, Vec<(String, String)>)],
+    selected_id: &str,
+    min_width: f32,
+    font_size: f32,
+    action_label: Option<&str>,
+) -> Option<GroupedDropdownChoice> {
+    let font = FontId::proportional(font_size);
+    let max_label = std::iter::once(default.1.as_str())
+        .chain(groups.iter().map(|group| group.0.as_str()))
+        .chain(action_label)
+        .map(|label| {
+            ui.painter()
+                .layout_no_wrap(label.to_owned(), font.clone(), ui.visuals().text_color())
+                .size()
+                .x
+        })
+        .fold(0.0_f32, f32::max);
+    let width = (max_label + 42.0).max(min_width);
+    let mut picked = None;
+    let active_id = id.with("active_category");
+    let row_id = id.with("category_row_rect");
+    let child_id = id.with("category_submenu_rect");
+    if !egui::Popup::is_id_open(ui.ctx(), id) {
+        ui.ctx().data_mut(|d| {
+            d.remove::<usize>(active_id);
+            d.remove::<egui::Rect>(child_id);
+        });
+    }
+    popup_below_widget_with_width(
+        ui,
+        id,
+        trigger,
+        egui::PopupCloseBehavior::CloseOnClickOutside,
+        width,
+        |ui| {
+            ui.set_min_width(width);
+            ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
+            let default_response = modern_dropdown_option_row(
+                ui,
+                &default.1,
+                width,
+                &font,
+                selected_id == default.0,
+                false,
+            );
+            if default_response.clicked() {
+                picked = Some(GroupedDropdownChoice::Item(default.0.clone()));
+                egui::Popup::close_all(ui.ctx());
+            }
+            let previous = ui.ctx().data(|d| d.get_temp::<usize>(active_id));
+            let pointer = ui.ctx().input(|i| i.pointer.hover_pos());
+            let old_row = ui.ctx().data(|d| d.get_temp::<egui::Rect>(row_id));
+            let old_child = ui.ctx().data(|d| d.get_temp::<egui::Rect>(child_id));
+            let mut hovered = None;
+            let mut rows = Vec::with_capacity(groups.len());
+            for (index, (label, _)) in groups.iter().enumerate() {
+                let response = modern_dropdown_option_row(
+                    ui,
+                    label,
+                    width,
+                    &font,
+                    previous == Some(index),
+                    true,
+                );
+                if response.hovered() || response.clicked() {
+                    hovered = Some(index);
+                }
+                rows.push(response);
+            }
+            let active = hovered.or_else(|| {
+                previous.filter(|_| pointer_over_submenu_bridge(pointer, old_row, old_child))
+            });
+            if let Some(index) = active {
+                let (label, entries) = &groups[index];
+                let row = &rows[index];
+                let child_width = entries
+                    .iter()
+                    .map(|(_, name)| {
+                        ui.painter()
+                            .layout_no_wrap(name.clone(), font.clone(), ui.visuals().text_color())
+                            .size()
+                            .x
+                    })
+                    .fold(0.0_f32, f32::max)
+                    .max(min_width - 24.0)
+                    .min((ui.ctx().content_rect().width() - 48.0).max(min_width - 24.0))
+                    + 24.0;
+                let submenu = egui::Popup::from_response(row)
+                    .id(id.with(("category_submenu", index)))
+                    .open(true)
+                    .align(egui::RectAlign::RIGHT_START)
+                    // Layer operations offsets its submenu 8px past the parent
+                    // frame inset, then leaves a 4px gap from the frame edge.
+                    .gap(12.0)
+                    .width(child_width)
+                    .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
+                    .show(|ui| {
+                        ui.set_min_width(child_width);
+                        ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
+                        egui::ScrollArea::vertical()
+                            .id_salt(("modern_dropdown_category_scroll", id, label))
+                            .max_height((entries.len() as f32 * 30.0).min(300.0))
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                for (item_id, item_name) in entries {
+                                    let response = modern_dropdown_option_row(
+                                        ui,
+                                        item_name,
+                                        child_width,
+                                        &font,
+                                        selected_id == item_id,
+                                        false,
+                                    );
+                                    if response.clicked() {
+                                        picked = Some(GroupedDropdownChoice::Item(item_id.clone()));
+                                        egui::Popup::close_all(ui.ctx());
+                                    }
+                                }
+                            });
+                    });
+                ui.ctx().data_mut(|d| {
+                    d.insert_temp(active_id, index);
+                    d.insert_temp(row_id, row.rect);
+                    if let Some(submenu) = submenu {
+                        d.insert_temp(child_id, submenu.response.rect);
+                    }
+                });
+            } else {
+                ui.ctx().data_mut(|d| {
+                    d.remove::<usize>(active_id);
+                    d.remove::<egui::Rect>(child_id);
+                });
+            }
+            if let Some(label) = action_label {
+                ui.separator();
+                if modern_dropdown_option_row(ui, label, width, &font, false, false).clicked() {
+                    picked = Some(GroupedDropdownChoice::Action);
+                    egui::Popup::close_all(ui.ctx());
+                }
+            }
+        },
+    );
+    picked
 }
 
 pub fn modern_toggle_pill(
@@ -1204,6 +1570,14 @@ pub fn settings_list_row_with_tooltip(
     });
 }
 
+/// Place a read-only settings value against the right edge of its control slot.
+pub fn settings_value_label(ui: &mut Ui, text: egui::RichText) -> egui::Response {
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.add(egui::Label::new(text).truncate())
+    })
+    .inner
+}
+
 #[allow(dead_code)]
 pub fn settings_switch(ui: &mut Ui, checked: &mut bool) -> egui::Response {
     settings_switch_interactive(ui, checked, true)
@@ -1375,6 +1749,107 @@ fn settings_switch_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_rule_trigger_preview_is_click_only_and_clipped() {
+        let ctx = egui::Context::default();
+        let text = format!("shortcut\n{}", "suffix".repeat(40));
+        let rect = std::cell::Cell::new(egui::Rect::NOTHING);
+        let clicked = std::cell::Cell::new(false);
+        let frame = |events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 120.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let response = modern_text_preview_field_sized(
+                        ui,
+                        egui::Id::new("trigger-preview-test"),
+                        &text,
+                        82.0,
+                        32.0,
+                        "",
+                    );
+                    rect.set(response.rect);
+                    clicked.set(response.clicked());
+                },
+            )
+        };
+        let output = frame(Vec::new());
+        assert!(output
+            .shapes
+            .iter()
+            .filter(|shape| matches!(shape.shape, egui::Shape::Text(_)))
+            .all(|shape| shape.clip_rect.right() <= rect.get().right() + 0.1));
+        assert!(output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text)
+                if text.galley.job.text.contains("shortcut suffix")
+                    && text.galley.rows.len() == 1)
+        }));
+        let pos = rect.get().center();
+        let hovered = frame(vec![egui::Event::PointerMoved(pos)]);
+        assert_eq!(
+            hovered.platform_output.cursor_icon,
+            egui::CursorIcon::PointingHand
+        );
+        assert!(hovered.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Rect(frame)
+                if frame.rect == rect.get() && frame.fill == hover_fill(true))
+        }));
+        frame(vec![egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        }]);
+        frame(vec![egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }]);
+        assert!(clicked.get());
+        assert!(text.contains('\n'));
+    }
+
+    #[test]
+    fn expanded_multiline_field_has_no_gray_background() {
+        for visuals in [egui::Visuals::dark(), egui::Visuals::light()] {
+            let ctx = egui::Context::default();
+            ctx.set_visuals(visuals);
+            let mut text = "Text".to_owned();
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600.0, 400.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    modern_multiline_text_field_sized(
+                        ui,
+                        ui.make_persistent_id("expanded_rule_text"),
+                        &mut text,
+                        egui::vec2(420.0, 180.0),
+                        "Text",
+                        480,
+                    );
+                },
+            );
+            assert!(output.shapes.iter().any(|clipped| {
+                matches!(&clipped.shape, egui::Shape::Rect(rect)
+                    if (rect.rect.width() - 420.0).abs() < 0.1
+                        && (rect.rect.height() - 180.0).abs() < 0.1
+                        && rect.fill == Color32::TRANSPARENT)
+            }));
+        }
+    }
 
     fn switch_frame(
         ctx: &egui::Context,

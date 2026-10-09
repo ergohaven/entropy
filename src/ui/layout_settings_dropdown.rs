@@ -1,4 +1,3 @@
-use super::application_layout_runtime::app_layout_text;
 #[cfg(not(target_arch = "wasm32"))]
 use super::vial_hid_task::VialHidTaskStart;
 use super::*;
@@ -111,7 +110,6 @@ impl EntropyApp {
                     .any(|qsid| self.supported_qmk_settings.contains(qsid));
             let show_update_indicator = crate::app::update_available(&self.update_check);
             let show_matrix_item = self.firmware == FirmwareProtocol::Vial;
-            let show_application_layouts_item = self.application_layouts_supported();
             let is_unlocked = self.vial_unlocked == Some(true);
             #[cfg(not(target_arch = "wasm32"))]
             let vial_hid_idle = vial_lock_control_idle(
@@ -131,7 +129,6 @@ impl EntropyApp {
             let show_lock_item = lock_menu_state.visible;
             let default_lock_label = crate::i18n::tr_catalog(lang, "ui.unlock_keyboard_action");
             let settings_item_count = 2
-                + show_application_layouts_item as usize
                 + show_matrix_item as usize
                 + show_rgb_item as usize
                 + show_display_item as usize
@@ -159,18 +156,11 @@ impl EntropyApp {
                     + show_live_features_item as usize,
                 show_tap_hold_item as usize + show_magic_item as usize,
                 show_matrix_item as usize + show_lock_item as usize,
-                2 + show_application_layouts_item as usize,
+                2,
             ]);
             let divider_count = dividers.iter().filter(|shown| **shown).count();
             let dropdown_height = top_dropdown_height(settings_item_count, divider_count);
             let mut settings_menu_labels = vec![crate::i18n::tr(lang, TrKey::AppSettingsTitle)];
-            if show_application_layouts_item {
-                settings_menu_labels.push(app_layout_text(
-                    lang,
-                    "Раскладки приложений",
-                    "Application layouts",
-                ));
-            }
             if show_matrix_item {
                 settings_menu_labels.push(crate::i18n::tr(lang, TrKey::MatrixTesterTitle));
             }
@@ -243,7 +233,6 @@ impl EntropyApp {
                 let item_width = dropdown_rect.width() - 16.0;
                 let (
                     app_hovered,
-                    application_layouts_hovered,
                     matrix_hovered,
                     rgb_hovered,
                     display_hovered,
@@ -432,21 +421,6 @@ impl EntropyApp {
                             self.main_menu_tab == MainMenuTab::Settings
                                 && self.settings_tab == SettingsTab::AppSettings,
                         );
-                        let application_layouts_resp = show_application_layouts_item.then(|| {
-                            top_dropdown_icon_item(
-                                ui,
-                                item_width,
-                                TopMenuIcon::ApplicationLayouts,
-                                app_layout_text(
-                                    lang,
-                                    "Раскладки приложений",
-                                    "Application layouts",
-                                ),
-                                true,
-                                self.main_menu_tab == MainMenuTab::Settings
-                                    && self.settings_tab == SettingsTab::ApplicationLayouts,
-                            )
-                        });
                         let about_entropy_resp = top_dropdown_icon_item_with_indicator(
                             ui,
                             item_width,
@@ -460,14 +434,6 @@ impl EntropyApp {
                         if app_resp.clicked() {
                             self.close_top_dropdowns(ui.ctx());
                             self.open_app_settings_page();
-                        }
-                        if application_layouts_resp
-                            .as_ref()
-                            .map(|response| response.clicked())
-                            .unwrap_or(false)
-                        {
-                            self.close_top_dropdowns(ui.ctx());
-                            self.open_application_layouts_page();
                         }
                         if matrix_resp.as_ref().map(|r| r.clicked()).unwrap_or(false) {
                             self.close_top_dropdowns(ui.ctx());
@@ -581,10 +547,6 @@ impl EntropyApp {
                         }
                         (
                             app_resp.hovered(),
-                            application_layouts_resp
-                                .as_ref()
-                                .map(|response| response.hovered())
-                                .unwrap_or(false),
                             matrix_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
                             rgb_resp
                                 .as_ref()
@@ -618,10 +580,6 @@ impl EntropyApp {
                             lock_resp.as_ref().map(|r| r.hovered()).unwrap_or(false),
                             about_entropy_resp.hovered(),
                             app_resp.clicked()
-                                || application_layouts_resp
-                                    .as_ref()
-                                    .map(|response| response.clicked())
-                                    .unwrap_or(false)
                                 || matrix_resp.as_ref().map(|r| r.clicked()).unwrap_or(false)
                                 || rgb_resp
                                     .as_ref()
@@ -664,7 +622,6 @@ impl EntropyApp {
                         !settings_clicked
                             && (settings_tab_hovered
                                 || app_hovered
-                                || application_layouts_hovered
                                 || matrix_hovered
                                 || rgb_hovered
                                 || display_hovered

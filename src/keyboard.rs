@@ -250,6 +250,89 @@ fn parse_layout_condition_from_label(label: &str, align: usize) -> Option<Layout
     })
 }
 
+/// Vial descriptors may place alternatives beside or below the default layout.
+/// Align each option value's rotated bounds with value 0, as Vial GUI does.
+pub(crate) fn normalize_layout_option_positions(
+    keys: &mut [PhysicalKey],
+    encoders: &mut [PhysicalEncoder],
+) {
+    let mut origins = std::collections::BTreeMap::<(usize, u32), (f32, f32)>::new();
+    let items = keys
+        .iter()
+        .map(|key| {
+            (
+                key.layout_condition,
+                key.x,
+                key.y,
+                key.w,
+                key.h,
+                key.rotation,
+                key.rotation_x,
+                key.rotation_y,
+            )
+        })
+        .chain(encoders.iter().map(|encoder| {
+            (
+                encoder.layout_condition,
+                encoder.x,
+                encoder.y,
+                encoder.w,
+                encoder.h,
+                encoder.rotation,
+                encoder.rotation_x,
+                encoder.rotation_y,
+            )
+        }));
+    for (condition, x, y, w, h, rotation, anchor_x, anchor_y) in items {
+        let Some(condition) = condition else { continue };
+        let origin = origins
+            .entry((condition.option_idx, condition.value))
+            .or_insert((f32::MAX, f32::MAX));
+        let (sin, cos) = rotation.to_radians().sin_cos();
+        for (cx, cy) in [(x, y), (x + w, y), (x + w, y + h), (x, y + h)] {
+            let dx = cx - anchor_x;
+            let dy = cy - anchor_y;
+            origin.0 = origin.0.min(anchor_x + dx * cos - dy * sin);
+            origin.1 = origin.1.min(anchor_y + dx * sin + dy * cos);
+        }
+    }
+
+    let items = keys
+        .iter_mut()
+        .map(|key| {
+            (
+                key.layout_condition,
+                &mut key.x,
+                &mut key.y,
+                &mut key.rotation_x,
+                &mut key.rotation_y,
+            )
+        })
+        .chain(encoders.iter_mut().map(|encoder| {
+            (
+                encoder.layout_condition,
+                &mut encoder.x,
+                &mut encoder.y,
+                &mut encoder.rotation_x,
+                &mut encoder.rotation_y,
+            )
+        }));
+    for (condition, x, y, anchor_x, anchor_y) in items {
+        let Some(condition) = condition else { continue };
+        let Some(default) = origins.get(&(condition.option_idx, 0)) else {
+            // Without a reference group, keep the descriptor's placement.
+            continue;
+        };
+        let origin = origins[&(condition.option_idx, condition.value)];
+        let shift_x = default.0 - origin.0;
+        let shift_y = default.1 - origin.1;
+        *x += shift_x;
+        *y += shift_y;
+        *anchor_x += shift_x;
+        *anchor_y += shift_y;
+    }
+}
+
 fn parse_layer_name_value(value: &serde_json::Value) -> Option<String> {
     if let Some(name) = value.as_str() {
         let name = name.trim();
@@ -631,6 +714,8 @@ impl KeyboardLayout {
             cur_x = rotation_x;
         }
 
+        normalize_layout_option_positions(&mut keys, &mut encoders);
+
         let layer_names = parse_layer_names_from_json(json);
         let layout_options = parse_layout_options_from_json(json);
         let live_features = parse_live_features_from_json(json);
@@ -710,6 +795,178 @@ impl KeyboardLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vial_alternatives_align_horizontal_and_vertical_offsets_without_reordering_keys() {
+        let json = serde_json::json!({
+            "matrix": {"rows": 2, "cols": 3},
+            "layouts": {
+                "labels": ["Split Backspace", "Split second row"],
+                "keymap": [
+                    ["0,0", {"w": 2}, "0,1\n\n\n0,0",
+                        {"x": 1}, "0,1\n\n\n0,1", "0,2\n\n\n0,1"],
+                    ["1,0", {"w": 2}, "1,1\n\n\n1,0"],
+                    [{"y": 1}, "1,1\n\n\n1,1", "1,2\n\n\n1,1"]
+                ]
+            }
+        });
+        let layout = KeyboardLayout::from_vial_json(&json).unwrap();
+        let expected = [
+            (0, 0, 0.0, 0.0, 1.0),
+            (0, 1, 1.0, 0.0, 2.0),
+            (0, 1, 1.0, 0.0, 1.0),
+            (0, 2, 2.0, 0.0, 1.0),
+            (1, 0, 0.0, 1.0, 1.0),
+            (1, 1, 1.0, 1.0, 2.0),
+            (1, 1, 1.0, 1.0, 1.0),
+            (1, 2, 2.0, 1.0, 1.0),
+        ];
+        assert_eq!(layout.keys.len(), expected.len());
+        for (key, (row, col, x, y, w)) in layout.keys.iter().zip(expected) {
+            assert_eq!((key.row, key.col, key.x, key.y, key.w), (row, col, x, y, w));
+            assert_eq!(key.label, format!("{row},{col}"));
+        }
+        assert_eq!(
+            layout.keys[2].layout_condition,
+            Some(LayoutCondition {
+                option_idx: 0,
+                value: 1
+            })
+        );
+        assert_eq!(
+            layout.keys[6].layout_condition,
+            Some(LayoutCondition {
+                option_idx: 1,
+                value: 1
+            })
+        );
+        assert!(layout
+            .layers
+            .iter()
+            .all(|layer| layer.len() == expected.len()));
+    }
+
+    #[test]
+    fn vial_select_alternatives_share_the_default_origin_and_preserve_spacing() {
+        let json = serde_json::json!({
+            "matrix": {"rows": 1, "cols": 3},
+            "layouts": {
+                "labels": [["Bottom row", "Standard", "Split", "Compact"]],
+                "keymap": [
+                    [{"x": 2, "w": 3}, "0,0\n\n\n0,0"],
+                    [{"x": 8, "y": 2}, "0,0\n\n\n0,1", {"x": 0.25}, "0,1\n\n\n0,1"],
+                    [{"x": 5, "w": 1.5}, "0,2\n\n\n0,2"]
+                ]
+            }
+        });
+        let layout = KeyboardLayout::from_vial_json(&json).unwrap();
+        assert_eq!((layout.keys[0].x, layout.keys[0].y), (2.0, 0.0));
+        assert_eq!((layout.keys[1].x, layout.keys[1].y), (2.0, 0.0));
+        assert_eq!((layout.keys[2].x, layout.keys[2].y), (3.25, 0.0));
+        assert_eq!(
+            (layout.keys[3].x, layout.keys[3].y, layout.keys[3].w),
+            (2.0, 0.0, 1.5)
+        );
+    }
+
+    #[test]
+    fn vial_overlaid_alternatives_and_groups_without_a_default_keep_their_positions() {
+        let json = serde_json::json!({
+            "matrix": {"rows": 1, "cols": 3},
+            "layouts": {
+                "labels": ["Split", "No default"],
+                "keymap": [[
+                    "0,0", "0,1\n\n\n0,0", {"x": -1}, "0,1\n\n\n0,1",
+                    {"x": 4}, "0,2\n\n\n1,1"
+                ]]
+            }
+        });
+        let layout = KeyboardLayout::from_vial_json(&json).unwrap();
+        assert_eq!(
+            layout
+                .keys
+                .iter()
+                .map(|key| (key.x, key.y))
+                .collect::<Vec<_>>(),
+            vec![(0.0, 0.0), (1.0, 0.0), (1.0, 0.0), (6.0, 0.0)]
+        );
+    }
+
+    #[test]
+    fn vial_rotated_alternatives_use_key_and_encoder_bounds_and_move_rotation_anchors() {
+        let json = serde_json::json!({
+            "matrix": {"rows": 1, "cols": 1},
+            "layouts": {
+                "labels": ["Rotated option"],
+                "keymap": [
+                    [{"rx": 4, "ry": 2, "w": 2}, "0,0\n\n\n0,0", "0,0\n\n\n0,0\n\n\n\n\n\ne"],
+                    [{"r": 90, "rx": 10, "ry": 6, "w": 2}, "0,0\n\n\n0,1",
+                        {"h": 3}, "0,1\n\n\n0,1\n\n\n\n\n\ne"]
+                ]
+            }
+        });
+        let layout = KeyboardLayout::from_vial_json(&json).unwrap();
+        let key = &layout.keys[1];
+        let encoder = &layout.encoders[1];
+        // The tall encoder determines the rotated group's left edge (x=7),
+        // so the whole alternative moves by (-3, -4), not the key-only (-5, -4).
+        for (actual, expected) in [
+            (key.x, 7.0),
+            (key.y, 2.0),
+            (key.rotation_x, 7.0),
+            (key.rotation_y, 2.0),
+            (encoder.x, 9.0),
+            (encoder.y, 2.0),
+            (encoder.rotation_x, 7.0),
+            (encoder.rotation_y, 2.0),
+        ] {
+            assert!((actual - expected).abs() < 0.0001, "{actual} != {expected}");
+        }
+        assert_eq!(
+            (key.w, key.h, key.rotation, key.row, key.col),
+            (2.0, 1.0, 90.0, 0, 0)
+        );
+        assert_eq!(
+            (
+                encoder.w,
+                encoder.h,
+                encoder.rotation,
+                encoder.encoder_idx,
+                encoder.direction
+            ),
+            (1.0, 3.0, 90.0, 0, 1)
+        );
+        assert_eq!(
+            (
+                layout.keys[0].x,
+                layout.keys[0].y,
+                layout.keys[0].rotation_x,
+                layout.keys[0].rotation_y
+            ),
+            (4.0, 2.0, 4.0, 2.0)
+        );
+    }
+
+    #[test]
+    fn vial_encoder_only_alternatives_align_without_changing_encoder_identity() {
+        let json = serde_json::json!({
+            "matrix": {"rows": 1, "cols": 1},
+            "layouts": {
+                "labels": ["Encoder position"],
+                "keymap": [
+                    ["0,0", "1,0\n\n\n0,0\n\n\n\n\n\ne"],
+                    [{"x": 4, "y": 1}, "1,1\n\n\n0,1\n\n\n\n\n\ne"]
+                ]
+            }
+        });
+        let layout = KeyboardLayout::from_vial_json(&json).unwrap();
+        assert_eq!((layout.encoders[1].x, layout.encoders[1].y), (1.0, 0.0));
+        assert_eq!(
+            (layout.encoders[1].encoder_idx, layout.encoders[1].direction),
+            (1, 1)
+        );
+        assert_eq!((layout.keys[0].x, layout.keys[0].y), (0.0, 0.0));
+    }
 
     #[test]
     fn parses_entropy_live_features_from_vial_json() {

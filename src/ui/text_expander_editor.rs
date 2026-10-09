@@ -988,6 +988,7 @@ impl EntropyApp {
             };
             let mut rule = original_rule.clone();
             let mut delete_rule = false;
+            let mut edit_rule = None;
             let mut changed = false;
             let mut should_flush_save = false;
             let issue = self.text_expander_rule_issue(idx, &rule);
@@ -1069,15 +1070,13 @@ impl EntropyApp {
                     let mut trigger_resp = None;
                     crate::ui_style::allocate_ui_at_rect(ui, trigger_rect, |ui| {
                         trigger_resp = Some(
-                            crate::ui_style::modern_text_field_sized(
+                            crate::ui_style::modern_text_preview_field_sized(
                                 ui,
                                 ui.make_persistent_id(("text_expander_trigger", idx)),
-                                &mut rule.trigger,
+                                &rule.trigger,
                                 trigger_width,
                                 field_height,
                                 crate::i18n::tr_catalog(lang, "text_expander.trigger_hint"),
-                                32,
-                                egui::Align::Center,
                             )
                             .on_hover_text(crate::i18n::tr_catalog(
                                 lang,
@@ -1086,11 +1085,8 @@ impl EntropyApp {
                         );
                     });
                     if let Some(resp) = trigger_resp {
-                        if resp.changed() {
-                            changed = true;
-                        }
-                        if resp.lost_focus() {
-                            should_flush_save = true;
+                        if resp.clicked() {
+                            edit_rule = Some(TextExpanderRuleField::Trigger);
                         }
                     }
 
@@ -1098,14 +1094,13 @@ impl EntropyApp {
                     let mut replacement_resp = None;
                     crate::ui_style::allocate_ui_at_rect(ui, replacement_rect, |ui| {
                         replacement_resp = Some(
-                            super::text_expander_emoji::color_emoji_text_field(
+                            super::text_expander_emoji::color_emoji_preview_field(
                                 ui,
                                 replacement_id,
-                                &mut rule.replacement,
+                                &rule.replacement,
                                 replacement_width,
                                 field_height,
                                 crate::i18n::tr_catalog(lang, "text_expander.replacement_hint"),
-                                480,
                             )
                             .on_hover_text(crate::i18n::tr_catalog(
                                 lang,
@@ -1114,11 +1109,8 @@ impl EntropyApp {
                         );
                     });
                     if let Some(resp) = replacement_resp {
-                        if resp.changed() {
-                            changed = true;
-                        }
-                        if resp.lost_focus() {
-                            should_flush_save = true;
+                        if resp.clicked() {
+                            edit_rule = Some(TextExpanderRuleField::Replacement);
                         }
                     }
 
@@ -1138,14 +1130,7 @@ impl EntropyApp {
                     if let Some(emoji_resp) = emoji_resp {
                         if emoji_resp.clicked() {
                             let char_count = rule.replacement.chars().count();
-                            let range = egui::widgets::text_edit::TextEditState::load(
-                                ui.ctx(),
-                                replacement_id,
-                            )
-                            .and_then(|state| state.cursor.char_range())
-                            .map(|range| range.as_sorted_char_range())
-                            .unwrap_or(char_count..char_count);
-                            self.text_expander_emoji_target = Some((idx, range.start, range.end));
+                            self.text_expander_emoji_target = Some((idx, char_count, char_count));
                             if !egui::Popup::is_id_open(ui.ctx(), popup_id) {
                                 self.text_expander_emoji_search.clear();
                             }
@@ -1171,25 +1156,12 @@ impl EntropyApp {
                                     let end = rule.replacement.chars().count();
                                     (end, end)
                                 });
-                            let cursor = super::text_expander_emoji::insert_emoji_at_char_range(
+                            super::text_expander_emoji::insert_emoji_at_char_range(
                                 &mut rule.replacement,
                                 start,
                                 end,
                                 emoji,
                             );
-                            if let Some(mut state) = egui::widgets::text_edit::TextEditState::load(
-                                ui.ctx(),
-                                replacement_id,
-                            ) {
-                                state
-                                    .cursor
-                                    .set_char_range(Some(egui::text::CCursorRange::one(
-                                        egui::text::CCursor::new(cursor),
-                                    )));
-                                state.store(ui.ctx(), replacement_id);
-                            }
-                            ui.ctx()
-                                .memory_mut(|memory| memory.request_focus(replacement_id));
                             self.text_expander_emoji_target = None;
                             changed = true;
                             should_flush_save = true;
@@ -1207,7 +1179,20 @@ impl EntropyApp {
                 },
             );
 
+            if let Some(field) = edit_rule {
+                self.text_expander_rule_editor = Some((idx, field));
+                self.text_expander_rule_editor_focus_pending = true;
+                egui::Popup::close_all(ui.ctx());
+            }
+
             if delete_rule {
+                if let Some((open_idx, field)) = self.text_expander_rule_editor {
+                    if open_idx == idx {
+                        self.text_expander_rule_editor = None;
+                    } else if open_idx > idx {
+                        self.text_expander_rule_editor = Some((open_idx - 1, field));
+                    }
+                }
                 let removed_rule = self.app_settings.text_expansion_rules.remove(idx);
                 self.text_expander_deleted_rules.push((idx, removed_rule));
                 self.save_text_expander_settings();

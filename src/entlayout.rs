@@ -1046,14 +1046,15 @@ impl EntropyApp {
             self.app_settings.language,
             "entlayout.connect_target_keyboard",
         ))?;
-        let exact_layout = bundle.keyboard.layout_hash == entlayout_hash(layout)
-            && bundle.keyboard.layers == layout.layers.len()
+        let matching_geometry = (bundle.keyboard.layout_hash == entlayout_hash(layout)
+            || entlayout_matches_offset_alternatives(bundle, layout))
             && bundle_source_key_count(bundle) == layout.keys.len()
             && bundle_source_encoder_count(bundle) == layout.encoders.len();
+        let exact_layout = matching_geometry && bundle.keyboard.layers == layout.layers.len();
 
-        if exact_layout {
+        if matching_geometry {
             return Ok(EntLayoutImportMapping {
-                exact_layout: true,
+                exact_layout,
                 key_mapping: (0..bundle_source_key_count(bundle)).map(Some).collect(),
                 encoder_mapping: (0..bundle_source_encoder_count(bundle)).map(Some).collect(),
             });
@@ -2837,6 +2838,81 @@ fn entmacro_bytecode(macros: &EntMacroData) -> Result<Vec<Vec<u8>>> {
     }
 }
 
+/// Accept old offset-alternative backups only when their saved fingerprint and
+/// all identities still match, and alignment alone produces the target geometry.
+fn entlayout_matches_offset_alternatives(bundle: &EntLayoutFile, layout: &KeyboardLayout) -> bool {
+    let Some(source) = &bundle.data.source_layout else {
+        return false;
+    };
+    if source.keys.len() != layout.keys.len() || source.encoders.len() != layout.encoders.len() {
+        return false;
+    }
+    let mut aligned = layout.clone();
+    for (idx, (saved, key)) in source.keys.iter().zip(&mut aligned.keys).enumerate() {
+        if saved.index != idx
+            || (
+                saved.row,
+                saved.col,
+                saved.w,
+                saved.h,
+                saved.rotation,
+                &saved.label,
+            ) != (key.row, key.col, key.w, key.h, key.rotation, &key.label)
+        {
+            return false;
+        }
+        (key.x, key.y, key.rotation_x, key.rotation_y) =
+            (saved.x, saved.y, saved.rotation_x, saved.rotation_y);
+    }
+    for (idx, (saved, encoder)) in source
+        .encoders
+        .iter()
+        .zip(&mut aligned.encoders)
+        .enumerate()
+    {
+        if saved.visual_index != idx
+            || (
+                saved.encoder_idx,
+                saved.direction,
+                saved.w,
+                saved.h,
+                saved.rotation,
+                &saved.label,
+            ) != (
+                encoder.encoder_idx,
+                encoder.direction,
+                encoder.w,
+                encoder.h,
+                encoder.rotation,
+                &encoder.label,
+            )
+        {
+            return false;
+        }
+        (encoder.x, encoder.y, encoder.rotation_x, encoder.rotation_y) =
+            (saved.x, saved.y, saved.rotation_x, saved.rotation_y);
+    }
+    // Preserve the existing hash contract, including matrix and option metadata.
+    if entlayout_hash(&aligned) != bundle.keyboard.layout_hash {
+        return false;
+    }
+    crate::keyboard::normalize_layout_option_positions(&mut aligned.keys, &mut aligned.encoders);
+    let same_position =
+        |a: [f32; 4], b: [f32; 4]| a.into_iter().zip(b).all(|(a, b)| (a - b).abs() <= 0.0001);
+    // Rotated bounds can differ slightly between floating-point implementations.
+    aligned.keys.iter().zip(&layout.keys).all(|(a, b)| {
+        same_position(
+            [a.x, a.y, a.rotation_x, a.rotation_y],
+            [b.x, b.y, b.rotation_x, b.rotation_y],
+        )
+    }) && aligned.encoders.iter().zip(&layout.encoders).all(|(a, b)| {
+        same_position(
+            [a.x, a.y, a.rotation_x, a.rotation_y],
+            [b.x, b.y, b.rotation_x, b.rotation_y],
+        )
+    })
+}
+
 fn entlayout_hash(layout: &KeyboardLayout) -> String {
     let mut hash = 0xcbf29ce484222325u64;
     fn feed(hash: &mut u64, bytes: &[u8]) {
@@ -2901,6 +2977,108 @@ mod tests {
         ).unwrap();
         layout.layers = vec![vec![4u16.into(), 5u16.into(), 6u16.into()]];
         layout
+    }
+
+    fn offset_alternative_backup() -> (EntLayoutFile, KeyboardLayout) {
+        let json = serde_json::json!({
+            "matrix": {"rows": 1, "cols": 2},
+            "layouts": {
+                "labels": ["Rotated option"],
+                "keymap": [
+                    ["0,0", {"rx": 4, "ry": 2, "w": 2}, "0,1\n\n\n0,0",
+                        "0,0\n\n\n0,0\n\n\n\n\n\ne"],
+                    [{"r": 90, "rx": 10, "ry": 6, "w": 2}, "0,1\n\n\n0,1",
+                        {"h": 3}, "0,1\n\n\n0,1\n\n\n\n\n\ne"]
+                ]
+            }
+        });
+        let mut target = KeyboardLayout::from_vial_json(&json).unwrap();
+        target.layers = vec![vec![4.into(), 5.into(), 6.into()]];
+        target.encoder_layers = vec![vec![7, 8]];
+        let mut legacy = target.clone();
+        // Coordinates exported by the old parser, before option alignment.
+        let key = &mut legacy.keys[2];
+        (key.x, key.y, key.rotation_x, key.rotation_y) = (10.0, 6.0, 10.0, 6.0);
+        let encoder = &mut legacy.encoders[1];
+        (encoder.x, encoder.y, encoder.rotation_x, encoder.rotation_y) = (12.0, 6.0, 10.0, 6.0);
+        let mut app = EntropyApp::new_inert_for_test();
+        app.layout = Some(legacy);
+        app.layout_options_value = Some(1);
+        let serialized = serde_json::to_string(&app.entlayout_snapshot().unwrap()).unwrap();
+        (serde_json::from_str(&serialized).unwrap(), target)
+    }
+
+    #[test]
+    fn offset_alternative_backups_keep_exact_key_encoder_and_option_restore() {
+        let (bundle, target) = offset_alternative_backup();
+        assert_ne!(bundle.keyboard.layout_hash, entlayout_hash(&target));
+        assert_eq!(bundle.data.layout_options, Some(1));
+        let mut app = EntropyApp::new_inert_for_test();
+        app.layout = Some(target);
+        app.layout_options_value = Some(0);
+        let mapping = app.entlayout_import_mapping(&bundle).unwrap();
+        assert!(mapping.exact_layout);
+        assert_eq!(mapping.key_mapping, vec![Some(0), Some(1), Some(2)]);
+        assert_eq!(mapping.encoder_mapping, vec![Some(0), Some(1)]);
+        let report = app.entlayout_import_report(
+            &bundle,
+            Path::new("unused-backup.entlayout"),
+            &[],
+            &mapping,
+            &EntPortableSettingsImportReport::default(),
+        );
+        assert!(!report.contains(crate::i18n::tr_catalog(
+            app.app_settings.language,
+            "entlayout.layout_options_exact_only"
+        )));
+    }
+
+    #[test]
+    fn offset_alternative_backup_compatibility_rejects_other_layouts_and_missing_geometry() {
+        let (bundle, target) = offset_alternative_backup();
+        let mut app = EntropyApp::new_inert_for_test();
+        for change in 0..8 {
+            let mut other = target.clone();
+            match change {
+                0 => other.keys[0].x += 1.0,
+                1 => other.keys[2].col = 0,
+                2 => other.keys[2].w += 0.5,
+                3 => other.keys[2].rotation += 10.0,
+                4 => other.encoders[1].direction = 0,
+                5 => other.encoders[1].h += 0.5,
+                6 => other.layout_options[0].label = "Different option".into(),
+                _ => other.keys.swap(0, 1),
+            }
+            app.layout = Some(other);
+            assert!(
+                !app.entlayout_import_mapping(&bundle).unwrap().exact_layout,
+                "unrelated layout change {change} was accepted as exact"
+            );
+        }
+        app.layout = Some(target);
+        let mut missing = bundle.clone();
+        missing.data.source_layout = None;
+        assert!(!app.entlayout_import_mapping(&missing).unwrap().exact_layout);
+        let mut inconsistent = bundle;
+        inconsistent.data.source_layout.as_mut().unwrap().keys[2].x += 1.0;
+        assert!(
+            !app.entlayout_import_mapping(&inconsistent)
+                .unwrap()
+                .exact_layout
+        );
+    }
+
+    #[test]
+    fn offset_alternative_backups_keep_index_mapping_when_only_layer_count_changes() {
+        let (bundle, mut target) = offset_alternative_backup();
+        target.layers.push(vec![0.into(); target.keys.len()]);
+        target.encoder_layers.push(vec![0; target.encoders.len()]);
+        let mut app = EntropyApp::new_inert_for_test();
+        app.layout = Some(target);
+        let mapping = app.entlayout_import_mapping(&bundle).unwrap();
+        assert!(!mapping.exact_layout);
+        assert_eq!(mapping.key_mapping, vec![Some(0), Some(1), Some(2)]);
+        assert_eq!(mapping.encoder_mapping, vec![Some(0), Some(1)]);
     }
 
     #[test]

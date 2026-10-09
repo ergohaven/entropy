@@ -60,8 +60,14 @@ impl EntropyApp {
         let layout = application_layout.as_ref().unwrap_or(layout);
         let viewport = ui.max_rect();
         let avail = viewport.size();
-        let application_layout_selector_h = if self.application_layout_editor_active {
+        // Settings keep their vertical origin while the Layout-tab selector is hidden.
+        let application_layout_settings_reserve_h = if self.application_layout_editor_active {
             58.0
+        } else {
+            0.0
+        };
+        let application_layout_selector_h = if self.show_main_menu_application_layout_switcher() {
+            application_layout_settings_reserve_h
         } else {
             0.0
         };
@@ -115,7 +121,7 @@ impl EntropyApp {
         let layout_h = geometry.layout_h;
         let main_tabs_h = 32.0_f32;
         let layer_bar_h = 68.0_f32;
-        let top_reserved_h = LAYOUT_TOP_RESERVED_H + application_layout_selector_h;
+        let top_reserved_h = LAYOUT_TOP_RESERVED_H + application_layout_settings_reserve_h;
         let top_base_y = viewport.top() + 6.0;
         self.last_layout_geometry = Some((offset_x, offset_y, unit, padding));
 

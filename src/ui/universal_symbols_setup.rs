@@ -692,7 +692,7 @@ impl EntropyApp {
     /// Restarting the daemon can take a moment and can hang, so it runs on a
     /// worker thread; `poll_ibus_reload` picks the result up.
     #[cfg(target_os = "linux")]
-    fn start_linux_ibus_reload(&mut self) {
+    pub(super) fn start_linux_ibus_reload(&mut self) {
         if self.pending_ibus_reload.is_some() {
             return;
         }
@@ -820,6 +820,8 @@ impl EntropyApp {
             }
             Err(err) => err,
         };
+        // The worker may finish after the row has cached the old registration.
+        self.ibus_registration.invalidate();
         crate::smart_input::refresh_installed_ibus_backend();
         ctx.request_repaint();
     }

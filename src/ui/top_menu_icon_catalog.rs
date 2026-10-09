@@ -175,7 +175,7 @@ impl TopMenuIcon {
             TopMenuIcon::Lock => ("🔒", Service),
             TopMenuIcon::Unlock => ("🔓", Service),
             TopMenuIcon::AppSettings => ("⚙", Meta),
-            TopMenuIcon::ApplicationLayouts => ("▤", Meta),
+            TopMenuIcon::ApplicationLayouts => ("▤", HostTools),
             TopMenuIcon::AboutEntropy => ("🛈", Meta),
         }
     }
@@ -204,7 +204,8 @@ mod tests {
         TopMenuIcon::LayoutIndicator,
         TopMenuIcon::AboutDevice,
     ];
-    const ADVANCED_MENU_ICONS: [TopMenuIcon; 7] = [
+    const ADVANCED_MENU_ICONS: [TopMenuIcon; 8] = [
+        TopMenuIcon::ApplicationLayouts,
         TopMenuIcon::TextExpander,
         TopMenuIcon::TypingTrainer,
         TopMenuIcon::Macros,
@@ -213,7 +214,7 @@ mod tests {
         TopMenuIcon::AutoShift,
         TopMenuIcon::KeyOverrides,
     ];
-    const CONFIG_MENU_ICONS: [TopMenuIcon; 17] = [
+    const CONFIG_MENU_ICONS: [TopMenuIcon; 16] = [
         TopMenuIcon::Rgb,
         TopMenuIcon::LayerLeds,
         TopMenuIcon::Display,
@@ -229,7 +230,6 @@ mod tests {
         TopMenuIcon::Lock,
         TopMenuIcon::Unlock,
         TopMenuIcon::AppSettings,
-        TopMenuIcon::ApplicationLayouts,
         TopMenuIcon::AboutEntropy,
     ];
 

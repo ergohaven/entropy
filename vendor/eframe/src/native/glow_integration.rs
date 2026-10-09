@@ -49,6 +49,26 @@ use super::{
 };
 
 // ----------------------------------------------------------------------------
+// Window identity:
+
+fn create_window_attributes(
+    egui_ctx: &egui::Context,
+    builder: ViewportBuilder,
+) -> winit::window::WindowAttributes {
+    let attributes = egui_winit::create_winit_window_attributes(egui_ctx, builder.clone());
+    // egui-winit forwards app_id on Wayland but leaves X11 WM_CLASS to
+    // winit's argv[0] fallback. AppImage launch names must not rename the app.
+    #[cfg(all(feature = "x11", target_os = "linux"))]
+    {
+        use winit::platform::x11::WindowAttributesExtX11 as _;
+        if let Some(app_id) = builder.app_id.as_deref() {
+            return attributes.with_name(app_id, app_id);
+        }
+    }
+    attributes
+}
+
+// ----------------------------------------------------------------------------
 // Types:
 
 pub struct GlowWinitApp<'app> {
@@ -1065,7 +1085,7 @@ impl GlutinWindowContext {
             //
             // The justification for FallbackEgl over PreferEgl is at https://github.com/emilk/egui/pull/2526#issuecomment-1400229576 .
             .with_preference(glutin_winit::ApiPreference::FallbackEgl)
-            .with_window_attributes(Some(egui_winit::create_winit_window_attributes(
+            .with_window_attributes(Some(create_window_attributes(
                 egui_ctx,
                 viewport_builder.clone(),
             )));
@@ -1234,10 +1254,8 @@ impl GlutinWindowContext {
             window
         } else {
             log::debug!("Creating a window for viewport {viewport_id:?}");
-            let window_attributes = egui_winit::create_winit_window_attributes(
-                &self.egui_ctx,
-                viewport.builder.clone(),
-            );
+            let window_attributes =
+                create_window_attributes(&self.egui_ctx, viewport.builder.clone());
             if window_attributes.transparent()
                 && self.gl_config.supports_transparency() == Some(false)
             {

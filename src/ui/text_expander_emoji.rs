@@ -221,11 +221,41 @@ pub(super) fn color_emoji_text_field(
     hint: &str,
     char_limit: usize,
 ) -> egui::Response {
+    color_emoji_field(ui, id, text, width, height, hint, char_limit, true)
+}
+
+pub(super) fn color_emoji_preview_field(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    text: &str,
+    width: f32,
+    height: f32,
+    hint: &str,
+) -> egui::Response {
+    let mut display = text.replace(['\r', '\n'], " ");
+    color_emoji_field(ui, id, &mut display, width, height, hint, 480, false)
+}
+
+fn color_emoji_field(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    text: &mut String,
+    width: f32,
+    height: f32,
+    hint: &str,
+    char_limit: usize,
+    interactive: bool,
+) -> egui::Response {
+    let field_rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, height));
     let font_size = 12.5 * (height / 32.0).clamp(1.0, 1.3);
     let text_color = ui.visuals().text_color();
     let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, wrap_width: f32| {
         let mut job = egui::text::LayoutJob::default();
-        job.wrap.max_width = wrap_width;
+        job.wrap.max_width = if interactive {
+            wrap_width
+        } else {
+            f32::INFINITY
+        };
         job.break_on_newline = false;
         job.halign = egui::Align::Min;
 
@@ -268,10 +298,13 @@ pub(super) fn color_emoji_text_field(
         hint,
         char_limit,
         egui::Align::Min,
+        interactive,
         &mut layouter,
     );
 
-    let painter = ui.painter().with_clip_rect(output.text_clip_rect);
+    let painter = ui
+        .painter()
+        .with_clip_rect(output.text_clip_rect.intersect(field_rect));
     for (range, emoji) in emoji_render_spans(output.galley.job.text.as_str()) {
         let Some(glyph_rect) = galley_char_range_rect(&output.galley, output.galley_pos, range)
         else {
@@ -289,7 +322,15 @@ pub(super) fn color_emoji_text_field(
         );
     }
 
-    output.response.response
+    if interactive {
+        output.response.response
+    } else {
+        let response = ui.interact(field_rect, id.with("preview_click"), egui::Sense::click());
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        response
+    }
 }
 
 fn emoji_render_spans(text: &str) -> Vec<(std::ops::Range<usize>, &str)> {
@@ -481,6 +522,90 @@ mod tests {
             2
         );
         assert_eq!(text, "Text ☺️ and 👨‍👩‍👧‍👦");
+    }
+
+    #[test]
+    fn long_color_emoji_preview_clicks_without_overflow() {
+        let ctx = egui::Context::default();
+        let text = format!("🚀\n{}", "text ".repeat(80));
+        let rect = std::cell::Cell::new(egui::Rect::NOTHING);
+        let was_clicked = std::cell::Cell::new(false);
+        let frame = |events, rect: &std::cell::Cell<egui::Rect>| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 120.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let response = color_emoji_preview_field(
+                        ui,
+                        egui::Id::new("replacement-preview-test"),
+                        &text,
+                        120.0,
+                        32.0,
+                        "",
+                    );
+                    rect.set(response.rect);
+                    was_clicked.set(response.clicked());
+                },
+            )
+        };
+        let output = frame(Vec::new(), &rect);
+        let field = rect.get();
+        assert!(!was_clicked.get());
+        assert!(output
+            .shapes
+            .iter()
+            .filter(|shape| matches!(shape.shape, egui::Shape::Text(_)))
+            .all(|shape| shape.clip_rect.right() <= field.right() + 0.1));
+        assert!(output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Mesh(mesh)
+                if mesh.texture_id != egui::TextureId::default())
+                && shape.clip_rect.right() <= field.right() + 0.1
+        }));
+        assert!(output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text)
+                if text.galley.job.text.contains("🚀 text")
+                    && text.galley.rows.len() == 1)
+        }));
+
+        let pos = field.center();
+        let hovered = frame(vec![egui::Event::PointerMoved(pos)], &rect);
+        assert_eq!(
+            hovered.platform_output.cursor_icon,
+            egui::CursorIcon::PointingHand
+        );
+        assert!(hovered.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Rect(frame)
+                if frame.rect == field && frame.fill == crate::ui_style::hover_fill(true))
+        }));
+        frame(
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ],
+            &rect,
+        );
+        frame(
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+            &rect,
+        );
+        assert!(was_clicked.get());
+        assert_eq!(text.chars().count(), 402);
     }
 
     #[test]

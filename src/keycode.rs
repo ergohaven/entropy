@@ -1904,6 +1904,15 @@ pub fn normalize_output_symbol_keycode(value: u16) -> u16 {
     }
 }
 
+// Display aliases only: legacy codes must not enter the protocol-v6 picker table.
+fn tri_layer_keycode_layer(value: u16) -> Option<u16> {
+    match value {
+        0x5F10 | 0x7C77 => Some(1), // FN_MO13 (Vial v5 / v6)
+        0x5F11 | 0x7C78 => Some(2), // FN_MO23 (Vial v5 / v6)
+        _ => None,
+    }
+}
+
 pub fn find_keycode(value: u16) -> Option<&'static Keycode> {
     KEYCODES.iter().find(|k| k.value == value)
 }
@@ -2055,6 +2064,9 @@ pub fn keycode_label_with_names(
 
     if let Some(label) = magic_keycode_label(value) {
         return label;
+    }
+    if let Some(layer) = tri_layer_keycode_layer(value) {
+        return format!("Fn{layer}\n(Fn3)");
     }
     if let Some(kc) = find_keycode(value) {
         return kc.label.to_string();
@@ -2500,6 +2512,13 @@ pub fn keycode_tooltip(value: u16, custom: &[CustomKeycode], layer_names: &[Stri
     if let Some(tip) = magic_keycode_tooltip(value) {
         return tip;
     }
+    if let Some(layer) = tri_layer_keycode_layer(value) {
+        return format!(
+            "Fn{layer} (Fn3) — activate {} while held; hold Fn1 and Fn2 together to activate {}",
+            layer_display(layer),
+            layer_display(3)
+        );
+    }
     // ── One-shot mod: 0x52A0..=0x52BF (Vial protocol v6) ─────────────────────
     if let Some(bits) = osm_mod_bits(value) {
         let full_name = modifier_full_name_from_bits(bits);
@@ -2870,6 +2889,57 @@ fn simple_key_tooltip(kc: &Keycode) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tri_layer_legends_recognize_legacy_and_current_vial_assignments() {
+        for (value, expected) in [
+            (0x5F10, "Fn1\n(Fn3)"),
+            (0x5F11, "Fn2\n(Fn3)"),
+            (0x7C77, "Fn1\n(Fn3)"),
+            (0x7C78, "Fn2\n(Fn3)"),
+        ] {
+            for layout in [KeyLegendLayout::English, KeyLegendLayout::RussianPrimary] {
+                assert_eq!(
+                    keycode_label_with_names_and_layout(value, &[], &[], layout),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tri_layer_tooltips_describe_the_held_and_combined_layers() {
+        let names = vec![
+            "Base".into(),
+            "Lower".into(),
+            "Raise".into(),
+            "Adjust".into(),
+        ];
+        for (value, layer, name) in [
+            (0x5F10, 1, "Lower"),
+            (0x5F11, 2, "Raise"),
+            (0x7C77, 1, "Lower"),
+            (0x7C78, 2, "Raise"),
+        ] {
+            assert_eq!(keycode_tooltip(value, &[], &[]),
+                format!("Fn{layer} (Fn3) — activate layer {layer} while held; hold Fn1 and Fn2 together to activate layer 3"));
+            assert_eq!(keycode_tooltip(value, &[], &names),
+                format!("Fn{layer} (Fn3) — activate \"{name}\" ({layer}) while held; hold Fn1 and Fn2 together to activate \"Adjust\" (3)"));
+        }
+    }
+
+    #[test]
+    fn tri_layer_display_preserves_raw_bindings_and_does_not_add_picker_aliases() {
+        for value in [0x5F10, 0x5F11, 0x7C77, 0x7C78] {
+            let binding = crate::keyboard::KeyBinding::Vial(value);
+            let _ = keycode_label_with_names(value, &[], &[]);
+            let _ = keycode_tooltip(value, &[], &[]);
+            let json = serde_json::to_string(&binding).unwrap();
+            let restored: crate::keyboard::KeyBinding = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored.vial_keycode(), value);
+            assert!(find_keycode(value).is_none());
+        }
+    }
 
     #[test]
     fn macos_gui_legends_use_cmd_text() {

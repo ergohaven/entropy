@@ -3288,6 +3288,12 @@ pub(crate) enum ComboPickField {
     Output,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum TextExpanderRuleField {
+    Trigger,
+    Replacement,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsTab {
     AppSettings,
@@ -5256,9 +5262,13 @@ pub struct EntropyApp {
     pub(crate) application_picker_target_layout_id: Option<String>,
     pub(crate) application_picker_search: String,
     pub(crate) application_picker_selected: Option<crate::application_layouts::DetectedApplication>,
-    pub(crate) application_layout_rename_focus_requested: bool,
-    pub(crate) application_layout_rename_target_id: Option<String>,
-    pub(crate) application_layout_rename_value: String,
+    pub(crate) application_picker_name: String,
+    pub(crate) application_picker_category: crate::application_layouts::ApplicationLayoutCategory,
+    pub(crate) application_picker_category_changed: bool,
+    pub(crate) application_picker_custom_category_id: Option<String>,
+    pub(crate) application_categories_open: bool,
+    pub(crate) application_categories_selected_id: Option<String>,
+    pub(crate) application_categories_name: String,
     /// Current firmware type (mirrors layout.firmware)
     pub(crate) firmware: FirmwareProtocol,
     /// QMK setting ids the connected firmware exposes (from the connect probe).
@@ -5372,6 +5382,8 @@ pub struct EntropyApp {
     pub(crate) key_override_visible_count: usize,
     pub(crate) key_override_undo_stack: Vec<(Vec<KeyOverrideEntry>, Vec<String>, usize, usize)>,
     pub(crate) text_expander_deleted_rules: Vec<(usize, crate::text_expander::TextExpansionRule)>,
+    pub(crate) text_expander_rule_editor: Option<(usize, TextExpanderRuleField)>,
+    pub(crate) text_expander_rule_editor_focus_pending: bool,
     pub(crate) text_expander_emoji_search: String,
     pub(crate) text_expander_emoji_group: usize,
     pub(crate) text_expander_emoji_target: Option<(usize, usize, usize)>,

@@ -1,5 +1,6 @@
 use super::layer_operations::LAYER_OPERATIONS_SUBMENU_HEIGHT;
 use super::*;
+use crate::ui_style::pointer_over_submenu_bridge as pointer_over_layer_operations_bridge;
 
 const LAYER_OPERATIONS_SUBMENU_GAP: f32 = 4.0;
 
@@ -19,31 +20,6 @@ fn layer_operations_submenu_rect(
     let max_y = (content_rect.bottom() - submenu_size.y - 4.0).max(content_rect.top() + 4.0);
     let y = preferred_y.clamp(content_rect.top() + 4.0, max_y);
     egui::Rect::from_min_size(egui::pos2(x, y), submenu_size)
-}
-
-fn pointer_over_layer_operations_bridge(
-    pointer: Option<egui::Pos2>,
-    row_rect: Option<egui::Rect>,
-    submenu_rect: Option<egui::Rect>,
-) -> bool {
-    let (Some(pointer), Some(row_rect), Some(submenu_rect)) = (pointer, row_rect, submenu_rect)
-    else {
-        return false;
-    };
-    let connector = if submenu_rect.left() >= row_rect.right() {
-        egui::Rect::from_min_max(
-            egui::pos2(row_rect.right() - 1.0, row_rect.top() - 3.0),
-            egui::pos2(submenu_rect.left() + 1.0, row_rect.bottom() + 3.0),
-        )
-    } else {
-        egui::Rect::from_min_max(
-            egui::pos2(submenu_rect.right() - 1.0, row_rect.top() - 3.0),
-            egui::pos2(row_rect.left() + 1.0, row_rect.bottom() + 3.0),
-        )
-    };
-    row_rect.expand(3.0).contains(pointer)
-        || submenu_rect.expand(3.0).contains(pointer)
-        || connector.contains(pointer)
 }
 
 fn entlayout_import_label(lang: crate::i18n::Language) -> &'static str {

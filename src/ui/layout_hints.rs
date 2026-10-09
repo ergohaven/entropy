@@ -158,6 +158,7 @@ impl EntropyApp {
         ui: &mut egui::Ui,
         center_x: f32,
         layer_name_hovered: bool,
+        application_selector_hovered: bool,
     ) {
         // Hint text below layer name
         let hint_color = if self.dark_mode {
@@ -181,6 +182,20 @@ impl EntropyApp {
                 hint_color,
                 self.app_settings.language,
                 false,
+            );
+            return;
+        }
+        if application_selector_hovered {
+            ui.painter().text(
+                egui::pos2(center_x, hint_y),
+                egui::Align2::CENTER_CENTER,
+                super::application_layout_runtime::app_layout_text(
+                    self.app_settings.language,
+                    "Выбрать раскладку или настроить Автослой",
+                    "Select a layout or configure Autolayer",
+                ),
+                hint_font,
+                hint_color,
             );
             return;
         }
@@ -504,6 +519,24 @@ mod tests {
             }
             .keys(false),
             &["key_hints.change_key", CLEAR_KEY]
+        );
+    }
+
+    #[test]
+    fn visibility_edit_hint_mentions_only_keys_in_both_languages() {
+        assert_eq!(
+            crate::i18n::tr_catalog(
+                crate::i18n::Language::English,
+                "key_hints.show_hide_keys_click",
+            ),
+            "Left click a key to show or hide it",
+        );
+        assert_eq!(
+            crate::i18n::tr_catalog(
+                crate::i18n::Language::Russian,
+                "key_hints.show_hide_keys_click",
+            ),
+            "ЛКМ по клавише — показать или скрыть",
         );
     }
 }
