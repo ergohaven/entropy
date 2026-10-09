@@ -7,7 +7,10 @@ VERIFY="$ROOT/scripts/verify_sha256.sh"
 # shellcheck disable=SC1091
 source "$ROOT/scripts/appimagetool_pin.sh"
 
-TMP_DIR="$(mktemp -d)"
+# Песочница внутри target/: сборка пишет только в сборочные каталоги
+# репозитория, и сценарии в /tmp она отвергла бы.
+mkdir -p "$ROOT/target"
+TMP_DIR="$(mktemp -d "$ROOT/target/appimage-test.XXXXXX")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 hash_file() {
@@ -27,9 +30,15 @@ curl --connect-timeout 30 --max-time 300 -fsSL \
 STUB_BIN="$TMP_DIR/bin"
 mkdir -p "$STUB_BIN"
 
+# cargo build идёт между проверкой путей и публикацией образа — в этом окне
+# сценарий подменяет каталог симлинком.
 cat > "$STUB_BIN/cargo" <<'EOF'
 #!/usr/bin/env bash
-exit 0
+set -euo pipefail
+if [[ -n "${CARGO_STUB_SWAP:-}" ]]; then
+  rm -rf "$CARGO_STUB_SWAP"
+  ln -s "$CARGO_STUB_SWAP_TO" "$CARGO_STUB_SWAP"
+fi
 EOF
 
 cat > "$STUB_BIN/install" <<'EOF'
@@ -60,10 +69,23 @@ EOF
 
 chmod 0755 "$STUB_BIN/cargo" "$STUB_BIN/install" "$STUB_BIN/curl"
 
+# Сборка распаковывает appimagetool и запускает squashfs-root/AppRun, а
+# mksquashfs ищется в usr/lib/appimagekit — фейк повторяет эту раскладку и
+# записывает аргументы, с которыми до mksquashfs дошёл вызов.
 TRUSTED_TOOL="$TMP_DIR/trusted-tool"
 cat > "$TRUSTED_TOOL" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${1:-}" == "--appimage-extract" ]]; then
+  mkdir -p squashfs-root/usr/lib/appimagekit
+  cp "$0" squashfs-root/AppRun
+  cat > squashfs-root/usr/lib/appimagekit/mksquashfs <<'MKSQUASHFS'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$APPIMAGETOOL_MKSQUASHFS_ARGS"
+MKSQUASHFS
+  chmod 0755 squashfs-root/AppRun squashfs-root/usr/lib/appimagekit/mksquashfs
+  exit 0
+fi
 printf 'ran\n' > "$APPIMAGETOOL_RUN_MARKER"
 compression=""
 positionals=()
@@ -82,6 +104,7 @@ done
 [[ "$compression" == "xz" ]]
 [[ ${#positionals[@]} -eq 2 ]]
 [[ -d "${positionals[0]}" ]]
+"$(dirname "$0")/usr/lib/appimagekit/mksquashfs" "${positionals[@]}"
 : > "${positionals[1]}"
 EOF
 chmod 0755 "$TRUSTED_TOOL"
@@ -98,15 +121,18 @@ run_build() {
 
   mkdir -p "$scenario"
   PATH="$STUB_BIN:$PATH" \
-    APPDIR="$scenario/Entropy.AppDir" \
     APPIMAGETOOL="$tool" \
     APPIMAGETOOL_URL="https://example.invalid/appimagetool" \
     APPIMAGETOOL_SHA256="$TRUSTED_SHA256" \
     APPIMAGETOOL_FIXTURE="$fixture" \
     APPIMAGETOOL_CURL_MARKER="$scenario/curl-called" \
     APPIMAGETOOL_RUN_MARKER="$scenario/tool-ran" \
+    APPIMAGETOOL_MKSQUASHFS_ARGS="$scenario/mksquashfs-args" \
     "$BUILD" vtest "$output"
 }
+
+sandboxes() { compgen -G "$ROOT/target/appimage/build.*" || true; }
+SANDBOXES_BEFORE="$(sandboxes)"
 
 FRESH_VALID="$TMP_DIR/fresh-valid"
 run_build "$FRESH_VALID" "$TRUSTED_TOOL"
@@ -114,6 +140,9 @@ run_build "$FRESH_VALID" "$TRUSTED_TOOL"
 [[ -f "$FRESH_VALID/curl-called" ]]
 [[ -f "$FRESH_VALID/tool-ran" ]]
 [[ -f "$FRESH_VALID/entropy.AppImage" ]]
+# Многопоточный mksquashfs 4.3 делает образ невоспроизводимым.
+[[ "$(<"$FRESH_VALID/mksquashfs-args")" == *" -processors 1" ]]
+[[ "$(sandboxes)" == "$SANDBOXES_BEFORE" ]]
 
 FRESH_CORRUPT="$TMP_DIR/fresh-corrupt"
 mkdir -p "$FRESH_CORRUPT"
@@ -148,5 +177,95 @@ fi
 [[ "$(<"$CACHED_CORRUPT/stderr")" == *"SHA-256 mismatch"* ]]
 [[ ! -e "$CACHED_CORRUPT/curl-called" ]]
 [[ ! -e "$CACHED_CORRUPT/tool-ran" ]]
+
+# OUT приезжает снаружи: всё, что после канонизации уходит из target/, dist/ и
+# .cache/, должно отвергаться, какими бы ни были TMPDIR и DIST. Приманки лежат
+# там, куда раньше дотягивались доверенные вызывающим корни: в общем /tmp и в
+# неотслеживаемом каталоге репозитория.
+ALLOWED="$TMP_DIR/allowed"
+OUTSIDE="$(mktemp -d)"
+REPO_DECOY="$(mktemp -d "$ROOT/.appimage-decoy.XXXXXX")"
+trap 'rm -rf "$TMP_DIR" "$OUTSIDE" "$REPO_DECOY"' EXIT
+mkdir -p "$ALLOWED" "$OUTSIDE/appdir" "$REPO_DECOY/appdir"
+: > "$OUTSIDE/appdir/keep"
+: > "$REPO_DECOY/appdir/keep"
+ln -s "$OUTSIDE" "$ALLOWED/escape"
+
+VALID_OUT="$ALLOWED/entropy.AppImage"
+
+# guarded_build <OUT> [VAR=значение ...] — остальное окружение валидное,
+# TMPDIR и DIST по умолчанию сняты.
+guarded_build() {
+  local out="$1"
+  shift
+
+  env -u TMPDIR -u DIST \
+    PATH="$STUB_BIN:$PATH" \
+    APPIMAGETOOL="$ALLOWED/appimagetool" \
+    APPIMAGETOOL_URL="https://example.invalid/appimagetool" \
+    APPIMAGETOOL_SHA256="$TRUSTED_SHA256" \
+    APPIMAGETOOL_FIXTURE="$TRUSTED_TOOL" \
+    APPIMAGETOOL_CURL_MARKER="$TMP_DIR/curl-called" \
+    APPIMAGETOOL_RUN_MARKER="$TMP_DIR/tool-ran" \
+    APPIMAGETOOL_MKSQUASHFS_ARGS="$TMP_DIR/mksquashfs-args" \
+    "$@" \
+    "$BUILD" vtest "$out"
+}
+
+decoys_survive() {
+  if [[ ! -f "$OUTSIDE/appdir/keep" || ! -f "$REPO_DECOY/appdir/keep" ]]; then
+    echo "$1 removed files outside the build directories" >&2
+    exit 1
+  fi
+}
+
+reject_path() {
+  local label="$1" out="$2"
+  local stderr="$TMP_DIR/stderr"
+  shift 2
+
+  if guarded_build "$out" "$@" 2> "$stderr"; then
+    echo "Expected $label to be rejected" >&2
+    exit 1
+  fi
+  if ! grep -q "outside" "$stderr"; then
+    cat "$stderr" >&2
+    echo "Expected a path validation error for $label" >&2
+    exit 1
+  fi
+  decoys_survive "$label"
+}
+
+reject_path "an OUT in /tmp with TMPDIR unset" "$OUTSIDE/appdir"
+reject_path "an OUT under an overridden TMPDIR" "$OUTSIDE/appdir" TMPDIR="$OUTSIDE"
+reject_path "an OUT in the repository with DIST=." "$REPO_DECOY/appdir" DIST=.
+reject_path "a parent-traversing OUT" "$ROOT/target/../$(basename "$REPO_DECOY")/appdir"
+reject_path "an OUT escaping through a symlink" "$ALLOWED/escape/appdir"
+reject_path "the repository root as OUT" "$ROOT"
+reject_path "the build root itself as OUT" "$ROOT/target"
+reject_path "a tool download outside the build directories" "$VALID_OUT" \
+  APPIMAGETOOL="$OUTSIDE/appimagetool"
+[[ ! -e "$OUTSIDE/appimagetool" ]]
+
+# APPDIR из окружения больше не читается: унаследованное значение ничего не
+# удаляет и сборке не мешает.
+guarded_build "$VALID_OUT" APPDIR="$OUTSIDE/appdir"
+[[ -f "$VALID_OUT" ]]
+decoys_survive "an inherited APPDIR"
+
+# Подмена предка после проверки: пока идёт «cargo build», каталог внутри
+# target/ становится симлинком наружу. Прежний `rm -rf "$OUT"` сносил по нему
+# чужой каталог; теперь по OUT делается один rename, а он каталог не заменит.
+SWAP="$ALLOWED/swap"
+mkdir -p "$SWAP" "$OUTSIDE/entropy.AppImage"
+: > "$OUTSIDE/entropy.AppImage/keep"
+if guarded_build "$SWAP/entropy.AppImage" \
+  CARGO_STUB_SWAP="$SWAP" CARGO_STUB_SWAP_TO="$OUTSIDE" 2> "$TMP_DIR/stderr"; then
+  echo "Expected the build to refuse replacing a directory with its output" >&2
+  exit 1
+fi
+[[ -L "$SWAP" ]]
+[[ -f "$OUTSIDE/entropy.AppImage/keep" ]]
+decoys_survive "an ancestor swapped for a symlink after validation"
 
 echo "AppImage tool integration tests passed"
