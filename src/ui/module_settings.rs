@@ -145,7 +145,106 @@ enum ModuleSettingsRow {
     Field { group_idx: usize, field_idx: usize },
 }
 
+// Vial's K:03 tabs are per encoder, but the general module parser coalesces them
+// by side. Their field titles retain the side-local encoder number.
+pub(super) fn fixed_encoder_side_size(layout: &KeyboardLayout) -> Option<usize> {
+    let name = layout
+        .name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    match name.as_str() {
+        "k03" | "ergohavenk03" => Some(3),
+        "imperial44" | "ergohavenimperial44" => Some(1),
+        _ => None,
+    }
+}
+
+pub(super) fn fixed_encoder_field_number(title: &str, side_size: usize) -> Option<usize> {
+    let words = title.split_whitespace().collect::<Vec<_>>();
+    match words.as_slice() {
+        [encoder, number, setting]
+            if side_size == 3
+                && encoder.eq_ignore_ascii_case("encoder")
+                && matches!(setting.to_ascii_lowercase().as_str(), "interval" | "steps") =>
+        {
+            number
+                .parse::<usize>()
+                .ok()
+                .filter(|n| (1..=side_size).contains(n))
+        }
+        [encoder, setting]
+            if side_size == 1
+                && encoder.eq_ignore_ascii_case("encoder")
+                && matches!(setting.to_ascii_lowercase().as_str(), "interval" | "steps") =>
+        {
+            Some(1)
+        }
+        _ => None,
+    }
+}
+
 impl EntropyApp {
+    // Never move a real module selector (K:04) or a mixed module page.
+    pub(super) fn encoder_only_module_settings(&self, layout: &KeyboardLayout) -> bool {
+        let Some(side_size) = fixed_encoder_side_size(layout) else {
+            return false;
+        };
+        if !self.module_settings.supported || layout.encoder_count() != side_size * 2 {
+            return false;
+        }
+        let mut qsids = std::collections::BTreeSet::new();
+        for group in &self.module_settings.groups {
+            let base = match group.kind {
+                ModuleSettingsGroupKind::Left => 0,
+                ModuleSettingsGroupKind::Right => side_size,
+                _ => return false,
+            };
+            for field in &group.fields {
+                let Some(number) = fixed_encoder_field_number(
+                    group.kind.field_base_title(&field.title),
+                    side_size,
+                ) else {
+                    return false;
+                };
+                let offset = if field.title.to_ascii_lowercase().ends_with(" interval") {
+                    0
+                } else {
+                    1
+                };
+                if field.qsid != 340 + (2 * (base + number - 1) + offset) as u16
+                    || !qsids.insert(field.qsid)
+                {
+                    return false;
+                }
+            }
+        }
+        qsids.len() == side_size * 4
+    }
+
+    // Before the first shared write, older firmware may hold distinct values.
+    // Do not show the first encoder's value as if it applied to every encoder.
+    fn shared_encoder_values_mixed(&self, qsid: u16) -> bool {
+        let Some(layout) = self.layout.as_ref() else {
+            return false;
+        };
+        if !self.encoder_only_module_settings(layout) {
+            return false;
+        }
+        let count = fixed_encoder_side_size(layout).unwrap_or(0) * 2;
+        let parity = qsid.saturating_sub(340) % 2;
+        let mut values = (0..count).map(|idx| {
+            let id = 340 + (idx * 2) as u16 + parity;
+            self.pending_settings_write_value(id)
+                .unwrap_or_else(|| self.module_settings.value(id))
+        });
+        let Some(first) = values.next() else {
+            return false;
+        };
+        values.any(|value| value != first)
+    }
+
     pub(super) fn module_settings_title_key(&self) -> &'static str {
         if self.module_settings.is_trackball_page() {
             "modules_settings.trackball_title"
@@ -165,6 +264,22 @@ impl EntropyApp {
     fn module_setting_label(&self, group_kind: ModuleSettingsGroupKind, title: &str) -> String {
         let lang = self.app_settings.language;
         let display_title = group_kind.field_base_title(title);
+        if self
+            .layout
+            .as_ref()
+            .is_some_and(|layout| self.encoder_only_module_settings(layout))
+        {
+            let key = if display_title.to_ascii_lowercase().ends_with(" interval") {
+                Some("modules_settings.encoder_interval")
+            } else if display_title.to_ascii_lowercase().ends_with(" steps") {
+                Some("modules_settings.encoder_steps")
+            } else {
+                None
+            };
+            if let Some(key) = key {
+                return crate::i18n::tr_catalog(lang, key).to_owned();
+            }
+        }
         module_setting_catalog_keys(display_title)
             .map(|(label_key, _)| crate::i18n::tr_catalog(lang, label_key).to_owned())
             .unwrap_or_else(|| crate::i18n::tr_text(lang, display_title))
@@ -177,7 +292,22 @@ impl EntropyApp {
     ) -> String {
         let lang = self.app_settings.language;
         let display_title = group_kind.field_base_title(&field.title);
-        let key = module_setting_catalog_keys(display_title)
+        let base_title = if self
+            .layout
+            .as_ref()
+            .is_some_and(|layout| self.encoder_only_module_settings(layout))
+        {
+            if display_title.to_ascii_lowercase().ends_with(" interval") {
+                "Encoder interval"
+            } else if display_title.to_ascii_lowercase().ends_with(" steps") {
+                "Encoder steps"
+            } else {
+                display_title
+            }
+        } else {
+            display_title
+        };
+        let key = module_setting_catalog_keys(base_title)
             .map(|(_, tooltip_key)| tooltip_key)
             .unwrap_or("modules_settings.generic_tooltip");
         let field_label = self.module_setting_label(group_kind, &field.title);
@@ -198,6 +328,62 @@ impl EntropyApp {
         field: &ModuleSettingField,
         value: u16,
     ) {
+        // K:03 and Imperial44 expose per-encoder QSIDs in firmware. One UI
+        // control must update every encoder, including hidden ones on both halves.
+        if let Some(layout) = self.layout.as_ref() {
+            if self.encoder_only_module_settings(layout) {
+                let side_size = fixed_encoder_side_size(layout).expect("fixed encoder model");
+                let selected_title = self
+                    .module_settings
+                    .groups
+                    .get(group_idx)
+                    .map(|group| group.kind.field_base_title(&field.title));
+                let offset = match selected_title.and_then(|title| title.split_whitespace().last())
+                {
+                    Some(setting) if setting.eq_ignore_ascii_case("interval") => Some(0),
+                    Some(setting) if setting.eq_ignore_ascii_case("steps") => Some(1),
+                    _ => None,
+                };
+                if let Some(offset) = offset {
+                    let targets = self
+                        .module_settings
+                        .groups
+                        .iter()
+                        .flat_map(|group| {
+                            group.fields.iter().filter_map(move |target| {
+                                let qsid = target.qsid;
+                                let slot = (qsid.checked_sub(340)? as usize) / 2;
+                                (slot < side_size * 2 && qsid == 340 + (slot * 2 + offset) as u16)
+                                    .then(|| (group.title.clone(), target.clone()))
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    for (group_title, target) in targets {
+                        let requested = Self::module_setting_transport_value(&target, value);
+                        let old_value = self.module_settings.value(target.qsid);
+                        let display_label = self.module_setting_label(
+                            if target.qsid < 340 + side_size as u16 * 2 {
+                                ModuleSettingsGroupKind::Left
+                            } else {
+                                ModuleSettingsGroupKind::Right
+                            },
+                            &target.title,
+                        );
+                        self.queue_module_setting_write(
+                            group_title,
+                            target.title,
+                            display_label,
+                            target.qsid,
+                            target.width,
+                            old_value,
+                            requested,
+                        );
+                    }
+                    self.sync_firmware_managed_layout_options();
+                    return;
+                }
+            }
+        }
         let group = self.module_settings.groups.get(group_idx);
         let group_title = group
             .map(|group| group.title.clone())
@@ -222,7 +408,7 @@ impl EntropyApp {
         self.sync_firmware_managed_layout_options();
     }
 
-    fn draw_module_settings_field_row(
+    pub(super) fn draw_module_settings_field_row(
         &mut self,
         ui: &mut egui::Ui,
         group_idx: usize,
@@ -333,14 +519,26 @@ impl EntropyApp {
             }
             ModuleSettingKind::Select => {
                 let dropdown_width = metrics.value(120.0);
-                let selected_idx = (raw_value as usize).min(field.variants.len().saturating_sub(1));
-                let variants = field
+                let mixed = self.shared_encoder_values_mixed(field.qsid);
+                let mut selected_idx =
+                    (raw_value as usize).min(field.variants.len().saturating_sub(1));
+                let mut variants = field
                     .variants
                     .iter()
                     .map(|variant| {
                         module_setting_variant_label(self.app_settings.language, variant)
                     })
                     .collect::<Vec<_>>();
+                if mixed {
+                    selected_idx = variants.len();
+                    variants.push(
+                        crate::i18n::tr_catalog(
+                            self.app_settings.language,
+                            "encoder_settings.mixed_values",
+                        )
+                        .to_owned(),
+                    );
+                }
                 crate::ui_style::settings_list_row_with_tooltip(
                     ui,
                     content_width,
@@ -363,7 +561,7 @@ impl EntropyApp {
                             &variants,
                             dropdown_width,
                         );
-                        if let Some(picked) = picked {
+                        if let Some(picked) = picked.filter(|idx| *idx < field.variants.len()) {
                             self.write_module_setting_value(group_idx, &field, picked as u16);
                         }
                     },
@@ -514,7 +712,7 @@ impl EntropyApp {
         }
     }
 
-    fn draw_module_settings_section(
+    pub(super) fn draw_module_settings_section(
         &self,
         ui: &mut egui::Ui,
         content_width: f32,
@@ -912,6 +1110,169 @@ mod tests {
         })
     }
 
+    // Mirrors keyboards/k03/vial.json and keyboards/imperial44/vial.json:
+    // per-encoder tabs with side metadata, side-local field numbers and QSIDs.
+    fn fixed_encoder_settings_json(side_size: usize) -> serde_json::Value {
+        let tabs = (0..side_size * 2)
+            .map(|idx| {
+                let side = if idx < side_size { "left" } else { "right" };
+                let number = idx % side_size + 1;
+                let title = |suffix| {
+                    if side_size == 1 {
+                        format!("Encoder {suffix}")
+                    } else {
+                        format!("Encoder {number} {suffix}")
+                    }
+                };
+                serde_json::json!({
+                    "name": format!("{side} encoder {number} (ID {idx})"),
+                    "side": side,
+                    "fields": [
+                        {"type": "select", "title": title("interval"), "qsid": 340 + idx * 2, "variants": ["0 ms", "5 ms"]},
+                        {"type": "select", "title": title("steps"), "qsid": 341 + idx * 2, "variants": ["1", "2"]}
+                    ]
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({"settings": tabs})
+    }
+
+    #[test]
+    fn fixed_encoders_share_one_pair_even_when_hidden() {
+        use super::super::encoder_visibility_settings_ui::EncoderSettingsRow;
+        for (side_size, name) in [
+            (3, "K:03"),
+            (3, "Ergohaven K:03"),
+            (1, "Imperial44"),
+            (1, "Ergohaven Imperial44"),
+        ] {
+            let mut app = test_app();
+            app.module_settings = EntropyApp::module_settings_from_definition(
+                &fixed_encoder_settings_json(side_size),
+                &(340..340 + side_size as u16 * 4).collect::<Vec<_>>(),
+            );
+            let mut layout = encoder_visibility_layout("Hide left encoder", "Hide right encoder");
+            layout.name = name.to_owned();
+            layout.encoders = (0..side_size * 2)
+                .map(|idx| PhysicalEncoder {
+                    encoder_idx: idx as u8,
+                    ..layout.encoders[0].clone()
+                })
+                .collect();
+            assert!(app.encoder_only_module_settings(&layout));
+            let rows = |app: &EntropyApp| {
+                app.encoder_settings_rows(&layout)
+                    .iter()
+                    .map(|row| match row {
+                        EncoderSettingsRow::Visibility(idx, _) => format!("toggle:{idx}"),
+                        EncoderSettingsRow::Field(group, field) => format!(
+                            "qsid:{}",
+                            app.module_settings.groups[*group].fields[*field].qsid
+                        ),
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let expected = vec!["qsid:340".to_owned(), "qsid:341".to_owned()];
+            assert_eq!(rows(&app), expected);
+            app.encoder_visibility = vec![true; side_size * 2];
+            app.encoder_visibility[side_size] = false;
+            assert_eq!(rows(&app), expected);
+            layout.name = "K:04".to_owned();
+            assert!(!app.encoder_only_module_settings(&layout));
+            assert_eq!(app.encoder_settings_rows(&layout).len(), side_size * 2);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn shared_encoder_controls_write_both_halves_including_hidden() {
+        use super::super::encoder_visibility_settings_ui::EncoderSettingsRow;
+        for (side_size, name) in [
+            (3, "K:03"),
+            (3, "Ergohaven K:03"),
+            (1, "Imperial44"),
+            (1, "Ergohaven Imperial44"),
+        ] {
+            let mut app = test_app();
+            app.module_settings = EntropyApp::module_settings_from_definition(
+                &fixed_encoder_settings_json(side_size),
+                &(340..340 + side_size as u16 * 4).collect::<Vec<_>>(),
+            );
+            let mut layout = encoder_visibility_layout("Hide left encoder", "Hide right encoder");
+            layout.name = name.to_owned();
+            layout.encoders = (0..side_size * 2)
+                .map(|idx| PhysicalEncoder {
+                    encoder_idx: idx as u8,
+                    ..layout.encoders[0].clone()
+                })
+                .collect();
+            app.encoder_visibility = vec![true; side_size * 2];
+            app.encoder_visibility[side_size] = false;
+            let fields = app
+                .encoder_settings_rows(&layout)
+                .into_iter()
+                .filter_map(|row| match row {
+                    EncoderSettingsRow::Field(group, field) => Some((
+                        group,
+                        app.module_settings.groups[group].fields[field].clone(),
+                    )),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(fields.len(), 2);
+            app.layout = Some(layout);
+            let right_qsid = 340 + side_size as u16 * 2;
+            app.module_settings.values.insert(right_qsid, 1);
+            app.module_settings.values.insert(right_qsid + 1, 1);
+            assert!(app.shared_encoder_values_mixed(340));
+            assert!(app.shared_encoder_values_mixed(341));
+            let (hid, recorder) = crate::hid::HidDevice::test_device();
+            app.hid_device = Some(hid);
+            for (group, field) in fields {
+                app.write_module_setting_value(group, &field, 1);
+            }
+            drain_hid_writes(&mut app, &egui::Context::default());
+            let requests = recorder.requests();
+            assert!(!app.shared_encoder_values_mixed(340));
+            assert!(!app.shared_encoder_values_mixed(341));
+            for qsid in 340..340 + side_size as u16 * 4 {
+                assert_eq!(app.module_settings.value(qsid), 1, "{name}: {qsid}");
+                assert!(
+                    requests
+                        .iter()
+                        .any(|r| r[2] == qsid as u8 && r[3] == (qsid >> 8) as u8),
+                    "{name}: {qsid}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_or_selectable_module_pages_remain_modules() {
+        let mut app = test_app();
+        let mut layout = encoder_visibility_layout("Hide left encoder", "Hide right encoder");
+        layout.name = "K:03".to_owned();
+        app.module_settings = EntropyApp::module_settings_from_definition(
+            &fixed_encoder_settings_json(3),
+            &(340..352).collect::<Vec<_>>(),
+        );
+        layout.encoders = (0..6)
+            .map(|idx| PhysicalEncoder {
+                encoder_idx: idx,
+                ..layout.encoders[0].clone()
+            })
+            .collect();
+        app.module_settings.groups[0]
+            .fields
+            .push(module_filter_field("Ball DPI", 120));
+        assert!(!app.encoder_only_module_settings(&layout));
+        app.module_settings.groups[0].fields.pop();
+        let mut selector = module_filter_field("Module", 149);
+        selector.variants = vec!["Encoder".to_owned(), "Trackball".to_owned()];
+        app.module_settings.groups[0].fields.push(selector);
+        assert!(!app.encoder_only_module_settings(&layout));
+    }
+
     fn visible_module_qsids(app: &EntropyApp) -> Vec<u16> {
         app.module_settings_rows()
             .into_iter()
@@ -1006,6 +1367,7 @@ mod tests {
                 Some(0),
                 None,
                 app.hide_modular_encoders_by_default(&layout),
+                app.encoder_only_module_settings(&layout),
             ),
             vec![true, true]
         );

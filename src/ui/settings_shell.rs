@@ -9,12 +9,15 @@ impl EntropyApp {
         content_top: f32,
         viewport: egui::Rect,
     ) {
+        // A deferred definition can finish loading while Modules is open.
+        if self.settings_tab == SettingsTab::Modules && self.encoder_only_module_settings(layout) {
+            self.settings_tab = SettingsTab::Encoders;
+        }
         if self.settings_tab == SettingsTab::Encoders
             && !self.show_separate_encoder_visibility_settings(layout)
         {
             self.settings_tab = SettingsTab::AppSettings;
         }
-
         #[cfg(not(target_arch = "wasm32"))]
         if self.settings_tab == SettingsTab::MatrixTester {
             self.poll_matrix_tester(ctx, layout);

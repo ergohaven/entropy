@@ -50,6 +50,9 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) layout_element_visibility:
         std::collections::BTreeMap<String, LayoutElementVisibility>,
+    /// Tracks each device whose model-wide encoder visibility was imported locally.
+    #[serde(default)]
+    pub(crate) migrated_fixed_encoder_visibility: std::collections::BTreeSet<String>,
     /// Per-device application layouts. Kept in Entropy settings so the base
     /// Vial keymap remains the reliable fallback when Entropy is not running.
     #[serde(default)]
@@ -216,6 +219,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             layout_element_visibility: std::collections::BTreeMap::new(),
+            migrated_fixed_encoder_visibility: std::collections::BTreeSet::new(),
             application_layouts: std::collections::BTreeMap::new(),
             last_application_layout_device_key: None,
             last_application_layout_device_name: None,

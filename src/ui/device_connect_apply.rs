@@ -1360,7 +1360,9 @@ impl EntropyApp {
                         encoder_count,
                     ),
                     hide_modular_encoders_by_default,
+                    self.encoder_only_module_settings(&r.layout),
                 );
+                self.migrate_fixed_encoder_visibility_to_layout(&r.layout);
 
                 // Populate picker
                 self.keycode_picker.supports_rgb =

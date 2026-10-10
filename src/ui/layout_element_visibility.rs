@@ -1,6 +1,6 @@
 use super::*;
 
-fn local_layout_visibility_key(base: &str, serial: Option<&str>) -> Option<String> {
+pub(super) fn local_layout_visibility_key(base: &str, serial: Option<&str>) -> Option<String> {
     if base.is_empty() {
         return None;
     }

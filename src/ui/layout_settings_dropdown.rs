@@ -96,7 +96,8 @@ impl EntropyApp {
             #[cfg(target_arch = "wasm32")]
             let deferred_rgb = false;
             let show_rgb_item = rgb_available_for_menu || deferred_rgb;
-            let show_modules_item = self.module_settings.supported || deferred_modules;
+            let show_modules_item = (self.module_settings.supported || deferred_modules)
+                && !self.encoder_only_module_settings(layout);
             let show_touchpad_item = self.touchpad_settings.supported || deferred_touchpad;
             let show_bluetooth_item = self.bluetooth_settings.supported || deferred_bluetooth;
             let show_layer_leds_item = layer_leds_available_for_menu || deferred_layer_leds;
