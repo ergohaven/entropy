@@ -1247,14 +1247,38 @@ pub(crate) struct ApplicationLayoutSnapshot {
     pub(crate) name: String,
     pub(crate) layer_names: [String; APPLICATION_LAYOUT_LAYER_COUNT],
     pub(crate) layers: [[u16; APPLICATION_LAYOUT_CONTROL_COUNT]; APPLICATION_LAYOUT_LAYER_COUNT],
+    pub(crate) visuals: [[u8; APPLICATION_LAYOUT_CONTROL_COUNT]; APPLICATION_LAYOUT_LAYER_COUNT],
     pub(crate) encoder_stacks: [Vec<EncoderStackAction>; APPLICATION_LAYOUT_LAYER_COUNT],
 }
 
 impl ApplicationLayoutSnapshot {
     pub(crate) fn from_layout(layout: &ApplicationLayout) -> Self {
+        let preset = builtin_application_layout_presets()
+            .into_iter()
+            .find(|preset| {
+                !layout.executable.trim().is_empty()
+                    && executables_match(&layout.executable, preset.executable)
+            });
+        let visuals = std::array::from_fn(|layer| {
+            std::array::from_fn(|control| {
+                let Some(preset) = &preset else { return 0 };
+                let Some(preset_layer) = preset.layers.get(layer) else {
+                    return 0;
+                };
+                let Some(configured) = layout.layers.get(layer) else {
+                    return 0;
+                };
+                let keycode = preset_layer.keycodes[control];
+                if keycode == 0 || configured[control] != keycode {
+                    return 0;
+                }
+                crate::action_icons::preset_visual(preset.id, layer, control)
+            })
+        });
         Self {
             active: true,
             revision: layout.revision,
+            visuals,
             name: layout.name.trim().to_owned(),
             layer_names: std::array::from_fn(|layer| {
                 layout
@@ -1287,6 +1311,7 @@ impl ApplicationLayoutSnapshot {
             name: String::new(),
             layer_names: std::array::from_fn(|_| String::new()),
             layers: [default_keycodes(); APPLICATION_LAYOUT_LAYER_COUNT],
+            visuals: [[0; APPLICATION_LAYOUT_CONTROL_COUNT]; APPLICATION_LAYOUT_LAYER_COUNT],
             encoder_stacks: std::array::from_fn(|_| Vec::new()),
         }
     }
@@ -1329,6 +1354,7 @@ impl ApplicationLayoutSnapshot {
             packet[1] = APPLICATION_LAYOUT_PROTOCOL_VERSION;
             packet[2] = layer as u8;
             packet[3] = APPLICATION_LAYOUT_CONTROL_COUNT as u8;
+            packet[4..4 + APPLICATION_LAYOUT_CONTROL_COUNT].copy_from_slice(&self.visuals[layer]);
             packets.push(packet);
         }
 
@@ -1374,8 +1400,14 @@ impl ApplicationLayoutSnapshot {
         commit[2] = u8::from(self.active);
         commit[3..7].copy_from_slice(&self.revision.to_le_bytes());
         commit[7..9].copy_from_slice(
-            &crc16_snapshot(&self.layers, &self.encoder_stacks, name, &self.layer_names)
-                .to_le_bytes(),
+            &crc16_snapshot(
+                &self.layers,
+                &self.visuals,
+                &self.encoder_stacks,
+                name,
+                &self.layer_names,
+            )
+            .to_le_bytes(),
         );
         packets.push(commit);
         packets
@@ -2811,6 +2843,7 @@ const fn chord(modifiers: u16, keycode: u16) -> u16 {
 
 fn crc16_snapshot(
     layers: &[[u16; APPLICATION_LAYOUT_CONTROL_COUNT]; APPLICATION_LAYOUT_LAYER_COUNT],
+    visuals: &[[u8; APPLICATION_LAYOUT_CONTROL_COUNT]; APPLICATION_LAYOUT_LAYER_COUNT],
     encoder_stacks: &[Vec<EncoderStackAction>; APPLICATION_LAYOUT_LAYER_COUNT],
     name: &[u8],
     layer_names: &[String; APPLICATION_LAYOUT_LAYER_COUNT],
@@ -2820,10 +2853,7 @@ fn crc16_snapshot(
         .iter()
         .flatten()
         .flat_map(|value| value.to_le_bytes())
-        .chain(std::iter::repeat_n(
-            0u8,
-            APPLICATION_LAYOUT_LAYER_COUNT * APPLICATION_LAYOUT_CONTROL_COUNT,
-        ))
+        .chain(visuals.iter().flatten().copied())
         .chain(encoder_stacks.iter().flat_map(|actions| {
             let count = if (2..=APPLICATION_LAYOUT_STACK_SLOTS).contains(&actions.len()) {
                 actions.len()
@@ -4143,6 +4173,54 @@ mod tests {
             }
         }
         assert_eq!(crc.to_le_bytes(), [packets[129][7], packets[129][8]]);
+    }
+
+    #[test]
+    fn every_bound_builtin_preset_command_has_a_semantic_icon() {
+        for platform in [ShortcutPlatform::MacOs, ShortcutPlatform::WindowsLinux] {
+            for preset in builtin_application_layout_presets_for(platform) {
+                for (layer, definition) in preset.layers.iter().enumerate() {
+                    for control in (0..9).chain(12..15) {
+                        let visual = crate::action_icons::preset_visual(preset.id, layer, control);
+                        if definition.keycodes[control] != 0 {
+                            assert!(
+                                visual >= 12,
+                                "{} layer {} control {} is missing an icon",
+                                preset.id,
+                                layer,
+                                control
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn changed_preset_command_loses_its_old_icon_and_visuals_are_transmitted() {
+        let preset = builtin_application_layout_presets_for(ShortcutPlatform::WindowsLinux)
+            .into_iter()
+            .find(|preset| preset.id == "google_chrome")
+            .unwrap();
+        let mut settings = DeviceApplicationLayouts::default();
+        let id = settings.create_from_preset(&preset);
+        let layout = settings.layouts.get(&id).unwrap();
+        let snapshot = ApplicationLayoutSnapshot::from_layout(layout);
+        assert_ne!(snapshot.visuals[0][0], 0);
+        let packets = snapshot.packets();
+        assert_eq!(packets[33][0], HID_APPLICATION_LAYOUT_VISUALS);
+        assert_eq!(packets[33][4], snapshot.visuals[0][0]);
+        assert_eq!(packets[34][4], snapshot.visuals[1][0]);
+        let layout = settings.layouts.get_mut(&id).unwrap();
+        layout.set_keycode(0, 0, 0x1234);
+        let updated = ApplicationLayoutSnapshot::from_layout(layout);
+        assert_eq!(updated.visuals[0][0], 0);
+        assert_ne!(updated.visuals[0][1], 0);
+        assert_ne!(
+            updated.packets().last().unwrap()[7..9],
+            packets.last().unwrap()[7..9]
+        );
     }
 
     #[test]

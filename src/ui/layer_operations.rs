@@ -396,6 +396,7 @@ struct LayerWriteContext {
     action: String,
     total: usize,
     undo_behavior: LayerUndoBehavior,
+    is_default_layout_sync: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -948,6 +949,7 @@ impl EntropyApp {
             action,
             total,
             undo_behavior,
+            is_default_layout_sync: action_key == "layer_actions.save_default_to_device",
         };
         let (sender, receiver) = std::sync::mpsc::channel();
         let layer_u8 = layer as u8;
@@ -1066,6 +1068,16 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn finish_layer_write(&mut self, result: LayerWriteResult) {
+        if result.context.is_default_layout_sync {
+            if result.progress.error.is_none() {
+                self.default_layout_pending_layers &= !(1u16 << result.context.layer);
+            }
+            self.default_layout_sync_retry_after = result
+                .progress
+                .error
+                .as_ref()
+                .map(|_| std::time::Instant::now() + std::time::Duration::from_secs(15));
+        }
         self.hid_device = result.hid_device;
         if let Some(layout) = &mut self.layout {
             apply_layer_updates(
@@ -1605,6 +1617,7 @@ mod tests {
             undo_behavior: LayerUndoBehavior::RetryDesired {
                 requires_firmware: true,
             },
+            is_default_layout_sync: false,
         };
 
         assert_eq!(
@@ -1631,6 +1644,7 @@ mod tests {
             action: "Paste".into(),
             total: 2,
             undo_behavior: LayerUndoBehavior::RecordOld,
+            is_default_layout_sync: false,
         };
 
         assert_eq!(

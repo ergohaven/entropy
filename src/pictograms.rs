@@ -293,6 +293,156 @@ pub(crate) const BUILTIN_PICTOGRAM_KEYS: &[&str] = &[
     "display_settings.pictogram_builtin_previous_track",
     "display_settings.pictogram_builtin_next_track",
     "display_settings.pictogram_builtin_calculator",
+    "display_settings.pictogram_builtin_action_link",
+    "display_settings.pictogram_builtin_action_plus",
+    "display_settings.pictogram_builtin_action_search",
+    "display_settings.pictogram_builtin_action_arrow_left",
+    "display_settings.pictogram_builtin_action_arrow_right",
+    "display_settings.pictogram_builtin_action_history",
+    "display_settings.pictogram_builtin_action_move_left",
+    "display_settings.pictogram_builtin_action_move_right",
+    "display_settings.pictogram_builtin_action_maximize",
+    "display_settings.pictogram_builtin_action_move_down",
+    "display_settings.pictogram_builtin_action_move_up",
+    "display_settings.pictogram_builtin_action_bookmark",
+    "display_settings.pictogram_builtin_action_download",
+    "display_settings.pictogram_builtin_action_square_pen",
+    "display_settings.pictogram_builtin_action_save",
+    "display_settings.pictogram_builtin_action_printer",
+    "display_settings.pictogram_builtin_action_focus",
+    "display_settings.pictogram_builtin_action_zoom_out",
+    "display_settings.pictogram_builtin_action_zoom_in",
+    "display_settings.pictogram_builtin_action_command",
+    "display_settings.pictogram_builtin_action_folder_open",
+    "display_settings.pictogram_builtin_action_terminal",
+    "display_settings.pictogram_builtin_action_panel_left",
+    "display_settings.pictogram_builtin_action_panel_bottom",
+    "display_settings.pictogram_builtin_action_message_square_code",
+    "display_settings.pictogram_builtin_action_bug",
+    "display_settings.pictogram_builtin_action_bug_off",
+    "display_settings.pictogram_builtin_action_text_cursor_input",
+    "display_settings.pictogram_builtin_action_replace",
+    "display_settings.pictogram_builtin_action_folder_search",
+    "display_settings.pictogram_builtin_action_files",
+    "display_settings.pictogram_builtin_action_git_branch",
+    "display_settings.pictogram_builtin_action_list_filter",
+    "display_settings.pictogram_builtin_action_mouse_pointer_2",
+    "display_settings.pictogram_builtin_action_arrow_up",
+    "display_settings.pictogram_builtin_action_arrow_down",
+    "display_settings.pictogram_builtin_action_file_plus",
+    "display_settings.pictogram_builtin_action_file_pen",
+    "display_settings.pictogram_builtin_action_square_terminal",
+    "display_settings.pictogram_builtin_action_blocks",
+    "display_settings.pictogram_builtin_action_paintbrush",
+    "display_settings.pictogram_builtin_action_eraser",
+    "display_settings.pictogram_builtin_action_crop",
+    "display_settings.pictogram_builtin_action_lasso",
+    "display_settings.pictogram_builtin_action_square_dashed",
+    "display_settings.pictogram_builtin_action_pipette",
+    "display_settings.pictogram_builtin_action_bandage",
+    "display_settings.pictogram_builtin_action_type",
+    "display_settings.pictogram_builtin_action_scan",
+    "display_settings.pictogram_builtin_action_undo",
+    "display_settings.pictogram_builtin_action_redo",
+    "display_settings.pictogram_builtin_action_copy",
+    "display_settings.pictogram_builtin_action_mouse_pointer",
+    "display_settings.pictogram_builtin_action_select_all",
+    "display_settings.pictogram_builtin_action_paste",
+    "display_settings.pictogram_builtin_action_layers_plus",
+    "display_settings.pictogram_builtin_action_group",
+    "display_settings.pictogram_builtin_action_blend",
+    "display_settings.pictogram_builtin_action_eye",
+    "display_settings.pictogram_builtin_action_component",
+    "display_settings.pictogram_builtin_action_list_restart",
+    "display_settings.pictogram_builtin_action_layers",
+    "display_settings.pictogram_builtin_action_scissors",
+    "display_settings.pictogram_builtin_action_corner_up_left",
+    "display_settings.pictogram_builtin_action_corner_up_right",
+    "display_settings.pictogram_builtin_action_move_horizontal",
+    "display_settings.pictogram_builtin_action_move_vertical",
+    "display_settings.pictogram_builtin_action_hand",
+    "display_settings.pictogram_builtin_action_play",
+    "display_settings.pictogram_builtin_action_step_back",
+    "display_settings.pictogram_builtin_action_step_forward",
+    "display_settings.pictogram_builtin_action_flag",
+    "display_settings.pictogram_builtin_action_flag_triangle_right",
+    "display_settings.pictogram_builtin_action_pause",
+    "display_settings.pictogram_builtin_action_skip_back",
+    "display_settings.pictogram_builtin_action_skip_forward",
+    "display_settings.pictogram_builtin_action_frame",
+    "display_settings.pictogram_builtin_action_rectangle_horizontal",
+    "display_settings.pictogram_builtin_action_pen_tool",
+    "display_settings.pictogram_builtin_action_expand",
+    "display_settings.pictogram_builtin_action_circle",
+    "display_settings.pictogram_builtin_action_line_squiggle",
+    "display_settings.pictogram_builtin_action_scaling",
+    "display_settings.pictogram_builtin_action_copy_plus",
+    "display_settings.pictogram_builtin_action_ungroup",
+    "display_settings.pictogram_builtin_action_image_plus",
+    "display_settings.pictogram_builtin_action_send_to_back",
+    "display_settings.pictogram_builtin_action_bring_to_front",
+    "display_settings.pictogram_builtin_action_scan_line",
+    "display_settings.pictogram_builtin_action_pencil",
+    "display_settings.pictogram_builtin_action_move",
+    "display_settings.pictogram_builtin_action_rotate_cw",
+    "display_settings.pictogram_builtin_action_keyboard",
+    "display_settings.pictogram_builtin_action_package_plus",
+    "display_settings.pictogram_builtin_action_scan_dashed",
+    "display_settings.pictogram_builtin_action_eye_off",
+    "display_settings.pictogram_builtin_action_panel_right",
+    "display_settings.pictogram_builtin_action_view_front",
+    "display_settings.pictogram_builtin_action_view_right",
+    "display_settings.pictogram_builtin_action_view_top",
+    "display_settings.pictogram_builtin_action_box",
+    "display_settings.pictogram_builtin_action_camera",
+    "display_settings.pictogram_builtin_action_rotate_ccw",
+    "display_settings.pictogram_builtin_action_route",
+    "display_settings.pictogram_builtin_action_circle_arrow_up",
+    "display_settings.pictogram_builtin_action_circle_arrow_down",
+    "display_settings.pictogram_builtin_action_arrow_down_to_line",
+    "display_settings.pictogram_builtin_action_arrow_up_to_line",
+    "display_settings.pictogram_builtin_action_mic_off",
+    "display_settings.pictogram_builtin_action_headphones",
+    "display_settings.pictogram_builtin_action_volume_x",
+    "display_settings.pictogram_builtin_action_volume_2",
+    "display_settings.pictogram_builtin_action_incognito",
+    "display_settings.pictogram_builtin_action_code",
+    "display_settings.pictogram_builtin_action_book_open",
+    "display_settings.pictogram_builtin_action_file_output",
+    "display_settings.pictogram_builtin_action_audio_lines",
+    "display_settings.pictogram_firmware_brightness_down",
+    "display_settings.pictogram_firmware_brightness_up",
+    "display_settings.pictogram_firmware_control_panel",
+    "display_settings.pictogram_firmware_computer",
+    "display_settings.pictogram_firmware_web_search",
+    "display_settings.pictogram_firmware_mail",
+    "display_settings.pictogram_firmware_calculator",
+    "display_settings.pictogram_firmware_volume_down",
+    "display_settings.pictogram_firmware_home",
+    "display_settings.pictogram_firmware_insert",
+    "display_settings.pictogram_firmware_end",
+    "display_settings.pictogram_firmware_delete",
+    "display_settings.pictogram_firmware_screenshot",
+    "display_settings.pictogram_firmware_mouse_left",
+    "display_settings.pictogram_firmware_mouse_middle",
+    "display_settings.pictogram_firmware_mouse_right",
+    "display_settings.pictogram_firmware_wheel_up",
+    "display_settings.pictogram_firmware_wheel_down",
+    "display_settings.pictogram_firmware_page_up",
+    "display_settings.pictogram_firmware_page_down",
+    "display_settings.pictogram_firmware_layer_prev_icon",
+    "display_settings.pictogram_firmware_layer_next_icon",
+    "display_settings.pictogram_integration_task_new",
+    "display_settings.pictogram_integration_task_edit",
+    "display_settings.pictogram_integration_task_done",
+    "display_settings.pictogram_integration_task_repeat",
+    "display_settings.pictogram_integration_obs_record",
+    "display_settings.pictogram_integration_obs_stream",
+    "display_settings.pictogram_integration_obs_scene",
+    "display_settings.pictogram_integration_obs_audio",
+    "display_settings.pictogram_integration_obs_visible",
+    "display_settings.pictogram_integration_obs_studio",
+    "display_settings.pictogram_integration_obs_refresh",
 ];
 
 struct PictogramCanvas {
@@ -591,7 +741,7 @@ impl Icon35 {
             for x in x0..=x1 {
                 if (0..35).contains(&x)
                     && (0..35).contains(&y)
-                    && (fill || x < x0 + 2 || x > x1 - 2 || y < y0 + 2 || y > y1 - 2)
+                    && (fill || x == x0 || x == x1 || y == y0 || y == y1)
                 {
                     self.0[(y * 35 + x) as usize] = true;
                 }
@@ -604,9 +754,9 @@ impl Icon35 {
                 let dx = x as f32 - cx;
                 let dy = y as f32 - cy;
                 let outer = dx * dx / (rx * rx) + dy * dy / (ry * ry) <= 1.0;
-                let inner = rx > 2.0
-                    && ry > 2.0
-                    && dx * dx / ((rx - 2.0) * (rx - 2.0)) + dy * dy / ((ry - 2.0) * (ry - 2.0))
+                let inner = rx > 1.5
+                    && ry > 1.5
+                    && dx * dx / ((rx - 1.5) * (rx - 1.5)) + dy * dy / ((ry - 1.5) * (ry - 1.5))
                         < 1.0;
                 if outer && (fill || !inner) {
                     self.0[y * 35 + x] = on;
@@ -617,7 +767,20 @@ impl Icon35 {
     fn circle(&mut self, x: i32, y: i32, r: i32, fill: bool, on: bool) {
         self.ellipse(x as f32, y as f32, r as f32, r as f32, fill, on);
     }
+    fn bold_circle(&mut self, cx: i32, cy: i32, radius: i32) {
+        for y in 0..35 {
+            for x in 0..35 {
+                let distance = (x - cx).pow(2) + (y - cy).pow(2);
+                if distance <= radius.pow(2) && distance >= (radius - 3).pow(2) {
+                    self.0[(y * 35 + x) as usize] = true;
+                }
+            }
+        }
+    }
     fn line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32) {
+        self.line_with_radius(x0, y0, x1, y1, 0.85);
+    }
+    fn line_with_radius(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, radius: f32) {
         let dx = x1 - x0;
         let dy = y1 - y0;
         let len = dx * dx + dy * dy;
@@ -629,7 +792,7 @@ impl Icon35 {
                     (((x as f32 - x0) * dx + (y as f32 - y0) * dy) / len).clamp(0.0, 1.0)
                 };
                 if (x as f32 - x0 - t * dx).powi(2) + (y as f32 - y0 - t * dy).powi(2)
-                    <= 1.15 * 1.15
+                    <= radius * radius
                 {
                     self.0[y * 35 + x] = true;
                 }
@@ -639,6 +802,17 @@ impl Icon35 {
     fn path(&mut self, p: &[(i32, i32)]) {
         for q in p.windows(2) {
             self.line(q[0].0 as f32, q[0].1 as f32, q[1].0 as f32, q[1].1 as f32);
+        }
+    }
+    fn bold_path(&mut self, p: &[(i32, i32)]) {
+        for q in p.windows(2) {
+            self.line_with_radius(
+                q[0].0 as f32,
+                q[0].1 as f32,
+                q[1].0 as f32,
+                q[1].1 as f32,
+                1.35,
+            );
         }
     }
     fn polygon(&mut self, p: &[(i32, i32)]) {
@@ -672,7 +846,7 @@ impl Icon35 {
                 let dx = x - cx;
                 let dy = y - cy;
                 let d = dx * dx + dy * dy;
-                if dx > 0 && dy.abs() <= r * 3 / 4 && d <= r * r && d >= (r - 2) * (r - 2) {
+                if dx > 0 && dy.abs() <= r * 3 / 4 && d <= r * r && d >= (r - 1) * (r - 1) {
                     self.0[(y * 35 + x) as usize] = true;
                 }
             }
@@ -713,6 +887,26 @@ pub(crate) fn builtin_pictogram_bitmap(index: usize) -> [u8; PICTOGRAM_BYTES] {
 }
 
 fn render_builtin_pictogram_bitmap(index: usize) -> [u8; PICTOGRAM_BYTES] {
+    if index
+        >= 38
+            + crate::action_icons::ACTION_ICON_COUNT
+            + crate::firmware_builtin_icons::FIRMWARE_ICON_COUNT
+    {
+        return crate::integration_icons::bitmap(
+            index
+                - 38
+                - crate::action_icons::ACTION_ICON_COUNT
+                - crate::firmware_builtin_icons::FIRMWARE_ICON_COUNT,
+        );
+    }
+    if index >= 38 + crate::action_icons::ACTION_ICON_COUNT {
+        return crate::firmware_builtin_icons::bitmap(
+            index - 38 - crate::action_icons::ACTION_ICON_COUNT,
+        );
+    }
+    if index >= 38 {
+        return crate::action_icons::bitmap(index - 38);
+    }
     let mut i = Icon35::new();
     match index {
         0 => i.polygon(&[(9, 6), (27, 17), (9, 28)]),
@@ -831,24 +1025,24 @@ fn render_builtin_pictogram_bitmap(index: usize) -> [u8; PICTOGRAM_BYTES] {
             i.circle(17, 17, 6, true, false);
         }
         19 | 20 => {
-            i.circle(17, 17, 14, false, true);
+            i.bold_circle(17, 17, 14);
             if index == 19 {
-                i.path(&[(13, 14), (17, 10), (17, 25)]);
-                i.path(&[(12, 25), (22, 25)]);
+                i.bold_path(&[(13, 14), (17, 10), (17, 25)]);
+                i.bold_path(&[(12, 25), (22, 25)]);
             } else {
-                i.path(&[(12, 13), (14, 10), (20, 10), (22, 13), (12, 24), (22, 24)]);
+                i.bold_path(&[(12, 13), (14, 10), (20, 10), (22, 13), (12, 24), (22, 24)]);
             }
         }
         21 => {
-            i.path(&[(17, 5), (17, 23)]);
-            i.path(&[(11, 18), (17, 24), (23, 18)]);
-            i.path(&[(8, 29), (26, 29)]);
+            i.bold_path(&[(17, 5), (17, 23)]);
+            i.bold_path(&[(11, 18), (17, 24), (23, 18)]);
+            i.bold_path(&[(8, 29), (26, 29)]);
         }
         22 => {
-            i.path(&[(12, 23), (27, 5)]);
-            i.path(&[(22, 23), (7, 5)]);
-            i.circle(10, 26, 4, false, true);
-            i.circle(24, 26, 4, false, true);
+            i.bold_path(&[(12, 23), (27, 5)]);
+            i.bold_path(&[(22, 23), (7, 5)]);
+            i.bold_circle(10, 26, 4);
+            i.bold_circle(24, 26, 4);
             i.circle(17, 17, 2, true, true);
             i.circle(17, 17, 1, true, false);
         }
@@ -950,8 +1144,7 @@ fn legacy_35px_gear_bitmap() -> &'static [u8; PICTOGRAM_BYTES] {
 }
 
 pub(crate) fn legacy_builtin_pictogram_index(bitmap: &[u8]) -> Option<usize> {
-    static ICONS: std::sync::OnceLock<[[u8; PICTOGRAM_BYTES]; BUILTIN_PICTOGRAM_KEYS.len()]> =
-        std::sync::OnceLock::new();
+    static ICONS: std::sync::OnceLock<[[u8; PICTOGRAM_BYTES]; 38]> = std::sync::OnceLock::new();
     ICONS
         .get_or_init(|| std::array::from_fn(legacy_builtin_pictogram_bitmap))
         .iter()
@@ -961,7 +1154,7 @@ pub(crate) fn legacy_builtin_pictogram_index(bitmap: &[u8]) -> Option<usize> {
 
 pub(crate) fn legacy_builtin_pictogram_bitmap(index: usize) -> [u8; PICTOGRAM_BYTES] {
     let mut icon = PictogramCanvas::new();
-    match index.min(BUILTIN_PICTOGRAM_KEYS.len() - 1) {
+    match index.min(37) {
         0 => {
             icon.play_triangle();
         }
@@ -2075,7 +2268,7 @@ mod tests {
 
     #[test]
     fn previous_stock_library_is_recognized_without_becoming_user_copies() {
-        for index in 0..BUILTIN_PICTOGRAM_KEYS.len() {
+        for index in 0..38 {
             assert!(
                 legacy_builtin_pictogram_index(&legacy_builtin_pictogram_bitmap(index)).is_some()
             );
@@ -2094,12 +2287,12 @@ mod tests {
         assert!(mirrored_horizontally(&middle_button, &middle_button));
         assert!(mirrored_horizontally(&move_left, &move_right));
 
-        // Direction arrows reach the corresponding edge and stay distinct
+        // Direction arrows stop one pixel from the edge and stay distinct
         // from the centered mouse body.
-        assert!(bitmap_pixel(&builtin_pictogram_bitmap(27), 17, 0));
-        assert!(bitmap_pixel(&builtin_pictogram_bitmap(28), 17, 34));
-        assert!(bitmap_pixel(&move_left, 0, 17));
-        assert!(bitmap_pixel(&move_right, 34, 17));
+        assert!(bitmap_pixel(&builtin_pictogram_bitmap(27), 17, 1));
+        assert!(bitmap_pixel(&builtin_pictogram_bitmap(28), 17, 33));
+        assert!(bitmap_pixel(&move_left, 1, 17));
+        assert!(bitmap_pixel(&move_right, 33, 17));
     }
 }
 

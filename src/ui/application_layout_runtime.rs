@@ -1,5 +1,24 @@
 use super::*;
 
+#[cfg(not(target_arch = "wasm32"))]
+fn reconcile_default_profile_from_device(
+    profile: &mut crate::application_layouts::ApplicationLayout,
+    device_layers: &[[u16; crate::application_layouts::APPLICATION_LAYOUT_CONTROL_COUNT];
+         crate::application_layouts::APPLICATION_LAYOUT_LAYER_COUNT],
+    pending_edits: u16,
+) -> bool {
+    let mut changed = false;
+    for (layer, keycodes) in device_layers.iter().enumerate() {
+        if pending_edits & (1u16 << layer) != 0 {
+            continue;
+        }
+        for (control, keycode) in keycodes.iter().enumerate() {
+            changed |= profile.set_keycode(layer, control, *keycode);
+        }
+    }
+    changed
+}
+
 pub(crate) fn application_layout_category_label(
     category: crate::application_layouts::ApplicationLayoutCategory,
     language: crate::i18n::Language,
@@ -401,6 +420,124 @@ impl EntropyApp {
         )
     }
 
+    /// Write only a user-edited Default layer. A cached profile is never
+    /// authority for a device keymap that may have changed in Vial while
+    /// Entropy was closed.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn write_default_application_layer_to_device(&mut self, layer: usize) -> bool {
+        use crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID;
+
+        if self.hid_device.is_none() || self.hid_user_action_busy() {
+            return false;
+        }
+        let Some(profile) = self
+            .application_layout_settings()
+            .and_then(|settings| settings.layouts.get(DEFAULT_APPLICATION_LAYOUT_ID))
+        else {
+            return false;
+        };
+        let Some(layout) = self.layout.as_ref() else {
+            return false;
+        };
+        let Some(keycodes) = profile.layers.get(layer) else {
+            return false;
+        };
+        let snapshot = Self::default_application_layer_snapshot(layout, layer, keycodes);
+        if snapshot
+            .keycodes
+            .iter()
+            .enumerate()
+            .all(|(index, binding)| layout.get_key_binding(layer, index) == *binding)
+            && snapshot
+                .encoder_keycodes
+                .iter()
+                .enumerate()
+                .all(|(index, keycode)| layout.get_encoder_keycode(layer, index) == *keycode)
+        {
+            return false;
+        }
+        self.apply_layer_snapshot(layer, snapshot, "layer_actions.save_default_to_device");
+        true
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn default_application_layer_snapshot(
+        layout: &KeyboardLayout,
+        layer: usize,
+        keycodes: &[u16; crate::application_layouts::APPLICATION_LAYOUT_CONTROL_COUNT],
+    ) -> super::layer_operations::LayerSnapshot {
+        super::layer_operations::LayerSnapshot {
+            keycodes: layout
+                .keys
+                .iter()
+                .enumerate()
+                .map(|(index, _)| {
+                    Self::application_control_for_key(layout, index)
+                        .map(|control| crate::keyboard::KeyBinding::Vial(keycodes[control]))
+                        .unwrap_or_else(|| layout.get_key_binding(layer, index))
+                })
+                .collect(),
+            encoder_keycodes: layout
+                .encoders
+                .iter()
+                .enumerate()
+                .map(|(index, _)| {
+                    Self::application_control_for_encoder(layout, index)
+                        .map(|control| keycodes[control])
+                        .unwrap_or_else(|| layout.get_encoder_keycode(layer, index))
+                })
+                .collect(),
+        }
+    }
+
+    /// On reconnect the firmware keymap wins over the locally cached Default
+    /// profile. Only an explicit Entropy edit may write a layer back.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn maybe_sync_default_application_layout_to_device(&mut self) {
+        if self.hid_device.is_none() || !self.deferred_device_load.all_layers_ready() {
+            return;
+        }
+        if !self.default_layout_device_reconciled {
+            let Some(layout) = self.layout.as_ref() else {
+                return;
+            };
+            let device_layers = Self::base_application_layers(layout);
+            let pending = self.default_layout_pending_layers;
+            let changed = self
+                .application_layout_settings_mut()
+                .and_then(|settings| {
+                    settings
+                        .layouts
+                        .get_mut(crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID)
+                })
+                .is_some_and(|profile| {
+                    reconcile_default_profile_from_device(profile, &device_layers, pending)
+                });
+            self.default_layout_device_reconciled = true;
+            if changed {
+                save_app_settings(&self.app_settings);
+            }
+        }
+        if self.hid_user_action_busy()
+            || self
+                .default_layout_sync_retry_after
+                .is_some_and(|retry_after| std::time::Instant::now() < retry_after)
+        {
+            return;
+        }
+        for layer in 0..crate::application_layouts::APPLICATION_LAYOUT_LAYER_COUNT {
+            let bit = 1u16 << layer;
+            if self.default_layout_pending_layers & bit == 0 {
+                continue;
+            }
+            if self.write_default_application_layer_to_device(layer) {
+                break;
+            }
+            // No difference remains, so the explicit edit is already present.
+            self.default_layout_pending_layers &= !bit;
+        }
+    }
+
     pub(super) fn application_layout_active_rendered_copy(
         &self,
         layout: &KeyboardLayout,
@@ -480,6 +617,10 @@ impl EntropyApp {
         keycode: u16,
     ) -> bool {
         let previous = self.application_layout_control_undo_state(layer, control);
+        #[cfg(not(target_arch = "wasm32"))]
+        let is_default = self.application_layout_settings().is_some_and(|settings| {
+            settings.active_layout_id == crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID
+        });
         let changed = self
             .application_layout_settings_mut()
             .and_then(|settings| settings.layouts.get_mut(&settings.active_layout_id))
@@ -495,6 +636,12 @@ impl EntropyApp {
                 "Application layout saved",
             )
             .to_owned();
+            #[cfg(not(target_arch = "wasm32"))]
+            if is_default {
+                self.default_layout_pending_layers |= 1u16 << layer;
+                self.default_layout_sync_retry_after = None;
+                self.maybe_sync_default_application_layout_to_device();
+            }
         }
         true
     }
@@ -633,6 +780,8 @@ impl EntropyApp {
             save_app_settings(&self.app_settings);
         }
 
+        self.maybe_sync_default_application_layout_to_device();
+
         self.publish_application_layout_snapshot(snapshot, false);
     }
 
@@ -767,6 +916,30 @@ pub(super) fn app_layout_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reconnect_keeps_external_vial_edit_instead_of_replaying_cached_default() {
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        let profile = settings
+            .layouts
+            .get_mut(crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID)
+            .unwrap();
+        profile.set_keycode(0, 0, 0x0004); // Cached before Entropy closed.
+        profile.set_keycode(1, 0, 0x0006); // A new Entropy edit still pending.
+        let mut device_layers = [[0u16;
+            crate::application_layouts::APPLICATION_LAYOUT_CONTROL_COUNT];
+            crate::application_layouts::APPLICATION_LAYOUT_LAYER_COUNT];
+        device_layers[0][0] = 0x0005; // Independently changed in Vial.
+        device_layers[1][0] = 0x0007;
+
+        assert!(reconcile_default_profile_from_device(
+            profile,
+            &device_layers,
+            1u16 << 1
+        ));
+        assert_eq!(profile.layers[0][0], 0x0005);
+        assert_eq!(profile.layers[1][0], 0x0006);
+    }
     use crate::keyboard::PhysicalKey;
 
     fn indicator_test_layout() -> KeyboardLayout {
@@ -800,6 +973,24 @@ mod tests {
             lighting_mode: None,
             firmware: FirmwareProtocol::Vial,
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn existing_default_tap_dance_is_selected_for_standalone_keymap_write() {
+        let layout = indicator_test_layout();
+        let mut default_keycodes =
+            [0xffff; crate::application_layouts::APPLICATION_LAYOUT_CONTROL_COUNT];
+        default_keycodes[0] = 0x5700; // Vial TD0
+
+        let snapshot =
+            EntropyApp::default_application_layer_snapshot(&layout, 0, &default_keycodes);
+
+        assert_eq!(
+            snapshot.keycodes[0],
+            crate::keyboard::KeyBinding::Vial(0x5700)
+        );
+        assert_eq!(layout.get_keycode(0, 0), 0x0027);
     }
 
     fn m4cr0pad_v3_device() -> crate::device::Device {

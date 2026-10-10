@@ -1,0 +1,780 @@
+{
+  "symbols": [
+    "link",
+    "plus",
+    "search",
+    "arrow-left",
+    "arrow-right",
+    "history",
+    "move-left",
+    "move-right",
+    "maximize",
+    "move-down",
+    "move-up",
+    "bookmark",
+    "download",
+    "square-pen",
+    "save",
+    "printer",
+    "focus",
+    "zoom-out",
+    "zoom-in",
+    "command",
+    "folder-open",
+    "terminal",
+    "panel-left",
+    "panel-bottom",
+    "message-square-code",
+    "bug",
+    "bug-off",
+    "text-cursor-input",
+    "replace",
+    "folder-search",
+    "files",
+    "git-branch",
+    "list-filter",
+    "mouse-pointer-2",
+    "arrow-up",
+    "arrow-down",
+    "file-plus",
+    "file-pen",
+    "square-terminal",
+    "blocks",
+    "paintbrush",
+    "eraser",
+    "crop",
+    "lasso",
+    "square-dashed",
+    "pipette",
+    "bandage",
+    "type",
+    "scan",
+    "undo",
+    "redo",
+    "copy",
+    "mouse-pointer",
+    "select-all",
+    "paste",
+    "layers-plus",
+    "group",
+    "blend",
+    "eye",
+    "component",
+    "list-restart",
+    "layers",
+    "scissors",
+    "corner-up-left",
+    "corner-up-right",
+    "move-horizontal",
+    "move-vertical",
+    "hand",
+    "play",
+    "step-back",
+    "step-forward",
+    "flag",
+    "flag-triangle-right",
+    "pause",
+    "skip-back",
+    "skip-forward",
+    "frame",
+    "rectangle-horizontal",
+    "pen-tool",
+    "expand",
+    "circle",
+    "line-squiggle",
+    "scaling",
+    "copy-plus",
+    "ungroup",
+    "image-plus",
+    "send-to-back",
+    "bring-to-front",
+    "scan-line",
+    "pencil",
+    "move",
+    "rotate-cw",
+    "keyboard",
+    "package-plus",
+    "scan-dashed",
+    "eye-off",
+    "panel-right",
+    "view-front",
+    "view-right",
+    "view-top",
+    "box",
+    "camera",
+    "rotate-ccw",
+    "route",
+    "circle-arrow-up",
+    "circle-arrow-down",
+    "arrow-down-to-line",
+    "arrow-up-to-line",
+    "mic-off",
+    "headphones",
+    "volume-x",
+    "volume-2",
+    "incognito",
+    "code",
+    "book-open",
+    "file-output",
+    "audio-lines"
+  ],
+  "presets": {
+    "google_chrome": [
+      {
+        "layer": "Browsing",
+        "icons": [
+          "link",
+          "plus",
+          "search",
+          "arrow-left",
+          "arrow-right",
+          "history",
+          "move-left",
+          "move-right",
+          "maximize",
+          "link",
+          "move-down",
+          "move-up"
+        ]
+      },
+      {
+        "layer": "Pages",
+        "icons": [
+          "bookmark",
+          "download",
+          "history",
+          "square-pen",
+          "save",
+          "printer",
+          "focus",
+          "zoom-out",
+          "zoom-in",
+          "search",
+          "zoom-out",
+          "zoom-in"
+        ]
+      }
+    ],
+    "visual_studio_code": [
+      {
+        "layer": "Coding",
+        "icons": [
+          "command",
+          "folder-open",
+          "terminal",
+          "panel-left",
+          "panel-bottom",
+          "message-square-code",
+          "bug",
+          "bug-off",
+          "text-cursor-input",
+          "folder-open",
+          "move-left",
+          "move-right"
+        ]
+      },
+      {
+        "layer": "Search",
+        "icons": [
+          "search",
+          "replace",
+          "folder-search",
+          "files",
+          "git-branch",
+          "list-filter",
+          "mouse-pointer-2",
+          "move-up",
+          "move-down",
+          "search",
+          "arrow-up",
+          "arrow-down"
+        ]
+      },
+      {
+        "layer": "Files & terminal",
+        "icons": [
+          "file-plus",
+          "folder-open",
+          "save",
+          "file-pen",
+          "terminal",
+          "square-terminal",
+          "panel-left",
+          "folder-search",
+          "blocks",
+          "save",
+          "move-left",
+          "move-right"
+        ]
+      }
+    ],
+    "adobe_photoshop": [
+      {
+        "layer": "Tools",
+        "icons": [
+          "mouse-pointer-2",
+          "paintbrush",
+          "eraser",
+          "crop",
+          "lasso",
+          "square-dashed",
+          "pipette",
+          "bandage",
+          "type",
+          "scan",
+          "zoom-out",
+          "zoom-in"
+        ]
+      },
+      {
+        "layer": "Editing",
+        "icons": [
+          "undo",
+          "redo",
+          "copy",
+          "save",
+          "mouse-pointer",
+          "select-all",
+          "copy",
+          "paste",
+          "focus",
+          "scan",
+          "zoom-out",
+          "zoom-in"
+        ]
+      },
+      {
+        "layer": "Layers",
+        "icons": [
+          "layers-plus",
+          "copy",
+          "group",
+          "blend",
+          "eye",
+          "component",
+          "list-restart",
+          "layers",
+          "file-pen",
+          "copy",
+          "move-left",
+          "move-right"
+        ]
+      }
+    ],
+    "adobe_premiere_pro": [
+      {
+        "layer": "Editing",
+        "icons": [
+          "mouse-pointer-2",
+          "scissors",
+          "corner-up-left",
+          "corner-up-right",
+          "move-horizontal",
+          "move-vertical",
+          "hand",
+          "zoom-in",
+          "play",
+          "play",
+          "step-back",
+          "step-forward"
+        ]
+      },
+      {
+        "layer": "Timeline",
+        "icons": [
+          "flag",
+          "flag-triangle-right",
+          "step-back",
+          "pause",
+          "step-forward",
+          "bookmark",
+          "scissors",
+          "undo",
+          "redo",
+          "pause",
+          "arrow-left",
+          "arrow-right"
+        ]
+      },
+      {
+        "layer": "Project",
+        "icons": [
+          "save",
+          "folder-open",
+          "file-plus",
+          "copy",
+          "paste",
+          "select-all",
+          "skip-back",
+          "skip-forward",
+          "_",
+          "save",
+          "zoom-in",
+          "zoom-out"
+        ]
+      }
+    ],
+    "figma": [
+      {
+        "layer": "Design",
+        "icons": [
+          "mouse-pointer-2",
+          "frame",
+          "rectangle-horizontal",
+          "pen-tool",
+          "type",
+          "expand",
+          "focus",
+          "command",
+          "undo",
+          "command",
+          "zoom-out",
+          "zoom-in"
+        ]
+      },
+      {
+        "layer": "Arrange",
+        "icons": [
+          "circle",
+          "line-squiggle",
+          "hand",
+          "scaling",
+          "select-all",
+          "copy",
+          "paste",
+          "copy-plus",
+          "group",
+          "ungroup",
+          "zoom-out",
+          "zoom-in"
+        ]
+      },
+      {
+        "layer": "Layers",
+        "icons": [
+          "ungroup",
+          "component",
+          "image-plus",
+          "move-down",
+          "move-up",
+          "send-to-back",
+          "bring-to-front",
+          "scan-line",
+          "text-cursor-input",
+          "group",
+          "move-down",
+          "move-up"
+        ]
+      }
+    ],
+    "adobe_illustrator": [
+      {
+        "layer": "Tools",
+        "icons": [
+          "mouse-pointer-2",
+          "mouse-pointer",
+          "pen-tool",
+          "type",
+          "rectangle-horizontal",
+          "circle",
+          "paintbrush",
+          "pencil",
+          "scissors",
+          "group",
+          "zoom-out",
+          "zoom-in"
+        ]
+      },
+      {
+        "layer": "Objects",
+        "icons": [
+          "group",
+          "ungroup",
+          "copy",
+          "paste",
+          "undo",
+          "redo",
+          "select-all",
+          "copy-plus",
+          "layers",
+          "group",
+          "move-down",
+          "move-up"
+        ]
+      },
+      {
+        "layer": "Documents",
+        "icons": [
+          "file-plus",
+          "folder-open",
+          "save",
+          "file-pen",
+          "printer",
+          "search",
+          "skip-back",
+          "skip-forward",
+          "_",
+          "save",
+          "zoom-out",
+          "zoom-in"
+        ]
+      }
+    ],
+    "blender": [
+      {
+        "layer": "Modeling",
+        "icons": [
+          "move",
+          "rotate-cw",
+          "scaling",
+          "keyboard",
+          "package-plus",
+          "search",
+          "blend",
+          "undo",
+          "redo",
+          "focus",
+          "zoom-out",
+          "zoom-in"
+        ]
+      },
+      {
+        "layer": "Selection",
+        "icons": [
+          "select-all",
+          "scan-dashed",
+          "list-restart",
+          "eye-off",
+          "eye-off",
+          "eye",
+          "panel-left",
+          "panel-right",
+          "text-cursor-input",
+          "focus",
+          "zoom-out",
+          "zoom-in"
+        ]
+      },
+      {
+        "layer": "Views",
+        "icons": [
+          "view-front",
+          "view-right",
+          "view-top",
+          "box",
+          "camera",
+          "focus",
+          "expand",
+          "search",
+          "panel-right",
+          "focus",
+          "rotate-ccw",
+          "rotate-cw"
+        ]
+      }
+    ],
+    "visual_studio": [
+      {
+        "layer": "Editing",
+        "icons": [
+          "save",
+          "search",
+          "replace",
+          "undo",
+          "redo",
+          "copy",
+          "paste",
+          "select-all",
+          "text-cursor-input",
+          "save",
+          "zoom-in",
+          "zoom-out"
+        ]
+      },
+      {
+        "layer": "Debugging",
+        "icons": [
+          "bug",
+          "bug-off",
+          "step-forward",
+          "step-back",
+          "arrow-right",
+          "_",
+          "_",
+          "_",
+          "_",
+          "bug",
+          "arrow-left",
+          "arrow-right"
+        ]
+      },
+      {
+        "layer": "Files",
+        "icons": [
+          "file-plus",
+          "folder-open",
+          "file-pen",
+          "list-filter",
+          "command",
+          "_",
+          "_",
+          "_",
+          "_",
+          "command",
+          "move-down",
+          "move-up"
+        ]
+      }
+    ],
+    "intellij_idea": [
+      {
+        "layer": "Coding",
+        "icons": [
+          "save",
+          "search",
+          "undo",
+          "redo",
+          "copy",
+          "paste",
+          "select-all",
+          "corner-up-right",
+          "_",
+          "save",
+          "zoom-in",
+          "zoom-out"
+        ]
+      },
+      {
+        "layer": "Navigation",
+        "icons": [
+          "search",
+          "files",
+          "replace",
+          "list-filter",
+          "command",
+          "_",
+          "_",
+          "_",
+          "_",
+          "search",
+          "move-down",
+          "move-up"
+        ]
+      },
+      {
+        "layer": "Run & files",
+        "icons": [
+          "bug",
+          "play",
+          "file-plus",
+          "folder-open",
+          "file-pen",
+          "_",
+          "_",
+          "_",
+          "_",
+          "save",
+          "move-down",
+          "move-up"
+        ]
+      }
+    ],
+    "pycharm": [
+      {
+        "layer": "Coding",
+        "icons": [
+          "save",
+          "search",
+          "undo",
+          "redo",
+          "copy",
+          "paste",
+          "select-all",
+          "corner-up-right",
+          "_",
+          "save",
+          "zoom-in",
+          "zoom-out"
+        ]
+      },
+      {
+        "layer": "Navigation",
+        "icons": [
+          "search",
+          "files",
+          "replace",
+          "list-filter",
+          "command",
+          "_",
+          "_",
+          "_",
+          "_",
+          "search",
+          "move-down",
+          "move-up"
+        ]
+      },
+      {
+        "layer": "Run & files",
+        "icons": [
+          "bug",
+          "play",
+          "file-plus",
+          "folder-open",
+          "file-pen",
+          "_",
+          "_",
+          "_",
+          "_",
+          "save",
+          "move-down",
+          "move-up"
+        ]
+      }
+    ],
+    "obs_studio": [
+      {
+        "layer": "Sources",
+        "icons": [
+          "undo",
+          "redo",
+          "search",
+          "copy",
+          "rotate-cw",
+          "eye",
+          "arrow-left",
+          "arrow-up",
+          "arrow-right",
+          "eye",
+          "arrow-down",
+          "arrow-up"
+        ]
+      },
+      {
+        "layer": "Source order",
+        "icons": [
+          "copy",
+          "paste",
+          "move-up",
+          "move-down",
+          "bring-to-front",
+          "send-to-back",
+          "expand",
+          "arrow-down",
+          "focus",
+          "expand",
+          "move-down",
+          "move-up"
+        ]
+      }
+    ],
+    "discord": [
+      {
+        "layer": "Navigation",
+        "icons": [
+          "route",
+          "search",
+          "circle-arrow-up",
+          "circle-arrow-down",
+          "arrow-down-to-line",
+          "arrow-up-to-line",
+          "_",
+          "_",
+          "_",
+          "route",
+          "arrow-up",
+          "arrow-down"
+        ]
+      },
+      {
+        "layer": "Voice",
+        "icons": [
+          "mic-off",
+          "headphones",
+          "_",
+          "_",
+          "_",
+          "_",
+          "_",
+          "_",
+          "_",
+          "_",
+          "volume-x",
+          "volume-2"
+        ]
+      }
+    ],
+    "firefox": [
+      {
+        "layer": "Browsing",
+        "icons": [
+          "link",
+          "plus",
+          "search",
+          "arrow-left",
+          "arrow-right",
+          "history",
+          "maximize",
+          "move-right",
+          "move-left",
+          "link",
+          "move-down",
+          "move-up"
+        ]
+      },
+      {
+        "layer": "Reading",
+        "icons": [
+          "bookmark",
+          "download",
+          "history",
+          "incognito",
+          "save",
+          "code",
+          "bookmark",
+          "focus",
+          "book-open",
+          "focus",
+          "zoom-out",
+          "zoom-in"
+        ]
+      }
+    ],
+    "audacity": [
+      {
+        "layer": "Audio",
+        "icons": [
+          "play",
+          "pause",
+          "step-back",
+          "pause",
+          "step-forward",
+          "skip-back",
+          "skip-forward",
+          "undo",
+          "redo",
+          "search",
+          "zoom-out",
+          "zoom-in"
+        ]
+      },
+      {
+        "layer": "Clip editing",
+        "icons": [
+          "scissors",
+          "copy",
+          "paste",
+          "copy-plus",
+          "select-all",
+          "save",
+          "file-plus",
+          "folder-open",
+          "file-output",
+          "audio-lines",
+          "move-down",
+          "move-up"
+        ]
+      }
+    ]
+  }
+}

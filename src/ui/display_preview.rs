@@ -234,24 +234,46 @@ fn paint_speaker_icon(
     }
 }
 
+fn paint_layer_navigation_icon(
+    ui: &egui::Ui,
+    center: egui::Pos2,
+    size: f32,
+    color: Color32,
+    next: bool,
+) {
+    let bitmap: &[u8] = if next {
+        include_bytes!("../../assets/display-layer-next.bin")
+    } else {
+        include_bytes!("../../assets/display-layer-prev.bin")
+    };
+    let pixel = size / 35.0;
+    let origin = center - egui::vec2(size, size) * 0.5;
+    let mut mesh = egui::epaint::Mesh::default();
+    for index in 0..35 * 35 {
+        if bitmap[index / 8] & (0x80 >> (index % 8)) == 0 {
+            continue;
+        }
+        mesh.add_colored_rect(
+            egui::Rect::from_min_size(
+                origin + egui::vec2((index % 35) as f32, (index / 35) as f32) * pixel,
+                egui::vec2(pixel, pixel),
+            ),
+            color,
+        );
+    }
+    ui.painter().add(egui::Shape::mesh(mesh));
+}
+
 fn paint_preview_key_icon(ui: &egui::Ui, rect: egui::Rect, icon: PreviewKeyIcon, color: Color32) {
     let size = rect.height() * 0.52;
     match icon {
         PreviewKeyIcon::LayerPrevious | PreviewKeyIcon::LayerNext => {
-            let center = rect.center();
-            paint_layer_icon(
+            paint_layer_navigation_icon(
                 ui,
-                egui::pos2(center.x - size * 0.32, center.y),
-                size * 0.82,
-                color,
-                20,
-            );
-            paint_chevrons(
-                ui,
-                egui::pos2(center.x + size * 0.38, center.y),
+                rect.center(),
                 size,
-                icon == PreviewKeyIcon::LayerNext,
                 color,
+                icon == PreviewKeyIcon::LayerNext,
             );
         }
         PreviewKeyIcon::VolumeDown | PreviewKeyIcon::VolumeMute | PreviewKeyIcon::VolumeUp => {

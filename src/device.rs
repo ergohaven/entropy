@@ -837,7 +837,10 @@ mod tests {
         device.vendor_id = ERGOHAVEN_VENDOR_ID;
         device.product_id = M4CR0PAD_V2_PRODUCT_ID;
 
-        assert_eq!(device.display_name_with_transport(&device.name), "Macropad v2");
+        assert_eq!(
+            device.display_name_with_transport(&device.name),
+            "Macropad v2"
+        );
     }
 
     #[test]

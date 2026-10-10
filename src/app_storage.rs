@@ -397,18 +397,11 @@ pub(super) fn read_pictogram_file(path: &std::path::Path) -> anyhow::Result<Vec<
         );
         p.bitmap = normalize_pictogram_bitmap(&p.bitmap)?;
     }
-    let mut result = file.user;
-    // Known stock revisions follow the refreshed library. Preserve unrecognized
-    // imported drawings and all explicit user copies unchanged.
-    for p in file.builtin {
-        if builtin_pictogram_index(&p.bitmap).is_none()
-            && legacy_builtin_pictogram_index(&p.bitmap).is_none()
-            && !result.iter().any(|v| v.bitmap == p.bitmap)
-        {
-            result.push(p);
-        }
-    }
-    Ok(result)
+    // `builtin` is an exported snapshot of the application's stock catalog.
+    // Its bitmaps change between releases, so an unfamiliar bitmap is not a
+    // user pictogram. Importing it into `user` filled “My pictograms” with
+    // outdated copies of stock icons after every catalog refresh.
+    Ok(file.user)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1108,6 +1101,20 @@ mod pictogram_portability_tests {
         assert_eq!(imported[0].name, "My lock");
         assert_eq!(imported[0].color, [1, 2, 3]);
         assert_eq!(imported[0].bitmap, old);
+    }
+
+    #[test]
+    fn unfamiliar_builtin_snapshot_is_not_imported_as_a_user_icon() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("older-stock.json");
+        let bitmap = vec![0xA5; PICTOGRAM_BYTES];
+        let json = serde_json::json!({
+            "version": 2, "width": 35, "height": 35,
+            "builtin": [{"name":"Previous stock artwork","color":[255,255,255],"bitmap":bitmap}],
+            "user": []
+        });
+        std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+        assert!(read_pictogram_file(&path).unwrap().is_empty());
     }
 
     #[test]

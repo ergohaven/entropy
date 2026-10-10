@@ -165,6 +165,7 @@ fn slot_save_keeps_pictogram_page_visible_without_library_loading_message() {
 
 #[test]
 fn full_ui_repeated_assignments_use_actual_popup_without_reunlock() {
+    let catalog = pictogram_catalog(crate::i18n::Language::Russian);
     for initially_unlocked in [false, true] {
         let (mut app, ctx, recorder) = app(initially_unlocked);
         click_label(&mut app, &ctx, "Пиктограммы");
@@ -215,7 +216,7 @@ fn full_ui_repeated_assignments_use_actual_popup_without_reunlock() {
                     .pictograms
                     .library
                     .bitmap(PictogramKind::Macro, if index == 2 { 1 } else { 0 }),
-                Some(builtin_pictogram_bitmap(index).as_slice())
+                Some(catalog[index].bitmap.as_slice())
             );
         }
         let requests = recorder.requests();

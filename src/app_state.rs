@@ -266,6 +266,23 @@ mod app_settings_tests {
     use super::*;
 
     #[test]
+    fn tap_dance_keycap_keeps_slot_label_and_tooltip_keeps_custom_name() {
+        let names = &["t1".to_owned()];
+        assert_eq!(
+            keycode_label_with_macro_names(0x5700, &[], &[], &[], names, KeyLegendLayout::English),
+            "TD0"
+        );
+        assert_eq!(
+            keycode_tooltip_with_macro_names(0x5700, &[], &[], &[], &[], names),
+            "t1 — tap dance 0"
+        );
+        assert_eq!(
+            keycode_label_with_macro_names(0x5700, &[], &[], &[], &[], KeyLegendLayout::English),
+            "TD0"
+        );
+    }
+
+    #[test]
     fn app_settings_default_dark_mode_is_light() {
         assert!(!AppSettings::default().dark_mode);
     }
@@ -311,7 +328,7 @@ pub(crate) fn keycode_label_with_macro_names(
     custom: &[crate::keyboard::CustomKeycode],
     layer_names: &[String],
     macro_names: &[String],
-    tap_dance_names: &[String],
+    _tap_dance_names: &[String],
     key_legend_layout: KeyLegendLayout,
 ) -> String {
     if (0x7700..=0x77FF).contains(&value) {
@@ -323,9 +340,8 @@ pub(crate) fn keycode_label_with_macro_names(
     }
     if (0x5700..=0x57FF).contains(&value) {
         let idx = (value - 0x5700) as usize;
-        if let Some(name) = tap_dance_custom_name(tap_dance_names, idx) {
-            return format!("TD{}\n{}", idx, name);
-        }
+        // Keep the slot identifier on the keycap; the custom name belongs in
+        // the tooltip and editor, not on the macropad preview.
         return format!("TD{}", idx);
     }
     keycode_label_with_names_and_layout(value, custom, layer_names, key_legend_layout)
@@ -2570,8 +2586,8 @@ impl Default for DisplaySettingsState {
             date: DATE_DEFAULT,
             confirmed_date: DATE_DEFAULT,
             supported: false,
-            color: [200, 178, 146],
-            confirmed_color: [200, 178, 146],
+            color: [209, 177, 139],
+            confirmed_color: [209, 177, 139],
             background_color_supported: false,
             background_color: [0, 0, 0],
             confirmed_background_color: [0, 0, 0],
@@ -2589,8 +2605,8 @@ impl Default for DisplaySettingsState {
             startup_image_preview_rgba: Vec::new(),
             startup_image_preview_revision: 0,
             clock_settings_supported: false,
-            clock_text_color: [255, 255, 255],
-            confirmed_clock_text_color: [255, 255, 255],
+            clock_text_color: [209, 177, 139],
+            confirmed_clock_text_color: [209, 177, 139],
             clock_overlay_controls_supported: false,
             clock_visible: true,
             confirmed_clock_visible: true,
@@ -2602,13 +2618,13 @@ impl Default for DisplaySettingsState {
             confirmed_clock_info_opacity: 100,
             clock_modifiers_visible: true,
             confirmed_clock_modifiers_visible: true,
-            clock_modifiers_color: [255, 255, 255],
-            confirmed_clock_modifiers_color: [255, 255, 255],
+            clock_modifiers_color: [209, 177, 139],
+            confirmed_clock_modifiers_color: [209, 177, 139],
             clock_modifiers_opacity: 100,
             confirmed_clock_modifiers_opacity: 100,
             clock_info_color_supported: false,
-            clock_info_color: [255, 255, 255],
-            confirmed_clock_info_color: [255, 255, 255],
+            clock_info_color: [209, 177, 139],
+            confirmed_clock_info_color: [209, 177, 139],
             clock_background_asset_supported: false,
             clock_background_kind: 0,
             clock_background_frames: 0,
@@ -2737,7 +2753,7 @@ pub(crate) fn load_display_settings(
     let clock_text_color = if clock_settings_supported {
         read_display_rgb(dev_conn, CLOCK_TEXT_COLOR_QSIDS)?
     } else {
-        [255, 255, 255]
+        color
     };
     let clock_overlay_controls_supported = [
         CLOCK_VISIBLE_QSID,
@@ -2778,7 +2794,7 @@ pub(crate) fn load_display_settings(
     let clock_modifiers_color = if clock_overlay_controls_supported {
         read_display_rgb(dev_conn, CLOCK_MODIFIERS_COLOR_QSIDS)?
     } else {
-        [255, 255, 255]
+        color
     };
     let clock_modifiers_opacity = if clock_overlay_controls_supported {
         read_display_setting_u8(dev_conn, CLOCK_MODIFIERS_OPACITY_QSID)?.min(100)
@@ -2792,7 +2808,7 @@ pub(crate) fn load_display_settings(
     let clock_info_color = if clock_info_color_supported {
         read_display_rgb(dev_conn, CLOCK_INFO_COLOR_QSIDS)?
     } else {
-        [255, 255, 255]
+        color
     };
     let clock_background_dim_supported =
         clock_settings_supported && supported_qmk_settings.contains(&CLOCK_BACKGROUND_DIM_QSID);
@@ -5259,6 +5275,13 @@ pub struct EntropyApp {
         String,
         Option<crate::application_layouts::DetectedApplication>,
     )>,
+    /// Avoid retrying a failed, explicitly requested Default keymap write every UI tick.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) default_layout_sync_retry_after: Option<std::time::Instant>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) default_layout_device_reconciled: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) default_layout_pending_layers: u16,
     pub(crate) application_picker_open: bool,
     pub(crate) application_picker_assign_existing: bool,
     /// Stable profile selected when the edit dialog opens. Foreground changes

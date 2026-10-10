@@ -110,9 +110,13 @@ fn pictogram_name_error(
         return Some("display_settings.pictogram_name_format_error");
     }
     let normalized = name.to_lowercase();
-    if builtin_names
-        .iter()
-        .any(|builtin| builtin.trim().to_lowercase() == normalized)
+    let keeps_existing_name = selected_saved
+        .and_then(|index| saved.get(index))
+        .is_some_and(|icon| icon.name.trim().to_lowercase() == normalized);
+    if !keeps_existing_name
+        && builtin_names
+            .iter()
+            .any(|builtin| builtin.trim().to_lowercase() == normalized)
     {
         return Some("display_settings.pictogram_name_duplicate_error");
     }
@@ -191,6 +195,346 @@ fn draw_pictogram_library_tile(
     );
 
     response.on_hover_text(tooltip).clicked()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+struct CatalogIcon {
+    index: usize,
+    name: String,
+    bitmap: [u8; PICTOGRAM_BYTES],
+    group: usize,
+}
+
+// The indices are persistent identifiers in pictograms.json. Only the view is
+// deduplicated and reordered; old references and saved user artwork stay valid.
+#[cfg(not(target_arch = "wasm32"))]
+fn pictogram_catalog(lang: crate::i18n::Language) -> Vec<CatalogIcon> {
+    use std::collections::HashSet;
+    let mut names = HashSet::new();
+    let mut bitmaps = HashSet::new();
+    let mut icons = Vec::new();
+    // Prefer the firmware's actual artwork for actions represented twice by
+    // older hand-drawn editor icons. Exact bitmap/name checks below cannot
+    // catch these: the two calculators, for example, have different pixels and
+    // different tooltips but mean the same thing.
+    for index in (38..BUILTIN_PICTOGRAM_KEYS.len()).chain(0..38) {
+        let key = BUILTIN_PICTOGRAM_KEYS[index];
+        if is_superseded_stock_pictogram(key) {
+            continue;
+        }
+        let name = crate::i18n::tr_catalog(lang, key).to_owned();
+        let bitmap = builtin_pictogram_bitmap(index);
+        if !names.insert(name.trim().to_lowercase()) || !bitmaps.insert(bitmap) {
+            continue;
+        }
+        icons.push(CatalogIcon {
+            index,
+            name,
+            bitmap,
+            group: pictogram_group(BUILTIN_PICTOGRAM_KEYS[index]),
+        });
+    }
+    icons.sort_by(|a, b| {
+        a.group.cmp(&b.group).then_with(|| {
+            pictogram_sort_key(BUILTIN_PICTOGRAM_KEYS[a.index])
+                .cmp(&pictogram_sort_key(BUILTIN_PICTOGRAM_KEYS[b.index]))
+        })
+    });
+    icons
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn is_superseded_stock_pictogram(key: &str) -> bool {
+    matches!(
+        key,
+        "display_settings.pictogram_builtin_mail"
+            | "display_settings.pictogram_builtin_home"
+            | "display_settings.pictogram_builtin_screenshot"
+            | "display_settings.pictogram_builtin_mouse_button_left"
+            | "display_settings.pictogram_builtin_mouse_button_middle"
+            | "display_settings.pictogram_builtin_mouse_button_right"
+            | "display_settings.pictogram_builtin_brightness_down"
+            | "display_settings.pictogram_builtin_brightness_up"
+            | "display_settings.pictogram_builtin_computer"
+            | "display_settings.pictogram_builtin_web_search"
+            | "display_settings.pictogram_builtin_calculator"
+    )
+}
+
+// Older Entropy releases could put a stock snapshot in `user`. Recognize only
+// an exact legacy stock record; a user drawing may legitimately reuse a stock
+// name, bitmap, or color independently.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_known_migrated_stock_pictogram(icon: &SavedPictogram) -> bool {
+    if icon.color != [84, 189, 191] {
+        return false;
+    }
+    (0..38).any(|index| {
+        let name_matches = crate::i18n::Language::ALL.iter().any(|language| {
+            icon.name.trim() == crate::i18n::tr_catalog(*language, BUILTIN_PICTOGRAM_KEYS[index])
+        });
+        name_matches
+            && (icon.bitmap == legacy_builtin_pictogram_bitmap(index)
+                || icon.bitmap == builtin_pictogram_bitmap(index))
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn visible_saved_pictograms<'a>(
+    saved: &'a [SavedPictogram],
+    _catalog: &[CatalogIcon],
+) -> Vec<&'a SavedPictogram> {
+    saved
+        .iter()
+        .filter(|icon| {
+            icon.bitmap.len() == PICTOGRAM_BYTES && !is_known_migrated_stock_pictogram(icon)
+        })
+        .collect()
+}
+
+// Order within each existing group. Keep these lists independent of the group
+// assignment rules: changing the order must not move an icon to another group.
+#[cfg(not(target_arch = "wasm32"))]
+fn pictogram_sort_key(key: &str) -> String {
+    let id = key.rsplit('.').next().unwrap_or(key);
+    let id = id
+        .strip_prefix("pictogram_builtin_action_")
+        .or_else(|| id.strip_prefix("pictogram_firmware_"))
+        .or_else(|| id.strip_prefix("pictogram_integration_"))
+        .or_else(|| id.strip_prefix("pictogram_builtin_"))
+        .unwrap_or(id);
+    const ORDER: [&str; 22] = [
+        "layer_prev_icon layer_next_icon", "", "", "", "",
+        "play pause stop",
+        "files file_plus file_pen file_output folder_open folder_search download mail save printer cut copy paste copy_plus",
+        "pen_tool pencil paintbrush pipette lasso crop eraser square_pen rectangle_horizontal circle frame image_plus layers layers_plus group ungroup blend eye eye_off rotate_ccw rotate_cw scaling circle_arrow_up circle_arrow_down book_open",
+        "terminal square_terminal code message_square_code command git_branch bug bug_off component package_plus blocks keyboard",
+        "arrow_left arrow_right arrow_up arrow_down arrow_up_to_line arrow_down_to_line",
+        "home end page_up page_down insert bookmark history search web_search focus zoom_out zoom_in move_left move_right move_up move_down move_horizontal move_vertical move link panel_left panel_right panel_bottom view_front view_right view_top send_to_back control_panel",
+        "undo redo select_all text_cursor_input type replace scissors eraser delete",
+        "brightness_down brightness_up computer settings control_panel calculator screenshot lock",
+        "single_tap double_tap hold plus maximize expand corner_up_left corner_up_right scan scan_line scan_dashed square_dashed list_filter list_restart route hand box bandage line_squiggle incognito bring_to_front",
+        "previous_track next_track skip_back skip_forward",
+        "step_back step_forward flag flag_triangle_right",
+        "volume_down volume volume_2 mute volume_x headphones",
+        "microphone mic_off audio_lines camera",
+        "mouse_left mouse_middle mouse_right mouse_button_left mouse_button_middle mouse_button_right mouse_up mouse_down wheel_up wheel_down mouse_pointer mouse_pointer_2",
+        "", "task_new task_edit task_done task_repeat obs_record obs_stream obs_scene obs_audio obs_visible obs_studio obs_refresh", "",
+    ];
+    let group = pictogram_group(key);
+    let rank = ORDER[group]
+        .split_whitespace()
+        .position(|candidate| candidate == id)
+        .unwrap_or(999);
+    format!("{rank:03}_{id}_{key}")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+const PICTOGRAM_GROUP_KEYS: [&str; 22] = [
+    "display_settings.pictogram_group_navigation",
+    "display_settings.pictogram_group_editing",
+    "display_settings.pictogram_group_files",
+    "display_settings.pictogram_group_design",
+    "display_settings.pictogram_group_development",
+    "display_settings.pictogram_group_playback",
+    "display_settings.pictogram_group_playback_files",
+    "display_settings.pictogram_group_playback_art",
+    "display_settings.pictogram_group_playback_code",
+    "display_settings.pictogram_group_playback_arrows",
+    "display_settings.pictogram_group_playback_navigation",
+    "display_settings.pictogram_group_playback_editing",
+    "display_settings.pictogram_group_playback_device",
+    "display_settings.pictogram_group_playback_actions",
+    "display_settings.pictogram_group_tracks",
+    "display_settings.pictogram_group_timeline",
+    "display_settings.pictogram_group_sound",
+    "display_settings.pictogram_group_recording",
+    "display_settings.pictogram_group_mouse",
+    "display_settings.pictogram_group_system",
+    "display_settings.pictogram_group_integrations",
+    "display_settings.pictogram_group_other",
+];
+
+#[cfg(not(target_arch = "wasm32"))]
+fn pictogram_group(key: &str) -> usize {
+    if key.contains("pictogram_firmware_layer_") {
+        return 0;
+    }
+    if key.contains("pictogram_integration_") {
+        return 20;
+    }
+    if key.contains("mouse") || key.contains("wheel") || key.contains("pointer") {
+        return 18;
+    }
+    if ["microphone", "mic_off", "audio_lines", "camera"]
+        .iter()
+        .any(|part| key.contains(part))
+    {
+        return 17;
+    }
+    if ["volume", "mute", "headphones"]
+        .iter()
+        .any(|part| key.contains(part))
+    {
+        return 16;
+    }
+    if ["step_back", "step_forward", "flag"]
+        .iter()
+        .any(|part| key.contains(part))
+    {
+        return 15;
+    }
+    if ["track", "skip_back", "skip_forward"]
+        .iter()
+        .any(|part| key.contains(part))
+    {
+        return 14;
+    }
+    // The old `key.contains("play")` matched `display_settings` for every
+    // remaining icon. Split that bucket only; the groups above keep their
+    // existing membership and relative order.
+    let id = key.rsplit('.').next().unwrap_or(key);
+    if id.ends_with("_play") || id.ends_with("_pause") || id.ends_with("_stop") {
+        return 5;
+    }
+    if [
+        "file", "folder", "save", "download", "printer", "export", "mail", "copy", "paste", "cut",
+    ]
+    .iter()
+    .any(|part| id.contains(part))
+    {
+        return 6;
+    }
+    if [
+        "paint",
+        "pencil",
+        "pen",
+        "brush",
+        "crop",
+        "lasso",
+        "pipette",
+        "rectangle",
+        "circle",
+        "frame",
+        "scaling",
+        "rotate",
+        "layers",
+        "group",
+        "image",
+        "blend",
+        "eye",
+    ]
+    .iter()
+    .any(|part| id.contains(part))
+    {
+        return 7;
+    }
+    if [
+        "terminal",
+        "code",
+        "bug",
+        "git",
+        "command",
+        "component",
+        "package",
+        "blocks",
+        "keyboard",
+    ]
+    .iter()
+    .any(|part| id.contains(part))
+    {
+        return 8;
+    }
+    if id.contains("arrow") {
+        return 9;
+    }
+    if [
+        "search", "move", "home", "page", "history", "bookmark", "focus", "zoom", "view", "next",
+        "previous", "end", "insert", "panel", "link",
+    ]
+    .iter()
+    .any(|part| id.contains(part))
+    {
+        return 10;
+    }
+    if [
+        "undo", "redo", "delete", "replace", "select", "text", "type", "scissors", "eraser",
+    ]
+    .iter()
+    .any(|part| id.contains(part))
+    {
+        return 11;
+    }
+    if [
+        "brightness",
+        "computer",
+        "calculator",
+        "control_panel",
+        "settings",
+        "lock",
+        "screenshot",
+    ]
+    .iter()
+    .any(|part| id.contains(part))
+    {
+        return 12;
+    }
+    13
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn draw_grouped_catalog(
+    ui: &mut egui::Ui,
+    lang: crate::i18n::Language,
+    dark: bool,
+    scale: f32,
+    search: &str,
+    color: [u8; 3],
+    background: [u8; 3],
+    selected: Option<&[u8]>,
+    columns: usize,
+    id: &str,
+    catalog: &[CatalogIcon],
+) -> Option<(usize, String, Vec<u8>)> {
+    let mut chosen = None;
+    for (group, key) in PICTOGRAM_GROUP_KEYS.iter().enumerate() {
+        let entries: Vec<_> = catalog
+            .iter()
+            .filter(|icon| {
+                icon.group == group
+                    && (search.is_empty() || icon.name.to_lowercase().contains(search))
+            })
+            .collect();
+        if entries.is_empty() {
+            continue;
+        }
+        ui.separator();
+        ui.label(RichText::new(crate::i18n::tr_catalog(lang, key)).strong());
+        egui::Grid::new((id, group))
+            .num_columns(columns)
+            .spacing(egui::vec2(7.0 * scale, 7.0 * scale))
+            .show(ui, |ui| {
+                for (position, icon) in entries.into_iter().enumerate() {
+                    if draw_pictogram_library_tile(
+                        ui,
+                        dark,
+                        scale,
+                        &icon.bitmap,
+                        color,
+                        background,
+                        &icon.name,
+                        selected == Some(icon.bitmap.as_slice()),
+                    ) {
+                        chosen = Some((icon.index, icon.name.clone(), icon.bitmap.to_vec()));
+                    }
+                    if (position + 1) % columns == 0 {
+                        ui.end_row();
+                    }
+                }
+            });
+    }
+    chosen
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2150,22 +2494,12 @@ impl EntropyApp {
             .library
             .bitmap(kind, self.display_settings.pictograms.selected_slot)
             .map(ToOwned::to_owned);
-        let picker_builtins: Vec<(String, Vec<u8>)> = BUILTIN_PICTOGRAM_KEYS
-            .iter()
-            .enumerate()
-            .map(|(i, key)| {
-                (
-                    crate::i18n::tr_catalog(lang, key).to_owned(),
-                    builtin_pictogram_bitmap(i).to_vec(),
-                )
-            })
-            .collect();
-        let picker_saved: Vec<(String, Vec<u8>)> = self
-            .app_settings
-            .saved_pictograms
-            .iter()
-            .map(|p| (p.name.clone(), p.bitmap.clone()))
-            .collect();
+        let picker_builtins = pictogram_catalog(lang);
+        let picker_saved: Vec<(String, Vec<u8>)> =
+            visible_saved_pictograms(&self.app_settings.saved_pictograms, &picker_builtins)
+                .into_iter()
+                .map(|p| (p.name.clone(), p.bitmap.clone()))
+                .collect();
         let picker_color = self.display_settings.color;
         let picker_background = self.display_settings.background_color;
         let mut assignment_choice: Option<Option<Vec<u8>>> = None;
@@ -2231,52 +2565,73 @@ impl EntropyApp {
                             .id_salt("pictogram_assignment_picker_scroll_v1")
                             .max_height(260.0 * scale)
                             .show(ui, |ui| {
-                                let columns = 6;
-                                egui::Grid::new("pictogram_assignment_picker_grid_v1")
-                                    .num_columns(columns)
-                                    .spacing(egui::vec2(7.0 * scale, 7.0 * scale))
-                                    .show(ui, |ui| {
-                                        let mut position = 0usize;
-                                        if draw_no_pictogram_tile(
-                                            ui,
-                                            dark,
-                                            scale,
-                                            crate::i18n::tr_catalog(
-                                                lang,
-                                                "display_settings.pictogram_none",
-                                            ),
-                                            selected_bitmap.is_none(),
-                                        ) {
-                                            assignment_choice = Some(None);
-                                        }
-                                        position += 1;
-                                        for (name, bitmap) in
-                                            picker_builtins.iter().chain(picker_saved.iter())
-                                        {
-                                            if !search.is_empty()
-                                                && !name.to_lowercase().contains(&search)
-                                            {
-                                                continue;
+                                if draw_no_pictogram_tile(
+                                    ui,
+                                    dark,
+                                    scale,
+                                    crate::i18n::tr_catalog(
+                                        lang,
+                                        "display_settings.pictogram_none",
+                                    ),
+                                    selected_bitmap.is_none(),
+                                ) {
+                                    assignment_choice = Some(None);
+                                }
+                                if let Some((_, _, bitmap)) = draw_grouped_catalog(
+                                    ui,
+                                    lang,
+                                    dark,
+                                    scale,
+                                    &search,
+                                    picker_color,
+                                    picker_background,
+                                    selected_bitmap.as_deref(),
+                                    6,
+                                    "assignment",
+                                    &picker_builtins,
+                                ) {
+                                    assignment_choice = Some(Some(bitmap));
+                                }
+                                if !picker_saved.is_empty() {
+                                    ui.separator();
+                                    ui.label(
+                                        RichText::new(crate::i18n::tr_catalog(
+                                            lang,
+                                            "display_settings.pictogram_group_saved",
+                                        ))
+                                        .strong(),
+                                    );
+                                    egui::Grid::new("assignment_saved")
+                                        .num_columns(6)
+                                        .spacing(egui::vec2(7.0 * scale, 7.0 * scale))
+                                        .show(ui, |ui| {
+                                            let mut position = 0;
+                                            for (name, bitmap) in &picker_saved {
+                                                if !search.is_empty()
+                                                    && !name.to_lowercase().contains(&search)
+                                                {
+                                                    continue;
+                                                }
+                                                if draw_pictogram_library_tile(
+                                                    ui,
+                                                    dark,
+                                                    scale,
+                                                    bitmap,
+                                                    picker_color,
+                                                    picker_background,
+                                                    name,
+                                                    selected_bitmap.as_deref()
+                                                        == Some(bitmap.as_slice()),
+                                                ) {
+                                                    assignment_choice = Some(Some(bitmap.clone()));
+                                                }
+                                                position += 1;
+                                                if position % 6 == 0 {
+                                                    ui.end_row();
+                                                }
                                             }
-                                            if draw_pictogram_library_tile(
-                                                ui,
-                                                dark,
-                                                scale,
-                                                bitmap,
-                                                picker_color,
-                                                picker_background,
-                                                name,
-                                                selected_bitmap.as_deref()
-                                                    == Some(bitmap.as_slice()),
-                                            ) {
-                                                assignment_choice = Some(Some(bitmap.clone()));
-                                            }
-                                            position += 1;
-                                            if position % columns == 0 {
-                                                ui.end_row();
-                                            }
-                                        }
-                                    });
+                                        });
+                                }
                             });
                     },
                 );
@@ -2638,92 +2993,63 @@ impl EntropyApp {
             .max_height(190.0 * scale)
             .show(ui, |ui| {
                 ui.style_mut().interaction.tooltip_delay = 1.0;
-                let columns = 5;
-                egui::Grid::new("pictogram_library_table")
-                    .num_columns(columns)
-                    .spacing(egui::vec2(7.0 * scale, 7.0 * scale))
-                    .show(ui, |ui| {
-                        let mut position = 0usize;
-                        for index in 0..BUILTIN_PICTOGRAM_KEYS.len() {
-                            let bitmap = builtin_pictogram_bitmap(index);
-                            let name = crate::i18n::tr_catalog(lang, BUILTIN_PICTOGRAM_KEYS[index])
-                                .to_owned();
-                            let (rect, response) = ui.allocate_exact_size(
-                                egui::vec2(48.0 * scale, 48.0 * scale),
-                                Sense::click(),
-                            );
-                            ui.painter().rect(
-                                rect,
-                                7.0 * scale,
-                                if response.hovered() {
-                                    app_hover_fill(dark)
-                                } else {
-                                    app_surface_fill(dark)
-                                },
-                                Stroke::new(1.0, crate::ui_style::border_color(dark)),
-                                egui::StrokeKind::Inside,
-                            );
-                            paint_monochrome_pictogram(
-                                ui,
-                                rect.shrink(8.0 * scale),
-                                &bitmap,
-                                Color32::from_rgb(accent[0], accent[1], accent[2]),
-                                Color32::TRANSPARENT,
-                            );
-                            let response = response.on_hover_text(name.clone());
-                            if response.clicked() && !busy {
-                                chosen = Some((bitmap.to_vec(), accent, name, Some(index)));
-                            }
-                            position += 1;
-                            if position % columns == 0 {
-                                ui.end_row();
-                            }
-                        }
-                        for preset in &saved {
-                            if preset.bitmap.len() != PICTOGRAM_BYTES {
-                                continue;
-                            }
-                            let (rect, response) = ui.allocate_exact_size(
-                                egui::vec2(48.0 * scale, 48.0 * scale),
-                                Sense::click(),
-                            );
-                            ui.painter().rect(
-                                rect,
-                                7.0 * scale,
-                                if response.hovered() {
-                                    app_hover_fill(dark)
-                                } else {
-                                    app_surface_fill(dark)
-                                },
-                                Stroke::new(1.0, crate::ui_style::border_color(dark)),
-                                egui::StrokeKind::Inside,
-                            );
-                            paint_monochrome_pictogram(
-                                ui,
-                                rect.shrink(8.0 * scale),
-                                &preset.bitmap,
-                                Color32::from_rgb(
-                                    preset.color[0],
-                                    preset.color[1],
-                                    preset.color[2],
-                                ),
-                                Color32::TRANSPARENT,
-                            );
-                            let response = response.on_hover_text(preset.name.clone());
-                            if response.clicked() && !busy {
-                                chosen = Some((
-                                    preset.bitmap.clone(),
+                let catalog = pictogram_catalog(lang);
+                if let Some((index, name, bitmap)) = draw_grouped_catalog(
+                    ui,
+                    lang,
+                    dark,
+                    scale,
+                    "",
+                    accent,
+                    self.display_settings.background_color,
+                    None,
+                    5,
+                    "editor",
+                    &catalog,
+                ) {
+                    if !busy {
+                        chosen = Some((bitmap, accent, name, Some(index)));
+                    }
+                }
+                let saved_visible = visible_saved_pictograms(&saved, &catalog);
+                if !saved_visible.is_empty() {
+                    ui.separator();
+                    ui.label(
+                        RichText::new(crate::i18n::tr_catalog(
+                            lang,
+                            "display_settings.pictogram_group_saved",
+                        ))
+                        .strong(),
+                    );
+                    egui::Grid::new("editor_saved")
+                        .num_columns(5)
+                        .spacing(egui::vec2(7.0 * scale, 7.0 * scale))
+                        .show(ui, |ui| {
+                            for (position, preset) in saved_visible.into_iter().enumerate() {
+                                if draw_pictogram_library_tile(
+                                    ui,
+                                    dark,
+                                    scale,
+                                    &preset.bitmap,
                                     preset.color,
-                                    preset.name.clone(),
-                                    None,
-                                ));
+                                    self.display_settings.background_color,
+                                    &preset.name,
+                                    false,
+                                ) && !busy
+                                {
+                                    chosen = Some((
+                                        preset.bitmap.clone(),
+                                        preset.color,
+                                        preset.name.clone(),
+                                        None,
+                                    ));
+                                }
+                                if (position + 1) % 5 == 0 {
+                                    ui.end_row();
+                                }
                             }
-                            position += 1;
-                            if position % columns == 0 {
-                                ui.end_row();
-                            }
-                        }
-                    });
+                        });
+                }
             });
         if let Some((bitmap, color, name, builtin)) = chosen {
             let pictograms = &mut self.display_settings.pictograms;
@@ -3014,14 +3340,11 @@ impl EntropyApp {
             self.restore_pictogram_editor_from_device();
         }
 
-        let mut builtin_labels = Vec::with_capacity(BUILTIN_PICTOGRAM_KEYS.len() + 2);
+        let builtin_catalog = pictogram_catalog(lang);
+        let mut builtin_labels = Vec::with_capacity(builtin_catalog.len() + 2);
         builtin_labels
             .push(crate::i18n::tr_catalog(lang, "display_settings.pictogram_default").to_owned());
-        builtin_labels.extend(
-            BUILTIN_PICTOGRAM_KEYS
-                .iter()
-                .map(|key| crate::i18n::tr_catalog(lang, key).to_owned()),
-        );
+        builtin_labels.extend(builtin_catalog.iter().map(|icon| icon.name.clone()));
         builtin_labels
             .push(crate::i18n::tr_catalog(lang, "display_settings.pictogram_custom").to_owned());
         let builtin_selected = if self.display_settings.pictograms.source_levels.is_empty() {
@@ -3030,7 +3353,8 @@ impl EntropyApp {
             self.display_settings
                 .pictograms
                 .selected_builtin
-                .map_or(BUILTIN_PICTOGRAM_KEYS.len() + 1, |index| index + 1)
+                .and_then(|index| builtin_catalog.iter().position(|icon| icon.index == index))
+                .map_or(builtin_catalog.len() + 1, |position| position + 1)
         };
         let mut picked_builtin = None;
         display_settings_row(
@@ -3060,8 +3384,8 @@ impl EntropyApp {
         if let Some(choice) = picked_builtin {
             if choice == 0 {
                 self.reset_current_pictogram(ui.ctx());
-            } else if choice <= BUILTIN_PICTOGRAM_KEYS.len() {
-                let index = choice - 1;
+            } else if choice <= builtin_catalog.len() {
+                let index = builtin_catalog[choice - 1].index;
                 let bitmap = builtin_pictogram_bitmap(index);
                 self.display_settings.pictograms.source_levels = pictogram_bitmap_levels(&bitmap);
                 self.display_settings.pictograms.source_file_name.clear();
@@ -4610,6 +4934,230 @@ mod pictogram_confirmation_tests {
             assert!(!app.display_settings.pictograms.loading);
             assert_eq!(app.display_settings.pictograms.source_levels, draft);
             assert_eq!(app.display_settings.pictograms.editor_name, "retain");
+        }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod icon_catalog_tests {
+    use super::*;
+
+    #[test]
+    fn only_exact_migrated_stock_copies_are_hidden_in_russian_picker() {
+        let catalog = pictogram_catalog(crate::i18n::Language::Russian);
+        let stock_index = 0;
+        let stock_name = crate::i18n::tr_catalog(
+            crate::i18n::Language::English,
+            BUILTIN_PICTOGRAM_KEYS[stock_index],
+        );
+        let saved = vec![
+            SavedPictogram {
+                name: stock_name.to_owned(),
+                color: [84, 189, 191],
+                bitmap: legacy_builtin_pictogram_bitmap(stock_index).to_vec(),
+            },
+            SavedPictogram {
+                name: "My drawing".to_owned(),
+                color: [255, 255, 255],
+                bitmap: vec![0x5A; PICTOGRAM_BYTES],
+            },
+        ];
+        let visible = visible_saved_pictograms(&saved, &catalog);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].name, "My drawing");
+    }
+
+    #[test]
+    fn saved_name_bitmap_and_recolored_stock_collisions_remain_selectable() {
+        let catalog = pictogram_catalog(crate::i18n::Language::English);
+        let stock_name =
+            crate::i18n::tr_catalog(crate::i18n::Language::English, BUILTIN_PICTOGRAM_KEYS[0]);
+        let saved = vec![
+            SavedPictogram {
+                name: stock_name.to_owned(),
+                color: [84, 189, 191],
+                bitmap: vec![0xA5; PICTOGRAM_BYTES],
+            },
+            SavedPictogram {
+                name: "My stock shape".to_owned(),
+                color: [84, 189, 191],
+                bitmap: builtin_pictogram_bitmap(0).to_vec(),
+            },
+            SavedPictogram {
+                name: stock_name.to_owned(),
+                color: [255, 0, 0],
+                bitmap: legacy_builtin_pictogram_bitmap(0).to_vec(),
+            },
+        ];
+        let visible = visible_saved_pictograms(&saved, &catalog);
+        assert_eq!(visible.len(), 3);
+        let builtin_names = vec![stock_name.to_owned()];
+        assert!(pictogram_name_error(stock_name, &saved[..1], Some(0), &builtin_names).is_none());
+    }
+
+    #[test]
+    fn stock_catalog_keys_match_the_bitmap_sources() {
+        assert_eq!(
+            &BUILTIN_PICTOGRAM_KEYS[38..38 + crate::action_icons::ACTION_ICON_COUNT],
+            &crate::action_icons::ACTION_ICON_KEYS,
+        );
+        let firmware_start = 38 + crate::action_icons::ACTION_ICON_COUNT;
+        assert_eq!(
+            &BUILTIN_PICTOGRAM_KEYS[firmware_start
+                ..firmware_start + crate::firmware_builtin_icons::FIRMWARE_ICON_COUNT],
+            &crate::firmware_builtin_icons::FIRMWARE_ICON_KEYS,
+        );
+        assert_eq!(
+            BUILTIN_PICTOGRAM_KEYS.len(),
+            firmware_start
+                + crate::firmware_builtin_icons::FIRMWARE_ICON_COUNT
+                + crate::integration_icons::INTEGRATION_ICON_COUNT,
+        );
+    }
+
+    #[test]
+    fn equivalent_legacy_and_firmware_icons_have_one_picker_tile() {
+        for language in crate::i18n::Language::ALL {
+            let catalog = pictogram_catalog(language);
+            for (legacy, current) in [
+                (14, 160), // mail
+                (17, 163), // home
+                (23, 167), // screenshot
+                (24, 168), // left mouse button
+                (25, 170), // right mouse button
+                (26, 169), // middle mouse button
+                (31, 155), // brightness down
+                (32, 156), // brightness up
+                (33, 158), // computer
+                (34, 159), // web search
+                (37, 161), // calculator
+            ] {
+                assert!(!catalog.iter().any(|icon| icon.index == legacy));
+                assert!(catalog.iter().any(|icon| icon.index == current));
+            }
+        }
+    }
+
+    #[test]
+    fn picker_has_unique_names_and_artwork_in_each_language() {
+        for language in crate::i18n::Language::ALL {
+            let catalog = pictogram_catalog(language);
+            let names: std::collections::HashSet<_> = catalog
+                .iter()
+                .map(|icon| icon.name.trim().to_lowercase())
+                .collect();
+            let bitmaps: std::collections::HashSet<_> =
+                catalog.iter().map(|icon| icon.bitmap).collect();
+            assert_eq!(names.len(), catalog.len());
+            assert_eq!(bitmaps.len(), catalog.len());
+            assert!(catalog
+                .iter()
+                .all(|icon| icon.bitmap.iter().any(|byte| *byte != 0)));
+            let layer_prev = 38 + crate::action_icons::ACTION_ICON_COUNT + 20;
+            let layer_next = layer_prev + 1;
+            assert!(catalog.iter().any(|icon| icon.index == layer_prev));
+            assert!(catalog.iter().any(|icon| icon.index == layer_next));
+            assert!(
+                catalog
+                    .iter()
+                    .all(|icon| { icon.name != BUILTIN_PICTOGRAM_KEYS[icon.index] }),
+                "untranslated pictogram tooltip in {language:?}"
+            );
+            let prev = catalog
+                .iter()
+                .position(|icon| icon.index == layer_prev)
+                .unwrap();
+            let next = catalog
+                .iter()
+                .position(|icon| icon.index == layer_next)
+                .unwrap();
+            assert_eq!(next, prev + 1, "layer navigation icons must be adjacent");
+            assert_eq!(catalog[prev].group, 0);
+            for group in 5..=13 {
+                assert!(catalog.iter().any(|icon| icon.group == group));
+            }
+            let titles: std::collections::HashSet<_> = PICTOGRAM_GROUP_KEYS
+                .iter()
+                .map(|key| crate::i18n::tr_catalog(language, key))
+                .collect();
+            assert_eq!(titles.len(), PICTOGRAM_GROUP_KEYS.len());
+        }
+    }
+
+    #[test]
+    fn playback_split_does_not_reassign_other_groups() {
+        assert_eq!(
+            pictogram_group("display_settings.pictogram_builtin_play"),
+            5
+        );
+        assert_eq!(
+            pictogram_group("display_settings.pictogram_builtin_copy"),
+            6
+        );
+        assert_eq!(
+            pictogram_group("display_settings.pictogram_builtin_action_arrow_left"),
+            9
+        );
+        assert_eq!(
+            pictogram_group("display_settings.pictogram_builtin_previous_track"),
+            14
+        );
+        assert_eq!(
+            pictogram_group("display_settings.pictogram_builtin_action_step_back"),
+            15
+        );
+        assert_eq!(
+            pictogram_group("display_settings.pictogram_builtin_volume"),
+            16
+        );
+        assert_eq!(
+            pictogram_group("display_settings.pictogram_builtin_camera"),
+            17
+        );
+        assert_eq!(
+            pictogram_group("display_settings.pictogram_firmware_mouse_left"),
+            18
+        );
+        assert_eq!(
+            pictogram_group("display_settings.pictogram_integration_obs_record"),
+            20
+        );
+    }
+
+    #[test]
+    fn every_picker_icon_has_an_explicit_order_within_its_existing_group() {
+        for language in crate::i18n::Language::ALL {
+            let catalog = pictogram_catalog(language);
+            for icon in &catalog {
+                let key = BUILTIN_PICTOGRAM_KEYS[icon.index];
+                assert!(
+                    !pictogram_sort_key(key).starts_with("999_"),
+                    "missing order for {key} in group {}",
+                    icon.group
+                );
+            }
+            let position = |suffix: &str| {
+                catalog
+                    .iter()
+                    .position(|icon| BUILTIN_PICTOGRAM_KEYS[icon.index].ends_with(suffix))
+                    .unwrap()
+            };
+            assert_eq!(
+                position("pictogram_builtin_double_tap"),
+                position("pictogram_builtin_single_tap") + 1
+            );
+            assert_eq!(
+                position("pictogram_builtin_hold"),
+                position("pictogram_builtin_double_tap") + 1
+            );
+            assert_eq!(
+                position("pictogram_builtin_cut") + 1,
+                position("pictogram_builtin_action_copy")
+            );
+            assert_eq!(
+                position("pictogram_builtin_action_copy") + 1,
+                position("pictogram_builtin_action_paste")
+            );
         }
     }
 }
