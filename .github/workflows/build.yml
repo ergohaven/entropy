@@ -72,8 +72,16 @@ jobs:
         if: matrix.kind != 'macos'
         run: cargo build --release
 
+      - name: Build macOS binary
+        if: matrix.kind == 'macos'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '10.15'
+        run: cargo build --release --target "${{ matrix.target }}"
+
       - name: Build macOS app bundle
         if: matrix.kind == 'macos'
+        env:
+          SKIP_CARGO_BUILD: '1'
         run: TARGET="${{ matrix.target }}" scripts/build_macos_app.sh
 
       - name: Test
@@ -126,6 +134,10 @@ jobs:
         run: |
           cargo test --all-targets hid::hid_proxy::tests -- --test-threads=1
           cargo test --all-targets qmk_hid_host::qa_followup_shared_output -- --test-threads=1
+
+      - name: Test macOS stable signing validation
+        if: matrix.kind == 'macos'
+        run: scripts/test_macos_stable_signing.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
