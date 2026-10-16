@@ -214,6 +214,7 @@ pub struct KeycodePicker {
     macro_undo_stack: Vec<(usize, Vec<MacroAction>)>,
     /// Macro key picker: (macro_idx, action_idx) being edited
     macro_key_pick: Option<(usize, usize)>,
+    macro_mod_key_pick: Option<u16>,
     advanced_slot_picker: Option<AdvancedSlotKind>,
     popup_state: PopupState,
     pub language: crate::i18n::Language,
@@ -1128,6 +1129,7 @@ impl Default for KeycodePicker {
             macro_actions: vec![vec![]; 16],
             macro_undo_stack: Vec::new(),
             macro_key_pick: None,
+            macro_mod_key_pick: None,
             advanced_slot_picker: None,
             macros_dirty: false,
             macro_edit_revision: 0,
@@ -1211,6 +1213,20 @@ impl KeycodePicker {
     }
 
     fn set_macro_key_pick_value(&mut self, macro_idx: usize, action_idx: usize, value: u16) {
+        let value = if let Some(base) = self.macro_mod_key_pick {
+            if !KEYCODES
+                .iter()
+                .any(|kc| kc.value == value && is_mod_key_tap_key_choice(kc))
+            {
+                return;
+            }
+            base | value
+        } else {
+            value
+        };
+        if !self.supports_macro_ext_keycodes && value >= 0x0100 {
+            return;
+        }
         let mut changed = false;
         if let Some(MacroAction::Tap(kc) | MacroAction::Down(kc) | MacroAction::Up(kc)) = self
             .macro_actions
@@ -1225,6 +1241,7 @@ impl KeycodePicker {
             self.mark_macros_dirty();
         }
         self.macro_key_pick = None;
+        self.macro_mod_key_pick = None;
         self.advanced_slot_picker = None;
     }
 
@@ -1340,6 +1357,7 @@ impl KeycodePicker {
         self.vial_layer_pending = None;
         self.advanced_slot_picker = None;
         self.macro_key_pick = None;
+        self.macro_mod_key_pick = None;
         self.td_key_pick = None;
         self.td_mod_key_pick = None;
         self.rmk_native_key_actions_allowed_for_target = false;
@@ -1437,6 +1455,9 @@ impl KeycodePicker {
         macro_data_state: DeferredPickerDataState,
         tap_dance_data_state: DeferredPickerDataState,
     ) {
+        if self.macro_key_pick.is_none() {
+            self.macro_mod_key_pick = None;
+        }
         let macro_key_pick_open = self.macro_key_pick.is_some();
         let regular_key_pick_open = self.regular_key_pick || self.regular_mod_key_pick.is_some();
         let layer_pick_open = self.vial_layer_pending.is_some();
@@ -1480,11 +1501,28 @@ impl KeycodePicker {
 
         // Macro key picker (sub-window of macro editor)
         if let Some((macro_idx, action_idx)) = self.macro_key_pick {
+            if ctx.input(|i| i.key_pressed(Key::Escape)) {
+                if self.macro_mod_key_pick.take().is_none() {
+                    self.macro_key_pick = None;
+                }
+                return;
+            }
+            let pending_mod_key = self.macro_mod_key_pick;
             let mut pick_open = true;
             let popup_size = key_picker_popup_size(ctx);
+            let title = pending_mod_key.map_or_else(
+                || tr_picker(self.language, "key_picker.pick_key_title").to_owned(),
+                |base| {
+                    format!(
+                        "{}: {}",
+                        tr_picker(self.language, "key_picker.pick_modifier_combo_title"),
+                        picker_mod_key_label(base)
+                    )
+                },
+            );
             crate::ui_style::centered_modal_window(
                 ctx,
-                tr_picker(self.language, "key_picker.pick_key_title"),
+                &title,
                 self.popup_state.id(PopupKey::MacroKeyPickWindow),
                 &mut pick_open,
                 popup_size,
@@ -1498,7 +1536,14 @@ impl KeycodePicker {
                 );
                 crate::ui_style::modal_hint(
                     ui,
-                    tr_picker(self.language, "key_picker.best_for_normal"),
+                    tr_picker(
+                        self.language,
+                        if pending_mod_key.is_some() {
+                            "key_picker.pending_mod_hint"
+                        } else {
+                            "key_picker.best_for_normal"
+                        },
+                    ),
                 );
                 ui.add_space(crate::ui_style::modal_space_xs());
                 // Physical key capture
@@ -1511,13 +1556,12 @@ impl KeycodePicker {
                             ..
                         } = event
                         {
-                            if *key == Key::Escape {
-                                self.macro_key_pick = None;
-                                return;
-                            }
                             if let Some(qmk) = egui_key_to_qmk(*key, *modifiers) {
                                 if qmk > 0 && (qmk < 0x0100 || self.supports_macro_ext_keycodes) {
                                     self.set_macro_key_pick_value(macro_idx, action_idx, qmk);
+                                    if self.macro_key_pick.is_none() {
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -1525,16 +1569,36 @@ impl KeycodePicker {
                 });
                 if picker_button(
                     ui,
-                    tr_picker(self.language, "key_picker.none_clear"),
+                    tr_picker(
+                        self.language,
+                        if pending_mod_key.is_some() {
+                            "key_picker.cancel"
+                        } else {
+                            "key_picker.none_clear"
+                        },
+                    ),
                     crate::ui_style::modal_action_button_size(),
                     true,
                     false,
                 )
                 .clicked()
                 {
-                    self.set_macro_key_pick_value(macro_idx, action_idx, 0);
+                    if pending_mod_key.is_some() {
+                        self.macro_mod_key_pick = None;
+                    } else {
+                        self.set_macro_key_pick_value(macro_idx, action_idx, 0);
+                    }
                 }
                 ui.add_space(4.0);
+                if self.macro_key_pick.is_some()
+                    && pending_mod_key.is_none()
+                    && self.supports_macro_ext_keycodes
+                    && self.popup_view_mode == PickerViewMode::List
+                {
+                    if let Some(base) = self.show_mod_key_section(ui, false) {
+                        self.macro_mod_key_pick = Some(base);
+                    }
+                }
                 let layer_choices = self
                     .macro_key_pick_kind(macro_idx, action_idx)
                     .map(|kind| self.macro_layer_key_choices(kind))
@@ -1543,8 +1607,11 @@ impl KeycodePicker {
                 let key_choices: Vec<&'static crate::keycode::Keycode> = KEYCODES
                     .iter()
                     .filter(|kc| {
-                        (supports_macro_ext_keycodes || is_8bit_tap_key_choice(kc))
-                            && !kc.name.starts_with("RGB_")
+                        (if pending_mod_key.is_some() {
+                            is_mod_key_tap_key_choice(kc)
+                        } else {
+                            supports_macro_ext_keycodes || is_8bit_tap_key_choice(kc)
+                        }) && !kc.name.starts_with("RGB_")
                     })
                     .collect();
                 egui::ScrollArea::vertical()
@@ -1571,7 +1638,7 @@ impl KeycodePicker {
                                     ) {
                                         self.set_macro_key_pick_value(macro_idx, action_idx, value);
                                     }
-                                    if self.macro_key_pick.is_some() {
+                                    if self.macro_key_pick.is_some() && pending_mod_key.is_none() {
                                         if let Some(value) = show_grouped_popup_choice_buttons(
                                             ui,
                                             vec![("Layers", layer_choices)],
@@ -1582,7 +1649,9 @@ impl KeycodePicker {
                                             );
                                         }
                                     }
-                                    if self.macro_key_pick.is_some() && supports_macro_ext_keycodes
+                                    if self.macro_key_pick.is_some()
+                                        && pending_mod_key.is_none()
+                                        && supports_macro_ext_keycodes
                                     {
                                         if let Some(value) =
                                             self.show_custom_keycode_choice_section(ui)
@@ -1599,6 +1668,7 @@ impl KeycodePicker {
             });
             if !pick_open {
                 self.macro_key_pick = None;
+                self.macro_mod_key_pick = None;
             }
             // Don't show macro editor while key picker is open
             return;
@@ -1985,7 +2055,9 @@ impl KeycodePicker {
                             PickerViewMode::List => {
                                 if self.regular_key_pick_allow_mod_key {
                                     self.show_regular_plain_modifier_section(ui);
-                                    self.show_regular_mod_key_section(ui);
+                                    if let Some(base) = self.show_mod_key_section(ui, true) {
+                                        self.regular_mod_key_pick = Some(base);
+                                    }
                                 }
 
                                 if let Some(value) = show_grouped_popup_key_buttons(
@@ -2077,14 +2149,15 @@ impl KeycodePicker {
         ui.add_space(crate::ui_style::modal_space_sm());
     }
 
-    fn show_regular_mod_key_section(&mut self, ui: &mut egui::Ui) {
+    fn show_mod_key_section(&self, ui: &mut egui::Ui, compact_only: bool) -> Option<u16> {
         ui.label(
             RichText::new(tr_picker(self.language, "key_picker.section_mod_key"))
                 .size(11.0)
                 .color(Color32::from_gray(150)),
         );
         ui.add_space(4.0);
-        let shortcuts = mod_key_choices(true);
+        let shortcuts = mod_key_choices(compact_only);
+        let mut picked = None;
         ui.horizontal_wrapped(|ui| {
             for choice in &shortcuts {
                 let resp = ui
@@ -2092,11 +2165,11 @@ impl KeycodePicker {
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
                 Self::paint_compact_picker_label(ui, &resp, &choice.label);
                 if resp.clicked_by(egui::PointerButton::Primary) {
-                    self.regular_mod_key_pick = Some(choice.left_value);
+                    picked = Some(choice.left_value);
                 }
                 if let Some(right_value) = choice.right_value {
                     if resp.clicked_by(egui::PointerButton::Secondary) {
-                        self.regular_mod_key_pick = Some(right_value);
+                        picked = Some(right_value);
                     }
                 }
                 resp.on_hover_text(crate::i18n::tr_text(
@@ -2106,6 +2179,7 @@ impl KeycodePicker {
             }
         });
         ui.add_space(crate::ui_style::modal_space_sm());
+        picked
     }
 
     fn show_pending_picker(&mut self, ctx: &egui::Context) {

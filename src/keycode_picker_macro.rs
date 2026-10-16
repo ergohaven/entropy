@@ -978,6 +978,297 @@ impl KeycodePicker {
 mod tests {
     use super::*;
 
+    fn macro_picker_frame(
+        picker: &mut KeycodePicker,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1_100.0, 900.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        ctx.run_ui(input, |_ui| {
+            picker.show(
+                ctx,
+                DeferredPickerDataState::Ready,
+                DeferredPickerDataState::Ready,
+            );
+        })
+    }
+
+    fn macro_picker_text_position(output: &egui::FullOutput, label: &str) -> Option<egui::Pos2> {
+        fn find(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
+            match shape {
+                egui::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(text.pos + text.galley.rect.center().to_vec2())
+                }
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| find(shape, label)),
+                _ => None,
+            }
+        }
+        output.shapes.iter().find_map(|shape| {
+            find(&shape.shape, label).filter(|pos| shape.clip_rect.contains(*pos))
+        })
+    }
+
+    fn macro_picker_click(picker: &mut KeycodePicker, ctx: &egui::Context, pos: egui::Pos2) {
+        macro_picker_click_button(picker, ctx, pos, egui::PointerButton::Primary);
+    }
+
+    fn macro_picker_click_button(
+        picker: &mut KeycodePicker,
+        ctx: &egui::Context,
+        pos: egui::Pos2,
+        button: egui::PointerButton,
+    ) {
+        for pressed in [true, false] {
+            let _ = macro_picker_frame(
+                picker,
+                ctx,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+    }
+
+    #[test]
+    fn macro_modifier_picker_mouse_selection_encodes_hyper_f16_for_each_action_kind() {
+        for (action, expected, opcode) in [
+            (MacroAction::Tap(0x04), MacroAction::Tap(0x0F6B), 5),
+            (MacroAction::Down(0x04), MacroAction::Down(0x0F6B), 6),
+            (MacroAction::Up(0x04), MacroAction::Up(0x0F6B), 7),
+        ] {
+            let ctx = egui::Context::default();
+            let mut picker = KeycodePicker {
+                language: crate::i18n::Language::English,
+                popup_view_mode: PickerViewMode::Layout,
+                macro_key_pick: Some((0, 0)),
+                macro_actions: vec![vec![action]],
+                ..Default::default()
+            };
+            let _ = macro_picker_frame(&mut picker, &ctx, vec![]);
+            let output = macro_picker_frame(&mut picker, &ctx, vec![]);
+            assert!(macro_picker_text_position(&output, "Hyper").is_none());
+            let pos = macro_picker_text_position(&output, "List").expect("List view tab");
+            macro_picker_click(&mut picker, &ctx, pos);
+            assert_eq!(picker.popup_view_mode, PickerViewMode::List);
+            let _ = macro_picker_frame(&mut picker, &ctx, vec![]);
+            let output = macro_picker_frame(&mut picker, &ctx, vec![]);
+            let pos = macro_picker_text_position(&output, "Hyper").expect("Hyper choice");
+            macro_picker_click(&mut picker, &ctx, pos);
+            assert_eq!(picker.macro_mod_key_pick, Some(0x0F00));
+            assert!(!picker.macros_dirty);
+
+            let _ = macro_picker_frame(&mut picker, &ctx, vec![]);
+            let mut output = macro_picker_frame(&mut picker, &ctx, vec![]);
+            let mut f16 = macro_picker_text_position(&output, "F16");
+            for _ in 0..12 {
+                if f16.is_some() {
+                    break;
+                }
+                output = macro_picker_frame(
+                    &mut picker,
+                    &ctx,
+                    vec![
+                        egui::Event::PointerMoved(egui::pos2(550.0, 550.0)),
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, -180.0),
+                            modifiers: egui::Modifiers::NONE,
+                            phase: egui::TouchPhase::Move,
+                        },
+                    ],
+                );
+                f16 = macro_picker_text_position(&output, "F16");
+            }
+            macro_picker_click(&mut picker, &ctx, f16.expect("visible F16 choice"));
+            assert_eq!(picker.macro_actions[0], [expected.clone()]);
+            assert_eq!(picker.macro_texts[0], [1, opcode, 0x6B, 0x0F]);
+            assert_eq!(decode_macro_actions(&picker.macro_texts[0]), [expected]);
+            assert!(picker.macros_dirty);
+            assert!(picker.result.is_none());
+            assert!(picker.macro_key_pick.is_none());
+            assert!(picker.macro_mod_key_pick.is_none());
+        }
+    }
+
+    #[test]
+    fn macro_modifier_picker_escape_cancels_modifier_then_picker_without_changes() {
+        let ctx = egui::Context::default();
+        let mut picker = KeycodePicker {
+            macro_key_pick: Some((0, 0)),
+            macro_mod_key_pick: Some(0x0F00),
+            macro_actions: vec![vec![MacroAction::Tap(0x04)]],
+            ..Default::default()
+        };
+        let escape = |pressed| egui::Event::Key {
+            key: Key::Escape,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let _ = macro_picker_frame(&mut picker, &ctx, vec![escape(true)]);
+        assert!(picker.macro_mod_key_pick.is_none());
+        assert_eq!(picker.macro_key_pick, Some((0, 0)));
+        let _ = macro_picker_frame(&mut picker, &ctx, vec![escape(false)]);
+        let _ = macro_picker_frame(&mut picker, &ctx, vec![escape(true)]);
+        assert!(picker.macro_key_pick.is_none());
+        assert_eq!(picker.macro_actions[0], [MacroAction::Tap(0x04)]);
+        assert!(!picker.macros_dirty);
+        assert!(picker.result.is_none());
+    }
+
+    #[test]
+    fn macro_modifier_picker_physical_key_rejects_nested_modifiers_and_accepts_first_base() {
+        let ctx = egui::Context::default();
+        let mut picker = KeycodePicker {
+            macro_key_pick: Some((0, 0)),
+            macro_mod_key_pick: Some(0x0F00),
+            macro_actions: vec![vec![MacroAction::Tap(0x04)]],
+            macro_texts: vec![vec![1, 1, 0x04]],
+            ..Default::default()
+        };
+        let key = |key, modifiers| egui::Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        let _ = macro_picker_frame(&mut picker, &ctx, vec![key(Key::A, egui::Modifiers::CTRL)]);
+        assert_eq!(picker.macro_mod_key_pick, Some(0x0F00));
+        assert_eq!(picker.macro_key_pick, Some((0, 0)));
+        assert_eq!(picker.macro_texts[0], [1, 1, 0x04]);
+        assert_eq!(picker.macro_actions[0], [MacroAction::Tap(0x04)]);
+        assert!(!picker.macros_dirty);
+
+        let _ = macro_picker_frame(
+            &mut picker,
+            &ctx,
+            vec![
+                key(Key::F16, egui::Modifiers::NONE),
+                key(Key::B, egui::Modifiers::NONE),
+            ],
+        );
+        assert_eq!(picker.macro_actions[0], [MacroAction::Tap(0x0F6B)]);
+        assert_eq!(picker.macro_texts[0], [1, 5, 0x6B, 0x0F]);
+        assert!(picker.macro_key_pick.is_none());
+        assert!(picker.macro_mod_key_pick.is_none());
+        assert!(picker.macros_dirty);
+        assert!(picker.result.is_none());
+    }
+
+    #[test]
+    fn macro_modifier_picker_secondary_click_selects_right_modifier() {
+        let ctx = egui::Context::default();
+        let mut picker = KeycodePicker {
+            language: crate::i18n::Language::English,
+            macro_key_pick: Some((0, 0)),
+            macro_actions: vec![vec![MacroAction::Tap(0x04)]],
+            ..Default::default()
+        };
+        let _ = macro_picker_frame(&mut picker, &ctx, vec![]);
+        let output = macro_picker_frame(&mut picker, &ctx, vec![]);
+        let pos = macro_picker_text_position(&output, "Ctrl").expect("Ctrl modifier choice");
+        macro_picker_click_button(&mut picker, &ctx, pos, egui::PointerButton::Secondary);
+        assert_eq!(picker.macro_mod_key_pick, Some(0x1100));
+        let _ = macro_picker_frame(
+            &mut picker,
+            &ctx,
+            vec![egui::Event::Key {
+                key: Key::A,
+                physical_key: Some(Key::A),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert_eq!(picker.macro_actions[0], [MacroAction::Tap(0x1104)]);
+        assert_eq!(picker.macro_texts[0], [1, 5, 0x04, 0x11]);
+        assert!(picker.macros_dirty);
+        assert!(picker.macro_key_pick.is_none());
+        assert!(picker.macro_mod_key_pick.is_none());
+        assert!(picker.result.is_none());
+    }
+
+    #[test]
+    fn macro_modifier_picker_cancel_button_preserves_action_and_keeps_picker_open() {
+        let ctx = egui::Context::default();
+        let mut picker = KeycodePicker {
+            language: crate::i18n::Language::English,
+            macro_key_pick: Some((0, 0)),
+            macro_mod_key_pick: Some(0x0F00),
+            macro_actions: vec![vec![MacroAction::Tap(0x04)]],
+            macro_texts: vec![vec![1, 1, 0x04]],
+            ..Default::default()
+        };
+        let _ = macro_picker_frame(&mut picker, &ctx, vec![]);
+        let output = macro_picker_frame(&mut picker, &ctx, vec![]);
+        let pos = macro_picker_text_position(&output, "✕ Cancel").expect("Cancel button");
+        macro_picker_click(&mut picker, &ctx, pos);
+        assert!(picker.macro_mod_key_pick.is_none());
+        assert_eq!(picker.macro_key_pick, Some((0, 0)));
+        assert_eq!(picker.macro_actions[0], [MacroAction::Tap(0x04)]);
+        assert_eq!(picker.macro_texts[0], [1, 1, 0x04]);
+        assert!(!picker.macros_dirty);
+        assert!(picker.result.is_none());
+    }
+
+    #[test]
+    fn macro_modifier_picker_rejects_extended_values_without_firmware_support() {
+        let mut picker = KeycodePicker {
+            supports_macro_ext_keycodes: false,
+            macro_key_pick: Some((0, 0)),
+            macro_actions: vec![vec![MacroAction::Tap(0x04)]],
+            ..Default::default()
+        };
+        picker.set_macro_key_pick_value(0, 0, 0x0F6B);
+        assert_eq!(picker.macro_actions[0], [MacroAction::Tap(0x04)]);
+        assert_eq!(picker.macro_key_pick, Some((0, 0)));
+        assert!(!picker.macros_dirty);
+        picker.set_macro_key_pick_value(0, 0, 0x006B);
+        assert_eq!(picker.macro_actions[0], [MacroAction::Tap(0x006B)]);
+        assert_eq!(picker.macro_texts[0], [1, 1, 0x6B]);
+    }
+
+    #[test]
+    fn macro_modifier_picker_offers_combos_in_supported_list_view() {
+        for view in PickerViewMode::ALL {
+            for supported in [true, false] {
+                let ctx = egui::Context::default();
+                let mut picker = KeycodePicker {
+                    language: crate::i18n::Language::English,
+                    popup_view_mode: view,
+                    supports_macro_ext_keycodes: supported,
+                    macro_key_pick: Some((0, 0)),
+                    macro_actions: vec![vec![MacroAction::Tap(0x04)]],
+                    ..Default::default()
+                };
+                let _ = macro_picker_frame(&mut picker, &ctx, vec![]);
+                let output = macro_picker_frame(&mut picker, &ctx, vec![]);
+                assert_eq!(
+                    macro_picker_text_position(&output, "Hyper").is_some(),
+                    supported && view == PickerViewMode::List,
+                    "{view:?}"
+                );
+                assert!(!picker.macros_dirty);
+                assert!(picker.result.is_none());
+            }
+        }
+    }
+
     #[test]
     fn macro_editor_keeps_one_trailing_action_selector_row() {
         assert_eq!(macro_settings_total_rows(0), 4);
