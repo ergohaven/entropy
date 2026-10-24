@@ -176,10 +176,13 @@ impl EntropyApp {
         self.application_categories_name.clear();
     }
 
-    pub(super) fn dismiss_application_layouts_dialogs_if_page_inactive(&mut self) {
-        if self.main_menu_tab == MainMenuTab::Advanced
+    pub(super) fn application_layouts_page_open(&self) -> bool {
+        self.main_menu_tab == MainMenuTab::Advanced
             && self.settings_tab == SettingsTab::ApplicationLayouts
-        {
+    }
+
+    pub(super) fn dismiss_application_layouts_dialogs_if_page_inactive(&mut self) {
+        if self.application_layouts_page_open() {
             return;
         }
         if self.application_picker_open {

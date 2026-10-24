@@ -1147,17 +1147,30 @@ fn platform_available_apps() -> Vec<DetectedApplication> {
     // still receive friendly names and stable identities without exposing
     // control panels and helper launchers to the user.
     let mut applications = Vec::new();
-    if linux_foreground_backend() == LinuxForegroundBackend::GnomeWayland {
-        merge_applications(&mut applications, linux_gnome_wayland_applications());
-    }
-    if let Some(output) = command_stdout("hyprctl", &["-j", "clients"]) {
-        merge_applications(&mut applications, parse_hyprland_clients(&output));
-    }
-    if let Some(output) = command_stdout("swaymsg", &["-t", "get_tree", "-r"]) {
-        merge_applications(&mut applications, parse_sway_apps(&output));
-    }
-    if let Some(output) = command_stdout("wmctrl", &["-lp"]) {
-        merge_applications(&mut applications, parse_wmctrl_apps(&output));
+    // Each window-list tool only answers inside its own session. Running the
+    // others on every scan just spawns processes that fail.
+    match linux_foreground_backend() {
+        LinuxForegroundBackend::GnomeWayland => {
+            merge_applications(&mut applications, linux_gnome_wayland_applications());
+        }
+        LinuxForegroundBackend::Hyprland => {
+            if let Some(output) = command_stdout("hyprctl", &["-j", "clients"]) {
+                merge_applications(&mut applications, parse_hyprland_clients(&output));
+            }
+        }
+        LinuxForegroundBackend::Sway => {
+            if let Some(output) = command_stdout("swaymsg", &["-t", "get_tree", "-r"]) {
+                merge_applications(&mut applications, parse_sway_apps(&output));
+            }
+        }
+        LinuxForegroundBackend::X11 => {
+            if let Some(output) = command_stdout("wmctrl", &["-lp"]) {
+                merge_applications(&mut applications, parse_wmctrl_apps(&output));
+            }
+        }
+        LinuxForegroundBackend::KdeWayland
+        | LinuxForegroundBackend::UnsupportedWayland
+        | LinuxForegroundBackend::Unavailable => {}
     }
     merge_applications(&mut applications, linux_x11_applications());
     let catalog = linux_installed_apps();

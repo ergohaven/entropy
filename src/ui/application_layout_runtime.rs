@@ -812,7 +812,32 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn application_layout_bridge_connected(&self) -> bool {
+        self.qmk_hid_hosts.values().any(|bridge| {
+            device_supports_application_layouts(bridge.device())
+                && self
+                    .device_manager
+                    .devices()
+                    .iter()
+                    .any(|device| device.permits_hid_target(bridge.device()))
+        })
+    }
+
+    // The foreground monitor and application scans only feed application
+    // layouts. With no device that can use them and their page closed, they
+    // would keep querying the desktop for nothing.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn application_layout_runtime_needed(&self) -> bool {
+        self.application_layouts_supported()
+            || self.application_layout_bridge_connected()
+            || self.application_layouts_page_open()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn update_application_layout_runtime(&mut self) {
+        if !self.application_layout_runtime_needed() {
+            return;
+        }
         self.update_application_layout_runtime_with(
             crate::app_discovery::application_discovery_snapshot(),
         );
@@ -1130,6 +1155,59 @@ pub(super) fn app_layout_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn application_layout_runtime_stays_off_without_a_layout_device() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let mut app = EntropyApp::new_inert_for_test();
+        let mut k04 = crate::device::test_usb_device("3-2", 9, 0x04);
+        k04.name = "K:04".into();
+        app.device_manager.replace_devices(vec![k04]);
+        app.selected_device = Some(0);
+        assert!(!app.application_layout_runtime_needed());
+
+        app.update_application_layout_runtime();
+        assert_eq!(
+            app.application_discovery.foreground_status,
+            crate::app_discovery::ForegroundStatus::default()
+        );
+
+        // The page lists running applications even without a Macropad.
+        app.main_menu_tab = MainMenuTab::Advanced;
+        app.settings_tab = SettingsTab::ApplicationLayouts;
+        assert!(app.application_layout_runtime_needed());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn application_layout_runtime_follows_a_connected_macropad() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let mut app = EntropyApp::new_inert_for_test();
+        let mut macropad = crate::device::test_usb_device("3-3", 5, 0x42);
+        macropad.name = "M4CR0Pad v3".into();
+        let mut k04 = crate::device::test_usb_device("3-2", 9, 0x04);
+        k04.name = "K:04".into();
+        app.device_manager
+            .replace_devices(vec![macropad.clone(), k04]);
+        app.selected_device = Some(1);
+        assert!(!app.application_layout_runtime_needed());
+
+        // A background Macropad bridge needs focus changes before it has
+        // published its capabilities.
+        let bridge = crate::qmk_hid_host::QmkHidHostBridge::test_inert(
+            macropad.clone(),
+            Default::default(),
+            None,
+            crate::qmk_hid_host::HostProtocol::Discover,
+        );
+        app.qmk_hid_hosts.insert(macropad.path.clone(), bridge);
+        assert!(app.application_layout_runtime_needed());
+
+        app.device_manager.replace_devices(Vec::new());
+        app.selected_device = None;
+        assert!(!app.application_layout_runtime_needed());
+    }
 
     #[test]
     fn reconnect_keeps_external_vial_edit_instead_of_replaying_cached_default() {

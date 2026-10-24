@@ -267,16 +267,8 @@ impl EntropyApp {
         // focused. Keep a lightweight runtime tick alive so auto-switching is
         // not accidentally tied to egui input/repaint events.
         if self.application_layouts_supported()
-            || self.qmk_hid_hosts.values().any(|bridge| {
-                super::application_layout_runtime::device_supports_application_layouts(
-                    bridge.device(),
-                ) && !self.app_settings.application_layouts.is_empty()
-                    && self
-                        .device_manager
-                        .devices()
-                        .iter()
-                        .any(|device| device.permits_hid_target(bridge.device()))
-            })
+            || (self.application_layout_bridge_connected()
+                && !self.app_settings.application_layouts.is_empty())
         {
             ctx.request_repaint_after(std::time::Duration::from_millis(200));
         }
