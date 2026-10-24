@@ -9,7 +9,7 @@ use anyhow::{bail, Context, Result};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -21,7 +21,15 @@ const USB_COMMAND_TIMEOUT: Duration = Duration::from_secs(4);
 // The helper deadline must outlive the 6 s SM62 display-setting read window.
 const SM62_DISPLAY_COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
 const BLE_COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
+// Supervision cadence while a retired owner is still being killed, reaped or
+// joined. Retirement wakes the reaper, so healthy owners never need this tick.
 const REAPER_INTERVAL: Duration = Duration::from_millis(10);
+// Healthy owners are rechecked only to notice a helper that exited on its own.
+// Tests use a long interval so every retirement path must prove its own wake.
+#[cfg(not(test))]
+const REAPER_IDLE_INTERVAL: Duration = Duration::from_secs(1);
+#[cfg(test)]
+const REAPER_IDLE_INTERVAL: Duration = Duration::from_secs(60);
 const MAX_FRAME: usize = 4_096;
 // Limit unproven/incomplete work, NOT the number of usable attached devices.
 // Healthy established owners do not consume this budget. Existing owners can
@@ -50,6 +58,20 @@ struct Slot {
     child: Mutex<Option<Child>>,
     reaped: AtomicBool,
     worker_joined: AtomicBool,
+    // Same queue as requests: an empty message wakes an idle IPC owner.
+    wake: mpsc::SyncSender<Option<Job>>,
+    #[cfg(test)]
+    owner_wakeups: std::sync::atomic::AtomicUsize,
+}
+
+impl Slot {
+    /// Retirement is monotonic. Neither wake can block: try_send never waits for
+    /// queue capacity, and a full queue already holds a job the owner will see.
+    fn retire(&self) {
+        self.retired.store(true, Ordering::Release);
+        let _ = self.wake.try_send(None);
+        wake_reaper();
+    }
 }
 
 struct Entry {
@@ -79,6 +101,15 @@ static REGISTRY: Mutex<Registry> = Mutex::new(Registry {
     reaper_started: false,
     entries: Vec::new(),
 });
+static REAPER: OnceLock<std::thread::Thread> = OnceLock::new();
+#[cfg(test)]
+static REAPER_PASSES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn wake_reaper() {
+    if let Some(reaper) = REAPER.get() {
+        reaper.unpark();
+    }
+}
 
 struct Job {
     request: String,
@@ -89,7 +120,7 @@ struct Job {
 pub(super) struct HidProxy {
     pub(super) host_output: Arc<crate::qmk_hid_host::HostOutputOwner>,
     slot: Arc<Slot>,
-    requests: mpsc::SyncSender<Job>,
+    requests: mpsc::SyncSender<Option<Job>>,
     transport: HidTransport,
     #[cfg(test)]
     timeout: Option<Duration>,
@@ -104,7 +135,7 @@ pub(crate) struct HidRetirement(std::sync::Weak<Slot>);
 impl HidRetirement {
     pub(crate) fn retire(&self) {
         if let Some(slot) = self.0.upgrade() {
-            slot.retired.store(true, Ordering::Release);
+            slot.retire();
         }
     }
 }
@@ -113,7 +144,7 @@ impl Drop for HidProxy {
     fn drop(&mut self) {
         // Do not kill/wait/join or acquire ANY mutex in Drop. The reaper owns
         // cleanup, and retains the physical reservation throughout retirement.
-        self.slot.retired.store(true, Ordering::Release);
+        self.slot.retire();
     }
 }
 
@@ -183,12 +214,15 @@ impl HidProxy {
             );
         };
         if !registry.reaper_started {
-            std::thread::Builder::new()
+            let reaper = std::thread::Builder::new()
                 .name("entropy-hid-reaper".into())
                 .spawn(reaper)
                 .context("Failed to start HID helper reaper")?;
+            // Published before any slot exists, so no retirement can miss it.
+            let _ = REAPER.set(reaper.thread().clone());
             registry.reaper_started = true;
         }
+        let (requests, rx) = mpsc::sync_channel(1);
         let slot = Arc::new(Slot {
             #[cfg(test)]
             submitted: Default::default(),
@@ -200,8 +234,10 @@ impl HidProxy {
             child: Mutex::new(None),
             reaped: AtomicBool::new(false),
             worker_joined: AtomicBool::new(false),
+            wake: requests.clone(),
+            #[cfg(test)]
+            owner_wakeups: Default::default(),
         });
-        let (requests, rx) = mpsc::sync_channel(1);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let worker_slot = slot.clone();
         let worker = std::thread::Builder::new()
@@ -210,7 +246,7 @@ impl HidProxy {
                 #[cfg(test)]
                 let exit_gate = spec.exit_gate.clone();
                 let result = ipc_owner(&worker_slot, spec, rx, &ready_tx);
-                worker_slot.retired.store(true, Ordering::Release);
+                worker_slot.retire();
                 if let Err(error) = result {
                     let _ = ready_tx.try_send(Err(format!("{error:#}")));
                 }
@@ -230,6 +266,8 @@ impl HidProxy {
             targets: vec![device.clone()],
         });
         drop(registry);
+        // An empty registry parks the reaper without a timeout.
+        wake_reaper();
         let proxy = Self {
             host_output: Default::default(),
             slot,
@@ -296,21 +334,21 @@ impl HidProxy {
         // Bounded queue, no waiting for the IPC writer or another caller. Both
         // shared output and queries traverse this SAME owner and response stream.
         self.requests
-            .try_send(Job {
+            .try_send(Some(Job {
                 request,
                 deadline,
                 reply,
-            })
+            }))
             .map_err(|_| anyhow::anyhow!("HID helper disconnected or request queue busy"))?;
         let result = rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
         match result {
             Ok(Ok(line)) if self.is_available() && Instant::now() < deadline => Ok(line),
             Ok(Err(error)) => {
-                self.slot.retired.store(true, Ordering::Release);
+                self.slot.retire();
                 bail!(error)
             }
             _ => {
-                self.slot.retired.store(true, Ordering::Release);
+                self.slot.retire();
                 bail!("HID helper timed out or disconnected during command")
             }
         }
@@ -447,7 +485,8 @@ fn reaper() {
                         let _ = child.kill();
                     }
                     if matches!(child.try_wait(), Ok(Some(_))) {
-                        slot.retired.store(true, Ordering::Release);
+                        // Wakes an IPC owner that is idle waiting for requests.
+                        slot.retire();
                         slot.reaped.store(true, Ordering::Release);
                         *guard = None;
                     }
@@ -465,13 +504,32 @@ fn reaper() {
             let _ = worker.join();
             slot.worker_joined.store(true, Ordering::Release);
         }
-        if let Ok(mut registry) = REGISTRY.try_lock() {
-            registry.entries.retain(|entry| {
-                !(entry.slot.reaped.load(Ordering::Acquire)
-                    && entry.slot.worker_joined.load(Ordering::Acquire))
-            });
+        // None: nothing to supervise; Some(true): a retired owner is still
+        // being torn down, or the registry was busy and must be revisited.
+        let teardown = match REGISTRY.try_lock() {
+            Ok(mut registry) => {
+                registry.entries.retain(|entry| {
+                    !(entry.slot.reaped.load(Ordering::Acquire)
+                        && entry.slot.worker_joined.load(Ordering::Acquire))
+                });
+                (!registry.entries.is_empty()).then(|| {
+                    registry
+                        .entries
+                        .iter()
+                        .any(|entry| entry.slot.retired.load(Ordering::Acquire))
+                })
+            }
+            Err(_) => Some(true),
+        };
+        #[cfg(test)]
+        REAPER_PASSES.fetch_add(1, Ordering::Relaxed);
+        // Retirement and new entries unpark this thread; an unpark that lands
+        // before the park makes it return at once, so no wake is lost.
+        match teardown {
+            None => std::thread::park(),
+            Some(false) => std::thread::park_timeout(REAPER_IDLE_INTERVAL),
+            Some(true) => std::thread::park_timeout(REAPER_INTERVAL),
         }
-        std::thread::sleep(REAPER_INTERVAL);
     }
 }
 
@@ -517,7 +575,7 @@ fn validate_response(line: &str, output: bool, startup: bool) -> Result<()> {
 fn ipc_owner(
     slot: &Arc<Slot>,
     mut spec: HelperCommand,
-    rx: mpsc::Receiver<Job>,
+    rx: mpsc::Receiver<Option<Job>>,
     ready: &mpsc::SyncSender<std::result::Result<(), String>>,
 ) -> Result<()> {
     if slot.retired.load(Ordering::Acquire) {
@@ -600,9 +658,13 @@ fn ipc_owner(
         .try_send(Ok(()))
         .map_err(|_| anyhow::anyhow!("HID helper startup receiver disappeared"))?;
     while !slot.retired.load(Ordering::Acquire) {
-        let job = match rx.recv_timeout(REAPER_INTERVAL) {
-            Ok(job) => job,
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+        // Sleeps until a request arrives; retirement queues an empty wake.
+        let message = rx.recv();
+        #[cfg(test)]
+        slot.owner_wakeups.fetch_add(1, Ordering::Relaxed);
+        let job = match message {
+            Ok(Some(job)) => job,
+            Ok(None) => continue,
             Err(_) => break,
         };
         if slot.retired.load(Ordering::Acquire) || Instant::now() >= job.deadline {
@@ -1075,6 +1137,26 @@ mod tests {
         }
         drop(helpers);
         empty_registry();
+    }
+
+    #[test]
+    fn real_helper_idle_owner_and_reaper_sleep_until_retirement() {
+        let _guard = serial_test();
+        let proxy = start("echo", "A");
+        let slot = proxy.slot.clone();
+        assert_eq!(proxy.usb_send(&[7]).unwrap()[0], 7);
+        let owner_wakeups = slot.owner_wakeups.load(Ordering::Relaxed);
+        let reaper_passes = REAPER_PASSES.load(Ordering::Relaxed);
+        // 10 ms polling would wake each thread about twenty times here.
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(slot.owner_wakeups.load(Ordering::Relaxed), owner_wakeups);
+        assert!(REAPER_PASSES.load(Ordering::Relaxed) <= reaper_passes + 1);
+        // The idle tick is 60 s in tests: only the retirement wake can finish
+        // this teardown inside the bounded wait.
+        proxy.retirement_handle().retire();
+        empty_registry();
+        assert!(slot.reaped.load(Ordering::Acquire));
+        assert!(!proxy.is_available());
     }
 
     #[test]
