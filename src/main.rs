@@ -488,6 +488,12 @@ fn main() -> eframe::Result<()> {
                 cc.egui_ctx
                     .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             }
+            #[cfg(target_os = "linux")]
+            let app = if launch_minimized {
+                app.with_start_in_background()
+            } else {
+                app
+            };
             Ok(Box::new(app))
         }),
     )

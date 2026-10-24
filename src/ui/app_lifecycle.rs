@@ -175,6 +175,19 @@ impl EntropyApp {
         }
     }
 
+    // Linux has no tray: background mode only minimizes the window, so device
+    // polling stays on, but nobody sees the window repaint.
+    fn main_window_in_background(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            self.linux_background_since.is_some()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            self.main_window_hidden_to_tray()
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn update_native_background(
         &mut self,
@@ -1430,8 +1443,10 @@ impl eframe::App for EntropyApp {
                 .app_settings
                 .sticky_layout_window
                 .then(|| self.matrix_tester_poll_interval());
+            #[cfg(target_os = "linux")]
+            self.track_linux_background_window(ctx);
             ctx.request_repaint_after(native_repaint_interval(
-                main_window_hidden_to_tray,
+                self.main_window_in_background(),
                 bluetooth_visible_interval,
                 connect_pending,
                 update_check_pending,

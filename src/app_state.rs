@@ -5564,6 +5564,10 @@ pub struct EntropyApp {
     pub(crate) macos_app_was_hidden: bool,
     #[cfg(target_os = "macos")]
     pub(crate) macos_hidden_to_menu_bar_at: Option<std::time::Instant>,
+    #[cfg(target_os = "linux")]
+    pub(crate) linux_background_since: Option<f64>,
+    #[cfg(target_os = "linux")]
+    pub(crate) linux_background_focus_left: bool,
     pub(crate) close_to_tray_prompt_open: bool,
     pub(crate) close_to_tray_prompt_remember: bool,
     pub(crate) force_close_requested: bool,

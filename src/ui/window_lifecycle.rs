@@ -9,11 +9,53 @@ fn should_keep_vial_unlock_visible(unlock_open: bool, unlock_polling: bool) -> b
     unlock_open || unlock_polling
 }
 
+#[cfg(target_os = "linux")]
+const LINUX_BACKGROUND_INPUT_GRACE_SECS: f64 = 1.0;
+
 impl EntropyApp {
     #[cfg(target_os = "windows")]
     pub(crate) fn with_start_hidden_to_tray(mut self) -> Self {
         self.windows_start_hidden_to_tray_pending = true;
         self
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn with_start_in_background(mut self) -> Self {
+        self.linux_background_since = Some(0.0);
+        self
+    }
+
+    // Wayland compositors do not tell clients that a window is minimized, so
+    // eframe keeps running the whole UI at the visible cadence. Minimizing
+    // moves keyboard focus away; getting it back, or direct input after a
+    // grace period on compositors that ignore minimize, means the window is
+    // in front of the user again.
+    #[cfg(target_os = "linux")]
+    pub(super) fn track_linux_background_window(&mut self, ctx: &egui::Context) {
+        let Some(since) = self.linux_background_since else {
+            return;
+        };
+        let (focused, user_input, now) = ctx.input(|i| {
+            let user_input = i.events.iter().any(|event| {
+                matches!(
+                    event,
+                    egui::Event::Key { .. }
+                        | egui::Event::Text(_)
+                        | egui::Event::PointerButton { .. }
+                        | egui::Event::PointerMoved(_)
+                        | egui::Event::MouseWheel { .. }
+                )
+            });
+            (i.focused, user_input, i.time)
+        });
+        if !focused {
+            self.linux_background_focus_left = true;
+        }
+        if (focused && self.linux_background_focus_left)
+            || (user_input && now - since >= LINUX_BACKGROUND_INPUT_GRACE_SECS)
+        {
+            self.linux_background_since = None;
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -146,6 +188,10 @@ impl EntropyApp {
             self.macos_window_hidden_to_menu_bar = false;
             self.macos_hidden_to_menu_bar_at = None;
             self.macos_app_was_hidden = false;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.linux_background_since = None;
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -290,6 +336,8 @@ impl EntropyApp {
         #[cfg(target_os = "linux")]
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            self.linux_background_since = Some(ctx.input(|i| i.time));
+            self.linux_background_focus_left = false;
             self.status_msg = background_status.into();
             return;
         }
@@ -1083,6 +1131,86 @@ mod tests {
         assert!(should_keep_vial_unlock_visible(false, true));
         assert!(should_keep_vial_unlock_visible(true, true));
         assert!(!should_keep_vial_unlock_visible(false, false));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn background_frame(
+        app: &mut EntropyApp,
+        ctx: &egui::Context,
+        time: f64,
+        focused: bool,
+        events: Vec<egui::Event>,
+    ) {
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                time: Some(time),
+                focused,
+                events,
+                ..Default::default()
+            },
+            |ui| app.track_linux_background_window(ui.ctx()),
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    fn minimize_at(app: &mut EntropyApp, ctx: &egui::Context, time: f64) {
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                time: Some(time),
+                focused: true,
+                ..Default::default()
+            },
+            |ui| app.minimize_window_to_tray(ui.ctx()),
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_background_ends_when_the_minimized_window_regains_focus() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        minimize_at(&mut app, &ctx, 1.0);
+        assert!(app.linux_background_since.is_some());
+
+        // Focus leaves only after the compositor has minimized the window.
+        background_frame(&mut app, &ctx, 1.1, true, Vec::new());
+        assert!(app.linux_background_since.is_some());
+        background_frame(&mut app, &ctx, 2.0, false, Vec::new());
+        assert!(app.linux_background_since.is_some());
+
+        background_frame(&mut app, &ctx, 30.0, true, Vec::new());
+        assert!(app.linux_background_since.is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_background_ends_on_input_when_minimize_is_ignored() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        minimize_at(&mut app, &ctx, 1.0);
+        let pointer = || vec![egui::Event::PointerMoved(egui::pos2(10.0, 10.0))];
+
+        // The click that minimized the window must not restore it.
+        background_frame(&mut app, &ctx, 1.2, true, pointer());
+        assert!(app.linux_background_since.is_some());
+
+        background_frame(&mut app, &ctx, 2.5, true, pointer());
+        assert!(app.linux_background_since.is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_minimized_launch_stays_in_background_until_restored() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test().with_start_in_background();
+        background_frame(&mut app, &ctx, 0.0, false, Vec::new());
+        background_frame(&mut app, &ctx, 60.0, false, Vec::new());
+        assert!(app.linux_background_since.is_some());
+
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.restore_from_tray(ui.ctx())
+        });
+        assert!(app.linux_background_since.is_none());
     }
 
     #[test]
