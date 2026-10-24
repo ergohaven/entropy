@@ -1381,6 +1381,8 @@ impl eframe::App for EntropyApp {
         self.flush_typing_trainer_symbol_stats();
         self.app_settings.dark_mode = self.dark_mode;
         save_app_settings(&self.app_settings);
+        #[cfg(target_os = "linux")]
+        crate::app_discovery::unload_kwin_foreground_script();
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {

@@ -9,6 +9,8 @@ use std::collections::HashSet;
 use std::ffi::{CStr, CString};
 #[cfg(target_os = "linux")]
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -221,9 +223,9 @@ fn polling_foreground_monitor_loop(state: &'static Mutex<ForegroundStatus>) -> !
 fn foreground_monitor_loop(state: &'static Mutex<ForegroundStatus>) {
     match linux_foreground_backend() {
         LinuxForegroundBackend::GnomeWayland => linux_gnome_wayland_monitor_loop(state),
+        LinuxForegroundBackend::KdeWayland => linux_kde_wayland_monitor_loop(state),
         LinuxForegroundBackend::X11 => {}
-        LinuxForegroundBackend::KdeWayland
-        | LinuxForegroundBackend::Hyprland
+        LinuxForegroundBackend::Hyprland
         | LinuxForegroundBackend::Sway
         | LinuxForegroundBackend::UnsupportedWayland
         | LinuxForegroundBackend::Unavailable => polling_foreground_monitor_loop(state),
@@ -510,6 +512,15 @@ fn platform_foreground_status() -> ForegroundStatus {
         LinuxForegroundBackend::Hyprland => linux_hyprland_status(),
         LinuxForegroundBackend::Sway => linux_sway_status(),
         LinuxForegroundBackend::GnomeWayland => linux_gnome_wayland_status(),
+        // While the KWin script runs, it pushes focus changes to the monitor.
+        LinuxForegroundBackend::KdeWayland
+            if KWIN_FOREGROUND_SCRIPT_LOADED.load(Ordering::Acquire) =>
+        {
+            FOREGROUND_MONITOR
+                .get()
+                .and_then(|state| state.lock().ok().map(|status| status.clone()))
+                .unwrap_or_default()
+        }
         LinuxForegroundBackend::KdeWayland => linux_kde_wayland_status(),
         LinuxForegroundBackend::UnsupportedWayland => ForegroundStatus {
             backend: "Wayland".to_owned(),
@@ -1883,19 +1894,45 @@ fn linux_x11_applications() -> Vec<DetectedApplication> {
 }
 
 #[cfg(target_os = "linux")]
+const KDOTOOL_FOREGROUND_BACKEND: &str = "KDE Wayland / KWin";
+#[cfg(target_os = "linux")]
+const KWIN_FOREGROUND_BACKEND: &str = "KDE Wayland / KWin (events)";
+#[cfg(target_os = "linux")]
+const KWIN_FOREGROUND_SCRIPT_PREFIX: &str = "entropy-kwin-foreground-";
+#[cfg(target_os = "linux")]
+const KWIN_FOREGROUND_PATH: &str = "/org/ergohaven/Entropy/KWinForeground1";
+#[cfg(target_os = "linux")]
+const KWIN_FOREGROUND_INTERFACE: &str = "org.ergohaven.Entropy.KWinForeground1";
+#[cfg(target_os = "linux")]
+const KWIN_FIRST_EVENT_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(target_os = "linux")]
+const KWIN_SCRIPT_CHECK_INTERVAL: Duration = Duration::from_secs(10);
+#[cfg(target_os = "linux")]
+const KWIN_RECONNECT_DELAY: Duration = Duration::from_secs(10);
+#[cfg(target_os = "linux")]
+static KWIN_FOREGROUND_SCRIPT_LOADED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "linux")]
 fn linux_kde_wayland_status() -> ForegroundStatus {
-    let info = match kdotool::get_active_window_info() {
-        Ok(info) => info,
-        Err(error) => {
-            return ForegroundStatus {
-                backend: "KDE Wayland / KWin".to_owned(),
-                state: ForegroundState::BackendUnavailable(error.to_string()),
-            };
-        }
-    };
-    let title = info.title.trim().to_owned();
-    let class = info.class_name.trim().to_owned();
-    let application = linux_app_from_pid(info.pid, title.clone()).or_else(|| {
+    match kdotool::get_active_window_info() {
+        Ok(info) => kwin_window_status(
+            KDOTOOL_FOREGROUND_BACKEND,
+            &info.title,
+            &info.class_name,
+            info.pid,
+        ),
+        Err(error) => ForegroundStatus {
+            backend: KDOTOOL_FOREGROUND_BACKEND.to_owned(),
+            state: ForegroundState::BackendUnavailable(error.to_string()),
+        },
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn kwin_window_status(backend: &str, title: &str, class: &str, pid: u32) -> ForegroundStatus {
+    let title = title.trim().to_owned();
+    let class = class.trim().to_owned();
+    let application = linux_app_from_pid(pid, title.clone()).or_else(|| {
         (!class.is_empty()).then(|| DetectedApplication {
             executable: class.clone(),
             identities: vec![class.clone()],
@@ -1905,7 +1942,7 @@ fn linux_kde_wayland_status() -> ForegroundStatus {
     });
     let Some(mut application) = application else {
         return ForegroundStatus {
-            backend: "KDE Wayland / KWin".to_owned(),
+            backend: backend.to_owned(),
             state: ForegroundState::UnidentifiedWindow(title),
         };
     };
@@ -1917,9 +1954,317 @@ fn linux_kde_wayland_status() -> ForegroundStatus {
         );
     }
     ForegroundStatus {
-        backend: "KDE Wayland / KWin".to_owned(),
+        backend: backend.to_owned(),
         state: ForegroundState::Focused(application),
     }
+}
+
+#[cfg(target_os = "linux")]
+struct KwinForegroundReceiver {
+    events: mpsc::Sender<String>,
+    kwin: zbus::names::OwnedUniqueName,
+}
+
+#[cfg(target_os = "linux")]
+#[zbus::interface(name = "org.ergohaven.Entropy.KWinForeground1")]
+impl KwinForegroundReceiver {
+    fn active_window(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        payload: String,
+    ) -> zbus::fdo::Result<()> {
+        // Any client on the session bus can call this method.
+        if header.sender().map(|sender| sender.as_str()) != Some(self.kwin.as_str()) {
+            return Err(zbus::fdo::Error::AccessDenied(
+                "Only KWin reports the focused window".to_owned(),
+            ));
+        }
+        let _ = self.events.send(payload);
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KwinActiveWindow {
+    caption: String,
+    resource_class: String,
+    pid: u32,
+}
+
+#[cfg(target_os = "linux")]
+fn kwin_status_from_payload(payload: &str) -> Result<ForegroundStatus, String> {
+    let invalid = |error: serde_json::Error| format!("Invalid KWin focus event: {error}");
+    // KWin can hand the JSON text over as an escaped string literal.
+    let value = match serde_json::from_str::<serde_json::Value>(payload).map_err(invalid)? {
+        serde_json::Value::String(inner) => serde_json::from_str(&inner).map_err(invalid)?,
+        value => value,
+    };
+    Ok(
+        match serde_json::from_value::<Option<KwinActiveWindow>>(value).map_err(invalid)? {
+            Some(window) => kwin_window_status(
+                KWIN_FOREGROUND_BACKEND,
+                &window.caption,
+                &window.resource_class,
+                window.pid,
+            ),
+            None => ForegroundStatus {
+                backend: KWIN_FOREGROUND_BACKEND.to_owned(),
+                state: ForegroundState::NoFocusedWindow,
+            },
+        },
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn kwin_foreground_script_source(bus_name: &str) -> String {
+    include_str!("../assets/kwin-script/foreground.js").replace("@ENTROPY_BUS_NAME@", bus_name)
+}
+
+#[cfg(target_os = "linux")]
+fn kwin_scripting_proxy(
+    connection: &zbus::blocking::Connection,
+) -> zbus::Result<zbus::blocking::Proxy<'static>> {
+    zbus::blocking::Proxy::new(
+        connection,
+        "org.kde.KWin",
+        "/Scripting",
+        "org.kde.kwin.Scripting",
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn kwin_foreground_script_name(pid: u32) -> String {
+    format!("{KWIN_FOREGROUND_SCRIPT_PREFIX}{pid}")
+}
+
+#[cfg(target_os = "linux")]
+fn kwin_foreground_script_dir() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+}
+
+// KWin cannot list loaded scripts by name, so every loaded script keeps its
+// source file in the runtime directory until it is unloaded. A file whose
+// process is gone belongs to a script that a crashed Entropy left running;
+// the file of this process belongs to its own previous attempt.
+#[cfg(target_os = "linux")]
+fn stale_kwin_foreground_scripts(dir: &Path, own_pid: u32) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let pid = entry
+                .file_name()
+                .to_str()?
+                .strip_prefix(KWIN_FOREGROUND_SCRIPT_PREFIX)?
+                .strip_suffix(".js")?
+                .parse::<u32>()
+                .ok()?;
+            (pid == own_pid || !Path::new("/proc").join(pid.to_string()).exists())
+                .then(|| kwin_foreground_script_name(pid))
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn write_kwin_foreground_script(path: &Path, bus_name: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .and_then(|mut file| file.write_all(kwin_foreground_script_source(bus_name).as_bytes()))
+        .map_err(|error| format!("Cannot write the KWin foreground script: {error}"))
+}
+
+// Plasma 6 pushes focus changes through a KWin script. Plasma 5, and any
+// session where that script cannot be started, keeps polling kdotool.
+#[cfg(target_os = "linux")]
+fn linux_kde_wayland_monitor_loop(state: &'static Mutex<ForegroundStatus>) -> ! {
+    let reason = run_kwin_foreground_events(
+        std::env::var("KDE_SESSION_VERSION").ok().as_deref(),
+        || KwinForegroundMonitor::start(state),
+        |monitor| monitor.run(state),
+        |duration| {
+            let deadline = Instant::now() + duration;
+            while Instant::now() < deadline {
+                publish_foreground_status(state, linux_kde_wayland_status());
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        },
+    );
+    log::info!("Application layouts: {reason}; polling kdotool instead");
+    polling_foreground_monitor_loop(state)
+}
+
+/// Runs KWin focus events for as long as they can be started and returns the
+/// reason once they cannot. KWin drops scripts when it restarts, so a script
+/// that stops after it ran is covered by kdotool for a while, then reloaded.
+#[cfg(target_os = "linux")]
+fn run_kwin_foreground_events<M>(
+    session_version: Option<&str>,
+    mut start: impl FnMut() -> Result<M, String>,
+    mut run: impl FnMut(M) -> String,
+    mut poll_kdotool: impl FnMut(Duration),
+) -> String {
+    if session_version != Some("6") {
+        return "KWin focus events require KDE Plasma 6".to_owned();
+    }
+    loop {
+        let monitor = match start() {
+            Ok(monitor) => monitor,
+            Err(error) => return error,
+        };
+        let error = run(monitor);
+        log::debug!("Application layouts: {error}; polling kdotool for {KWIN_RECONNECT_DELAY:?}");
+        poll_kdotool(KWIN_RECONNECT_DELAY);
+    }
+}
+
+// The script calls this process back on every focus or title change, so the
+// thread sleeps until something happens. Loading a script per query made KWin
+// compile JavaScript and the bus set up two connections five times a second.
+#[cfg(target_os = "linux")]
+struct KwinForegroundMonitor {
+    scripting: zbus::blocking::Proxy<'static>,
+    script: String,
+    path: PathBuf,
+    received: mpsc::Receiver<String>,
+}
+
+#[cfg(target_os = "linux")]
+impl KwinForegroundMonitor {
+    fn start(state: &'static Mutex<ForegroundStatus>) -> Result<Self, String> {
+        let connection = zbus::blocking::Connection::session()
+            .map_err(|error| format!("Cannot connect to the session bus: {error}"))?;
+        let bus_name = connection
+            .unique_name()
+            .map(|name| name.to_string())
+            .ok_or_else(|| "The session bus did not assign a connection name".to_owned())?;
+        // The name is pasted into JavaScript source.
+        if !bus_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b":._-".contains(&byte))
+        {
+            return Err(format!("Unexpected session bus name {bus_name:?}"));
+        }
+        let kwin = zbus::blocking::Proxy::new(
+            &connection,
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+        )
+        .and_then(|bus| bus.call("GetNameOwner", &("org.kde.KWin",)))
+        .map_err(|error| format!("KWin is not on the session bus: {error}"))?;
+        let (events, received) = mpsc::channel();
+        connection
+            .object_server()
+            .at(
+                KWIN_FOREGROUND_PATH,
+                KwinForegroundReceiver { events, kwin },
+            )
+            .map_err(|error| format!("Cannot serve the KWin focus receiver: {error}"))?;
+        let scripting = kwin_scripting_proxy(&connection)
+            .map_err(|error| format!("Cannot reach KWin scripting: {error}"))?;
+        let dir = kwin_foreground_script_dir();
+        for script in stale_kwin_foreground_scripts(&dir, std::process::id()) {
+            let _ = scripting.call::<_, _, bool>("unloadScript", &(&script,));
+            let _ = std::fs::remove_file(dir.join(format!("{script}.js")));
+        }
+
+        let script = kwin_foreground_script_name(std::process::id());
+        let path = dir.join(format!("{script}.js"));
+        write_kwin_foreground_script(&path, &bus_name)?;
+        // From here on, dropping the monitor unloads the script and removes its file.
+        let monitor = Self {
+            scripting,
+            script,
+            path,
+            received,
+        };
+        let id = monitor
+            .scripting
+            .call::<_, _, i32>(
+                "loadScript",
+                &(&*monitor.path.to_string_lossy(), &monitor.script),
+            )
+            .map_err(|error| format!("KWin cannot load the foreground script: {error}"))?;
+        if id < 0 {
+            return Err("KWin refused the Entropy foreground script".to_owned());
+        }
+        KWIN_FOREGROUND_SCRIPT_LOADED.store(true, Ordering::Release);
+        zbus::blocking::Proxy::new(
+            &connection,
+            "org.kde.KWin",
+            format!("/Scripting/Script{id}"),
+            "org.kde.kwin.Script",
+        )
+        .and_then(|script| script.call::<_, _, ()>("run", &()))
+        .map_err(|error| format!("KWin cannot run the foreground script: {error}"))?;
+        let payload = monitor
+            .received
+            .recv_timeout(KWIN_FIRST_EVENT_TIMEOUT)
+            .map_err(|_| "KWin did not report the focused window".to_owned())?;
+        publish_foreground_status(state, kwin_status_from_payload(&payload)?);
+        Ok(monitor)
+    }
+
+    fn run(self, state: &'static Mutex<ForegroundStatus>) -> String {
+        loop {
+            match self.received.recv_timeout(KWIN_SCRIPT_CHECK_INTERVAL) {
+                Ok(payload) => match kwin_status_from_payload(&payload) {
+                    Ok(status) => publish_foreground_status(state, status),
+                    Err(error) => log::warn!("Application layouts: {error}"),
+                },
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    match self
+                        .scripting
+                        .call::<_, _, bool>("isScriptLoaded", &(&self.script,))
+                    {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            return "KWin unloaded the Entropy foreground script".to_owned()
+                        }
+                        Err(error) => return format!("Cannot reach KWin scripting: {error}"),
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return "The KWin focus receiver stopped".to_owned();
+                }
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for KwinForegroundMonitor {
+    fn drop(&mut self) {
+        KWIN_FOREGROUND_SCRIPT_LOADED.store(false, Ordering::Release);
+        let _ = self
+            .scripting
+            .call::<_, _, bool>("unloadScript", &(&self.script,));
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn unload_kwin_foreground_script() {
+    if !KWIN_FOREGROUND_SCRIPT_LOADED.swap(false, Ordering::AcqRel) {
+        return;
+    }
+    let script = kwin_foreground_script_name(std::process::id());
+    let _ = zbus::blocking::Connection::session()
+        .and_then(|connection| kwin_scripting_proxy(&connection))
+        .and_then(|scripting| scripting.call::<_, _, bool>("unloadScript", &(&script,)));
+    let _ = std::fs::remove_file(kwin_foreground_script_dir().join(format!("{script}.js")));
 }
 
 #[cfg(target_os = "linux")]
@@ -2794,6 +3139,215 @@ mod macos_tests {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kwin_focus_event_identifies_the_window_process() {
+        let pid = std::process::id();
+        let payload =
+            format!(r#"{{"caption":" Draft ","resourceClass":"org.kde.kate","pid":{pid}}}"#);
+        let status = kwin_status_from_payload(&payload).unwrap();
+        assert_eq!(status.backend, KWIN_FOREGROUND_BACKEND);
+        let ForegroundState::Focused(application) = status.state else {
+            panic!("expected a focused application: {:?}", status.state);
+        };
+        assert_eq!(application.window_title, "Draft");
+        assert!(application
+            .identities
+            .iter()
+            .any(|identity| identity.contains("kate")));
+    }
+
+    #[test]
+    fn kwin_focus_event_falls_back_to_the_window_class() {
+        // PID 0 has no /proc entry, as for windows KWin cannot attribute.
+        let status =
+            kwin_status_from_payload(r#"{"caption":"Notes","resourceClass":"obsidian","pid":0}"#)
+                .unwrap();
+        let ForegroundState::Focused(application) = status.state else {
+            panic!("expected a focused application: {:?}", status.state);
+        };
+        assert_eq!(application.executable, "obsidian");
+        assert_eq!(application.window_title, "Notes");
+
+        assert_eq!(
+            kwin_status_from_payload(r#"{"caption":"Popup","resourceClass":"","pid":0}"#)
+                .unwrap()
+                .state,
+            ForegroundState::UnidentifiedWindow("Popup".to_owned())
+        );
+    }
+
+    #[test]
+    fn kwin_focus_event_accepts_no_window_and_escaped_json() {
+        assert_eq!(
+            kwin_status_from_payload("null").unwrap().state,
+            ForegroundState::NoFocusedWindow
+        );
+        assert_eq!(
+            kwin_status_from_payload(
+                r#""{\"caption\":\"Popup\",\"resourceClass\":\"\",\"pid\":0}""#
+            )
+            .unwrap()
+            .state,
+            ForegroundState::UnidentifiedWindow("Popup".to_owned())
+        );
+        assert!(kwin_status_from_payload("{").is_err());
+    }
+
+    #[test]
+    fn kwin_script_reports_to_the_receiver_object() {
+        let source = kwin_foreground_script_source(":1.42");
+        assert!(source.contains(r#"const SERVICE = ":1.42";"#));
+        assert!(!source.contains("@ENTROPY_BUS_NAME@"));
+        assert!(source.contains(KWIN_FOREGROUND_PATH));
+        assert!(source.contains(KWIN_FOREGROUND_INTERFACE));
+        assert!(source.contains(r#""ActiveWindow""#));
+        assert_eq!(
+            <KwinForegroundReceiver as zbus::object_server::Interface>::name().as_str(),
+            KWIN_FOREGROUND_INTERFACE
+        );
+    }
+
+    #[test]
+    fn kwin_receiver_accepts_only_the_kwin_connection() {
+        let (events, received) = mpsc::channel();
+        let receiver = KwinForegroundReceiver {
+            events,
+            kwin: zbus::names::OwnedUniqueName::try_from(":1.10").unwrap(),
+        };
+        let call = |sender: &str| {
+            zbus::message::Message::method_call(KWIN_FOREGROUND_PATH, "ActiveWindow")
+                .and_then(|builder| builder.sender(sender))
+                .and_then(|builder| builder.build(&("null",)))
+                .unwrap()
+        };
+
+        // Another client, or a KWin that restarted under a new connection name.
+        let other = call(":1.11");
+        assert!(matches!(
+            receiver.active_window(other.header(), "null".to_owned()),
+            Err(zbus::fdo::Error::AccessDenied(_))
+        ));
+        assert!(received.try_recv().is_err());
+
+        let kwin = call(":1.10");
+        receiver
+            .active_window(kwin.header(), "null".to_owned())
+            .unwrap();
+        assert_eq!(received.try_recv().unwrap(), "null");
+    }
+
+    #[test]
+    fn kde_foreground_polls_kdotool_unless_kwin_events_start() {
+        for version in [None, Some("5")] {
+            let reason = run_kwin_foreground_events(
+                version,
+                || -> Result<(), String> { panic!("Plasma {version:?} has no KWin focus events") },
+                |_| unreachable!(),
+                |_| unreachable!(),
+            );
+            assert!(reason.contains("Plasma 6"), "{reason}");
+        }
+
+        let reason = run_kwin_foreground_events(
+            Some("6"),
+            || Err::<(), _>("KWin refused the Entropy foreground script".to_owned()),
+            |_| unreachable!(),
+            |_| unreachable!(),
+        );
+        assert_eq!(reason, "KWin refused the Entropy foreground script");
+
+        // A KWin restart drops the script: kdotool covers the gap until the
+        // script is back, and kdotool takes over once it cannot be loaded.
+        let mut starts = 0;
+        let mut runs = Vec::new();
+        let mut polls = Vec::new();
+        let reason = run_kwin_foreground_events(
+            Some("6"),
+            || {
+                starts += 1;
+                if starts < 3 {
+                    Ok(starts)
+                } else {
+                    Err("KWin is not on the session bus".to_owned())
+                }
+            },
+            |monitor| {
+                runs.push(monitor);
+                "KWin unloaded the Entropy foreground script".to_owned()
+            },
+            |duration| polls.push(duration),
+        );
+        assert_eq!(reason, "KWin is not on the session bus");
+        assert_eq!(starts, 3);
+        assert_eq!(runs, [1, 2]);
+        assert_eq!(polls, [KWIN_RECONNECT_DELAY; 2]);
+    }
+
+    #[test]
+    fn stale_kwin_scripts_are_the_own_and_those_of_gone_processes() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "entropy-kwin-scripts-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let own = std::process::id();
+        // PID 1 is always running; PIDs never reach u32::MAX.
+        let gone = u32::MAX;
+        for name in [
+            format!("{}.js", kwin_foreground_script_name(own)),
+            format!("{}.js", kwin_foreground_script_name(1)),
+            format!("{}.js", kwin_foreground_script_name(gone)),
+            format!("{KWIN_FOREGROUND_SCRIPT_PREFIX}draft.js"),
+            format!("{}.txt", kwin_foreground_script_name(gone)),
+            "unrelated.js".to_owned(),
+        ] {
+            std::fs::write(dir.join(name), "").unwrap();
+        }
+
+        let mut stale = stale_kwin_foreground_scripts(&dir, own);
+        stale.sort();
+        let mut expected = vec![
+            kwin_foreground_script_name(own),
+            kwin_foreground_script_name(gone),
+        ];
+        expected.sort();
+        assert_eq!(stale, expected);
+        assert!(stale_kwin_foreground_scripts(&dir.join("missing"), own).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    #[ignore = "needs a KDE Plasma 6 Wayland session"]
+    fn kwin_foreground_monitor_reports_live_focus() {
+        let state: &'static Mutex<ForegroundStatus> =
+            Box::leak(Box::new(Mutex::new(ForegroundStatus::default())));
+        std::thread::spawn(move || linux_kde_wayland_monitor_loop(state));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let status = loop {
+            let status = state.lock().unwrap().clone();
+            if status.backend == KWIN_FOREGROUND_BACKEND || Instant::now() > deadline {
+                break status;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        unload_kwin_foreground_script();
+        assert_eq!(status.backend, KWIN_FOREGROUND_BACKEND, "{status:?}");
+        assert!(
+            !matches!(status.state, ForegroundState::BackendUnavailable(_)),
+            "{status:?}"
+        );
+        assert!(!kwin_foreground_script_dir()
+            .join(format!(
+                "{}.js",
+                kwin_foreground_script_name(std::process::id())
+            ))
+            .exists());
+    }
 
     #[test]
     fn parses_hyprland_clients() {
