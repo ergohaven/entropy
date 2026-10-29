@@ -58,6 +58,14 @@ impl EntropyApp {
             .collect()
     }
 
+    pub(super) fn is_universal_geometry_layout_option(option: &LayoutOption) -> bool {
+        option
+            .label
+            .trim()
+            .eq_ignore_ascii_case("Universal Symbols geometry")
+            && option.choices == ["ANSI", "ISO"]
+    }
+
     pub(super) fn user_layout_option_indices(&self, layout: &KeyboardLayout) -> Vec<usize> {
         let firmware_managed = self.firmware_managed_layout_option_indices();
         layout
@@ -65,8 +73,10 @@ impl EntropyApp {
             .iter()
             .enumerate()
             .filter_map(|(idx, option)| {
-                (!Self::is_encoder_layout_option(option) && !firmware_managed.contains(&idx))
-                    .then_some(idx)
+                (!Self::is_encoder_layout_option(option)
+                    && !Self::is_universal_geometry_layout_option(option)
+                    && !firmware_managed.contains(&idx))
+                .then_some(idx)
             })
             .collect()
     }
@@ -481,7 +491,8 @@ impl EntropyApp {
         }
 
         let name = device.name.to_ascii_lowercase();
-        let ergohaven_macropad_display = device.is_ergohaven_display_macropad() || device.is_ergohaven_sm62();
+        let ergohaven_macropad_display =
+            device.is_ergohaven_display_macropad() || device.is_ergohaven_sm62();
 
         ergohaven_macropad_display || name.contains("m4cr0pad v2") || name.contains("m4cr0pad v3")
     }

@@ -5685,6 +5685,8 @@ pub struct EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) pending_layer_name_writes: std::collections::VecDeque<vial_hid_task::LayerNameWrite>,
     #[cfg(not(target_arch = "wasm32"))]
+    pub(super) pending_universal_geometry: Option<vial_hid_task::UniversalGeometryWrite>,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) uncertain_layer_names: Vec<vial_hid_task::LayerNameWrite>,
     /// Current connected device name (for per-device layer names)
     pub(crate) current_device_name: String,

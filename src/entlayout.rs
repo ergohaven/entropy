@@ -4833,6 +4833,24 @@ mod tests {
     }
 
     #[test]
+    fn universal_numero_round_trips_through_native_entlayout_encoding() {
+        use rmk_types::action::{Action, KeyAction};
+
+        let action = KeyAction::Single(Action::User(0xB4));
+        let encoded = encode_native_key_action(action).expect("№ action should fit");
+        let decoded = decode_native_key_action(&encoded).unwrap();
+        assert_eq!(decoded, action);
+        assert_eq!(
+            crate::universal_symbols::label(decoded).as_deref(),
+            Some("Universal\n№")
+        );
+        assert_eq!(
+            entlayout_dynamic_binding(0, Some(&encoded)).unwrap(),
+            crate::universal_symbols::binding(0xB4)
+        );
+    }
+
+    #[test]
     fn native_key_action_round_trips_through_entlayout_encoding() {
         use rmk_types::action::{Action, KeyAction};
         use rmk_types::keycode::HidKeyCode;

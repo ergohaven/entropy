@@ -585,6 +585,28 @@ mod tests {
     }
 
     #[test]
+    fn universal_numero_is_searchable_assignable_and_reopens_on_universal_tab() {
+        let binding = crate::universal_symbols::binding(0xB4);
+        for language in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            let rows = universal_symbol_rows(language);
+            let matches = rows
+                .iter()
+                .filter(|row| row.matches("№", None))
+                .collect::<Vec<_>>();
+            assert_eq!(matches.len(), 1);
+            assert_eq!(matches[0].label, "Universal\n№");
+            assert_eq!(matches[0].action, PickerAction::Assign(binding));
+            assert_eq!(matches[0].tab, KeycodeTab::UniversalSymbols);
+        }
+        let mut picker = KeycodePicker::default();
+        picker.select_tab_for_binding(binding);
+        assert_eq!(picker.selected_tab, KeycodeTab::UniversalSymbols);
+    }
+
+    #[test]
     fn universal_symbol_reopens_on_its_own_tab() {
         let mut picker = KeycodePicker::default();
         picker.select_tab_for_binding(crate::universal_symbols::binding(

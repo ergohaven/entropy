@@ -1437,6 +1437,8 @@ none = "None"
 disabled = "Disabled"
 
 [live_features]
+universal_keyboard_type = "Keyboard type for Universal Symbols"
+universal_keyboard_type_tooltip = "Keyboard type matching the macOS settings. Affects backtick and tilde input on Mac"
 standby_visibility_tooltip = "Show this element on the standby screen"
 entropy_background = "Entropy background"
 keep_entropy_running_in_the_background_for_live_firmware_data = "Keep Entropy running in the background for live firmware data"

@@ -1,5 +1,9 @@
 use super::*;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "universal_geometry_tests.rs"]
+mod universal_geometry_tests;
+
 impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn selected_live_features_path_and_supported_mode(
@@ -35,6 +39,95 @@ impl EntropyApp {
     pub(super) fn live_features_available_for_selected_device(&self) -> bool {
         self.selected_live_features_path_and_supported_mode()
             .is_some()
+            || (self
+                .selected_device
+                .and_then(|i| self.device_manager.devices().get(i))
+                .is_some_and(|device| device.firmware == FirmwareProtocol::Vial)
+                && self.layout.as_ref().is_some_and(|layout| {
+                    layout
+                        .layout_options
+                        .iter()
+                        .any(Self::is_universal_geometry_layout_option)
+                }))
+    }
+
+    fn draw_universal_geometry_settings(
+        &mut self,
+        ui: &mut egui::Ui,
+        metrics: crate::ui_style::ResponsiveMetrics,
+    ) {
+        let Some((index, option)) = self.layout.as_ref().and_then(|layout| {
+            layout
+                .layout_options
+                .iter()
+                .enumerate()
+                .find(|(_, option)| Self::is_universal_geometry_layout_option(option))
+                .map(|(index, option)| (index, option.clone()))
+        }) else {
+            return;
+        };
+        let lang = self.app_settings.language;
+        ui.label(
+            RichText::new("Universal Symbols")
+                .size(metrics.value(15.0))
+                .strong(),
+        );
+        ui.add_space(metrics.value(8.0));
+        let values = Self::unpack_layout_option_values(
+            &self.layout.as_ref().unwrap().layout_options,
+            self.layout_options_value.unwrap_or(0),
+        );
+        let selected = Self::selected_layout_option_idx(&option, &values, index);
+        #[cfg(not(target_arch = "wasm32"))]
+        let ready = self.universal_geometry_connection_ready()
+            && self.layout_options_value.is_some()
+            && self
+                .selected_device
+                .and_then(|i| self.device_manager.devices().get(i))
+                .is_some_and(|device| device.firmware == FirmwareProtocol::Vial);
+        #[cfg(target_arch = "wasm32")]
+        let ready = false;
+        ui.add_enabled_ui(ready, |ui| {
+            crate::ui_style::settings_list_row_with_tooltip(
+                ui,
+                metrics.settings_row_content_width(),
+                metrics.settings_row_height(),
+                crate::i18n::tr_catalog(lang, "live_features.universal_keyboard_type"),
+                true,
+                Some(crate::i18n::tr_catalog(
+                    lang,
+                    "live_features.universal_keyboard_type_tooltip",
+                )),
+                metrics.settings_control_width(),
+                |ui| {
+                    let id = ui.make_persistent_id("universal_geometry_dropdown");
+                    let response = crate::ui_style::modern_dropdown_button_sized(
+                        ui,
+                        id,
+                        &option.choices[selected],
+                        ui.visuals().text_color(),
+                        metrics.settings_control_width(),
+                        metrics.settings_control_height(),
+                        metrics.settings_control_font_size(),
+                    );
+                    crate::ui_style::popup_below_widget(
+                        ui,
+                        id,
+                        &response,
+                        egui::PopupCloseBehavior::CloseOnClickOutside,
+                        |ui| {
+                            for (value, label) in option.choices.iter().enumerate() {
+                                if ui.selectable_label(selected == value, label).clicked() {
+                                    self.set_layout_option_value(index, value as u32);
+                                    egui::Popup::close_all(ui.ctx());
+                                }
+                            }
+                        },
+                    );
+                },
+            );
+        });
+        ui.add_space(metrics.value(24.0));
     }
 
     fn draw_live_feature_row(
@@ -167,6 +260,7 @@ impl EntropyApp {
                 ui.add_space(metrics.value(24.0));
 
                 let Some((_, supported_mode)) = supported_path_and_mode else {
+                    self.draw_universal_geometry_settings(ui, metrics);
                     crate::ui_style::modal_empty_state(
                         ui,
                         crate::i18n::tr(lang, crate::i18n::Key::LiveFeaturesInactive),
@@ -211,6 +305,8 @@ impl EntropyApp {
                         self.sync_qmk_hid_host_bridges();
                     }
                 }
+                ui.add_space(metrics.value(24.0));
+                self.draw_universal_geometry_settings(ui, metrics);
                 if supported_mode.time {
                     Self::draw_live_feature_row(
                         ui,

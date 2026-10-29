@@ -337,6 +337,8 @@ impl EntropyApp {
             #[cfg(not(target_arch = "wasm32"))]
             pending_layer_name_writes: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
+            pending_universal_geometry: None,
+            #[cfg(not(target_arch = "wasm32"))]
             uncertain_layer_names: Vec::new(),
             current_device_name: String::new(),
             current_keyboard_id: None,

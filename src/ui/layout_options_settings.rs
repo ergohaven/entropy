@@ -263,7 +263,7 @@ impl EntropyApp {
         });
     }
 
-    fn set_layout_option_value(&mut self, option_idx: usize, value: u32) {
+    pub(super) fn set_layout_option_value(&mut self, option_idx: usize, value: u32) {
         let Some(options) = self
             .layout
             .as_ref()
@@ -281,6 +281,11 @@ impl EntropyApp {
         }
         let packed = Self::pack_layout_option_values(&options, &values);
         self.layout_options_value = Some(packed);
+        #[cfg(not(target_arch = "wasm32"))]
+        if Self::is_universal_geometry_layout_option(&options[option_idx]) {
+            self.queue_universal_geometry_write(packed);
+            return;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(option) = options.get(option_idx) {
             if Self::is_display_preset_layout_option(option) {

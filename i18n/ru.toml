@@ -1437,6 +1437,8 @@ none = "Нет"
 disabled = "Отключено"
 
 [live_features]
+universal_keyboard_type = "Тип клавиатуры для Universal Symbols"
+universal_keyboard_type_tooltip = "Выбор типа клавиатуры, соответствующего настройкам macOS. Влияет на ввод обратной кавычки и тильды на Mac"
 standby_visibility_tooltip = "Показывать этот элемент на экране ожидания"
 entropy_background = "Entropy в фоне"
 keep_entropy_running_in_the_background_for_live_firmware_data = "Держать Entropy в фоне для live-данных прошивки"
