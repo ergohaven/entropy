@@ -600,11 +600,11 @@ const KDE_LAYOUT_LIST_REFRESH: Duration = Duration::from_secs(1);
 #[cfg(target_os = "linux")]
 const LAYOUT_DBUS_CALL_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(target_os = "linux")]
-const IBUS_DESTINATION: &str = "org.freedesktop.IBus";
+pub(crate) const IBUS_DESTINATION: &str = "org.freedesktop.IBus";
 #[cfg(target_os = "linux")]
-const IBUS_PATH: &str = "/org/freedesktop/IBus";
+pub(crate) const IBUS_PATH: &str = "/org/freedesktop/IBus";
 #[cfg(target_os = "linux")]
-const IBUS_INTERFACE: &str = "org.freedesktop.IBus";
+pub(crate) const IBUS_INTERFACE: &str = "org.freedesktop.IBus";
 const DATA_HOST_STATUS: u8 = 0xBA;
 // Native Windows audio queries can follow each bridge tick. Only changed
 // percentages are sent, allowing the display to retarget small volume steps.
@@ -3282,9 +3282,9 @@ impl IbusLayoutTracker {
 
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct IbusEngineState {
-    entropy: bool,
-    layout: Option<u8>,
+pub(crate) struct IbusEngineState {
+    pub(crate) entropy: bool,
+    pub(crate) layout: Option<u8>,
 }
 
 #[cfg(target_os = "linux")]
@@ -3294,7 +3294,7 @@ fn ibus_engine_field(engine: &zbus::zvariant::OwnedValue, index: usize) -> Optio
 }
 
 #[cfg(target_os = "linux")]
-fn ibus_engine_state(engine: &zbus::zvariant::OwnedValue) -> Option<IbusEngineState> {
+pub(crate) fn ibus_engine_state(engine: &zbus::zvariant::OwnedValue) -> Option<IbusEngineState> {
     const ENTROPY_ENGINE_PREFIX: &str = "entropy-universal-symbols";
 
     let name = ibus_engine_field(engine, 2)?;
@@ -3315,7 +3315,7 @@ fn ibus_engine_state(engine: &zbus::zvariant::OwnedValue) -> Option<IbusEngineSt
 }
 
 #[cfg(target_os = "linux")]
-fn gnome_desktop_session() -> bool {
+pub(crate) fn gnome_desktop_session() -> bool {
     ["XDG_CURRENT_DESKTOP", "XDG_SESSION_DESKTOP"]
         .into_iter()
         .filter_map(std::env::var_os)
@@ -3334,7 +3334,7 @@ fn desktop_list_has_gnome(value: &str) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn kde_desktop_session() -> bool {
+pub(crate) fn kde_desktop_session() -> bool {
     ["XDG_CURRENT_DESKTOP", "XDG_SESSION_DESKTOP"]
         .into_iter()
         .filter_map(std::env::var_os)

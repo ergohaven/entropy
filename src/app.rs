@@ -215,6 +215,7 @@ mod text_expander_emoji;
 mod text_expander_runtime;
 #[path = "ui/text_expander_settings.rs"]
 mod text_expander_settings_ui;
+use text_expander_settings_ui::text_expander_setup_row_count;
 #[path = "ui/universal_symbols_setup.rs"]
 mod text_expander_setup;
 #[cfg(target_os = "linux")]

@@ -24,6 +24,8 @@ mod linux_ble;
 #[cfg(target_os = "linux")]
 mod linux_setup;
 #[cfg(target_os = "linux")]
+mod linux_text_expander;
+#[cfg(target_os = "linux")]
 mod linux_tray;
 #[cfg(not(target_arch = "wasm32"))]
 mod pdf;

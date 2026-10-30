@@ -205,6 +205,12 @@ impl EntropyApp {
             ibus_registration: Default::default(),
             #[cfg(target_os = "linux")]
             pending_ibus_reload: None,
+            #[cfg(target_os = "linux")]
+            text_expander_probe: None,
+            #[cfg(target_os = "linux")]
+            pending_text_expander_probe: None,
+            #[cfg(target_os = "linux")]
+            text_expander_ibus_modal: None,
             import_progress_started_at: None,
             import_progress_title: String::new(),
             import_progress_body: String::new(),

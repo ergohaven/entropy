@@ -3514,6 +3514,16 @@ pub(crate) enum TextExpanderRuleField {
     Replacement,
 }
 
+/// The Text Expander dialog about getting IBus to use the Entropy engine.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum TextExpanderIbusModal {
+    /// What to do on this desktop, step by step.
+    Steps,
+    /// Asks before GNOME's English and Russian become the Entropy sources.
+    UseGnomeSources,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsTab {
     AppSettings,
@@ -5383,10 +5393,27 @@ pub struct EntropyApp {
     /// invalidated outright after any action of ours that can change it.
     #[cfg(target_os = "linux")]
     pub(crate) ibus_registration: crate::linux_setup::IbusRegistrationCache,
-    /// In-flight `ibus write-cache` + `ibus restart`, run off the UI thread so
-    /// a slow or wedged daemon cannot freeze the window.
+    /// In-flight `ibus write-cache` and restart of a running daemon, run off
+    /// the UI thread so a slow or wedged daemon cannot freeze the window.
     #[cfg(target_os = "linux")]
-    pub(crate) pending_ibus_reload: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
+    pub(crate) pending_ibus_reload:
+        Option<std::sync::mpsc::Receiver<Result<crate::smart_input::IbusReload, String>>>,
+    /// Last look at where Text Expander stands in this session, and when it
+    /// was started; refreshed off the UI thread while the page is open.
+    #[cfg(target_os = "linux")]
+    pub(crate) text_expander_probe: Option<(
+        std::time::Instant,
+        crate::linux_text_expander::TextExpanderProbe,
+    )>,
+    /// The look under way, with when it was started. Dropped when an action
+    /// of ours outdates it, so its answer is never taken for a newer one.
+    #[cfg(target_os = "linux")]
+    pub(crate) pending_text_expander_probe: Option<(
+        std::time::Instant,
+        std::sync::mpsc::Receiver<crate::linux_text_expander::TextExpanderProbe>,
+    )>,
+    #[cfg(target_os = "linux")]
+    pub(crate) text_expander_ibus_modal: Option<TextExpanderIbusModal>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) import_progress_started_at: Option<f64>,
     #[cfg(not(target_arch = "wasm32"))]

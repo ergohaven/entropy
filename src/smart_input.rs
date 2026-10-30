@@ -142,27 +142,6 @@ pub fn platform_open_window_candidates() -> Vec<TextExpanderAppCandidate> {
 }
 
 #[cfg(target_os = "linux")]
-pub fn text_expander_runs_outside_entropy_process() -> bool {
-    linux_input_method_env().contains("ibus")
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn text_expander_runs_outside_entropy_process() -> bool {
-    false
-}
-
-#[cfg(target_os = "linux")]
-fn linux_input_method_env() -> String {
-    let im_vars = ["GTK_IM_MODULE", "QT_IM_MODULE", "XMODIFIERS"];
-    im_vars
-        .iter()
-        .filter_map(|name| std::env::var(name).ok())
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_ascii_lowercase()
-}
-
-#[cfg(target_os = "linux")]
 fn linux_command_available(command: &str) -> bool {
     std::process::Command::new(command)
         .arg("--version")
@@ -238,12 +217,195 @@ fn set_user_executable(path: &std::path::Path) {
 /// Nothing user-local is added to IBUS_COMPONENT_PATH here: whatever registered
 /// the engine is already on it.
 #[cfg(target_os = "linux")]
-pub(crate) fn reload_ibus_registry() -> Result<(), String> {
+pub(crate) fn reload_ibus_registry() -> Result<IbusReload, String> {
     if !linux_command_available("ibus") {
         return Err("ibus is not installed".to_owned());
     }
     run_ibus_command("write-cache")?;
-    run_ibus_command("restart")
+    reload_running_ibus()
+}
+
+/// What a running IBus serves once it has been asked to reread the registry.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IbusReload {
+    /// The restarted daemon lists the Entropy engine.
+    Listed,
+    /// The daemon restarted but does not list the engine, or did not come
+    /// back in time to say.
+    Unlisted,
+    /// No ibus-daemon runs in this session. It reads the registry when it
+    /// starts, so there was nothing to restart.
+    NotRunning,
+    /// IBus runs as the desktop's input method and was left alone, see
+    /// [`ibus_restartable`]. It rereads the registry at the next login.
+    DesktopInputMethod,
+}
+
+#[cfg(target_os = "linux")]
+const IBUS_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+/// How long a restarted daemon gets to serve again before the engine counts
+/// as missing.
+#[cfg(target_os = "linux")]
+const IBUS_RESTART_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+#[cfg(target_os = "linux")]
+const ENTROPY_IBUS_ENGINES: [&str; 2] = [
+    "entropy-universal-symbols-us",
+    "entropy-universal-symbols-ru",
+];
+
+/// The running daemon's own bus, found through `ibus address`. Unlike the
+/// `org.freedesktop.IBus` name on the session bus, which a D-Bus service file
+/// may activate, it never starts a daemon that is not running.
+#[cfg(target_os = "linux")]
+pub(crate) fn running_ibus() -> Option<zbus::blocking::Connection> {
+    zbus::blocking::connection::Builder::ibus()
+        .ok()?
+        .method_timeout(IBUS_CALL_TIMEOUT)
+        .build()
+        .ok()
+}
+
+/// Has the daemon re-execute itself in place, which rereads the registry.
+///
+/// `ibus restart` is not used for this: since ibus 1.5.30 (ibus commit
+/// 74712fa) it also manages the desktop's input method, and in a KDE Plasma
+/// Wayland session it rewrites kwinrc so that KWin launches IBus, replacing
+/// whatever input method or on-screen keyboard was chosen there. `Exit(true)`
+/// is what it sends to a daemon it finds running on its own. The daemon
+/// replies and flushes before it quits, so an error here means it did not.
+#[cfg(target_os = "linux")]
+fn restart_ibus(connection: &zbus::blocking::Connection) -> Result<(), String> {
+    connection
+        .call_method(
+            Some(crate::qmk_hid_host::IBUS_DESTINATION),
+            crate::qmk_hid_host::IBUS_PATH,
+            Some(crate::qmk_hid_host::IBUS_INTERFACE),
+            "Exit",
+            &(true,),
+        )
+        .map(|_| ())
+        .map_err(|err| format!("could not restart IBus: {err}"))
+}
+
+/// Whether `Exit(true)` gives the session its IBus back.
+///
+/// Not when the daemon runs under the panel a Wayland compositor starts as
+/// its input method (`ibus-ui-gtk3 --enable-wayland-im`, as KWin does for
+/// IBus Wayland): the panel quits once the daemon drops its connection, the
+/// daemon follows its parent out, and KWin does not start again an input
+/// method that quit on its own. A daemon whose parent cannot be told is left
+/// alone as well.
+#[cfg(target_os = "linux")]
+fn ibus_restartable(connection: &zbus::blocking::Connection) -> bool {
+    zbus::block_on(connection.peer_creds())
+        .ok()
+        .and_then(|credentials| credentials.process_id())
+        .and_then(|pid| std::fs::read_to_string(format!("/proc/{pid}/stat")).ok())
+        .and_then(|stat| stat_parent_pid(&stat))
+        .and_then(|parent| std::fs::read(format!("/proc/{parent}/cmdline")).ok())
+        .is_some_and(|cmdline| !wayland_input_method_panel(&cmdline))
+}
+
+/// The parent's pid from `/proc/<pid>/stat`: `pid (comm) state ppid …`,
+/// where the command name may hold spaces and parentheses itself.
+#[cfg(target_os = "linux")]
+fn stat_parent_pid(stat: &str) -> Option<u32> {
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
+}
+
+#[cfg(target_os = "linux")]
+fn wayland_input_method_panel(cmdline: &[u8]) -> bool {
+    cmdline
+        .split(|&byte| byte == 0)
+        .any(|arg| arg == b"--enable-wayland-im")
+}
+
+/// Restarts a running daemon and waits for it to say whether it now lists
+/// the Entropy engine.
+#[cfg(target_os = "linux")]
+pub(crate) fn reload_running_ibus() -> Result<IbusReload, String> {
+    reload_running_ibus_with(running_ibus, ibus_restartable, IBUS_RESTART_WAIT)
+}
+
+#[cfg(target_os = "linux")]
+fn reload_running_ibus_with(
+    mut connect: impl FnMut() -> Option<zbus::blocking::Connection>,
+    restartable: impl Fn(&zbus::blocking::Connection) -> bool,
+    wait: std::time::Duration,
+) -> Result<IbusReload, String> {
+    let Some(connection) = connect() else {
+        return Ok(IbusReload::NotRunning);
+    };
+    if !restartable(&connection) {
+        return Ok(IbusReload::DesktopInputMethod);
+    }
+    // The daemon re-executes itself and comes back as a new server; until
+    // then the address may still lead to the old one, which would answer
+    // from the registry it is about to drop.
+    let restarted_from = connection.server_guid().to_owned();
+    restart_ibus(&connection)?;
+    drop(connection);
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        if let Some(listed) = connect()
+            .filter(|connection| connection.server_guid() != restarted_from)
+            .and_then(|connection| ibus_lists_entropy_engine(&connection).ok())
+        {
+            return Ok(if listed {
+                IbusReload::Listed
+            } else {
+                IbusReload::Unlisted
+            });
+        }
+        if std::time::Instant::now() >= deadline {
+            return Ok(IbusReload::Unlisted);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn ibus_lists_entropy_engine(
+    connection: &zbus::blocking::Connection,
+) -> zbus::Result<bool> {
+    // Only the names the daemon knows come back.
+    let engines: Vec<zbus::zvariant::OwnedValue> = connection
+        .call_method(
+            Some(crate::qmk_hid_host::IBUS_DESTINATION),
+            crate::qmk_hid_host::IBUS_PATH,
+            Some(crate::qmk_hid_host::IBUS_INTERFACE),
+            "GetEnginesByNames",
+            &(ENTROPY_IBUS_ENGINES.as_slice(),),
+        )?
+        .body()
+        .deserialize()?;
+    Ok(!engines.is_empty())
+}
+
+/// The source in use, as the daemon reports it; `None` with none chosen yet.
+#[cfg(target_os = "linux")]
+pub(crate) fn ibus_global_engine(
+    connection: &zbus::blocking::Connection,
+) -> Option<crate::qmk_hid_host::IbusEngineState> {
+    let engine: zbus::zvariant::OwnedValue = connection
+        .call_method(
+            Some(crate::qmk_hid_host::IBUS_DESTINATION),
+            crate::qmk_hid_host::IBUS_PATH,
+            Some(crate::qmk_hid_host::IBUS_INTERFACE),
+            "GetGlobalEngine",
+            &(),
+        )
+        .ok()?
+        .body()
+        .deserialize()
+        .ok()?;
+    crate::qmk_hid_host::ibus_engine_state(&engine)
 }
 
 #[cfg(target_os = "linux")]
@@ -295,11 +457,14 @@ fn refresh_ibus_registry() {
             .stderr(std::process::Stdio::null())
             .status();
     }
-    let _ = std::process::Command::new("ibus")
-        .arg("restart")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
+    // A stopped daemon reads the registry when it starts; one the desktop
+    // runs as its input method rereads it at the next login.
+    if let Some(Err(err)) = running_ibus()
+        .filter(ibus_restartable)
+        .map(|connection| restart_ibus(&connection))
+    {
+        log::warn!("Smart Input: {err}");
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -1210,5 +1375,229 @@ mod tests {
             "the child must execute the keyboard regression check: {stdout}"
         );
         print!("{stdout}");
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod ibus_reload_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// What a daemon was asked: the restarts and the engine lookups.
+    #[derive(Default)]
+    struct DaemonLog {
+        exits: Vec<bool>,
+        queries: usize,
+    }
+
+    struct FakeIbus {
+        log: Arc<Mutex<DaemonLog>>,
+        engines: Vec<String>,
+        refuse_exit: bool,
+    }
+
+    #[zbus::interface(name = "org.freedesktop.IBus")]
+    impl FakeIbus {
+        fn exit(&self, restart: bool) -> zbus::fdo::Result<()> {
+            if self.refuse_exit {
+                return Err(zbus::fdo::Error::Failed("scripted exit failure".to_owned()));
+            }
+            self.log.lock().unwrap().exits.push(restart);
+            Ok(())
+        }
+
+        fn get_engines_by_names(&self, names: Vec<String>) -> Vec<zbus::zvariant::OwnedValue> {
+            self.log.lock().unwrap().queries += 1;
+            names
+                .into_iter()
+                .filter(|name| self.engines.contains(name))
+                .map(|name| zbus::zvariant::Value::from(name).try_into().unwrap())
+                .collect()
+        }
+    }
+
+    /// One ibus-daemon process: every connection to it carries the same
+    /// server GUID, and a restarted daemon comes back with a new one.
+    struct Daemon {
+        guid: zbus::Guid<'static>,
+        log: Arc<Mutex<DaemonLog>>,
+        engines: Vec<String>,
+        refuse_exit: bool,
+        servers: Vec<zbus::blocking::Connection>,
+    }
+
+    impl Daemon {
+        fn new(engines: &[&str]) -> Self {
+            Self {
+                guid: zbus::Guid::generate(),
+                log: Arc::default(),
+                engines: engines.iter().map(|&name| name.to_owned()).collect(),
+                refuse_exit: false,
+                servers: Vec::new(),
+            }
+        }
+
+        fn connect(&mut self) -> zbus::blocking::Connection {
+            let (client, server) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+            let guid = self.guid.clone();
+            let ibus = FakeIbus {
+                log: self.log.clone(),
+                engines: self.engines.clone(),
+                refuse_exit: self.refuse_exit,
+            };
+            let server = std::thread::spawn(move || {
+                zbus::blocking::connection::Builder::unix_stream(server)
+                    .server(guid)
+                    .expect("server guid")
+                    .p2p()
+                    .serve_at(crate::qmk_hid_host::IBUS_PATH, ibus)
+                    .expect("IBus object")
+                    .build()
+                    .expect("server connection")
+            });
+            let client = zbus::blocking::connection::Builder::unix_stream(client)
+                .p2p()
+                .build()
+                .expect("client connection");
+            self.servers.push(server.join().expect("server thread"));
+            client
+        }
+    }
+
+    #[test]
+    fn a_stopped_ibus_is_left_stopped() {
+        let mut attempts = 0;
+        let reload = reload_running_ibus_with(
+            || {
+                attempts += 1;
+                None
+            },
+            ibus_restartable,
+            Duration::from_millis(50),
+        );
+        assert_eq!(reload, Ok(IbusReload::NotRunning));
+        assert_eq!(attempts, 1, "nothing waits for a daemon that never ran");
+    }
+
+    #[test]
+    fn a_running_ibus_restarts_once_and_is_asked_again_only_once_it_is_back() {
+        let mut old = Daemon::new(&[]);
+        let mut new = Daemon::new(&ENTROPY_IBUS_ENGINES[..1]);
+        // The old daemon still answers once after it was asked to exit.
+        let mut connections = vec![old.connect(), old.connect()].into_iter();
+        let reload = reload_running_ibus_with(
+            || connections.next().or_else(|| Some(new.connect())),
+            ibus_restartable,
+            Duration::from_secs(5),
+        );
+        assert_eq!(reload, Ok(IbusReload::Listed));
+        let old = old.log.lock().unwrap();
+        assert_eq!(old.exits, [true]);
+        assert_eq!(
+            old.queries, 0,
+            "the old daemon answers from the registry it drops"
+        );
+        let new = new.log.lock().unwrap();
+        assert!(new.exits.is_empty());
+        assert_eq!(new.queries, 1);
+    }
+
+    #[test]
+    fn a_restarted_ibus_without_the_engine_lists_it_as_missing() {
+        let mut old = Daemon::new(&ENTROPY_IBUS_ENGINES);
+        let mut new = Daemon::new(&["xkb:us::eng"]);
+        let mut first = Some(old.connect());
+        let reload = reload_running_ibus_with(
+            || first.take().or_else(|| Some(new.connect())),
+            ibus_restartable,
+            Duration::from_secs(5),
+        );
+        assert_eq!(reload, Ok(IbusReload::Unlisted));
+        assert_eq!(old.log.lock().unwrap().exits, [true]);
+        assert_eq!(new.log.lock().unwrap().queries, 1);
+    }
+
+    #[test]
+    fn a_daemon_that_does_not_come_back_counts_as_missing_after_the_wait() {
+        let mut old = Daemon::new(&ENTROPY_IBUS_ENGINES);
+        let mut first = Some(old.connect());
+        let mut attempts = 0;
+        let reload = reload_running_ibus_with(
+            || {
+                attempts += 1;
+                first.take()
+            },
+            ibus_restartable,
+            Duration::from_millis(300),
+        );
+        assert_eq!(reload, Ok(IbusReload::Unlisted));
+        assert_eq!(old.log.lock().unwrap().exits, [true]);
+        assert!(
+            attempts > 2,
+            "the address is tried again until the wait is over"
+        );
+    }
+
+    #[test]
+    fn a_refused_restart_is_reported_without_waiting_for_the_daemon() {
+        let mut daemon = Daemon::new(&ENTROPY_IBUS_ENGINES);
+        daemon.refuse_exit = true;
+        let mut first = Some(daemon.connect());
+        let mut attempts = 0;
+        let reload = reload_running_ibus_with(
+            || {
+                attempts += 1;
+                first.take()
+            },
+            ibus_restartable,
+            Duration::from_secs(5),
+        );
+        assert!(
+            reload
+                .as_ref()
+                .is_err_and(|err| err.contains("scripted exit failure")),
+            "{reload:?}"
+        );
+        assert_eq!(attempts, 1);
+        assert_eq!(daemon.log.lock().unwrap().queries, 0);
+    }
+
+    #[test]
+    fn an_ibus_the_desktop_runs_as_its_input_method_is_left_running() {
+        let mut daemon = Daemon::new(&ENTROPY_IBUS_ENGINES);
+        let mut first = Some(daemon.connect());
+        let reload = reload_running_ibus_with(|| first.take(), |_| false, Duration::from_secs(5));
+        assert_eq!(reload, Ok(IbusReload::DesktopInputMethod));
+        let log = daemon.log.lock().unwrap();
+        assert!(log.exits.is_empty());
+        assert_eq!(log.queries, 0);
+    }
+
+    #[test]
+    fn a_daemon_is_restartable_unless_its_parent_is_a_wayland_input_method_panel() {
+        // The fake daemon is this test process, whose parent is no panel.
+        let mut daemon = Daemon::new(&ENTROPY_IBUS_ENGINES);
+        assert!(ibus_restartable(&daemon.connect()));
+
+        assert!(wayland_input_method_panel(
+            b"/usr/libexec/ibus-ui-gtk3\0--enable-wayland-im\0--exec-daemon\0--daemon-args\0--xim --panel disable\0"
+        ));
+        assert!(!wayland_input_method_panel(
+            b"ibus-daemon\0--daemonize\0--xim\0"
+        ));
+        assert!(!wayland_input_method_panel(
+            b"/usr/libexec/ibus-ui-gtk3\0--enable-wayland-imx\0"
+        ));
+
+        assert_eq!(
+            stat_parent_pid("4242 (ibus-daemon) S 4200 4242 4242 0 -1"),
+            Some(4200)
+        );
+        assert_eq!(
+            stat_parent_pid("77 (odd) name (x)) R 5 77 77 0 -1"),
+            Some(5)
+        );
+        assert_eq!(stat_parent_pid("garbage"), None);
     }
 }
