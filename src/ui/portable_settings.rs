@@ -33,6 +33,15 @@ pub(super) struct EntPortableSetting {
     pub(super) module: Option<Vec<EntModuleField>>,
 }
 
+impl EntPortableSetting {
+    pub(super) fn is_layer_led_color(&self) -> bool {
+        self.id
+            .strip_prefix("layer_led_color:")
+            .and_then(|layer| layer.parse::<u8>().ok())
+            .is_some()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct EntPortableSettingSpec {
     pub(super) id: &'static str,
@@ -107,11 +116,23 @@ pub(super) fn ent_portable_setting_spec(qsid: u16) -> Option<EntPortableSettingS
     })
 }
 
-pub(super) fn ent_portable_setting_is_known(qsid: u16) -> bool {
-    ent_portable_setting_spec(qsid).is_some() || matches!(qsid, 120 | 143)
+pub(super) fn ent_portable_setting_is_known(setting: &EntPortableSetting) -> bool {
+    ent_portable_setting_spec(setting.qsid).is_some()
+        || matches!(setting.qsid, 120 | 143)
+        || setting.is_layer_led_color()
 }
 
 pub(super) fn ent_portable_setting_is_valid(setting: &EntPortableSetting) -> bool {
+    if setting.is_layer_led_color() {
+        return setting.module.is_none()
+            && setting.width == EntPortableSettingWidth::U8
+            && usize::from(setting.value) < LAYER_LED_PALETTE.len()
+            && setting
+                .variants
+                .iter()
+                .map(String::as_str)
+                .eq(LAYER_LED_PALETTE);
+    }
     if setting.module.is_some() {
         return module_setting_valid(setting);
     }
@@ -165,7 +186,11 @@ pub(super) fn write_entlayout_portable_setting(
     hid: &crate::hid::HidDevice,
     setting: &EntPortableSetting,
 ) -> anyhow::Result<()> {
-    let policy = settings_write_queue::qmk_setting_write_policy(setting.qsid);
+    let policy = if setting.is_layer_led_color() && !hid.is_bluetooth_transport() {
+        settings_write_queue::QmkSettingWritePolicy::VerifiedReadback
+    } else {
+        settings_write_queue::qmk_setting_write_policy(setting.qsid)
+    };
     let (result, _) = settings_write_queue::write_qmk_setting_value(
         hid,
         setting.qsid,
@@ -246,6 +271,31 @@ impl EntropyApp {
                 .any(|field| field.qsid == setting.qsid)
         });
         settings.extend(modules);
+        if self.layer_led_settings.supported {
+            for (layer, color) in self.layer_led_settings.layer_colors.iter().enumerate() {
+                if !color.loaded || layer >= self.layer_count {
+                    continue;
+                }
+                for qsid in color.all_qsids() {
+                    if !self.supported_qmk_settings.contains(&qsid)
+                        || settings.iter().any(|setting| setting.qsid == qsid)
+                    {
+                        continue;
+                    }
+                    let setting = EntPortableSetting {
+                        id: format!("layer_led_color:{layer}"),
+                        qsid,
+                        width: EntPortableSettingWidth::U8,
+                        value: u16::from(color.value),
+                        variants: LAYER_LED_PALETTE.iter().map(|s| (*s).to_owned()).collect(),
+                        module: None,
+                    };
+                    if ent_portable_setting_is_valid(&setting) {
+                        settings.push(setting);
+                    }
+                }
+            }
+        }
         settings.sort_by_key(|setting| setting.qsid);
         settings
     }
@@ -336,6 +386,10 @@ impl EntropyApp {
 
     pub(super) fn apply_entlayout_portable_setting_local(&mut self, setting: &EntPortableSetting) {
         let value = setting.value;
+        if setting.is_layer_led_color() {
+            self.layer_led_settings.set_value(setting.qsid, value);
+            return;
+        }
         if setting.module.is_some() {
             self.module_settings.values.insert(setting.qsid, value);
             self.sync_firmware_managed_layout_options();

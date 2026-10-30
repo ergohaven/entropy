@@ -1308,11 +1308,15 @@ impl EntropyApp {
             .into_iter()
             .filter(|(profile, _)| *profile <= 4)
             .map(|(_, qsid)| {
-                let value = dev_conn.get_qmk_setting_u8(qsid).unwrap_or_else(|e| {
+                let result = dev_conn.get_qmk_setting_u8(qsid);
+                let loaded = result.is_ok();
+                let value = result.unwrap_or_else(|e| {
                     log::warn!("get_qmk_setting_u8(layer_led bt profile qsid {qsid}): {e}");
                     0
                 });
-                LayerLedColorSetting::new(qsid, value)
+                let mut setting = LayerLedColorSetting::new(qsid, value);
+                setting.loaded = loaded;
+                setting
             })
             .collect::<Vec<_>>();
 
@@ -1320,15 +1324,16 @@ impl EntropyApp {
             .into_iter()
             .filter_map(|(_, qsids)| {
                 let (&qsid, linked_qsids) = qsids.split_first()?;
-                let value = dev_conn.get_qmk_setting_u8(qsid).unwrap_or_else(|e| {
+                let result = dev_conn.get_qmk_setting_u8(qsid);
+                let loaded = result.is_ok();
+                let value = result.unwrap_or_else(|e| {
                     log::warn!("get_qmk_setting_u8(layer_led layer qsid {qsid}): {e}");
                     0
                 });
-                Some(LayerLedColorSetting::with_linked_qsids(
-                    qsid,
-                    linked_qsids.to_vec(),
-                    value,
-                ))
+                let mut setting =
+                    LayerLedColorSetting::with_linked_qsids(qsid, linked_qsids.to_vec(), value);
+                setting.loaded = loaded;
+                Some(setting)
             })
             .collect::<Vec<_>>();
 
@@ -1367,12 +1372,15 @@ impl EntropyApp {
             if !has_qmk_setting(qsid) {
                 break;
             }
-            let value = dev_conn.get_qmk_setting_u8(qsid).unwrap_or_else(|e| {
+            let result = dev_conn.get_qmk_setting_u8(qsid);
+            let loaded = result.is_ok();
+            let value = result.unwrap_or_else(|e| {
                 log::warn!("get_qmk_setting_u8(layer_led qsid {qsid}): {e}");
                 0
             });
-            leds.layer_colors
-                .push(LayerLedColorSetting::new(qsid, value));
+            let mut setting = LayerLedColorSetting::new(qsid, value);
+            setting.loaded = loaded;
+            leds.layer_colors.push(setting);
         }
         leds.supported = !leds.layer_colors.is_empty();
         if leds.supported {

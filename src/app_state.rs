@@ -2245,6 +2245,8 @@ pub(crate) struct LayerLedColorSetting {
     pub(crate) qsid: u16,
     pub(crate) linked_qsids: Vec<u16>,
     pub(crate) value: u8,
+    /// False when the displayed fallback did not come from a successful read.
+    pub(crate) loaded: bool,
 }
 
 impl LayerLedColorSetting {
@@ -2253,6 +2255,7 @@ impl LayerLedColorSetting {
             qsid,
             linked_qsids: Vec::new(),
             value,
+            loaded: true,
         }
     }
 
@@ -2261,6 +2264,7 @@ impl LayerLedColorSetting {
             qsid,
             linked_qsids,
             value,
+            loaded: true,
         }
     }
 
@@ -2322,6 +2326,7 @@ impl LayerLedSettingsState {
         {
             if setting.qsid == qsid || setting.linked_qsids.contains(&qsid) {
                 setting.value = color;
+                setting.loaded = true;
                 return true;
             }
         }

@@ -70,7 +70,7 @@ pub(super) enum DeferredLoadPayload {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-const ENTLAYOUT_EXPORT_SECTIONS: [DeferredLoadSection; 7] = [
+const ENTLAYOUT_EXPORT_SECTIONS: [DeferredLoadSection; 8] = [
     DeferredLoadSection::Macros,
     DeferredLoadSection::Combos,
     DeferredLoadSection::TapDance,
@@ -78,6 +78,7 @@ const ENTLAYOUT_EXPORT_SECTIONS: [DeferredLoadSection; 7] = [
     DeferredLoadSection::AltRepeat,
     DeferredLoadSection::BehaviorSettings,
     DeferredLoadSection::Touchpad,
+    DeferredLoadSection::LayerLeds,
 ];
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1748,6 +1749,34 @@ mod tests {
             &state,
             DeferredFullLayoutAction::ImportEntlayout
         ));
+    }
+
+    #[test]
+    fn entlayout_layer_colors_wait_for_bluetooth_load() {
+        let mut load_context = context();
+        load_context.layer_leds_supported = true;
+        let mut state = DeferredDeviceLoadState::staged(load_context);
+        for layer in 1..4 {
+            state.set_layer_status(layer, DeferredLoadStatus::Loaded);
+        }
+        for section in ENTLAYOUT_EXPORT_SECTIONS {
+            if state.section_supported(section) && section != DeferredLoadSection::LayerLeds {
+                state.set_section_status(section, DeferredLoadStatus::Loaded);
+            }
+        }
+        for action in [
+            DeferredFullLayoutAction::ExportEntlayout,
+            DeferredFullLayoutAction::ImportEntlayout,
+        ] {
+            assert!(!deferred_full_layout_data_ready(&state, action));
+        }
+        state.set_section_status(DeferredLoadSection::LayerLeds, DeferredLoadStatus::Loaded);
+        for action in [
+            DeferredFullLayoutAction::ExportEntlayout,
+            DeferredFullLayoutAction::ImportEntlayout,
+        ] {
+            assert!(deferred_full_layout_data_ready(&state, action));
+        }
     }
 
     #[test]
