@@ -471,9 +471,10 @@ impl EntropyApp {
         let (title, body, remember, close_label, tray_label, cancel_label) =
             linux_close_to_tray_prompt_copy(
                 lang,
-                self.app_settings
-                    .text_expander_enabled
-                    .then(crate::smart_input::text_expander_runs_outside_entropy_process),
+                text_expander_through_ibus(
+                    self.app_settings.text_expander_enabled,
+                    self.ibus_registration.get(),
+                ),
             );
         #[cfg(target_os = "macos")]
         let (title, body, remember, close_label, tray_label, cancel_label) = match lang {
@@ -1149,6 +1150,18 @@ fn plist_xml_escape(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+/// Whether Text Expander keeps running once Entropy closes; `None` with it
+/// off. On Linux it lives only in the Entropy IBus engine, so what counts is
+/// that IBus has the engine to load, not whether this process was started
+/// with IBus input-module variables.
+#[cfg(target_os = "linux")]
+fn text_expander_through_ibus(
+    enabled: bool,
+    registration: crate::linux_setup::IbusRegistration,
+) -> Option<bool> {
+    enabled.then_some(registration.user || registration.system)
+}
+
 #[cfg(target_os = "linux")]
 /// `input_method_backend` is `None` with Text Expander off: the prompt then
 /// only comes up because the tray can bring the window back.
@@ -1403,6 +1416,30 @@ mod tests {
             assert!(!tray_alone.contains("Text Expander"));
             assert!(text_expander.contains("Text Expander"));
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_close_prompt_keeps_text_expander_running_wherever_the_engine_is_registered() {
+        use crate::linux_setup::IbusRegistration;
+
+        let registered = |user, system| IbusRegistration { user, system };
+        assert_eq!(
+            text_expander_through_ibus(false, registered(true, true)),
+            None
+        );
+        assert_eq!(
+            text_expander_through_ibus(true, registered(false, false)),
+            Some(false)
+        );
+        assert_eq!(
+            text_expander_through_ibus(true, registered(true, false)),
+            Some(true)
+        );
+        assert_eq!(
+            text_expander_through_ibus(true, registered(false, true)),
+            Some(true)
+        );
     }
 
     #[test]

@@ -578,4 +578,83 @@ mod tests {
             vec![PathBuf::from("/usr/share/ibus/component")]
         );
     }
+
+    // `ibus restart` would make IBus the input method KWin launches on KDE
+    // Plasma Wayland; the scripts only rewrite the registry cache and leave
+    // the restart to Entropy.
+    #[test]
+    fn ibus_setup_scripts_rewrite_the_registry_cache_and_leave_the_daemon_alone() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "entropy-ibus-scripts-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let bin = root.join("bin");
+        let scripts = root.join("ibus");
+        let data_home = root.join("data");
+        let calls = root.join("ibus-calls");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&scripts).unwrap();
+        for file in [
+            "install-user.sh",
+            "uninstall-user.sh",
+            "entropy-universal-symbols.xml.in",
+        ] {
+            std::fs::copy(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("linux/ibus")
+                    .join(file),
+                scripts.join(file),
+            )
+            .unwrap();
+        }
+        // `ibus` logs how it was called. The engine only has to pass its
+        // dependency check, which needs no Python here.
+        for (path, body) in [
+            (
+                bin.join("ibus"),
+                "printf '%s|%s\\n' \"$*\" \"$IBUS_COMPONENT_PATH\" >> \"$ENTROPY_TEST_IBUS_CALLS\"\n",
+            ),
+            (scripts.join("entropy-ibus-engine"), "exit 0\n"),
+        ] {
+            std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = std::env::join_paths(
+            std::iter::once(bin.clone()).chain(
+                std::env::var_os("PATH")
+                    .iter()
+                    .flat_map(std::env::split_paths),
+            ),
+        )
+        .unwrap();
+
+        for script in ["install-user.sh", "uninstall-user.sh"] {
+            let output = std::process::Command::new("sh")
+                .arg(scripts.join(script))
+                .env("PATH", &path)
+                .env("XDG_DATA_HOME", &data_home)
+                .env("ENTROPY_TEST_IBUS_CALLS", &calls)
+                .env_remove("IBUS_COMPONENT_PATH")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{script}: {output:?}");
+        }
+
+        let user_components = format!("{}:", data_home.join("ibus/component").display());
+        let calls = std::fs::read_to_string(&calls).unwrap();
+        let calls: Vec<&str> = calls.lines().collect();
+        assert_eq!(calls.len(), 2, "one ibus call per script: {calls:?}");
+        for call in calls {
+            let (args, component_path) = call.split_once('|').unwrap();
+            assert_eq!(args, "write-cache");
+            assert!(component_path.starts_with(&user_components), "{call}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
