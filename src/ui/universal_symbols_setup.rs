@@ -3,6 +3,7 @@ use super::*;
 #[cfg(target_os = "linux")]
 pub(super) struct LinuxSetupTask {
     script: String,
+    args: Vec<String>,
     backend: String,
     receiver: std::sync::mpsc::Receiver<LinuxSetupResult>,
 }
@@ -14,32 +15,41 @@ struct LinuxSetupResult {
     reload: Option<Result<crate::smart_input::IbusReload, String>>,
 }
 
-/// Runs the script, then has a running IBus reread the registry. The scripts
-/// leave the daemon alone, see `reload_running_ibus`.
+/// Has a running IBus reread the registry once a script changed it.
+#[cfg(target_os = "linux")]
+type IbusReloadAfterSetup =
+    Box<dyn FnOnce() -> Result<crate::smart_input::IbusReload, String> + Send>;
+
+/// Runs the script, then, for the IBus scripts, has a running IBus reread the
+/// registry. The scripts leave the daemon alone, see `reload_running_ibus`.
 #[cfg(target_os = "linux")]
 fn start_linux_setup_task(
     script_path: std::path::PathBuf,
     script: &str,
+    args: &[&str],
     backend: &str,
-    reload: impl FnOnce() -> Result<crate::smart_input::IbusReload, String> + Send + 'static,
+    reload: Option<IbusReloadAfterSetup>,
 ) -> Result<LinuxSetupTask, String> {
+    let args: Vec<String> = args.iter().map(|&arg| arg.to_owned()).collect();
+    let worker_args = args.clone();
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::Builder::new()
         .name("entropy-linux-setup".to_owned())
         .spawn(move || {
             let output = std::process::Command::new("sh")
                 .arg(&script_path)
+                .args(&worker_args)
                 .output()
                 .map_err(|err| format!("Could not run {}: {err}", script_path.display()));
-            let reload = output
-                .as_ref()
-                .is_ok_and(|output| output.status.success())
-                .then(reload);
+            let reload = reload
+                .filter(|_| output.as_ref().is_ok_and(|output| output.status.success()))
+                .map(|reload| reload());
             let _ = sender.send(LinuxSetupResult { output, reload });
         })
         .map_err(|err| format!("Could not start {backend} setup: {err}"))?;
     Ok(LinuxSetupTask {
         script: script.to_owned(),
+        args,
         backend: backend.to_owned(),
         receiver,
     })
@@ -735,6 +745,7 @@ impl EntropyApp {
                 // The reload can only have changed what the daemon serves, but
                 // an install or removal may have raced it — rescan either way.
                 self.ibus_registration.invalidate();
+                self.invalidate_text_expander_probe();
                 let lang = self.app_settings.language;
                 let catalog = |key| crate::i18n::tr_catalog(lang, key).to_owned();
                 self.status_msg = match outcome {
@@ -779,24 +790,48 @@ impl EntropyApp {
             return;
         }
 
-        self.run_linux_setup_script(script, backend);
+        // Removing a leftover copy beside a system-wide registration keeps the
+        // GNOME sources, which still work through the other one.
+        let args: &[&str] =
+            if script.ends_with("uninstall-user.sh") && self.ibus_registration.get().system {
+                &["--keep-gnome-sources"]
+            } else {
+                &[]
+            };
+        self.run_linux_setup_script(
+            script,
+            args,
+            backend,
+            Some(Box::new(crate::smart_input::reload_running_ibus)),
+        );
         // install-user.sh / uninstall-user.sh add or remove the user copy.
         self.ibus_registration.invalidate();
     }
 
+    /// Runs `gnome-input-sources.sh use` or `restore`. GNOME Shell follows
+    /// its input sources by itself, so IBus is left alone.
     #[cfg(target_os = "linux")]
-    fn run_linux_setup_script(&mut self, script: &str, backend: &str) {
+    pub(super) fn run_gnome_input_sources(&mut self, action: &'static str) {
+        if self.linux_setup_task.is_some() || self.pending_ibus_reload.is_some() {
+            return;
+        }
+        self.run_linux_setup_script(GNOME_INPUT_SOURCES_SCRIPT, &[action], "GNOME", None);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn run_linux_setup_script(
+        &mut self,
+        script: &str,
+        args: &[&str],
+        backend: &str,
+        reload: Option<IbusReloadAfterSetup>,
+    ) {
         let Some(script_path) = crate::linux_setup::setup_script_path(script) else {
             self.status_msg = format!("Could not find {script}; run it from the Entropy folder");
             return;
         };
 
-        match start_linux_setup_task(
-            script_path,
-            script,
-            backend,
-            crate::smart_input::reload_running_ibus,
-        ) {
+        match start_linux_setup_task(script_path, script, args, backend, reload) {
             Ok(task) => {
                 self.linux_setup_task = Some(task);
                 self.status_msg = crate::i18n::tr_catalog(
@@ -835,11 +870,11 @@ impl EntropyApp {
         let lang = self.app_settings.language;
         self.status_msg = match output {
             Ok(output) if output.status.success() => {
-                linux_setup_success_status(lang, &task.script, reload)
+                linux_setup_success_status(lang, &task.script, &task.args, reload)
             }
             Ok(output) => {
                 let details = command_output_summary(&output.stderr, &output.stdout);
-                let action = linux_setup_action_label(&task.script);
+                let action = linux_setup_action_label(&task.script, &task.args);
                 if details.is_empty() {
                     format!("{} {action} failed: {}", task.backend, output.status)
                 } else {
@@ -848,8 +883,9 @@ impl EntropyApp {
             }
             Err(err) => err,
         };
-        // The worker may finish after the row has cached the old registration.
+        // The worker may finish after the rows have cached the old state.
         self.ibus_registration.invalidate();
+        self.invalidate_text_expander_probe();
         crate::smart_input::refresh_installed_ibus_backend();
         ctx.request_repaint();
     }
@@ -1283,13 +1319,33 @@ fn universal_symbols_text_expander_key() -> &'static str {
 }
 
 #[cfg(target_os = "linux")]
+pub(super) const GNOME_INPUT_SOURCES_SCRIPT: &str = "linux/ibus/gnome-input-sources.sh";
+
+/// `use` or `restore` when the task changes GNOME's input sources.
+#[cfg(target_os = "linux")]
+fn gnome_input_sources_action<'a>(script: &str, args: &'a [String]) -> Option<&'a str> {
+    (script == GNOME_INPUT_SOURCES_SCRIPT)
+        .then(|| args.first().map(String::as_str))
+        .flatten()
+}
+
+#[cfg(target_os = "linux")]
 fn linux_setup_success_status(
     lang: crate::i18n::Language,
     script: &str,
+    args: &[String],
     reload: Option<Result<crate::smart_input::IbusReload, String>>,
 ) -> String {
     use crate::smart_input::IbusReload;
 
+    if let Some(action) = gnome_input_sources_action(script, args) {
+        let key = if action == "restore" {
+            "text_expander.gnome_sources_restored_status"
+        } else {
+            "text_expander.gnome_sources_used_status"
+        };
+        return crate::i18n::tr_catalog(lang, key).to_owned();
+    }
     if script.contains("uninstall") {
         // A daemon still serving the removed engine drops it with the session,
         // which the message already says.
@@ -1321,7 +1377,9 @@ fn linux_setup_success_status(
 
 #[cfg(target_os = "linux")]
 fn linux_setup_progress_status_key(script: &str) -> &'static str {
-    if script.contains("uninstall") {
+    if script == GNOME_INPUT_SOURCES_SCRIPT {
+        "text_expander.gnome_sources_working_status"
+    } else if script.contains("uninstall") {
         "universal_symbols_setup.ibus_uninstalling_status"
     } else {
         "universal_symbols_setup.ibus_installing_status"
@@ -1329,8 +1387,10 @@ fn linux_setup_progress_status_key(script: &str) -> &'static str {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_setup_action_label(script: &str) -> &'static str {
-    if script.contains("uninstall") {
+fn linux_setup_action_label(script: &str, args: &[String]) -> &'static str {
+    if gnome_input_sources_action(script, args).is_some() {
+        "input sources change"
+    } else if script.contains("uninstall") {
         "uninstall"
     } else {
         "install"
@@ -1374,9 +1434,13 @@ mod linux_setup_tests {
         let script_path = std::env::temp_dir().join(unique);
         std::fs::write(&script_path, "printf 'setup complete\\n'\n").unwrap();
 
-        let task = start_linux_setup_task(script_path.clone(), "install-user.sh", "IBus", || {
-            Ok(crate::smart_input::IbusReload::Listed)
-        })
+        let task = start_linux_setup_task(
+            script_path.clone(),
+            "install-user.sh",
+            &[],
+            "IBus",
+            Some(Box::new(|| Ok(crate::smart_input::IbusReload::Listed))),
+        )
         .unwrap();
         let result = task
             .receiver
@@ -1409,12 +1473,17 @@ mod linux_setup_tests {
         let reloaded = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         let flag = reloaded.clone();
-        let task =
-            start_linux_setup_task(script_path.clone(), "install-user.sh", "IBus", move || {
+        let task = start_linux_setup_task(
+            script_path.clone(),
+            "install-user.sh",
+            &[],
+            "IBus",
+            Some(Box::new(move || {
                 flag.store(true, std::sync::atomic::Ordering::SeqCst);
                 Ok(crate::smart_input::IbusReload::Listed)
-            })
-            .unwrap();
+            })),
+        )
+        .unwrap();
         let result = task
             .receiver
             .recv_timeout(std::time::Duration::from_secs(2))
@@ -1432,7 +1501,7 @@ mod linux_setup_tests {
         use crate::smart_input::IbusReload;
 
         let lang = Language::English;
-        let installed = |reload| linux_setup_success_status(lang, "install-user.sh", reload);
+        let installed = |reload| linux_setup_success_status(lang, "install-user.sh", &[], reload);
         let key = |key| tr_catalog(lang, key).to_owned();
         assert_eq!(
             installed(Some(Ok(IbusReload::Listed))),
@@ -1452,8 +1521,63 @@ mod linux_setup_tests {
         );
         assert!(installed(Some(Err("no bus".to_owned()))).contains("no bus"));
         assert_eq!(
-            linux_setup_success_status(lang, "uninstall-user.sh", Some(Err("no bus".to_owned()))),
+            linux_setup_success_status(
+                lang,
+                "uninstall-user.sh",
+                &[],
+                Some(Err("no bus".to_owned()))
+            ),
             key("universal_symbols_setup.ibus_uninstalled_status")
         );
+    }
+
+    #[test]
+    fn gnome_input_sources_task_passes_its_action_and_leaves_ibus_alone() {
+        use crate::i18n::{tr_catalog, Language};
+
+        let unique = format!(
+            "entropy-gnome-sources-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let script_path = std::env::temp_dir().join(unique);
+        std::fs::write(&script_path, "printf '%s\\n' \"$@\"\n").unwrap();
+
+        let task = start_linux_setup_task(
+            script_path.clone(),
+            GNOME_INPUT_SOURCES_SCRIPT,
+            &["use"],
+            "GNOME",
+            None,
+        )
+        .unwrap();
+        let result = task
+            .receiver
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+
+        assert_eq!(
+            String::from_utf8_lossy(&result.output.unwrap().stdout),
+            "use\n"
+        );
+        assert_eq!(result.reload, None);
+        let lang = Language::English;
+        assert_eq!(
+            linux_setup_success_status(lang, &task.script, &task.args, None),
+            tr_catalog(lang, "text_expander.gnome_sources_used_status")
+        );
+        assert_eq!(
+            linux_setup_success_status(
+                lang,
+                GNOME_INPUT_SOURCES_SCRIPT,
+                &["restore".to_owned()],
+                None
+            ),
+            tr_catalog(lang, "text_expander.gnome_sources_restored_status")
+        );
+        std::fs::remove_file(script_path).unwrap();
     }
 }

@@ -279,7 +279,7 @@ const ENTROPY_IBUS_ENGINES: [&str; 2] = [
 /// `org.freedesktop.IBus` name on the session bus, which a D-Bus service file
 /// may activate, it never starts a daemon that is not running.
 #[cfg(target_os = "linux")]
-fn running_ibus() -> Option<zbus::blocking::Connection> {
+pub(crate) fn running_ibus() -> Option<zbus::blocking::Connection> {
     zbus::blocking::connection::Builder::ibus()
         .ok()?
         .method_timeout(IBUS_CALL_TIMEOUT)
@@ -392,7 +392,9 @@ fn reload_running_ibus_with(
 }
 
 #[cfg(target_os = "linux")]
-fn ibus_lists_entropy_engine(connection: &zbus::blocking::Connection) -> zbus::Result<bool> {
+pub(crate) fn ibus_lists_entropy_engine(
+    connection: &zbus::blocking::Connection,
+) -> zbus::Result<bool> {
     // Only the names the daemon knows come back.
     let engines: Vec<zbus::zvariant::OwnedValue> = connection
         .call_method(
@@ -405,6 +407,26 @@ fn ibus_lists_entropy_engine(connection: &zbus::blocking::Connection) -> zbus::R
         .body()
         .deserialize()?;
     Ok(!engines.is_empty())
+}
+
+/// The source in use, as the daemon reports it; `None` with none chosen yet.
+#[cfg(target_os = "linux")]
+pub(crate) fn ibus_global_engine(
+    connection: &zbus::blocking::Connection,
+) -> Option<crate::qmk_hid_host::IbusEngineState> {
+    let engine: zbus::zvariant::OwnedValue = connection
+        .call_method(
+            Some(crate::qmk_hid_host::IBUS_DESTINATION),
+            crate::qmk_hid_host::IBUS_PATH,
+            Some(crate::qmk_hid_host::IBUS_INTERFACE),
+            "GetGlobalEngine",
+            &(),
+        )
+        .ok()?
+        .body()
+        .deserialize()
+        .ok()?;
+    crate::qmk_hid_host::ibus_engine_state(&engine)
 }
 
 #[cfg(target_os = "linux")]
