@@ -1764,9 +1764,13 @@ impl eframe::App for EntropyApp {
                 self.parent_display_handle,
                 Some(raw_window_handle::RawDisplayHandle::Wayland(_))
             );
+            // Wayland reports keyboard focus and pointer enter/leave even when
+            // it hides minimizing: a window left for another one has neither.
+            let main_window_attended = ctx.input(|i| i.focused || i.pointer.has_pointer());
             let bluetooth_visible_interval = bluetooth_visible_repaint_interval(
                 selected_device_is_bluetooth,
                 main_window_uses_wayland,
+                main_window_attended,
             );
             let connect_pending = matches!(self.connect_state, ConnectState::Loading { .. });
             let update_check_pending =
