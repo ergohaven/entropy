@@ -13,7 +13,7 @@ impl EntropyApp {
             &[("device", &device_name)],
         );
 
-        egui::Area::new(egui::Id::new("bluetooth_reconnect_status"))
+        egui::Area::new(egui::Id::unique("bluetooth_reconnect_status"))
             .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -22.0])
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {

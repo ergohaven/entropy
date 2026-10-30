@@ -2,12 +2,12 @@ use super::*;
 use std::time::{Duration, Instant};
 
 fn frame(app: &mut EntropyApp, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
-    ctx.run(egui::RawInput {
+    crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1100.0, 2200.0))),
         events, ..Default::default()
-    }, |ctx| { egui::CentralPanel::default().show(ctx, |ui| {
+    }, |ctx| { ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
         app.draw_display_settings_page(ui, ui.max_rect());
-    }); })
+    })); }))
 }
 fn click(app: &mut EntropyApp, ctx: &egui::Context, label: &str) {
     let mut output = frame(app, ctx, vec![]);
@@ -24,7 +24,7 @@ fn click(app: &mut EntropyApp, ctx: &egui::Context, label: &str) {
             egui::Shape::Text(t) if s.clip_rect.contains(t.pos + t.galley.size()/2.0) => Some(t.pos + t.galley.size()/2.0), _ => None,
         }).unwrap();
         frame(app, ctx, vec![egui::Event::PointerMoved(anchor), egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point, phase: egui::TouchPhase::Move, delta: egui::vec2(0.0,-160.0), modifiers: Default::default(),
+            unit: egui::MouseWheelUnit::Point, phase: egui::TouchPhase::Move, delta: egui::vec2(0.0,-160.0), modifiers: Default::default(), source: egui::MouseWheelSource::Unknown,
         }]);
         for _ in 0..30 { output = frame(app,ctx,vec![]); }
     }
@@ -65,9 +65,9 @@ fn sm62_timeout_failed_set_get_and_mismatch_never_confirm_requested_value() {
         assert_ne!(app.display_settings.confirmed_display_timeout, 6);
         let count = recorder.requests().len();
         for _ in 0..3 {
-            let output = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.draw_sm62_timeout_control(ui));
-            });
+            let output = crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
+                ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| app.draw_sm62_timeout_control(ui)));
+            }));
             assert!(output.shapes.iter().any(|s| matches!(&s.shape,
                 egui::Shape::Text(t) if t.galley.job.text == "!")), "SM62 timeout failure remains visible");
         }
@@ -84,9 +84,9 @@ fn sm62_timeout_unsupported_control_never_queues_and_does_not_mutate_defaults() 
     let (hid, recorder) = crate::hid::HidDevice::test_device();
     app.hid_device = Some(hid);
     let before = app.display_settings.clone();
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| app.draw_sm62_timeout_control(ui));
-    });
+    ctx.run_pass(egui::RawInput::default(), |ctx| {
+        ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| app.draw_sm62_timeout_control(ui)));
+    }).drop_without_applying_deltas();
     assert_eq!(app.display_settings, before);
     assert!(recorder.requests().is_empty());
     assert_eq!(super::super::settings_write_queue::qmk_setting_write_policy(DISPLAY_TIMEOUT_QSID), super::super::settings_write_queue::QmkSettingWritePolicy::SetOnly, "unrelated generic settings retain legacy policy");
@@ -164,9 +164,9 @@ fn sm62_timeout_saved_check_is_hidden_but_generic_saved_status_is_retained() {
     app.queue_display_setting_write("timeout".into(), DISPLAY_TIMEOUT_QSID, 0, 1);
     // Do not poll completion yet: the real queue must still paint progress.
     for _ in 0..2 {
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.draw_sm62_timeout_control(ui));
-        });
+        let output = crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| app.draw_sm62_timeout_control(ui)));
+        }));
         assert!(output.shapes.iter().any(|s| matches!(&s.shape,
             egui::Shape::Path(p) if p.stroke.width == 3.0 && p.points.len() >= 8)), "pending spinner remains visible");
     }
@@ -176,12 +176,12 @@ fn sm62_timeout_saved_check_is_hidden_but_generic_saved_status_is_retained() {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(matches!(app.settings_write_status(DISPLAY_TIMEOUT_QSID), Some(super::super::settings_write_queue::SettingsWriteStatus::Saved)));
-    let draw = |app: &mut EntropyApp, timeout: bool| ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let draw = |app: &mut EntropyApp, timeout: bool| crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
+        ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
             if timeout { app.draw_sm62_timeout_control(ui); }
             else { app.draw_settings_write_status(ui, DISPLAY_TIMEOUT_QSID, crate::ui_style::ResponsiveMetrics::from_ctx(ctx), false); }
-        });
-    });
+        }));
+    }));
     let checks = |out: &egui::FullOutput| out.shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == "\u{2713}")).count();
     draw(&mut app, true);
     let output = draw(&mut app, true);

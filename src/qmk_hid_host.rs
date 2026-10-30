@@ -2894,7 +2894,7 @@ mod tests {
         let guid = zbus::Guid::generate();
         // A peer with no object server reads the call and never replies.
         let server = thread::spawn(move || {
-            zbus::blocking::connection::Builder::unix_stream(server)
+            zbus::blocking::connection::Builder::async_io_unix_stream(server)
                 .server(guid)
                 .expect("server guid")
                 .p2p()
@@ -2902,7 +2902,7 @@ mod tests {
         });
         let timeout = Duration::from_millis(200);
         let client = layout_bus(
-            Ok(zbus::blocking::connection::Builder::unix_stream(client).p2p()),
+            Ok(zbus::blocking::connection::Builder::async_io_unix_stream(client).p2p()),
             timeout,
         )
         .expect("client connection");

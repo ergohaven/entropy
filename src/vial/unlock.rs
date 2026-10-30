@@ -197,7 +197,7 @@ impl EntropyApp {
             let total = self.vial_unlock_total;
             let layout_options_value = self.layout_options_value;
 
-            egui::Area::new(egui::Id::new("unlock_overlay"))
+            egui::Area::new(egui::Id::unique("unlock_overlay"))
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
@@ -232,7 +232,7 @@ impl EntropyApp {
                     ui.painter().rect_filled(screen, 0.0, screen_bg);
                     ui.interact(
                         screen,
-                        egui::Id::new("unlock_overlay_blocker"),
+                        egui::Id::unique("unlock_overlay_blocker"),
                         Sense::click_and_drag(),
                     );
 
@@ -329,7 +329,10 @@ impl EntropyApp {
                         0.0
                     };
                     let progress = ui.ctx().animate_value_with_time(
-                        egui::Id::new(("vial_unlock_progress", self.vial_unlock_animation_nonce)),
+                        egui::Id::unique((
+                            "vial_unlock_progress",
+                            self.vial_unlock_animation_nonce,
+                        )),
                         target_progress.clamp(0.0, 1.0),
                         VIAL_UNLOCK_PROGRESS_ANIMATION_TIME,
                     );
@@ -431,7 +434,7 @@ mod tests {
         ctx: &egui::Context,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
-        ctx.run_ui(
+        crate::app::discard_texture_deltas(ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -441,7 +444,7 @@ mod tests {
                 ..Default::default()
             },
             |ui| app.draw_vial_unlock_overlay(ui.ctx()),
-        )
+        ))
     }
 
     fn click_preflight_button(app: &mut EntropyApp, ctx: &egui::Context, start: bool) {
@@ -476,15 +479,16 @@ mod tests {
         app.unlock_open = true;
         app.pending_layout_indicator_open_after_unlock = true;
 
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_ui(egui::RawInput::default(), |ui| {
             app.draw_vial_unlock_overlay(ui.ctx());
-        });
+        })
+        .drop_without_applying_deltas();
         assert!(app.unlock_open);
         assert!(!app.vial_unlock_session_started);
         assert!(app.vial_hid_task.is_none());
         assert!(recorder.requests().is_empty());
 
-        let _ = ctx.run_ui(
+        ctx.run_ui(
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key: egui::Key::Escape,
@@ -496,7 +500,8 @@ mod tests {
                 ..Default::default()
             },
             |ui| app.draw_vial_unlock_overlay(ui.ctx()),
-        );
+        )
+        .drop_without_applying_deltas();
         assert!(!app.unlock_open);
         assert!(!app.pending_layout_indicator_open_after_unlock);
         assert!(app.macro_auto_unlock_cancelled);

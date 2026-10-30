@@ -953,7 +953,7 @@ mod tests {
                 let mut app = EntropyApp::new(&cc);
                 app.app_settings.language = lang;
                 app.device_about_info = Some(info.clone());
-                let output = ctx.run(
+                let output = crate::app::discard_texture_deltas(ctx.run_pass(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -962,11 +962,13 @@ mod tests {
                         ..Default::default()
                     },
                     |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            app.draw_about_device_page(ui, ui.max_rect());
+                        ctx.root_ui(|ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
+                                app.draw_about_device_page(ui, ui.max_rect());
+                            })
                         });
                     },
-                );
+                ));
                 let texts = output
                     .shapes
                     .iter()

@@ -37,6 +37,6 @@ impl PopupState {
     }
 
     pub fn id(&self, key: PopupKey) -> egui::Id {
-        egui::Id::new(("popup", key, self.epochs.get(&key).copied().unwrap_or(0)))
+        egui::Id::unique(("popup", key, self.epochs.get(&key).copied().unwrap_or(0)))
     }
 }

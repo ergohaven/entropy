@@ -4663,30 +4663,26 @@ mod tests {
                     )));
                     ctx.set_visuals(egui::Visuals::light());
                 }
-                for event in ctx.input(|input| input.events.clone()) {
-                    if let egui::Event::Screenshot { image, .. } = event {
-                        let rgba: Vec<u8> = image.pixels.iter().flat_map(|pixel| pixel.to_array()).collect();
-                        image::save_buffer(&self.path, &rgba, image.size[0] as u32,
-                            image.size[1] as u32, image::ColorType::Rgba8).unwrap();
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                }
-                egui::CentralPanel::default().show_inside(ui, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     ui.label("Disconnected render fixture — no HID writes / not hardware verification");
                     self.app.draw_sm62_display_settings_page(ui,ui.available_rect_before_wrap());
                     if self.frames==2 {
-                        if let Some((id,max))=ctx.data(|data|data.get_temp::<(egui::Id,f32)>(egui::Id::new("sm62_scroll_fixture"))) {
-                            let mut state=egui::scroll_area::State::default();
-                            state.offset.y=if std::env::var("ENTROPY_RENDER_BOTTOM").as_deref()==Ok("1") {max} else {0.0};
-                            state.store(&ctx,id);
+                        if let Some((_,max))=ctx.data(|data|data.get_temp::<(egui::Id,f32)>(egui::Id::unique("sm62_scroll_fixture"))) {
+                            scroll_sm62_display_to(&ctx,if std::env::var("ENTROPY_RENDER_BOTTOM").as_deref()==Ok("1") {max} else {0.0});
                         }
                     }
                 });
                 self.frames += 1;
                 if self.frames == 5 {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+                    let (path, close) = (self.path.clone(), ctx.clone());
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |image| {
+                        let rgba: Vec<u8> = image.pixels.iter().flat_map(|pixel| pixel.to_array()).collect();
+                        image::save_buffer(&path, &rgba, image.size[0] as u32,
+                            image.size[1] as u32, image::ColorType::Rgba8).unwrap();
+                        close.send_viewport_cmd(egui::ViewportCommand::Close);
+                    })));
                 }
-                assert!(self.frames < 120, "screenshot event did not arrive");
+                assert!(self.frames < 120, "screenshot did not arrive");
                 ctx.request_repaint();
             }
         }
@@ -4749,9 +4745,9 @@ mod tests {
             app.display_settings.sm62_supported=true; app.display_settings.sm62_stars_supported=true;
             app.display_settings.sm62_stars_values=[initial;2];
             app.display_settings.confirmed_sm62_stars_values=[initial;2];
-            let render=|app:&mut EntropyApp,events:Vec<egui::Event>| ctx.run(egui::RawInput {events,screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1000.0,1800.0))),..Default::default()},|ctx| {
-                egui::CentralPanel::default().show(ctx,|ui| {app.draw_sm62_display_settings_page(ui,ui.max_rect());});
-            });
+            let render=|app:&mut EntropyApp,events:Vec<egui::Event>| crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput {events,screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1000.0,1800.0))),..Default::default()},|ctx| {
+                ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| {app.draw_sm62_display_settings_page(ui,ui.max_rect());}));
+            }));
             render(&mut app,vec![]);
             let output=render(&mut app,vec![]);
             let pos=output.shapes.iter().filter_map(|s|match &s.shape {egui::Shape::Rect(r) if r.rect.width()==46.0 && r.rect.height()==24.0=>Some(r.rect.center()),_=>None}).nth(5).expect("star switch after individual/layout/date controls");
@@ -4761,9 +4757,9 @@ mod tests {
             assert_eq!(app.display_settings.sm62_stars_values,[1-initial;2],"first actual pointer click");
             for _ in 0..80 {
                 app.poll_settings_write(&ctx);
-                let _=ctx.run(egui::RawInput {screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1000.0,1800.0))),..Default::default()},|ctx| {
-                    egui::CentralPanel::default().show(ctx,|ui| {app.draw_sm62_display_settings_page(ui,ui.max_rect());});
-                });
+                ctx.run_pass(egui::RawInput {screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1000.0,1800.0))),..Default::default()},|ctx| {
+                    ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| {app.draw_sm62_display_settings_page(ui,ui.max_rect());}));
+                }).drop_without_applying_deltas();
                 assert_eq!(app.display_settings.sm62_stars_values,[1-initial;2]);
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
@@ -4788,14 +4784,14 @@ mod tests {
             fonts.families.insert(egui::FontFamily::Name("display_preview".into()),
                 fonts.families[&egui::FontFamily::Proportional].clone());
             ctx.set_fonts(fonts);
-            let output = ctx.run(egui::RawInput {
+            let output = crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 1800.0))),
                 ..Default::default()
             }, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+                ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
                     app.draw_sm62_display_settings_page(ui, ui.max_rect());
-                });
-            });
+                }));
+            }));
             let labels: Vec<_> = output.shapes.iter().filter_map(|shape| {
                 if let egui::Shape::Text(text) = &shape.shape { Some(text.galley.job.text.as_str()) }
                 else { None }
@@ -4838,12 +4834,12 @@ mod tests {
         let initial = values;
         let mut changed = Vec::new();
         let mut run = |events: Vec<egui::Event>| {
-            ctx.run(egui::RawInput {
+            crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, 900.0))),
                 events, ..Default::default()
-            }, |ctx| { egui::CentralPanel::default().show(ctx, |ui| {
+            }, |ctx| { ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
                 sm62_display_controls(ui, side, &mut values, &mut changed, false);
-            }); })
+            })); }))
         };
         let click = |pos| vec![egui::Event::PointerMoved(pos),
             egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() },
@@ -4882,27 +4878,27 @@ mod tests {
             let saved = values;
             let mut changed = Vec::new();
             let mut id = egui::Id::NULL;
-            let output = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let output = crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
+                ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
                     id = sm62_display_controls(ui, 0, &mut values, &mut changed, false);
-                });
-            });
+                }));
+            }));
             assert_eq!(values, saved);
             assert!(changed.is_empty());
             assert!(output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == expected)));
             if mode != 2 {
                 egui::Popup::open_id(&ctx, id);
                 let draw = |ctx: &egui::Context| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                    ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
                         sm62_display_controls(ui, 0, &mut values, &mut changed, false);
-                    });
+                    }));
                 };
-                let _ = ctx.run(egui::RawInput::default(), draw);
-                let output = ctx.run(egui::RawInput::default(), |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                ctx.run_pass(egui::RawInput::default(), draw).drop_without_applying_deltas();
+                let output = crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
+                    ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
                         sm62_display_controls(ui, 0, &mut values, &mut changed, false);
-                    });
-                });
+                    }));
+                }));
                 let labels: Vec<_> = output.shapes.iter().filter_map(|s| match &s.shape {
                     egui::Shape::Text(t) => Some(t.galley.job.text.as_str()), _ => None }).collect();
                 assert!(labels.contains(&"No animation"));
@@ -4920,11 +4916,11 @@ mod tests {
             let ctx = egui::Context::default();
             let mut values = [0,0,20,1,1,0,0,20,1,1];
             let mut language = [1,1];
-            let mut draw = |events| ctx.run(egui::RawInput { events, ..Default::default() }, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let mut draw = |events| crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput { events, ..Default::default() }, |ctx| {
+                ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
                     sm62_shared_controls(ui,&mut values,&mut Vec::new(),false,None,None,Some(&mut language),None,None);
-                });
-            });
+                }));
+            }));
             let output = draw(vec![]);
             let pos = output.shapes.iter().filter_map(|s| match &s.shape {
                 egui::Shape::Rect(r) if r.rect.width() == 46.0 && r.rect.height() == 24.0 => Some(r.rect.center()), _ => None
@@ -4947,11 +4943,11 @@ mod tests {
         let mut language = [0,1];
         let before = (values,date,hold,language);
         let mut changed = Vec::new();
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let output = crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
                 sm62_shared_controls(ui,&mut values,&mut changed,false,Some(&mut date),Some(&mut hold),Some(&mut language),None,None);
-            });
-        });
+            }));
+        }));
         assert_eq!((values,date,hold,language),before);
         assert!(changed.is_empty());
         assert!(output.shapes.iter().any(|s| matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text.contains("Mixed"))));
@@ -4964,11 +4960,11 @@ mod tests {
             let mut values = [0,0,20,1,1,2,1,0,1,1];
             let mut date = [1,1]; let mut hold = [112,333]; let mut language = [1,1];
             let before = values; let mut changed = Vec::new();
-            let mut draw = |events| ctx.run(egui::RawInput { events,..Default::default() },|ctx| {
-                egui::CentralPanel::default().show(ctx,|ui| {
+            let mut draw = |events| crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput { events,..Default::default() },|ctx| {
+                ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| {
                     sm62_shared_controls(ui,&mut values,&mut changed,false,Some(&mut date),Some(&mut hold),Some(&mut language),None,None);
-                });
-            });
+                }));
+            }));
             let output = draw(vec![]);
             let switches: Vec<_> = output.shapes.iter().filter_map(|s| match &s.shape {
                 egui::Shape::Rect(r) if r.rect.width()==46.0 && r.rect.height()==24.0 => Some(r.rect.center()), _=>None }).collect();
@@ -4992,9 +4988,9 @@ mod tests {
     fn sm62_shared_hold_drag_applies_to_both_halves() {
         let ctx = egui::Context::default();
         let mut values=[0,0,20,1,1,0,0,20,1,1]; let mut hold=[112,333];
-        let mut draw=|events| ctx.run(egui::RawInput { events,..Default::default() },|ctx| {
-            egui::CentralPanel::default().show(ctx,|ui| { sm62_shared_controls(ui,&mut values,&mut Vec::new(),false,None,Some(&mut hold),None,None,None); });
-        });
+        let mut draw=|events| crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput { events,..Default::default() },|ctx| {
+            ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| { sm62_shared_controls(ui,&mut values,&mut Vec::new(),false,None,Some(&mut hold),None,None,None); }));
+        }));
         let output=draw(vec![]);
         let pos=output.shapes.iter().find_map(|s| match &s.shape {
             egui::Shape::Text(t) if t.galley.job.text=="Mixed" => Some(t.pos+t.galley.size()/2.0), _=>None }).unwrap();
@@ -5011,9 +5007,9 @@ mod tests {
     fn sm62_shared_hold_can_commit_the_existing_left_value_to_both() {
         let ctx=egui::Context::default();
         let mut values=[0,0,20,1,1,0,0,20,1,1]; let mut hold=[112,333];
-        let mut draw=|events| ctx.run(egui::RawInput {events,..Default::default()},|ctx| {
-            egui::CentralPanel::default().show(ctx,|ui| {sm62_shared_controls(ui,&mut values,&mut Vec::new(),false,None,Some(&mut hold),None,None,None);});
-        });
+        let mut draw=|events| crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput {events,..Default::default()},|ctx| {
+            ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| {sm62_shared_controls(ui,&mut values,&mut Vec::new(),false,None,Some(&mut hold),None,None,None);}));
+        }));
         let output=draw(vec![]);
         let pos=output.shapes.iter().find_map(|s| match &s.shape {egui::Shape::Text(t) if t.galley.job.text=="Mixed"=>Some(t.pos+t.galley.size()/2.0),_=>None}).unwrap();
         for _ in 0..2 {draw(vec![egui::Event::PointerMoved(pos),
@@ -5036,9 +5032,9 @@ mod tests {
         fonts.families.insert(egui::FontFamily::Name("display_preview".into()),fonts.families[&egui::FontFamily::Proportional].clone());
         ctx.set_fonts(fonts);
         let mut output=None;
-        for _ in 0..3 {output=Some(ctx.run(egui::RawInput {
+        for _ in 0..3 {output=Some(crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput {
             screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1000.0,650.0))),..Default::default()
-        },|ctx| {egui::CentralPanel::default().show(ctx,|ui| {app.draw_sm62_display_settings_page(ui,ui.max_rect());});}));}
+        },|ctx| {ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| {app.draw_sm62_display_settings_page(ui,ui.max_rect());}));})));}
         let output=output.unwrap();
         let thumbs:Vec<_>=output.shapes.iter().filter_map(|s|match &s.shape {
             egui::Shape::Rect(r) if r.fill==Color32::from_rgb(62,62,66) && (r.rect.width()-6.0).abs()<0.1=>Some(r.rect),_=>None}).collect();
@@ -5055,9 +5051,9 @@ mod tests {
             fonts.families.insert(egui::FontFamily::Name("display_preview".into()),fonts.families[&egui::FontFamily::Proportional].clone());ctx.set_fonts(fonts);
             app.display_settings.sm62_stars_values=[0,0];
             app.display_settings.sm62_screens_off_values=if off {[1,1]} else {[0,0]};
-            let output=ctx.run(egui::RawInput {screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1000.0,1800.0))),..Default::default()},|ctx| {
-                egui::CentralPanel::default().show(ctx,|ui| {app.draw_sm62_display_settings_page(ui,ui.max_rect());});
-            });
+            let output=crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput {screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1000.0,1800.0))),..Default::default()},|ctx| {
+                ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| {app.draw_sm62_display_settings_page(ui,ui.max_rect());}));
+            }));
             assert!(!output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Circle(c) if c.radius<2.0 && c.fill==Color32::from_rgb(131,127,118).gamma_multiply(0.6))),"stars disabled means plain background");
             let shared_y = output.shapes.iter().find_map(|s| match &s.shape {
                 egui::Shape::Text(t) if t.galley.job.text == "Shared display settings" || t.galley.job.text == "Общие настройки экранов" => Some(t.pos.y),
@@ -5077,9 +5073,9 @@ mod tests {
             let ctx=egui::Context::default();
             let mut values=[0,0,20,1,1,2,1,0,1,1];let before=values;
             let mut stars=[1,1];let mut off=[0,0];let mut changed=Vec::new();
-            let mut draw=|events|ctx.run(egui::RawInput {events,..Default::default()},|ctx| {
-                egui::CentralPanel::default().show(ctx,|ui| {sm62_shared_controls(ui,&mut values,&mut changed,false,None,None,None,Some(&mut stars),Some(&mut off));});
-            });
+            let mut draw=|events|crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput {events,..Default::default()},|ctx| {
+                ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| {sm62_shared_controls(ui,&mut values,&mut changed,false,None,None,None,Some(&mut stars),Some(&mut off));}));
+            }));
             let output=draw(vec![]);let switches:Vec<_>=output.shapes.iter().filter_map(|s|match &s.shape {egui::Shape::Rect(r) if r.rect.width()==46.0&&r.rect.height()==24.0=>Some(r.rect.center()),_=>None}).collect();
             let pos=switches[index];draw(vec![egui::Event::PointerMoved(pos),
                 egui::Event::PointerButton {pos,button:egui::PointerButton::Primary,pressed:true,modifiers:Default::default()},
@@ -5093,15 +5089,15 @@ mod tests {
     fn sm62_right_scroll_track_reaches_last_shared_setting() {
         let ctx=egui::Context::default();let cc=eframe::CreationContext::_new_kittest(ctx.clone());let mut app=EntropyApp::new(&cc);app.app_settings.language=crate::i18n::Language::English;
         let mut fonts=egui::FontDefinitions::default();fonts.families.insert(egui::FontFamily::Name("display_preview".into()),fonts.families[&egui::FontFamily::Proportional].clone());ctx.set_fonts(fonts);
-        let mut draw=|events|ctx.run(egui::RawInput {events,screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1000.0,650.0))),..Default::default()},|ctx| {
-            egui::CentralPanel::default().show(ctx,|ui| {app.draw_sm62_display_settings_page(ui,ui.max_rect());});
-        });
+        let mut draw=|events|crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput {events,screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1000.0,650.0))),..Default::default()},|ctx| {
+            ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| {app.draw_sm62_display_settings_page(ui,ui.max_rect());}));
+        }));
         for _ in 0..3 {draw(vec![]);}
         let pos=egui::pos2(956.0,625.0);draw(vec![egui::Event::PointerMoved(pos),
             egui::Event::PointerButton {pos,button:egui::PointerButton::Primary,pressed:true,modifiers:Default::default()},
             egui::Event::PointerButton {pos,button:egui::PointerButton::Primary,pressed:false,modifiers:Default::default()}]);
         let output=draw(vec![]);
-        let (id,max)=ctx.data(|data|data.get_temp::<(egui::Id,f32)>(egui::Id::new("sm62_scroll_fixture"))).unwrap();assert!(max>0.0);assert!(egui::scroll_area::State::load(&ctx,id).unwrap().offset.y>0.0);
+        let (id,max)=ctx.data(|data|data.get_temp::<(egui::Id,f32)>(egui::Id::unique("sm62_scroll_fixture"))).unwrap();assert!(max>0.0);assert!(egui::scroll_area::State::load(&ctx,id).unwrap().unclamped_offset().y>0.0);
         assert!(output.shapes.iter().any(|s|match &s.shape {egui::Shape::Text(t) if t.galley.job.text=="Turn off displays"=>s.clip_rect.contains(t.pos+t.galley.size()/2.0),_=>false}),"last setting must be visible after scrolling");
     }
 
@@ -5112,9 +5108,9 @@ mod tests {
                 let ctx=egui::Context::default();let cc=eframe::CreationContext::_new_kittest(ctx.clone());let mut app=EntropyApp::new(&cc);app.app_settings.language=language;
                 let mut fonts=egui::FontDefinitions::default();fonts.families.insert(egui::FontFamily::Name("display_preview".into()),fonts.families[&egui::FontFamily::Proportional].clone());ctx.set_fonts(fonts);
                 let mut full=egui::Rect::NOTHING;
-                let mut draw=||ctx.run(egui::RawInput {screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,650.0))),..Default::default()},|ctx|{
-                    egui::CentralPanel::default().show(ctx,|ui|{full=ui.max_rect();app.draw_sm62_display_settings_page(ui,full);});
-                });
+                let mut draw=||crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput {screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,650.0))),..Default::default()},|ctx|{
+                    ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui|{full=ui.max_rect();app.draw_sm62_display_settings_page(ui,full);}));
+                }));
                 draw();draw();let top=draw();
                 let russian=language==crate::i18n::Language::Russian;
                 let left_label=if russian {"Левый экран"} else {"Left display"};
@@ -5125,8 +5121,8 @@ mod tests {
                     let frame=top.shapes.iter().find_map(|s|match &s.shape {egui::Shape::Rect(r) if r.fill==Color32::from_rgb(7,7,5)&&r.stroke.color==Color32::from_gray(75)=>Some(r.rect),_=>None}).unwrap();
                     assert!((frame.left()-(width-918.0)/2.0).abs()<2.0,"preview must align with centered block left: {frame:?}");
                 }
-                let (id,max)=ctx.data(|d|d.get_temp::<(egui::Id,f32)>(egui::Id::new("sm62_scroll_fixture"))).unwrap();
-                let mut state=egui::scroll_area::State::load(&ctx,id).unwrap();state.offset.y=max;state.store(&ctx,id);
+                let (_,max)=ctx.data(|d|d.get_temp::<(egui::Id,f32)>(egui::Id::unique("sm62_scroll_fixture"))).unwrap();
+                scroll_sm62_display_to(&ctx,max);
                 draw();let bottom=draw();drop(draw);
                 let shared=if russian {"Общие настройки экранов"} else {"Shared display settings"};
                 let symbol=if russian {"Кириллические символы"} else {"Cyrillic symbols"};
@@ -5183,11 +5179,11 @@ mod tests {
         app.display_settings.pictograms.selected_slot = 0;
         for color in [[255, 255, 255], [19, 137, 220]] {
             app.display_settings.color = color;
-            let output = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let output = crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
+                ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
                     app.draw_pictogram_editor_panel(ui, 400.0);
-                });
-            });
+                }));
+            }));
             let icons: Vec<_> = output
                 .shapes
                 .iter()

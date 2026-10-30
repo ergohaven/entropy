@@ -1924,7 +1924,7 @@ fn macropad_application_menu_has_only_unified_layout_actions() {
     let ctx = egui::Context::default();
     let mut texts = Vec::new();
     for _ in 0..2 {
-        let output = ctx.run_ui(
+        let output = crate::app::discard_texture_deltas(ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1946,7 +1946,7 @@ fn macropad_application_menu_has_only_unified_layout_actions() {
                     false,
                 );
             },
-        );
+        ));
         texts = output
             .shapes
             .iter()
@@ -2118,7 +2118,7 @@ fn exercise_unified_menu_lifecycle(export: bool, nondefault: bool, failing_read:
     }
     let ctx = egui::Context::default();
     let draw = |app: &mut EntropyApp, events| {
-        ctx.run_ui(
+        crate::app::discard_texture_deltas(ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -2141,7 +2141,7 @@ fn exercise_unified_menu_lifecycle(export: bool, nondefault: bool, failing_read:
                     false,
                 );
             },
-        )
+        ))
     };
     let _ = draw(&mut app, vec![]);
     let output = draw(&mut app, vec![]);
@@ -2782,7 +2782,7 @@ fn macropad_menu_clicks_queue_standard_import_export_without_application_gating(
         let ctx = egui::Context::default();
         let rect = egui::Rect::from_min_size(egui::pos2(400.0, 0.0), egui::vec2(80.0, 30.0));
         let draw = |app: &mut EntropyApp, events| {
-            ctx.run_ui(
+            crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2802,7 +2802,7 @@ fn macropad_menu_clicks_queue_standard_import_export_without_application_gating(
                         false,
                     )
                 },
-            )
+            ))
         };
         draw(&mut app, vec![]);
         let output = draw(&mut app, vec![]);

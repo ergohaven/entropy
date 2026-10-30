@@ -621,7 +621,7 @@ impl EntropyApp {
                                                     if let Some(name) = self.key_override_names.get_mut(idx) {
                                                         let resp = crate::ui_style::modern_text_field_sized(
                                                             ui,
-                                                            egui::Id::new(("key_override_name", idx)),
+                                                            egui::Id::unique(("key_override_name", idx)),
                                                             name,
                                                             control_width,
                                                             32.0 * scale,

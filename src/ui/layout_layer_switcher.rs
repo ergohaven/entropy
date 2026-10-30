@@ -328,7 +328,7 @@ impl EntropyApp {
                     name_rect,
                     egui::TextEdit::singleline(&mut self.editing_layer_text)
                         .font(editing_font)
-                        .horizontal_align(egui::Align::Center)
+                        .align(egui::Align2::CENTER_TOP)
                         .char_limit(12)
                         .frame(egui::Frame::NONE),
                 );
@@ -608,7 +608,7 @@ mod tests {
             .set_layer_status(1, DeferredLoadStatus::NotLoaded);
         let pos = egui::pos2(550.0, 50.0);
         let frame = |app: &mut EntropyApp, events| {
-            let _ = ctx.run_ui(
+            ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -618,7 +618,8 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_layout_layer_switcher_and_hints(ui, 0.0, 0.0, 52.0),
-            );
+            )
+            .drop_without_applying_deltas();
         };
         frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
         for pressed in [true, false] {
@@ -745,7 +746,7 @@ mod tests {
         app.application_layout_editor_active = app.application_layouts_supported();
 
         let render = |app: &mut EntropyApp| {
-            let output = ctx.run_ui(
+            let output = crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -754,7 +755,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_layout_layer_switcher_and_hints(ui, 0.0, 0.0, 52.0),
-            );
+            ));
             output.shapes.iter().any(|shape| {
                 matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Default")
             })
@@ -805,7 +806,7 @@ mod tests {
             .application_layouts
             .insert(device_key.clone(), settings);
         app.app_settings.last_application_layout_device_key = Some(device_key);
-        let output = ctx.run_ui(
+        let output = crate::app::discard_texture_deltas(ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -816,7 +817,7 @@ mod tests {
             |ui| {
                 app.draw_application_layout_switcher(ui, 450.0, 130.0);
             },
-        );
+        ));
         let name = output
             .shapes
             .iter()
@@ -871,7 +872,7 @@ mod tests {
         let selector_center = egui::pos2(450.0, 130.0);
         let frame = |app: &mut EntropyApp, events| {
             let mut popup_id = None;
-            let output = ctx.run_ui(
+            let output = crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -884,7 +885,7 @@ mod tests {
                     popup_id = Some(ui.make_persistent_id("layout_page_application_selector"));
                     app.draw_application_layout_switcher(ui, selector_center.x, selector_center.y);
                 },
-            );
+            ));
             (popup_id.unwrap(), output)
         };
         let (popup_id, output) = frame(&mut app, vec![]);
@@ -1161,7 +1162,7 @@ mod tests {
     #[test]
     fn application_selector_hover_uses_bottom_hint_instead_of_tooltip() {
         let ctx = egui::Context::default();
-        ctx.style_mut(|style| style.interaction.tooltip_delay = 0.0);
+        ctx.global_style_mut(|style| style.interaction.tooltip_delay = 0.0);
         let mut app = EntropyApp::new_inert_for_test();
         app.app_settings.language = crate::i18n::Language::English;
         app.application_layout_editor_active = true;
@@ -1173,7 +1174,7 @@ mod tests {
         let selector = egui::pos2(450.0, 146.0);
         let mut output = None;
         for time in [0.0, 1.0, 2.0] {
-            output = Some(ctx.run_ui(
+            output = Some(crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     time: Some(time),
                     screen_rect: Some(egui::Rect::from_min_size(
@@ -1184,7 +1185,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_layout_layer_switcher_and_hints(ui, 6.0, 32.0, 68.0),
-            ));
+            )));
         }
         let output = output.unwrap();
         let hint = output
@@ -1204,7 +1205,7 @@ mod tests {
             egui::Shape::Text(text)
                 if text.galley.text() == "Choose an application layout or open Autolayer settings"
         )));
-        let away = ctx.run_ui(
+        let away = crate::app::discard_texture_deltas(ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1214,7 +1215,7 @@ mod tests {
                 ..Default::default()
             },
             |ui| app.draw_layout_layer_switcher_and_hints(ui, 6.0, 32.0, 68.0),
-        );
+        ));
         assert!(!away.shapes.iter().any(|shape| matches!(&shape.shape,
             egui::Shape::Text(text)
                 if text.galley.text() == "Select a layout or configure Autolayer"

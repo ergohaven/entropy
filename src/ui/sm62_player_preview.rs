@@ -93,11 +93,11 @@ mod player_bitmap_tests {
         for scale in [1.0, 0.5, 0.825] {
             let ctx = egui::Context::default();
             let screen = egui::Rect::from_min_size(egui::pos2(11.0,13.0),egui::vec2(240.0,280.0)*scale);
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                egui::CentralPanel::default().show_inside(ui, |ui| {
+            let output = crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     paint_sm62_screen(ui,screen,&[1,0,20,1,1],0,false,0,Some("EN"),false,false,false);
                 });
-            });
+            }));
             let meshes: Vec<_> = output.shapes.iter().filter_map(|s| match &s.shape {
                 egui::Shape::Mesh(m) => Some((s.clip_rect,m)), _ => None }).collect();
             assert_eq!(meshes.len(),38);
@@ -134,21 +134,21 @@ mod player_bitmap_tests {
             fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
                 let ctx = ui.ctx().clone();
                 ctx.set_pixels_per_point(1.0);
-                for event in ctx.input(|i|i.events.clone()) {
-                    if let egui::Event::Screenshot { image, .. } = event {
-                        assert_eq!(image.size,[240,280]);
-                        let rgba: Vec<u8> = image.pixels.iter().flat_map(|p|p.to_array()).collect();
-                        image::save_buffer(&self.path,&rgba,240,280,image::ColorType::Rgba8).unwrap();
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                }
-                egui::CentralPanel::default().frame(egui::Frame::NONE).show_inside(ui, |ui| {
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
                     paint_sm62_screen(ui,egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(240.0,280.0)),
                         &[1,0,20,1,1],0,false,0,Some("EN"),false,false,false);
                 });
                 self.frames += 1;
-                if self.frames == 5 { ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default())); }
-                assert!(self.frames < 120,"screenshot event did not arrive");
+                if self.frames == 5 {
+                    let (path, close) = (self.path.clone(), ctx.clone());
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |image| {
+                        assert_eq!(image.size,[240,280]);
+                        let rgba: Vec<u8> = image.pixels.iter().flat_map(|p|p.to_array()).collect();
+                        image::save_buffer(&path,&rgba,240,280,image::ColorType::Rgba8).unwrap();
+                        close.send_viewport_cmd(egui::ViewportCommand::Close);
+                    })));
+                }
+                assert!(self.frames < 120,"screenshot did not arrive");
                 ctx.request_repaint();
             }
         }

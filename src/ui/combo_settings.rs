@@ -322,7 +322,7 @@ impl EntropyApp {
                         if let Some(name) = self.combo_names.get_mut(combo_idx) {
                             let resp = crate::ui_style::modern_text_field_sized(
                                 ui,
-                                egui::Id::new(("combo_name", combo_idx)),
+                                egui::Id::unique(("combo_name", combo_idx)),
                                 name,
                                 control_width,
                                 control_height,
@@ -688,7 +688,7 @@ impl EntropyApp {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    let edit_id = egui::Id::new("combo_term");
+                                    let edit_id = egui::Id::unique("combo_term");
                                     let mut combo_term_text = ui.ctx().data_mut(|d| {
                                         d.get_temp::<String>(edit_id)
                                             .unwrap_or_else(|| current_combo_term.to_string())

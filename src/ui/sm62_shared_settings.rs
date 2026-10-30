@@ -89,6 +89,9 @@ fn sm62_shared_controls(
     let mixed = pair[0] != pair[1];
     let mut value = pair[0];
     let mut edited = false;
+    // A number typed in counts as an edit even when it equals the left value, which
+    // then goes to both: egui reports a change only when the value moves.
+    let typed = std::cell::Cell::new(false);
     let width = ui.available_width();
     display_settings_row(ui,width,54.0,
         if russian { "Показывать раскладку в течение" } else { "Show layout for" },true,196.0,|ui| {
@@ -96,8 +99,13 @@ fn sm62_shared_controls(
                 let response = ui.add_sized(egui::vec2(196.0,34.0),egui::DragValue::new(&mut value)
                     .range(0..=10_000).speed(1)
                     .custom_formatter(move |n,_| if mixed { if russian { "Различаются".into() } else { "Mixed".into() } } else { format!("{n:.0}") })
+                    .custom_parser(|text| {
+                        let parsed = text.chars().filter(|c| !c.is_whitespace()).collect::<String>().parse().ok();
+                        typed.set(typed.get() || parsed.is_some());
+                        parsed
+                    })
                     .suffix(if mixed { "" } else if russian { " мс" } else { " ms" }));
-                edited = response.changed();
+                edited = response.changed() || typed.get();
                 if mixed { response.on_hover_text(if russian {
                     format!("Левый: {} мс; правый: {} мс. Новое значение применяется к обоим.",pair[0],pair[1])
                 } else { format!("Left: {} ms; right: {} ms. Editing applies to both.",pair[0],pair[1]) }); }

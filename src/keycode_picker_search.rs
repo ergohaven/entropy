@@ -471,10 +471,11 @@ mod tests {
         picker.search.query = "signature".into();
         let mut harness = egui_kittest::Harness::builder()
             .with_size(egui::vec2(1_400.0, 1_000.0))
-            .build_state(
-                |ctx, picker: &mut KeycodePicker| {
+            .allow_missing_glyphs()
+            .build_ui_state(
+                |ui, picker: &mut KeycodePicker| {
                     picker.show(
-                        ctx,
+                        ui.ctx(),
                         DeferredPickerDataState::Ready,
                         DeferredPickerDataState::Ready,
                     );
