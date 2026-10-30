@@ -381,7 +381,7 @@ fn layout_no_input(connected: bool, enabled: bool) {
     let before = app.display_settings.clone();
     let start = recorder.requests().len();
     for _ in 0..3 {
-        let _ = ctx.run(
+        ctx.run_pass(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -390,13 +390,16 @@ fn layout_no_input(connected: bool, enabled: bool) {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.add_enabled_ui(enabled, |ui| {
-                        app.draw_sm62_display_settings_page(ui, ui.max_rect())
-                    });
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.add_enabled_ui(enabled, |ui| {
+                            app.draw_sm62_display_settings_page(ui, ui.max_rect())
+                        });
+                    })
                 });
             },
-        );
+        )
+        .drop_without_applying_deltas();
     }
     drain(&mut app, &ctx);
     assert_eq!(

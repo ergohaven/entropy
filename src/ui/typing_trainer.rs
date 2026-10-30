@@ -17,7 +17,7 @@ impl EntropyApp {
             || self.typing_trainer.is_finished()
             || self.typing_trainer_history_open;
         ctx.animate_bool_with_time(
-            egui::Id::new("typing_trainer_chrome_visible"),
+            egui::Id::unique("typing_trainer_chrome_visible"),
             visible,
             0.18,
         )
@@ -792,14 +792,14 @@ impl EntropyApp {
         }
 
         let screen_rect = ctx.content_rect();
-        egui::Area::new("typing_trainer_history_backdrop".into())
+        egui::Area::new(egui::Id::unique("typing_trainer_history_backdrop"))
             .order(egui::Order::Foreground)
             .fixed_pos(screen_rect.min)
             .show(ctx, |ui| {
                 let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen_rect.size());
                 ui.interact(
                     rect,
-                    egui::Id::new("typing_trainer_history_backdrop_blocker"),
+                    egui::Id::unique("typing_trainer_history_backdrop_blocker"),
                     egui::Sense::click_and_drag(),
                 );
                 ui.painter().rect_filled(
@@ -819,7 +819,7 @@ impl EntropyApp {
         crate::ui_style::centered_modal_window(
             ctx,
             crate::i18n::tr_catalog(lang, "typing_trainer.history"),
-            egui::Id::new("typing_trainer_history_window"),
+            egui::Id::unique("typing_trainer_history_window"),
             &mut open,
             Vec2::new(660.0, 430.0),
         )
@@ -1363,12 +1363,11 @@ mod typing_trainer_ui_tests {
         app.typing_trainer.target_text = text.to_owned();
         app.typing_trainer.typed_chars.clear();
 
-        let mut input = egui::RawInput {
-            modifiers,
-            ..Default::default()
-        };
+        let mut input = egui::RawInput::default();
+        input.events.push(egui::Event::ModifiersChanged(modifiers));
         input.events.push(egui::Event::Text(text.to_owned()));
-        let _ = ctx.run_ui(input, |ui| app.handle_typing_trainer_input(ui.ctx()));
+        ctx.run_ui(input, |ui| app.handle_typing_trainer_input(ui.ctx()))
+            .drop_without_applying_deltas();
 
         app.typing_trainer.typed_chars
     }

@@ -384,7 +384,7 @@ fn twemoji_asset(emoji: &str) -> Option<&'static twemoji_assets::png::PngTwemoji
 }
 
 fn twemoji_texture(ctx: &egui::Context, emoji: &str) -> Option<egui::TextureHandle> {
-    let id = egui::Id::new(("text_expander_twemoji", emoji));
+    let id = egui::Id::unique(("text_expander_twemoji", emoji));
     if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
         return Some(texture);
     }
@@ -495,17 +495,18 @@ mod tests {
         let ctx = egui::Context::default();
         let mut text = "Text ☺️ and 👨‍👩‍👧‍👦".to_owned();
 
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            color_emoji_text_field(
-                ui,
-                egui::Id::new("color-emoji-text-field-test"),
-                &mut text,
-                320.0,
-                32.0,
-                "",
-                480,
-            );
-        });
+        let output =
+            crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
+                color_emoji_text_field(
+                    ui,
+                    egui::Id::unique("color-emoji-text-field-test"),
+                    &mut text,
+                    320.0,
+                    32.0,
+                    "",
+                    480,
+                );
+            }));
 
         assert_eq!(
             output
@@ -531,7 +532,7 @@ mod tests {
         let rect = std::cell::Cell::new(egui::Rect::NOTHING);
         let was_clicked = std::cell::Cell::new(false);
         let frame = |events, rect: &std::cell::Cell<egui::Rect>| {
-            ctx.run_ui(
+            crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -543,7 +544,7 @@ mod tests {
                 |ui| {
                     let response = color_emoji_preview_field(
                         ui,
-                        egui::Id::new("replacement-preview-test"),
+                        egui::Id::unique("replacement-preview-test"),
                         &text,
                         120.0,
                         32.0,
@@ -552,7 +553,7 @@ mod tests {
                     rect.set(response.rect);
                     was_clicked.set(response.clicked());
                 },
-            )
+            ))
         };
         let output = frame(Vec::new(), &rect);
         let field = rect.get();
@@ -613,17 +614,18 @@ mod tests {
         let ctx = egui::Context::default();
         let mut text = "🚀☺️".to_owned();
 
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            color_emoji_text_field(
-                ui,
-                egui::Id::new("adjacent-color-emoji-test"),
-                &mut text,
-                120.0,
-                32.0,
-                "",
-                32,
-            );
-        });
+        let output =
+            crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
+                color_emoji_text_field(
+                    ui,
+                    egui::Id::unique("adjacent-color-emoji-test"),
+                    &mut text,
+                    120.0,
+                    32.0,
+                    "",
+                    32,
+                );
+            }));
         let image_rects = output
             .shapes
             .iter()
@@ -649,9 +651,10 @@ mod tests {
     #[test]
     fn emoji_picker_trigger_is_monochrome_text() {
         let ctx = egui::Context::default();
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            monochrome_emoji_picker_button(ui, egui::vec2(32.0, 32.0));
-        });
+        let output =
+            crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
+                monochrome_emoji_picker_button(ui, egui::vec2(32.0, 32.0));
+            }));
 
         assert!(!output.shapes.iter().any(|shape| {
             matches!(

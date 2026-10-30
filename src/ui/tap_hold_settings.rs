@@ -509,7 +509,7 @@ impl EntropyApp {
                     },
                     field_width,
                     |ui| {
-                        let edit_id = egui::Id::new((
+                        let edit_id = egui::Id::unique((
                             match kind {
                                 SettingsRowKind::TapHold => "tap_hold_edit",
                                 SettingsRowKind::OneShot => "one_shot_edit",

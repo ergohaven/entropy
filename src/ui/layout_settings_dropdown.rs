@@ -253,7 +253,7 @@ impl EntropyApp {
                     settings_clicked,
                 ) = show_top_dropdown(
                     ui.ctx(),
-                    egui::Id::new("settings_dropdown_area"),
+                    egui::Id::unique("settings_dropdown_area"),
                     dropdown_rect.min,
                     |ui| {
                         ui.set_min_width(item_width);

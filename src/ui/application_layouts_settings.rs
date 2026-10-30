@@ -332,7 +332,7 @@ impl EntropyApp {
         crate::ui_style::centered_modal_window(
             ctx,
             app_layout_text(language, "Категории", "Categories"),
-            egui::Id::new("autolayer_categories_modal"),
+            egui::Id::unique("autolayer_categories_modal"),
             &mut open,
             metrics.size(380.0, 208.0),
         )
@@ -1357,7 +1357,7 @@ impl EntropyApp {
         let search = self.application_picker_search.trim().to_ascii_lowercase();
         ctx.request_repaint_after(std::time::Duration::from_millis(500));
 
-        let picker_window_id = egui::Id::new("application_picker_v2");
+        let picker_window_id = egui::Id::unique("application_picker_v2");
         let window_center_x = ctx.content_rect().center().x;
         crate::ui_style::centered_modal_window(
             ctx,
@@ -1789,7 +1789,7 @@ mod tests {
     fn status_value_text_reaches_settings_row_right_edge() {
         let ctx = egui::Context::default();
         let edge = std::cell::Cell::new(0.0);
-        let output = ctx.run_ui(
+        let output = crate::app::discard_texture_deltas(ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1812,7 +1812,7 @@ mod tests {
                     },
                 );
             },
-        );
+        ));
         let text_edge = output
             .shapes
             .iter()
@@ -1833,7 +1833,7 @@ mod tests {
     #[test]
     fn standard_page_width_fits_status_labels_and_description() {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1873,7 +1873,8 @@ mod tests {
                     assert!(width + 4.0 <= row_width - 260.0, "{label}: width={width}");
                 }
             },
-        );
+        )
+        .drop_without_applying_deltas();
     }
 
     #[test]
@@ -1904,7 +1905,7 @@ mod tests {
 
         let ctx = egui::Context::default();
         let frame = |app: &mut EntropyApp, events| {
-            ctx.run_ui(
+            crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1914,7 +1915,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_application_layouts_settings_page(ui, ui.max_rect()),
-            )
+            ))
         };
         let first = frame(&mut app, vec![]);
         let selector = first
@@ -2028,7 +2029,7 @@ mod tests {
         app.app_settings.last_application_layout_device_key = Some(device_key);
         let ctx = egui::Context::default();
         let frame = |app: &mut EntropyApp, events| {
-            ctx.run_ui(
+            crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2038,7 +2039,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_application_layouts_settings_page(ui, ui.max_rect()),
-            )
+            ))
         };
         let position = |output: &egui::FullOutput, label: &str| {
             output
@@ -2090,6 +2091,7 @@ mod tests {
                     delta: egui::vec2(0.0, -210.0),
                     modifiers: egui::Modifiers::NONE,
                     phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
                 },
             ],
         );
@@ -2117,7 +2119,7 @@ mod tests {
         app.app_settings.last_application_layout_device_key = Some(device_key);
         let ctx = egui::Context::default();
         let frame = |app: &mut EntropyApp, events| {
-            ctx.run_ui(
+            crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2127,7 +2129,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_application_layouts_settings_page(ui, ui.max_rect()),
-            )
+            ))
         };
         let output = frame(&mut app, vec![]);
         let name = output
@@ -2181,7 +2183,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut painted = Vec::new();
         for _ in 0..3 {
-            let output = ctx.run_ui(
+            let output = crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2190,7 +2192,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_application_picker_v2(ui.ctx()),
-            );
+            ));
             painted = output
                 .shapes
                 .iter()
@@ -2212,12 +2214,12 @@ mod tests {
         assert!(painted.iter().any(|text| text == "Other"), "{painted:?}");
         assert!(painted.iter().any(|text| text == "Save"), "{painted:?}");
         let window = ctx
-            .memory(|memory| memory.area_rect(egui::Id::new("application_picker_v2")))
+            .memory(|memory| memory.area_rect(egui::Id::unique("application_picker_v2")))
             .expect("Edit application window must be placed");
         assert!(window.bottom() <= 700.0, "window {window:?}");
         let mut small_output = None;
         for _ in 0..3 {
-            small_output = Some(ctx.run_ui(
+            small_output = Some(crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2226,7 +2228,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_application_picker_v2(ui.ctx()),
-            ));
+            )));
         }
         let small_output = small_output.unwrap();
         let save = small_output
@@ -2261,7 +2263,7 @@ mod tests {
         let frame = |app: &mut EntropyApp| {
             let mut output = None;
             for _ in 0..3 {
-                output = Some(ctx.run_ui(
+                output = Some(crate::app::discard_texture_deltas(ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -2270,10 +2272,10 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| app.draw_application_picker_v2(ui.ctx()),
-                ));
+                )));
             }
             let rect = ctx
-                .memory(|memory| memory.area_rect(egui::Id::new("application_picker_v2")))
+                .memory(|memory| memory.area_rect(egui::Id::unique("application_picker_v2")))
                 .expect("application picker remains open");
             let output = output.unwrap();
             let footer_y = output
@@ -2346,9 +2348,10 @@ mod tests {
             for _ in 0..3 {
                 ctx.run_ui(egui::RawInput::default(), |ui| {
                     app.draw_application_picker_v2(ui.ctx());
-                });
+                })
+                .drop_without_applying_deltas();
             }
-            let _ = ctx.run_ui(
+            ctx.run_ui(
                 egui::RawInput {
                     events: vec![egui::Event::Key {
                         key: egui::Key::Escape,
@@ -2363,7 +2366,8 @@ mod tests {
                     app.draw_application_picker_v2(ui.ctx());
                     assert!(!ui.input(|input| input.key_pressed(egui::Key::Escape)));
                 },
-            );
+            )
+            .drop_without_applying_deltas();
             assert!(!app.application_picker_open);
             assert!(app.application_picker_selected.is_none());
             assert!(app.application_picker_name.is_empty());
@@ -2386,7 +2390,7 @@ mod tests {
         );
         app.app_settings.last_application_layout_device_key = Some(key);
         let ctx = egui::Context::default();
-        let output = ctx.run_ui(
+        let output = crate::app::discard_texture_deltas(ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -2401,7 +2405,7 @@ mod tests {
                     0..app.application_layouts_editor_row_count(),
                 );
             },
-        );
+        ));
         let label_y = |label| {
             output
                 .shapes
@@ -2434,7 +2438,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut output = None;
         for _ in 0..3 {
-            output = Some(ctx.run_ui(
+            output = Some(crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2443,7 +2447,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_application_categories_modal(ui.ctx()),
-            ));
+            )));
         }
         let output = output.unwrap();
         for label in ["Categories", "Category", "Add", "Delete"] {
@@ -2459,7 +2463,7 @@ mod tests {
                 egui::Shape::Text(text) if text.galley.text() == redundant)));
         }
         let window = ctx
-            .memory(|memory| memory.area_rect(egui::Id::new("autolayer_categories_modal")))
+            .memory(|memory| memory.area_rect(egui::Id::unique("autolayer_categories_modal")))
             .expect("category manager window");
         assert!(
             window.left() >= 0.0 && window.right() <= 480.0,
@@ -2501,7 +2505,7 @@ mod tests {
             })
             .expect("Add button text");
         for pressed in [true, false] {
-            let _ = ctx.run_ui(
+            ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2519,14 +2523,16 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_application_categories_modal(ui.ctx()),
-            );
+            )
+            .drop_without_applying_deltas();
         }
         assert_eq!(app.application_categories_selected_id, None);
         assert!(app.application_categories_name.is_empty());
         app.application_categories_name = "Projects".to_owned();
-        let create_output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            app.draw_application_categories_modal(ui.ctx());
-        });
+        let create_output =
+            crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.draw_application_categories_modal(ui.ctx());
+            }));
         assert!(create_output
             .shapes
             .iter()
@@ -2538,7 +2544,7 @@ mod tests {
             ((create_center.x + delete_center.x) / 2.0 - window.center().x).abs() < 2.0,
             "Create {create_center:?}, Delete {delete_center:?}, window {window:?}"
         );
-        let _ = ctx.run_ui(
+        ctx.run_ui(
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key: egui::Key::Escape,
@@ -2550,7 +2556,8 @@ mod tests {
                 ..Default::default()
             },
             |ui| app.draw_application_categories_modal(ui.ctx()),
-        );
+        )
+        .drop_without_applying_deltas();
         assert!(!app.application_categories_open);
     }
 
@@ -2569,7 +2576,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut output = None;
         for _ in 0..3 {
-            output = Some(ctx.run_ui(
+            output = Some(crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2578,7 +2585,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_application_picker_v2(ui.ctx()),
-            ));
+            )));
         }
         let output = output.unwrap();
         let painted = |label: &str| {
@@ -2598,14 +2605,14 @@ mod tests {
         let add = painted("Add").expect("Add must remain visible at 480×480");
         assert!(add.bottom() < 480.0, "Add {add:?}");
         let baseline_rect = ctx
-            .memory(|memory| memory.area_rect(egui::Id::new("application_picker_v2")))
+            .memory(|memory| memory.area_rect(egui::Id::unique("application_picker_v2")))
             .unwrap();
 
         app.select_application_picker_choice(detected_application("firefox", "Firefox"));
         app.application_picker_name = "Default".to_owned();
         let mut invalid = None;
         for _ in 0..3 {
-            invalid = Some(ctx.run_ui(
+            invalid = Some(crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2614,11 +2621,11 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_application_picker_v2(ui.ctx()),
-            ));
+            )));
         }
         let invalid = invalid.unwrap();
         let invalid_rect = ctx
-            .memory(|memory| memory.area_rect(egui::Id::new("application_picker_v2")))
+            .memory(|memory| memory.area_rect(egui::Id::unique("application_picker_v2")))
             .unwrap();
         assert!((invalid_rect.top() - baseline_rect.top()).abs() <= 1.0);
         assert!((invalid_rect.bottom() - baseline_rect.bottom()).abs() <= 1.0);
@@ -2882,7 +2889,7 @@ mod tests {
     #[test]
     fn default_application_text_fits_beside_edit_in_russian() {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -2934,7 +2941,8 @@ mod tests {
                     assert!((pair.trailing.right() - control_width).abs() < 0.01);
                 }
             },
-        );
+        )
+        .drop_without_applying_deltas();
     }
 
     #[test]
@@ -3013,8 +3021,8 @@ mod tests {
                 egui::Pos2::ZERO,
                 egui::vec2(726.0, 620.0),
             ));
-            let _ = ctx.run_ui(input, |_ui| {
-                let id = egui::Id::new("application_picker_real_window_test");
+            ctx.run_ui(input, |_ui| {
+                let id = egui::Id::unique("application_picker_real_window_test");
                 let response = crate::ui_style::centered_modal_window(
                     &ctx,
                     "Add application",
@@ -3043,11 +3051,14 @@ mod tests {
                     );
                 });
                 let _ = response;
-            });
+            })
+            .drop_without_applying_deltas();
         }
 
         let window = ctx
-            .memory(|memory| memory.area_rect(egui::Id::new("application_picker_real_window_test")))
+            .memory(|memory| {
+                memory.area_rect(egui::Id::unique("application_picker_real_window_test"))
+            })
             .expect("modal window should render");
         let field = measured.get().expect("modal content should render");
         let left = field.left() - window.left();

@@ -478,7 +478,8 @@ impl EntropyApp {
                     tooltip.as_deref(),
                     field_width,
                     |ui| {
-                        let edit_id = egui::Id::new(("module_setting_edit", group_idx, field.qsid));
+                        let edit_id =
+                            egui::Id::unique(("module_setting_edit", group_idx, field.qsid));
                         let current = raw_value.clamp(field.min, field.max);
                         let mut text = ui.ctx().data_mut(|d| {
                             d.get_temp::<String>(edit_id)

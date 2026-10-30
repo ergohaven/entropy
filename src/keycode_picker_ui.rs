@@ -84,7 +84,7 @@ pub(super) fn picker_keycap_button_in_rect(
     };
     let resp = ui.allocate_rect(rect, sense);
     resp.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label.replace('\n', " "))
+        egui::WidgetInfo::labeled(egui::Role::Button, enabled, label.replace('\n', " "))
     });
     let dark = ui.visuals().dark_mode;
     let hovered = enabled && resp.hovered();
@@ -283,7 +283,7 @@ pub(super) fn picker_button(
     let (rect, resp) = ui.allocate_exact_size(size, sense);
     if !label.is_empty() {
         resp.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label.replace('\n', " "))
+            egui::WidgetInfo::labeled(egui::Role::Button, enabled, label.replace('\n', " "))
         });
     }
     let dark = ui.visuals().dark_mode;
@@ -355,9 +355,7 @@ pub(super) fn picker_tab_button(
 ) -> egui::Response {
     let size = Vec2::new(picker_tab_width(label), 30.0);
     let resp = picker_button(ui, "", size, true, active);
-    resp.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, active, label)
-    });
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label));
     // Announced as a tab with a selected state, not as a toggle button.
     ui.ctx().accesskit_node_builder(resp.id, |node| {
         node.set_role(egui::accesskit::Role::Tab);
@@ -433,9 +431,7 @@ pub(super) fn picker_keycap_row_button(
     row: &PickerRow,
 ) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
-    resp.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, row.accessible_name())
-    });
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, row.accessible_name()));
     set_accessible_description(ui, &resp, &row.tooltip);
     if ui.is_rect_visible(rect) {
         let visuals = ui.style().interact(&resp);
@@ -471,7 +467,7 @@ pub(super) fn picker_slot_button(
         } else {
             id_text.to_owned()
         };
-        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, active, name)
+        egui::WidgetInfo::selected(egui::Role::Button, true, active, name)
     });
     let dark = ui.visuals().dark_mode;
     let hovered = resp.hovered();

@@ -449,14 +449,14 @@ impl EntropyApp {
 
         let dark = ctx.global_style().visuals.dark_mode;
         let screen_rect = ctx.content_rect();
-        egui::Area::new("close_to_tray_prompt_backdrop".into())
+        egui::Area::new(egui::Id::unique("close_to_tray_prompt_backdrop"))
             .order(egui::Order::Foreground)
             .fixed_pos(screen_rect.min)
             .show(ctx, |ui| {
                 let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen_rect.size());
                 ui.interact(
                     rect,
-                    egui::Id::new("close_to_tray_prompt_blocker"),
+                    egui::Id::unique("close_to_tray_prompt_blocker"),
                     egui::Sense::click_and_drag(),
                 );
                 ui.painter().rect_filled(
@@ -519,19 +519,18 @@ impl EntropyApp {
         let mut cancel = false;
 
         let panel_size = Vec2::new(460.0, 176.0);
+        let frame = crate::ui_style::modal_window_frame(ctx.global_style().as_ref(), dark);
         egui::Window::new("")
-            .id(egui::Id::new("close_to_tray_prompt_window"))
+            .id(egui::Id::unique("close_to_tray_prompt_window"))
             .title_bar(false)
             .resizable(false)
             .collapsible(false)
             .movable(false)
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            .fixed_size(panel_size)
-            .frame(crate::ui_style::modal_window_frame(
-                ctx.global_style().as_ref(),
-                dark,
-            ))
+            // The panel is the content; egui sizes a window with its frame.
+            .fixed_size(panel_size + frame.total_margin().sum())
+            .frame(frame)
             .show(ctx, |ui| {
                 ui.set_min_size(panel_size);
                 let rect = egui::Rect::from_min_size(ui.min_rect().min, panel_size);
@@ -543,7 +542,7 @@ impl EntropyApp {
                 );
                 let close_resp = ui.interact(
                     close_rect,
-                    egui::Id::new("close_to_tray_prompt_x"),
+                    egui::Id::unique("close_to_tray_prompt_x"),
                     egui::Sense::click(),
                 );
                 if close_resp.hovered() {
@@ -604,7 +603,7 @@ impl EntropyApp {
                 );
                 let remember_resp = ui.interact(
                     remember_rect,
-                    egui::Id::new("close_to_tray_prompt_remember"),
+                    egui::Id::unique("close_to_tray_prompt_remember"),
                     egui::Sense::click(),
                 );
                 if remember_resp.hovered() {
@@ -1235,7 +1234,7 @@ mod tests {
         focused: bool,
         events: Vec<egui::Event>,
     ) {
-        let _ = ctx.run_ui(
+        ctx.run_ui(
             egui::RawInput {
                 time: Some(time),
                 focused,
@@ -1243,19 +1242,21 @@ mod tests {
                 ..Default::default()
             },
             |ui| app.track_linux_background_window(ui.ctx()),
-        );
+        )
+        .drop_without_applying_deltas();
     }
 
     #[cfg(target_os = "linux")]
     fn minimize_at(app: &mut EntropyApp, ctx: &egui::Context, time: f64) {
-        let _ = ctx.run_ui(
+        ctx.run_ui(
             egui::RawInput {
                 time: Some(time),
                 focused: true,
                 ..Default::default()
             },
             |ui| app.minimize_window_to_tray(ui.ctx()),
-        );
+        )
+        .drop_without_applying_deltas();
     }
 
     #[cfg(target_os = "linux")]
@@ -1301,18 +1302,27 @@ mod tests {
         background_frame(&mut app, &ctx, 60.0, false, Vec::new());
         assert!(app.linux_background_since.is_some());
 
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_ui(egui::RawInput::default(), |ui| {
             app.restore_from_tray(ui.ctx())
-        });
+        })
+        .drop_without_applying_deltas();
         assert!(app.linux_background_since.is_none());
     }
 
     #[cfg(target_os = "linux")]
     fn root_commands(output: &egui::FullOutput) -> Vec<egui::ViewportCommand> {
+        // egui sends the theme itself on the first pass of a context.
         output
             .viewport_output
             .get(&egui::ViewportId::ROOT)
-            .map(|viewport| viewport.commands.clone())
+            .map(|viewport| {
+                viewport
+                    .commands
+                    .iter()
+                    .filter(|command| !matches!(command, egui::ViewportCommand::SetTheme(_)))
+                    .cloned()
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -1322,9 +1332,10 @@ mod tests {
         // Tests never start a panel: the window must stay within reach.
         let ctx = egui::Context::default();
         let mut app = EntropyApp::new_inert_for_test();
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            app.minimize_window_to_tray(ui.ctx())
-        });
+        let output =
+            crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.minimize_window_to_tray(ui.ctx())
+            }));
         assert_eq!(
             root_commands(&output),
             [egui::ViewportCommand::Minimized(true)]
@@ -1340,9 +1351,11 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = EntropyApp::new_inert_for_test().with_start_in_background();
         let mut frame = || {
-            root_commands(&ctx.run_ui(egui::RawInput::default(), |ui| {
-                app.handle_linux_start_hidden_to_tray(ui.ctx())
-            }))
+            root_commands(&crate::app::discard_texture_deltas(
+                ctx.run_ui(egui::RawInput::default(), |ui| {
+                    app.handle_linux_start_hidden_to_tray(ui.ctx())
+                }),
+            ))
         };
         // No panel in tests: minimized rather than out of reach, and only once.
         assert_eq!(frame(), [egui::ViewportCommand::Minimized(true)]);
@@ -1382,12 +1395,16 @@ mod tests {
         app.app_settings.minimize_to_tray_on_close = false;
         app.app_settings.close_to_tray_behavior = CloseToTrayBehavior::Ask;
 
-        let output = ctx.run_ui(close_request(), |ui| app.handle_close_to_tray(ui.ctx()));
+        let output = crate::app::discard_texture_deltas(
+            ctx.run_ui(close_request(), |ui| app.handle_close_to_tray(ui.ctx())),
+        );
         assert!(!root_commands(&output).contains(&egui::ViewportCommand::CancelClose));
         assert!(!app.close_to_tray_prompt_open);
 
         app.app_settings.text_expander_enabled = true;
-        let output = ctx.run_ui(close_request(), |ui| app.handle_close_to_tray(ui.ctx()));
+        let output = crate::app::discard_texture_deltas(
+            ctx.run_ui(close_request(), |ui| app.handle_close_to_tray(ui.ctx())),
+        );
         assert!(root_commands(&output).contains(&egui::ViewportCommand::CancelClose));
         assert!(app.close_to_tray_prompt_open);
     }
@@ -1451,9 +1468,10 @@ mod tests {
         app.touchpad_settings.scroll_sens = 12;
         app.debounce_touchpad_setting_write(&ctx, "Scroll sensitivity".to_owned(), 122, 8, 12);
 
-        let first_output = ctx.run_ui(egui::RawInput::default(), |_ui| {
-            app.finish_deferred_exit_after_hid_write(&ctx);
-        });
+        let first_output =
+            crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |_ui| {
+                app.finish_deferred_exit_after_hid_write(&ctx);
+            }));
         assert!(app.settings_write_task.is_some());
         assert!(!first_output
             .viewport_output
@@ -1465,9 +1483,10 @@ mod tests {
         let mut close_sent = false;
         for _ in 0..200 {
             app.poll_settings_write(&ctx);
-            let output = ctx.run_ui(egui::RawInput::default(), |_ui| {
-                app.finish_deferred_exit_after_hid_write(&ctx);
-            });
+            let output =
+                crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |_ui| {
+                    app.finish_deferred_exit_after_hid_write(&ctx);
+                }));
             close_sent |= output
                 .viewport_output
                 .get(&egui::ViewportId::ROOT)
@@ -1507,9 +1526,10 @@ mod tests {
         app.maybe_start_macro_write(&ctx);
         app.exit_after_hid_write = true;
 
-        let output = ctx.run_ui(egui::RawInput::default(), |_ui| {
-            app.finish_deferred_exit_after_hid_write(&ctx);
-        });
+        let output =
+            crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |_ui| {
+                app.finish_deferred_exit_after_hid_write(&ctx);
+            }));
 
         assert!(output
             .viewport_output
@@ -1561,9 +1581,10 @@ mod tests {
         );
         app.exit_after_hid_write = true;
 
-        let output = ctx.run_ui(egui::RawInput::default(), |_ui| {
-            app.finish_deferred_exit_after_hid_write(&ctx);
-        });
+        let output =
+            crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |_ui| {
+                app.finish_deferred_exit_after_hid_write(&ctx);
+            }));
 
         assert!(output
             .viewport_output

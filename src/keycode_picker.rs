@@ -238,16 +238,18 @@ mod tests {
             ..Default::default()
         };
         picker.search.query = "tap dan".into();
-        let mut harness = egui_kittest::Harness::new_state(
-            |ctx, picker: &mut KeycodePicker| {
-                picker.show(
-                    ctx,
-                    DeferredPickerDataState::Ready,
-                    DeferredPickerDataState::Ready,
-                );
-            },
-            picker,
-        );
+        let mut harness = egui_kittest::Harness::builder()
+            .allow_missing_glyphs()
+            .build_ui_state(
+                |ui, picker: &mut KeycodePicker| {
+                    picker.show(
+                        ui.ctx(),
+                        DeferredPickerDataState::Ready,
+                        DeferredPickerDataState::Ready,
+                    );
+                },
+                picker,
+            );
         harness.run();
         assert!(harness.state().open, "picker should be showing before Esc");
 
@@ -270,16 +272,18 @@ mod tests {
             vial_quantum_pending_mod: Some(0x0100),
             ..Default::default()
         };
-        let mut harness = egui_kittest::Harness::new_state(
-            |ctx, picker: &mut KeycodePicker| {
-                picker.show(
-                    ctx,
-                    DeferredPickerDataState::Ready,
-                    DeferredPickerDataState::Ready,
-                );
-            },
-            picker,
-        );
+        let mut harness = egui_kittest::Harness::builder()
+            .allow_missing_glyphs()
+            .build_ui_state(
+                |ui, picker: &mut KeycodePicker| {
+                    picker.show(
+                        ui.ctx(),
+                        DeferredPickerDataState::Ready,
+                        DeferredPickerDataState::Ready,
+                    );
+                },
+                picker,
+            );
         harness.run();
         harness.key_press(egui::Key::Escape);
         harness.run();
@@ -303,10 +307,11 @@ mod tests {
     fn open_picker_harness(picker: KeycodePicker) -> egui_kittest::Harness<'static, KeycodePicker> {
         let mut harness = egui_kittest::Harness::builder()
             .with_size(egui::vec2(1_400.0, 1_000.0))
-            .build_state(
-                |ctx, picker: &mut KeycodePicker| {
+            .allow_missing_glyphs()
+            .build_ui_state(
+                |ui, picker: &mut KeycodePicker| {
                     picker.show(
-                        ctx,
+                        ui.ctx(),
                         DeferredPickerDataState::Ready,
                         DeferredPickerDataState::Ready,
                     );
@@ -722,13 +727,13 @@ mod tests {
                 egui::Pos2::ZERO,
                 egui::vec2(1_100.0, 800.0),
             ));
-            ctx.run_ui(input, |_ui| {
+            crate::app::discard_texture_deltas(ctx.run_ui(input, |_ui| {
                 picker.show(
                     &ctx,
                     DeferredPickerDataState::Ready,
                     DeferredPickerDataState::Ready,
                 );
-            })
+            }))
         };
         let _ = render();
         let output = render();
@@ -1784,7 +1789,7 @@ impl KeycodePicker {
                     egui::TextEdit::singleline(&mut self.search.query)
                         .hint_text(tr_picker(self.language, "key_picker.search_hint"))
                         .font(egui::FontId::proportional(12.5))
-                        .vertical_align(egui::Align::Center)
+                        .align(egui::Align2::LEFT_CENTER)
                         .margin(egui::Margin {
                             left: 8,
                             right: 26,
@@ -1804,7 +1809,7 @@ impl KeycodePicker {
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .on_hover_text(clear_label);
                     clear_resp.widget_info(|| {
-                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, clear_label)
+                        egui::WidgetInfo::labeled(egui::Role::Button, true, clear_label)
                     });
                     paint_focus_ring(ui, &clear_resp, 4.0);
                     let color = if clear_resp.hovered() {
@@ -1832,7 +1837,7 @@ impl KeycodePicker {
 
             // Tab bar
             let visible_tabs = self.visible_vial_tabs();
-            let panel_id = ui.id().with("picker_tab_panel");
+            let panel_id = ui.scope_id().with("picker_tab_panel");
             let mut selected_tab_id = None;
             let tab_spacing = 6.0;
             let tab_bar_width: f32 = visible_tabs
@@ -1880,7 +1885,7 @@ impl KeycodePicker {
             let searching = self.search.is_active();
 
             let content_height = key_picker_main_content_height(picker_size);
-            ui.scope_builder(egui::UiBuilder::new().id(panel_id), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().scope_id(panel_id), |ui| {
                 ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
                     node.set_role(egui::accesskit::Role::TabPanel);
                     if let Some(tab_id) = selected_tab_id {

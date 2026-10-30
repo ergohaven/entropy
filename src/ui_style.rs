@@ -199,8 +199,7 @@ pub fn allocate_ui_at_rect<R>(
     rect: egui::Rect,
     add_contents: impl FnOnce(&mut Ui) -> R,
 ) -> egui::InnerResponse<R> {
-    #[allow(deprecated)]
-    ui.allocate_ui_at_rect(rect, add_contents)
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), add_contents)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -337,7 +336,7 @@ pub fn modern_keycap_button(ui: &mut Ui, label: &str, size: Vec2, enabled: bool)
 #[allow(dead_code)]
 pub fn settings_segmented_control(
     ui: &mut Ui,
-    id_source: impl std::hash::Hash,
+    id_source: impl egui::AsIdSalt,
     labels: &[String],
     selected: usize,
     size: Vec2,
@@ -349,7 +348,7 @@ pub fn settings_segmented_control(
     let dark = ui.visuals().dark_mode;
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let segment_width = rect.width() / labels.len() as f32;
-    let base_id = ui.id().with(id_source);
+    let base_id = ui.scope_id().with(id_source);
     let mut picked = None;
 
     ui.painter().rect(
@@ -604,7 +603,7 @@ pub fn modern_text_preview_field_sized(
                 .font(FontId::proportional(12.5 * (height / 32.0).clamp(1.0, 1.3)))
                 .frame(egui::Frame::NONE)
                 .interactive(false)
-                .vertical_align(egui::Align::Center),
+                .align(egui::Align2::LEFT_CENTER),
         );
     });
     let response = ui.interact(field_rect, id.with("preview_click"), Sense::click());
@@ -708,8 +707,7 @@ fn modern_text_field_impl(
                 .char_limit(char_limit)
                 .frame(egui::Frame::NONE)
                 .interactive(interactive)
-                .horizontal_align(horizontal_align)
-                .vertical_align(egui::Align::Center),
+                .align(egui::Align2([horizontal_align, egui::Align::Center])),
         )
     })
     .inner;
@@ -747,8 +745,7 @@ pub fn modern_text_field_sized_with_layouter(
             .char_limit(char_limit)
             .frame(egui::Frame::NONE)
             .interactive(interactive)
-            .horizontal_align(horizontal_align)
-            .vertical_align(egui::Align::Center)
+            .align(egui::Align2([horizontal_align, egui::Align::Center]))
             .layouter(layouter)
             .show(ui)
     })
@@ -1414,19 +1411,23 @@ pub fn centered_modal_window<'a>(
     open: &'a mut bool,
     size: Vec2,
 ) -> egui::Window<'a> {
+    let style = ctx.global_style();
+    let frame = modal_window_frame(style.as_ref(), style.visuals.dark_mode);
+    // `size` is the most the content takes, and the window fits what it uses.
+    // egui sizes a window by its outer size, so add the frame and a title bar
+    // of one heading row inside the frame's margin.
+    let title_bar = frame.inner_margin.sum().y
+        + ctx.fonts_mut(|fonts| fonts.row_height(&egui::TextStyle::Heading.resolve(&style)));
     egui::Window::new(title)
         .id(id)
         .open(open)
         .collapsible(false)
-        .resizable(false)
         .movable(true)
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-        .fixed_size(size)
-        .frame(modal_window_frame(
-            ctx.global_style().as_ref(),
-            ctx.global_style().visuals.dark_mode,
-        ))
+        .auto_sized()
+        .max_size(size + frame.total_margin().sum() + Vec2::new(0.0, title_bar))
+        .frame(frame)
 }
 
 pub fn modal_content(ui: &mut Ui, layout: ModalLayout, add_contents: impl FnOnce(&mut Ui)) {
@@ -1547,7 +1548,7 @@ pub fn settings_list_row_with_tooltip(
         );
         let label_resp = ui.interact(
             label_rect,
-            ui.id().with(("settings_label", label)),
+            ui.scope_id().with(("settings_label", label)),
             egui::Sense::hover(),
         );
         if label_resp.hovered() {
@@ -1593,7 +1594,7 @@ pub fn settings_switch_sized(
 
 pub fn settings_switch_sized_stable(
     ui: &mut Ui,
-    id_source: impl std::hash::Hash,
+    id_source: impl egui::AsIdSalt,
     checked: &mut bool,
     desired_size: Vec2,
 ) -> egui::Response {
@@ -1602,7 +1603,7 @@ pub fn settings_switch_sized_stable(
 
 pub fn settings_switch_sized_stable_interactive(
     ui: &mut Ui,
-    id_source: impl std::hash::Hash,
+    id_source: impl egui::AsIdSalt,
     checked: &mut bool,
     desired_size: Vec2,
     interactive: bool,
@@ -1612,7 +1613,7 @@ pub fn settings_switch_sized_stable_interactive(
         checked,
         desired_size,
         interactive,
-        Some(ui.id().with(id_source)),
+        Some(ui.scope_id().with(id_source)),
     )
 }
 
@@ -1757,7 +1758,7 @@ mod tests {
         let rect = std::cell::Cell::new(egui::Rect::NOTHING);
         let clicked = std::cell::Cell::new(false);
         let frame = |events| {
-            ctx.run_ui(
+            crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1769,7 +1770,7 @@ mod tests {
                 |ui| {
                     let response = modern_text_preview_field_sized(
                         ui,
-                        egui::Id::new("trigger-preview-test"),
+                        egui::Id::unique("trigger-preview-test"),
                         &text,
                         82.0,
                         32.0,
@@ -1778,7 +1779,7 @@ mod tests {
                     rect.set(response.rect);
                     clicked.set(response.clicked());
                 },
-            )
+            ))
         };
         let output = frame(Vec::new());
         assert!(output
@@ -1823,7 +1824,7 @@ mod tests {
             let ctx = egui::Context::default();
             ctx.set_visuals(visuals);
             let mut text = "Text".to_owned();
-            let output = ctx.run_ui(
+            let output = crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1841,7 +1842,7 @@ mod tests {
                         480,
                     );
                 },
-            );
+            ));
             assert!(output.shapes.iter().any(|clipped| {
                 matches!(&clipped.shape, egui::Shape::Rect(rect)
                     if (rect.rect.width() - 420.0).abs() < 0.1
@@ -1858,7 +1859,7 @@ mod tests {
         events: Vec<egui::Event>,
     ) -> egui::Rect {
         let rect = std::cell::Cell::new(egui::Rect::NOTHING);
-        let _ = ctx.run_ui(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1877,7 +1878,8 @@ mod tests {
                 );
                 rect.set(response.rect);
             },
-        );
+        )
+        .drop_without_applying_deltas();
         rect.get()
     }
 

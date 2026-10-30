@@ -519,12 +519,12 @@ mod usb_hotplug_tests {
                 assert!(app.hid_device.is_none());
                 let mut output = None;
                 for _ in 0..2 {
-                    output = Some(ctx.run(egui::RawInput::default(), |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
+                    output = Some(crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
+                        ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
                             let rect = ui.max_rect();
                             app.draw_device_selection_empty_state(ui, rect);
-                        });
-                    }));
+                        }));
+                    })));
                 }
                 let labels: Vec<_> = output
                     .unwrap()
@@ -551,12 +551,12 @@ mod usb_hotplug_tests {
                 assert!(connect_rx.try_recv().is_err());
                 // Real open failures still retain the error heading and detail.
                 app.status_msg = "Open failed: fixture access denied".into();
-                let output = ctx.run(egui::RawInput::default(), |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                let output = crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
+                    ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
                         let rect = ui.max_rect();
                         app.draw_device_selection_empty_state(ui, rect);
-                    });
-                });
+                    }));
+                }));
                 assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text.contains("Не удалось открыть")||t.galley.job.text.contains("Could not open"))));
             }
         }

@@ -92,22 +92,29 @@ fn event_defers_automatic_background_load(event: &egui::Event) -> bool {
         egui::Event::Copy
         | egui::Event::Cut
         | egui::Event::Paste(_)
+        | egui::Event::PasteImage(_)
+        | egui::Event::MiddleClickPaste { .. }
         | egui::Event::Text(_)
         | egui::Event::Zoom(_)
         | egui::Event::Rotate(_)
         | egui::Event::MouseWheel { .. }
         | egui::Event::AccessKitActionRequest(_) => true,
         egui::Event::Key { pressed, .. } | egui::Event::PointerButton { pressed, .. } => *pressed,
-        egui::Event::Ime(egui::ImeEvent::Preedit(_) | egui::ImeEvent::Commit(_)) => true,
+        egui::Event::Ime(
+            egui::ImeEvent::Preedit { .. }
+            | egui::ImeEvent::Commit(_)
+            | egui::ImeEvent::DeleteSurrounding { .. },
+        ) => true,
         egui::Event::Touch { phase, .. } => {
             matches!(phase, egui::TouchPhase::Start | egui::TouchPhase::Move)
         }
         egui::Event::PointerMoved(_)
         | egui::Event::MouseMoved(_)
         | egui::Event::PointerGone
-        | egui::Event::Ime(egui::ImeEvent::Enabled | egui::ImeEvent::Disabled)
-        | egui::Event::WindowFocused(_)
-        | egui::Event::Screenshot { .. } => false,
+        | egui::Event::ModifiersChanged(_)
+        // `Enabled` and `Disabled`, which egui no longer sends.
+        | egui::Event::Ime(_)
+        | egui::Event::WindowFocused(_) => false,
     }
 }
 
@@ -2120,6 +2127,7 @@ mod tests {
                 delta: egui::vec2(0.0, 10.0),
                 modifiers: egui::Modifiers::NONE,
                 phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
             }
         ));
     }

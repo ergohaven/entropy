@@ -2745,10 +2745,18 @@ mod tests {
             });
             app.hid_device = Some(hid);
             let frame = |app: &mut EntropyApp, events| {
-                let _ = ctx.run_ui(egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1100.0,800.0))),
-                    events, ..Default::default()
-                }, |ui| app.draw_layout_layer_switcher_and_hints(ui,0.0,0.0,52.0));
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1100.0, 800.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| app.draw_layout_layer_switcher_and_hints(ui, 0.0, 0.0, 52.0),
+                )
+                .drop_without_applying_deltas();
             };
             let pos = egui::pos2(550.0,50.0);
             frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
@@ -2924,10 +2932,18 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn name_review_frame(app: &mut EntropyApp, ctx: &egui::Context, events: Vec<egui::Event>) {
-        let _ = ctx.run_ui(egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1100.0,800.0))),
-            events, ..Default::default()
-        }, |ui| app.draw_layout_layer_switcher_and_hints(ui,0.0,0.0,52.0));
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1100.0, 800.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| app.draw_layout_layer_switcher_and_hints(ui, 0.0, 0.0, 52.0),
+        )
+        .drop_without_applying_deltas();
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -3296,7 +3312,7 @@ mod tests {
             // Match the production state after explicitly selecting a profile.
             app.application_layout_manual_override = Some((key.clone(), Some(foreground.clone())));
             let frame = |app: &mut EntropyApp, events| {
-                let _ = ctx.run_ui(
+                ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -3306,7 +3322,8 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| app.draw_layout_layer_switcher_and_hints(ui, 0.0, 0.0, 52.0),
-                );
+                )
+                .drop_without_applying_deltas();
             };
             let pos = egui::pos2(550.0, 50.0);
             frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
@@ -3403,7 +3420,7 @@ mod tests {
                 app.application_layout_manual_override =
                     Some((key.clone(), Some(foreground.clone())));
                 let frame = |app: &mut EntropyApp, events| {
-                    let _ = ctx.run_ui(
+                    ctx.run_ui(
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(
                                 egui::Pos2::ZERO,
@@ -3413,7 +3430,8 @@ mod tests {
                             ..Default::default()
                         },
                         |ui| app.draw_layout_layer_switcher_and_hints(ui, 0.0, 0.0, 52.0),
-                    );
+                    )
+                    .drop_without_applying_deltas();
                 };
                 let pos = egui::pos2(550.0, 50.0);
                 frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
@@ -3520,7 +3538,7 @@ mod tests {
         app.application_layout_foreground = Some(foreground.clone());
         assert!(app.application_layout_manual_override.is_none());
         let frame = |app: &mut EntropyApp, events| {
-            let _ = ctx.run_ui(
+            ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -3530,7 +3548,8 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_layout_layer_switcher_and_hints(ui, 0.0, 0.0, 52.0),
-            );
+            )
+            .drop_without_applying_deltas();
         };
         let position = egui::pos2(550.0, 50.0);
         frame(&mut app, vec![egui::Event::PointerMoved(position)]);

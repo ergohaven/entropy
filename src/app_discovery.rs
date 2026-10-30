@@ -3438,7 +3438,7 @@ mod tests {
         let (client, server) = std::os::unix::net::UnixStream::pair().expect("socket pair");
         let guid = zbus::Guid::generate();
         let server = std::thread::spawn(move || {
-            zbus::blocking::connection::Builder::unix_stream(server)
+            zbus::blocking::connection::Builder::async_io_unix_stream(server)
                 .server(guid)
                 .expect("server guid")
                 .p2p()
@@ -3446,7 +3446,7 @@ mod tests {
         });
         let timeout = Duration::from_millis(500);
         let connection = kwin_connection(
-            Ok(zbus::blocking::connection::Builder::unix_stream(client).p2p()),
+            Ok(zbus::blocking::connection::Builder::async_io_unix_stream(client).p2p()),
             timeout,
         )
         .expect("client connection");

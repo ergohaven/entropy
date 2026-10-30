@@ -120,8 +120,8 @@ pub(crate) fn allocate_adaptive_settings_list_viewport_capped(
     let list_height = row_height * visible_rows as f32;
     let content_height = row_height * total_rows as f32;
     let max_offset = (content_height - list_height).max(0.0);
-    let offset_id = ui.id().with((id_salt, "smooth_offset"));
-    let target_id = ui.id().with((id_salt, "smooth_target"));
+    let offset_id = ui.scope_id().with((id_salt, "smooth_offset"));
+    let target_id = ui.scope_id().with((id_salt, "smooth_target"));
     let mut scroll_offset = ui
         .ctx()
         .data_mut(|d| d.get_persisted::<f32>(offset_id).unwrap_or(0.0))
@@ -141,7 +141,7 @@ pub(crate) fn allocate_adaptive_settings_list_viewport_capped(
     let scrollbar_resp = if max_offset > 0.0 {
         Some(ui.interact(
             track_rect.expand2(egui::vec2(metrics.value(5.0), 0.0)),
-            ui.id().with((id_salt, "scrollbar")),
+            ui.scope_id().with((id_salt, "scrollbar")),
             Sense::click_and_drag(),
         ))
     } else {

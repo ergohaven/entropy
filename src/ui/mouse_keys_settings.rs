@@ -195,7 +195,7 @@ impl EntropyApp {
                 },
                 field_width,
                 |ui| {
-                    let edit_id = egui::Id::new(("mouse_keys_edit", qsid));
+                    let edit_id = egui::Id::unique(("mouse_keys_edit", qsid));
                     let mut text = ui.ctx().data_mut(|d| {
                         d.get_temp::<String>(edit_id)
                             .unwrap_or_else(|| current.to_string())

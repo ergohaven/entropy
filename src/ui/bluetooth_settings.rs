@@ -372,9 +372,9 @@ mod tests {
             egui::Pos2::ZERO,
             egui::vec2(900.0, 700.0),
         ));
-        let output = ctx.run_ui(input, |ui| {
+        let output = crate::app::discard_texture_deltas(ctx.run_ui(input, |ui| {
             app.draw_bluetooth_settings_page(ui, ui.max_rect());
-        });
+        }));
         let mut text = Vec::new();
         for clipped_shape in &output.shapes {
             collect_text(&clipped_shape.shape, &mut text);

@@ -684,14 +684,14 @@ impl EntropyApp {
             return;
         }
         let screen_rect = ctx.content_rect();
-        egui::Area::new("import_progress_backdrop".into())
+        egui::Area::new(egui::Id::unique("import_progress_backdrop"))
             .order(egui::Order::Foreground)
             .fixed_pos(screen_rect.min)
             .show(ctx, |ui| {
                 let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen_rect.size());
                 ui.interact(
                     rect,
-                    egui::Id::new("import_progress_backdrop_blocker"),
+                    egui::Id::unique("import_progress_backdrop_blocker"),
                     egui::Sense::click_and_drag(),
                 );
                 ui.painter().rect_filled(
@@ -707,7 +707,7 @@ impl EntropyApp {
         crate::ui_style::centered_modal_window(
             ctx,
             &self.import_progress_title,
-            egui::Id::new("import_progress_window"),
+            egui::Id::unique("import_progress_window"),
             &mut open,
             Vec2::new(420.0, 150.0),
         )
@@ -791,7 +791,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut delay = std::time::Duration::MAX;
         for frame in 0..4 {
-            let output = ctx.run_ui(
+            let output = crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     time: Some(f64::from(frame)),
                     ..Default::default()
@@ -799,7 +799,7 @@ mod tests {
                 |ui| {
                     app.update_native_background(ui.ctx(), 1.0, true, true);
                 },
-            );
+            ));
             delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
         }
         assert!(
@@ -893,9 +893,10 @@ mod tests {
         let mut frame = eframe::Frame::_new_kittest();
         app.app_settings.sticky_layout_window = true;
 
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            eframe::App::logic(&mut app, ui.ctx(), &mut frame);
-        });
+        let output =
+            crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
+                eframe::App::logic(&mut app, ui.ctx(), &mut frame);
+            }));
 
         assert!(output.shapes.is_empty());
     }
@@ -1027,9 +1028,10 @@ mod tests {
         app.keycode_picker.tap_dance_dirty = true;
         let mut frame = eframe::Frame::_new_kittest();
 
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_ui(egui::RawInput::default(), |ui| {
             eframe::App::ui(&mut app, ui, &mut frame);
-        });
+        })
+        .drop_without_applying_deltas();
         assert!(app.keycode_picker.tap_dance_dirty);
         assert!(recorder.requests().is_empty());
 
@@ -1038,9 +1040,10 @@ mod tests {
         readback[9..11].copy_from_slice(&entry.tapping_term.to_le_bytes());
         recorder.respond_with([[0; 32], readback]);
         app.vial_unlocked = Some(true);
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_ui(egui::RawInput::default(), |ui| {
             eframe::App::ui(&mut app, ui, &mut frame);
-        });
+        })
+        .drop_without_applying_deltas();
         assert!(!app.keycode_picker.tap_dance_dirty);
         assert_eq!(app.keycode_picker.tap_dance_synced_entries[0], entry);
         assert!(!recorder.requests().is_empty());
@@ -1083,9 +1086,10 @@ mod tests {
         let mut close_sent = false;
         for _ in 0..200 {
             app.update_native_background(&ctx, 0.0, true, true);
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                eframe::App::ui(&mut app, ui, &mut frame);
-            });
+            let output =
+                crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
+                    eframe::App::ui(&mut app, ui, &mut frame);
+                }));
             close_sent |= output
                 .viewport_output
                 .get(&egui::ViewportId::ROOT)
@@ -1228,9 +1232,9 @@ mod tests {
             .expect("root viewport exists")
             .events
             .push(egui::ViewportEvent::Close);
-        let close_output = ctx.run_ui(close_input, |_ui| {
+        let close_output = crate::app::discard_texture_deltas(ctx.run_ui(close_input, |_ui| {
             app.handle_close_to_tray(&ctx);
-        });
+        }));
         assert!(close_output
             .viewport_output
             .get(&egui::ViewportId::ROOT)
@@ -1281,9 +1285,10 @@ mod tests {
         assert_eq!(app.key_override_entries[0].trigger, 0x0004);
         app.flush_pending_key_override_writes();
 
-        let first_close_output = ctx.run_ui(egui::RawInput::default(), |_ui| {
-            app.finish_deferred_exit_after_hid_write(&ctx);
-        });
+        let first_close_output =
+            crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |_ui| {
+                app.finish_deferred_exit_after_hid_write(&ctx);
+            }));
         assert!(app.exit_after_hid_write);
         assert!(app.pending_tap_hold_numeric_writes.is_empty());
         assert!(app.settings_write_task.is_some());
@@ -1297,9 +1302,10 @@ mod tests {
         let mut close_sent = false;
         for _ in 0..200 {
             app.poll_settings_write(&ctx);
-            let output = ctx.run_ui(egui::RawInput::default(), |_ui| {
-                app.finish_deferred_exit_after_hid_write(&ctx);
-            });
+            let output =
+                crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |_ui| {
+                    app.finish_deferred_exit_after_hid_write(&ctx);
+                }));
             close_sent |= output
                 .viewport_output
                 .get(&egui::ViewportId::ROOT)
@@ -1449,9 +1455,10 @@ mod tests {
 
         let mut close_count = 0;
         for _ in 0..200 {
-            let output = ctx.run_ui(egui::RawInput::default(), |_ui| {
-                app.update_native_background(&ctx, 0.0, true, false);
-            });
+            let output =
+                crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |_ui| {
+                    app.update_native_background(&ctx, 0.0, true, false);
+                }));
             close_count += output
                 .viewport_output
                 .get(&egui::ViewportId::ROOT)
@@ -1491,7 +1498,8 @@ mod tests {
             1
         );
 
-        let output = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+        let output =
+            crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |_ui| {}));
         assert!(!output
             .viewport_output
             .get(&egui::ViewportId::ROOT)
@@ -1616,9 +1624,10 @@ mod tests {
     /// no `ui`. Returns the root's viewport commands.
     #[cfg(target_os = "linux")]
     fn tick(app: &mut EntropyApp, ctx: &egui::Context, now: f64) -> Vec<egui::ViewportCommand> {
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            app.update_native_background(ui.ctx(), now, false, false);
-        });
+        let output =
+            crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.update_native_background(ui.ctx(), now, false, false);
+            }));
         output
             .viewport_output
             .get(&egui::ViewportId::ROOT)
@@ -1892,7 +1901,7 @@ impl eframe::App for EntropyApp {
         let is_loading = false;
 
         // Main canvas
-        egui::CentralPanel::default().show_inside(root_ui, |ui| {
+        egui::CentralPanel::default().show(root_ui, |ui| {
             #[cfg(not(target_arch = "wasm32"))]
             let reconnecting_with_layout =
                 self.bluetooth_reconnect_active() && self.layout.is_some();
@@ -2147,7 +2156,7 @@ impl eframe::App for EntropyApp {
         }
 
         if self.app_settings.show_made_by_signature && chrome_opacity > 0.01 {
-            egui::Area::new(egui::Id::new("made_by_signature"))
+            egui::Area::new(egui::Id::unique("made_by_signature"))
                 .anchor(egui::Align2::LEFT_BOTTOM, [16.0, -12.0])
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
@@ -2179,7 +2188,7 @@ impl eframe::App for EntropyApp {
         }
 
         if chrome_opacity > 0.01 {
-            egui::Area::new(egui::Id::new("theme_selector"))
+            egui::Area::new(egui::Id::unique("theme_selector"))
                 .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -12.0])
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
@@ -2206,14 +2215,14 @@ impl eframe::App for EntropyApp {
 
         if self.import_report_open {
             let screen_rect = ctx.content_rect();
-            egui::Area::new("import_report_backdrop".into())
+            egui::Area::new(egui::Id::unique("import_report_backdrop"))
                 .order(egui::Order::Foreground)
                 .fixed_pos(screen_rect.min)
                 .show(ctx, |ui| {
                     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen_rect.size());
                     ui.interact(
                         rect,
-                        egui::Id::new("import_report_backdrop_blocker"),
+                        egui::Id::unique("import_report_backdrop_blocker"),
                         egui::Sense::click_and_drag(),
                     );
                     ui.painter().rect_filled(
@@ -2230,7 +2239,7 @@ impl eframe::App for EntropyApp {
             crate::ui_style::centered_modal_window(
                 ctx,
                 &self.import_report_title,
-                egui::Id::new("import_report_window"),
+                egui::Id::unique("import_report_window"),
                 &mut open,
                 Vec2::new(680.0, 620.0),
             )
@@ -2273,13 +2282,16 @@ impl eframe::App for EntropyApp {
 
         if self.keycode_picker.has_open_modal() {
             let screen_rect = ctx.content_rect();
-            egui::Area::new("window_backdrop".into())
+            egui::Area::new(egui::Id::unique("window_backdrop"))
                 .order(egui::Order::Middle)
                 .fixed_pos(screen_rect.min)
                 .show(ctx, |ui| {
                     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen_rect.size());
-                    let response =
-                        ui.interact(rect, ui.id().with("backdrop_click"), egui::Sense::click());
+                    let response = ui.interact(
+                        rect,
+                        ui.scope_id().with("backdrop_click"),
+                        egui::Sense::click(),
+                    );
                     ui.painter().rect_filled(
                         rect,
                         0.0,

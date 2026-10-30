@@ -252,7 +252,7 @@ mod tests {
         app.jump_back_stack.push(2);
         let ctx = egui::Context::default();
         let mut handled = false;
-        let _ = ctx.run_ui(
+        ctx.run_ui(
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key: egui::Key::Escape,
@@ -267,7 +267,8 @@ mod tests {
                 app.editing_layout_visibility = true;
                 handled = app.finish_layout_visibility_edit_on_input(ui.ctx());
             },
-        );
+        )
+        .drop_without_applying_deltas();
         assert!(handled);
         assert!(!app.editing_layout_visibility);
         assert_eq!(app.selected_layer, 4);
@@ -277,7 +278,7 @@ mod tests {
         let pos = egui::pos2(15.0, 15.0);
         app.editing_layout_visibility = true;
         for pressed in [true, false] {
-            let _ = ctx.run_ui(
+            ctx.run_ui(
                 egui::RawInput {
                     events: vec![
                         egui::Event::PointerMoved(pos),
@@ -291,7 +292,8 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| handled = app.finish_layout_visibility_edit_on_input(ui.ctx()),
-            );
+            )
+            .drop_without_applying_deltas();
         }
         assert!(handled);
         assert!(!app.editing_layout_visibility);
@@ -371,7 +373,7 @@ mod tests {
         app.start_layout_visibility_edit();
         let ctx = egui::Context::default();
         let frame = |app: &mut EntropyApp, events| {
-            let _ = ctx.run_ui(
+            ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -393,7 +395,8 @@ mod tests {
                         80.0,
                     );
                 },
-            );
+            )
+            .drop_without_applying_deltas();
         };
         let click = |app: &mut EntropyApp, pos| {
             frame(app, vec![egui::Event::PointerMoved(pos)]);
@@ -461,7 +464,7 @@ mod tests {
         let ctx = egui::Context::default();
         let pos = egui::pos2(300.0, 140.0);
         for pressed in [true, false] {
-            let _ = ctx.run_ui(
+            ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -491,7 +494,8 @@ mod tests {
                         80.0,
                     );
                 },
-            );
+            )
+            .drop_without_applying_deltas();
         }
         assert!(!app.keycode_picker.open);
     }
