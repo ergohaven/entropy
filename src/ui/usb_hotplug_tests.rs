@@ -731,6 +731,7 @@ mod usb_hotplug_tests {
     }
     #[test]
     fn usb_hotplug_does_not_poll_while_hidden_to_tray() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let (mut app, ctx, _) = fixture();
         let (tx, rx) = mpsc::channel();
         app.test_device_scan_requests = Some(tx);
