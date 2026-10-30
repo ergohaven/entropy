@@ -22,7 +22,18 @@ Entropy also reads the selected source's base layout (`EN` or `RU`) for firmware
 Universal Symbols, including on KDE and X11 desktops where the normal layout tracker is
 not IBus.
 
-To remove the Entropy IBus sources:
+On GNOME, registering the engine is not enough: GNOME Shell switches only the sources listed in
+`org.gnome.desktop.input-sources`. This puts English (Entropy) and Russian (Entropy) where English (US)
+and Russian stand, once IBus lists the engine, and `restore` puts them back:
+
+```sh
+./linux/ibus/gnome-input-sources.sh use
+```
+
+On KDE Plasma Wayland, IBus runs only when it is chosen under System Settings → Keyboard → Virtual
+Keyboard (IBus Wayland); add the Entropy sources in IBus Preferences.
+
+To remove the Entropy IBus sources (on GNOME this also restores the layouts they replaced):
 
 ```sh
 ./linux/ibus/uninstall-user.sh

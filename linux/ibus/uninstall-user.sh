@@ -1,9 +1,18 @@
 #!/usr/bin/env sh
 set -eu
 
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 lib_dir="${XDG_DATA_HOME:-$HOME/.local/share}/entropy/ibus"
 component_dir="${XDG_DATA_HOME:-$HOME/.local/share}/ibus/component"
 component_path="$component_dir/entropy-universal-symbols.xml"
+
+# Give GNOME back the layouts the Entropy sources took over, while the record
+# of what they replaced (in $lib_dir) is still there. Entropy passes
+# --keep-gnome-sources when the engine stays registered system-wide, where the
+# sources keep working without this copy.
+if [ "${1:-}" != --keep-gnome-sources ] && [ -f "$script_dir/gnome-input-sources.sh" ]; then
+    sh "$script_dir/gnome-input-sources.sh" restore || true
+fi
 
 if [ -f "$component_path" ]; then
     rm -f "$component_path"
