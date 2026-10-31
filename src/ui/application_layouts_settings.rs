@@ -86,11 +86,7 @@ fn automatic_application_layout_name(
     application: &crate::application_layouts::DetectedApplication,
     excluding_id: Option<&str>,
 ) -> String {
-    let base = if application.display_name.trim().is_empty() {
-        application.executable.trim()
-    } else {
-        application.display_name.trim()
-    };
+    let base = application.name();
     let base = if base.is_empty() { "Application" } else { base };
     if !settings.layout_name_exists(base, excluding_id) {
         return base.to_owned();

@@ -611,7 +611,7 @@ impl DeviceManager {
             }
         }
 
-        log::info!("Found {} Vial device(s)", self.devices.len());
+        log::info!("Found {} compatible device(s)", self.devices.len());
     }
 
     #[cfg(all(test, not(target_os = "macos")))]
@@ -621,7 +621,7 @@ impl DeviceManager {
 
     pub fn replace_devices(&mut self, devices: Vec<Device>) {
         self.devices = devices;
-        log::info!("Found {} Vial device(s)", self.devices.len());
+        log::info!("Found {} compatible device(s)", self.devices.len());
     }
 
     pub fn devices(&self) -> &[Device] {

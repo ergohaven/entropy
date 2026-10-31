@@ -794,8 +794,8 @@ fn fixture() -> (EntropyApp, crate::hid::TestHidRecorder, String) {
     let key = app.application_layout_device_key().unwrap();
     let mut settings = DeviceApplicationLayouts::default();
     let application = settings.create_for_application(&DetectedApplication {
-        executable: "vial".into(),
-        display_name: "Vial".into(),
+        executable: "entropy".into(),
+        display_name: "Entropy".into(),
         ..Default::default()
     });
     settings
@@ -1957,13 +1957,13 @@ fn macropad_application_menu_has_only_unified_layout_actions() {
             .collect();
     }
     assert!(
-        !texts.iter().any(|text| text == "Export application: Vial"),
+        !texts.iter().any(|text| text == "Export application: Entropy"),
         "{texts:?}"
     );
     assert!(
         !texts
             .iter()
-            .any(|text| text == "Import into application: Vial"),
+            .any(|text| text == "Import into application: Entropy"),
         "{texts:?}"
     );
 }
@@ -3213,7 +3213,7 @@ fn reviewed_final_merged_rules_check_alias_overlap_for_existing_ids() {
         .layouts
         .get_mut(&other)
         .unwrap()
-        .application_identities = vec!["vial".into()];
+        .application_identities = vec!["entropy".into()];
     let mut bundle = app.entlayout_snapshot().unwrap();
     // Other is not imported, but remains part of the resulting device set.
     bundle.application_layouts.as_mut().unwrap().remove(&other);

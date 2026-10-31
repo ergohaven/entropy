@@ -246,10 +246,10 @@ fn save_cached_vial_definition(
     match serde_json::to_vec(&cached) {
         Ok(bytes) => {
             if let Err(e) = std::fs::write(path, bytes) {
-                log::warn!("failed to write Vial definition cache: {e}");
+                log::warn!("failed to write keyboard definition cache: {e}");
             }
         }
-        Err(e) => log::warn!("failed to serialize Vial definition cache: {e}"),
+        Err(e) => log::warn!("failed to serialize keyboard definition cache: {e}"),
     }
 }
 
@@ -799,10 +799,10 @@ impl EntropyApp {
                     .map_err(|e| format!("VIA protocol read failed: {e:#}"))?;
                 log::info!("VIA protocol version: {via_protocol}");
 
-                progress("Reading Vial keyboard id…")?;
+                progress("Reading keyboard ID…")?;
                 let (vial_protocol, keyboard_id) = dev_conn
                     .get_keyboard_id()
-                    .map_err(|e| format!("Vial keyboard id read failed: {e:#}"))?;
+                    .map_err(|e| format!("Keyboard ID read failed: {e:#}"))?;
                 log::info!("Vial protocol: {vial_protocol}, keyboard id: {keyboard_id:016X}");
                 let cache_keys = device_cache_keys(&dev, keyboard_id);
                 let cache_key = &cache_keys[0];
@@ -818,7 +818,7 @@ impl EntropyApp {
                 let vial_unlock_status = match dev_conn.get_unlock_status() {
                     Ok(status) => Some(status),
                     Err(error) => {
-                        log::warn!("Vial unlock status read failed during connect: {error:#}");
+                        log::warn!("Keyboard unlock status read failed during connect: {error:#}");
                         None
                     }
                 };
@@ -855,7 +855,7 @@ impl EntropyApp {
                         false
                     });
 
-                progress("Reading Vial layout definition…")?;
+                progress("Reading keyboard layout definition…")?;
                 log::info!("Getting layout JSON…");
                 let definition_size = dev_conn
                     .get_definition_size()
@@ -868,7 +868,7 @@ impl EntropyApp {
                     runtime_firmware_cache_token,
                 ) {
                     log::info!(
-                        "Loaded Vial definition from cache for keyboard id {keyboard_id:016X}, key {source_cache_key}, size {definition_size}"
+                        "Loaded keyboard definition from cache for keyboard id {keyboard_id:016X}, key {source_cache_key}, size {definition_size}"
                     );
                     if source_cache_key != *cache_key {
                         if let Some(runtime_firmware_version) = runtime_firmware_cache_token {
@@ -888,7 +888,7 @@ impl EntropyApp {
                             |completed, total| {
                                 if total > 0 {
                                     progress(&format!(
-                                        "Reading Vial layout definition… {completed}/{total}"
+                                        "Reading keyboard layout definition… {completed}/{total}"
                                     ))
                                     .map_err(anyhow::Error::msg)?;
                                 }
@@ -905,7 +905,7 @@ impl EntropyApp {
                         );
                     } else {
                         log::info!(
-                            "Runtime firmware version unavailable; Vial definition and QMK settings caches disabled"
+                            "Runtime firmware version unavailable; keyboard definition and QMK settings caches disabled"
                         );
                     }
                     json
@@ -941,7 +941,7 @@ impl EntropyApp {
                         Ok(context) => Some(context),
                         Err(error) => {
                             log::warn!(
-                                "failed to fingerprint Vial definition; QMK settings cache disabled: {error}"
+                                "failed to fingerprint keyboard definition; QMK settings cache disabled: {error}"
                             );
                             None
                         }
@@ -1179,13 +1179,13 @@ impl EntropyApp {
                     for (qsid, name) in layer_name_updates {
                         if let Err(e) = dev_conn.set_qmk_setting_string(qsid, &name) {
                             log::warn!(
-                                "Vial set_qmk_setting_string failed while syncing qsid {qsid}: {e}"
+                                "set_qmk_setting_string failed while syncing qsid {qsid}: {e}"
                             );
                         }
                     }
                 }
 
-                progress("Reading Vial-core extras…")?;
+                progress("Reading keyboard features…")?;
                 if !layout.encoders.is_empty() {
                     layout.encoder_layers = vec![vec![0u16; layout.encoders.len()]; layer_count];
                     let encoder_count = layout.encoder_count();

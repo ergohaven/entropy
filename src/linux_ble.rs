@@ -1086,10 +1086,10 @@ impl LinuxBleDevice {
             "{}",
             last_unrelated
                 .or_else(|| last_read_error.map(|error| format!(
-                    "Bluetooth Vial timeout; direct reply read failed: {error}"
+                    "Bluetooth timeout; direct reply read failed: {error}"
                 )))
                 .unwrap_or_else(|| {
-                    "Bluetooth Vial timeout — keyboard did not respond".to_owned()
+                    "Bluetooth timeout — keyboard did not respond".to_owned()
                 })
         )
     }

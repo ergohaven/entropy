@@ -31,7 +31,7 @@ install_rule() {
         exit 1
     fi
 
-    printf '%s\n' "Installed Vial udev rule: $rule_path"
+    printf '%s\n' "Installed Entropy device access rule: $rule_path"
 }
 
 if [ "${1:-}" = "--as-root" ]; then

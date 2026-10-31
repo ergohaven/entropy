@@ -147,7 +147,7 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn fail_vial_unlock_poll(&mut self, error: String) {
-        log::warn!("Vial unlock poll failed; retrying: {error}");
+        log::warn!("Keyboard unlock poll failed; retrying: {error}");
         self.status_msg = crate::i18n::tr_catalog_format(
             self.app_settings.language,
             "status_messages.unlock_poll_retry",

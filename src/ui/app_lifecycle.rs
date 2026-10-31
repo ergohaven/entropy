@@ -1928,7 +1928,7 @@ impl eframe::App for EntropyApp {
                     return;
                 }
                 #[cfg(target_os = "linux")]
-                if !super::app_settings_ui::linux_vial_udev_rules_installed()
+                if !super::app_settings_ui::linux_device_udev_rules_installed()
                     && !self
                         .device_manager
                         .devices()
@@ -1947,7 +1947,7 @@ impl eframe::App for EntropyApp {
                             ui.label(
                                 RichText::new(crate::i18n::tr_catalog(
                                     self.app_settings.language,
-                                    "connection.linux_vial_udev_required_title",
+                                    "connection.linux_device_udev_required_title",
                                 ))
                                 .size(20.0)
                                 .strong()
@@ -1963,7 +1963,7 @@ impl eframe::App for EntropyApp {
                                 egui::Label::new(
                                     RichText::new(crate::i18n::tr_catalog(
                                         self.app_settings.language,
-                                        "connection.linux_vial_udev_required_body",
+                                        "connection.linux_device_udev_required_body",
                                     ))
                                     .size(13.0)
                                     .color(app_muted_text(self.dark_mode)),
@@ -1976,14 +1976,14 @@ impl eframe::App for EntropyApp {
                                 ui,
                                 crate::i18n::tr_catalog(
                                     self.app_settings.language,
-                                    "ui.install_vial_udev_rules",
+                                    "ui.install_device_udev_rules",
                                 ),
                                 egui::vec2(168.0, 34.0),
                                 true,
                             )
                             .clicked()
                             {
-                                self.run_linux_vial_udev_rules_install();
+                                self.run_linux_device_udev_rules_install();
                                 self.start_device_scan();
                             }
                         });
@@ -2022,7 +2022,7 @@ impl eframe::App for EntropyApp {
                         ui.label(
                             RichText::new(crate::i18n::tr_catalog(
                                 self.app_settings.language,
-                                "connection.connect_vial_device",
+                                "connection.connect_device",
                             ))
                             .size(13.0)
                             .color(app_muted_text(self.dark_mode)),

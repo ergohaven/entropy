@@ -386,7 +386,7 @@ impl EntropyApp {
                                             &new_name,
                                         ) {
                                             log::warn!(
-                                                "Vial set_qmk_setting_string failed for layer {}: {}",
+                                                "set_qmk_setting_string failed for layer {}: {}",
                                                 selected,
                                                 e
                                             );

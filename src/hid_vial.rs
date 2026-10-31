@@ -26,7 +26,7 @@ impl HidDevice {
     pub fn get_definition_size(&self) -> Result<u32> {
         let resp = self
             .usb_send(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_GET_SIZE])
-            .context("failed to read Vial definition size")?;
+            .context("failed to read keyboard definition size")?;
         // response: size as little-endian u32 starting at byte 0
         Ok(u32::from_le_bytes([resp[0], resp[1], resp[2], resp[3]]))
     }
@@ -49,7 +49,7 @@ impl HidDevice {
         if sz == 0 || sz > 2_000_000 {
             bail!("Invalid definition size: {sz}");
         }
-        log::info!("Vial definition compressed size: {sz} bytes");
+        log::info!("Keyboard definition compressed size: {sz} bytes");
 
         let mut payload = Vec::with_capacity(sz);
         let mut block: u32 = 0;
@@ -64,7 +64,7 @@ impl HidDevice {
             cmd[2..6].copy_from_slice(&block.to_le_bytes());
             let resp = self
                 .usb_send(&cmd)
-                .with_context(|| format!("failed to read Vial definition block {block}"))?;
+                .with_context(|| format!("failed to read keyboard definition block {block}"))?;
 
             let chunk = remaining.min(MSG_LEN);
             payload.extend_from_slice(&resp[..chunk]);
@@ -83,14 +83,14 @@ impl HidDevice {
             // fallback: try raw LZMA
             decompressed.clear();
             lzma_rs::lzma_decompress(&mut &payload[..], &mut decompressed)
-                .context("Failed to decompress vial definition (tried xz and lzma)")?;
+                .context("Failed to decompress keyboard definition (tried xz and lzma)")?;
         }
 
         let json_str =
-            std::str::from_utf8(&decompressed).context("Vial definition is not valid UTF-8")?;
+            std::str::from_utf8(&decompressed).context("Keyboard definition is not valid UTF-8")?;
 
         let value: serde_json::Value =
-            serde_json::from_str(json_str).context("Failed to parse vial JSON")?;
+            serde_json::from_str(json_str).context("Failed to parse keyboard definition JSON")?;
         Ok(value)
     }
 
@@ -106,7 +106,7 @@ impl HidDevice {
     pub(crate) fn get_unlock_status_with_progress(&self) -> Result<(bool, bool, Vec<(u8, u8)>)> {
         let resp = self
             .usb_send(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_GET_UNLOCK_STATUS])
-            .context("failed to read Vial unlock status")?;
+            .context("failed to read keyboard unlock status")?;
         // resp[0] = unlocked (1=yes), resp[1] = unlock_in_progress
         // resp[2..] = pairs of (row, col), rest filled with 0xFF
         let (unlocked, keys) = parse_unlock_status_response(&resp);
@@ -121,7 +121,7 @@ impl HidDevice {
     /// Start unlock sequence — returns keys to hold (row, col pairs)
     pub fn unlock_start(&self) -> Result<()> {
         self.usb_send(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_UNLOCK_START])
-            .context("failed to start Vial unlock sequence")?;
+            .context("failed to start keyboard unlock sequence")?;
         self.unlock_confirmation_pending
             .store(false, std::sync::atomic::Ordering::Release);
         Ok(())
@@ -140,7 +140,7 @@ impl HidDevice {
 
         let resp = self
             .usb_send(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_UNLOCK_POLL])
-            .context("failed to poll Vial unlock status")?;
+            .context("failed to poll keyboard unlock status")?;
         // resp[0] = unlocked, resp[1] = in_progress, resp[2] = counter
         let mut unlocked = resp[0] == 1;
         let mut in_progress = resp[1] == 1;
@@ -168,7 +168,7 @@ impl HidDevice {
     /// Lock the keyboard
     pub fn lock(&self) -> Result<()> {
         self.usb_send(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_LOCK])
-            .context("failed to lock Vial device")?;
+            .context("failed to lock keyboard")?;
         self.unlock_confirmation_pending
             .store(false, std::sync::atomic::Ordering::Release);
         Ok(())

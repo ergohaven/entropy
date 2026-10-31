@@ -120,7 +120,7 @@ impl EntropyApp {
         for row_idx in row_range {
             #[cfg(target_os = "linux")]
             if row_idx == 5 {
-                self.draw_linux_vial_udev_rules_row(
+                self.draw_linux_device_udev_rules_row(
                     ui,
                     content_width,
                     row_height,
@@ -673,7 +673,7 @@ impl EntropyApp {
     }
 
     #[cfg(target_os = "linux")]
-    fn draw_linux_vial_udev_rules_row(
+    fn draw_linux_device_udev_rules_row(
         &mut self,
         ui: &mut egui::Ui,
         content_width: f32,
@@ -684,40 +684,40 @@ impl EntropyApp {
     ) {
         let lang = self.app_settings.language;
         let tooltip = (!suppress_tooltips)
-            .then_some(crate::i18n::tr_catalog(lang, "ui.vial_udev_rules_tooltip"));
+            .then_some(crate::i18n::tr_catalog(lang, "ui.device_udev_rules_tooltip"));
 
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
             content_width,
             row_height,
-            crate::i18n::tr_catalog(lang, "ui.vial_udev_rules_label"),
+            crate::i18n::tr_catalog(lang, "ui.device_udev_rules_label"),
             true,
             tooltip,
             metrics.settings_control_width(),
             |ui| {
-                if linux_vial_udev_rules_installed() {
+                if linux_device_udev_rules_installed() {
                     draw_app_settings_value(
                         ui,
                         metrics,
-                        crate::i18n::tr_catalog(lang, "ui.vial_udev_rules_installed"),
+                        crate::i18n::tr_catalog(lang, "ui.device_udev_rules_installed"),
                         app_muted_text(dark),
                     );
                 } else if crate::ui_style::modern_button(
                     ui,
-                    crate::i18n::tr_catalog(lang, "ui.install_vial_udev_rules"),
+                    crate::i18n::tr_catalog(lang, "ui.install_device_udev_rules"),
                     metrics.size(168.0, 34.0),
                     true,
                 )
                 .clicked()
                 {
-                    self.run_linux_vial_udev_rules_install();
+                    self.run_linux_device_udev_rules_install();
                 }
             },
         );
     }
 
     #[cfg(target_os = "linux")]
-    pub(super) fn run_linux_vial_udev_rules_install(&mut self) {
+    pub(super) fn run_linux_device_udev_rules_install(&mut self) {
         let script = "linux/udev/install-vial-rules.sh";
         let Some(script_path) = crate::linux_setup::setup_script_path(script) else {
             self.status_msg = format!("Could not find {script}; run it from the Entropy folder");
@@ -728,15 +728,15 @@ impl EntropyApp {
         self.status_msg = match output {
             Ok(output) if output.status.success() => crate::i18n::tr_catalog(
                 self.app_settings.language,
-                "ui.vial_udev_rules_installed_status",
+                "ui.device_udev_rules_installed_status",
             )
             .to_owned(),
             Ok(output) => {
                 let details = command_output_summary(&output.stderr, &output.stdout);
                 if details.is_empty() {
-                    format!("Vial udev rules install failed: {}", output.status)
+                    format!("Entropy device access rules install failed: {}", output.status)
                 } else {
-                    format!("Vial udev rules install failed: {details}")
+                    format!("Entropy device access rules install failed: {details}")
                 }
             }
             Err(err) => format!("Could not run {}: {err}", script_path.display()),
@@ -789,7 +789,7 @@ fn draw_app_settings_value(
 }
 
 #[cfg(target_os = "linux")]
-pub(super) fn linux_vial_udev_rules_installed() -> bool {
+pub(super) fn linux_device_udev_rules_installed() -> bool {
     const RULE_PATHS: [&str; 4] = [
         "/etc/udev/rules.d/59-vial.rules",
         "/run/udev/rules.d/59-vial.rules",
@@ -799,13 +799,13 @@ pub(super) fn linux_vial_udev_rules_installed() -> bool {
 
     RULE_PATHS.iter().any(|path| {
         std::fs::read_to_string(path)
-            .map(|contents| vial_udev_rule_is_current(&contents))
+            .map(|contents| device_udev_rule_is_current(&contents))
             .unwrap_or(false)
     })
 }
 
 #[cfg(target_os = "linux")]
-fn vial_udev_rule_is_current(contents: &str) -> bool {
+fn device_udev_rule_is_current(contents: &str) -> bool {
     const VERSION_MARKER: &str = "# Entropy Vial hidraw access v2";
     const USB_RULE_MARKER: &str = r#"ATTRS{serial}=="*vial:f64c2b3c*""#;
     const ERGOHAVEN_BLUETOOTH_RULE_MARKER: &str = r#"KERNELS=="0005:E126:*""#;
@@ -838,7 +838,7 @@ fn command_output_summary(primary: &[u8], fallback: &[u8]) -> String {
 
 #[cfg(all(test, target_os = "linux"))]
 mod linux_udev_tests {
-    use super::vial_udev_rule_is_current;
+    use super::device_udev_rule_is_current;
 
     const OLD_RULE: &str = r#"KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{serial}=="*vial:f64c2b3c*", MODE="0660", GROUP="1000", TAG+="uaccess""#;
     const CURRENT_RULE: &str = r#"# Entropy Vial hidraw access v2
@@ -847,12 +847,12 @@ KERNEL=="hidraw*", SUBSYSTEM=="hidraw", KERNELS=="0005:E126:*", MODE="0660", GRO
 
     #[test]
     fn old_usb_only_rule_requires_upgrade() {
-        assert!(!vial_udev_rule_is_current(OLD_RULE));
+        assert!(!device_udev_rule_is_current(OLD_RULE));
     }
 
     #[test]
     fn current_rule_covers_usb_and_ergohaven_bluetooth() {
-        assert!(vial_udev_rule_is_current(CURRENT_RULE));
+        assert!(device_udev_rule_is_current(CURRENT_RULE));
     }
 
     #[test]
@@ -867,6 +867,6 @@ KERNEL=="hidraw*", SUBSYSTEM=="hidraw", KERNELS=="0005:E126:*", MODE="0660", GRO
     fn packaged_udev_rule_is_accepted() {
         let packaged = include_str!("../../packaging/linux/59-vial.rules");
 
-        assert!(vial_udev_rule_is_current(packaged));
+        assert!(device_udev_rule_is_current(packaged));
     }
 }
