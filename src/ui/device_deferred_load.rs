@@ -144,8 +144,7 @@ pub(super) fn run_deferred_load(
             let qsid = 200 + *layer as u16;
             let firmware_name = if context.supported_qmk_settings.contains(&qsid) {
                 match hid.get_qmk_setting_string(qsid) {
-                    Ok(name) if !name.trim().is_empty() => Some(name),
-                    Ok(_) => None,
+                    Ok(name) => Some(name),
                     Err(error) => {
                         log::warn!(
                             "get_qmk_setting_string(layer name qsid {qsid}) during staged load: {error}"
@@ -206,8 +205,7 @@ pub(super) fn run_deferred_load(
                 BackgroundLayerStep::FirmwareName => {
                     let qsid = 200 + *layer as u16;
                     let firmware_name = match hid.get_qmk_setting_string(qsid) {
-                        Ok(name) if !name.trim().is_empty() => Some(name),
-                        Ok(_) => None,
+                        Ok(name) => Some(name),
                         Err(error) => {
                             log::warn!(
                                 "get_qmk_setting_string(layer name qsid {qsid}) during background load: {error}"
@@ -1070,7 +1068,7 @@ impl EntropyApp {
                     }
                 }
             }
-            if let Some(name) = firmware_name.filter(|name| !name.trim().is_empty()) {
+            if let Some(name) = firmware_name {
                 if let Some(layer_name) = layout.layer_names.get_mut(layer) {
                     *layer_name = name.clone();
                 }
@@ -1517,6 +1515,43 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn cleared_firmware_layer_name_survives_foreground_and_background_loads() {
+        let (hid, _) = crate::hid::HidDevice::test_device();
+        let mut context = context();
+        context.supported_qmk_settings = std::sync::Arc::new(vec![200]);
+        let context = std::sync::Arc::new(context);
+        for request in [
+            DeferredLoadRequest::Layer { layer: 0, context: context.clone() },
+            DeferredLoadRequest::BackgroundLayerStep {
+                layer: 0, step: BackgroundLayerStep::FirmwareName, context: context.clone(),
+            },
+        ] {
+            let name = match run_deferred_load(&hid, &request).unwrap() {
+                DeferredLoadPayload::Layer { firmware_name, .. } => firmware_name,
+                DeferredLoadPayload::BackgroundLayerStep {
+                    result: BackgroundLayerStepResult::FirmwareName(name), ..
+                } => name,
+                _ => panic!("unexpected layer response"),
+            };
+            assert_eq!(name, Some(String::new()));
+        }
+
+        let mut app = EntropyApp::new_inert_for_test();
+        app.layout = Some(KeyboardLayout::from_vial_json(&serde_json::json!({
+            "name": "Cleared", "matrix": {"rows": 1, "cols": 1},
+            "layouts": {"keymap": [["0,0"]]}, "layer_names": ["Old"]
+        })).unwrap());
+        app.layer_names = vec!["Old".into()];
+        app.apply_deferred_layer(0, vec![0], vec![], vec![], None);
+        assert_eq!(app.layer_names[0], "Old", "missing read must preserve the cached name");
+        app.apply_deferred_layer(0, vec![0], vec![], vec![], Some(String::new()));
+        assert_eq!(app.layer_names[0], "");
+        assert_eq!(app.layout.as_ref().unwrap().layer_names[0], "");
+        assert_eq!(app.keycode_picker.layer_names[0], "");
+    }
 
     fn context() -> DeferredDeviceLoadContext {
         DeferredDeviceLoadContext {

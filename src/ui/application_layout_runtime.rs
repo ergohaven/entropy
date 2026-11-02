@@ -443,9 +443,7 @@ impl EntropyApp {
             return;
         };
         let name = self.editing_layer_text.trim().to_owned();
-        if !name.is_empty() {
-            self.rename_application_layout_layer(&layout_id, layer, name);
-        }
+        self.rename_application_layout_layer(&layout_id, layer, name);
         self.editing_layer = None;
         self.editing_layer_text.clear();
         self.editing_layer_focus_requested = false;
@@ -2943,8 +2941,107 @@ mod tests {
         assert_eq!(app.editing_layer, Some(app.selected_layer));
         name_review_frame(app, ctx, vec![egui::Event::Key { key:egui::Key::A,physical_key:None,pressed:true,repeat:false,
             modifiers:egui::Modifiers { command:true,ctrl:true,..Default::default() } }]);
-        name_review_frame(app, ctx, vec![egui::Event::Text(name.into())]);
+        let replacement = if name.is_empty() {
+            egui::Event::Key { key: egui::Key::Backspace, physical_key: None, pressed: true,
+                repeat: false, modifiers: egui::Modifiers::NONE }
+        } else {
+            egui::Event::Text(name.into())
+        };
+        name_review_frame(app, ctx, vec![replacement]);
         name_review_frame(app, ctx, vec![egui::Event::Key { key:egui::Key::Enter,physical_key:None,pressed:true,repeat:false,modifiers:egui::Modifiers::NONE }]);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn cleared_layer_name_commits_from_ui_and_remains_editable() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        for mode in 0..3 {
+            let ctx = egui::Context::default();
+            let mut app = name_review_app();
+            let key = app.application_layout_device_key().unwrap();
+            let settings = app.app_settings.application_layouts.get_mut(&key).unwrap();
+            let profile = if mode == 2 {
+                settings.create_for_application(&crate::application_layouts::DetectedApplication {
+                    executable: "clear-name.exe".into(), ..Default::default()
+                })
+            } else {
+                crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID.to_owned()
+            };
+            settings.active_layout_id = profile.clone();
+            settings.editor_layout_id = profile.clone();
+            settings.layouts.get_mut(&profile).unwrap().set_layer_name(0, "Old".into());
+            app.application_layout_editor_active = mode != 0;
+            app.layer_names[0] = "Old".into();
+            app.layout.as_mut().unwrap().layer_names[0] = "Old".into();
+            let (hid, packets) = crate::hid::HidDevice::test_device();
+            let store = std::sync::Arc::new(std::sync::Mutex::new("Old".to_owned()));
+            let firmware = store.clone();
+            packets.respond_by(move |r| {
+                if r[..4] == [0xfe, 0x0b, 200, 0] {
+                    let end = r[4..].iter().position(|b| *b == 0).unwrap_or(28);
+                    *firmware.lock().unwrap() = String::from_utf8(r[4..4 + end].to_vec()).unwrap();
+                    Some(Ok([0; 32]))
+                } else if r[..4] == [0xfe, 0x0a, 200, 0] {
+                    let name = firmware.lock().unwrap();
+                    let mut response = [0; 32];
+                    response[1..1 + name.len()].copy_from_slice(name.as_bytes());
+                    Some(Ok(response))
+                } else { None }
+            });
+            app.hid_device = Some(hid);
+            name_review_rename(&mut app, &ctx, "");
+            name_review_drain(&mut app, &ctx);
+            assert_eq!(app.editing_layer, None);
+            if mode == 2 {
+                assert_eq!(*store.lock().unwrap(), "Old");
+                assert!(!packets.requests().iter().any(|r| r[..2] == [0xfe, 0x0b]));
+            } else {
+                assert_eq!(*store.lock().unwrap(), "", "mode {mode}: clear did not reach firmware");
+                assert_eq!(app.layer_names[0], "");
+                assert_eq!(crate::app::app_storage::load_layer_names("Macropad")[0], "");
+            }
+            if mode != 0 {
+                assert_eq!(app.app_settings.application_layouts[&key].layouts[&profile].layer_names[0], "");
+                assert_eq!(crate::app::app_storage::load_app_settings().application_layouts[&key].layouts[&profile].layer_names[0], "");
+            }
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.draw_layout_layer_switcher_and_hints(ui, 0.0, 0.0, 52.0);
+            });
+            assert!(output.shapes.iter().any(|shape| matches!(
+                &shape.shape, egui::Shape::Text(text) if text.galley.text() == "0"
+            )), "an unnamed layer must display its number");
+            // Clicking the number of an unnamed layer must still start editing.
+            name_review_rename(&mut app, &ctx, "Restored");
+            name_review_drain(&mut app, &ctx);
+            let names = if mode == 0 { app.layer_names.clone() } else { app.application_layout_editor_layer_names() };
+            assert_eq!(names[0], "Restored");
+
+            let writes = packets.requests().len();
+            app.editing_layer = Some(0);
+            app.editing_layer_layout_id = (mode != 0).then(|| profile.clone());
+            app.editing_layer_text.clear();
+            name_review_frame(&mut app, &ctx, vec![egui::Event::Key {
+                key: egui::Key::Escape, physical_key: None, pressed: true,
+                repeat: false, modifiers: egui::Modifiers::NONE,
+            }]);
+            let names = if mode == 0 { app.layer_names.clone() } else { app.application_layout_editor_layer_names() };
+            assert_eq!(names[0], "Restored", "Escape must cancel clearing");
+            assert_eq!(packets.requests().len(), writes);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn cleared_pending_layer_name_commits_when_leaving_editor() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let mut app = name_review_app();
+        let key = app.application_layout_device_key().unwrap();
+        app.editing_layer = Some(0);
+        app.editing_layer_layout_id = Some(crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID.into());
+        app.editing_layer_text = "  ".into();
+        app.commit_pending_application_layout_edits();
+        assert_eq!(app.app_settings.application_layouts[&key].layouts[crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID].layer_names[0], "");
+        assert_eq!(app.editing_layer, None);
     }
 
     #[cfg(not(target_arch = "wasm32"))]

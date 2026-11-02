@@ -389,7 +389,7 @@ fn layer_name_sync_updates(
 
             let current = current_names.get(layer)?.as_deref()?;
             let name = name.trim();
-            if name.is_empty() || current == name {
+            if current == name {
                 None
             } else {
                 Some((qsid, name.to_owned()))
@@ -1130,10 +1130,10 @@ impl EntropyApp {
                             })?
                         {
                             *current_firmware_name = Some(name.clone());
-                            if !name.is_empty() {
-                                layout.layer_names[layer] = name;
-                                layer_names_from_firmware[layer] = true;
-                            }
+                            // A successful empty read is an unnamed layer, not
+                            // absent storage: do not resurrect a stale local name.
+                            layout.layer_names[layer] = name;
+                            layer_names_from_firmware[layer] = true;
                         }
                     }
                 }
@@ -1962,6 +1962,13 @@ mod tests {
         let current = vec![None, None];
 
         assert!(layer_name_sync_updates(&names, &current, &[1, 2, 3]).is_empty());
+    }
+
+    #[test]
+    fn cleared_layer_name_sync_writes_empty_only_when_supported_and_read() {
+        let names = vec![String::new(); 3];
+        let current = vec![Some("Old".into()), None, Some("Old".into())];
+        assert_eq!(layer_name_sync_updates(&names, &current, &[200, 201]), vec![(200, String::new())]);
     }
 
     #[test]
