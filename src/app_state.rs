@@ -2242,6 +2242,9 @@ pub(crate) struct BehaviorSettingsState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LayerLedColorSetting {
+    /// Firmware layer identity, present only for a verified U8 palette contract.
+    /// Legacy reads and BT profile colors have no portable layer contract.
+    pub(crate) portable_layer: Option<usize>,
     pub(crate) qsid: u16,
     pub(crate) linked_qsids: Vec<u16>,
     pub(crate) value: u8,
@@ -2252,6 +2255,7 @@ pub(crate) struct LayerLedColorSetting {
 impl LayerLedColorSetting {
     pub(crate) fn new(qsid: u16, value: u8) -> Self {
         Self {
+            portable_layer: None,
             qsid,
             linked_qsids: Vec::new(),
             value,
@@ -2261,6 +2265,7 @@ impl LayerLedColorSetting {
 
     pub(crate) fn with_linked_qsids(qsid: u16, linked_qsids: Vec<u16>, value: u8) -> Self {
         Self {
+            portable_layer: None,
             qsid,
             linked_qsids,
             value,

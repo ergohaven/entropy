@@ -2676,6 +2676,21 @@ impl EntropyApp {
         }
 
         verified_portable_settings.retain(|setting| !failed_layer_colors.contains(&setting.id));
+        // A failed verification can follow a successful SET. Refresh instead of
+        // exporting the old value or using it to skip a later restore.
+        for color in &mut self.layer_led_settings.layer_colors {
+            if color.portable_layer.is_some_and(|layer| {
+                failed_layer_colors.contains(&format!("layer_led_color:{layer}"))
+            }) {
+                match hid.get_qmk_setting_u8(color.qsid) {
+                    Ok(value) => {
+                        color.value = value;
+                        color.loaded = true;
+                    }
+                    Err(_) => color.loaded = false,
+                }
+            }
+        }
 
         if self.current_device_is_likely_rmk() {
             for setting in &verified_portable_settings {
@@ -4201,6 +4216,164 @@ mod tests {
         assert_eq!(writes, vec![(300, 16), (301, 16), (302, 16), (303, 16)]);
     }
 
+    fn layer_color_definition(layer: usize, qsid: u16) -> serde_json::Value {
+        serde_json::json!({"settings": [{"name": "LEDs settings", "fields": [{
+            "type": "select", "title": format!("Layer {layer} color"),
+            "qsid": qsid, "variants": LAYER_LED_PALETTE
+        }]}]})
+    }
+
+    fn layer_color_app_from_definition(definition: &serde_json::Value, color: u8) -> EntropyApp {
+        let mut app = phenom_app(color);
+        app.supported_qmk_settings.push(400);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        recorder.respond_by(move |request| {
+            (request[..2] == [0xfe, 0x0a]).then(|| {
+                let mut response = [0; 32];
+                response[1] = color;
+                Ok(response)
+            })
+        });
+        app.layer_led_settings = EntropyApp::read_layer_led_settings(
+            definition,
+            &app.supported_qmk_settings,
+            app.layer_count,
+            &hid,
+        );
+        app
+    }
+
+    #[test]
+    fn entlayout_layer_colors_preserve_sparse_firmware_layer_identity() {
+        let source = layer_color_app_from_definition(&layer_color_definition(0, 300), 16);
+        let target = layer_color_app_from_definition(&layer_color_definition(1, 300), 0);
+        let source_settings = source.entlayout_portable_settings_snapshot();
+        let target_settings = target.entlayout_portable_settings_snapshot();
+        assert_eq!(target_settings[0].id, "layer_led_color:1");
+        let plan = plan_entlayout_portable_settings_import(&source_settings, &target_settings);
+        assert!(plan.compatible.is_empty());
+        assert_eq!(plan.report.incompatible, 1);
+        let sparse_source = layer_color_app_from_definition(&layer_color_definition(1, 300), 16);
+        let plan = plan_entlayout_portable_settings_import(
+            &sparse_source.entlayout_portable_settings_snapshot(),
+            &target_settings,
+        );
+        assert_eq!(plan.compatible.len(), 1);
+    }
+
+    #[test]
+    fn entlayout_layer_colors_reject_unverified_firmware_contracts() {
+        let source = phenom_app(16).entlayout_portable_settings_snapshot();
+        for linked in [false, true] {
+            for invalid in 0..7 {
+                let mut definition = layer_color_definition(0, 300);
+                let fields = definition["settings"][0]["fields"].as_array_mut().unwrap();
+                if linked {
+                    let mut alias = fields[0].clone();
+                    alias["qsid"] = serde_json::json!(400);
+                    fields.push(alias);
+                }
+                let field = fields.last_mut().unwrap();
+                match invalid {
+                    0 => field["variants"].as_array_mut().unwrap().swap(2, 16),
+                    1 => {
+                        field.as_object_mut().unwrap().remove("variants");
+                    }
+                    2 => field["width"] = serde_json::json!(2),
+                    3 => field["width"] = serde_json::json!(257),
+                    4 => field["type"] = serde_json::json!("integer"),
+                    5 => field["bit"] = serde_json::json!(0),
+                    _ => field["variants"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(serde_json::Value::Null),
+                }
+                let target = layer_color_app_from_definition(&definition, 0);
+                let target_settings = target.entlayout_portable_settings_snapshot();
+                assert!(
+                    target_settings.is_empty(),
+                    "linked={linked}, invalid={invalid}"
+                );
+                assert!(
+                    plan_entlayout_portable_settings_import(&source, &target_settings)
+                        .compatible
+                        .is_empty()
+                );
+            }
+        }
+        let legacy = layer_color_app_from_definition(&serde_json::json!({}), 0);
+        assert!(legacy.entlayout_portable_settings_snapshot().is_empty());
+    }
+
+    #[test]
+    fn entlayout_layer_colors_reject_other_led_register_aliases() {
+        for title in ["LED brightness", "LED timeout", "BT profile 1 color"] {
+            let mut definition = layer_color_definition(0, 300);
+            let fields = definition["settings"][0]["fields"].as_array_mut().unwrap();
+            let mut other = fields[0].clone();
+            other["title"] = serde_json::json!(title);
+            fields.push(other);
+            let app = layer_color_app_from_definition(&definition, 16);
+            assert!(
+                app.entlayout_portable_settings_snapshot().is_empty(),
+                "{title}"
+            );
+        }
+    }
+
+    #[test]
+    fn entlayout_layer_colors_failed_verification_invalidates_stale_export() {
+        let bundle = phenom_app(16).entlayout_snapshot().unwrap();
+        let mut target = phenom_app(0);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        recorder.respond_by(|request| {
+            (request[..2] == [0xfe, 0x0a]).then(|| Err("GET failed after SET".to_owned()))
+        });
+        target.hid_device = Some(hid);
+        let (_, _, report) = target.apply_entlayout(&bundle).unwrap();
+        assert_eq!(report.failed, 4);
+        assert!(target.entlayout_portable_settings_snapshot().is_empty());
+    }
+
+    #[test]
+    fn entlayout_layer_colors_failed_verification_refreshes_before_restore() {
+        let bundle = phenom_app(16).entlayout_snapshot().unwrap();
+        let mut target = phenom_app(0);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        let reads = std::sync::atomic::AtomicUsize::new(0);
+        recorder.respond_by(move |request| {
+            (request[..2] == [0xfe, 0x0a]).then(|| {
+                if reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 4 {
+                    Err("verification failed after SET".to_owned())
+                } else {
+                    let mut response = [0; 32];
+                    response[1] = 16;
+                    Ok(response)
+                }
+            })
+        });
+        target.hid_device = Some(hid);
+        let (_, _, report) = target.apply_entlayout(&bundle).unwrap();
+        assert_eq!(report.failed, 4);
+        assert!(target
+            .entlayout_portable_settings_snapshot()
+            .iter()
+            .all(|s| s.value == 16));
+        let old = phenom_app(0).entlayout_snapshot().unwrap();
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        target.hid_device = Some(hid);
+        let (_, _, report) = target.apply_entlayout(&old).unwrap();
+        assert_eq!(report.imported, 4);
+        assert_eq!(
+            recorder
+                .requests()
+                .iter()
+                .filter(|r| r[..2] == [0xfe, 0x0b])
+                .count(),
+            4
+        );
+    }
+
     #[test]
     fn entlayout_layer_colors_skip_unloaded_unsupported_and_invalid_values() {
         let mut app = phenom_app(16);
@@ -4351,7 +4524,8 @@ mod tests {
         target.hid_device = Some(hid);
         let (_, _, report) = target.apply_entlayout(&bundle).unwrap();
         assert_eq!(report.failed, 1);
-        assert_eq!(target.layer_led_settings.layer_colors[0].value, 0);
+        assert_eq!(target.layer_led_settings.layer_colors[0].value, 16);
+        assert_eq!(target.entlayout_portable_settings_snapshot()[0].value, 16);
         let (hid, recorder) = crate::hid::HidDevice::test_device();
         target.hid_device = Some(hid);
         let (failures, _, report) = target.apply_entlayout(&bundle).unwrap();
@@ -4375,8 +4549,8 @@ mod tests {
         target.supported_qmk_settings.push(400);
         let definition = serde_json::json!({
             "settings": [{"name": "LEDs settings", "fields": [
-                {"type": "select", "title": "Layer 0 color", "qsid": 300},
-                {"type": "select", "title": "Layer 0 color", "qsid": 400}
+                {"type": "select", "title": "Layer 0 color", "qsid": 300, "variants": LAYER_LED_PALETTE},
+                {"type": "select", "title": "Layer 0 color", "qsid": 400, "variants": LAYER_LED_PALETTE}
             ]}]
         });
         let (hid, recorder) = crate::hid::HidDevice::test_device();

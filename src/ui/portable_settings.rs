@@ -272,7 +272,10 @@ impl EntropyApp {
         });
         settings.extend(modules);
         if self.layer_led_settings.supported {
-            for (layer, color) in self.layer_led_settings.layer_colors.iter().enumerate() {
+            for color in &self.layer_led_settings.layer_colors {
+                let Some(layer) = color.portable_layer else {
+                    continue;
+                };
                 if !color.loaded || layer >= self.layer_count {
                     continue;
                 }
