@@ -2130,6 +2130,11 @@ mod tests {
     fn macropad_layer_paste_survives_native_background_reconciliation() {
         let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let (mut app, recorder, ctx) = macropad_fixture();
+        // Keep desktop foreground discovery from routing this Default paste to
+        // an installed application's profile during the native background tick.
+        let settings = app.application_layout_settings_mut().unwrap();
+        settings.automatic_switching_enabled = false;
+        settings.active_layout_id = crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID.into();
         // Make every non-target binding explicit: runtime UNSET seeding is not
         // a layer-paste mutation. Allow normal preset migration before snapshot.
         for profile in app
@@ -2150,8 +2155,13 @@ mod tests {
         let before = app.application_layout_settings().unwrap().clone();
         app.selected_layer = 0;
         click_layer_menu(&mut app, &ctx, 0);
+        assert!(app.layer_clipboard.is_some(), "Copy menu action did not run");
         app.selected_layer = 1;
         click_layer_menu(&mut app, &ctx, 1);
+        assert!(
+            app.layer_write_task.is_some(),
+            "Paste must start a firmware write"
+        );
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         while app.layer_write_task.is_some() {
             app.tick_layout_import_lifecycle_for_test(&ctx, 0.2);
