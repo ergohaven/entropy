@@ -386,7 +386,10 @@ impl EntropyApp {
 
     fn draw_key_override_editor_content(&mut self, ui: &mut egui::Ui, _two_column: bool) {
         let dark = ui.visuals().dark_mode;
-        if self.firmware != FirmwareProtocol::Vial {
+        if !matches!(
+            self.firmware,
+            FirmwareProtocol::Vial | FirmwareProtocol::Rynk
+        ) {
             crate::ui_style::modal_empty_state(
                 ui,
                 "Key Overrides are not supported for this firmware",

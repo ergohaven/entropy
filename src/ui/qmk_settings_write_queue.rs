@@ -316,7 +316,7 @@ mod tests {
         {
             let ctx = egui::Context::default();
             let (hid_device, recorder) = crate::hid::HidDevice::test_device();
-            app.hid_device = Some(hid_device);
+            app.hid_device = Some(hid_device.into());
             app.touchpad_settings.scroll_sens = 14;
             app.qmk_settings_write_queue
                 .enqueue(request(122, 8, 14, std::time::Instant::now()));
@@ -334,7 +334,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = test_app();
         let (hid_device, recorder) = crate::hid::HidDevice::test_device();
-        app.hid_device = Some(hid_device);
+        app.hid_device = Some(hid_device.into());
         app.combo_entries = vec![ComboEntry {
             keys: [0x0004, 0x0005, 0, 0],
             output: 0x0006.into(),
@@ -373,7 +373,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = test_app();
         let (hid_device, recorder) = crate::hid::HidDevice::test_device();
-        app.hid_device = Some(hid_device);
+        app.hid_device = Some(hid_device.into());
         let target = crate::device::Device {
             name: "Test Keyboard".to_owned(),
             vendor_id: 0x1209,
@@ -410,7 +410,7 @@ mod tests {
             1,
             crate::hid::TestHidFault::Disconnect,
         )));
-        app.hid_device = Some(hid_device);
+        app.hid_device = Some(hid_device.into());
         app.touchpad_settings.scroll_sens = 10;
 
         app.debounce_touchpad_setting_write(&ctx, "Scroll sensitivity".to_owned(), 122, 8, 10);

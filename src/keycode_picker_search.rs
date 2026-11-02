@@ -260,6 +260,7 @@ mod tests {
     fn every_row_of_every_visible_tab_is_indexed() {
         let mut picker = KeycodePicker {
             supports_rmk_native_key_actions: true,
+            supports_universal_numero: false,
             supports_universal_symbols: true,
             supports_universal_russian_letters: true,
             rmk_native_key_actions_allowed_for_target: true,
@@ -500,6 +501,7 @@ mod tests {
     #[test]
     fn finds_universal_symbols_when_firmware_supports_them() {
         let mut picker = KeycodePicker {
+            supports_universal_numero: false,
             supports_universal_symbols: true,
             supports_rmk_native_key_actions: true,
             rmk_native_key_actions_allowed_for_target: true,
@@ -522,6 +524,7 @@ mod tests {
 
         // Without RMK actions allowed for the target, universal entries vanish.
         let mut gated = KeycodePicker {
+            supports_universal_numero: false,
             supports_universal_symbols: true,
             supports_rmk_native_key_actions: true,
             rmk_native_key_actions_allowed_for_target: false,

@@ -188,14 +188,17 @@ pub(crate) use hid_keymap::keycode_writeback_readback;
 
 #[path = "hid_settings.rs"]
 mod hid_settings;
-pub(crate) use hid_settings::BatteryHalves;
+pub(crate) use hid_settings::{qmk_setting_string_value, BatteryHalves};
 
 #[path = "hid_vial.rs"]
 mod hid_vial;
+pub(crate) use hid_vial::decode_vial_definition;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub struct HidDevice {
     backend: HidBackend,
+    pub(crate) native_capabilities:
+        std::sync::Mutex<Option<crate::rmk_native::RmkNativeCapabilities>>,
     unlock_confirmation_pending: std::sync::atomic::AtomicBool,
     read_only: Option<ReadOnlyHidSession>,
 }
@@ -215,7 +218,6 @@ pub(crate) struct ReadOnlyHidSession {
 struct ReadOnlyHidLedger {
     refused: Vec<[u8; MSG_LEN]>,
     failed_reads: Vec<[u8; MSG_LEN]>,
-    closed: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -254,9 +256,6 @@ impl ReadOnlyHidSession {
         data: &[u8],
         send: impl FnOnce() -> Result<[u8; MSG_LEN]>,
     ) -> Result<[u8; MSG_LEN]> {
-        if self.ledger().closed {
-            bail!("The read-only HID session has ended");
-        }
         if !is_read_request(data) {
             return Err(self.refuse(data));
         }
@@ -275,12 +274,6 @@ impl ReadOnlyHidSession {
     /// Reads that reached the transport and failed there.
     pub(crate) fn failed_reads(&self) -> Vec<[u8; MSG_LEN]> {
         self.ledger().failed_reads.clone()
-    }
-
-    /// From now on every handle in this session fails before the transport,
-    /// so a worker left behind cannot reach a keyboard lent back to its owner.
-    pub(crate) fn close(&self) {
-        self.ledger().closed = true;
     }
 }
 
@@ -305,9 +298,7 @@ pub(crate) struct TestHidRecorder {
     responses: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<[u8; MSG_LEN]>>>,
     responder: std::sync::Arc<std::sync::Mutex<Option<TestHidResponder>>>,
     output_connected: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    retired: std::sync::Arc<std::sync::atomic::AtomicBool>,
     output_hook: std::sync::Arc<std::sync::Mutex<Option<Box<dyn FnMut(&[u8]) + Send>>>>,
-    bluetooth: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(test)]
@@ -333,26 +324,9 @@ impl TestHidRecorder {
         *self.responder.lock().unwrap() = Some(Box::new(responder));
     }
 
-    /// Makes the scripted keyboard a Bluetooth one, which connects staged.
-    pub(crate) fn set_bluetooth(&self) {
-        self.bluetooth
-            .store(true, std::sync::atomic::Ordering::Release);
-    }
-
     pub(crate) fn disconnect_output(&self) {
         self.output_connected
             .store(false, std::sync::atomic::Ordering::Release);
-    }
-
-    /// Retires the scripted connection as a timed-out helper retires its
-    /// proxy: every later request fails, and the transport reports it.
-    pub(crate) fn retire_transport(&self) {
-        self.retired
-            .store(true, std::sync::atomic::Ordering::Release);
-    }
-
-    fn is_retired(&self) -> bool {
-        self.retired.load(std::sync::atomic::Ordering::Acquire)
     }
 
     fn ensure_output_connected(&self) -> Result<()> {
@@ -394,13 +368,12 @@ enum HidBackend {
     Proxy(std::sync::Arc<HidProxy>),
     #[cfg(target_os = "linux")]
     LinuxBle(crate::linux_ble::LinuxBleDevice),
-    // Shared, so a read-only view talks to the same scripted keyboard.
     #[cfg(test)]
     Test {
         recorder: TestHidRecorder,
-        combo: std::sync::Arc<std::sync::Mutex<([u16; 4], u16)>>,
-        qmk_settings: std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<u16, u16>>>,
-        fault_after_requests: std::sync::Arc<std::sync::Mutex<Option<(usize, TestHidFault)>>>,
+        combo: std::sync::Mutex<([u16; 4], u16)>,
+        qmk_settings: std::sync::Mutex<std::collections::BTreeMap<u16, u16>>,
+        fault_after_requests: std::sync::Mutex<Option<(usize, TestHidFault)>>,
     },
 }
 
@@ -482,9 +455,7 @@ impl HidDevice {
             #[cfg(target_os = "linux")]
             HidBackend::LinuxBle(_) => true,
             #[cfg(test)]
-            HidBackend::Test { recorder, .. } => recorder
-                .bluetooth
-                .load(std::sync::atomic::Ordering::Acquire),
+            HidBackend::Test { .. } => false,
         }
     }
 
@@ -642,6 +613,45 @@ fn device_info_matches(info: &hidapi::DeviceInfo, device: &crate::device::Device
         && device.permits_hid_target(&device_from_info(info))
 }
 
+/// The usage page and usage of a Rynk board's vendor report, which the OS HID
+/// stack lists for a board paired over Bluetooth.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn is_rynk_report(info: &hidapi::DeviceInfo) -> bool {
+    info.usage_page() == 0xFF14 && info.usage() == 0x61
+}
+
+/// A Rynk report endpoint as its helper opens it: the endpoint's own path, so
+/// the helper checks the same identity a Vial helper does.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn rynk_report_device(info: &hidapi::DeviceInfo) -> crate::device::Device {
+    crate::device::Device {
+        firmware: crate::firmware::FirmwareProtocol::Rynk,
+        ..device_from_info(info)
+    }
+}
+
+/// A Rynk board's report endpoint, held by a helper as a Vial endpoint is.
+/// Reports carry the link's bytes; the protocol stays with the caller.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct RawReportChannel(HidProxy);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl RawReportChannel {
+    pub(crate) fn open(device: &crate::device::Device) -> Result<Self> {
+        Ok(Self(HidProxy::open(device)?))
+    }
+
+    /// One output report of at most 32 bytes; the helper pads it.
+    pub(crate) fn write(&self, data: &[u8]) -> Result<()> {
+        self.0.write_output_report(data)
+    }
+
+    /// One input report, empty when none came within `timeout`.
+    pub(crate) fn read(&self, timeout: Duration) -> Result<Vec<u8>> {
+        self.0.read_raw_report(timeout)
+    }
+}
+
 fn device_from_info(info: &hidapi::DeviceInfo) -> crate::device::Device {
     let path = info.path().to_string_lossy().into_owned();
     crate::device::Device {
@@ -676,19 +686,16 @@ impl HidDevice {
             responder: Default::default(),
             output_hook: Default::default(),
             output_connected: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            retired: Default::default(),
-            bluetooth: Default::default(),
         };
         let device = Self {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: None,
             backend: HidBackend::Test {
                 recorder: recorder.clone(),
-                combo: Default::default(),
-                qmk_settings: Default::default(),
-                fault_after_requests: std::sync::Arc::new(std::sync::Mutex::new(
-                    fault_after_requests,
-                )),
+                combo: std::sync::Mutex::new(([0; 4], 0)),
+                qmk_settings: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+                fault_after_requests: std::sync::Mutex::new(fault_after_requests),
             },
         };
         (device, recorder)
@@ -701,33 +708,6 @@ impl HidDevice {
         let (mut device, recorder) = Self::test_device();
         device.read_only = Some(session);
         (device, recorder)
-    }
-
-    /// Another handle on this transport that goes through `session`, so it
-    /// can only read whatever asks: a running instance lends it to a console
-    /// export. `None` for a transport only its owner can use.
-    pub(crate) fn read_only_view(&self, session: ReadOnlyHidSession) -> Option<Self> {
-        let backend = match &self.backend {
-            HidBackend::Proxy(proxy) => HidBackend::Proxy(proxy.clone()),
-            #[cfg(test)]
-            HidBackend::Test {
-                recorder,
-                combo,
-                qmk_settings,
-                fault_after_requests,
-            } => HidBackend::Test {
-                recorder: recorder.clone(),
-                combo: combo.clone(),
-                qmk_settings: qmk_settings.clone(),
-                fault_after_requests: fault_after_requests.clone(),
-            },
-            _ => return None,
-        };
-        Some(Self {
-            backend,
-            unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
-            read_only: Some(session),
-        })
     }
 
     #[cfg(test)]
@@ -749,6 +729,36 @@ impl HidDevice {
         Self::open_proxy_for(device)
     }
 
+    /// A Rynk board's report endpoint, opened by its helper only as listed now
+    /// and claimed from the UI process, as a Vial endpoint is.
+    fn open_rynk_reports_in_helper(device: &crate::device::Device) -> Result<hidapi::HidDevice> {
+        let open = || -> Result<hidapi::HidDevice> {
+            #[cfg(target_os = "macos")]
+            let _hid_lock = macos_hid_operation_lock();
+            let api = hidapi::HidApi::new().context("Failed to init hidapi")?;
+            let info = api
+                .device_list()
+                .find(|info| is_rynk_report(info) && info.path().to_string_lossy() == device.path)
+                .context("HID device disconnected before it opened")?;
+            let listed = device_from_info(info);
+            if !device.permits_hid_target(&listed) {
+                bail!("HID device disconnected or endpoint identity changed during open");
+            }
+            claim_open_target(&listed)?;
+            info.open_device(&api)
+                .context("Failed to open the Rynk HID endpoint")
+        };
+        #[cfg(target_os = "macos")]
+        return with_macos_bluetooth_hid_access(
+            device.is_bluetooth_transport(),
+            crate::smart_input::input_monitoring_access_granted,
+            crate::smart_input::request_input_monitoring_access,
+            open,
+        );
+        #[cfg(not(target_os = "macos"))]
+        open()
+    }
+
     // Called only by the helper on its main thread, never by the UI process.
     fn open_in_helper(device: &crate::device::Device) -> Result<Self> {
         #[cfg(target_os = "linux")]
@@ -757,6 +767,7 @@ impl HidDevice {
                 Ok(bluez_device) => {
                     return Ok(Self {
                         unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+                        native_capabilities: std::sync::Mutex::new(None),
                         read_only: read_only_hid_session(),
                         backend: HidBackend::LinuxBle(bluez_device),
                     })
@@ -781,8 +792,6 @@ impl HidDevice {
     pub(crate) fn is_transport_available(&self) -> bool {
         match &self.backend {
             HidBackend::Proxy(proxy) => proxy.is_available(),
-            #[cfg(test)]
-            HidBackend::Test { recorder, .. } => !recorder.is_retired(),
             _ => true,
         }
     }
@@ -794,7 +803,9 @@ impl HidDevice {
         match &self.backend {
             HidBackend::Proxy(proxy) => proxy.host_output.with_settings_write_paused(operation),
             #[cfg(test)]
-            HidBackend::Test { recorder, .. } => recorder.host_output.with_settings_write_paused(operation),
+            HidBackend::Test { recorder, .. } => {
+                recorder.host_output.with_settings_write_paused(operation)
+            }
             _ => operation(),
         }
     }
@@ -862,6 +873,7 @@ impl HidDevice {
     fn open_proxy_for(device: &crate::device::Device) -> Result<Self> {
         Ok(Self {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: read_only_hid_session(),
             backend: HidBackend::Proxy(std::sync::Arc::new(HidProxy::open(device)?)),
         })
@@ -910,6 +922,7 @@ impl HidDevice {
             let write_framing = detect_hid_write_framing(&hid_device, transport)?;
             return Ok(Self {
                 unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+                native_capabilities: std::sync::Mutex::new(None),
                 read_only: read_only_hid_session(),
                 backend: HidBackend::Local {
                     device: hid_device,
@@ -1016,9 +1029,6 @@ impl HidDevice {
                     .lock()
                     .unwrap_or_else(|error| error.into_inner())
                     .push(request);
-                if recorder.is_retired() {
-                    bail!("HID helper timed out or disconnected");
-                }
 
                 let fault = {
                     let mut pending = fault_after_requests

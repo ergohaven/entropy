@@ -325,11 +325,11 @@ fn save_cached_qmk_settings(cache_key: &str, context: &QmkSettingsCacheContext, 
     }
 }
 
-fn normalize_reported_layer_count(reported_layer_count: usize) -> usize {
+pub(super) fn normalize_reported_layer_count(reported_layer_count: usize) -> usize {
     reported_layer_count.max(1)
 }
 
-fn use_device_name_for_unnamed_layout(layout: &mut KeyboardLayout, device_name: &str) {
+pub(super) fn use_device_name_for_unnamed_layout(layout: &mut KeyboardLayout, device_name: &str) {
     if layout.name.trim().is_empty() || layout.name.eq_ignore_ascii_case("unknown") {
         let device_name = device_name.trim();
         if !device_name.is_empty() {
@@ -354,24 +354,28 @@ fn is_default_layer_name(index: usize, name: &str) -> bool {
         || trimmed.eq_ignore_ascii_case(&format!("layer {index}"))
 }
 
-fn has_firmware_layer_names(names: &[String]) -> bool {
+pub(super) fn has_firmware_layer_names(names: &[String]) -> bool {
     names
         .iter()
         .enumerate()
         .any(|(index, name)| !is_default_layer_name(index, name))
 }
 
+#[test]
+fn version_compat_connect_rejects_unknown_native_version() {
+    let (device, recorder) = crate::hid::HidDevice::test_device();
+    recorder.respond_by(|r| {
+        let mut out = *r;
+        out[3..6].copy_from_slice(&[3, 1, 0]);
+        Some(Ok(out))
+    });
+    assert!(rmk_native_capabilities(&device).is_err());
+}
+
 fn rmk_native_capabilities(
     dev_conn: &crate::hid::HidDevice,
 ) -> anyhow::Result<crate::rmk_native::RmkNativeCapabilities> {
-    match dev_conn.get_rmk_native_capabilities() {
-        Ok(capabilities) => Ok(capabilities),
-        Err(error) if crate::hid::is_transport_disconnect_error(&error) => Err(error),
-        Err(error) => {
-            log::debug!("RMK native capabilities unavailable: {error:#}");
-            Ok(crate::rmk_native::RmkNativeCapabilities::default())
-        }
-    }
+    dev_conn.get_rmk_native_capabilities()
 }
 
 fn firmware_layer_name(
@@ -388,7 +392,7 @@ fn firmware_layer_name(
     }
 }
 
-fn layer_name_sync_updates(
+pub(super) fn layer_name_sync_updates(
     names: &[String],
     current_names: &[Option<String>],
     supported_qmk_settings: &[u16],
@@ -671,6 +675,7 @@ impl EntropyApp {
             self.selected_key = None;
             self.selected_encoder = None;
             self.keycode_picker.open = false;
+            self.keycode_picker.supports_universal_numero = false;
             self.reset_matrix_tester_state();
         } else {
             self.status_msg = format!(
@@ -763,7 +768,9 @@ impl EntropyApp {
                 .expect("test connect worker receiver");
             return;
         }
-        let supplied_hid = self.connect_hid.take();
+        #[cfg(test)]
+        let test_hid = self.test_connect_hid.take();
+        let language = self.app_settings.language;
 
         std::thread::spawn(move || {
             let progress = |message: &str| -> Result<(), String> {
@@ -774,6 +781,9 @@ impl EntropyApp {
                 Ok(())
             };
             let result = (|| -> Result<ConnectResult, String> {
+                if dev.firmware == FirmwareProtocol::Rynk {
+                    return Self::connect_rynk(&dev, language, &progress);
+                }
                 use crate::hid::HidDevice;
 
                 progress("Opening HID device…")?;
@@ -783,10 +793,13 @@ impl EntropyApp {
                     dev.vendor_id,
                     dev.product_id
                 );
-                let opened = match supplied_hid {
+                #[cfg(test)]
+                let opened = match test_hid {
                     Some(hid) => Ok(hid),
                     None => HidDevice::open_fresh_for(&dev),
                 };
+                #[cfg(not(test))]
+                let opened = HidDevice::open_fresh_for(&dev);
                 let dev_conn = opened.map_err(|e| format!("Open failed: {e:#}"))?;
                 let standby_animation_load = Self::device_uses_automatic_display_host_data(&dev)
                     .then(|| dev_conn.pause_standby_animation_for_load());
@@ -1099,6 +1112,7 @@ impl EntropyApp {
                         format!("RMK native key-action capability read failed: {error:#}")
                     })?;
                 let supports_rmk_native_key_actions = rmk_native_capabilities.key_actions;
+                let supports_universal_numero = rmk_native_capabilities.universal_numero;
                 let supports_universal_symbols = rmk_native_capabilities.universal_symbols;
                 let supports_universal_russian_letters = rmk_native_capabilities.russian_letters;
                 let supports_rmk_native_combo_output = rmk_native_capabilities.combo_output;
@@ -1533,6 +1547,7 @@ impl EntropyApp {
                         rgb_supported: layout.supports_rgb,
                         lighting_mode: layout.lighting_mode.clone(),
                         supports_rmk_native_key_actions,
+                        supports_universal_numero,
                         supports_universal_symbols,
                         supports_universal_russian_letters,
                         supports_rmk_native_combo_output,
@@ -1584,6 +1599,7 @@ impl EntropyApp {
                     caps_word: vial_features.caps_word,
                     layer_lock: vial_features.layer_lock,
                     qmk_settings: !supported_qmk_settings.is_empty(),
+                    rynk: None,
                 };
 
                 progress("Applying keyboard layout…")?;
@@ -1592,12 +1608,13 @@ impl EntropyApp {
                     device_name: dev.name.clone(),
                     keyboard_id,
                     vial_unlock_status,
-                    hid_device: Some(dev_conn),
+                    hid_device: Some(dev_conn.into()),
                     about_info,
                     layer_names_from_firmware,
                     macro_texts,
                     supports_macro_ext_keycodes,
                     supports_rmk_native_key_actions,
+                    supports_universal_numero,
                     supports_universal_symbols,
                     supports_universal_russian_letters,
                     supports_rmk_native_combo_output,
@@ -1628,6 +1645,7 @@ impl EntropyApp {
                     layer_count,
                     supported_qmk_settings,
                     deferred_load,
+                    rynk_read_losses: Vec::new(),
                 })
             })();
 

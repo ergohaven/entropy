@@ -282,7 +282,8 @@ impl EntropyApp {
         let packed = Self::pack_layout_option_values(&options, &values);
         self.layout_options_value = Some(packed);
         #[cfg(not(target_arch = "wasm32"))]
-        if Self::is_universal_geometry_layout_option(&options[option_idx]) {
+        if self.layout.as_ref().is_some_and(|layout| layout.firmware == FirmwareProtocol::Vial)
+            && Self::is_universal_geometry_layout_option(&options[option_idx]) {
             self.queue_universal_geometry_write(packed);
             return;
         }

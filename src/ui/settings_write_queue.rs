@@ -408,7 +408,7 @@ pub(super) struct SettingsWriteTask {
 
 #[cfg(not(target_arch = "wasm32"))]
 struct SettingsWriteResult {
-    hid_device: Option<crate::hid::HidDevice>,
+    hid_device: Option<crate::device_session::DeviceSession>,
     request: SettingsWriteRequest,
     result: Result<u16, ModuleSettingWritebackError>,
     disconnected: bool,
@@ -416,7 +416,7 @@ struct SettingsWriteResult {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn run_settings_write(
-    hid: &crate::hid::HidDevice,
+    hid: &crate::device_session::DeviceSession,
     request: &SettingsWriteRequest,
 ) -> (Result<u16, ModuleSettingWritebackError>, bool) {
     let policy = if request
@@ -432,7 +432,7 @@ fn run_settings_write(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn retry_sm62_setting_io<T>(
-    hid: &crate::hid::HidDevice,
+    hid: &crate::device_session::DeviceSession,
     qsid: u16,
     mut operation: impl FnMut() -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
@@ -483,7 +483,7 @@ fn setting_readback_delay(qsid: u16, attempt: usize) -> std::time::Duration {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn write_qmk_setting_value(
-    hid: &crate::hid::HidDevice,
+    hid: &crate::device_session::DeviceSession,
     qsid: u16,
     width: u8,
     requested: u16,
@@ -1117,6 +1117,7 @@ mod tests {
     #[test]
     fn sm62_setting_io_retries_a_transient_timeout() {
         let (hid, _) = crate::hid::HidDevice::test_device();
+        let hid = crate::device_session::DeviceSession::from(hid);
         let mut attempts = 0;
         let result = retry_sm62_setting_io(&hid, 230, || {
             attempts += 1;
@@ -1132,6 +1133,7 @@ mod tests {
     #[test]
     fn sm62_setting_io_does_not_retry_a_physical_disconnect() {
         let (hid, _) = crate::hid::HidDevice::test_device();
+        let hid = crate::device_session::DeviceSession::from(hid);
         let mut attempts = 0;
         let result = retry_sm62_setting_io(&hid, 235, || -> anyhow::Result<()> {
             attempts += 1;
@@ -1600,6 +1602,7 @@ mod tests {
     #[test]
     fn tap_hold_and_one_shot_writes_match_vial_set_without_readback() {
         let (hid_device, recorder) = crate::hid::HidDevice::test_device();
+        let hid_device = crate::device_session::DeviceSession::from(hid_device);
         let tap_hold = SettingsWriteRequest {
             id: 1,
             generation: 0,
@@ -1637,6 +1640,7 @@ mod tests {
         let (hid_device, recorder) = crate::hid::HidDevice::test_device_with_fault_after_requests(
             Some((0, crate::hid::TestHidFault::IgnoreQmkSettingSet)),
         );
+        let hid_device = crate::device_session::DeviceSession::from(hid_device);
         let request = SettingsWriteRequest {
             id: 1,
             generation: 0,

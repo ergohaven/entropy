@@ -112,7 +112,7 @@ impl EntropyApp {
                     .iter()
                     .any(|qsid| self.supported_qmk_settings.contains(qsid));
             let show_update_indicator = crate::app::update_available(&self.update_check);
-            let show_matrix_item = self.firmware == FirmwareProtocol::Vial;
+            let show_matrix_item = self.has_keyboard_lock();
             let is_unlocked = self.vial_unlocked == Some(true);
             #[cfg(not(target_arch = "wasm32"))]
             let vial_hid_idle = vial_lock_control_idle(
@@ -123,7 +123,7 @@ impl EntropyApp {
             #[cfg(target_arch = "wasm32")]
             let vial_hid_idle = true;
             let lock_menu_state = vial_lock_menu_state(
-                self.firmware == FirmwareProtocol::Vial,
+                self.has_keyboard_lock(),
                 self.layout.is_some(),
                 self.vial_unlock_polling,
                 self.unlock_open,

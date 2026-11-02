@@ -181,7 +181,9 @@ impl KeycodePicker {
                 .map(|cell| cell.row)
                 .collect(),
             KeycodeTab::Symbols | KeycodeTab::Media => self.keycode_table_rows(tab),
-            KeycodeTab::UniversalSymbols => universal_symbol_rows(self.language),
+            KeycodeTab::UniversalSymbols => {
+                universal_symbol_rows(self.language, self.supports_universal_numero)
+            }
             KeycodeTab::Layers => self.layer_rows(KeycodeTab::Layers),
             KeycodeTab::Modifiers => self.modifier_rows(),
             KeycodeTab::Rgb => self.rgb_rows(),
@@ -238,6 +240,7 @@ impl KeycodePicker {
             self.supports_persistent_default_layer,
             self.supports_rmk_native_key_actions,
             self.supports_universal_symbols,
+            self.supports_universal_numero,
             self.supports_universal_russian_letters,
             self.rmk_native_key_actions_allowed_for_target,
         ]
@@ -376,6 +379,11 @@ impl KeycodePicker {
                 self.assign_keycode_value(value);
             }
             PickerAction::Assign(binding) => {
+                if crate::universal_symbols::binding_contains_numero(binding)
+                    && !self.supports_universal_numero
+                {
+                    return;
+                }
                 self.result = Some(binding);
                 self.open = false;
             }
@@ -480,6 +488,7 @@ mod tests {
     fn full_picker() -> KeycodePicker {
         KeycodePicker {
             supports_rmk_native_key_actions: true,
+            supports_universal_numero: false,
             supports_universal_symbols: true,
             supports_universal_russian_letters: true,
             rmk_native_key_actions_allowed_for_target: true,

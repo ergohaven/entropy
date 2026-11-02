@@ -84,10 +84,18 @@ let
 
   engineNames = config: map (drv: drv.pname or drv.name) config.i18n.inputMethod.ibus.engines;
 
+  udevRules = lib.findFirst (
+    drv: drv.pname or drv.name == "entropy-vial-udev-rules"
+  ) null bare.services.udev.packages;
+
   nixosAssertions = [
     # The app and the Vial rule are what `enable` is for.
     (lib.assertMsg (hasPackage "entropy" bare.environment.systemPackages) "programs.entropy.enable does not install the entropy package")
     (lib.assertMsg (hasPackage "entropy-vial-udev-rules" bare.services.udev.packages) "the Vial udev rule is missing from services.udev.packages")
+
+    # Rynk boards are claimed through usbfs, so the rule has to grant their USB
+    # device node, not a hidraw one.
+    (lib.assertMsg (lib.hasInfix ''SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="e126", ATTR{serial}=="rynk:*"'' udevRules.text) "the udev rule does not grant Rynk boards on USB")
 
     # The rule names a group; both the dedicated default and an override have
     # to exist so the installed rule never points at a missing group.

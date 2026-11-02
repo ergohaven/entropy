@@ -162,7 +162,7 @@ pub(super) fn ent_portable_setting_contracts_match(
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn write_entlayout_portable_setting(
-    hid: &crate::hid::HidDevice,
+    hid: &crate::device_session::DeviceSession,
     setting: &EntPortableSetting,
 ) -> anyhow::Result<()> {
     let policy = settings_write_queue::qmk_setting_write_policy(setting.qsid);
@@ -444,6 +444,7 @@ mod tests {
     #[test]
     fn standard_setting_write_uses_one_set_without_readback() {
         let (hid, recorder) = crate::hid::HidDevice::test_device();
+        let hid = crate::device_session::DeviceSession::from(hid);
 
         write_entlayout_portable_setting(&hid, &setting(7, EntPortableSettingWidth::U16, 200))
             .unwrap();
@@ -456,6 +457,7 @@ mod tests {
     #[test]
     fn touchpad_setting_write_uses_delayed_verified_readback() {
         let (hid, recorder) = crate::hid::HidDevice::test_device();
+        let hid = crate::device_session::DeviceSession::from(hid);
 
         write_entlayout_portable_setting(&hid, &setting(121, EntPortableSettingWidth::U8, 42))
             .unwrap();

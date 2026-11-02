@@ -1,5 +1,5 @@
-# Entropy Vial hidraw access v2
-# Vial-compatible HID devices: grant access to the active local user.
+# Entropy keyboard access v3
+# Vial-compatible HID devices and Rynk boards: grant access to the active local user.
 # TAG+="uaccess" hands the device to the logged-in session via systemd-logind,
 # so no static group membership is required.
 # Первая строка — маркер версии правила: по нему приложение отличает актуальное
@@ -7,6 +7,10 @@
 # и без неё пакет считается не настроившим доступ.
 # Второе правило — для Bluetooth: у подключённых по BLE устройств серийный номер
 # Vial в hidraw не виден, остаётся только идентификатор шины HID (0005 = BLUETOOTH).
-# Оно должно совпадать с тем, что ставит linux/udev/install-vial-rules.sh.
+# Третье правило — для Rynk-плат по USB: Entropy забирает их vendor-интерфейс
+# через usbfs, поэтому доступ нужен к самому usb_device, а не к hidraw.
+# uaccess срабатывает, только если правило стоит раньше 73-seat-late.rules.
+# Правила должны совпадать с тем, что ставит linux/udev/install-vial-rules.sh.
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{serial}=="*vial:f64c2b3c*", MODE="0660", TAG+="uaccess", TAG+="udev-acl"
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", KERNELS=="0005:E126:*", MODE="0660", TAG+="uaccess", TAG+="udev-acl"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="e126", ATTR{serial}=="rynk:*", MODE="0660", TAG+="uaccess", TAG+="udev-acl"

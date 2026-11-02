@@ -365,7 +365,7 @@ fn app(unlocked: bool) -> (EntropyApp, egui::Context, crate::hid::TestHidRecorde
     app.vial_unlocked = Some(unlocked);
     let (hid, recorder) = crate::hid::HidDevice::test_device();
     app.shared_hid_output = hid.shared_output();
-    app.hid_device = Some(hid);
+    app.hid_device = Some(hid.into());
     (app, ctx, recorder)
 }
 

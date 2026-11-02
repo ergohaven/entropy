@@ -370,6 +370,30 @@ pub(crate) fn rmk_firmware_release_target(
     })
 }
 
+/// What a Rynk build's package adds to its board's asset name, so that a Vial
+/// package of the board never passes for one, whatever the release numbering.
+const RYNK_ASSET_SUFFIX: &str = "-rynk";
+
+/// The release a Rynk board updates from: its board's, under Rynk's own asset.
+pub(crate) fn rynk_firmware_release_target(
+    vendor_id: u16,
+    product_id: u16,
+    firmware_version: Option<&str>,
+    board_definition: &serde_json::Value,
+    legacy_qube: bool,
+) -> Option<FirmwareReleaseTarget> {
+    let mut target = rmk_firmware_release_target(
+        vendor_id,
+        product_id,
+        firmware_version,
+        board_definition,
+        legacy_qube,
+        true,
+    )?;
+    target.asset_prefix.push_str(RYNK_ASSET_SUFFIX);
+    Some(target)
+}
+
 fn legacy_rmk_asset_prefix(product_id: u16, qube: bool) -> Option<&'static str> {
     match (product_id, qube) {
         (0x0036, false) => Some("op36"),
@@ -1117,6 +1141,44 @@ mod tests {
 
         assert_eq!(result.latest_version, "v0.1.4");
         assert_eq!(result.asset.name, "k03-v0.1.4.zip");
+        assert_eq!(result.relation, VersionRelation::UpdateAvailable);
+    }
+
+    #[test]
+    fn a_rynk_board_takes_only_rynk_packages() {
+        let target = rynk_firmware_release_target(
+            ERGOHAVEN_VENDOR_ID,
+            0x0072,
+            Some("0.2.0"),
+            &serde_json::json!({
+                "firmware": {"name": "RMK"},
+                "entropy": {"firmwareUpdate": {"asset": "k04-mini-qube"}}
+            }),
+            true,
+        )
+        .unwrap();
+        let vial_releases = || {
+            vec![
+                release("v0.2.0", false, false, &["k04-mini-qube-v0.2.0.zip"]),
+                release("v0.3.0", false, false, &["k04-mini-qube-v0.3.0.zip"]),
+            ]
+        };
+
+        assert!(
+            build_firmware_update_result(&target, vial_releases()).is_none(),
+            "a Vial package is no update for a Rynk board"
+        );
+
+        let mut releases = vial_releases();
+        releases.push(release(
+            "v0.2.1",
+            false,
+            false,
+            &["k04-mini-qube-v0.2.1.zip", "k04-mini-qube-rynk-v0.2.1.zip"],
+        ));
+        let result = build_firmware_update_result(&target, releases).unwrap();
+
+        assert_eq!(result.asset.name, "k04-mini-qube-rynk-v0.2.1.zip");
         assert_eq!(result.relation, VersionRelation::UpdateAvailable);
     }
 

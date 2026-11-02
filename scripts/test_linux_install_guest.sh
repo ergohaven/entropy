@@ -90,7 +90,7 @@ done
 [[ "$(stat -c '%a' /usr/bin/entropy)" == 755 ]] || fail "/usr/bin/entropy mode is $(stat -c '%a' /usr/bin/entropy), want 755"
 [[ "$(stat -c '%a' /usr/lib/udev/rules.d/59-vial.rules)" == 644 ]] ||
 	fail "udev rule mode is $(stat -c '%a' /usr/lib/udev/rules.d/59-vial.rules), want 644"
-grep -qxF '# Entropy Vial hidraw access v2' /usr/lib/udev/rules.d/59-vial.rules ||
+grep -qxF '# Entropy keyboard access v3' /usr/lib/udev/rules.d/59-vial.rules ||
 	fail "installed udev rule lacks the version marker"
 
 echo "== $FAMILY: runtime"

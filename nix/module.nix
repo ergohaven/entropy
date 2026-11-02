@@ -24,21 +24,25 @@
 let
   cfg = config.programs.entropy;
 
-  # Mirrors linux/udev/install-vial-rules.sh: match Vial's magic serial and the
-  # Ergohaven Bluetooth HID id, then hand the node to the local session.
+  # Mirrors linux/udev/install-vial-rules.sh: match Vial's magic serial, the
+  # Ergohaven Bluetooth HID id and Rynk boards on USB, then hand the node to
+  # the local session.
   #
   # Shipped as a package rather than through services.udev.extraRules because
   # the app looks for a file named exactly 59-vial.rules under /etc, /run,
   # /usr/lib or /lib (src/ui/app_settings.rs: linux_vial_udev_rules_installed).
   # extraRules is merged into 99-local.rules, which would leave Entropy claiming
-  # the rule is missing even though hidraw access works.
+  # the rule is missing even though hidraw access works. It also comes after
+  # 73-seat-late.rules, where uaccess is applied, so a Rynk board would stay
+  # out of reach.
   vialUdevRules = pkgs.writeTextFile {
     name = "entropy-vial-udev-rules";
     destination = "/lib/udev/rules.d/59-vial.rules";
     text = ''
-      # Entropy Vial hidraw access v2
+      # Entropy keyboard access v3
       KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{serial}=="*vial:f64c2b3c*", MODE="0660", GROUP="${cfg.group}", TAG+="uaccess", TAG+="udev-acl"
       KERNEL=="hidraw*", SUBSYSTEM=="hidraw", KERNELS=="0005:E126:*", MODE="0660", GROUP="${cfg.group}", TAG+="uaccess", TAG+="udev-acl"
+      SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="e126", ATTR{serial}=="rynk:*", MODE="0660", GROUP="${cfg.group}", TAG+="uaccess", TAG+="udev-acl"
     '';
   };
 in
@@ -62,9 +66,10 @@ in
       default = "entropy";
       example = "plugdev";
       description = ''
-        Group granted read/write access to Vial hidraw devices. Members can
-        talk to the keyboard even where uaccess does not apply (over SSH, or
-        from a session that does not own the seat).
+        Group granted read/write access to Vial hidraw devices and Rynk
+        boards on USB. Members can talk to the keyboard even where uaccess
+        does not apply (over SSH, or from a session that does not own the
+        seat).
 
         The dedicated `entropy` group is used by default instead of a broad
         input-device group. The configured group is created if it does not

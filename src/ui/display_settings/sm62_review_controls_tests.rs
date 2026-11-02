@@ -30,7 +30,7 @@ fn setup() -> (EntropyApp, egui::Context, crate::hid::TestHidRecorder) {
     hid.set_qmk_setting_u8(DISPLAY_TIMEOUT_QSID, 0).unwrap();
     let qsids: Vec<_> = (230..=249).chain([DISPLAY_TIMEOUT_QSID]).collect();
     app.display_settings = crate::app::app_state::load_display_settings(&hid, &qsids).unwrap();
-    app.hid_device = Some(hid);
+    app.hid_device = Some(hid.into());
     (app, ctx, recorder)
 }
 

@@ -263,7 +263,11 @@ impl EntropyApp {
     }
 
     fn set_rgb_effect(&mut self, effect: u16) {
-        let Some(hid) = &self.hid_device else {
+        let Some(hid) = self
+            .hid_device
+            .as_ref()
+            .and_then(crate::device_session::DeviceSession::as_vial)
+        else {
             return;
         };
         let result = match self.rgb_settings.kind {
@@ -295,7 +299,11 @@ impl EntropyApp {
     }
 
     fn set_rgb_brightness(&mut self, brightness: u8) {
-        let Some(hid) = &self.hid_device else {
+        let Some(hid) = self
+            .hid_device
+            .as_ref()
+            .and_then(crate::device_session::DeviceSession::as_vial)
+        else {
             return;
         };
         let result = match self.rgb_settings.kind {
@@ -322,7 +330,11 @@ impl EntropyApp {
     }
 
     fn set_rgb_color(&mut self, hue: u8, saturation: u8) {
-        let Some(hid) = &self.hid_device else {
+        let Some(hid) = self
+            .hid_device
+            .as_ref()
+            .and_then(crate::device_session::DeviceSession::as_vial)
+        else {
             return;
         };
         let result = match self.rgb_settings.kind {
@@ -350,7 +362,11 @@ impl EntropyApp {
     }
 
     fn set_rgb_speed(&mut self, speed: u8) {
-        let Some(hid) = &self.hid_device else {
+        let Some(hid) = self
+            .hid_device
+            .as_ref()
+            .and_then(crate::device_session::DeviceSession::as_vial)
+        else {
             return;
         };
         let result = match self.rgb_settings.kind {
@@ -377,7 +393,11 @@ impl EntropyApp {
     }
 
     fn autosave_rgb_settings(&mut self) {
-        let Some(hid) = &self.hid_device else {
+        let Some(hid) = self
+            .hid_device
+            .as_ref()
+            .and_then(crate::device_session::DeviceSession::as_vial)
+        else {
             return;
         };
         if let Err(e) = hid.save_rgb() {

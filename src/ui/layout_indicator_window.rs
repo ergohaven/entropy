@@ -446,7 +446,7 @@ fn sticky_layout_should_bring_window_forward(
 impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn poll_sticky_layout_background(&mut self, ctx: &egui::Context) {
-        if !self.app_settings.sticky_layout_window || self.is_vial_locked() {
+        if !self.app_settings.sticky_layout_window || self.is_matrix_locked() {
             return;
         }
 
@@ -538,7 +538,7 @@ impl EntropyApp {
         if self.app_settings.sticky_layout_window {
             self.app_settings.sticky_layout_window = false;
             self.pending_layout_indicator_open_after_unlock = false;
-        } else if self.is_vial_locked() {
+        } else if self.is_matrix_locked() {
             self.defer_sticky_layout_until_unlock();
             return;
         } else {
@@ -572,7 +572,7 @@ impl EntropyApp {
         }
 
         #[cfg(not(target_arch = "wasm32"))]
-        if self.is_vial_locked() {
+        if self.is_matrix_locked() {
             self.defer_sticky_layout_until_unlock();
             save_app_settings(&self.app_settings);
             return;

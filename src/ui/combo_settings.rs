@@ -115,7 +115,10 @@ impl EntropyApp {
             );
         }
 
-        if self.firmware != FirmwareProtocol::Vial {
+        if !matches!(
+            self.firmware,
+            FirmwareProtocol::Vial | FirmwareProtocol::Rynk
+        ) {
             crate::ui_style::modal_empty_state(
                 ui,
                 "Dynamic combos are not supported for this firmware",

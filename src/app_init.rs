@@ -38,7 +38,7 @@ impl EntropyApp {
             text_expander_rules_signature(&app_settings.text_expander_rule_files);
         let mut typing_trainer = TypingTrainerState::from_settings(app_settings.typing_trainer);
         typing_trainer.set_symbol_stats(load_typing_trainer_symbol_stats());
-        let mut app = Self::from_bootstrap(AppBootstrap {
+        Self::from_bootstrap(AppBootstrap {
             app_settings,
             device_manager: DeviceManager::new(),
             typing_trainer,
@@ -46,16 +46,12 @@ impl EntropyApp {
             last_single_instance_signal: read_single_instance_signal(),
             layer_names: load_layer_names("default"),
             update_check: start_update_check(),
-        });
-        #[cfg(unix)]
-        app.start_console_export_server(&cc.egui_ctx);
-        app
+        })
     }
 
     /// The app without a window, for `--export-layout`. Reads the same
     /// settings as `new` (language, diagnostics) but starts none of the
-    /// desktop machinery: no text expander, no update check, no zoom, no
-    /// device scan of its own.
+    /// desktop machinery: no text expander, no update check, no zoom.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn new_headless() -> Self {
         let app_settings = load_app_settings();
@@ -63,7 +59,7 @@ impl EntropyApp {
         let mut app = Self::from_bootstrap(AppBootstrap {
             typing_trainer: TypingTrainerState::from_settings(app_settings.typing_trainer),
             app_settings,
-            device_manager: DeviceManager::empty(),
+            device_manager: DeviceManager::new(),
             text_expander_rules_signature: Vec::new(),
             last_single_instance_signal: String::new(),
             layer_names: Vec::new(),
@@ -79,7 +75,7 @@ impl EntropyApp {
         Self::from_bootstrap(AppBootstrap {
             typing_trainer: TypingTrainerState::from_settings(app_settings.typing_trainer),
             app_settings,
-            device_manager: DeviceManager::empty(),
+            device_manager: DeviceManager::empty_for_test(),
             text_expander_rules_signature: Vec::new(),
             last_single_instance_signal: String::new(),
             layer_names: Vec::new(),
@@ -120,14 +116,14 @@ impl EntropyApp {
             deferred_device_load: DeferredDeviceLoadState::default(),
             #[cfg(not(target_arch = "wasm32"))]
             deferred_full_layout_action: None,
-            #[cfg(unix)]
-            console_export_server: None,
-            #[cfg(unix)]
-            pending_console_export: None,
             settings_write_queue: SettingsWriteQueueState::default(),
             settings_write_generation: 0,
             #[cfg(not(target_arch = "wasm32"))]
             qmk_hid_hosts: std::collections::HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            rynk_hosts: std::collections::HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            rynk_host_opens: std::collections::HashMap::new(),
             application_layout_editor_active: false,
             #[cfg(not(target_arch = "wasm32"))]
             application_discovery: Default::default(),
@@ -159,8 +155,6 @@ impl EntropyApp {
             application_categories_selected_id: None,
             application_categories_name: String::new(),
             pending_device_connect: None,
-            remembered_device: None,
-            pending_takeover: None,
             #[cfg(not(target_arch = "wasm32"))]
             headless: false,
             firmware: FirmwareProtocol::Vial,
@@ -196,6 +190,8 @@ impl EntropyApp {
             import_report_title: String::new(),
             import_report_body: String::new(),
             pending_entlayout_import_path: None,
+            entlayout_losses_prompt: None,
+            entlayout_losses_accepted: None,
             pending_file_dialog: None,
             connection_generation: 0,
             parent_window_handle: None,
@@ -237,12 +233,6 @@ impl EntropyApp {
             linux_background_since: None,
             #[cfg(target_os = "linux")]
             linux_background_focus_left: false,
-            #[cfg(target_os = "linux")]
-            linux_tray: None,
-            #[cfg(target_os = "linux")]
-            linux_hidden_to_tray: false,
-            #[cfg(target_os = "linux")]
-            linux_start_hidden_to_tray_pending: false,
             close_to_tray_prompt_open: false,
             close_to_tray_prompt_remember: false,
             force_close_requested: false,
@@ -368,8 +358,8 @@ impl EntropyApp {
             test_device_scan_requests: None,
             #[cfg(all(test, not(target_arch = "wasm32")))]
             test_connect_requests: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            connect_hid: None,
+            #[cfg(all(test, not(target_arch = "wasm32")))]
+            test_connect_hid: None,
             #[cfg(not(target_arch = "wasm32"))]
             device_scan_state: DeviceScanState::Idle,
         }
@@ -385,7 +375,7 @@ impl EntropyApp {
                 .map(|keys| {
                     keys.iter().any(|binding| {
                         let kc = binding.vial_keycode();
-                        binding.rmk_action().is_some() || (kc != 0x0000 && kc != 0x0001)
+                        binding.is_vial_native() || (kc != 0x0000 && kc != 0x0001)
                     })
                 })
                 .collect();
@@ -395,6 +385,25 @@ impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn is_vial_locked(&self) -> bool {
         self.firmware == FirmwareProtocol::Vial
+            && self.layout.is_some()
+            && !self.vial_unlock_polling
+            && self.vial_unlocked != Some(true)
+    }
+
+    /// Whether the board has a lock Entropy unlocks: Vial and Rynk boards do.
+    pub(crate) fn has_keyboard_lock(&self) -> bool {
+        matches!(
+            self.firmware,
+            FirmwareProtocol::Vial | FirmwareProtocol::Rynk
+        )
+    }
+
+    /// Whether reading the key matrix waits for an unlock. A Rynk board serves
+    /// its matrix only unlocked, as a Vial board does, but takes writes while
+    /// locked, so [`Self::is_vial_locked`] stays Vial's.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn is_matrix_locked(&self) -> bool {
+        self.has_keyboard_lock()
             && self.layout.is_some()
             && !self.vial_unlock_polling
             && self.vial_unlocked != Some(true)
@@ -418,7 +427,7 @@ impl EntropyApp {
         match crate::hid::HidDevice::open_fresh_for(dev) {
             Ok(hid) => {
                 self.shared_hid_output = hid.shared_output();
-                self.hid_device = Some(hid);
+                self.hid_device = Some(hid.into());
             }
             Err(e) => {
                 self.hid_device = None;

@@ -47,7 +47,7 @@ fn selector(output: &egui::FullOutput) -> (egui::Rect, egui::Color32) {
 fn fixture() -> (EntropyApp, crate::hid::TestHidRecorder) {
     let mut app = EntropyApp::new_inert_for_test();
     let (hid, recorder) = crate::hid::HidDevice::test_device();
-    app.hid_device = Some(hid);
+    app.hid_device = Some(hid.into());
     app.device_manager
         .replace_devices(vec![crate::device::Device {
             name: "Test".into(),
@@ -185,6 +185,86 @@ fn echo_layout(recorder: &crate::hid::TestHidRecorder) {
         }
         Some(Ok(response))
     });
+}
+
+#[test]
+fn universal_geometry_rynk_existing_option_uses_its_original_session_writer() {
+    use crate::rynk::session::{
+        testing::{board, link, Stored},
+        RynkSession,
+    };
+    use rmk_types_rynk::protocol::rynk::Cmd;
+    let ctx = egui::Context::default();
+    let (mut app, vial) = fixture();
+    app.layout.as_mut().unwrap().firmware = FirmwareProtocol::Rynk;
+    let mut device = app.device_manager.devices()[0].clone();
+    device.firmware = FirmwareProtocol::Rynk;
+    app.device_manager.replace_devices(vec![device]);
+    let (board, stored) = board(Stored::new(1, 1, 1));
+    app.hid_device = Some(RynkSession::new(link("geometry-rynk-option", &board)).into());
+    app.set_layout_option_value(0, 1);
+    assert!(
+        app.pending_universal_geometry.is_none(),
+        "Vial queue intercepted Rynk option"
+    );
+    assert_eq!(stored.lock().unwrap().layout_options, 1);
+    assert_eq!(stored.lock().unwrap().writes(), vec![Cmd::SetLayoutOption]);
+    assert!(vial.requests().is_empty());
+    assert!(!app.vial_hid_task_active());
+    // Even a misrouted Vial worker request must refuse this session before SET.
+    let result = run_vial_hid_operation(
+        app.hid_device.as_ref().unwrap(),
+        VialHidOperation::UniversalGeometryWrite(UniversalGeometryWrite {
+            device: app.device_manager.devices()[0].clone(),
+            generation: app.connection_generation,
+            packed: 0,
+        }),
+    );
+    assert!(result.is_err());
+    assert_eq!(stored.lock().unwrap().writes(), vec![Cmd::SetLayoutOption]);
+    app.poll_vial_hid_task(&ctx);
+}
+
+#[test]
+fn universal_geometry_shared_worker_keeps_rynk_macros_and_returned_session() {
+    use crate::rynk::session::{
+        testing::{board, link, Stored},
+        RynkSession,
+    };
+    let ctx = egui::Context::default();
+    let (mut app, vial) = fixture();
+    app.layout.as_mut().unwrap().firmware = FirmwareProtocol::Rynk;
+    let mut device = app.device_manager.devices()[0].clone();
+    device.firmware = FirmwareProtocol::Rynk;
+    app.device_manager.replace_devices(vec![device]);
+    let mut initial = Stored::new(1, 1, 1);
+    initial.capabilities.max_macros = 2;
+    initial.macros = vec![Vec::new(), Vec::new()];
+    let (board, stored) = board(initial);
+    app.hid_device = Some(RynkSession::new(link("geometry-rynk-macro-worker", &board)).into());
+    app.keycode_picker.macro_texts = vec![b"ab".to_vec(), Vec::new()];
+    app.keycode_picker.mark_macros_dirty();
+    let revision = app.keycode_picker.macro_edit_revision;
+    assert_eq!(
+        app.start_vial_hid_operation(
+            &ctx,
+            VialHidOperation::MacroWrite {
+                macros: app.keycode_picker.macro_texts.clone(),
+                revision,
+            }
+        ),
+        VialHidTaskStart::Started
+    );
+    assert!(app.hid_device.is_none());
+    drain(&mut app, &ctx);
+    assert!(app.hid_device.as_ref().unwrap().is_rynk());
+    assert!(!app.keycode_picker.macros_dirty);
+    assert!(!app.import_report_open);
+    let written = stored.lock().unwrap();
+    assert!(!written.writes().is_empty());
+    assert_eq!(written.macros[0].len(), 2);
+    assert!(written.macros[1].is_empty());
+    assert!(vial.requests().is_empty());
 }
 
 #[test]
@@ -431,7 +511,7 @@ fn universal_geometry_old_inflight_result_cannot_replace_new_handle_or_status() 
         }
         app.device_manager.replace_devices(vec![device]);
         let (new_hid, new_recorder) = crate::hid::HidDevice::test_device();
-        app.hid_device = Some(new_hid);
+        app.hid_device = Some(new_hid.into());
         app.layout_options_value = Some(0);
         app.status_msg = "new target".into();
         finish.send(()).unwrap();
@@ -447,6 +527,8 @@ fn universal_geometry_old_inflight_result_cannot_replace_new_handle_or_status() 
         app.hid_device
             .as_ref()
             .unwrap()
+            .require_vial()
+            .unwrap()
             .get_layout_options()
             .unwrap();
         assert_eq!(new_recorder.requests().len(), 1);
@@ -457,31 +539,37 @@ fn universal_geometry_old_inflight_result_cannot_replace_new_handle_or_status() 
 #[test]
 fn universal_geometry_async_set_get_preserves_encoder_bits_with_sync_off_or_on() {
     for sync in [false, true] {
-        for bits in 0..4 {
-            let ctx = egui::Context::default();
-            let (mut app, recorder) = fixture();
-            app.app_settings.layout_sync_enabled = sync;
-            let options = &mut app.layout.as_mut().unwrap().layout_options;
-            for label in ["Hide left encoder", "Hide right encoder"] {
-                options.push(LayoutOption {
-                    label: label.into(),
-                    choices: vec![],
-                });
+        for encoder_count in 0..=2 {
+            let mask = 1u32 << encoder_count;
+            for bits in 0..mask {
+                let ctx = egui::Context::default();
+                let (mut app, recorder) = fixture();
+                app.app_settings.layout_sync_enabled = sync;
+                let options = &mut app.layout.as_mut().unwrap().layout_options;
+                for label in ["Hide left encoder", "Hide right encoder"]
+                    .into_iter()
+                    .take(encoder_count)
+                {
+                    options.push(LayoutOption {
+                        label: label.into(),
+                        choices: vec![],
+                    });
+                }
+                echo_layout(&recorder);
+                app.layout_options_value = Some(bits);
+                for (choice, packed) in [(1, bits | mask), (0, bits)] {
+                    app.set_layout_option_value(0, choice);
+                    drain(&mut app, &ctx);
+                    assert_eq!(app.layout_options_value, Some(packed));
+                }
+                let requests = recorder.requests();
+                assert_eq!(requests.len(), 4);
+                assert_eq!(&requests[0][..6], &[3, 2, 0, 0, 0, (bits | mask) as u8]);
+                assert_eq!(&requests[2][..6], &[3, 2, 0, 0, 0, bits as u8]);
+                assert_eq!(&requests[1][..2], &[2, 2]);
+                assert_eq!(&requests[3][..2], &[2, 2]);
+                assert_eq!(app.app_settings.layout_sync_enabled, sync);
             }
-            echo_layout(&recorder);
-            app.layout_options_value = Some(bits);
-            for (choice, packed) in [(1, bits | 4), (0, bits)] {
-                app.set_layout_option_value(0, choice);
-                drain(&mut app, &ctx);
-                assert_eq!(app.layout_options_value, Some(packed));
-            }
-            let requests = recorder.requests();
-            assert_eq!(requests.len(), 4);
-            assert_eq!(&requests[0][..6], &[3, 2, 0, 0, 0, (bits | 4) as u8]);
-            assert_eq!(&requests[2][..6], &[3, 2, 0, 0, 0, bits as u8]);
-            assert_eq!(&requests[1][..2], &[2, 2]);
-            assert_eq!(&requests[3][..2], &[2, 2]);
-            assert_eq!(app.app_settings.layout_sync_enabled, sync);
         }
     }
 }

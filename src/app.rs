@@ -59,8 +59,6 @@ mod entlayout;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "headless_export.rs"]
 mod headless_export;
-#[cfg(unix)]
-pub(crate) use headless_export::export_via_running_instance;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use headless_export::{
     run_headless_export, HeadlessExportRequest, EXIT_INSTANCE_RUNNING, EXIT_USAGE,
@@ -125,6 +123,8 @@ mod grave_escape_settings_ui;
 mod key_assignment;
 #[path = "ui/layer_operations.rs"]
 mod layer_operations;
+#[path = "ui/rynk_connect.rs"]
+mod rynk_connect;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "standby_background.rs"]
 mod standby_background;

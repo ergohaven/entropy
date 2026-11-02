@@ -27,6 +27,14 @@ class EntropyCIContract(unittest.TestCase):
         self.assertIn('push:\n    branches: [main]', text)
         self.assertNotIn('disabled-auto-build', text)
 
+    def test_main_and_rynk_prs_run_without_duplicate_integration_push_builds(self):
+        for name in ('build.yml', 'nix.yml'):
+            with self.subTest(workflow=name):
+                text = workflow(name)
+                self.assertRegex(text, r'(?m)^  pull_request:\n    branches: \[main, rynk\]$')
+                self.assertRegex(text, r'(?m)^  push:\n    branches: \[main\]$')
+                self.assertIn('  workflow_dispatch:', text)
+
     def test_build_plan_is_cheap_and_checks_policy(self):
         owner = job(workflow('build.yml'), 'plan')
         self.assertIn('fetch-depth: 0', owner)

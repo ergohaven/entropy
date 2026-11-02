@@ -26,7 +26,7 @@ pub(crate) fn product_display_name(vendor_id: u16, product_id: u16, reported: &s
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DeviceIdentity {
     vendor_id: u16,
     product_id: u16,
@@ -399,6 +399,37 @@ impl Device {
         self.vendor_id == ERGOHAVEN_VENDOR_ID
             && (K04_QUBE_PRODUCT_ID_START..=K04_QUBE_PRODUCT_ID_END).contains(&self.product_id)
     }
+
+    /// A Rynk board as its bus describes it; `path` is the link's id.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn from_rynk_board(board: crate::rynk::transport::FoundBoard) -> Self {
+        Self {
+            name: board
+                .product
+                .unwrap_or_else(|| "Unknown Keyboard".to_owned()),
+            vendor_id: board.vendor_id,
+            product_id: board.product_id,
+            manufacturer: board.manufacturer.unwrap_or_default(),
+            serial_number: board.serial.unwrap_or_default(),
+            bus_type: if board.bluetooth { "Bluetooth" } else { "Usb" }.to_owned(),
+            path: board.id.0,
+            instance_token: String::new(),
+            firmware: FirmwareProtocol::Rynk,
+        }
+    }
+}
+
+/// Rynk boards a scan found. Finding them opens nothing, so the USB-only scan
+/// may take the USB ones too.
+#[cfg(not(target_arch = "wasm32"))]
+fn rynk_devices(found: std::io::Result<Vec<crate::rynk::transport::FoundBoard>>) -> Vec<Device> {
+    match found {
+        Ok(boards) => boards.into_iter().map(Device::from_rynk_board).collect(),
+        Err(error) => {
+            log::warn!("Rynk scan failed: {error}");
+            Vec::new()
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -510,8 +541,8 @@ pub struct DeviceManager {
 }
 
 impl DeviceManager {
-    /// No devices and no scan: the caller supplies them.
-    pub(crate) fn empty() -> Self {
+    #[cfg(test)]
+    pub(crate) fn empty_for_test() -> Self {
         Self { devices: vec![] }
     }
 
@@ -537,7 +568,11 @@ impl DeviceManager {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn scan_usb_devices() -> Result<Vec<Device>, String> { usb_discovery::scan() }
+    pub fn scan_usb_devices() -> Result<Vec<Device>, String> {
+        let mut devices = usb_discovery::scan()?;
+        devices.extend(rynk_devices(crate::rynk::transport::scan_usb()));
+        Ok(devices)
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn scan_devices() -> Result<Vec<Device>, String> {
@@ -565,6 +600,13 @@ impl DeviceManager {
                     info.usage_page(), info.usage(), info.interface_number(),
                     vial_interface, info.path().to_string_lossy()
                 );
+            }
+            // A Rynk board paired over Bluetooth; Linux reaches it over GATT.
+            #[cfg(not(target_os = "linux"))]
+            if crate::hid::is_rynk_report(info) {
+                let mut device = crate::hid::rynk_report_device(info);
+                device.path = crate::rynk::transport::hid_reports::id(&device.path).0;
+                devices.push(device);
             }
             // Filter: Vial usage page 0xFF60, usage 0x61
             if info.usage_page() == 0xFF60 && info.usage() == 0x61 {
@@ -599,6 +641,10 @@ impl DeviceManager {
             merge_bluez_vial_devices(&mut devices, bluez_devices);
         }
 
+        let rynk = rynk_devices(crate::rynk::transport::scan());
+        #[cfg(target_os = "linux")]
+        drop_vial_twins_of_rynk_boards(&mut devices, &rynk);
+        devices.extend(rynk);
         Ok(devices)
     }
 
@@ -687,6 +733,23 @@ fn merge_bluez_vial_devices(devices: &mut Vec<Device>, bluez_devices: Vec<Device
         }
         devices.push(bluez_device);
     }
+}
+
+/// A Rynk board over Bluetooth also shows HID endpoints a Vial scan may take
+/// for its own, and the board speaks no Vial on any of them: its Rynk entry
+/// is the only one listed.
+#[cfg(target_os = "linux")]
+fn drop_vial_twins_of_rynk_boards(devices: &mut Vec<Device>, rynk: &[Device]) {
+    let addresses: Vec<String> = rynk
+        .iter()
+        .filter(|board| board.is_bluetooth_transport())
+        .map(|board| normalized_bluetooth_identity(&board.serial_number))
+        .filter(|address| !address.is_empty())
+        .collect();
+    devices.retain(|device| {
+        !device.is_bluetooth_transport()
+            || !addresses.contains(&normalized_bluetooth_identity(&device.serial_number))
+    });
 }
 
 #[cfg(test)]
@@ -1051,6 +1114,41 @@ mod tests {
         assert_eq!(
             normalized_bluetooth_identity("AA:BB:CC:DD:EE:FF"),
             normalized_bluetooth_identity("aa-bb-cc-dd-ee-ff")
+        );
+    }
+
+    /// K:04 Mini on Rynk over Bluetooth: its Rynk-over-HID service passes for
+    /// a Vial one, so the board was listed twice.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_rynk_board_over_bluetooth_is_listed_once() {
+        let mut rynk = test_device("Bluetooth", "ble:C6:57:73:4E:6B:51");
+        rynk.serial_number = "C6:57:73:4E:6B:51".to_owned();
+        rynk.firmware = FirmwareProtocol::Rynk;
+        let mut gatt_twin = test_device(
+            "Bluetooth",
+            "bluez-gatt:/org/bluez/hci0/dev_C6_57_73_4E_6B_51/service0033",
+        );
+        gatt_twin.serial_number = "C6:57:73:4E:6B:51".to_owned();
+        let mut hidraw_twin = test_device("Bluetooth", "/dev/hidraw2");
+        hidraw_twin.serial_number = "c6:57:73:4e:6b:51".to_owned();
+        let mut other = test_device(
+            "Bluetooth",
+            "bluez-gatt:/org/bluez/hci0/dev_C6_9E_29_C4_F4_C7/service002a",
+        );
+        other.serial_number = "C6:9E:29:C4:F4:C7".to_owned();
+        let usb = test_device("Usb", "/dev/hidraw0");
+        let mut devices = vec![gatt_twin, hidraw_twin, other, usb];
+
+        drop_vial_twins_of_rynk_boards(&mut devices, std::slice::from_ref(&rynk));
+
+        let paths: Vec<&str> = devices.iter().map(|device| device.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            [
+                "bluez-gatt:/org/bluez/hci0/dev_C6_9E_29_C4_F4_C7/service002a",
+                "/dev/hidraw0",
+            ]
         );
     }
 

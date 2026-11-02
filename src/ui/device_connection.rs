@@ -103,6 +103,8 @@ impl EntropyApp {
         self.retire_selected_qmk_hid_host_bridges();
         self.pending_device_connect = None;
         self.pending_entlayout_import_path = None;
+        self.entlayout_losses_prompt = None;
+        self.entlayout_losses_accepted = None;
         self.pending_entsettings_import_path = None;
         self.import_progress_started_at = None;
         self.reset_settings_write_context();
@@ -119,6 +121,7 @@ impl EntropyApp {
         self.pending_layout_undo = false;
         self.pending_layer_write = None;
         self.keycode_picker.open = false;
+        self.keycode_picker.supports_universal_numero = false;
         self.selected_key = None;
         self.selected_encoder = None;
         self.unlock_open = false;
@@ -233,6 +236,7 @@ impl EntropyApp {
         self.vial_unlock_last_poll = None;
         self.pending_layout_indicator_open_after_unlock = false;
         self.keycode_picker.open = false;
+        self.keycode_picker.supports_universal_numero = false;
         self.current_device_name.clear();
         self.current_keyboard_id = None;
         self.current_encoder_visibility_id.clear();
@@ -361,7 +365,7 @@ impl EntropyApp {
                     });
                     if let Some(idx) = selected_device {
                         self.main_menu_tab = MainMenuTab::Keyboard;
-                        self.connect_picked_device(idx);
+                        self.start_connect(idx);
                     }
                 });
             });

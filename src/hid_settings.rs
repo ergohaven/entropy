@@ -34,6 +34,16 @@ fn truncate_qmk_string_payload(value: &str, max_decoded: usize, max_escaped: usi
 
 use anyhow::{Context, Result};
 
+/// What a string setting carries after its id, as `set_qmk_setting_string`
+/// sends it: escaped, cut to fit, NUL-terminated. A Rynk board takes the same
+/// bytes for the same id.
+pub(crate) fn qmk_setting_string_value(value: &str) -> Vec<u8> {
+    // The 28 bytes after a Vial report's id, one of them for the NUL.
+    let mut payload = truncate_qmk_string_payload(value, QMK_STRING_MAX_DECODED_BYTES, 27);
+    payload.push(0);
+    payload
+}
+
 fn decode_qmk_setting_string(response: &[u8; MSG_LEN], qsid: u16) -> Result<String> {
     if response[0] != 0 {
         anyhow::bail!("qmk setting get error or unsupported qsid: {qsid}");

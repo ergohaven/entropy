@@ -1296,8 +1296,16 @@ impl EntropyApp {
         if let Some(language) = self
             .selected_device
             .and_then(|index| self.device_manager.devices().get(index))
-            .and_then(|device| self.qmk_hid_hosts.get(&device.path))
-            .and_then(|bridge| bridge.layout_label())
+            .and_then(|device| {
+                self.qmk_hid_hosts
+                    .get(&device.path)
+                    .and_then(|bridge| bridge.layout_label())
+                    .or_else(|| {
+                        self.rynk_hosts
+                            .get(&device.path)
+                            .and_then(|bridge| bridge.layout_label())
+                    })
+            })
         {
             return language;
         }

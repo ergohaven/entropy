@@ -4,6 +4,9 @@
 use super::*;
 use crate::app::vial_hid_task::{VialHidOperation, VialHidTaskStart};
 
+#[path = "batch_preflight_tests.rs"]
+mod batch_preflight_tests;
+
 fn tap_dance_app() -> (EntropyApp, egui::Context, crate::hid::TestHidRecorder) {
     let (mut app, ctx, recorder) = app(true);
     let mut device = app.device_manager.devices()[0].clone();
@@ -207,7 +210,7 @@ fn tap_dance_timeout_clears_connection_instead_of_retaining_a_busy_choose() {
         0,
         crate::hid::TestHidFault::Timeout,
     )));
-    app.hid_device = Some(hid);
+    app.hid_device = Some(hid.into());
     app.start_pictogram_load(&ctx);
     finish(&mut app, &ctx);
     assert!(!app.vial_hid_task_blocks_user_action());
@@ -238,7 +241,7 @@ fn tap_dance_stale_deferred_result_cannot_overwrite_successor_or_leave_choose_bu
     app.deferred_device_load
         .set_section_status(DeferredLoadSection::TapDance, DeferredLoadStatus::Loaded);
     let (successor_hid, _) = crate::hid::HidDevice::test_device();
-    app.hid_device = Some(successor_hid);
+    app.hid_device = Some(successor_hid.into());
     app.display_settings.pictograms.editor_name = "Successor draft".into();
     finish(&mut app, &ctx);
     assert_eq!(
@@ -279,6 +282,7 @@ fn deferred_context() -> DeferredDeviceLoadContext {
         rgb_supported: false,
         lighting_mode: None,
         supports_rmk_native_key_actions: false,
+        supports_universal_numero: false,
         supports_universal_symbols: false,
         supports_universal_russian_letters: false,
         supports_rmk_native_combo_output: false,

@@ -1,7 +1,7 @@
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub(crate) static TRAY_QUIT_REQUESTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub(crate) static TRAY_RESTORE_REQUESTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -23,8 +23,8 @@ pub(crate) const COMBO_COLOR_SEED_PALETTE: [u32; 16] = [
 ];
 
 use super::typing_trainer_symbols::{
-    TYPING_TRAINER_SYMBOL_COUNTS, TypingTrainerCharacterStatsMap, record_symbol_attempt,
-    weighted_symbol_text,
+    record_symbol_attempt, weighted_symbol_text, TypingTrainerCharacterStatsMap,
+    TYPING_TRAINER_SYMBOL_COUNTS,
 };
 use super::*;
 
@@ -150,10 +150,28 @@ pub(crate) struct AppSettings {
     pub(crate) text_expansion_rules: Vec<crate::text_expander::TextExpansionRule>,
     #[serde(default = "default_layout_sync_enabled")]
     pub(crate) layout_sync_enabled: bool,
+    /// Rynk boards whose host data keeps going while they are not selected,
+    /// across restarts and replugs: each one selected before.
+    #[serde(default)]
+    pub(crate) rynk_host_boards: Vec<RynkHostBoard>,
     #[serde(default)]
     pub(crate) typing_trainer: TypingTrainerSettings,
     #[serde(default)]
     pub(crate) typing_trainer_history: Vec<TypingTrainerRunRecord>,
+}
+
+/// A Rynk board and the host data its bridge sent when it was last selected.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct RynkHostBoard {
+    pub(crate) identity: crate::device::DeviceIdentity,
+    #[serde(default)]
+    pub(crate) time: bool,
+    #[serde(default)]
+    pub(crate) volume: bool,
+    #[serde(default)]
+    pub(crate) layout: bool,
+    #[serde(default)]
+    pub(crate) media: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -277,6 +295,7 @@ impl Default for AppSettings {
             text_expander_rule_files: Vec::new(),
             text_expansion_rules: Vec::new(),
             layout_sync_enabled: default_layout_sync_enabled(),
+            rynk_host_boards: Vec::new(),
             typing_trainer: TypingTrainerSettings::default(),
             typing_trainer_history: Vec::new(),
         }
@@ -410,6 +429,10 @@ pub(crate) fn key_binding_label_with_macro_names(
             tap_dance_names,
             key_legend_layout,
         ),
+        crate::keyboard::KeyBinding::VialTapHold { tap, hold, profile } => format!(
+            "Vial TapHold {tap:?} / {hold:?} (profile {}: {:#x})",
+            profile.index, profile.raw
+        ),
         crate::keyboard::KeyBinding::Rmk(action) => {
             if let Some(label) = crate::universal_symbols::label(action) {
                 return label;
@@ -427,6 +450,19 @@ pub(crate) fn key_binding_label_with_macro_names(
             }
             "RMK\nAction".to_owned()
         }
+        crate::keyboard::KeyBinding::Rynk(action) => {
+            match crate::rynk::native_v1::v1_label_action(action) {
+                Some(action) => key_binding_label_with_macro_names(
+                    action.into(),
+                    custom,
+                    layer_names,
+                    macro_names,
+                    tap_dance_names,
+                    key_legend_layout,
+                ),
+                None => crate::rynk::native_v1::fallback_label(action),
+            }
+        }
     }
 }
 
@@ -443,11 +479,18 @@ pub(crate) fn key_binding_printable_output(
         crate::keyboard::KeyBinding::Vial(value) => {
             crate::keycode::printable_output(value, key_output_layout)
         }
+        crate::keyboard::KeyBinding::VialTapHold { tap, .. } => {
+            rmk_action_printable_output(rmk_types::action::KeyAction::Tap(tap), key_output_layout)
+        }
         crate::keyboard::KeyBinding::Rmk(action) => {
             if let Some(parts) = crate::rmk_native::rmk_mod_tap_parts(action) {
                 return crate::keycode::printable_output(parts.tap_value(), key_output_layout);
             }
             rmk_action_printable_output(action, key_output_layout)
+        }
+        crate::keyboard::KeyBinding::Rynk(action) => {
+            crate::rynk::native_v1::v1_label_action(action)
+                .and_then(|action| key_binding_printable_output(action.into(), key_output_layout))
         }
     }
 }
@@ -499,6 +542,10 @@ pub(crate) fn key_binding_tooltip_with_macro_names(
             macro_descriptions,
             tap_dance_names,
         ),
+        crate::keyboard::KeyBinding::VialTapHold { tap, hold, profile } => format!(
+            "Vial TapHold {tap:?} / {hold:?}; packed profile {:#x}, index {}",
+            profile.raw, profile.index
+        ),
         crate::keyboard::KeyBinding::Rmk(action) => {
             if let Some(tooltip) = crate::universal_symbols::tooltip(action) {
                 return tooltip;
@@ -518,6 +565,19 @@ pub(crate) fn key_binding_tooltip_with_macro_names(
                 );
             }
             format!("Native RMK key action: {action:?}")
+        }
+        crate::keyboard::KeyBinding::Rynk(action) => {
+            match crate::rynk::native_v1::v1_label_action(action) {
+                Some(action) => key_binding_tooltip_with_macro_names(
+                    action.into(),
+                    custom,
+                    layer_names,
+                    macro_names,
+                    macro_descriptions,
+                    tap_dance_names,
+                ),
+                None => format!("Native RMK key action: {action:?}"),
+            }
         }
     }
 }
@@ -568,6 +628,17 @@ pub(crate) struct DeviceAboutInfo {
     pub(crate) caps_word: bool,
     pub(crate) layer_lock: bool,
     pub(crate) qmk_settings: bool,
+    /// What a Rynk board told about itself; `None` over Vial.
+    pub(crate) rynk: Option<RynkAboutInfo>,
+}
+
+/// A Rynk board's `GetErgohavenInfo` as About Device shows it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct RynkAboutInfo {
+    /// The firmware's Ergohaven revision of the Rynk table.
+    pub(crate) revision: u16,
+    /// `ErgohavenInfo::caps` bits.
+    pub(crate) caps: u32,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -700,6 +771,7 @@ pub(crate) struct DeferredDeviceLoadContext {
     pub(crate) rgb_supported: bool,
     pub(crate) lighting_mode: Option<String>,
     pub(crate) supports_rmk_native_key_actions: bool,
+    pub(crate) supports_universal_numero: bool,
     pub(crate) supports_universal_symbols: bool,
     pub(crate) supports_universal_russian_letters: bool,
     pub(crate) supports_rmk_native_combo_output: bool,
@@ -748,6 +820,7 @@ impl DeferredDeviceLoadContext {
             && self.rgb_supported == other.rgb_supported
             && self.lighting_mode == other.lighting_mode
             && self.supports_rmk_native_key_actions == other.supports_rmk_native_key_actions
+            && self.supports_universal_numero == other.supports_universal_numero
             && self.supports_universal_symbols == other.supports_universal_symbols
             && self.supports_universal_russian_letters == other.supports_universal_russian_letters
             && self.supports_rmk_native_combo_output == other.supports_rmk_native_combo_output
@@ -1128,7 +1201,7 @@ pub(crate) struct ConnectResult {
     /// Lock state and physical unlock keys reported by Vial during connect.
     pub(crate) vial_unlock_status: Option<(bool, Vec<(u8, u8)>)>,
     /// Open HID connection used during loading; kept for live writes just like vial-gui.
-    pub(crate) hid_device: Option<crate::hid::HidDevice>,
+    pub(crate) hid_device: Option<crate::device_session::DeviceSession>,
     pub(crate) layout: KeyboardLayout,
     pub(crate) layer_count: usize,
     /// Device/protocol summary shown by the About Device page.
@@ -1140,6 +1213,7 @@ pub(crate) struct ConnectResult {
     /// Firmware exposes the lossless RMK KeyAction Get/Set extension.
     pub(crate) supports_rmk_native_key_actions: bool,
     /// Firmware implements native EN/RU Universal Symbols actions.
+    pub(crate) supports_universal_numero: bool,
     pub(crate) supports_universal_symbols: bool,
     /// Firmware implements native Russian-letter Universal Symbols actions.
     pub(crate) supports_universal_russian_letters: bool,
@@ -1199,6 +1273,12 @@ pub(crate) struct ConnectResult {
     /// Readiness and immutable metadata for Bluetooth data loaded after the
     /// first usable layer is shown.
     pub(crate) deferred_load: DeferredDeviceLoadState,
+    /// What the editor cannot show of the entries a Rynk board holds.
+    pub(crate) rynk_read_losses: Vec<(
+        crate::rynk::dynamic::DynamicSlot,
+        u8,
+        crate::rynk::dynamic::DynamicLoss,
+    )>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -3550,7 +3630,7 @@ pub(crate) const TYPING_TRAINER_DURATIONS: [u32; 4] = [15, 30, 60, 120];
 pub(crate) const TYPING_TRAINER_WORD_COUNTS: [usize; 4] = [10, 25, 50, 100];
 pub(crate) const TYPING_TRAINER_HISTORY_LIMIT: usize = 20;
 const TYPING_TRAINER_DEFAULT_TEXT_WORDS: usize = 72;
-pub(crate) use super::typing_trainer_words::{TYPING_TRAINER_LANGUAGES, TypingTrainerLanguage};
+pub(crate) use super::typing_trainer_words::{TypingTrainerLanguage, TYPING_TRAINER_LANGUAGES};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -5376,6 +5456,14 @@ pub struct EntropyApp {
     /// device B that connected in the meantime.
     pub(crate) pending_entlayout_import_path: Option<(std::path::PathBuf, u64)>,
     #[cfg(not(target_arch = "wasm32"))]
+    /// An `.entlayout` import a Rynk board would lose part of, waiting for the
+    /// user: the path and connection generation as pending, and what goes.
+    pub(crate) entlayout_losses_prompt: Option<(std::path::PathBuf, u64, String)>,
+    #[cfg(not(target_arch = "wasm32"))]
+    /// The file whose losses the user accepted: its next import goes on
+    /// without them.
+    pub(crate) entlayout_losses_accepted: Option<std::path::PathBuf>,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) pending_entsettings_import_path: Option<std::path::PathBuf>,
     /// Cached result of scanning the IBus component directories, which the Text
     /// Expander setup page would otherwise redo on every frame. Refreshes on
@@ -5411,16 +5499,15 @@ pub struct EntropyApp {
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) test_connect_requests:
         Option<mpsc::Sender<(Device, mpsc::Sender<ConnectTaskMessage>)>>,
-    /// An open transport the next connect uses in place of opening the
-    /// device: a scripted keyboard in tests, or the read-only view a running
-    /// instance lends to a console export.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) connect_hid: Option<crate::hid::HidDevice>,
+    /// Scripted HID handle for the next real connect worker, in place of
+    /// opening the device.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) test_connect_hid: Option<crate::hid::HidDevice>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) device_scan_state: DeviceScanState,
     /// Persistent open HID device for real-time writes (Vial)
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) hid_device: Option<crate::hid::HidDevice>,
+    pub(crate) hid_device: Option<crate::device_session::DeviceSession>,
     /// Non-owning output path into the persistent HID owner. Live host data
     /// uses it without opening a competing Windows Bluetooth handle.
     #[cfg(not(target_arch = "wasm32"))]
@@ -5451,25 +5538,21 @@ pub struct EntropyApp {
     /// User action waiting for every staged Bluetooth layer to become complete.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) deferred_full_layout_action: Option<DeferredFullLayoutAction>,
-    /// Listens for `--export-layout` runs while this instance owns the keyboards.
-    #[cfg(unix)]
-    pub(super) console_export_server: Option<super::headless_export::ExportServer>,
-    #[cfg(unix)]
-    pub(super) pending_console_export: Option<super::headless_export::PendingConsoleExport>,
     pub(super) settings_write_queue: SettingsWriteQueueState,
     pub(super) settings_write_generation: u64,
     pub(super) qmk_settings_write_queue: QmkSettingsWriteQueue,
     pub(super) pending_device_connect: Option<DeviceIdentity>,
-    /// The board the user picked last: it is connected again when it comes
-    /// back, however many others are listed. Picking another replaces it.
-    pub(super) remembered_device: Option<DeviceIdentity>,
-    /// The remembered board's takeover while it waits in
-    /// `pending_device_connect`: it lapses with the memory.
-    pub(super) pending_takeover: Option<DeviceIdentity>,
     /// Built-in qmk-hid-host bridges for displays/presets that need host data
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) qmk_hid_hosts:
         std::collections::HashMap<String, crate::qmk_hid_host::QmkHidHostBridge>,
+    /// Host-data bridges of Rynk boards, posting on their links.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) rynk_hosts: std::collections::HashMap<String, crate::qmk_hid_host::RynkHostBridge>,
+    /// Links being opened for remembered Rynk boards that have no bridge yet.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) rynk_host_opens:
+        std::collections::HashMap<String, crate::qmk_hid_host::RynkHostOpen>,
     /// True while the normal keyboard canvas edits the selected application
     /// layout instead of writing the permanent Vial keymap.
     pub(crate) application_layout_editor_active: bool,
@@ -5580,12 +5663,6 @@ pub struct EntropyApp {
     pub(crate) linux_background_since: Option<f64>,
     #[cfg(target_os = "linux")]
     pub(crate) linux_background_focus_left: bool,
-    #[cfg(target_os = "linux")]
-    pub(crate) linux_tray: Option<crate::linux_tray::LinuxTray>,
-    #[cfg(target_os = "linux")]
-    pub(crate) linux_hidden_to_tray: bool,
-    #[cfg(target_os = "linux")]
-    pub(crate) linux_start_hidden_to_tray_pending: bool,
     pub(crate) close_to_tray_prompt_open: bool,
     pub(crate) close_to_tray_prompt_remember: bool,
     pub(crate) force_close_requested: bool,

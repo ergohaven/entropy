@@ -1365,7 +1365,7 @@ mod tests {
                 .unwrap()
                 .set_keycode(0, 0, 0x0005);
             app.shared_hid_output = macro_hid.shared_output();
-            app.hid_device = Some(macro_hid);
+            app.hid_device = Some(macro_hid.into());
             app.remember_connected_application_layout_device();
             if select_k04 {
                 assert!(app.handoff_selected_qmk_hid_host_bridge(&macropad, &k04));
@@ -2743,7 +2743,7 @@ mod tests {
                     Some(Ok(response))
                 } else { None }
             });
-            app.hid_device = Some(hid);
+            app.hid_device = Some(hid.into());
             let frame = |app: &mut EntropyApp, events| {
                 let _ = ctx.run_ui(egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1100.0,800.0))),
@@ -2774,7 +2774,7 @@ mod tests {
                 app.app_settings.application_layouts.insert(unrelated_key.into(),unrelated_settings.clone());
                 app.current_keyboard_id = Some(0x43);
                 app.connection_generation += 1;
-                app.hid_device = Some(unrelated_hid);
+                app.hid_device = Some(unrelated_hid.into());
             }
             if scenario == "borrowed" {
                 assert_eq!(app.start_vial_hid_operation(&ctx,super::super::vial_hid_task::VialHidOperation::Lock),
@@ -2883,7 +2883,7 @@ mod tests {
                     Some(Ok(response))
                 } else { None }
             });
-            app.hid_device = Some(hid);
+            app.hid_device = Some(hid.into());
             name_review_rename(&mut app, &ctx, proposal);
             name_review_drain(&mut app, &ctx);
             assert_eq!(*store.lock().unwrap(), stored, "setter wire budget changed");
@@ -2961,7 +2961,7 @@ mod tests {
             macro_count:0, macro_memory_bytes:Some(0), tap_dance_count:0, combo_count:0,
             key_override_count:0, alt_repeat_count:0, modules_supported:false, touchpad_supported:false,
             bluetooth_supported:false, layer_leds_supported:false, rgb_supported:false, lighting_mode:None,
-            supports_rmk_native_key_actions:false, supports_universal_symbols:false,
+            supports_rmk_native_key_actions:false, supports_universal_numero: false, supports_universal_symbols:false,
             supports_universal_russian_letters:false, supports_rmk_native_combo_output:false,
             supports_rmk_native_tap_dance_actions:false, supports_rmk_combo_layers:false,
         });
@@ -2983,7 +2983,7 @@ mod tests {
                 response[1..1+name.len()].copy_from_slice(name.as_bytes()); Some(Ok(response))
             } else { None }
         });
-        app.hid_device = Some(hid);
+        app.hid_device = Some(hid.into());
         name_review_rename(&mut app, &ctx, "Cold");
         assert!(app.defer_exit_until_hid_write_returns(&ctx));
         app.poll_vial_hid_task(&ctx);
@@ -3041,7 +3041,7 @@ mod tests {
                     response[1..1+store[layer].len()].copy_from_slice(store[layer].as_bytes()); Some(Ok(response))
                 } else {None}
             });
-            app.hid_device=Some(hid); app.layer_names[0]="Old".into();
+            app.hid_device=Some(hid.into()); app.layer_names[0]="Old".into();
             app.layout.as_mut().unwrap().layer_names[0]="Old".into();
             name_review_rename(&mut app,&ctx,"Changed"); name_review_drain(&mut app,&ctx);
             assert_eq!(store.lock().unwrap()[0],"Changed");
@@ -3092,7 +3092,7 @@ mod tests {
                 Some(Ok(response))
             } else { None }
         });
-        app.hid_device = Some(hid);
+        app.hid_device = Some(hid.into());
         app.layer_names[0] = "Old".into();
         app.layout.as_mut().unwrap().layer_names[0] = "Old".into();
         name_review_rename(&mut app, &ctx, "Changed");
@@ -3131,7 +3131,7 @@ mod tests {
         ] {
             let ctx=egui::Context::default(); let mut app=name_review_app();
             app.app_settings.language=language;
-            let (hid,_)=crate::hid::HidDevice::test_device();app.hid_device=Some(hid);
+            let (hid,_)=crate::hid::HidDevice::test_device();app.hid_device=Some(hid.into());
             name_review_rename(&mut app,&ctx,"Test");
             app.deferred_device_load.set_layer_status(0,DeferredLoadStatus::Failed("read error".into()));
             app.poll_vial_hid_task(&ctx);
@@ -3159,7 +3159,7 @@ mod tests {
             if r[..2]==[0xfe,0x0b] {Some(Ok([0;32]))}
             else if r[..2]==[0xfe,0x0a] {Some(Ok([0xff;32]))} else {None}
         });
-        app.hid_device=Some(hid);
+        app.hid_device=Some(hid.into());
         name_review_rename(&mut app,&ctx,"Draft");name_review_drain(&mut app,&ctx);
         let before=packets.requests().iter().filter(|r|r[..2]==[0xfe,0x0a]).count();
         let path=std::env::temp_dir().join(format!("name-export-{}.entlayout",std::process::id()));
@@ -3196,7 +3196,7 @@ mod tests {
                     response[1..1+name.len()].copy_from_slice(name.as_bytes());Some(Ok(response))
                 } else {None}
             });
-            app.hid_device=Some(hid);
+            app.hid_device=Some(hid.into());
             name_review_rename(&mut app,&ctx,"First");app.poll_vial_hid_task(&ctx);
             waiting.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
             name_review_rename(&mut app,&ctx,"Second");
@@ -3205,7 +3205,7 @@ mod tests {
             if cancel_generation {
                 app.connection_generation+=1;
                 app.current_keyboard_id=Some(0x99);
-                app.hid_device=Some(unrelated);
+                app.hid_device=Some(unrelated.into());
             }
             release.send(()).unwrap();name_review_drain(&mut app,&ctx);
             assert_eq!(app.app_settings.application_layouts[&key].layouts[crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID].layer_names[0],"Second");
@@ -3252,7 +3252,7 @@ mod tests {
                 app.device_manager.replace_devices(vec![other]);app.connection_generation+=1;
                 mark_application_layout_protocol_supported(&mut app);
             }
-            app.hid_device=Some(hid);
+            app.hid_device=Some(hid.into());
             app.rename_application_layout_layer(crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID,0,"Draft".into());
             name_review_drain(&mut app,&ctx);
         }
@@ -3840,7 +3840,7 @@ mod tests {
         bridge.set_selected_application_layout_support(true);
         app.qmk_hid_hosts.insert(device.path.clone(), bridge);
         app.shared_hid_output = hid.shared_output();
-        app.hid_device = Some(hid);
+        app.hid_device = Some(hid.into());
         app.remember_connected_application_layout_device();
         let key = app.application_layout_device_key().unwrap();
         let foreground = |executable: &str| crate::application_layouts::DetectedApplication {

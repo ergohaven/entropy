@@ -91,19 +91,6 @@ pub trait WinitApp {
         window_id: WindowId,
     ) -> crate::Result<EventResult>;
 
-    /// Entropy patch: whether the root has no window while the app runs on,
-    /// see `linux_root`.
-    #[cfg(target_os = "linux")]
-    fn root_hidden(&self) -> bool {
-        false
-    }
-
-    /// Entropy patch: a pass of the root while it has no window.
-    #[cfg(target_os = "linux")]
-    fn run_hidden_root(&mut self, _event_loop: &ActiveEventLoop) -> crate::Result<EventResult> {
-        Ok(EventResult::Wait)
-    }
-
     fn suspended(&mut self, event_loop: &ActiveEventLoop) -> crate::Result<EventResult>;
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) -> crate::Result<EventResult>;

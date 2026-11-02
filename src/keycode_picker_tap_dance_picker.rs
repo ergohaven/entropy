@@ -382,7 +382,9 @@ impl KeycodePicker {
         }
         if self.supports_universal_symbols {
             ui.add_space(crate::ui_style::modal_space_sm());
-            if let Some(binding) = show_universal_symbol_section(ui, self.language) {
+            if let Some(binding) =
+                show_universal_symbol_section(ui, self.language, self.supports_universal_numero)
+            {
                 self.set_tap_dance_binding(td_idx, field, binding);
                 self.td_key_pick = None;
             }
@@ -410,9 +412,22 @@ impl KeycodePicker {
     }
 
     fn set_tap_dance_binding(&mut self, n: usize, field: u8, value: crate::keyboard::KeyBinding) {
+        if crate::universal_symbols::binding_contains_numero(value)
+            && !self.supports_universal_numero
+        {
+            return;
+        }
         if n >= self.tap_dance_entries.len() {
             return;
         }
+        let value = if self.rynk_board {
+            match crate::rynk::keycode::rynk_board_binding(value) {
+                Some(value) => value,
+                None => return,
+            }
+        } else {
+            value
+        };
         let current = match self.tap_dance_entries.get(n) {
             Some(td) => match field {
                 0 => td.on_tap,
@@ -467,6 +482,7 @@ mod tests {
         let available = KeycodePicker {
             supports_rmk_native_key_actions: true,
             supports_rmk_native_tap_dance_actions: true,
+            supports_universal_numero: false,
             supports_universal_symbols: true,
             ..Default::default()
         };
@@ -506,5 +522,26 @@ mod tests {
         assert_eq!(entry.on_hold, binding);
         assert_eq!(entry.on_double_tap, binding);
         assert_eq!(entry.on_tap_hold, binding);
+    }
+
+    #[test]
+    fn a_rynk_board_takes_tap_dance_picks_as_rynk_actions() {
+        let user_id = crate::universal_symbols::USER_SYMBOL_START;
+        let mut picker = KeycodePicker {
+            tap_dance_entries: vec![TapDanceEntry::default()],
+            rynk_board: true,
+            ..Default::default()
+        };
+
+        picker.set_tap_dance_binding(0, 1, crate::universal_symbols::binding(user_id));
+
+        let on_hold = picker.tap_dance_entries[0].on_hold;
+        assert!(!matches!(on_hold, crate::keyboard::KeyBinding::Rmk(_)));
+        assert_eq!(
+            crate::rynk::keycode::binding_action(on_hold),
+            Ok(rmk_types_rynk::action::KeyAction::Single(
+                rmk_types_rynk::action::Action::User(user_id)
+            ))
+        );
     }
 }

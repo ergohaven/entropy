@@ -1,5 +1,18 @@
 use rmk_types::action::{Action, KeyAction};
 
+pub(crate) fn binding_contains_numero(binding: crate::keyboard::KeyBinding) -> bool {
+    use crate::keyboard::KeyBinding;
+    let is_numero = |a| matches!(a, Action::User(0xB4));
+    match binding {
+        KeyBinding::Rmk(KeyAction::Single(a) | KeyAction::Tap(a)) => is_numero(a),
+        KeyBinding::Rmk(KeyAction::TapHold(a, b, _))
+        | KeyBinding::VialTapHold {
+            tap: a, hold: b, ..
+        } => is_numero(a) || is_numero(b),
+        _ => false,
+    }
+}
+
 pub(crate) const USER_TOGGLE: u8 = 0x80;
 pub(crate) const USER_SYNC: u8 = 0x81;
 pub(crate) const USER_SET_ENGLISH: u8 = 0x82;

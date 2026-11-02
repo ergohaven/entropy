@@ -121,13 +121,9 @@ entropy --export-layout - --device "K:04 (Qube)" > k04.entlayout
 The file is the same one **Layout → Export layout** writes. `--device` picks
 the keyboard when several are attached, by a part of its name, a hex `VID:PID`
 such as `e126:0071`, or its HID path; `--timeout` (seconds, default 60) bounds
-both the wait for a Bluetooth keyboard to be discovered and its loading.
-
-When Entropy is already running, it owns the keyboard, so on Linux and macOS
-the export asks that instance for the layout over a socket private to the
-user. The running Entropy lends its connection to the same read-only export,
-even while its window is in the background; its own writes wait until the
-export is done. On Windows, close the Entropy window first.
+both the wait for a Bluetooth keyboard to be discovered and its loading. Close
+the Entropy window first: the export refuses to run next to another instance
+that owns the keyboard.
 
 The export is read-only: the HID transport refuses every command that would
 change the keyboard. It writes only a complete snapshot of one connection: if a
@@ -136,7 +132,7 @@ file destination is replaced atomically, so a failed run keeps the previous
 backup.
 
 Exit status: `0` exported, `1` export failed, `2` no or ambiguous keyboard,
-`3` another Entropy instance is running and did not answer, `4` incomplete (the missing sections
+`3` another Entropy instance is running, `4` incomplete (the missing sections
 are logged), `64` usage error.
 
 ## Linux Device Access

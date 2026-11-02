@@ -560,7 +560,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = vial_app(true);
         let (hid_device, recorder) = crate::hid::HidDevice::test_device();
-        app.hid_device = Some(hid_device);
+        app.hid_device = Some(hid_device.into());
         app.auto_shift_timeout = Some(175);
 
         app.open_auto_shift_settings_page();
@@ -589,7 +589,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = vial_app(true);
         let (hid_device, recorder) = crate::hid::HidDevice::test_device();
-        app.hid_device = Some(hid_device);
+        app.hid_device = Some(hid_device.into());
         app.settings_tab = SettingsTab::MatrixTester;
         app.main_menu_tab = MainMenuTab::Settings;
         app.reset_matrix_tester_state();

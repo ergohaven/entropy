@@ -49,7 +49,7 @@ fn sm62_timeout_failed_set_get_and_mismatch_never_confirm_requested_value() {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&cc);
         let (hid, recorder) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((after, fault)));
-        app.hid_device = Some(hid);
+        app.hid_device = Some(hid.into());
         app.display_settings.sm62_supported = true;
         app.display_settings.display_timeout_supported = true;
         app.display_settings.display_timeout = 6;
@@ -82,7 +82,7 @@ fn sm62_timeout_unsupported_control_never_queues_and_does_not_mutate_defaults() 
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EntropyApp::new(&cc);
     let (hid, recorder) = crate::hid::HidDevice::test_device();
-    app.hid_device = Some(hid);
+    app.hid_device = Some(hid.into());
     let before = app.display_settings.clone();
     let _ = ctx.run(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| app.draw_sm62_timeout_control(ui));
@@ -114,7 +114,7 @@ fn sm62_timeout_real_dropdown_queues_each_index_and_reloads_without_other_writes
             app.display_settings = crate::app::app_state::load_display_settings(&hid, &qsids).unwrap();
             let before = app.display_settings.clone();
             let request_start = recorder.requests().len();
-            app.hid_device = Some(hid);
+            app.hid_device = Some(hid.into());
             frame(&mut app, &ctx, vec![]);
             frame(&mut app, &ctx, vec![]);
             assert_eq!(recorder.requests().len(), request_start, "render must not write");
@@ -143,7 +143,7 @@ fn sm62_timeout_real_dropdown_queues_each_index_and_reloads_without_other_writes
             assert_eq!(u16::from_le_bytes([sets[0][2],sets[0][3]]), DISPLAY_TIMEOUT_QSID);
             assert_eq!(sets[0][4], index);
             assert!(requests[request_start..].iter().any(|r| r[1] == 0x0A && u16::from_le_bytes([r[2],r[3]]) == DISPLAY_TIMEOUT_QSID));
-            let loaded = crate::app::app_state::load_display_settings(app.hid_device.as_ref().unwrap(), &qsids).unwrap();
+            let loaded = crate::app::app_state::load_display_settings(app.hid_device.as_ref().unwrap().as_vial().unwrap(), &qsids).unwrap();
             assert_eq!(loaded.confirmed_display_timeout, index, "fresh production read from device storage");
             assert_eq!(loaded.sm62_values, values);
         }
@@ -158,7 +158,7 @@ fn sm62_timeout_saved_check_is_hidden_but_generic_saved_status_is_retained() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EntropyApp::new(&cc);
     let (hid, _) = crate::hid::HidDevice::test_device();
-    app.hid_device = Some(hid);
+    app.hid_device = Some(hid.into());
     app.display_settings.sm62_supported = true;
     app.display_settings.display_timeout_supported = true;
     app.queue_display_setting_write("timeout".into(), DISPLAY_TIMEOUT_QSID, 0, 1);

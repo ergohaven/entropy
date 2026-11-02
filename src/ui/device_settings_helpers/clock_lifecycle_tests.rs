@@ -215,7 +215,7 @@ fn attach(app: &mut EntropyApp, index: usize, time: bool) -> TestHidRecorder {
     app.selected_device = Some(index);
     app.layout = Some(layout(time));
     app.shared_hid_output = hid.shared_output();
-    app.hid_device = Some(hid);
+    app.hid_device = Some(hid.into());
     app.connect_state = ConnectState::Idle;
     recorder
 }

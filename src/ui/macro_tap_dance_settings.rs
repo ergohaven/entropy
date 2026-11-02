@@ -6,10 +6,14 @@ impl EntropyApp {
     /// counter and the write guard both read this, so they cannot disagree.
     pub(super) fn macro_memory_use(&self) -> Option<(usize, usize)> {
         let capacity = self.device_about_info.as_ref()?.macro_memory_bytes?;
-        Some((
-            crate::hid::macro_buffer_len(&self.keycode_picker.macro_texts),
-            usize::from(capacity),
-        ))
+        let macros = &self.keycode_picker.macro_texts;
+        // A Rynk board's pool holds ops, not Vial's bytes.
+        let used = if self.rynk_board_connected() {
+            crate::rynk::macros::vial_macros_space_used(macros, self.keycode_picker.macro_count)
+        } else {
+            crate::hid::macro_buffer_len(macros)
+        };
+        Some((used, usize::from(capacity)))
     }
 
     pub(super) fn draw_macro_settings_page(&mut self, ui: &mut egui::Ui, content_rect: egui::Rect) {

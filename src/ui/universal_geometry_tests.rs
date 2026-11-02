@@ -51,6 +51,30 @@ fn texts(shape: &egui::Shape, out: &mut Vec<String>) {
 }
 
 #[test]
+fn universal_geometry_does_not_take_over_rynk_layout_options_or_live_ui() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_geometry(&ctx);
+    app.layout.as_mut().unwrap().firmware = FirmwareProtocol::Rynk;
+    let layout = app.layout.as_ref().unwrap();
+    assert_eq!(
+        app.user_layout_option_indices(layout),
+        vec![0],
+        "Vial-only geometry relocation hid an existing Rynk option"
+    );
+    let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        app.draw_live_features_settings_page(ui, ui.max_rect());
+    });
+    let mut rendered = vec![];
+    for shape in output.shapes {
+        texts(&shape.shape, &mut rendered);
+    }
+    assert!(
+        !rendered.iter().any(|s| s == "Universal Symbols"),
+        "{rendered:?}"
+    );
+}
+
+#[test]
 fn universal_geometry_follows_layout_sync_even_when_sync_disabled() {
     for enabled in [false, true] {
         let ctx = egui::Context::default();

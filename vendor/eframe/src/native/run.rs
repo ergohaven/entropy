@@ -78,9 +78,6 @@ fn with_event_loop<R>(
 /// some events, but otherwise forwards events to the [`WinitApp`].
 struct WinitAppWrapper<T: WinitApp> {
     windows_next_repaint_times: HashMap<WindowId, Instant>,
-    /// Entropy patch: when the root, which has no window while hidden, runs next.
-    #[cfg(target_os = "linux")]
-    hidden_root_next_pass: Option<Instant>,
     winit_app: T,
     return_result: Result<(), crate::Error>,
     run_and_return: bool,
@@ -90,8 +87,6 @@ impl<T: WinitApp> WinitAppWrapper<T> {
     fn new(winit_app: T, run_and_return: bool) -> Self {
         Self {
             windows_next_repaint_times: HashMap::default(),
-            #[cfg(target_os = "linux")]
-            hidden_root_next_pass: None,
             winit_app,
             return_result: Ok(()),
             run_and_return,
@@ -156,12 +151,6 @@ impl<T: WinitApp> WinitAppWrapper<T> {
                 event_result
             }
             EventResult::CloseRequested => {
-                // The next window event ends the loop, but a hidden root has
-                // no window left to send one.
-                #[cfg(target_os = "linux")]
-                if self.winit_app.root_hidden() {
-                    exit = true;
-                }
                 // The windows need to be dropped whilst the event loop is running to allow for proper cleanup.
                 self.winit_app.save_and_destroy();
                 event_result
@@ -198,15 +187,6 @@ impl<T: WinitApp> WinitAppWrapper<T> {
 
     fn check_redraw_requests(&mut self, event_loop: &ActiveEventLoop) {
         let now = Instant::now();
-
-        #[cfg(target_os = "linux")]
-        if self.hidden_root_next_pass.is_some_and(|when| when <= now) {
-            self.hidden_root_next_pass = None;
-            let event_result = self.winit_app.run_hidden_root(event_loop);
-            // Checks the redraw requests again once it is handled.
-            self.handle_event_result(event_loop, event_result);
-            return;
-        }
 
         let mut invisible_window_ids = Vec::new();
 
@@ -257,11 +237,6 @@ impl<T: WinitApp> WinitAppWrapper<T> {
         }
 
         let next_repaint_time = self.windows_next_repaint_times.values().min().copied();
-        #[cfg(target_os = "linux")]
-        let next_repaint_time = next_repaint_time
-            .into_iter()
-            .chain(self.hidden_root_next_pass)
-            .min();
         if let Some(next_repaint_time) = next_repaint_time {
             event_loop.set_control_flow(ControlFlow::WaitUntil(next_repaint_time));
         }
@@ -349,18 +324,6 @@ impl<T: WinitApp> ApplicationHandler<UserEvent> for WinitAppWrapper<T> {
                             };
                             Ok(EventResult::RepaintAt(window_id, when))
                         } else {
-                            // A hidden root has no window to repaint, yet its app
-                            // keeps running, at the pace of an invisible window.
-                            #[cfg(target_os = "linux")]
-                            if viewport_id == egui::ViewportId::ROOT && self.winit_app.root_hidden()
-                            {
-                                let when =
-                                    when.max(Instant::now() + INVISIBLE_WINDOW_REPAINT_INTERVAL);
-                                self.hidden_root_next_pass = Some(
-                                    self.hidden_root_next_pass
-                                        .map_or(when, |next| next.min(when)),
-                                );
-                            }
                             Ok(EventResult::Wait)
                         }
                     } else {

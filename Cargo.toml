@@ -51,10 +51,16 @@ ab_glyph = "0.2"
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
 postcard = "1"
 rmk-types = { git = "https://github.com/ergohaven/rmk.git", rev = "99cdcd542600eb1a439675455997fe7cf3928600", default-features = false }
+# Rynk boards: the ergohaven Rynk firmware revision, moves with every firmware sync.
+rmk-types-rynk = { package = "rmk-types", git = "https://github.com/ergohaven/rmk.git", rev = "25ba9a57dd21f4470723e977038a390c2559d37c", default-features = false, features = ["host", "ergohaven"] }
 semver = "1"
 url = "2"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Blocks on nusb's hotplug stream in the Rynk board watcher.
+futures-lite = "2"
+# Rynk boards over USB: the vendor bulk interface, claimed without libusb.
+nusb = "0.2"
 rfd = "0.15"
 tempfile = "3"
 ureq = { version = "2", features = ["json"] }
@@ -81,10 +87,8 @@ tray-icon = "0.22"
 [target.'cfg(target_os = "linux")'.dependencies]
 async-channel = "2"
 dbus = { version = "0.9", features = ["vendored"] }
-futures-lite = "2"
 hidapi = { version = "2.6", default-features = false, features = ["linux-native-basic-udev"] }
 kdotool = { version = "0.3", default-features = false }
-ksni = { version = "0.3.7", default-features = false, features = ["async-io", "blocking"] }
 libc = "0.2"
 x11-dl = "2"
 zbus = "5.16"

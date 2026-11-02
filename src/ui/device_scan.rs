@@ -8,6 +8,44 @@ fn should_wait_for_manual_device_selection(status_msg: &str) -> bool {
         || status_msg.starts_with("Connect failed:")
 }
 
+/// A device reached over BlueZ's D-Bus, which no udev rule gates: Vial's GATT
+/// service, or a Rynk board over Bluetooth.
+#[cfg(target_os = "linux")]
+fn reachable_without_udev_rule(device: &Device) -> bool {
+    device.uses_bluez_gatt_transport()
+        || (device.firmware == FirmwareProtocol::Rynk && device.is_bluetooth_transport())
+}
+
+/// A Rynk board on USB, which only the rule's usb_device line opens.
+#[cfg(target_os = "linux")]
+fn needs_rynk_udev_rule(device: &Device) -> bool {
+    device.firmware == FirmwareProtocol::Rynk && !reachable_without_udev_rule(device)
+}
+
+/// Whether the installed rule opens every listed board that needs one. A rule
+/// from before Rynk still opens Vial boards, so it is enough until a Rynk board
+/// shows up on USB.
+#[cfg(target_os = "linux")]
+pub(super) fn udev_rule_covers(
+    devices: &[Device],
+    access: super::app_settings_ui::UdevAccess,
+) -> bool {
+    access.vial && (access.rynk || !devices.iter().any(needs_rynk_udev_rule))
+}
+
+/// Whether to ask for the rule instead of connecting: it does not cover the
+/// list, and either a Rynk board on USB waits for it or nothing on the list
+/// can be reached without one.
+#[cfg(target_os = "linux")]
+pub(super) fn udev_rule_missing(
+    devices: &[Device],
+    access: super::app_settings_ui::UdevAccess,
+) -> bool {
+    !udev_rule_covers(devices, access)
+        && (devices.iter().any(needs_rynk_udev_rule)
+            || !devices.iter().any(reachable_without_udev_rule))
+}
+
 fn should_auto_connect_only_device(device_count: usize) -> bool {
     device_count == 1
 }
@@ -56,57 +94,6 @@ fn in_listed_order(listed: &[Device], mut scanned: Vec<Device>) -> Vec<Device> {
 }
 
 impl EntropyApp {
-    /// Connects the board the user picked, and remembers it to connect it
-    /// again whenever it comes back. Only an identity that names this board
-    /// alone is remembered: same-model boards without distinct serials cannot
-    /// be told apart once one of them is gone.
-    pub(super) fn connect_picked_device(&mut self, device_idx: usize) {
-        self.remember_picked_device(device_idx);
-        self.start_connect(device_idx);
-    }
-
-    /// A board picked in the device menu: connected unless it already is,
-    /// and remembered either way.
-    pub(super) fn pick_device(&mut self, device_idx: usize) {
-        if self.selected_device != Some(device_idx) || self.pending_device_connect.is_some() {
-            self.connect_picked_device(device_idx);
-        } else {
-            self.remember_picked_device(device_idx);
-        }
-    }
-
-    /// Remembers the board the user picked, connected already or not: the
-    /// pick replaces any board remembered before, and any takeover queued for
-    /// it.
-    fn remember_picked_device(&mut self, device_idx: usize) {
-        let devices = self.device_manager.devices();
-        self.remembered_device = devices
-            .get(device_idx)
-            .map(Device::stable_identity)
-            .filter(|identity| devices.iter().filter(|d| identity.matches(d)).count() == 1);
-        self.pending_takeover = None;
-    }
-
-    /// Forgets the picked board once a scan lists two boards its identity
-    /// names: from then on neither proves to be the one picked, and a
-    /// takeover still queued for it lapses. A request the user made stays.
-    fn forget_ambiguous_remembered_device(&mut self) {
-        let ambiguous = self.remembered_device.as_ref().is_some_and(|identity| {
-            let devices = self.device_manager.devices();
-            devices.iter().filter(|d| identity.matches(d)).count() > 1
-        });
-        if ambiguous {
-            self.remembered_device = None;
-            if self
-                .pending_takeover
-                .take()
-                .is_some_and(|takeover| self.pending_device_connect.as_ref() == Some(&takeover))
-            {
-                self.pending_device_connect = None;
-            }
-        }
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn maybe_start_bluetooth_reconnect_scan(&mut self, ctx: &egui::Context) {
         let Some(next_attempt_at) = (match &self.connect_state {
@@ -248,6 +235,9 @@ impl EntropyApp {
                 },
                 Err(error) => log::warn!("{error}; preserving the previous device list"),
             }
+            // A Rynk board selected before gets its bridge back once it is
+            // found, whether it is selected now or not.
+            self.sync_rynk_host_bridges();
         }
     }
 
@@ -284,7 +274,6 @@ impl EntropyApp {
                 })
             });
             self.device_manager.replace_devices(devices);
-            self.forget_ambiguous_remembered_device();
             if let Some(previous) = previous {
                 let changed = selected.is_some_and(|i| {
                     let current = &self.device_manager.devices()[i];
@@ -310,7 +299,6 @@ impl EntropyApp {
             let reconnect_device_index =
                 unique_reconnect_device_index(&devices, &reconnect.identity);
             self.device_manager.replace_devices(devices);
-            self.forget_ambiguous_remembered_device();
             self.retain_connected_qmk_hid_host_bridges();
             let connected_display_name_keys: std::collections::HashSet<String> = self
                 .device_manager
@@ -340,7 +328,6 @@ impl EntropyApp {
         let selecting_device = matches!(self.connect_state, ConnectState::SelectingDevice);
 
         self.device_manager.replace_devices(devices);
-        self.forget_ambiguous_remembered_device();
         self.retain_connected_qmk_hid_host_bridges();
         let connected_display_name_keys: std::collections::HashSet<String> = self
             .device_manager
@@ -417,46 +404,14 @@ impl EntropyApp {
             return;
         }
 
-        // The board picked last comes back on its own, however many others
-        // are listed, and takes over from a board connected without a pick,
-        // such as the one left alone while it was gone: picking that board
-        // would have replaced the memory. It has been opened before, so no
-        // udev gate applies.
-        if !was_loading {
-            let idle = self.selected_device.is_none() && self.layout.is_none();
-            let remembered = self.remembered_device.as_ref().and_then(|identity| {
-                let index = unique_reconnect_device_index(self.device_manager.devices(), identity)?;
-                let other_connected = previous_device
-                    .as_ref()
-                    .is_some_and(|device| !identity.matches(device));
-                (idle || other_connected).then_some(index)
-            });
-            if let Some(index) = remembered {
-                // The previous board's index is from the last scan; the
-                // handoff in start_connect needs it in this one.
-                self.selected_device = previous_device_key.as_ref().and_then(|key| {
-                    self.device_manager
-                        .devices()
-                        .iter()
-                        .position(|dev| dev.display_name_cache_key() == *key)
-                });
-                self.start_connect(index);
-                // Queued behind a write, it is still the remembered board's.
-                self.pending_takeover = self.pending_device_connect.clone();
-                return;
-            }
-        }
-
         #[cfg(target_os = "linux")]
         if self.selected_device.is_none()
             && self.layout.is_none()
             && !was_loading
-            && !super::app_settings_ui::linux_vial_udev_rules_installed()
-            && !self
-                .device_manager
-                .devices()
-                .iter()
-                .any(Device::uses_bluez_gatt_transport)
+            && udev_rule_missing(
+                self.device_manager.devices(),
+                super::app_settings_ui::linux_udev_access(),
+            )
         {
             self.retain_connected_qmk_hid_host_bridges();
             return;
@@ -477,12 +432,17 @@ impl EntropyApp {
                     log::info!("USB HID endpoint was re-enumerated; reopening the device");
                     self.start_connect(idx);
                 } else if (self.layout.is_none()
-                    || (self.hid_device.is_none() && !self.hid_write_task_owner_active()))
+                    || (self.hid_device.is_none() && !self.hid_write_task_owner_active())
+                    || self
+                        .hid_device
+                        .as_ref()
+                        .is_some_and(crate::device_session::DeviceSession::link_lost))
                     && !was_loading
                 {
                     // A failed USB settings write can drop the HID owner while
-                    // discovery still reports the same path/instance. Do not
-                    // wait for another OS re-enumeration to reopen it.
+                    // discovery still reports the same path/instance, and a
+                    // Rynk link can break under a board that stays plugged in.
+                    // Do not wait for another OS re-enumeration to reopen it.
                     self.start_connect(idx);
                 } else {
                     self.sync_qmk_hid_host_bridges();
@@ -508,7 +468,97 @@ impl EntropyApp {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    use super::super::app_settings_ui::UdevAccess;
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn bluetooth_boards_reached_over_dbus_need_no_udev_rule() {
+        let mut rynk = scan_test_device("rynk");
+        rynk.firmware = FirmwareProtocol::Rynk;
+        rynk.path = "usb:3-1".into();
+        assert!(
+            !reachable_without_udev_rule(&rynk),
+            "a Rynk board on USB is claimed through usbfs"
+        );
+        rynk.path = "ble:E0:2A:4F:10:22:33".into();
+        rynk.bus_type = "Bluetooth".into();
+        assert!(reachable_without_udev_rule(&rynk));
+
+        let mut vial = scan_test_device("vial");
+        vial.bus_type = "Bluetooth".into();
+        assert!(
+            !reachable_without_udev_rule(&vial),
+            "a Vial board over kernel HID opens hidraw"
+        );
+        vial.path = "bluez-gatt:/org/bluez/hci0/dev_E0_2A_4F_10_22_33/service0020".into();
+        assert!(reachable_without_udev_rule(&vial));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn rynk_on_usb() -> Device {
+        let mut rynk = scan_test_device("rynk");
+        rynk.firmware = FirmwareProtocol::Rynk;
+        rynk.path = "usb:3-1".into();
+        rynk
+    }
+
+    #[cfg(target_os = "linux")]
+    const V2: UdevAccess = UdevAccess {
+        vial: true,
+        rynk: false,
+    };
+
+    #[cfg(target_os = "linux")]
+    const V3: UdevAccess = UdevAccess {
+        vial: true,
+        rynk: true,
+    };
+
+    #[cfg(target_os = "linux")]
+    const NO_RULE: UdevAccess = UdevAccess {
+        vial: false,
+        rynk: false,
+    };
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_v2_rule_with_vial_boards_only_asks_for_nothing() {
+        let vial = [scan_test_device("vial")];
+        assert!(udev_rule_covers(&vial, V2));
+        assert!(
+            !udev_rule_missing(&vial, V2),
+            "Vial on USB connects with v2"
+        );
+        assert!(!udev_rule_missing(&[], V2), "an empty list shows no card");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_rynk_board_on_usb_asks_a_v2_rule_for_the_update() {
+        let boards = [scan_test_device("vial"), rynk_on_usb()];
+        assert!(!udev_rule_covers(&boards, V2));
+        assert!(udev_rule_missing(&boards, V2));
+        assert!(udev_rule_missing(&boards[1..], V2));
+        assert!(udev_rule_covers(&boards, V3));
+        assert!(!udev_rule_missing(&boards, V3));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn without_a_rule_only_boards_off_udev_connect() {
+        let vial = [scan_test_device("vial")];
+        assert!(udev_rule_missing(&vial, NO_RULE));
+        assert!(udev_rule_missing(&[], NO_RULE));
+        assert!(udev_rule_missing(&[rynk_on_usb()], NO_RULE));
+
+        let mut rynk_ble = rynk_on_usb();
+        rynk_ble.path = "ble:E0:2A:4F:10:22:33".into();
+        rynk_ble.bus_type = "Bluetooth".into();
+        assert!(!udev_rule_missing(&[rynk_ble], NO_RULE));
+        assert!(!udev_rule_covers(&vial, NO_RULE));
+    }
 
     fn scan_test_device(name: &str) -> Device {
         Device {
@@ -551,7 +601,7 @@ mod tests {
             firmware: FirmwareProtocol::Vial,
         });
         let (hid, _recorder) = crate::hid::HidDevice::test_device();
-        app.hid_device = Some(hid);
+        app.hid_device = Some(hid.into());
         app.device_display_names
             .insert(macropad.display_name_cache_key(), macropad.name.clone());
         let old_generation = app.connection_generation;
@@ -611,270 +661,6 @@ mod tests {
 
         assert_eq!(requests.try_recv().unwrap().0.path, device.path);
         assert!(matches!(app.connect_state, ConnectState::Loading { .. }));
-    }
-
-    #[test]
-    fn the_board_picked_last_is_connected_again_among_several() {
-        let mut app = EntropyApp::new_inert_for_test();
-        let (launch_tx, requests) = mpsc::channel();
-        app.test_connect_requests = Some(launch_tx);
-        let phenom = scan_test_device("Phenom");
-        let qube = scan_test_device("Qube");
-        let mut mini = scan_test_device("Mini");
-        mini.bus_type = "Bluetooth".to_owned();
-        app.device_manager
-            .replace_devices(vec![phenom.clone(), qube.clone(), mini.clone()]);
-        // A connect that ended with its board gone.
-        let unplugged = |app: &mut EntropyApp| {
-            app.connect_state = ConnectState::Idle;
-            app.selected_device = None;
-        };
-
-        app.connect_picked_device(1);
-        assert_eq!(requests.try_recv().unwrap().0.name, "Qube");
-        unplugged(&mut app);
-        app.apply_device_scan_result(vec![phenom.clone(), mini.clone()]);
-        assert!(requests.try_recv().is_err(), "another board was connected");
-
-        let mut replugged = qube.clone();
-        replugged.path = format!("{}-replugged", qube.path);
-        replugged.instance_token = "replugged-instance".to_owned();
-        app.apply_device_scan_result(vec![phenom.clone(), replugged.clone(), mini.clone()]);
-        let (connected, _) = requests
-            .try_recv()
-            .expect("the picked board was not connected again");
-        assert_eq!(connected.path, replugged.path);
-
-        // Picking another board replaces the one remembered.
-        unplugged(&mut app);
-        app.connect_picked_device(0);
-        assert_eq!(requests.try_recv().unwrap().0.name, "Phenom");
-        unplugged(&mut app);
-        app.apply_device_scan_result(vec![phenom, replugged, mini]);
-        assert_eq!(requests.try_recv().unwrap().0.name, "Phenom");
-    }
-
-    /// The same model without a serial: nothing tells two of them apart.
-    fn serial_less_twin(path: &str) -> Device {
-        let mut twin = scan_test_device("Twin");
-        twin.serial_number.clear();
-        twin.path = format!("/nonexistent/entropy-test-{path}");
-        twin.instance_token = format!("{path}-instance");
-        twin
-    }
-
-    /// The picked board, opened and loaded.
-    fn connected_to(app: &mut EntropyApp, index: usize) {
-        let device = app.device_manager.devices()[index].clone();
-        app.connect_state = ConnectState::Idle;
-        app.selected_device = Some(index);
-        app.layout = Some(KeyboardLayout {
-            name: device.name.clone(),
-            rows: 0,
-            cols: 0,
-            keys: Vec::new(),
-            encoders: Vec::new(),
-            layers: vec![Vec::new()],
-            encoder_layers: vec![Vec::new()],
-            layer_names: vec!["Base".to_owned()],
-            custom_keycodes: Vec::new(),
-            layout_options: Vec::new(),
-            live_features: Default::default(),
-            supports_rgb: false,
-            lighting_mode: None,
-            firmware: FirmwareProtocol::Vial,
-        });
-        app.hid_device = Some(crate::hid::HidDevice::test_device().0);
-    }
-
-    #[test]
-    fn a_board_its_twin_could_be_is_not_connected_again() {
-        let mut app = EntropyApp::new_inert_for_test();
-        let (launch_tx, requests) = mpsc::channel();
-        app.test_connect_requests = Some(launch_tx);
-        let a = serial_less_twin("a");
-        let b = serial_less_twin("b");
-        let other = scan_test_device("Other");
-        // Both twins gone and the connection with them.
-        let gone = |app: &mut EntropyApp| {
-            app.connect_state = ConnectState::Idle;
-            app.selected_device = None;
-            app.layout = None;
-            app.hid_device = None;
-        };
-
-        // Picked while its twin was listed: the pick names either.
-        app.device_manager
-            .replace_devices(vec![a.clone(), b.clone(), other.clone()]);
-        app.connect_picked_device(0);
-        assert_eq!(requests.try_recv().unwrap().0.path, a.path);
-        assert!(app.remembered_device.is_none());
-        gone(&mut app);
-        app.apply_device_scan_result(vec![b.clone(), other.clone()]);
-        assert!(
-            requests.try_recv().is_err(),
-            "the twin was opened as the pick"
-        );
-
-        // Picked alone, then listed beside its twin: neither proves to be it.
-        app.device_manager
-            .replace_devices(vec![a.clone(), other.clone()]);
-        app.connect_picked_device(0);
-        assert_eq!(requests.try_recv().unwrap().0.path, a.path);
-        assert!(app.remembered_device.is_some());
-        connected_to(&mut app, 0);
-        app.apply_device_scan_result(vec![a, b.clone(), other.clone()]);
-        assert!(app.remembered_device.is_none());
-        gone(&mut app);
-        app.apply_device_scan_result(vec![b, other]);
-        assert!(
-            requests.try_recv().is_err(),
-            "the twin was opened as the pick"
-        );
-    }
-
-    #[test]
-    fn the_picked_board_takes_over_from_the_one_left_alone() {
-        let mut app = EntropyApp::new_inert_for_test();
-        let (launch_tx, requests) = mpsc::channel();
-        app.test_connect_requests = Some(launch_tx);
-        let picked = scan_test_device("Picked");
-        let other = scan_test_device("Other");
-        app.device_manager
-            .replace_devices(vec![picked.clone(), other.clone()]);
-        app.connect_picked_device(0);
-        assert_eq!(requests.try_recv().unwrap().0.name, "Picked");
-        connected_to(&mut app, 0);
-
-        // Unplugged: the board left alone is connected on its own.
-        app.apply_device_scan_result(vec![other.clone()]);
-        assert_eq!(requests.try_recv().unwrap().0.name, "Other");
-        connected_to(&mut app, 0);
-        app.apply_device_scan_result(vec![other.clone()]);
-        assert!(requests.try_recv().is_err());
-
-        // Back: the picked board takes over, and keeps the connection after.
-        app.apply_device_scan_result(vec![other.clone(), picked.clone()]);
-        assert_eq!(requests.try_recv().unwrap().0.name, "Picked");
-        connected_to(&mut app, 1);
-        app.apply_device_scan_result(vec![other.clone(), picked.clone()]);
-        assert!(requests.try_recv().is_err(), "the connection moved again");
-
-        // Picking the other board makes it the one remembered.
-        app.connect_picked_device(0);
-        assert_eq!(requests.try_recv().unwrap().0.name, "Other");
-        connected_to(&mut app, 0);
-        app.apply_device_scan_result(vec![other, picked]);
-        assert!(
-            requests.try_recv().is_err(),
-            "the manual choice was overridden"
-        );
-    }
-
-    #[test]
-    fn picking_the_connected_board_makes_it_the_one_remembered() {
-        let mut app = EntropyApp::new_inert_for_test();
-        let (launch_tx, requests) = mpsc::channel();
-        app.test_connect_requests = Some(launch_tx);
-        let a = scan_test_device("A");
-        let b = scan_test_device("B");
-        app.device_manager
-            .replace_devices(vec![a.clone(), b.clone()]);
-        app.pick_device(0);
-        assert_eq!(requests.try_recv().unwrap().0.name, "A");
-        connected_to(&mut app, 0);
-        app.apply_device_scan_result(vec![b.clone()]);
-        assert_eq!(requests.try_recv().unwrap().0.name, "B");
-        connected_to(&mut app, 0);
-
-        // Picked as it is: nothing to open, but it is the choice now.
-        app.pick_device(0);
-        assert!(
-            requests.try_recv().is_err(),
-            "the connected board was reopened"
-        );
-        app.apply_device_scan_result(vec![b, a]);
-
-        assert!(requests.try_recv().is_err(), "the earlier pick took over");
-        assert_eq!(app.selected_device, Some(0));
-    }
-
-    /// The same model with the same serial: as indistinct as no serial.
-    fn duplicate_serial_twin(path: &str) -> Device {
-        let mut twin = scan_test_device("Twin");
-        twin.path = format!("/nonexistent/entropy-test-{path}");
-        twin.instance_token = format!("{path}-instance");
-        twin
-    }
-
-    /// Holds the connection the way a combo write does, until it is dropped.
-    fn busy_with_a_write(app: &mut EntropyApp) {
-        let (_, receiver) = mpsc::channel();
-        app.combo_write_task = Some(ComboWriteTask {
-            receiver,
-            revision: 0,
-        });
-    }
-
-    #[test]
-    fn a_queued_takeover_lapses_once_its_board_has_a_twin() {
-        for twin in [serial_less_twin, duplicate_serial_twin] {
-            let mut app = EntropyApp::new_inert_for_test();
-            let (launch_tx, requests) = mpsc::channel();
-            app.test_connect_requests = Some(launch_tx);
-            let a = twin("a");
-            let b = twin("b");
-            let other = scan_test_device("Other");
-            app.device_manager
-                .replace_devices(vec![a.clone(), other.clone()]);
-            app.pick_device(0);
-            assert_eq!(requests.try_recv().unwrap().0.path, a.path);
-            connected_to(&mut app, 0);
-            app.apply_device_scan_result(vec![other.clone()]);
-            assert_eq!(requests.try_recv().unwrap().0.name, "Other");
-            connected_to(&mut app, 0);
-
-            // A comes back while a write holds Other: its takeover waits.
-            busy_with_a_write(&mut app);
-            app.apply_device_scan_result(vec![other.clone(), a.clone()]);
-            assert_eq!(app.pending_device_connect, Some(a.stable_identity()));
-            app.apply_device_scan_result(vec![other.clone(), a, b.clone()]);
-            app.apply_device_scan_result(vec![other.clone()]);
-            app.combo_write_task = None;
-            app.resume_pending_device_connect();
-            app.apply_device_scan_result(vec![other, b]);
-
-            assert!(
-                requests.try_recv().is_err(),
-                "the twin was opened as the pick"
-            );
-            assert!(app.pending_device_connect.is_none());
-        }
-    }
-
-    #[test]
-    fn a_queued_pick_outlives_its_board_getting_a_twin() {
-        let mut app = EntropyApp::new_inert_for_test();
-        let (launch_tx, requests) = mpsc::channel();
-        app.test_connect_requests = Some(launch_tx);
-        let a = serial_less_twin("a");
-        let b = serial_less_twin("b");
-        let other = scan_test_device("Other");
-        app.device_manager
-            .replace_devices(vec![other.clone(), a.clone()]);
-        connected_to(&mut app, 0);
-        busy_with_a_write(&mut app);
-
-        app.pick_device(1);
-        app.apply_device_scan_result(vec![other, a.clone(), b]);
-
-        assert!(requests.try_recv().is_err());
-        assert!(app.remembered_device.is_none());
-        assert_eq!(
-            app.pending_device_connect,
-            Some(a.stable_identity()),
-            "the user's request was dropped"
-        );
     }
 
     #[test]

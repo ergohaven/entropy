@@ -197,9 +197,6 @@ pub use native::macos::WindowChromeMetrics;
 #[cfg(any(feature = "glow", feature = "wgpu_no_default_features"))]
 pub use native::run::EframeWinitApplication;
 
-#[cfg(all(target_os = "linux", feature = "glow"))]
-pub use native::linux_root::set_root_activation_token;
-
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
 #[cfg(any(feature = "glow", feature = "wgpu_no_default_features"))]
 pub use native::run::EframePumpStatus;

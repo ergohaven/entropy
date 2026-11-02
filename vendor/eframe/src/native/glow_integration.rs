@@ -126,10 +126,6 @@ struct GlutinWindowContext {
     window_from_viewport: OrderedViewportIdMap<WindowId>,
 
     focused_viewport: Option<ViewportId>,
-
-    /// Entropy patch: a root window created again needs AccessKit set up again.
-    #[cfg(all(target_os = "linux", feature = "accesskit"))]
-    accesskit_proxy: Option<EventLoopProxy<UserEvent>>,
 }
 
 struct Viewport {
@@ -154,13 +150,6 @@ struct Viewport {
     /// Preserve the requested VSync cadence in software when that fallback is active.
     wayland_frame_interval: Option<Duration>,
     last_swap_at: Option<Instant>,
-
-    /// Entropy patch: the root dropped its window on purpose, see `linux_root`.
-    #[cfg(target_os = "linux")]
-    hidden: bool,
-    /// Entropy patch: texture changes of root passes that painted nothing.
-    #[cfg(target_os = "linux")]
-    pending_textures_delta: egui::TexturesDelta,
 }
 
 fn wayland_frame_interval(
@@ -364,11 +353,7 @@ impl<'app> GlowWinitApp<'app> {
                 ..
             } = viewport
             {
-                egui_winit.init_accesskit(event_loop, window, event_loop_proxy.clone());
-            }
-            #[cfg(target_os = "linux")]
-            {
-                glutin.accesskit_proxy = Some(event_loop_proxy);
+                egui_winit.init_accesskit(event_loop, window, event_loop_proxy);
             }
         }
 
@@ -485,11 +470,10 @@ impl WinitApp for GlowWinitApp<'_> {
         if let Some(mut running) = self.running.take() {
             profiling::function_scope!();
 
-            // The root may have no window: it can quit from the tray.
-            let window_opt = running.glutin.borrow().window_opt(ViewportId::ROOT);
-            running
-                .integration
-                .save(running.app.as_mut(), window_opt.as_deref());
+            running.integration.save(
+                running.app.as_mut(),
+                Some(&running.glutin.borrow().window(ViewportId::ROOT)),
+            );
             running.app.on_exit(Some(running.painter.borrow().gl()));
             running.painter.borrow_mut().destroy();
         }
@@ -504,26 +488,6 @@ impl WinitApp for GlowWinitApp<'_> {
             running.run_ui_and_paint(event_loop, window_id)
         } else {
             Ok(EventResult::Wait)
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn root_hidden(&self) -> bool {
-        self.running.as_ref().is_some_and(|running| {
-            running
-                .glutin
-                .borrow()
-                .viewports
-                .get(&ViewportId::ROOT)
-                .is_some_and(|root| root.hidden)
-        })
-    }
-
-    #[cfg(target_os = "linux")]
-    fn run_hidden_root(&mut self, event_loop: &ActiveEventLoop) -> Result<EventResult> {
-        match &mut self.running {
-            Some(running) => running.run_hidden_root(event_loop),
-            None => Ok(EventResult::Wait),
         }
     }
 
@@ -748,15 +712,6 @@ impl GlowWinitRunning<'_> {
             is_visible,
         );
 
-        // A root that hides on this pass is not painted: at launch it never shows.
-        #[cfg(target_os = "linux")]
-        let is_visible = is_visible
-            && !(viewport_id == ViewportId::ROOT
-                && full_output
-                    .viewport_output
-                    .get(&ViewportId::ROOT)
-                    .is_some_and(|output| super::linux_root::hides(&output.commands)));
-
         // ------------------------------------------------------------
 
         let Self {
@@ -789,20 +744,6 @@ impl GlowWinitRunning<'_> {
 
         let Some(viewport) = viewports.get_mut(&viewport_id) else {
             return Ok(EventResult::Wait);
-        };
-
-        // Texture changes of root passes that painted nothing go with the next
-        // painted one, so a root that comes back finds its textures.
-        #[cfg(target_os = "linux")]
-        let textures_delta = if viewport_id != ViewportId::ROOT {
-            textures_delta
-        } else if is_visible {
-            let mut pending = std::mem::take(&mut viewport.pending_textures_delta);
-            pending.append(textures_delta);
-            pending
-        } else {
-            viewport.pending_textures_delta.append(textures_delta);
-            Default::default()
         };
 
         viewport.info.events.clear(); // they should have been processed
@@ -907,11 +848,6 @@ impl GlowWinitRunning<'_> {
 
         glutin.handle_viewport_output(event_loop, &integration.egui_ctx, &viewport_output);
 
-        #[cfg(target_os = "linux")]
-        if viewport_id == ViewportId::ROOT {
-            refresh_root_handles(integration, &glutin);
-        }
-
         integration.report_frame_time(frame_timer.total_time_sec()); // don't count auto-save time as part of regular frame time
 
         integration.maybe_autosave(app.as_mut(), Some(&window));
@@ -927,69 +863,6 @@ impl GlowWinitRunning<'_> {
 
         if integration.should_close() {
             Ok(EventResult::CloseRequested)
-        } else {
-            Ok(EventResult::Wait)
-        }
-    }
-
-    /// Entropy patch: a pass of the root while it has no window. It runs
-    /// `App::logic` only, as an invisible window does, and paints nothing.
-    #[cfg(target_os = "linux")]
-    fn run_hidden_root(&mut self, event_loop: &ActiveEventLoop) -> Result<EventResult> {
-        profiling::function_scope!();
-
-        let raw_input = {
-            let glutin = self.glutin.borrow();
-            if !glutin
-                .viewports
-                .get(&ViewportId::ROOT)
-                .is_some_and(|root| root.hidden)
-            {
-                return Ok(EventResult::Wait);
-            }
-            self.integration.pre_update();
-            egui::RawInput {
-                viewport_id: ViewportId::ROOT,
-                viewports: glutin
-                    .viewports
-                    .iter()
-                    .map(|(id, viewport)| (*id, viewport.info.clone()))
-                    .collect(),
-                time: Some(self.integration.beginning.elapsed().as_secs_f64()),
-                focused: false,
-                ..Default::default()
-            }
-        };
-
-        let full_output = self
-            .integration
-            .update(self.app.as_mut(), None, raw_input, false);
-
-        let Self {
-            integration,
-            app,
-            glutin,
-            ..
-        } = self;
-        let mut glutin = glutin.borrow_mut();
-        if let Some(root) = glutin.viewports.get_mut(&ViewportId::ROOT) {
-            root.info.events.clear(); // they should have been processed
-            root.pending_textures_delta
-                .append(full_output.textures_delta);
-        }
-        glutin.handle_viewport_output(
-            event_loop,
-            &integration.egui_ctx,
-            &full_output.viewport_output,
-        );
-        refresh_root_handles(integration, &glutin);
-        integration.maybe_autosave(app.as_mut(), None);
-
-        if integration.should_close() {
-            Ok(EventResult::CloseRequested)
-        } else if let Some(window_id) = glutin.window_from_viewport.get(&ViewportId::ROOT) {
-            // Shown again: paint it right away.
-            Ok(EventResult::RepaintNow(*window_id))
         } else {
             Ok(EventResult::Wait)
         }
@@ -1117,23 +990,6 @@ impl GlowWinitRunning<'_> {
             EventResult::Wait
         }
     }
-}
-
-/// Entropy patch: the root window can be created again, so the window and the
-/// handles an app reads from its `Frame` follow it, and fail while there is no
-/// window. The `Frame` must not keep a dropped window: winit destroys a window
-/// only with its last `Arc`, and until then it stays on screen.
-#[cfg(target_os = "linux")]
-fn refresh_root_handles(integration: &mut EpiIntegration, glutin: &GlutinWindowContext) {
-    let root_window = glutin
-        .viewports
-        .get(&ViewportId::ROOT)
-        .and_then(|root| root.window.as_ref());
-    integration.frame.window = root_window.cloned();
-    integration.frame.raw_window_handle = match root_window {
-        Some(window) => window.window_handle().map(|handle| handle.as_raw()),
-        None => Err(raw_window_handle::HandleError::Unavailable),
-    };
 }
 
 fn change_gl_context(
@@ -1339,10 +1195,6 @@ impl GlutinWindowContext {
                 egui_winit: None,
                 wayland_frame_interval: None,
                 last_swap_at: None,
-                #[cfg(target_os = "linux")]
-                hidden: false,
-                #[cfg(target_os = "linux")]
-                pending_textures_delta: Default::default(),
             },
         );
 
@@ -1362,8 +1214,6 @@ impl GlutinWindowContext {
             max_texture_side: None,
             window_from_viewport,
             focused_viewport: Some(ViewportId::ROOT),
-            #[cfg(all(target_os = "linux", feature = "accesskit"))]
-            accesskit_proxy: None,
         };
 
         slf.initialize_window(ViewportId::ROOT, event_loop)?;
@@ -1380,10 +1230,6 @@ impl GlutinWindowContext {
         let viewports: Vec<ViewportId> = self.viewports.keys().copied().collect();
 
         for viewport_id in viewports {
-            #[cfg(target_os = "linux")]
-            if self.viewports[&viewport_id].hidden {
-                continue;
-            }
             if let Err(err) = self.initialize_window(viewport_id, event_loop) {
                 log::error!("Failed to initialize a window for viewport {viewport_id:?}: {err}");
             }
@@ -1410,18 +1256,6 @@ impl GlutinWindowContext {
             log::debug!("Creating a window for viewport {viewport_id:?}");
             let window_attributes =
                 create_window_attributes(&self.egui_ctx, viewport.builder.clone());
-            #[cfg(target_os = "linux")]
-            let window_attributes = match (viewport_id == ViewportId::ROOT)
-                .then(super::linux_root::take_root_activation_token)
-                .flatten()
-            {
-                Some(token) => {
-                    use winit::platform::startup_notify::WindowAttributesExtStartupNotify as _;
-                    window_attributes
-                        .with_activation_token(winit::window::ActivationToken::from_raw(token))
-                }
-                None => window_attributes,
-            };
             if window_attributes.transparent()
                 && self.gl_config.supports_transparency() == Some(false)
             {
@@ -1439,8 +1273,6 @@ impl GlutinWindowContext {
             viewport.window.insert(Arc::new(window))
         };
 
-        #[cfg(all(target_os = "linux", feature = "accesskit"))]
-        let egui_winit_created = viewport.egui_winit.is_none();
         viewport.egui_winit.get_or_insert_with(|| {
             log::debug!("Initializing egui_winit for viewport {viewport_id:?}");
             egui_winit::State::new(
@@ -1452,16 +1284,6 @@ impl GlutinWindowContext {
                 self.max_texture_side,
             )
         });
-        // The root's first AccessKit setup is in `init_run_state`; this is for
-        // a root window created again after it was hidden.
-        #[cfg(all(target_os = "linux", feature = "accesskit"))]
-        if egui_winit_created
-            && viewport_id == ViewportId::ROOT
-            && let (Some(proxy), Some(egui_winit)) =
-                (&self.accesskit_proxy, viewport.egui_winit.as_mut())
-        {
-            egui_winit.init_accesskit(event_loop, window, proxy.clone());
-        }
 
         if viewport.gl_surface.is_none() {
             log::debug!("Creating a gl_surface for viewport {viewport_id:?}");
@@ -1559,45 +1381,6 @@ impl GlutinWindowContext {
         Ok(())
     }
 
-    /// Entropy patch: drops the root's window, surface and egui-winit state as
-    /// `on_suspend` does for every window, keeping what it takes to create the
-    /// window again where it was.
-    #[cfg(target_os = "linux")]
-    fn hide_root_window(&mut self) {
-        let Some(root) = self.viewports.get_mut(&ViewportId::ROOT) else {
-            return;
-        };
-        if let Some(rect) = root.info.inner_rect {
-            root.builder.inner_size = Some(rect.size());
-        }
-        if let Some(rect) = root.info.outer_rect {
-            root.builder.position = Some(rect.min);
-        }
-        root.builder.maximized = root.info.maximized;
-        // The root starts invisible until its first frame; once shown, it is
-        // created visible.
-        root.builder.visible = Some(true);
-        root.hidden = true;
-
-        // Like on_suspend: the context must not stay current on a surface that goes.
-        if let Some(current) = self.current_gl_context.take() {
-            match current.make_not_current() {
-                Ok(not_current) => self.not_current_gl_context = Some(not_current),
-                Err(err) => log::error!("Failed to release the GL context of the root: {err}"),
-            }
-        }
-        root.gl_surface = None;
-        root.egui_winit = None;
-        if let Some(window) = root.window.take() {
-            self.viewport_from_window.remove(&window.id());
-        }
-        self.window_from_viewport.remove(&ViewportId::ROOT);
-        if self.focused_viewport == Some(ViewportId::ROOT) {
-            self.focused_viewport = None;
-        }
-        log::debug!("Root window dropped while the app keeps running");
-    }
-
     fn viewport(&self, viewport_id: ViewportId) -> &Viewport {
         self.viewports
             .get(&viewport_id)
@@ -1674,13 +1457,6 @@ impl GlutinWindowContext {
         {
             let ids = ViewportIdPair::from_self_and_parent(viewport_id, parent);
 
-            #[cfg(target_os = "linux")]
-            let root_visibility = if viewport_id == ViewportId::ROOT {
-                super::linux_root::take_visibility(&mut commands)
-            } else {
-                None
-            };
-
             let viewport = initialize_or_update_viewport(
                 &mut self.viewports,
                 ids,
@@ -1688,39 +1464,6 @@ impl GlutinWindowContext {
                 builder,
                 viewport_ui_cb,
             );
-
-            #[cfg(target_os = "linux")]
-            if viewport_id == ViewportId::ROOT {
-                match root_visibility {
-                    Some(false) if viewport.hidden => {}
-                    Some(false) if viewport.window.is_some() => {
-                        viewport.deferred_commands.append(&mut commands);
-                        self.hide_root_window();
-                        continue;
-                    }
-                    // `initialize_all_windows` below creates the window; the
-                    // other commands apply to it on the next pass.
-                    Some(true) if viewport.hidden => {
-                        viewport.hidden = false;
-                        viewport.deferred_commands.append(&mut commands);
-                        continue;
-                    }
-                    Some(visible) => commands.push(egui::ViewportCommand::Visible(visible)),
-                    None => {}
-                }
-                if viewport.hidden {
-                    // Without a window, a close request reaches the app as it
-                    // would through egui-winit; the rest waits for the window.
-                    for command in commands.drain(..) {
-                        if command == egui::ViewportCommand::Close {
-                            viewport.info.events.push(egui::ViewportEvent::Close);
-                        } else {
-                            viewport.deferred_commands.push(command);
-                        }
-                    }
-                    continue;
-                }
-            }
 
             if let Some(window) = &viewport.window {
                 let old_inner_size = window.inner_size();
@@ -1787,10 +1530,6 @@ fn initialize_or_update_viewport(
                 gl_surface: None,
                 wayland_frame_interval: None,
                 last_swap_at: None,
-                #[cfg(target_os = "linux")]
-                hidden: false,
-                #[cfg(target_os = "linux")]
-                pending_textures_delta: Default::default(),
             })
         }
 

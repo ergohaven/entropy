@@ -99,18 +99,6 @@ impl Drop for ScopedTempConfig {
     }
 }
 
-/// The calling thread's test root, for a worker that keeps the test's
-/// isolated configuration with `adopt_test_config_root`.
-#[cfg(test)]
-pub(super) fn test_config_root() -> Option<std::path::PathBuf> {
-    TEST_CONFIG_DIR.with(|root| root.borrow().clone())
-}
-
-#[cfg(test)]
-pub(super) fn adopt_test_config_root(root: Option<std::path::PathBuf>) {
-    TEST_CONFIG_DIR.with(|current| current.replace(root));
-}
-
 pub(super) fn storage_config_dir() -> Option<std::path::PathBuf> {
     #[cfg(test)]
     if let Some(root) = TEST_CONFIG_DIR.with(|root| root.borrow().clone()) {

@@ -1227,7 +1227,7 @@ mod tests {
             assert!(app.shared_encoder_values_mixed(340));
             assert!(app.shared_encoder_values_mixed(341));
             let (hid, recorder) = crate::hid::HidDevice::test_device();
-            app.hid_device = Some(hid);
+            app.hid_device = Some(hid.into());
             for (group, field) in fields {
                 app.write_module_setting_value(group, &field, 1);
             }
@@ -1587,7 +1587,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = test_app();
         let (hid_device, _) = crate::hid::HidDevice::test_device();
-        app.hid_device = Some(hid_device);
+        app.hid_device = Some(hid_device.into());
         add_filterable_module_groups(&mut app);
         let selector = app.module_settings.groups[0].fields[0].clone();
 
@@ -1608,7 +1608,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = test_app();
         let (hid_device, _) = crate::hid::HidDevice::test_device();
-        app.hid_device = Some(hid_device);
+        app.hid_device = Some(hid_device.into());
         add_filterable_module_groups(&mut app);
         app.module_settings.set_value(149, 3);
         let mode = app.module_settings.groups[0].fields[3].clone();
@@ -1630,7 +1630,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = test_app();
         let (hid_device, recorder) = crate::hid::HidDevice::test_device();
-        app.hid_device = Some(hid_device);
+        app.hid_device = Some(hid_device.into());
         let field = test_module_field();
         add_test_module_group(&mut app, &field);
         app.status_msg = "unchanged".to_owned();
@@ -1666,7 +1666,7 @@ mod tests {
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
         let (hid_device, recorder) = crate::hid::HidDevice::test_device();
-        app.hid_device = Some(hid_device);
+        app.hid_device = Some(hid_device.into());
         app.combo_entries = vec![ComboEntry {
             keys: [0x0004, 0x0005, 0, 0],
             output: 0x0006.into(),

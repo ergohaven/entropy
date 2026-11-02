@@ -120,9 +120,12 @@ impl HidDevice {
         keys: [u16; 4],
         output: crate::keyboard::KeyBinding,
     ) -> Result<()> {
+        if output.is_vial_native() {
+            self.preflight_vial_dynamic(output, false)?;
+        }
         self.set_combo(idx, keys, output.vial_keycode())?;
-        if let Some(action) = output.rmk_action() {
-            self.set_rmk_combo_output(idx, action)?;
+        if output.is_vial_native() {
+            self.set_rmk_combo_output(idx, output)?;
         }
         Ok(())
     }
@@ -271,6 +274,11 @@ impl HidDevice {
         actions: [crate::keyboard::KeyBinding; 4],
         tapping_term: u16,
     ) -> Result<()> {
+        for binding in actions {
+            if binding.is_vial_native() {
+                self.preflight_vial_dynamic(binding, true)?;
+            }
+        }
         self.set_tap_dance(
             idx,
             actions[0].vial_keycode(),
@@ -280,8 +288,8 @@ impl HidDevice {
             tapping_term,
         )?;
         for (field, binding) in actions.into_iter().enumerate() {
-            if let Some(action) = binding.rmk_action() {
-                self.set_rmk_tap_dance_action(idx, field as u8, action)?;
+            if binding.is_vial_native() {
+                self.set_rmk_tap_dance_action(idx, field as u8, binding)?;
             }
         }
         Ok(())

@@ -175,10 +175,14 @@ fn firmware_update_rows(
                 crate::i18n::Language::English => "checking GitHub Releases".to_owned(),
             },
             FirmwareUpdateCheckState::Ready { result, .. } => match result.relation {
-                VersionRelation::UpdateAvailable => match lang {
-                    crate::i18n::Language::Russian => "доступно обновление".to_owned(),
-                    crate::i18n::Language::English => "update available".to_owned(),
-                },
+                VersionRelation::UpdateAvailable => format!(
+                    "{}. {}",
+                    match lang {
+                        crate::i18n::Language::Russian => "доступно обновление",
+                        crate::i18n::Language::English => "update available",
+                    },
+                    backup_before_update(lang)
+                ),
                 VersionRelation::UpToDate => match lang {
                     crate::i18n::Language::Russian => "актуальная версия".to_owned(),
                     crate::i18n::Language::English => "up to date".to_owned(),
@@ -243,6 +247,136 @@ fn firmware_update_rows(
     ]
 }
 
+/// The protocol the board speaks and its id: VIA and Vial over Vial, Rynk and
+/// the Ergohaven revision on a Rynk board.
+fn protocol_rows(lang: crate::i18n::Language, info: &DeviceAboutInfo) -> Vec<AboutRow> {
+    let keyboard_id = format!("{:016X}", info.keyboard_id);
+    let Some(rynk) = info.rynk else {
+        return vec![
+            localized_row(
+                lang,
+                "VIA protocol",
+                "VIA protocol",
+                "Версия VIA protocol",
+                "VIA protocol version",
+                info.via_protocol.to_string(),
+            ),
+            localized_row(
+                lang,
+                "Vial protocol",
+                "Vial protocol",
+                "Версия Vial protocol",
+                "Vial protocol version",
+                info.vial_protocol.to_string(),
+            ),
+            localized_monospace_row(
+                lang,
+                "Vial keyboard ID",
+                "Vial keyboard ID",
+                "Идентификатор клавиатуры Vial",
+                "Vial keyboard identifier",
+                keyboard_id,
+            ),
+        ];
+    };
+    // The connect refuses a board on any other version.
+    let version = rmk_types_rynk::protocol::rynk::ProtocolVersion::CURRENT;
+    vec![
+        localized_row(
+            lang,
+            "Протокол",
+            "Protocol",
+            "Протокол RMK для настройки платы и его версия",
+            "RMK's protocol for configuring the board, and its version",
+            format!("Rynk {}.{}", version.major, version.minor),
+        ),
+        localized_row(
+            lang,
+            "Ревизия Ergohaven",
+            "Ergohaven revision",
+            "Ревизия команд Ergohaven в прошивке",
+            "Revision of the Ergohaven commands in the firmware",
+            rynk.revision.to_string(),
+        ),
+        localized_monospace_row(
+            lang,
+            "ID клавиатуры",
+            "Keyboard ID",
+            "keyboard_uid из GetErgohavenInfo: те же 8 байт, что Vial keyboard ID",
+            "keyboard_uid from GetErgohavenInfo: the same 8 bytes as Vial's keyboard ID",
+            keyboard_id,
+        ),
+    ]
+}
+
+/// What a Rynk board's firmware says it can do (`ErgohavenInfo::caps`).
+fn rynk_capability_rows(lang: crate::i18n::Language, rynk: RynkAboutInfo) -> Vec<AboutRow> {
+    use rmk_types_rynk::protocol::rynk::ergohaven::caps;
+    let has = |cap: u32| rynk.caps & cap != 0;
+    let russian = matches!(lang, crate::i18n::Language::Russian);
+    let symbols = match (has(caps::UNIVERSAL_SYMBOLS), has(caps::RUSSIAN_LETTERS)) {
+        (true, true) if russian => "да, с русскими буквами",
+        (true, true) => "yes, with Russian letters",
+        (symbols, _) => yes_no(lang, symbols),
+    };
+    let host: Vec<&str> = [
+        (caps::HOST_TIME, "время", "time"),
+        (caps::HOST_MEDIA, "медиа", "media"),
+        (caps::HOST_KEYBOARD_LAYOUT, "раскладка", "layout"),
+    ]
+    .into_iter()
+    .filter(|&(cap, ..)| has(cap))
+    .map(|(_, ru, en)| if russian { ru } else { en })
+    .collect();
+    let host = if host.is_empty() {
+        yes_no(lang, false).to_owned()
+    } else {
+        host.join(", ")
+    };
+    vec![
+        localized_row(
+            lang,
+            "Universal Symbols",
+            "Universal Symbols",
+            "Прошивка понимает Universal Symbols и русские буквы среди них",
+            "The firmware understands Universal Symbols, and the Russian letters among them",
+            symbols,
+        ),
+        localized_row(
+            lang,
+            "Данные от компьютера",
+            "Host data",
+            "Что прошивка берёт от Entropy: время, медиа, раскладку",
+            "What the firmware takes from Entropy: the time, media, the keyboard layout",
+            host,
+        ),
+        localized_row(
+            lang,
+            "Заряд обеих половинок",
+            "Battery of both halves",
+            "Прошивка сообщает заряд каждой половинки",
+            "The firmware reports the battery of each half",
+            yes_no(lang, has(caps::BATTERY_HALVES)),
+        ),
+        localized_row(
+            lang,
+            "Layout options",
+            "Layout options",
+            "Прошивка читает и меняет layout options",
+            "The firmware reads and changes layout options",
+            yes_no(lang, has(caps::LAYOUT_OPTIONS)),
+        ),
+        localized_row(
+            lang,
+            "Отложенная запись",
+            "Staged writes",
+            "Раскладка и макросы доходят до flash после ответа, Entropy ждёт, пока запишутся",
+            "Keymap and macro writes reach flash after the reply, and Entropy waits for them",
+            yes_no(lang, has(caps::STAGED_WRITES)),
+        ),
+    ]
+}
+
 fn device_about_rows(
     lang: crate::i18n::Language,
     info: &DeviceAboutInfo,
@@ -279,14 +413,24 @@ fn device_about_rows(
                 &info.product,
             )),
         ),
-        localized_row(
-            lang,
-            "Версия прошивки",
-            "Firmware version",
-            "Runtime VIA id_firmware_version, fallback на Vial JSON metadata",
-            "Runtime VIA id_firmware_version, fallback from Vial JSON metadata",
-            firmware_version,
-        ),
+        match info.rynk {
+            Some(_) => localized_row(
+                lang,
+                "Версия прошивки",
+                "Firmware version",
+                "Версия, которую плата сообщает в GetErgohavenInfo",
+                "The version the board reports in GetErgohavenInfo",
+                firmware_version,
+            ),
+            None => localized_row(
+                lang,
+                "Версия прошивки",
+                "Firmware version",
+                "Runtime VIA id_firmware_version, fallback на Vial JSON metadata",
+                "Runtime VIA id_firmware_version, fallback from Vial JSON metadata",
+                firmware_version,
+            ),
+        },
         localized_monospace_row(
             lang,
             "VID",
@@ -311,30 +455,9 @@ fn device_about_rows(
             "Current HID path of the selected keyboard",
             text_or_unknown(&info.path),
         ),
-        localized_row(
-            lang,
-            "VIA protocol",
-            "VIA protocol",
-            "Версия VIA protocol",
-            "VIA protocol version",
-            info.via_protocol.to_string(),
-        ),
-        localized_row(
-            lang,
-            "Vial protocol",
-            "Vial protocol",
-            "Версия Vial protocol",
-            "Vial protocol version",
-            info.vial_protocol.to_string(),
-        ),
-        localized_monospace_row(
-            lang,
-            "Vial keyboard ID",
-            "Vial keyboard ID",
-            "Идентификатор клавиатуры Vial",
-            "Vial keyboard identifier",
-            format!("{:016X}", info.keyboard_id),
-        ),
+    ];
+    rows.extend(protocol_rows(lang, info));
+    rows.extend([
         localized_row(
             lang,
             "Macro entries",
@@ -419,11 +542,22 @@ fn device_about_rows(
             lang,
             "QMK Settings",
             "QMK Settings",
-            "Поддержка Vial QMK Settings",
-            "Vial QMK Settings support",
+            if info.rynk.is_some() {
+                "Настройки по QSID через Rynk GetSetting"
+            } else {
+                "Поддержка Vial QMK Settings"
+            },
+            if info.rynk.is_some() {
+                "Settings by QSID over Rynk GetSetting"
+            } else {
+                "Vial QMK Settings support"
+            },
             yes_no(lang, info.qmk_settings),
         ),
-    ];
+    ]);
+    if let Some(rynk) = info.rynk {
+        rows.extend(rynk_capability_rows(lang, rynk));
+    }
 
     let firmware_update_row_count = if let Some(target) = &info.firmware_update_target {
         let update_rows = firmware_update_rows(lang, target, firmware_update_check);
@@ -436,14 +570,25 @@ fn device_about_rows(
 
     if let Some(battery) = info.battery_halves {
         let battery_row_index = 3 + firmware_update_row_count;
+        let (left, right) = if info.rynk.is_some() {
+            (
+                "Rynk GetBatteryHalves, left half",
+                "Rynk GetBatteryHalves, right half",
+            )
+        } else {
+            (
+                "VIA CustomGetValue 0xE8/0x01, left half",
+                "VIA CustomGetValue 0xE8/0x01, right half",
+            )
+        };
         rows.insert(
             battery_row_index,
             localized_row(
                 lang,
                 "Заряд левой половинки",
                 "Left half battery",
-                "VIA CustomGetValue 0xE8/0x01, left half",
-                "VIA CustomGetValue 0xE8/0x01, left half",
+                left,
+                left,
                 battery_percent_text(lang, battery.left),
             ),
         );
@@ -453,8 +598,8 @@ fn device_about_rows(
                 lang,
                 "Заряд правой половинки",
                 "Right half battery",
-                "VIA CustomGetValue 0xE8/0x01, right half",
-                "VIA CustomGetValue 0xE8/0x01, right half",
+                right,
+                right,
                 battery_percent_text(lang, battery.right),
             ),
         );
@@ -598,6 +743,19 @@ fn download_update_label(lang: crate::i18n::Language) -> &'static str {
     match lang {
         crate::i18n::Language::Russian => "Скачать",
         crate::i18n::Language::English => "Download",
+    }
+}
+
+/// The new firmware can wipe the keyboard's storage (moving to Rynk does),
+/// so the layout comes back only from a file.
+fn backup_before_update(lang: crate::i18n::Language) -> &'static str {
+    match lang {
+        crate::i18n::Language::Russian => {
+            "Перед прошивкой экспортируйте раскладку (.entlayout): новая прошивка может очистить память клавиатуры"
+        }
+        crate::i18n::Language::English => {
+            "Export your layout (.entlayout) before flashing: the new firmware may clear the keyboard's storage"
+        }
     }
 }
 
@@ -770,6 +928,7 @@ impl EntropyApp {
                                 button_size,
                                 true,
                             )
+                            .on_hover_text(backup_before_update(lang))
                             .clicked()
                                 && !crate::app::open_url_in_browser(&result.asset.url)
                             {
@@ -996,6 +1155,39 @@ mod tests {
     }
 
     #[test]
+    fn an_available_firmware_update_asks_for_a_layout_backup() {
+        let target = FirmwareReleaseTarget {
+            current_version: "1.2.0".to_owned(),
+            asset_prefix: "k04".to_owned(),
+        };
+        let state = |relation| FirmwareUpdateCheckState::Ready {
+            target: target.clone(),
+            result: crate::app::FirmwareUpdateCheckResult {
+                latest_version: "1.3.0".to_owned(),
+                release_url: "https://github.com/ergohaven/rmk/releases/tag/1.3.0".to_owned(),
+                asset: crate::app::UpdateAsset {
+                    name: "k04.zip".to_owned(),
+                    url: "https://github.com/ergohaven/rmk/releases/download/1.3.0/k04.zip"
+                        .to_owned(),
+                },
+                relation,
+            },
+        };
+        for lang in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            let status = |relation| {
+                firmware_update_rows(lang, &target, &state(relation))[1]
+                    .value
+                    .clone()
+            };
+            assert!(status(VersionRelation::UpdateAvailable).ends_with(backup_before_update(lang)));
+            assert!(!status(VersionRelation::UpToDate).contains(".entlayout"));
+        }
+    }
+
+    #[test]
     fn macro_ext_status_explains_rmk_guard() {
         let info = DeviceAboutInfo {
             supports_macro_ext_keycodes: false,
@@ -1006,6 +1198,101 @@ mod tests {
         };
 
         assert!(macro_ext_keycodes_status(crate::i18n::Language::English, &info).contains("RMK"));
+    }
+
+    fn value_of<'a>(rows: &'a [AboutRow], label: &str) -> Option<&'a str> {
+        rows.iter()
+            .find(|row| row.label == label)
+            .map(|row| row.value.as_str())
+    }
+
+    #[test]
+    fn a_rynk_board_shows_its_protocol_revision_and_caps_instead_of_vial() {
+        use rmk_types_rynk::protocol::rynk::ergohaven::caps;
+        let info = DeviceAboutInfo {
+            keyboard_id: 0x0123_4567_89AB_CDEF,
+            qmk_settings: true,
+            rynk: Some(RynkAboutInfo {
+                revision: 2,
+                caps: caps::UNIVERSAL_SYMBOLS
+                    | caps::RUSSIAN_LETTERS
+                    | caps::HOST_TIME
+                    | caps::HOST_KEYBOARD_LAYOUT
+                    | caps::STAGED_WRITES,
+            }),
+            ..Default::default()
+        };
+        let version = rmk_types_rynk::protocol::rynk::ProtocolVersion::CURRENT;
+        let protocol = format!("Rynk {}.{}", version.major, version.minor);
+
+        let rows = device_about_rows(
+            crate::i18n::Language::English,
+            &info,
+            &FirmwareUpdateCheckState::Unsupported,
+        );
+        for vial in ["VIA protocol", "Vial protocol", "Vial keyboard ID"] {
+            assert_eq!(value_of(&rows, vial), None, "{vial} is not a Rynk row");
+        }
+        assert_eq!(value_of(&rows, "Protocol"), Some(protocol.as_str()));
+        assert_eq!(value_of(&rows, "Ergohaven revision"), Some("2"));
+        assert_eq!(value_of(&rows, "Keyboard ID"), Some("0123456789ABCDEF"));
+        assert_eq!(
+            value_of(&rows, "Universal Symbols"),
+            Some("yes, with Russian letters")
+        );
+        assert_eq!(value_of(&rows, "Host data"), Some("time, layout"));
+        assert_eq!(value_of(&rows, "Battery of both halves"), Some("no"));
+        assert_eq!(value_of(&rows, "Layout options"), Some("no"));
+        assert_eq!(value_of(&rows, "Staged writes"), Some("yes"));
+        let settings = rows.iter().find(|row| row.label == "QMK Settings").unwrap();
+        assert!(settings.tooltip.contains("Rynk"), "{}", settings.tooltip);
+
+        let rows = device_about_rows(
+            crate::i18n::Language::Russian,
+            &info,
+            &FirmwareUpdateCheckState::Unsupported,
+        );
+        assert_eq!(value_of(&rows, "Протокол"), Some(protocol.as_str()));
+        assert_eq!(value_of(&rows, "ID клавиатуры"), Some("0123456789ABCDEF"));
+        assert_eq!(
+            value_of(&rows, "Universal Symbols"),
+            Some("да, с русскими буквами")
+        );
+        assert_eq!(
+            value_of(&rows, "Данные от компьютера"),
+            Some("время, раскладка")
+        );
+    }
+
+    #[test]
+    fn a_vial_board_keeps_its_protocol_rows() {
+        let info = DeviceAboutInfo {
+            via_protocol: 9,
+            vial_protocol: 6,
+            keyboard_id: 0x0123_4567_89AB_CDEF,
+            ..Default::default()
+        };
+        let rows = device_about_rows(
+            crate::i18n::Language::English,
+            &info,
+            &FirmwareUpdateCheckState::Unsupported,
+        );
+        assert_eq!(value_of(&rows, "VIA protocol"), Some("9"));
+        assert_eq!(value_of(&rows, "Vial protocol"), Some("6"));
+        assert_eq!(
+            value_of(&rows, "Vial keyboard ID"),
+            Some("0123456789ABCDEF")
+        );
+        for rynk in [
+            "Protocol",
+            "Ergohaven revision",
+            "Host data",
+            "Staged writes",
+        ] {
+            assert_eq!(value_of(&rows, rynk), None, "{rynk} is a Rynk row");
+        }
+        let settings = rows.iter().find(|row| row.label == "QMK Settings").unwrap();
+        assert_eq!(settings.tooltip, "Vial QMK Settings support");
     }
 
     #[test]

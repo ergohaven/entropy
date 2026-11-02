@@ -358,7 +358,7 @@ mod tests {
             supported: true,
             ..BluetoothSettingsState::default()
         };
-        app.hid_device = Some(hid);
+        app.hid_device = Some(hid.into());
 
         assert_eq!(
             app.start_vial_hid_operation(&ctx, VialHidOperation::BatteryRefresh),

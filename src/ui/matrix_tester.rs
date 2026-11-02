@@ -36,7 +36,7 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn prompt_if_vial_locked_for_matrix_poll(&mut self) {
-        if self.firmware != FirmwareProtocol::Vial
+        if !self.has_keyboard_lock()
             || self.layout.is_none()
             || self.hid_device.is_none()
             || self.unlock_open
@@ -56,7 +56,7 @@ impl EntropyApp {
 
         self.matrix_tester_lock_checked = true;
         self.matrix_tester_last_lock_check = now;
-        if self.is_vial_locked() {
+        if self.is_matrix_locked() {
             self.unlock_open = true;
             self.matrix_tester_unlock_prompted = true;
             self.status_msg = crate::i18n::tr_catalog(
@@ -75,13 +75,13 @@ impl EntropyApp {
         cols: usize,
         remember_ever_pressed: bool,
     ) {
-        if self.firmware != FirmwareProtocol::Vial {
+        if !self.has_keyboard_lock() {
             return;
         }
         if self.unlock_open || self.vial_unlock_polling {
             return;
         }
-        if self.is_vial_locked() {
+        if self.is_matrix_locked() {
             return;
         }
         let now = std::time::Instant::now();
@@ -145,7 +145,7 @@ impl EntropyApp {
         let title_y = content_rect.top() + 30.0;
         let desc_y = title_y + 28.0;
         let status_y = desc_y + 30.0;
-        let supported = self.firmware == FirmwareProtocol::Vial;
+        let supported = self.has_keyboard_lock();
         let hid_ready = {
             #[cfg(not(target_arch = "wasm32"))]
             {

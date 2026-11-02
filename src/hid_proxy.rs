@@ -38,6 +38,10 @@ const MAX_FRAME: usize = 4_096;
 // bound, and no new helper can bypass an unreclaimed physical reservation.
 const MAX_UNSETTLED_HELPERS: usize = 2;
 const OUTPUT_PREFIX: &str = "output:";
+// Rynk helpers only: wait up to the given milliseconds for one input report.
+const READ_PREFIX: &str = "read:";
+/// How much longer than its own wait a raw read may take to come back.
+const READ_REPLY_MARGIN: Duration = Duration::from_secs(2);
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -370,6 +374,18 @@ impl HidProxy {
         Ok(out)
     }
 
+    /// One input report of a Rynk helper, empty when none came within
+    /// `timeout`. A quiet board is no failure, so this never retires the helper.
+    pub(super) fn read_raw_report(&self, timeout: Duration) -> Result<Vec<u8>> {
+        let millis = timeout.as_millis().min(u32::MAX as u128);
+        let line = self.request(
+            format!("{READ_PREFIX}{millis}"),
+            timeout + READ_REPLY_MARGIN,
+        )?;
+        let response: ProxyResponse = serde_json::from_str(&line)?;
+        hex_to_bytes(response.data.as_deref().unwrap_or_default())
+    }
+
     pub(super) fn write_output_report(&self, data: &[u8]) -> Result<()> {
         ensure_output_report_len(data)?;
         let line = self.request(
@@ -572,6 +588,27 @@ fn validate_response(line: &str, output: bool, startup: bool) -> Result<()> {
     Ok(())
 }
 
+/// A raw read answers with up to one report, or none when the board was quiet.
+fn validate_read_response(line: &str) -> Result<()> {
+    let response: ProxyResponse =
+        serde_json::from_str(line).context("HID helper returned malformed response")?;
+    if !response.ok {
+        if response.error.is_none() || response.data.is_some() {
+            bail!("HID helper returned malformed error response");
+        }
+    } else if response.error.is_some() {
+        bail!("HID helper returned contradictory response");
+    } else {
+        hex_to_bytes(
+            response
+                .data
+                .as_deref()
+                .context("HID helper response missing data")?,
+        )?;
+    }
+    Ok(())
+}
+
 fn ipc_owner(
     slot: &Arc<Slot>,
     mut spec: HelperCommand,
@@ -680,7 +717,11 @@ fn ipc_owner(
             #[cfg(test)]
             slot.submitted.lock().unwrap().push(job.request.clone());
             let line = read_frame(&mut reader)?;
-            validate_response(&line, job.request.starts_with(OUTPUT_PREFIX), false)?;
+            if job.request.starts_with(READ_PREFIX) {
+                validate_read_response(&line)?;
+            } else {
+                validate_response(&line, job.request.starts_with(OUTPUT_PREFIX), false)?;
+            }
             let response: ProxyResponse = serde_json::from_str(&line)?;
             // These are raw transport operations: genuine firmware rejection
             // is carried in the successful data bytes, NOT as an IPC error.
@@ -743,6 +784,9 @@ fn emit_response(response: &ProxyResponse) -> Result<()> {
 }
 
 fn run_hid_proxy(device: Device) -> Result<()> {
+    if device.firmware == crate::firmware::FirmwareProtocol::Rynk {
+        return run_rynk_proxy(device);
+    }
     let hid = HidDevice::open_in_helper(&device)?;
     emit_response(&ProxyResponse {
         ok: true,
@@ -778,6 +822,91 @@ fn run_hid_proxy(device: Device) -> Result<()> {
                 error: Some(format!("{error:#}")),
             },
         };
+        emit_response(&response)?;
+        if !response.ok {
+            return Ok(());
+        }
+    }
+}
+
+/// Raw reports of an endpoint, as a Rynk helper moves them.
+trait RawReports {
+    fn write(&self, data: &[u8]) -> Result<()>;
+    fn read(&self, timeout_ms: i32) -> Result<Vec<u8>>;
+}
+
+impl RawReports for hidapi::HidDevice {
+    /// The report has no ID, so it goes out behind a zero byte, padded to its size.
+    fn write(&self, data: &[u8]) -> Result<()> {
+        ensure_output_report_len(data)?;
+        let mut report = [0u8; MSG_LEN + 1];
+        report[1..=data.len()].copy_from_slice(data);
+        hidapi::HidDevice::write(self, &report).context("HID write failed")?;
+        Ok(())
+    }
+
+    fn read(&self, timeout_ms: i32) -> Result<Vec<u8>> {
+        let mut buf = [0u8; 2 * MSG_LEN];
+        let n = self
+            .read_timeout(&mut buf, timeout_ms)
+            .context("HID read failed")?;
+        Ok(report_payload(&buf[..n]).to_vec())
+    }
+}
+
+/// A report as read, less the zero report ID some stacks leave in front.
+fn report_payload(read: &[u8]) -> &[u8] {
+    let payload = match read {
+        [0, rest @ ..] if read.len() == MSG_LEN + 1 => rest,
+        _ => read,
+    };
+    &payload[..payload.len().min(MSG_LEN)]
+}
+
+/// The answer to one request of the Rynk helper's own protocol.
+fn rynk_reply(reports: &impl RawReports, line: &str) -> ProxyResponse {
+    let result = if let Some(encoded) = line.strip_prefix(OUTPUT_PREFIX) {
+        hex_to_bytes(encoded)
+            .and_then(|data| reports.write(&data))
+            .map(|()| None)
+    } else if let Some(millis) = line.strip_prefix(READ_PREFIX) {
+        millis
+            .parse::<u32>()
+            .context("Invalid HID read timeout")
+            .and_then(|millis| reports.read(millis.min(i32::MAX as u32) as i32))
+            .map(|data| Some(bytes_to_hex(&data)))
+    } else {
+        Err(anyhow::anyhow!("A Rynk HID helper moves raw reports only"))
+    };
+    match result {
+        Ok(data) => ProxyResponse {
+            ok: true,
+            data,
+            error: None,
+        },
+        Err(error) => ProxyResponse {
+            ok: false,
+            data: None,
+            error: Some(format!("{error:#}")),
+        },
+    }
+}
+
+/// A Rynk board's report endpoint: raw reports both ways, the protocol stays
+/// with the link in the UI process.
+fn run_rynk_proxy(device: Device) -> Result<()> {
+    let reports = HidDevice::open_rynk_reports_in_helper(&device)?;
+    emit_response(&ProxyResponse {
+        ok: true,
+        data: None,
+        error: None,
+    })?;
+    let mut reader = BufReader::new(std::io::stdin());
+    loop {
+        let line = read_frame(&mut reader)?;
+        #[cfg(target_os = "macos")]
+        let _hid_lock = super::macos_hid_operation_lock();
+        let response = rynk_reply(&reports, line.trim());
         emit_response(&response)?;
         if !response.ok {
             return Ok(());
@@ -849,89 +978,6 @@ mod tests {
 
     fn empty_registry() {
         await_condition(|| REGISTRY.try_lock().is_ok_and(|r| r.entries.is_empty()));
-    }
-
-    /// Holds gated IPC workers from exiting. It opens however the test ends,
-    /// so a failed assertion cannot leave them to time out the tests after it.
-    struct ExitGate(Arc<AtomicBool>);
-
-    impl ExitGate {
-        fn closed() -> Self {
-            Self(Arc::new(AtomicBool::new(false)))
-        }
-
-        fn flag(&self) -> Option<Arc<AtomicBool>> {
-            Some(self.0.clone())
-        }
-
-        fn open(&self) {
-            self.0.store(true, Ordering::Release);
-        }
-    }
-
-    impl Drop for ExitGate {
-        fn drop(&mut self) {
-            self.open();
-        }
-    }
-
-    /// Fills the admission budget with failed startups whose workers `gate`
-    /// holds. A startup can also fail before it takes a slot, when its
-    /// deadline runs out while capacity is busy: it holds nothing, so
-    /// startups go on until every slot is held, however many that takes.
-    fn hold_failed_startups(gate: &ExitGate) {
-        let held = || {
-            REGISTRY
-                .lock()
-                .unwrap()
-                .entries
-                .iter()
-                .filter(|entry| !entry.slot.worker_joined.load(Ordering::Acquire))
-                .count()
-        };
-        let mut attempts = 0;
-        while held() < MAX_UNSETTLED_HELPERS {
-            assert!(
-                attempts < 20,
-                "failed startups never took the admission slots"
-            );
-            assert!(HidProxy::start(
-                &device(&format!("failed-{attempts}")),
-                spec("startup-silence", gate.flag(), None),
-                Duration::from_millis(80),
-            )
-            .is_err());
-            attempts += 1;
-        }
-        await_condition(|| {
-            let registry = REGISTRY.lock().unwrap();
-            registry.entries.len() == MAX_UNSETTLED_HELPERS
-                && registry
-                    .entries
-                    .iter()
-                    .all(|entry| entry.slot.reaped.load(Ordering::Acquire))
-        });
-    }
-
-    /// With every slot held by unreclaimed work, a fresh startup is refused
-    /// and takes no slot of its own.
-    fn assert_admission_stays_closed() {
-        for index in 0..12 {
-            let fresh_target = device(&format!("failed-retry-{index}"));
-            assert!(HidProxy::start(
-                &fresh_target,
-                spec("echo", None, None),
-                Duration::from_millis(30),
-            )
-            .is_err());
-            let registry = REGISTRY.lock().unwrap();
-            assert_eq!(registry.entries.len(), MAX_UNSETTLED_HELPERS);
-            assert_eq!(registry.unsettled_count(), MAX_UNSETTLED_HELPERS);
-            assert!(registry.entries.iter().all(|entry| {
-                !entry.slot.established.load(Ordering::Acquire)
-                    && !entry.slot.worker_joined.load(Ordering::Acquire)
-            }));
-        }
     }
 
     fn serial_test() -> MutexGuard<'static, ()> {
@@ -1019,6 +1065,7 @@ mod tests {
             std::thread::sleep(Duration::from_secs(60));
             return;
         }
+        let mut raw_reads = 0;
         loop {
             let Ok(line) = read_frame(&mut input) else {
                 std::process::exit(0);
@@ -1066,6 +1113,29 @@ mod tests {
             }
             if mode == "late" {
                 std::thread::sleep(Duration::from_millis(600));
+            }
+            // A Rynk board: one report, then quiet.
+            if mode == "raw-reports" && line.trim().starts_with(READ_PREFIX) {
+                raw_reads += 1;
+                let data: &[u8] = if raw_reads == 1 { &[1, 2, 3] } else { &[] };
+                let response = ProxyResponse {
+                    ok: true,
+                    data: Some(bytes_to_hex(data)),
+                    error: None,
+                };
+                writeln!(output, "{}", serde_json::to_string(&response).unwrap()).unwrap();
+                output.flush().unwrap();
+                continue;
+            }
+            if mode == "short-reply" {
+                let response = ProxyResponse {
+                    ok: true,
+                    data: Some(bytes_to_hex(&[1, 2, 3])),
+                    error: None,
+                };
+                writeln!(output, "{}", serde_json::to_string(&response).unwrap()).unwrap();
+                output.flush().unwrap();
+                continue;
             }
             let response = if line.trim().starts_with(OUTPUT_PREFIX) {
                 ready.to_owned()
@@ -1342,6 +1412,7 @@ mod tests {
         for name in ["A", "B", "C"] {
             let hid = HidDevice {
                 unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+                native_capabilities: std::sync::Mutex::new(None),
                 read_only: None,
                 backend: super::super::HidBackend::Proxy(Arc::new(start("echo", name))),
             };
@@ -1376,34 +1447,43 @@ mod tests {
     #[test]
     fn real_helper_failed_startups_cannot_accumulate_unreclaimed_workers() {
         let _guard = serial_test();
-        let gate = ExitGate::closed();
-        hold_failed_startups(&gate);
-        assert_admission_stays_closed();
-        gate.open();
+        let gate = Arc::new(AtomicBool::new(false));
+        for name in ["failed-A", "failed-B"] {
+            assert!(HidProxy::start(
+                &device(name),
+                spec("startup-silence", Some(gate.clone()), None),
+                Duration::from_millis(80),
+            )
+            .is_err());
+        }
+        await_condition(|| {
+            let registry = REGISTRY.lock().unwrap();
+            registry
+                .entries
+                .iter()
+                .all(|entry| entry.slot.reaped.load(Ordering::Acquire))
+        });
+        for index in 0..12 {
+            let fresh_target = device(&format!("failed-retry-{index}"));
+            assert!(HidProxy::start(
+                &fresh_target,
+                spec("echo", None, None),
+                Duration::from_millis(30),
+            )
+            .is_err());
+            let registry = REGISTRY.lock().unwrap();
+            assert_eq!(registry.entries.len(), MAX_UNSETTLED_HELPERS);
+            assert_eq!(registry.unsettled_count(), MAX_UNSETTLED_HELPERS);
+            assert!(registry.entries.iter().all(|entry| {
+                !entry.slot.established.load(Ordering::Acquire)
+                    && !entry.slot.worker_joined.load(Ordering::Acquire)
+            }));
+        }
+        gate.store(true, Ordering::Release);
         empty_registry();
         let recovered = start("echo", "recovered");
         assert_eq!(recovered.usb_send(&[34]).unwrap()[0], 34);
         drop(recovered);
-        empty_registry();
-    }
-
-    #[test]
-    fn real_helper_a_startup_that_fails_before_its_slot_holds_none() {
-        let _guard = serial_test();
-        let gate = ExitGate::closed();
-        // Its deadline is gone before admission: the startup fails without
-        // registering anything, and both slots are still free for the
-        // startups after it, however many of them fail before theirs.
-        assert!(HidProxy::start(
-            &device("failed-early"),
-            spec("startup-silence", gate.flag(), None),
-            Duration::ZERO,
-        )
-        .is_err());
-        assert!(REGISTRY.lock().unwrap().entries.is_empty());
-        hold_failed_startups(&gate);
-        assert_admission_stays_closed();
-        gate.open();
         empty_registry();
     }
 
@@ -1434,10 +1514,10 @@ mod tests {
     #[test]
     fn real_helper_budget_retains_reaped_child_until_io_worker_exits() {
         let _guard = serial_test();
-        let gate = ExitGate::closed();
+        let gate = Arc::new(AtomicBool::new(false));
         let a = HidProxy::start(
             &device("A"),
-            spec("echo", gate.flag(), None),
+            spec("echo", Some(gate.clone()), None),
             Duration::from_secs(3),
         )
         .unwrap();
@@ -1448,7 +1528,7 @@ mod tests {
         let b = start("echo", "B");
         let c = HidProxy::start(
             &device("C"),
-            spec("echo", gate.flag(), None),
+            spec("echo", Some(gate.clone()), None),
             Duration::from_secs(3),
         )
         .unwrap();
@@ -1469,7 +1549,7 @@ mod tests {
             assert_eq!(registry.unsettled_count(), MAX_UNSETTLED_HELPERS);
         }
         assert_eq!(b.usb_send(&[19]).unwrap()[0], 19);
-        gate.open();
+        gate.store(true, Ordering::Release);
         drop(b);
         empty_registry();
         drop(start("echo", "A"));
@@ -1597,6 +1677,7 @@ mod tests {
         let proxy = start("echo", "A");
         let hid = HidDevice {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: None,
             backend: super::super::HidBackend::Proxy(Arc::new(proxy)),
         };
@@ -1617,6 +1698,7 @@ mod tests {
         let slot = proxy.slot.clone();
         let hid = HidDevice {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: None,
             backend: super::super::HidBackend::Proxy(Arc::new(proxy)),
         };
@@ -1675,6 +1757,7 @@ mod tests {
         let first_slot = first.slot.clone();
         let hid = HidDevice {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: None,
             backend: super::super::HidBackend::Proxy(first.clone()),
         };
@@ -1706,6 +1789,7 @@ mod tests {
         assert!(!first.is_available());
         let keyboard = HidDevice {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: None,
             backend: super::super::HidBackend::Proxy(selected.clone()),
         };
@@ -1755,6 +1839,7 @@ mod tests {
         let last_slot = last.slot.clone();
         let hid = HidDevice {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: None,
             backend: super::super::HidBackend::Proxy(last.clone()),
         };
@@ -1792,6 +1877,7 @@ mod tests {
         let slot = proxy.slot.clone();
         let hid = HidDevice {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: None,
             backend: super::super::HidBackend::Proxy(proxy.clone()),
         };
@@ -1838,6 +1924,7 @@ mod tests {
         let proxy = Arc::new(start("echo", "A"));
         let hid = HidDevice {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: None,
             backend: super::super::HidBackend::Proxy(proxy.clone()),
         };
@@ -1865,11 +1952,13 @@ mod tests {
         // Two wrappers of the SAME physical proxy must share the ordering domain.
         let first = HidDevice {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: None,
             backend: super::super::HidBackend::Proxy(proxy.clone()),
         };
         let second = HidDevice {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: None,
             backend: super::super::HidBackend::Proxy(proxy.clone()),
         };
@@ -1960,5 +2049,96 @@ mod tests {
         let registry = REGISTRY.lock().unwrap();
         assert!(registry.reaper_started);
         assert!(registry.entries.is_empty());
+    }
+
+    #[test]
+    fn real_helper_raw_reads_return_what_came_and_outlast_a_quiet_board() {
+        let _serial = serial_test();
+        let proxy = start("raw-reports", "raw-reports");
+        let wait = Duration::from_millis(10);
+        assert_eq!(proxy.read_raw_report(wait).unwrap(), [1, 2, 3]);
+        assert_eq!(proxy.read_raw_report(wait).unwrap(), Vec::<u8>::new());
+        assert!(
+            proxy.is_available(),
+            "a quiet board does not retire the helper"
+        );
+        proxy.write_output_report(&[9; 3]).unwrap();
+        assert_eq!(
+            *proxy.slot.submitted.lock().unwrap(),
+            ["read:10", "read:10", "output:090909"]
+        );
+    }
+
+    #[test]
+    fn vial_requests_keep_their_lines_and_their_full_replies() {
+        let _serial = serial_test();
+        let proxy = start("echo", "vial-lines");
+        let reply = proxy.usb_send(&[0xFE, 0x00, 1, 2]).unwrap();
+        assert_eq!(reply[..4], [0xFE, 0x00, 1, 2]);
+        proxy.write_output_report(&[7; 3]).unwrap();
+        assert_eq!(
+            *proxy.slot.submitted.lock().unwrap(),
+            ["fe000102", "output:070707"],
+            "Vial requests go out as before the raw reads"
+        );
+        drop(proxy);
+
+        // A Vial reply still has to be a whole report.
+        let short = start("short-reply", "vial-short");
+        assert!(short.usb_send(&[0xFE, 0x00]).is_err());
+        assert!(!short.is_available());
+    }
+
+    /// Reports a test scripts, for the helper's side of the Rynk channel.
+    #[derive(Default)]
+    struct ScriptedReports {
+        written: Mutex<Vec<Vec<u8>>>,
+        to_read: Mutex<Vec<u8>>,
+    }
+
+    impl RawReports for ScriptedReports {
+        fn write(&self, data: &[u8]) -> Result<()> {
+            ensure_output_report_len(data)?;
+            self.written.lock().unwrap().push(data.to_vec());
+            Ok(())
+        }
+
+        fn read(&self, timeout_ms: i32) -> Result<Vec<u8>> {
+            assert_eq!(timeout_ms, 25);
+            Ok(std::mem::take(&mut *self.to_read.lock().unwrap()))
+        }
+    }
+
+    #[test]
+    fn a_rynk_helper_moves_raw_reports_and_nothing_else() {
+        let reports = ScriptedReports::default();
+        *reports.to_read.lock().unwrap() = vec![4, 5];
+
+        let read = rynk_reply(&reports, "read:25");
+        assert!(read.ok);
+        assert_eq!(read.data.as_deref(), Some("0405"));
+        let quiet = rynk_reply(&reports, "read:25");
+        assert_eq!(quiet.data.as_deref(), Some(""));
+        let written = rynk_reply(&reports, "output:0a0b");
+        assert!(written.ok && written.data.is_none());
+        assert_eq!(*reports.written.lock().unwrap(), [vec![0x0A, 0x0B]]);
+
+        for refused in ["fe00", "read:soon", &format!("output:{}", "00".repeat(33))] {
+            let reply = rynk_reply(&reports, refused);
+            assert!(!reply.ok && reply.error.is_some(), "{refused}");
+        }
+    }
+
+    #[test]
+    fn a_report_id_in_front_of_a_report_is_dropped() {
+        let mut with_id = vec![0u8; MSG_LEN + 1];
+        with_id[1] = 7;
+        assert_eq!(report_payload(&with_id), &with_id[1..]);
+        assert_eq!(
+            report_payload(&[0, 7]),
+            [0, 7],
+            "a short read is kept as is"
+        );
+        assert_eq!(report_payload(&[1; 40]).len(), MSG_LEN);
     }
 }

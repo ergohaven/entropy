@@ -124,7 +124,7 @@ mod tests {
             device_name: name.to_owned(),
             keyboard_id: 0xDEAD165,
             vial_unlock_status: Default::default(),
-            hid_device: Some(crate::hid::HidDevice::test_device().0),
+            hid_device: Some(crate::hid::HidDevice::test_device().0.into()),
             layout: KeyboardLayout::from_vial_json(&serde_json::json!({
                 "name": name, "matrix": {"rows": 1, "cols": 1},
                 "layouts": {"keymap": [["0,0"]]}
@@ -135,7 +135,7 @@ mod tests {
             macro_texts: Default::default(),
             supports_macro_ext_keycodes: Default::default(),
             supports_rmk_native_key_actions: Default::default(),
-            supports_universal_symbols: Default::default(),
+            supports_universal_numero: false, supports_universal_symbols: Default::default(),
             supports_universal_russian_letters: Default::default(),
             supports_rmk_native_combo_output: Default::default(),
             supports_rmk_native_tap_dance_actions: Default::default(),
@@ -164,6 +164,7 @@ mod tests {
             layer_names_from_firmware: Default::default(),
             supported_qmk_settings: Default::default(),
             deferred_load: Default::default(),
+            rynk_read_losses: Vec::new(),
         }
     }
 
@@ -1351,6 +1352,7 @@ impl EntropyApp {
                 self.keycode_picker.supports_macro_ext_keycodes = r.supports_macro_ext_keycodes;
                 self.keycode_picker.supports_rmk_native_key_actions =
                     r.supports_rmk_native_key_actions;
+                self.keycode_picker.supports_universal_numero = r.supports_universal_numero;
                 self.keycode_picker.supports_universal_symbols = r.supports_universal_symbols;
                 self.keycode_picker.supports_universal_russian_letters =
                     r.supports_universal_russian_letters;
@@ -1455,10 +1457,21 @@ impl EntropyApp {
                 self.shared_hid_output = r
                     .hid_device
                     .as_ref()
+                    .and_then(crate::device_session::DeviceSession::as_vial)
                     .and_then(crate::hid::HidDevice::shared_output);
                 self.hid_device = r.hid_device;
                 self.supported_qmk_settings = r.supported_qmk_settings;
                 self.deferred_device_load = r.deferred_load;
+                if !r.rynk_read_losses.is_empty() {
+                    let language = self.app_settings.language;
+                    self.import_report_title =
+                        crate::i18n::tr_catalog(language, "rynk_read.title").into();
+                    self.import_report_body = crate::rynk::dynamic::describe_dynamic_losses(
+                        language,
+                        &r.rynk_read_losses,
+                    );
+                    self.import_report_open = true;
+                }
 
                 // A headless export only reads: no display preset write-back,
                 // no clock/layout bridges left running on the keyboard.
@@ -1540,7 +1553,10 @@ impl EntropyApp {
     /// never a masked transport error.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn write_layer_names_to_firmware(&self, names: &[String]) -> Vec<usize> {
-        if self.firmware != FirmwareProtocol::Vial {
+        if !matches!(
+            self.firmware,
+            FirmwareProtocol::Vial | FirmwareProtocol::Rynk
+        ) {
             return Vec::new();
         }
         let Some(dev) = &self.hid_device else {
@@ -1569,7 +1585,7 @@ pub(super) trait LayerNameStore {
 /// setting ids the firmware advertised during connect.
 #[cfg(not(target_arch = "wasm32"))]
 struct HidLayerNameStore<'a> {
-    dev: &'a crate::hid::HidDevice,
+    dev: &'a crate::device_session::DeviceSession,
     supported: &'a [u16],
 }
 
@@ -1659,7 +1675,7 @@ mod qa_followup_reconnect {
             device_name: device.name.clone(),
             keyboard_id: keyboard_id,
             vial_unlock_status: Default::default(),
-            hid_device: Some(hid),
+            hid_device: Some(hid.into()),
             layout: layout(),
             layer_count: 1,
             about_info: DeviceAboutInfo {
@@ -1670,7 +1686,7 @@ mod qa_followup_reconnect {
             macro_texts: Default::default(),
             supports_macro_ext_keycodes: Default::default(),
             supports_rmk_native_key_actions: Default::default(),
-            supports_universal_symbols: Default::default(),
+            supports_universal_numero: false, supports_universal_symbols: Default::default(),
             supports_universal_russian_letters: Default::default(),
             supports_rmk_native_combo_output: Default::default(),
             supports_rmk_native_tap_dance_actions: Default::default(),
@@ -1699,6 +1715,7 @@ mod qa_followup_reconnect {
             layer_names_from_firmware: Default::default(),
             supported_qmk_settings: Default::default(),
             deferred_load: Default::default(),
+            rynk_read_losses: Vec::new(),
         }
     }
     fn poll_upload(app: &mut EntropyApp, ctx: &egui::Context) {
@@ -1721,7 +1738,7 @@ mod qa_followup_reconnect {
             0,
             crate::hid::TestHidFault::Disconnect,
         )));
-        app.hid_device = Some(hid);
+        app.hid_device = Some(hid.into());
         let p = &mut app.display_settings.pictograms;
         p.loaded = true;
         p.supported = Some(true);
@@ -1777,7 +1794,7 @@ mod qa_followup_reconnect {
             macro_count:0,macro_memory_bytes:Some(0),tap_dance_count:0,combo_count:0,
             key_override_count:0,alt_repeat_count:0,modules_supported:false,touchpad_supported:false,
             bluetooth_supported:false,layer_leds_supported:false,rgb_supported:false,lighting_mode:None,
-            supports_rmk_native_key_actions:false,supports_universal_symbols:false,
+            supports_rmk_native_key_actions:false,supports_universal_numero: false, supports_universal_symbols:false,
             supports_universal_russian_letters:false,supports_rmk_native_combo_output:false,
             supports_rmk_native_tap_dance_actions:false,supports_rmk_combo_layers:false,
         };
@@ -1789,7 +1806,7 @@ mod qa_followup_reconnect {
             if r[..2]==[0xfe,0x0b] {Some(Ok([0;32]))}
             else if r[..2]==[0xfe,0x0a] {Some(Ok([0xff;32]))} else {None}
         });
-        app.hid_device=Some(hid);
+        app.hid_device=Some(hid.into());
         let request=super::super::vial_hid_task::LayerNameWrite {
             device:device("a"),device_key:"reconnect-name".into(),layout_id:"default".into(),
             generation:app.connection_generation,layer:1,name:"Mutated".into(),
@@ -1824,7 +1841,7 @@ mod qa_followup_reconnect {
         let confirmed = PictogramLibrary::default();
         let (hid, recorder) = crate::hid::HidDevice::test_device();
         recorder.respond_with(test_pictogram_read_responses(&confirmed));
-        app.hid_device = Some(hid);
+        app.hid_device = Some(hid.into());
         assert!(matches!(
             app.start_vial_hid_operation(
                 &ctx,

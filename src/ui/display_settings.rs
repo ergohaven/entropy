@@ -4745,7 +4745,7 @@ mod tests {
             let mut app=EntropyApp::new(&cc);
             let mut fonts=egui::FontDefinitions::default();
             fonts.families.insert(egui::FontFamily::Name("display_preview".into()),fonts.families[&egui::FontFamily::Proportional].clone()); ctx.set_fonts(fonts);
-            let (hid,recorder)=crate::hid::HidDevice::test_device(); app.hid_device=Some(hid);
+            let (hid,recorder)=crate::hid::HidDevice::test_device(); app.hid_device=Some(hid.into());
             app.display_settings.sm62_supported=true; app.display_settings.sm62_stars_supported=true;
             app.display_settings.sm62_stars_values=[initial;2];
             app.display_settings.confirmed_sm62_stars_values=[initial;2];
@@ -5360,7 +5360,7 @@ mod pictogram_confirmation_tests {
         let ctx = egui::Context::default();
         let mut app = EntropyApp::new_inert_for_test();
         let (hid, recorder) = crate::hid::HidDevice::test_device();
-        app.hid_device = Some(hid);
+        app.hid_device = Some(hid.into());
         app.display_settings.pictograms.supported = Some(true);
         app.display_settings.pictograms.loaded = true;
         let generation = app.connection_generation;
@@ -5408,7 +5408,7 @@ mod pictogram_confirmation_tests {
             .unwrap();
             recorder.set_pictogram_backup_directory(backup.path().join("pictogram-backups"));
             recorder.respond_with(test_pictogram_upload_responses(action != 3, 4));
-            app.hid_device = Some(hid);
+            app.hid_device = Some(hid.into());
             let p = &mut app.display_settings.pictograms;
             p.supported = Some(true);
             p.loaded = true;
@@ -5494,7 +5494,7 @@ mod pictogram_confirmation_tests {
             .unwrap();
             recorder.set_pictogram_backup_directory(backup.path().join("pictogram-backups"));
             recorder.respond_with(test_pictogram_upload_responses(slot_upload, 0));
-            app.hid_device = Some(hid);
+            app.hid_device = Some(hid.into());
             app.display_settings.pictograms.loaded = true;
             app.display_settings.pictograms.supported = Some(true);
             let before = app.display_settings.pictograms.library.clone();
@@ -5538,7 +5538,7 @@ mod pictogram_confirmation_tests {
             let mut app = EntropyApp::new_inert_for_test();
             let (hid, _) =
                 crate::hid::HidDevice::test_device_with_fault_after_requests(Some((0, fault)));
-            app.hid_device = Some(hid);
+            app.hid_device = Some(hid.into());
             app.display_settings.pictograms.loaded = true;
             app.display_settings.pictograms.supported = Some(true);
             app.display_settings.pictograms.editor_name = "retain".into();

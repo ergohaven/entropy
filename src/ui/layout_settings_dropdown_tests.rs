@@ -50,7 +50,7 @@ fn screenless_menu(lang: crate::i18n::Language) {
     let ctx = egui::Context::default();
     let mut app = fixture(&ctx);
     let (hid, recorder) = crate::hid::HidDevice::test_device();
-    app.hid_device = Some(hid);
+    app.hid_device = Some(hid.into());
     for keyboard in [device("Ergohaven K:04", 0xE126, 0x0074), device("Generic screenless", 0x1234, 0x5678)] {
         app.device_manager.replace_devices(vec![keyboard]);
         app.selected_device = Some(0);
@@ -102,7 +102,7 @@ fn catalog_production_loader_to_menu_matrix_preserves_existing_routes_ru_en() {
                 if !dedicated {
                     assert!(!app.display_settings.supported && !app.display_settings.sm62_supported, "{row}");
                 }
-                app.hid_device = Some(hid);
+                app.hid_device = Some(hid.into());
                 app.device_manager.replace_devices(vec![keyboard]);
                 app.selected_device = Some(0);
                 let baseline = labels(&mut app, &ctx, lang);
@@ -159,7 +159,7 @@ fn legacy_lcd_contract_and_oled_preset_page_stay_separate_from_dedicated_page() 
             app.layout = Some(KeyboardLayout::from_vial_json(definition).unwrap());
             app.app_settings.language = lang;
             let (hid, recorder) = crate::hid::HidDevice::test_device();
-            app.hid_device = Some(hid);
+            app.hid_device = Some(hid.into());
             app.layout_options_value = Some(0);
             app.device_manager.replace_devices(vec![device(name, row["vendor_id"].as_u64().unwrap() as u16, row["product_id"].as_u64().unwrap() as u16)]);
             app.selected_device = Some(0);
@@ -216,7 +216,7 @@ fn k04_definition_bluetooth_color_ids_do_not_advertise_a_display() {
         assert!(!app.display_settings.supported);
         assert!(recorder.requests().is_empty(), "BT color IDs must not launch display probes");
         let request_count = recorder.requests().len();
-        app.hid_device = Some(hid);
+        app.hid_device = Some(hid.into());
         app.device_manager.replace_devices(vec![device("K:04", 0xE126, 0x0074)]);
         app.selected_device = Some(0);
         let actual = labels(&mut app, &ctx, lang);
@@ -240,7 +240,7 @@ fn display_devices_keep_actual_menu_through_reload_selection_and_inventory_order
                 let ctx = egui::Context::default();
                 let mut app = fixture(&ctx);
                 let (hid, recorder) = crate::hid::HidDevice::test_device();
-                app.hid_device = Some(hid);
+                app.hid_device = Some(hid.into());
                 let k04 = device("K:04", 0xE126, 0x0074);
                 app.device_manager.replace_devices(if display_first { vec![display.clone(), k04] } else { vec![k04, display.clone()] });
                 let index = usize::from(!display_first);

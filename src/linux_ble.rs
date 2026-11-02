@@ -17,11 +17,11 @@ use zbus::blocking::{Connection, Proxy};
 use zbus::fdo::ManagedObjects;
 use zbus::zvariant::{ObjectPath, OwnedValue, Value};
 
-const BLUEZ_DESTINATION: &str = "org.bluez";
+pub(crate) const BLUEZ_DESTINATION: &str = "org.bluez";
 const BLUEZ_GATT_PREFIX: &str = "bluez-gatt:";
-const DEVICE_INTERFACE: &str = "org.bluez.Device1";
-const SERVICE_INTERFACE: &str = "org.bluez.GattService1";
-const CHARACTERISTIC_INTERFACE: &str = "org.bluez.GattCharacteristic1";
+pub(crate) const DEVICE_INTERFACE: &str = "org.bluez.Device1";
+pub(crate) const SERVICE_INTERFACE: &str = "org.bluez.GattService1";
+pub(crate) const CHARACTERISTIC_INTERFACE: &str = "org.bluez.GattCharacteristic1";
 const DESCRIPTOR_INTERFACE: &str = "org.bluez.GattDescriptor1";
 const HID_SERVICE_UUID: &str = "1812";
 const REPORT_MAP_CHARACTERISTIC_UUID: &str = "2a4b";
@@ -119,7 +119,7 @@ fn bluez_service_path(path: &str) -> Option<&str> {
         .filter(|path| path.starts_with('/'))
 }
 
-fn bluez_connection() -> Result<Connection> {
+pub(crate) fn bluez_connection() -> Result<Connection> {
     ConnectionBuilder::system()
         .context("Failed to create BlueZ D-Bus connection builder")?
         .method_timeout(BLUEZ_METHOD_TIMEOUT)
@@ -127,7 +127,7 @@ fn bluez_connection() -> Result<Connection> {
         .context("Failed to connect to the BlueZ system bus")
 }
 
-fn managed_objects(connection: &Connection) -> Result<ManagedObjects> {
+pub(crate) fn managed_objects(connection: &Connection) -> Result<ManagedObjects> {
     let proxy = ObjectManagerProxy::builder(connection)
         .destination(BLUEZ_DESTINATION)
         .context("Invalid BlueZ D-Bus destination")?
@@ -140,27 +140,36 @@ fn managed_objects(connection: &Connection) -> Result<ManagedObjects> {
         .context("Failed to enumerate BlueZ GATT objects")
 }
 
-fn property_string(properties: &HashMap<String, OwnedValue>, name: &str) -> Option<String> {
+pub(crate) fn property_string(
+    properties: &HashMap<String, OwnedValue>,
+    name: &str,
+) -> Option<String> {
     properties
         .get(name)
         .and_then(|value| <&str>::try_from(value).ok())
         .map(str::to_owned)
 }
 
-fn property_bool(properties: &HashMap<String, OwnedValue>, name: &str) -> Option<bool> {
+pub(crate) fn property_bool(properties: &HashMap<String, OwnedValue>, name: &str) -> Option<bool> {
     properties
         .get(name)
         .and_then(|value| bool::try_from(value).ok())
 }
 
-fn property_path(properties: &HashMap<String, OwnedValue>, name: &str) -> Option<String> {
+pub(crate) fn property_path(
+    properties: &HashMap<String, OwnedValue>,
+    name: &str,
+) -> Option<String> {
     properties
         .get(name)
         .and_then(|value| <&ObjectPath<'_>>::try_from(value).ok())
         .map(ToString::to_string)
 }
 
-fn property_strings(properties: &HashMap<String, OwnedValue>, name: &str) -> Vec<String> {
+pub(crate) fn property_strings(
+    properties: &HashMap<String, OwnedValue>,
+    name: &str,
+) -> Vec<String> {
     properties
         .get(name)
         .and_then(|value| value.try_clone().ok())
@@ -176,7 +185,7 @@ fn property_bytes(properties: &HashMap<String, OwnedValue>, name: &str) -> Vec<u
         .unwrap_or_default()
 }
 
-fn interface_properties<'a>(
+pub(crate) fn interface_properties<'a>(
     interfaces: &'a HashMap<zbus::names::OwnedInterfaceName, HashMap<String, OwnedValue>>,
     interface: &str,
 ) -> Option<&'a HashMap<String, OwnedValue>> {
@@ -428,15 +437,15 @@ fn select_hid_vial_endpoints(
             })
             .collect();
 
-        let vial_report_id = characteristics
+        let report_map = characteristics
             .iter()
             .find(|characteristic| {
                 characteristic.service == *service
                     && uuid_matches(&characteristic.uuid, REPORT_MAP_CHARACTERISTIC_UUID)
             })
-            .and_then(|characteristic| {
-                crate::hid::vial_report_id_from_hid_descriptor(&characteristic.value)
-            });
+            .map(|characteristic| characteristic.value.as_slice())
+            .filter(|value| !value.is_empty());
+        let vial_report_id = report_map.and_then(crate::hid::vial_report_id_from_hid_descriptor);
         let report_reference = |characteristic: &CharacteristicSummary| {
             descriptors
                 .iter()
@@ -467,10 +476,11 @@ fn select_hid_vial_endpoints(
                         })
                 }),
             )
-        } else if reports.len() == 2 {
+        } else if reports.len() == 2 && report_map.is_none() {
             // Backward-compatible fallback for older BlueZ/RMK combinations
             // that expose a dedicated Vial HID service but do not cache its
-            // Report Map or Report Reference values.
+            // Report Map or Report Reference values. A cached map without the
+            // Vial usage is another two-report service, such as Rynk's.
             (
                 reports.iter().find(|characteristic| {
                     characteristic
@@ -531,7 +541,7 @@ fn select_vial_endpoints(
     endpoints
 }
 
-fn parse_bluez_modalias(modalias: &str) -> (u16, u16) {
+pub(crate) fn parse_bluez_modalias(modalias: &str) -> (u16, u16) {
     let lower = modalias.to_ascii_lowercase();
     let Some(vendor_start) = lower.find(":v").map(|index| index + 2) else {
         return (0, 0);
@@ -701,7 +711,7 @@ fn validate_service_identity(
     Ok(())
 }
 
-fn ensure_device_connected(connection: &Connection, device_path: &str) -> Result<()> {
+pub(crate) fn ensure_device_connected(connection: &Connection, device_path: &str) -> Result<()> {
     let proxy = Proxy::new(connection, BLUEZ_DESTINATION, device_path, DEVICE_INTERFACE)
         .context("Failed to create the BlueZ device proxy")?;
     let connected = proxy.get_property::<bool>("Connected").unwrap_or(false);
@@ -744,7 +754,10 @@ fn endpoints_for_service(
         .find(|endpoints| endpoints.service == service)
 }
 
-fn characteristic_proxy<'a>(connection: &'a Connection, path: &'a str) -> Result<Proxy<'a>> {
+pub(crate) fn characteristic_proxy<'a>(
+    connection: &'a Connection,
+    path: &'a str,
+) -> Result<Proxy<'a>> {
     Proxy::new(
         connection,
         BLUEZ_DESTINATION,
@@ -759,7 +772,7 @@ fn descriptor_proxy<'a>(connection: &'a Connection, path: &'a str) -> Result<Pro
         .context("Failed to create a BlueZ GATT descriptor proxy")
 }
 
-fn value_bytes(value: &Value<'_>) -> Option<Vec<u8>> {
+pub(crate) fn value_bytes(value: &Value<'_>) -> Option<Vec<u8>> {
     let array: &zbus::zvariant::Array<'_> = value.downcast_ref().ok()?;
     array.iter().map(|item| u8::try_from(item).ok()).collect()
 }
@@ -1312,6 +1325,44 @@ mod tests {
                 output_write_types: vec![GattWriteType::Request, GattWriteType::Command],
                 transport: VialGattTransport::Hid,
             }]
+        );
+    }
+
+    /// K:04 Mini on Rynk: a second HID service of two reports carries Rynk
+    /// (usage page 0xFF14), and BlueZ has its Report Map.
+    #[test]
+    fn a_cached_report_map_without_vial_is_not_a_vial_service() {
+        let services = HashMap::from([("/service0033".to_owned(), "/device".to_owned())]);
+        let mut report_map =
+            characteristic("/service0033/char0036", "/service0033", "2a4b", &["read"]);
+        report_map.value = vec![
+            0x06, 0x14, 0xFF, 0x09, 0x61, 0xA1, 0x01, 0x09, 0x62, 0x15, 0x00, 0x26, 0xFF, 0x00,
+            0x75, 0x08, 0x95, 0x20, 0x81, 0x02, 0x09, 0x63, 0x15, 0x00, 0x91, 0x02, 0xC0,
+        ];
+        let mut characteristics = vec![
+            characteristic(
+                "/service0033/char003c",
+                "/service0033",
+                "2a4d",
+                &["read", "notify"],
+            ),
+            characteristic(
+                "/service0033/char0040",
+                "/service0033",
+                "2a4d",
+                &["read", "write-without-response", "write"],
+            ),
+        ];
+
+        // Without the map, two reports still read as a Vial service.
+        assert_eq!(
+            select_hid_vial_endpoints(&services, &characteristics, &[]).len(),
+            1
+        );
+        characteristics.push(report_map);
+        assert_eq!(
+            select_hid_vial_endpoints(&services, &characteristics, &[]),
+            []
         );
     }
 

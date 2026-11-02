@@ -39,7 +39,7 @@ READABLE=(
 )
 # Маркер версии правила: без него приложение считает установленное правило
 # устаревшим и продолжает просить настроить доступ (src/ui/app_settings.rs).
-UDEV_MARKER='# Entropy Vial hidraw access v2'
+UDEV_MARKER='# Entropy keyboard access v3'
 
 failures=0
 fail() {

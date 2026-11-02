@@ -38,7 +38,7 @@ mod usb_hotplug_tests {
             firmware: FirmwareProtocol::Vial,
         });
         app.current_device_name = "Generic BT keyboard".into();
-        app.hid_device = Some(hid);
+        app.hid_device = Some(hid.into());
         app.last_device_scan_at = 10.0;
         app.last_full_device_scan_at = 10.0;
         (app, ctx, recorder)

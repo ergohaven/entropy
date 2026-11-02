@@ -12,7 +12,10 @@ impl EntropyApp {
         let selected = self
             .selected_device
             .and_then(|idx| self.device_manager.devices().get(idx))?;
-        if selected.firmware != FirmwareProtocol::Vial {
+        if !matches!(
+            selected.firmware,
+            FirmwareProtocol::Vial | FirmwareProtocol::Rynk
+        ) {
             return None;
         }
 
@@ -56,6 +59,9 @@ impl EntropyApp {
         ui: &mut egui::Ui,
         metrics: crate::ui_style::ResponsiveMetrics,
     ) {
+        if self.layout.as_ref().is_none_or(|layout| layout.firmware != FirmwareProtocol::Vial) {
+            return;
+        }
         let Some((index, option)) = self.layout.as_ref().and_then(|layout| {
             layout
                 .layout_options

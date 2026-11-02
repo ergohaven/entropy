@@ -122,7 +122,7 @@ impl EntropyApp {
     /// Shared ownership gate for shortcuts on pages behind app modals.
     pub(super) fn modal_or_popup_open(&self, ctx: &egui::Context) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
-        let import_pending = self.import_pending();
+        let import_pending = self.import_pending() || self.entlayout_losses_prompt.is_some();
         #[cfg(target_arch = "wasm32")]
         let import_pending = false;
         self.application_categories_open
@@ -175,9 +175,8 @@ impl EntropyApp {
         }
     }
 
-    // On Linux the background window is minimized, or hidden to the tray where
-    // it can come back from there; device polling stays on either way, but
-    // nobody sees the window repaint.
+    // Linux has no tray: background mode only minimizes the window, so device
+    // polling stays on, but nobody sees the window repaint.
     fn main_window_in_background(&self) -> bool {
         #[cfg(target_os = "linux")]
         {
@@ -187,160 +186,6 @@ impl EntropyApp {
         {
             self.main_window_hidden_to_tray()
         }
-    }
-
-    /// Starts writing the edits waiting for the board: macros, key overrides,
-    /// the combo term, tap dance and combos. `ui` does it every pass; a root
-    /// hidden to the Linux tray gets no `ui` pass, so the tick does it there.
-    fn write_pending_dynamic_entries(&mut self, ctx: &egui::Context) {
-        let active_hid_is_bluetooth = self
-            .hid_device
-            .as_ref()
-            .map(|hid| hid.is_bluetooth_transport())
-            .unwrap_or(false);
-
-        self.flush_pending_key_override_writes();
-
-        #[cfg(not(target_arch = "wasm32"))]
-        self.maybe_start_macro_write(ctx);
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let hid_write_task_active = self.hid_write_task_active();
-        #[cfg(target_arch = "wasm32")]
-        let hid_write_task_active = false;
-
-        if self.combo_term_dirty
-            && !self.keycode_picker.open
-            && !active_hid_is_bluetooth
-            && !hid_write_task_active
-        {
-            let mut term_save_ok = false;
-            if let (Some(hid), Some(value)) = (&self.hid_device, self.combo_term) {
-                match hid.set_qmk_setting_u16(2, value) {
-                    Ok(()) => term_save_ok = true,
-                    Err(e) => {
-                        self.status_msg = crate::i18n::tr_catalog_format(
-                            self.app_settings.language,
-                            "status_messages.combo_timeout_write_error",
-                            &[("error", &e.to_string())],
-                        );
-                    }
-                }
-            }
-            if term_save_ok {
-                self.combo_term_dirty = false;
-                self.status_msg = crate::i18n::tr_catalog(
-                    self.app_settings.language,
-                    "status_messages.combo_timeout_saved",
-                )
-                .into();
-            }
-        }
-
-        if self.combo_names_dirty {
-            save_combo_names(&self.combo_names, &self.current_device_name);
-            self.combo_names_dirty = false;
-        }
-
-        if self.keycode_picker.macro_metadata_dirty && !self.current_device_name.is_empty() {
-            save_macro_metadata(
-                &self.keycode_picker.macro_names,
-                &self.keycode_picker.macro_descriptions,
-                &self.current_device_name,
-            );
-            self.keycode_picker.macro_metadata_dirty = false;
-        }
-
-        if self.combo_colors_dirty {
-            save_combo_colors(&self.combo_colors, &self.current_device_name);
-            self.combo_colors_dirty = false;
-        }
-
-        if !hid_write_task_active {
-            self.flush_due_qmk_setting_writes();
-            self.flush_due_tap_hold_numeric_writes();
-        }
-
-        // Write tap dance to device if changed
-        if !self.is_vial_locked()
-            && !self.vial_unlock_polling
-            && should_write_dynamic_entries(
-                self.keycode_picker.tap_dance_dirty,
-                self.keycode_picker.open,
-                active_hid_is_bluetooth,
-                hid_write_task_active,
-            )
-        {
-            let entries_to_write = tap_dance_entries_to_write(
-                &self.keycode_picker.tap_dance_entries,
-                &self.keycode_picker.tap_dance_synced_entries,
-            );
-            let mut td_save_ok = true;
-            if entries_to_write.is_empty() {
-                // Names are local metadata; no device round-trip is needed.
-            } else if let Some(hid) = &self.hid_device {
-                for i in entries_to_write {
-                    let Some(td) = self.keycode_picker.tap_dance_entries.get(i).cloned() else {
-                        continue;
-                    };
-                    match hid.set_tap_dance_bindings(
-                        i as u8,
-                        [td.on_tap, td.on_hold, td.on_double_tap, td.on_tap_hold],
-                        td.tapping_term,
-                    ) {
-                        Ok(()) => {
-                            if self.keycode_picker.tap_dance_synced_entries.len() <= i {
-                                self.keycode_picker
-                                    .tap_dance_synced_entries
-                                    .resize(i + 1, Default::default());
-                            }
-                            self.keycode_picker.tap_dance_synced_entries[i] = td;
-                        }
-                        Err(e) => {
-                            self.status_msg = crate::i18n::tr_catalog_format(
-                                self.app_settings.language,
-                                "status_messages.tap_dance_write_error",
-                                &[("error", &e.to_string())],
-                            );
-                            td_save_ok = false;
-                            break;
-                        }
-                    }
-                }
-            } else {
-                self.status_msg = crate::i18n::tr_catalog_format(
-                    self.app_settings.language,
-                    "status_messages.tap_dance_write_error",
-                    &[(
-                        "error",
-                        crate::i18n::tr_catalog(
-                            self.app_settings.language,
-                            "status_messages.device_unavailable",
-                        ),
-                    )],
-                );
-                td_save_ok = false;
-            }
-            save_tap_dance_names(
-                &self.keycode_picker.tap_dance_names,
-                &self.current_device_name,
-            );
-            // Consume this attempt. Failed device entries remain different from the
-            // synced snapshot and retry after the next edit or picker close.
-            self.keycode_picker.tap_dance_dirty = false;
-            if td_save_ok && (self.status_msg.is_empty() || self.status_msg.starts_with("✓")) {
-                self.status_msg = crate::i18n::tr_catalog(
-                    self.app_settings.language,
-                    "status_messages.tap_dance_saved",
-                )
-                .into();
-            }
-        }
-
-        // Start background combo I/O after synchronous dynamic-entry writes have finished
-        // using the shared HID handle for this frame.
-        #[cfg(not(target_arch = "wasm32"))]
-        self.maybe_start_combo_write(ctx);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -375,11 +220,20 @@ impl EntropyApp {
             // work. After an unplug that work can remain pending until a scan
             // observes the missing endpoint and advances connection_generation.
             self.poll_device_scan(ctx);
+            if !self.rynk_host_opens.is_empty() {
+                // A remembered Rynk board's link opened, or its retry is due.
+                self.sync_rynk_host_bridges();
+            }
             self.maybe_start_bluetooth_reconnect_scan(ctx);
 
             // A worker temporarily borrows the handle; it is still the same
             // active transport and must not authorize full Bluetooth enumeration.
-            let hid_session_active = self.hid_device.is_some()
+            // A Rynk session whose link broke is over: the next full scan,
+            // which reopens its board, is not held back as for a live one.
+            let hid_session_active = self
+                .hid_device
+                .as_ref()
+                .is_some_and(|session| !session.link_lost())
                 || self.hid_write_task_owner_active()
                 || matches!(self.connect_state, ConnectState::Loading { .. });
             let bluetooth_busy = (selected_device_is_bluetooth && hid_session_active)
@@ -419,11 +273,6 @@ impl EntropyApp {
         self.maybe_start_pending_layout_undo(ctx);
         self.maybe_start_pending_layer_write();
         self.maybe_start_combo_write(ctx);
-        // Without a window the root gets no `ui` pass, where these start.
-        #[cfg(target_os = "linux")]
-        if self.linux_hidden_to_tray {
-            self.write_pending_dynamic_entries(ctx);
-        }
         self.finish_deferred_exit_after_hid_write(ctx);
         self.poll_text_expander_deferred_save(now);
         self.auto_reload_text_expander_rules_file(now);
@@ -432,8 +281,6 @@ impl EntropyApp {
         self.poll_single_instance_signal(ctx);
         self.poll_connect(ctx);
         self.maybe_begin_bluetooth_reconnect();
-        #[cfg(unix)]
-        self.poll_console_export(ctx);
         self.finish_deferred_full_layout_action(ctx);
         self.maybe_start_periodic_battery_refresh(ctx, main_window_hidden_to_tray);
         self.maybe_start_deferred_device_load(ctx, main_window_hidden_to_tray);
@@ -514,14 +361,23 @@ impl EntropyApp {
                     self.import_report_body = report;
                     self.import_report_open = true;
                 }
-                Err(e) => self.report_import_failure(
-                    "status_messages.layout_import_failed_title",
-                    crate::i18n::tr_catalog_format(
-                        self.app_settings.language,
-                        "status_messages.import_failed",
-                        &[("error", &format!("{e:#}"))],
-                    ),
-                ),
+                Err(e) => {
+                    match e.downcast::<crate::rynk::entlayout::EntLayoutLossesNeedConsent>() {
+                        // Nothing is written yet: the user decides on the list.
+                        Ok(losses) => {
+                            self.entlayout_losses_prompt =
+                                Some((path, opened_generation, losses.message));
+                        }
+                        Err(e) => self.report_import_failure(
+                            "status_messages.layout_import_failed_title",
+                            crate::i18n::tr_catalog_format(
+                                self.app_settings.language,
+                                "status_messages.import_failed",
+                                &[("error", &format!("{e:#}"))],
+                            ),
+                        ),
+                    }
+                }
             }
         }
         if let Some(path) = self.pending_entsettings_import_path.take() {
@@ -725,6 +581,117 @@ impl EntropyApp {
             );
         });
     }
+
+    /// What a Rynk board would not take from an `.entlayout`, and the choice
+    /// to import without it or to leave the board as it is.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_entlayout_losses_prompt(&mut self, ctx: &egui::Context) {
+        let Some((_, _, message)) = &self.entlayout_losses_prompt else {
+            return;
+        };
+        let lang = self.app_settings.language;
+        let body = format!(
+            "{}\n{message}",
+            crate::i18n::tr_catalog(lang, "entlayout.rynk_losses_hint")
+        );
+        let screen_rect = ctx.content_rect();
+        egui::Area::new("entlayout_losses_backdrop".into())
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen_rect.min)
+            .show(ctx, |ui| {
+                let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen_rect.size());
+                ui.interact(
+                    rect,
+                    egui::Id::new("entlayout_losses_backdrop_blocker"),
+                    egui::Sense::click_and_drag(),
+                );
+                ui.painter().rect_filled(
+                    rect,
+                    0.0,
+                    Color32::from_black_alpha(crate::ui_style::modal_backdrop_alpha(
+                        ctx.global_style().visuals.dark_mode,
+                    )),
+                );
+            });
+
+        let mut open = true;
+        let mut import_clicked = false;
+        let mut cancel_clicked = false;
+        crate::ui_style::centered_modal_window(
+            ctx,
+            crate::i18n::tr_catalog(lang, "entlayout.rynk_losses_title"),
+            egui::Id::new("entlayout_losses_window"),
+            &mut open,
+            Vec2::new(680.0, 620.0),
+        )
+        .show(ctx, |ui| {
+            ui.set_min_size(Vec2::new(660.0, 560.0));
+            let rect = ui.max_rect();
+            let content_rect = egui::Rect::from_min_max(
+                egui::pos2(rect.left() + 34.0, rect.top() + 18.0),
+                egui::pos2(rect.right() - 34.0, rect.bottom() - 74.0),
+            );
+            let button_size = crate::ui_style::modal_action_button_size();
+            let button_gap = 10.0;
+            let button_rect = egui::Rect::from_center_size(
+                egui::pos2(rect.center().x, rect.bottom() - 34.0),
+                egui::vec2(button_size.x * 2.0 + button_gap, button_size.y),
+            );
+
+            crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(content_rect.height())
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.set_width(content_rect.width() - 18.0);
+                        Self::draw_import_report_text(ui, &body);
+                    });
+            });
+
+            crate::ui_style::allocate_ui_at_rect(ui, button_rect, |ui| {
+                ui.allocate_ui_with_layout(
+                    button_rect.size(),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        if crate::ui_style::modern_button(
+                            ui,
+                            crate::i18n::tr_catalog(lang, "common.cancel"),
+                            button_size,
+                            true,
+                        )
+                        .clicked()
+                        {
+                            cancel_clicked = true;
+                        }
+                        ui.add_space(button_gap);
+                        if crate::ui_style::modern_button(
+                            ui,
+                            crate::i18n::tr_catalog(lang, "entlayout.rynk_losses_import"),
+                            button_size,
+                            true,
+                        )
+                        .clicked()
+                        {
+                            import_clicked = true;
+                        }
+                    },
+                );
+            });
+        });
+
+        if import_clicked {
+            if let Some((path, generation, _)) = self.entlayout_losses_prompt.take() {
+                self.begin_entlayout_import(path.clone());
+                // The retry belongs to the connection the file was chosen for.
+                self.pending_entlayout_import_path = Some((path.clone(), generation));
+                self.entlayout_losses_accepted = Some(path);
+            }
+        } else if cancel_clicked || !open {
+            self.entlayout_losses_prompt = None;
+            self.status_msg =
+                crate::i18n::tr_catalog(lang, "status_messages.import_cancelled").into();
+        }
+    }
 }
 
 fn should_write_dynamic_entries(
@@ -847,6 +814,55 @@ mod tests {
             crate::i18n::tr_catalog(
                 app.app_settings.language,
                 "status_messages.file_dialog_device_changed"
+            )
+        );
+    }
+
+    #[test]
+    fn a_rynk_import_asks_about_its_losses_and_other_failures_say_why() {
+        let storage = crate::app::app_storage::ScopedTempConfig::new();
+        let mut app = EntropyApp::new_inert_for_test();
+        let ctx = egui::Context::default();
+        // A key a Rynk board cannot hold.
+        let mut layout = KeyboardLayout::from_vial_json(&serde_json::json!({
+            "matrix": { "rows": 1, "cols": 1 },
+            "layouts": { "keymap": [["0,0"]] }
+        }))
+        .unwrap();
+        layout.layers = vec![vec![crate::keyboard::KeyBinding::Vial(0x7000)]];
+        app.layout = Some(layout);
+        let file = storage.path().join("lossy.entlayout");
+        std::fs::write(&file, app.entlayout_export_json().unwrap().unwrap()).unwrap();
+        let stored = crate::rynk::session::testing::Stored::new(1, 1, 1);
+        let (board, state) = crate::rynk::session::testing::board(stored);
+        let link = crate::rynk::session::testing::link("import-consent", &board);
+        app.hid_device = Some(crate::device_session::DeviceSession::Rynk(
+            crate::rynk::session::RynkSession::new(link),
+        ));
+
+        // What the board would lose waits for the user, before any write.
+        app.begin_entlayout_import(file.clone());
+        app.handle_pending_imports(&ctx, 1.0);
+        app.handle_pending_imports(&ctx, 1.1);
+        assert!(app
+            .entlayout_losses_prompt
+            .as_ref()
+            .is_some_and(|(path, _, _)| *path == file));
+        assert!(!app.import_report_open);
+        assert_eq!(state.lock().unwrap().writes(), []);
+
+        // Any other failure says why in the report window.
+        app.entlayout_losses_prompt = None;
+        app.begin_entlayout_import(storage.path().join("missing.entlayout"));
+        app.handle_pending_imports(&ctx, 2.0);
+        app.handle_pending_imports(&ctx, 2.1);
+        assert!(app.entlayout_losses_prompt.is_none());
+        assert!(app.import_report_open);
+        assert_eq!(
+            app.import_report_title,
+            crate::i18n::tr_catalog(
+                app.app_settings.language,
+                "status_messages.layout_import_failed_title",
             )
         );
     }
@@ -1015,7 +1031,7 @@ mod tests {
             }))
             .unwrap(),
         );
-        app.hid_device = Some(hid_device);
+        app.hid_device = Some(hid_device.into());
         app.vial_unlocked = Some(false);
         let entry = crate::keycode_picker::TapDanceEntry {
             on_tap: 0x0004.into(),
@@ -1053,7 +1069,7 @@ mod tests {
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
         let (hid_device, recorder) = crate::hid::HidDevice::test_device();
-        app.hid_device = Some(hid_device);
+        app.hid_device = Some(hid_device.into());
         app.queue_touchpad_setting_write("Sniper sensitivity".to_owned(), 121, 1, 1, 2);
         assert!(app.settings_write_task.is_some());
 
@@ -1182,7 +1198,7 @@ mod tests {
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
         let (hid_device, recorder) = crate::hid::HidDevice::test_device();
-        app.hid_device = Some(hid_device);
+        app.hid_device = Some(hid_device.into());
         app.combo_entries = vec![combo([0x0004, 0x0005, 0, 0], 0x0006)];
         app.combo_synced_entries = vec![ComboEntry::default()];
         app.combo_dirty = true;
@@ -1351,7 +1367,7 @@ mod tests {
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
         let (hid_device, _recorder) = crate::hid::HidDevice::test_device();
-        app.hid_device = Some(hid_device);
+        app.hid_device = Some(hid_device.into());
         app.combo_entries = vec![combo([0x0004, 0x0005, 0, 0], 0x0006)];
         app.combo_synced_entries = vec![ComboEntry::default()];
         app.combo_dirty = true;
@@ -1378,7 +1394,7 @@ mod tests {
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
         let (hid_device, _recorder) = crate::hid::HidDevice::test_device();
-        app.hid_device = Some(hid_device);
+        app.hid_device = Some(hid_device.into());
         app.layout = Some(KeyboardLayout {
             name: "Test".into(),
             rows: 1,
@@ -1437,7 +1453,7 @@ mod tests {
         let mut app = EntropyApp::new(&creation_context);
         let (hid_device, recorder) =
             crate::hid::HidDevice::test_device_with_fault_after_requests(Some((2, fault)));
-        app.hid_device = Some(hid_device);
+        app.hid_device = Some(hid_device.into());
         app.combo_entries = vec![combo([0x0004, 0x0005, 0, 0], 0x0006)];
         app.combo_synced_entries = vec![ComboEntry::default()];
         app.combo_dirty = true;
@@ -1520,7 +1536,7 @@ mod tests {
         let (hid_device, _recorder) = crate::hid::HidDevice::test_device();
         let first = combo([0x0004, 0x0005, 0, 0], 0x0006);
         let second = combo([0x0007, 0x0008, 0, 0], 0x0009);
-        app.hid_device = Some(hid_device);
+        app.hid_device = Some(hid_device.into());
         app.combo_entries = vec![first.clone(), second];
         app.combo_synced_entries = vec![ComboEntry::default(), ComboEntry::default()];
         app.combo_dirty = true;
@@ -1588,120 +1604,6 @@ mod tests {
             AppAccentColor::Blue
         ));
     }
-
-    /// An app whose next macro edit waits behind a write still on the board.
-    #[cfg(target_os = "linux")]
-    fn app_with_a_macro_edit_queued() -> (EntropyApp, egui::Context, crate::hid::TestHidRecorder) {
-        let ctx = egui::Context::default();
-        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EntropyApp::new(&creation_context);
-        // Discovery is not under test: its requests go nowhere.
-        let (scans, _) = std::sync::mpsc::channel();
-        app.test_device_scan_requests = Some(scans);
-        let (hid, recorder) = crate::hid::HidDevice::test_device();
-        app.hid_device = Some(hid);
-        app.keycode_picker.macro_texts = vec![Vec::new(); 32];
-        app.keycode_picker.mark_macros_dirty();
-        app.maybe_start_macro_write(&ctx);
-        assert!(
-            app.vial_hid_task_active(),
-            "the first write owns the transport"
-        );
-        app.keycode_picker.macro_texts[0] = b"newer".to_vec();
-        app.keycode_picker.mark_macros_dirty();
-        (app, ctx, recorder)
-    }
-
-    /// Passes of the tick `logic` runs, as a root without a window gets them:
-    /// no `ui`. Returns the root's viewport commands.
-    #[cfg(target_os = "linux")]
-    fn tick(app: &mut EntropyApp, ctx: &egui::Context, now: f64) -> Vec<egui::ViewportCommand> {
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            app.update_native_background(ui.ctx(), now, false, false);
-        });
-        output
-            .viewport_output
-            .get(&egui::ViewportId::ROOT)
-            .map(|viewport| viewport.commands.clone())
-            .unwrap_or_default()
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn a_window_hidden_to_the_tray_writes_the_queued_edit_and_then_quits() {
-        let (mut app, ctx, recorder) = app_with_a_macro_edit_queued();
-        app.linux_hidden_to_tray = true;
-        assert!(
-            app.defer_exit_until_hid_write_returns(&ctx),
-            "Quit waits for the edit"
-        );
-
-        let mut commands = Vec::new();
-        for pass in 0..2000 {
-            commands = tick(&mut app, &ctx, f64::from(pass) * 0.016);
-            if commands.contains(&egui::ViewportCommand::Close) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        assert!(
-            commands.contains(&egui::ViewportCommand::Close),
-            "Quit ends once the edit is on the board"
-        );
-        assert!(!app.keycode_picker.macros_dirty);
-        assert!(app.linux_hidden_to_tray, "the window stays hidden");
-        let writes = recorder
-            .requests()
-            .iter()
-            .filter(|request| request[0] == 0x0D)
-            .count();
-        assert_eq!(writes, 2, "both macro writes reached the board");
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn a_window_hidden_to_the_tray_comes_back_for_an_edit_only_it_can_finish() {
-        let (mut app, ctx, _) = app_with_a_macro_edit_queued();
-        app.linux_hidden_to_tray = true;
-        // Hidden with the picker still open: the edit waits for it to close.
-        app.keycode_picker.open = true;
-        assert!(app.defer_exit_until_hid_write_returns(&ctx));
-
-        let mut commands = Vec::new();
-        for pass in 0..2000 {
-            commands.extend(tick(&mut app, &ctx, f64::from(pass) * 0.016));
-            if !app.linux_hidden_to_tray {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        assert!(!app.linux_hidden_to_tray, "the window is back");
-        assert!(commands.contains(&egui::ViewportCommand::Visible(true)));
-        assert!(!commands.contains(&egui::ViewportCommand::Close));
-        assert!(app.keycode_picker.macros_dirty, "the edit is kept");
-        assert!(app.exit_after_hid_write, "Quit still waits for it");
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn a_visible_window_leaves_the_queued_edit_to_ui() {
-        let (mut app, ctx, recorder) = app_with_a_macro_edit_queued();
-        for pass in 0..2000 {
-            tick(&mut app, &ctx, f64::from(pass) * 0.016);
-            if !app.vial_hid_task_active() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        assert!(!app.vial_hid_task_active());
-        assert!(app.keycode_picker.macros_dirty, "ui admits it, in its pass");
-        let writes = recorder
-            .requests()
-            .iter()
-            .filter(|request| request[0] == 0x0D)
-            .count();
-        assert_eq!(writes, 1);
-    }
 }
 
 impl eframe::App for EntropyApp {
@@ -1737,13 +1639,9 @@ impl eframe::App for EntropyApp {
             // Cache the winit window/display handles so native file dialogs can be
             // parented to the main window instead of opening behind it.
             self.cache_parent_window_handles(frame);
-            #[cfg(target_os = "linux")]
-            self.handle_linux_start_hidden_to_tray(ctx);
-            #[cfg(target_os = "linux")]
-            self.sync_linux_tray(ctx);
-            #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             self.handle_tray_quit_request(ctx);
-            #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             self.handle_tray_restore_request(ctx);
             self.handle_close_to_tray(ctx);
             #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -1928,13 +1826,10 @@ impl eframe::App for EntropyApp {
                     return;
                 }
                 #[cfg(target_os = "linux")]
-                if !super::app_settings_ui::linux_vial_udev_rules_installed()
-                    && !self
-                        .device_manager
-                        .devices()
-                        .iter()
-                        .any(Device::uses_bluez_gatt_transport)
-                {
+                if super::device_scan::udev_rule_missing(
+                    self.device_manager.devices(),
+                    super::app_settings_ui::linux_udev_access(),
+                ) {
                     let empty_rect = egui::Rect::from_center_size(
                         rect.center(),
                         egui::vec2(rect.width().min(520.0), 210.0),
@@ -2265,6 +2160,8 @@ impl eframe::App for EntropyApp {
             });
             self.import_report_open = open && !close_clicked;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.draw_entlayout_losses_prompt(ctx);
 
         self.draw_close_to_tray_prompt(ctx);
 
@@ -2298,6 +2195,7 @@ impl eframe::App for EntropyApp {
 
         if !self.unlock_open && !self.vial_unlock_polling {
             self.keycode_picker.language = self.app_settings.language;
+            self.keycode_picker.rynk_board = self.rynk_board_connected();
             self.keycode_picker.key_legend_layout = self.app_settings.key_legend_layout;
             self.keycode_picker.show_shifted_number_symbols =
                 self.app_settings.show_shifted_number_symbols;
@@ -2331,10 +2229,184 @@ impl eframe::App for EntropyApp {
             self.alt_repeat_pick_target = None;
         }
 
+        // Write macros to device if changed
         self.maybe_start_onboarding_tour(ctx);
         self.draw_onboarding_tour(ctx);
 
-        self.write_pending_dynamic_entries(ctx);
+        let active_hid_is_bluetooth = self
+            .hid_device
+            .as_ref()
+            .map(|hid| hid.is_bluetooth_transport())
+            .unwrap_or(false);
+
+        self.flush_pending_key_override_writes();
+
+        #[cfg(not(target_arch = "wasm32"))]
+        self.maybe_start_macro_write(ctx);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let hid_write_task_active = self.hid_write_task_active();
+        #[cfg(target_arch = "wasm32")]
+        let hid_write_task_active = false;
+
+        if self.combo_term_dirty
+            && !self.keycode_picker.open
+            && !active_hid_is_bluetooth
+            && !hid_write_task_active
+        {
+            let mut term_save_ok = false;
+            if let (Some(hid), Some(value)) = (&self.hid_device, self.combo_term) {
+                match hid.set_qmk_setting_u16(2, value) {
+                    Ok(()) => term_save_ok = true,
+                    Err(e) => {
+                        self.status_msg = crate::i18n::tr_catalog_format(
+                            self.app_settings.language,
+                            "status_messages.combo_timeout_write_error",
+                            &[("error", &e.to_string())],
+                        );
+                    }
+                }
+            }
+            if term_save_ok {
+                self.combo_term_dirty = false;
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "status_messages.combo_timeout_saved",
+                )
+                .into();
+            }
+        }
+
+        if self.combo_names_dirty {
+            save_combo_names(&self.combo_names, &self.current_device_name);
+            self.combo_names_dirty = false;
+        }
+
+        if self.keycode_picker.macro_metadata_dirty && !self.current_device_name.is_empty() {
+            save_macro_metadata(
+                &self.keycode_picker.macro_names,
+                &self.keycode_picker.macro_descriptions,
+                &self.current_device_name,
+            );
+            self.keycode_picker.macro_metadata_dirty = false;
+        }
+
+        if self.combo_colors_dirty {
+            save_combo_colors(&self.combo_colors, &self.current_device_name);
+            self.combo_colors_dirty = false;
+        }
+
+        if !hid_write_task_active {
+            self.flush_due_qmk_setting_writes();
+            self.flush_due_tap_hold_numeric_writes();
+        }
+
+        // Write tap dance to device if changed
+        if !self.is_vial_locked()
+            && !self.vial_unlock_polling
+            && should_write_dynamic_entries(
+                self.keycode_picker.tap_dance_dirty,
+                self.keycode_picker.open,
+                active_hid_is_bluetooth,
+                hid_write_task_active,
+            )
+        {
+            let entries_to_write = tap_dance_entries_to_write(
+                &self.keycode_picker.tap_dance_entries,
+                &self.keycode_picker.tap_dance_synced_entries,
+            );
+            let mut td_save_ok = true;
+            if entries_to_write.is_empty() {
+                // Names are local metadata; no device round-trip is needed.
+            } else if let Some(hid) = &self.hid_device {
+                // Validate this entire pending batch before any entry can be
+                // written or marked synced. Rynk keeps its own write policy.
+                let preflight = (|| -> anyhow::Result<()> {
+                    if let Some(vial) = hid.as_vial() {
+                        for &i in &entries_to_write {
+                            let td = &self.keycode_picker.tap_dance_entries[i];
+                            for binding in [td.on_tap, td.on_hold, td.on_double_tap, td.on_tap_hold] {
+                                if binding.is_vial_native() {
+                                    vial.preflight_vial_dynamic(binding, true)?;
+                                }
+                            }
+                        }
+                    }
+                    Ok(())
+                })();
+                if let Err(e) = preflight {
+                    self.status_msg = crate::i18n::tr_catalog_format(
+                        self.app_settings.language,
+                        "status_messages.tap_dance_write_error",
+                        &[("error", &e.to_string())],
+                    );
+                    td_save_ok = false;
+                }
+                for i in entries_to_write {
+                    if !td_save_ok {
+                        break;
+                    }
+                    let Some(td) = self.keycode_picker.tap_dance_entries.get(i).cloned() else {
+                        continue;
+                    };
+                    match hid.set_tap_dance_bindings(
+                        i as u8,
+                        [td.on_tap, td.on_hold, td.on_double_tap, td.on_tap_hold],
+                        td.tapping_term,
+                    ) {
+                        Ok(()) => {
+                            if self.keycode_picker.tap_dance_synced_entries.len() <= i {
+                                self.keycode_picker
+                                    .tap_dance_synced_entries
+                                    .resize(i + 1, Default::default());
+                            }
+                            self.keycode_picker.tap_dance_synced_entries[i] = td;
+                        }
+                        Err(e) => {
+                            self.status_msg = crate::i18n::tr_catalog_format(
+                                self.app_settings.language,
+                                "status_messages.tap_dance_write_error",
+                                &[("error", &e.to_string())],
+                            );
+                            td_save_ok = false;
+                            break;
+                        }
+                    }
+                }
+            } else {
+                self.status_msg = crate::i18n::tr_catalog_format(
+                    self.app_settings.language,
+                    "status_messages.tap_dance_write_error",
+                    &[(
+                        "error",
+                        crate::i18n::tr_catalog(
+                            self.app_settings.language,
+                            "status_messages.device_unavailable",
+                        ),
+                    )],
+                );
+                td_save_ok = false;
+            }
+            save_tap_dance_names(
+                &self.keycode_picker.tap_dance_names,
+                &self.current_device_name,
+            );
+            // Consume this attempt. Failed device entries remain different from the
+            // synced snapshot and retry after the next edit or picker close.
+            self.keycode_picker.tap_dance_dirty = false;
+            if td_save_ok && (self.status_msg.is_empty() || self.status_msg.starts_with("✓")) {
+                self.status_msg = crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "status_messages.tap_dance_saved",
+                )
+                .into();
+            }
+        }
+
+        // Start background combo I/O after synchronous dynamic-entry writes have finished
+        // using the shared HID handle for this frame.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.maybe_start_combo_write(ctx);
 
         if self.main_menu_tab != MainMenuTab::Keyboard
             || self.layout.is_none()

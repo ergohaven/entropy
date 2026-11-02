@@ -3,11 +3,88 @@ use serde::{Deserialize, Serialize};
 
 use crate::firmware::FirmwareProtocol;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum KeyBinding {
     Vial(u16),
     Rmk(rmk_types::action::KeyAction),
+    Rynk(rmk_types_rynk::action::KeyAction),
+    /// Vial native v2 timing is a resolved packed u64, never a v1 u32.
+    /// The source index is retained for round trips, but revalidated on writes.
+    VialTapHold {
+        tap: rmk_types::action::Action,
+        hold: rmk_types::action::Action,
+        profile: VialMorseProfile,
+    },
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VialMorseProfile {
+    pub raw: u64,
+    pub index: u8,
+}
+
+#[cfg(test)]
+mod version_compat_model_tests {
+    use super::*;
+    #[test]
+    fn version_compat_v1_profile_is_part_of_binding_equality() {
+        use rmk_types::action::{Action, KeyAction};
+        let a = KeyBinding::Rmk(KeyAction::TapHold(
+            Action::User(144),
+            Action::User(145),
+            180.into(),
+        ));
+        let b = KeyBinding::Rmk(KeyAction::TapHold(
+            Action::User(144),
+            Action::User(145),
+            200.into(),
+        ));
+        assert_ne!(
+            a, b,
+            "profile change must not be skipped by preset/layer writers"
+        );
+    }
+    #[test]
+    fn version_compat_snapshot_retains_full_profile_and_index() {
+        let json = r#"{"VialTapHold":{"tap":{"User":180},"hold":{"User":144},"profile":{"raw":35184372089032,"index":0}}}"#;
+        let binding: KeyBinding = serde_json::from_str(json).expect("lossless Vial v2 tap hold");
+        assert_eq!(
+            serde_json::to_value(binding).unwrap(),
+            serde_json::from_str::<serde_json::Value>(json).unwrap()
+        );
+        assert!(!binding.is_no());
+    }
+}
+
+// Firmware's KeyAction equality intentionally ignores timing for combo matching.
+// Editor/snapshot equality must retain it, otherwise a profile-only edit vanishes.
+impl PartialEq for KeyBinding {
+    fn eq(&self, other: &Self) -> bool {
+        use rmk_types::action::KeyAction;
+        match (*self, *other) {
+            (Self::Rmk(KeyAction::TapHold(a, b, p)), Self::Rmk(KeyAction::TapHold(c, d, q))) => {
+                a == c && b == d && p == q
+            }
+            (Self::Rmk(a), Self::Rmk(b)) => a == b,
+            (Self::Vial(a), Self::Vial(b)) => a == b,
+            (Self::Rynk(a), Self::Rynk(b)) => a == b, // preserve the existing Rynk contract
+            (
+                Self::VialTapHold {
+                    tap: a,
+                    hold: b,
+                    profile: p,
+                },
+                Self::VialTapHold {
+                    tap: c,
+                    hold: d,
+                    profile: q,
+                },
+            ) => a == c && b == d && p == q,
+            _ => false,
+        }
+    }
+}
+impl Eq for KeyBinding {}
 
 impl Default for KeyBinding {
     fn default() -> Self {
@@ -31,21 +108,34 @@ impl KeyBinding {
     pub fn vial_keycode(self) -> u16 {
         match self {
             Self::Vial(value) => value,
-            Self::Rmk(_) => 0,
+            Self::Rmk(_) | Self::Rynk(_) | Self::VialTapHold { .. } => 0,
         }
+    }
+
+    pub fn is_vial_native(self) -> bool {
+        matches!(self, Self::Rmk(_) | Self::VialTapHold { .. })
     }
 
     pub fn rmk_action(self) -> Option<rmk_types::action::KeyAction> {
         match self {
-            Self::Vial(_) => None,
+            Self::Vial(_) | Self::Rynk(_) | Self::VialTapHold { .. } => None,
             Self::Rmk(action) => Some(action),
+        }
+    }
+
+    pub fn rynk_action(self) -> Option<rmk_types_rynk::action::KeyAction> {
+        match self {
+            Self::Rynk(action) => Some(action),
+            Self::Vial(_) | Self::Rmk(_) | Self::VialTapHold { .. } => None,
         }
     }
 
     pub fn is_no(self) -> bool {
         match self {
             Self::Vial(value) => value == 0,
+            Self::VialTapHold { .. } => false,
             Self::Rmk(action) => matches!(action, rmk_types::action::KeyAction::No),
+            Self::Rynk(action) => matches!(action, rmk_types_rynk::action::KeyAction::No),
         }
     }
 

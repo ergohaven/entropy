@@ -379,7 +379,10 @@ impl EntropyApp {
                                 save_layer_names(&self.layer_names, "default");
                                 // Also write name back to the connected device
                                 #[cfg(not(target_arch = "wasm32"))]
-                                if self.firmware == FirmwareProtocol::Vial {
+                                if matches!(
+                                    self.firmware,
+                                    FirmwareProtocol::Vial | FirmwareProtocol::Rynk
+                                ) {
                                     if let Some(dev) = &self.hid_device {
                                         if let Err(e) = dev.set_qmk_setting_string(
                                             200 + selected as u16,

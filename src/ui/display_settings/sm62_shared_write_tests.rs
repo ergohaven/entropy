@@ -66,7 +66,7 @@ fn failed_shared_write_does_not_restart_on_repaint(failed_opcode: u8) {
                 None
             }
         });
-        app.hid_device = Some(hid);
+        app.hid_device = Some(hid.into());
         let s = &mut app.display_settings;
         s.sm62_supported = true;
         s.sm62_date_supported = true;
@@ -236,7 +236,7 @@ fn shared_sm62_real_edits_coalesce_across_fields_without_repaint_writes() {
     let mut app = EntropyApp::new(&cc);
     app.app_settings.language = crate::i18n::Language::English;
     let (hid, recorder) = crate::hid::HidDevice::test_device();
-    app.hid_device = Some(hid);
+    app.hid_device = Some(hid.into());
     app.display_settings.sm62_supported = true;
     app.display_settings.sm62_stars_supported = true;
     app.display_settings.sm62_screens_off_supported = true;
@@ -288,7 +288,7 @@ fn shared_sm62_disabled_page_does_not_enqueue_unconfirmed_values() {
         app.app_settings.language = crate::i18n::Language::English;
         let (hid, recorder) = crate::hid::HidDevice::test_device();
         if read_only {
-            app.hid_device = Some(hid);
+            app.hid_device = Some(hid.into());
         }
         app.display_settings.sm62_supported = true;
         app.display_settings.sm62_stars_supported = true;

@@ -7,9 +7,13 @@ mod app_discovery;
 pub(crate) mod app_icon;
 mod application_layouts;
 mod device;
+#[cfg(not(target_arch = "wasm32"))]
+mod device_session;
 mod diagnostics;
 mod firmware;
 mod firmware_builtin_icons;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod golden_frames;
 #[cfg(not(target_arch = "wasm32"))]
 mod hid;
 mod i18n;
@@ -23,18 +27,18 @@ mod layouts;
 mod linux_ble;
 #[cfg(target_os = "linux")]
 mod linux_setup;
-#[cfg(target_os = "linux")]
-mod linux_tray;
 #[cfg(not(target_arch = "wasm32"))]
 mod pdf;
 mod popup_state;
 #[cfg(not(target_arch = "wasm32"))]
 mod qmk_hid_host;
 mod rmk_native;
+mod rynk;
 mod smart_input;
 mod text_expander;
 mod ui_style;
 mod universal_symbols;
+mod vial_native;
 
 use app::EntropyApp;
 
@@ -310,11 +314,6 @@ fn main() -> eframe::Result<()> {
     {
         if let Some(request) = headless_export {
             if single_instance_enabled() && !try_acquire_single_instance() {
-                // The running instance owns the keyboards; it exports for us.
-                #[cfg(unix)]
-                if let Some(code) = app::export_via_running_instance(&request) {
-                    std::process::exit(code);
-                }
                 log::error!(
                     "Another Entropy instance is running; close it or export from its Layout menu"
                 );
@@ -490,8 +489,7 @@ fn main() -> eframe::Result<()> {
             } else {
                 app
             };
-            // Linux decides on the first pass: to the tray, or minimized.
-            #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+            #[cfg(not(target_os = "windows"))]
             if launch_minimized {
                 cc.egui_ctx
                     .send_viewport_cmd(egui::ViewportCommand::Minimized(true));

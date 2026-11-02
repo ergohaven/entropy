@@ -74,7 +74,8 @@ impl EntropyApp {
             .enumerate()
             .filter_map(|(idx, option)| {
                 (!Self::is_encoder_layout_option(option)
-                    && !Self::is_universal_geometry_layout_option(option)
+                    && !(layout.firmware == FirmwareProtocol::Vial
+                        && Self::is_universal_geometry_layout_option(option))
                     && !firmware_managed.contains(&idx))
                 .then_some(idx)
             })
@@ -560,7 +561,7 @@ impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn read_behavior_settings(
         supported_qmk_settings: &[u16],
-        dev_conn: &crate::hid::HidDevice,
+        dev_conn: &impl crate::device_session::QmkSettingsSource,
     ) -> BehaviorSettingsState {
         let has_qmk_setting = |qsid: u16| supported_qmk_settings.contains(&qsid);
 
@@ -792,7 +793,7 @@ impl EntropyApp {
     pub(super) fn read_touchpad_settings(
         json: &serde_json::Value,
         supported_qmk_settings: &[u16],
-        dev_conn: &crate::hid::HidDevice,
+        dev_conn: &impl crate::device_session::QmkSettingsSource,
     ) -> TouchpadSettingsState {
         let mut settings = TouchpadSettingsState::default();
         if !Self::layout_json_has_touchpad_settings(json)
@@ -879,7 +880,7 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn read_bluetooth_select_setting(
-        dev_conn: &crate::hid::HidDevice,
+        dev_conn: &impl crate::device_session::QmkSettingsSource,
         field: &serde_json::Value,
         qsid: u16,
         label: &str,
@@ -910,7 +911,7 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn read_bluetooth_boolean_setting(
-        dev_conn: &crate::hid::HidDevice,
+        dev_conn: &impl crate::device_session::QmkSettingsSource,
         field: &serde_json::Value,
         qsid: u16,
         label: &str,
@@ -929,7 +930,7 @@ impl EntropyApp {
     pub(super) fn read_bluetooth_settings(
         json: &serde_json::Value,
         supported_qmk_settings: &[u16],
-        dev_conn: &crate::hid::HidDevice,
+        dev_conn: &impl crate::device_session::QmkSettingsSource,
     ) -> BluetoothSettingsState {
         let has_qmk_setting = |qsid: u16| supported_qmk_settings.contains(&qsid);
         let mut charge_indicator = None;
@@ -1140,7 +1141,7 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn read_layer_led_numeric_setting(
-        dev_conn: &crate::hid::HidDevice,
+        dev_conn: &impl crate::device_session::QmkSettingsSource,
         qsid: u16,
         width: u8,
         max: u16,
@@ -1214,7 +1215,7 @@ impl EntropyApp {
         json: &serde_json::Value,
         supported_qmk_settings: &[u16],
         layer_count: usize,
-        dev_conn: &crate::hid::HidDevice,
+        dev_conn: &impl crate::device_session::QmkSettingsSource,
     ) -> LayerLedSettingsState {
         let has_qmk_setting = |qsid: u16| supported_qmk_settings.contains(&qsid);
         let mut brightness = None;
@@ -1361,7 +1362,7 @@ impl EntropyApp {
     fn read_legacy_layer_led_settings(
         supported_qmk_settings: &[u16],
         layer_count: usize,
-        dev_conn: &crate::hid::HidDevice,
+        dev_conn: &impl crate::device_session::QmkSettingsSource,
     ) -> LayerLedSettingsState {
         let has_qmk_setting = |qsid: u16| supported_qmk_settings.contains(&qsid);
         let mut leds = LayerLedSettingsState::default();
@@ -1710,7 +1711,7 @@ impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn read_initial_module_values(
         settings: &mut ModuleSettingsState,
-        dev_conn: &crate::hid::HidDevice,
+        dev_conn: &impl crate::device_session::QmkSettingsSource,
     ) {
         let selectors = settings
             .groups
@@ -1750,7 +1751,7 @@ impl EntropyApp {
     pub(super) fn read_module_settings(
         json: &serde_json::Value,
         supported_qmk_settings: &[u16],
-        dev_conn: &crate::hid::HidDevice,
+        dev_conn: &impl crate::device_session::QmkSettingsSource,
     ) -> ModuleSettingsState {
         let mut settings = Self::module_settings_from_definition(json, supported_qmk_settings);
         if !settings.supported {
@@ -1894,6 +1895,8 @@ impl EntropyApp {
         self.save_display_preset_restore(original_packed);
         self.layout_options_value = Some(packed);
         self.qmk_hid_hosts.clear();
+        self.rynk_hosts.clear();
+        self.rynk_host_opens.clear();
         if let Some(hid) = &self.hid_device {
             if let Err(e) = hid.set_layout_options(packed) {
                 log::warn!("fallback display preset before exit failed: {e}");
@@ -1904,6 +1907,181 @@ impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn sync_qmk_hid_host_bridges(&mut self) {
         self.sync_qmk_hid_host_bridges_with(&mut crate::qmk_hid_host::QmkHidHostBridge::start);
+        self.sync_rynk_host_bridges();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn sync_rynk_host_bridges(&mut self) {
+        self.sync_rynk_host_bridges_with(
+            &mut crate::qmk_hid_host::RynkHostBridge::start,
+            &mut crate::qmk_hid_host::rynk_bridge::open_link,
+            std::time::Instant::now(),
+        );
+    }
+
+    /// Host-data bridges of the Rynk boards: the selected one once its connect
+    /// is done, and the others while they keep the mode they had when they
+    /// were selected, as the Vial bridges do. Each bridge holds its board's
+    /// link, the one the session shares. A board selected before, in this run
+    /// or an earlier one, gets its bridge back on its own once it is found.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn sync_rynk_host_bridges_with(
+        &mut self,
+        start: &mut dyn FnMut(
+            std::sync::Arc<crate::rynk::link::RynkLink>,
+            crate::qmk_hid_host::HostDataMode,
+        ) -> crate::qmk_hid_host::RynkHostBridge,
+        open: &mut dyn FnMut(
+            crate::rynk::link::PhysicalId,
+        ) -> crate::qmk_hid_host::rynk_bridge::LinkOpening,
+        now: std::time::Instant,
+    ) {
+        // A write takes the session for a while; the selected board's bridge
+        // keeps its link meanwhile.
+        let session_link = self
+            .hid_device
+            .as_ref()
+            .and_then(crate::device_session::DeviceSession::as_rynk)
+            .map(|session| session.link().clone());
+        if !self.headless {
+            self.remember_selected_rynk_host_board(session_link.as_ref());
+        }
+        let selected_layout = self
+            .layout
+            .as_ref()
+            .filter(|layout| layout.firmware == FirmwareProtocol::Rynk);
+        let selected_path = self
+            .selected_device
+            .and_then(|idx| self.device_manager.devices().get(idx))
+            .map(|device| device.path.as_str());
+        // Opens of boards that are gone are dropped: a board that comes back
+        // is tried at once.
+        let mut opens = std::mem::take(&mut self.rynk_host_opens);
+        let mut opening = std::collections::HashMap::new();
+        let mut desired = std::collections::HashMap::new();
+        for device in self.device_manager.devices() {
+            if device.firmware != FirmwareProtocol::Rynk {
+                continue;
+            }
+            let running = self
+                .rynk_hosts
+                .get(&device.path)
+                .filter(|bridge| bridge.is_running());
+            let selected_mode = selected_layout
+                .filter(|_| selected_path == Some(device.path.as_str()))
+                .map(|layout| Self::qmk_hid_host_mode_for(layout, self.layout_options_value));
+            let selected_link = session_link
+                .clone()
+                .filter(|link| link.id().0 == device.path)
+                .or_else(|| running.map(|bridge| bridge.link().clone()));
+            let (link, mut mode) = match (selected_mode, selected_link) {
+                (Some(mode), Some(link)) => (link, mode),
+                _ => match running {
+                    Some(bridge) => (bridge.link().clone(), bridge.mode()),
+                    None => {
+                        let remembered = self
+                            .app_settings
+                            .rynk_host_boards
+                            .iter()
+                            .filter(|_| !self.headless)
+                            .find(|board| board.identity.matches(device));
+                        let Some(board) = remembered else {
+                            continue;
+                        };
+                        let mode = crate::qmk_hid_host::HostDataMode {
+                            time: board.time,
+                            volume: board.volume,
+                            layout: board.layout && self.app_settings.layout_sync_enabled,
+                            media: board.media,
+                        };
+                        if mode.is_empty() {
+                            continue;
+                        }
+                        let mut board_open = opens
+                            .remove(&device.path)
+                            .unwrap_or_else(|| crate::qmk_hid_host::RynkHostOpen::new(now));
+                        let Some(link) = board_open.poll(now) else {
+                            board_open.start_if_due(now, || {
+                                open(crate::rynk::link::PhysicalId(device.path.clone()))
+                            });
+                            opening.insert(device.path.clone(), board_open);
+                            continue;
+                        };
+                        (link, mode)
+                    }
+                },
+            };
+            if !self.app_settings.layout_sync_enabled {
+                mode.layout = false;
+            }
+            if !mode.is_empty() {
+                desired.insert(device.path.clone(), (link, mode));
+            }
+        }
+        self.rynk_host_opens = opening;
+
+        self.rynk_hosts.retain(|path, bridge| {
+            let successor = desired
+                .get(path)
+                .filter(|(link, _)| std::sync::Arc::ptr_eq(link, bridge.link()));
+            let keep =
+                bridge.is_running() && successor.is_some_and(|(_, mode)| *mode == bridge.mode());
+            if !keep && successor.is_some_and(|(_, mode)| mode.media) {
+                // The successor sends the media; clearing it first would flash.
+                bridge.suppress_shutdown();
+            }
+            keep
+        });
+        for (path, (link, mode)) in desired {
+            self.rynk_hosts
+                .entry(path)
+                .or_insert_with(|| start(link, mode));
+        }
+    }
+
+    /// Keeps the host data of the selected Rynk board, once its session is
+    /// up, for after a restart or a replug; a board that wants none is
+    /// forgotten. The mode is kept before the layout sync setting applies.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn remember_selected_rynk_host_board(
+        &mut self,
+        session_link: Option<&std::sync::Arc<crate::rynk::link::RynkLink>>,
+    ) {
+        let Some(layout) = self
+            .layout
+            .as_ref()
+            .filter(|layout| layout.firmware == FirmwareProtocol::Rynk)
+        else {
+            return;
+        };
+        let Some(device) = self
+            .selected_device
+            .and_then(|idx| self.device_manager.devices().get(idx))
+            .filter(|device| session_link.is_some_and(|link| link.id().0 == device.path))
+        else {
+            return;
+        };
+        let mode = Self::qmk_hid_host_mode_for(layout, self.layout_options_value);
+        let board = RynkHostBoard {
+            identity: device.stable_identity(),
+            time: mode.time,
+            volume: mode.volume,
+            layout: mode.layout,
+            media: mode.media,
+        };
+        let boards = &mut self.app_settings.rynk_host_boards;
+        let index = boards
+            .iter()
+            .position(|known| known.identity.matches(device));
+        match index {
+            Some(index) if mode.is_empty() => {
+                boards.remove(index);
+            }
+            Some(index) if boards[index] != board => boards[index] = board,
+            None if !mode.is_empty() => boards.push(board),
+            _ => return,
+        }
+        save_app_settings(&self.app_settings);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2066,8 +2244,15 @@ impl EntropyApp {
         if !bridge.uses_shared_output() || !qmk_bridge_matches_device(bridge, previous) {
             return false;
         }
-        let Some(hid) = self.hid_device.take() else {
+        let Some(session) = self.hid_device.take() else {
             return false;
+        };
+        let hid = match session.into_vial() {
+            Ok(hid) => hid,
+            Err(session) => {
+                self.hid_device = Some(*session);
+                return false;
+            }
         };
         match bridge.adopt_selected_hid(hid) {
             Ok(()) => {
@@ -2075,7 +2260,7 @@ impl EntropyApp {
                 true
             }
             Err(hid) => {
-                self.hid_device = Some(hid);
+                self.hid_device = Some(hid.into());
                 false
             }
         }
@@ -3068,7 +3253,7 @@ mod tests {
         app.layout = Some(layout);
         app.app_settings.layout_sync_enabled = true;
         app.shared_hid_output = hid.shared_output();
-        app.hid_device = Some(hid);
+        app.hid_device = Some(hid.into());
 
         app.sync_qmk_hid_host_bridges();
 
@@ -3271,5 +3456,279 @@ mod tests {
             EntropyApp::module_setting_widths(&[narrow, wide, other]),
             std::collections::BTreeMap::from([(134, 2), (135, 1)])
         );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_rynk_board_keeps_its_bridge_as_a_vial_one_does() {
+        use crate::qmk_hid_host::rynk_bridge::testing::{
+            await_updates, board, link, Desktop, ALL_HOST_DATA,
+        };
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let path = "rynk-sync-qube";
+        let desktop = Desktop::new();
+        desktop.show(Some(1), None);
+        let (fake, received) = board(ALL_HOST_DATA);
+        let link = link(path, &fake);
+        let mut start = |link, mode| desktop.bridge(link, mode);
+        let mut open = |_| -> crate::qmk_hid_host::rynk_bridge::LinkOpening {
+            panic!("a board with a running bridge is not opened again")
+        };
+        let now = std::time::Instant::now();
+
+        let mut app = test_app();
+        let (device, layout) = rynk_test_board(path);
+        app.device_manager.replace_devices(vec![device]);
+        app.selected_device = Some(0);
+        app.layout = Some(layout);
+        app.hid_device = Some(crate::rynk::session::RynkSession::new(link.clone()).into());
+
+        // The selected board's connect is done: its bridge sends at once.
+        app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+        let bridge = &app.rynk_hosts[path];
+        assert!(std::sync::Arc::ptr_eq(bridge.link(), &link));
+        let mode = bridge.mode();
+        assert!(mode.time && mode.layout && !mode.media);
+        assert_eq!(await_updates(&received, 2).len(), 2);
+
+        // A write takes the session: the bridge stays on its link.
+        let session = app.hid_device.take();
+        app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+        assert!(std::sync::Arc::ptr_eq(app.rynk_hosts[path].link(), &link));
+        app.hid_device = session;
+
+        // Another board is selected: this one keeps its bridge and mode.
+        app.hid_device = None;
+        app.layout = None;
+        app.selected_device = None;
+        drop(link);
+        app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+        assert_eq!(app.rynk_hosts[path].mode(), mode);
+
+        // The board is gone: so is its bridge.
+        app.device_manager.replace_devices(vec![]);
+        app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+        assert!(app.rynk_hosts.is_empty());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn rynk_test_board(path: &str) -> (Device, KeyboardLayout) {
+        let device = Device {
+            path: path.to_owned(),
+            firmware: FirmwareProtocol::Rynk,
+            ..crate::device::test_usb_device("3-4", 9, 0x00A4)
+        };
+        let json = serde_json::json!({
+            "matrix": {"rows": 1, "cols": 1},
+            "layouts": {"keymap": [["0,0"]]}
+        });
+        let mut layout = KeyboardLayout::from_vial_json(&json).unwrap();
+        layout.firmware = FirmwareProtocol::Rynk;
+        layout.live_features.time = true;
+        layout.live_features.layout = true;
+        (device, layout)
+    }
+
+    /// Opens that all end as `opened`, counted in `count`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn rynk_opens(
+        opened: Result<std::sync::Arc<crate::rynk::link::RynkLink>, std::io::ErrorKind>,
+        count: &std::cell::Cell<usize>,
+    ) -> impl FnMut(crate::rynk::link::PhysicalId) -> crate::qmk_hid_host::rynk_bridge::LinkOpening + '_
+    {
+        move |_| {
+            count.set(count.get() + 1);
+            let (sender, opening) = std::sync::mpsc::channel();
+            let result = opened
+                .clone()
+                .map_err(|kind| std::io::Error::from(kind).into());
+            sender.send(result).unwrap();
+            opening
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn remember_rynk_board(app: &mut EntropyApp, device: &Device) {
+        app.app_settings.rynk_host_boards.push(RynkHostBoard {
+            identity: device.stable_identity(),
+            time: true,
+            volume: false,
+            layout: true,
+            media: false,
+        });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_rynk_board_selected_before_gets_its_bridge_back_after_a_restart() {
+        use crate::qmk_hid_host::rynk_bridge::testing::{
+            await_updates, board, link, Desktop, ALL_HOST_DATA,
+        };
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let path = "rynk-restart-qube";
+        let desktop = Desktop::new();
+        desktop.show(Some(1), None);
+        let (fake, received) = board(ALL_HOST_DATA);
+        let link = link(path, &fake);
+        let mut start = |link, mode| desktop.bridge(link, mode);
+        let opens = std::cell::Cell::new(0);
+        let mut open = rynk_opens(Ok(link.clone()), &opens);
+        let now = std::time::Instant::now();
+        let (device, layout) = rynk_test_board(path);
+
+        let mut app = test_app();
+        app.device_manager.replace_devices(vec![device.clone()]);
+        app.selected_device = Some(0);
+        app.layout = Some(layout);
+        app.hid_device = Some(crate::rynk::session::RynkSession::new(link.clone()).into());
+        app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+        let mode = app.rynk_hosts[path].mode();
+        assert_eq!(await_updates(&received, 2).len(), 2);
+        drop(app);
+
+        // Entropy starts again, the board is plugged in and nothing is
+        // selected: the window is never opened.
+        let mut app = test_app();
+        assert_eq!(app.app_settings.rynk_host_boards.len(), 1);
+        app.device_manager.replace_devices(vec![device]);
+        app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+        assert_eq!(opens.get(), 1, "the board's link opens in the background");
+        assert!(app.rynk_hosts.is_empty());
+        app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+        let bridge = &app.rynk_hosts[path];
+        assert!(std::sync::Arc::ptr_eq(bridge.link(), &link));
+        assert_eq!(bridge.mode(), mode);
+        await_updates(&received, 4);
+
+        // Selecting it again keeps the bridge it already has.
+        app.selected_device = Some(0);
+        app.layout = Some(rynk_test_board(path).1);
+        app.hid_device = Some(crate::rynk::session::RynkSession::new(link.clone()).into());
+        let running = app.rynk_hosts[path].link().clone();
+        app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+        let kept = app.rynk_hosts[path].link();
+        assert!(std::sync::Arc::ptr_eq(kept, &running));
+        assert_eq!(opens.get(), 1);
+
+        // A board that wants no host data any more is forgotten.
+        app.layout.as_mut().unwrap().live_features = Default::default();
+        app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+        assert!(app.rynk_hosts.is_empty());
+        assert!(app.app_settings.rynk_host_boards.is_empty());
+        assert!(test_app().app_settings.rynk_host_boards.is_empty());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_remembered_rynk_board_is_opened_when_it_comes_back_and_not_while_it_is_gone() {
+        use crate::qmk_hid_host::rynk_bridge::testing::{board, link, Desktop, ALL_HOST_DATA};
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let path = "rynk-replug-qube";
+        let desktop = Desktop::new();
+        let (fake, _) = board(ALL_HOST_DATA);
+        let link = link(path, &fake);
+        let mut start = |link, mode| desktop.bridge(link, mode);
+        let opens = std::cell::Cell::new(0);
+        let mut open = rynk_opens(Ok(link.clone()), &opens);
+        let mut now = std::time::Instant::now();
+        let (device, _) = rynk_test_board(path);
+        let mut app = test_app();
+        remember_rynk_board(&mut app, &device);
+
+        // Not plugged in: nothing is opened, however long Entropy waits.
+        for _ in 0..5 {
+            app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+            now += std::time::Duration::from_secs(120);
+        }
+        assert_eq!(opens.get(), 0);
+
+        app.device_manager.replace_devices(vec![device.clone()]);
+        app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+        app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+        assert_eq!(opens.get(), 1);
+        assert!(app.rynk_hosts.contains_key(path));
+
+        // Unplugged: the bridge goes, and nothing is opened meanwhile.
+        app.device_manager.replace_devices(vec![]);
+        for _ in 0..5 {
+            app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+            now += std::time::Duration::from_secs(120);
+        }
+        assert!(app.rynk_hosts.is_empty());
+        assert!(app.rynk_host_opens.is_empty());
+        assert_eq!(opens.get(), 1);
+
+        // Plugged in again: opened at once.
+        app.device_manager.replace_devices(vec![device]);
+        app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+        app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+        assert_eq!(opens.get(), 2);
+        assert!(app.rynk_hosts.contains_key(path));
+
+        // A headless export opens nothing for the boards it remembers.
+        app.rynk_hosts.clear();
+        app.headless = true;
+        app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+        assert_eq!(opens.get(), 2);
+        assert!(app.rynk_host_opens.is_empty());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_remembered_rynk_board_that_does_not_open_is_retried_with_a_bounded_backoff() {
+        use crate::qmk_hid_host::rynk_bridge::testing::Desktop;
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let path = "rynk-busy-qube";
+        let desktop = Desktop::new();
+        let mut start = |link, mode| desktop.bridge(link, mode);
+        let (device, _) = rynk_test_board(path);
+        let mut app = test_app();
+        remember_rynk_board(&mut app, &device);
+        app.device_manager.replace_devices(vec![device.clone()]);
+        let second = std::time::Duration::from_secs(1);
+        let start_at = std::time::Instant::now();
+
+        // Another program holds the board: the waits double up to a minute.
+        let opens = std::cell::Cell::new(0);
+        let mut open = rynk_opens(Err(std::io::ErrorKind::ResourceBusy), &opens);
+        let mut now = start_at;
+        app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+        for (tries, wait) in [2, 4, 8, 16, 32, 60, 60].into_iter().enumerate() {
+            // The failed open is seen.
+            app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+            app.sync_rynk_host_bridges_with(&mut start, &mut open, now + (wait - 1) * second);
+            assert_eq!(opens.get(), tries + 1, "no retry before {wait} s");
+            now += wait * second;
+            app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+            assert_eq!(opens.get(), tries + 2, "a retry after {wait} s");
+        }
+        assert!(app.rynk_hosts.is_empty());
+
+        // Replugged: the board is tried at once, its failures forgotten.
+        app.device_manager.replace_devices(vec![]);
+        app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+        app.device_manager.replace_devices(vec![device]);
+        let before = opens.get();
+        app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+        assert_eq!(opens.get(), before + 1);
+        app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+        app.sync_rynk_host_bridges_with(&mut start, &mut open, now + 2 * second);
+        assert_eq!(opens.get(), before + 2, "the first wait again");
+
+        // A Bluetooth board that is away is looked for every few seconds,
+        // without the waits growing.
+        let away = std::cell::Cell::new(0);
+        let mut open = rynk_opens(Err(std::io::ErrorKind::NotConnected), &away);
+        app.rynk_host_opens.clear();
+        let mut now = start_at;
+        app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+        for tries in 1..=4 {
+            app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+            app.sync_rynk_host_bridges_with(&mut start, &mut open, now + 4 * second);
+            assert_eq!(away.get(), tries);
+            now += 5 * second;
+            app.sync_rynk_host_bridges_with(&mut start, &mut open, now);
+            assert_eq!(away.get(), tries + 1);
+        }
     }
 }

@@ -32,7 +32,7 @@ fn entlayout_module_contract_mutations_never_write() {
         let mut target = module_app();
         let before = target.module_settings.values.clone();
         let (hid, recorder) = crate::hid::HidDevice::test_device();
-        target.hid_device = Some(hid);
+        target.hid_device = Some(hid.into());
         let (_, _, report) = target.apply_entlayout(&bundle).unwrap();
         assert_eq!(report.incompatible, 1, "contract mutation {key}");
         assert_eq!(target.module_settings.values, before);
@@ -56,7 +56,7 @@ fn entlayout_module_unloaded_unsupported_and_out_of_range_skip() {
     target.module_settings.values.remove(&140);
     target.supported_qmk_settings.retain(|id| *id != 141);
     let (hid, recorder) = crate::hid::HidDevice::test_device();
-    target.hid_device = Some(hid);
+    target.hid_device = Some(hid.into());
     let (_, _, report) = target.apply_entlayout(&bundle).unwrap();
     assert_eq!(report.unsupported, 2);
     assert!(!recorder.requests().iter().any(|r| r[..2] == [0xfe, 0x0b]));
@@ -80,7 +80,7 @@ fn entlayout_module_old_files_retain_module_cache_and_standard_portable() {
         let bundle: EntLayoutFile = serde_json::from_value(json.clone()).unwrap();
         app.tap_hold_settings.tapping_term = 200;
         let (hid, recorder) = crate::hid::HidDevice::test_device();
-        app.hid_device = Some(hid);
+        app.hid_device = Some(hid.into());
         let (_, _, report) = app.apply_entlayout(&bundle).unwrap();
         assert_eq!(report.imported, 1);
         assert_eq!(app.tap_hold_settings.tapping_term, 250);
@@ -111,7 +111,7 @@ fn entlayout_module_transport_failure_keeps_committed_cache() {
     recorder.respond_by(|request| {
         (request[..2] == [0xfe, 0x0b]).then(|| Err("scripted SET failure".to_owned()))
     });
-    target.hid_device = Some(hid);
+    target.hid_device = Some(hid.into());
     let (failures, _, report) = target.apply_entlayout(&bundle).unwrap();
     assert_eq!(report.failed, 1);
     assert!(!failures.is_empty());
@@ -155,7 +155,7 @@ fn entlayout_module_synthetic_packed_boolean_and_u16_roundtrip_once_per_qsid() {
     target.layout_options_value = Some(0);
     target.current_device_name = "Synthetic RMK".to_owned();
     let (hid, recorder) = crate::hid::HidDevice::test_device();
-    target.hid_device = Some(hid);
+    target.hid_device = Some(hid.into());
     let (_, _, report) = target.apply_entlayout(&bundle).unwrap();
     assert_eq!(report.imported, 3);
     assert_eq!(
@@ -252,7 +252,7 @@ fn entlayout_module_all_real_k04_loaded_fields_roundtrip() {
         source.module_settings.values.len()
     );
     let (hid, recorder) = crate::hid::HidDevice::test_device();
-    target.hid_device = Some(hid);
+    target.hid_device = Some(hid.into());
     let (_, _, report) = target.apply_entlayout(&bundle).unwrap();
     assert_eq!(report.imported, source.module_settings.values.len());
     assert_eq!(target.module_settings.values, source.module_settings.values);

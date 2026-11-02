@@ -3,6 +3,27 @@ use super::hid_protocol::*;
 use super::HidDevice;
 use anyhow::{bail, Context, Result};
 
+/// The definition JSON from the bytes a board stores; Rynk boards hand out the
+/// same bytes.
+pub(crate) fn decode_vial_definition(payload: &[u8]) -> Result<serde_json::Value> {
+    // Decompress: vial uses Python lzma which defaults to XZ container format
+    let mut decompressed = Vec::new();
+    let xz_result = lzma_rs::xz_decompress(&mut &payload[..], &mut decompressed);
+    if xz_result.is_err() {
+        // fallback: try raw LZMA
+        decompressed.clear();
+        lzma_rs::lzma_decompress(&mut &payload[..], &mut decompressed)
+            .context("Failed to decompress vial definition (tried xz and lzma)")?;
+    }
+
+    let json_str =
+        std::str::from_utf8(&decompressed).context("Vial definition is not valid UTF-8")?;
+
+    let value: serde_json::Value =
+        serde_json::from_str(json_str).context("Failed to parse vial JSON")?;
+    Ok(value)
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl HidDevice {
     pub fn get_protocol_version(&self) -> Result<u16> {
@@ -76,22 +97,7 @@ impl HidDevice {
             }
         }
 
-        // Decompress: vial uses Python lzma which defaults to XZ container format
-        let mut decompressed = Vec::new();
-        let xz_result = lzma_rs::xz_decompress(&mut &payload[..], &mut decompressed);
-        if xz_result.is_err() {
-            // fallback: try raw LZMA
-            decompressed.clear();
-            lzma_rs::lzma_decompress(&mut &payload[..], &mut decompressed)
-                .context("Failed to decompress vial definition (tried xz and lzma)")?;
-        }
-
-        let json_str =
-            std::str::from_utf8(&decompressed).context("Vial definition is not valid UTF-8")?;
-
-        let value: serde_json::Value =
-            serde_json::from_str(json_str).context("Failed to parse vial JSON")?;
-        Ok(value)
+        decode_vial_definition(&payload)
     }
 
     /// Check whether the keyboard is ready for normal Vial commands.
