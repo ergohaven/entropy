@@ -212,6 +212,9 @@ pub struct KeycodePicker {
     pub macro_attempted_revision: Option<u64>,
     /// Undo stack for macro editor: (macro_idx, previous_actions)
     macro_undo_stack: Vec<(usize, Vec<MacroAction>)>,
+    /// Typographic characters replaced with ASCII while editing Text steps of
+    /// this macro: (macro_idx, count). Shown so the rewrite is never silent.
+    macro_text_ascii_replaced: Option<(usize, usize)>,
     /// Macro key picker: (macro_idx, action_idx) being edited
     macro_key_pick: Option<(usize, usize)>,
     macro_mod_key_pick: Option<u16>,
@@ -1128,6 +1131,7 @@ impl Default for KeycodePicker {
             macro_metadata_dirty: false,
             macro_actions: vec![vec![]; 16],
             macro_undo_stack: Vec::new(),
+            macro_text_ascii_replaced: None,
             macro_key_pick: None,
             macro_mod_key_pick: None,
             advanced_slot_picker: None,
