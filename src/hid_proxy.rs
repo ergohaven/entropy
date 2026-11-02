@@ -1448,20 +1448,47 @@ mod tests {
     fn real_helper_failed_startups_cannot_accumulate_unreclaimed_workers() {
         let _guard = serial_test();
         let gate = Arc::new(AtomicBool::new(false));
-        for name in ["failed-A", "failed-B"] {
-            assert!(HidProxy::start(
-                &device(name),
-                spec("startup-silence", Some(gate.clone()), None),
-                Duration::from_millis(80),
-            )
-            .is_err());
+        // A failed assertion must not strand gated workers in the shared
+        // registry and turn every subsequent lifecycle test into a timeout.
+        struct ReleaseGate(Arc<AtomicBool>);
+        impl Drop for ReleaseGate {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
         }
+        let _release_gate = ReleaseGate(gate.clone());
+        // Admission is part of the startup deadline. Exercise a busy registry
+        // so a pre-admission timeout cannot masquerade as a retained worker.
+        let (locked_tx, locked_rx) = mpsc::sync_channel(0);
+        let admission = std::thread::spawn(move || {
+            let _registry = REGISTRY.lock().unwrap();
+            locked_tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+        });
+        locked_rx.recv().unwrap();
+        for name in ["failed-A", "failed-B"] {
+            // Fail on an actual helper response, not elapsed scheduling time:
+            // a startup timeout may occur BEFORE admission and create no debt.
+            let error = HidProxy::start(
+                &device(name),
+                spec("startup-malformed", Some(gate.clone()), None),
+                Duration::from_secs(3),
+            )
+            .err()
+            .expect("malformed startup must fail");
+            assert!(
+                error.to_string().contains("malformed response"),
+                "{error:#}"
+            );
+        }
+        admission.join().unwrap();
         await_condition(|| {
             let registry = REGISTRY.lock().unwrap();
-            registry
-                .entries
-                .iter()
-                .all(|entry| entry.slot.reaped.load(Ordering::Acquire))
+            registry.entries.len() == MAX_UNSETTLED_HELPERS
+                && registry
+                    .entries
+                    .iter()
+                    .all(|entry| entry.slot.reaped.load(Ordering::Acquire))
         });
         for index in 0..12 {
             let fresh_target = device(&format!("failed-retry-{index}"));
