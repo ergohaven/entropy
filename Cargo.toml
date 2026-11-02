@@ -75,6 +75,10 @@ windows = { version = "0.56", features = ["Foundation", "Foundation_Collections"
 # prevents hidapi from trying to seize the whole keyboard, which macOS rejects.
 hidapi = { version = "2.6", features = ["macos-shared-device"] }
 dispatch2 = "0.3.1"
+block2 = "0.6"
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-user-notifications = { version = "0.3.2", default-features = false, features = ["std", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationTrigger", "UNUserNotificationCenter"] }
 objc = "0.2"
 tray-icon = "0.22"
 

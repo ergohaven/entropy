@@ -220,8 +220,8 @@ fn firmware_update_rows(
             lang,
             "Последняя прошивка",
             "Latest firmware",
-            "Новая стабильная версия RMK с пакетом именно для этого устройства",
-            "Newest stable RMK release containing a package for this exact device",
+            "Новая стабильная версия прошивки с пакетом именно для этого устройства",
+            "Newest stable firmware release containing a package for this exact device",
             latest,
         ),
         localized_row(
@@ -1049,6 +1049,7 @@ mod tests {
     #[test]
     fn firmware_rows_show_matching_release_package() {
         let target = FirmwareReleaseTarget {
+            family: FirmwareReleaseFamily::Rmk,
             current_version: "0.1.5".to_owned(),
             asset_prefix: "k04".to_owned(),
         };
