@@ -5383,10 +5383,11 @@ pub struct EntropyApp {
     /// invalidated outright after any action of ours that can change it.
     #[cfg(target_os = "linux")]
     pub(crate) ibus_registration: crate::linux_setup::IbusRegistrationCache,
-    /// In-flight `ibus write-cache` + `ibus restart`, run off the UI thread so
-    /// a slow or wedged daemon cannot freeze the window.
+    /// In-flight `ibus write-cache` and restart of a running daemon, run off
+    /// the UI thread so a slow or wedged daemon cannot freeze the window.
     #[cfg(target_os = "linux")]
-    pub(crate) pending_ibus_reload: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
+    pub(crate) pending_ibus_reload:
+        Option<std::sync::mpsc::Receiver<Result<crate::smart_input::IbusReload, String>>>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) import_progress_started_at: Option<f64>,
     #[cfg(not(target_arch = "wasm32"))]

@@ -32,11 +32,8 @@ if command -v ibus >/dev/null 2>&1; then
         printf '%s\n' "Uninstalled, but IBus registry cache update failed."
         printf '%s\n' "Run: IBUS_COMPONENT_PATH=\"$ibus_component_path\" ibus write-cache"
     fi
-    if ibus restart >/dev/null 2>&1; then
-        printf '%s\n' "Restarted IBus."
-    else
-        printf '%s\n' "Uninstalled, but IBus restart failed. Run: ibus restart"
-    fi
 else
     printf '%s\n' "Uninstalled, but ibus command was not found."
 fi
+# No `ibus restart` here, for the reason given in install-user.sh.
+printf '%s\n' "A running IBus drops the engine once restarted: Entropy restarts it after this step, or log out and back in."

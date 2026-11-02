@@ -600,11 +600,11 @@ const KDE_LAYOUT_LIST_REFRESH: Duration = Duration::from_secs(1);
 #[cfg(target_os = "linux")]
 const LAYOUT_DBUS_CALL_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(target_os = "linux")]
-const IBUS_DESTINATION: &str = "org.freedesktop.IBus";
+pub(crate) const IBUS_DESTINATION: &str = "org.freedesktop.IBus";
 #[cfg(target_os = "linux")]
-const IBUS_PATH: &str = "/org/freedesktop/IBus";
+pub(crate) const IBUS_PATH: &str = "/org/freedesktop/IBus";
 #[cfg(target_os = "linux")]
-const IBUS_INTERFACE: &str = "org.freedesktop.IBus";
+pub(crate) const IBUS_INTERFACE: &str = "org.freedesktop.IBus";
 const DATA_HOST_STATUS: u8 = 0xBA;
 // Native Windows audio queries can follow each bridge tick. Only changed
 // percentages are sent, allowing the display to retarget small volume steps.

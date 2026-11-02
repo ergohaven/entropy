@@ -6,10 +6,13 @@ Entropy uses this IBus backend for Text Expander on Linux. While selected as an 
 
 ```sh
 ./linux/ibus/install-user.sh
-ibus restart
 ```
 
-Then add/select the two Entropy input sources in the system input-source/input-method settings:
+Then log out and back in so that IBus loads it; Install IBus in Entropy restarts a running IBus
+itself. `ibus restart` works too, but since ibus 1.5.30 it also makes IBus the input method KWin
+launches in a KDE Plasma Wayland session, replacing the one chosen there.
+
+After that, add/select the two Entropy input sources in the system input-source/input-method settings:
 
 - **English (Entropy)** for the `us` layout
 - **Russian (Entropy)** for the `ru` layout
