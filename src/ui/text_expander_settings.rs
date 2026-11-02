@@ -222,7 +222,7 @@ impl EntropyApp {
 
         if rule != original {
             self.app_settings.text_expansion_rules[idx] = rule;
-            self.queue_text_expander_settings_save(ctx.input(|input| input.time));
+            self.queue_text_expander_settings_save();
         }
         let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
         if !open || done || escape {

@@ -425,8 +425,8 @@ impl EntropyApp {
             self.write_pending_dynamic_entries(ctx);
         }
         self.finish_deferred_exit_after_hid_write(ctx);
-        self.poll_text_expander_deferred_save(now);
-        self.auto_reload_text_expander_rules_file(now);
+        self.poll_text_expander_deferred_save();
+        self.auto_reload_text_expander_rules_file();
         #[cfg(target_os = "linux")]
         self.poll_linux_universal_symbols_setup(ctx);
         self.poll_single_instance_signal(ctx);
@@ -764,6 +764,60 @@ mod tests {
     use super::super::settings_write_queue::SettingsWriteStatus;
     use super::*;
     use crate::keyboard::{KeyboardLayout, LayoutOption, PhysicalKey};
+
+    #[test]
+    fn hidden_window_keeps_text_expander_debounce_and_reload_progressing() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let mut app = EntropyApp::new_inert_for_test();
+        let ctx = egui::Context::default();
+        let hi = crate::text_expander::TextExpansionRule {
+            enabled: true,
+            trigger: "hi".into(),
+            replacement: "hello".into(),
+        };
+        app.app_settings.text_expansion_rules.push(hi);
+        // An edit at t=10s queues a save. The window then hides, so every
+        // background tick below paints nothing: the painted egui input time
+        // stays frozen at 10.0 while the monotonic app clock keeps advancing.
+        app.test_set_app_clock(10.0);
+        app.queue_text_expander_settings_save();
+        assert!(app.text_expander_settings_save_pending);
+        // Hidden 0.2s later, before the 0.45s debounce deadline: no save yet.
+        app.test_set_app_clock(10.2);
+        app.update_native_background(&ctx, 10.0, true, false);
+        assert!(
+            app.text_expander_settings_save_pending,
+            "debounce must not fire before its deadline"
+        );
+        // Hidden past the deadline: the deferred save fires even though the
+        // painted time never moved (only `run_logic` ticked).
+        app.test_set_app_clock(10.5);
+        app.update_native_background(&ctx, 10.0, true, false);
+        assert!(
+            !app.text_expander_settings_save_pending,
+            "deferred save must fire while the window is hidden"
+        );
+        // External reload: rewrite the primary rules file (new content) and mark
+        // the stored signature stale, then tick hidden past the 1.0s interval.
+        let bye = crate::text_expander::TextExpansionRule {
+            enabled: true,
+            trigger: "bye".into(),
+            replacement: "goodbye".into(),
+        };
+        crate::app::app_storage::save_text_expansion_rules(&[bye.clone()]);
+        app.text_expander_rules_signature = Vec::new();
+        app.test_set_app_clock(12.0);
+        app.update_native_background(&ctx, 10.0, true, false);
+        assert!(
+            app.text_expander_rules_last_check_at > 10.5,
+            "the reload check must keep advancing on the app clock"
+        );
+        assert_eq!(
+            app.app_settings.text_expansion_rules,
+            vec![bye],
+            "the external reload must progress while the window is hidden"
+        );
+    }
 
     #[test]
     fn tray_background_tick_keeps_macropad_service_alive_with_k04_selected() {
@@ -1818,9 +1872,8 @@ impl eframe::App for EntropyApp {
         {
             crate::app::poll_update_check(&mut self.update_check);
             crate::app::poll_firmware_update_check(&mut self.firmware_update_check);
-            let now = ctx.input(|i| i.time);
-            self.poll_text_expander_deferred_save(now);
-            self.auto_reload_text_expander_rules_file(now);
+            self.poll_text_expander_deferred_save();
+            self.auto_reload_text_expander_rules_file();
         }
     }
 
