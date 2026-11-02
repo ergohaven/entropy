@@ -811,12 +811,12 @@ impl EntropyApp {
                 let task = self
                     .vial_hid_task
                     .take()
-                    .expect("Vial HID task checked above");
+                    .expect("Keyboard HID task checked above");
                 if task.generation == self.connection_generation {
                     self.hid_device = None;
                     self.finish_vial_hid_error(
                         task.operation,
-                        "Vial HID worker stopped".to_owned(),
+                        "Keyboard HID worker stopped".to_owned(),
                         true,
                     );
                 }
@@ -1919,7 +1919,7 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        panic!("Vial HID task did not finish");
+        panic!("Keyboard HID task did not finish");
     }
 
     #[test]
@@ -2084,7 +2084,7 @@ mod tests {
         recorder.respond_with([stale_poll]);
 
         let error = hid.unlock_poll().unwrap_err();
-        assert!(format!("{error:#}").contains("failed to read Vial unlock status"));
+        assert!(format!("{error:#}").contains("failed to read keyboard unlock status"));
 
         let requests = recorder.requests();
         assert_eq!(requests.len(), 2);

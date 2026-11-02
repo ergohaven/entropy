@@ -451,7 +451,7 @@ impl EntropyApp {
         if self.selected_device.is_none()
             && self.layout.is_none()
             && !was_loading
-            && !super::app_settings_ui::linux_vial_udev_rules_installed()
+            && !super::app_settings_ui::linux_device_udev_rules_installed()
             && !self
                 .device_manager
                 .devices()
@@ -974,7 +974,7 @@ mod tests {
             "Open failed: Failed to open HID device"
         ));
         assert!(should_wait_for_manual_device_selection(
-            "Connect timeout — RMK/Vial device did not finish loading"
+            "Connect timeout — device did not finish loading"
         ));
         assert!(should_wait_for_manual_device_selection(
             "Connect failed: HID timeout — device did not respond"

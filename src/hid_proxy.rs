@@ -1030,7 +1030,7 @@ mod tests {
                     serde_json::to_string(&ProxyResponse {
                         ok: false,
                         data: None,
-                        error: Some("Bluetooth Vial timeout — keyboard did not respond".into()),
+                        error: Some("Bluetooth timeout — keyboard did not respond".into()),
                     })
                     .unwrap()
                 )
@@ -1571,7 +1571,7 @@ mod tests {
         let held = slot.child.lock().unwrap();
         let started = Instant::now();
         let error = a.usb_send(&[11]).unwrap_err().to_string();
-        assert!(error.contains("Bluetooth Vial timeout"));
+        assert!(error.contains("Bluetooth timeout"));
         assert!(started.elapsed() < TEST_TIMEOUT);
         await_condition(|| slot.worker_joined.load(Ordering::Acquire));
         assert!(!slot.reaped.load(Ordering::Acquire));

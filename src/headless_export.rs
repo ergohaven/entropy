@@ -201,7 +201,7 @@ fn select_device(devices: &[Device], filter: Option<&str>) -> Result<usize, NoDe
 
 fn report_no_device(devices: &[Device], filter: Option<&str>, no_device: &NoDevice) {
     match no_device {
-        NoDevice::Missing if devices.is_empty() => log::error!("No Vial keyboard found"),
+        NoDevice::Missing if devices.is_empty() => log::error!("No compatible keyboard found"),
         NoDevice::Missing => log::error!(
             "No keyboard matches {DEVICE_ARG} {:?}; attached: {}",
             filter.unwrap_or_default(),
@@ -705,8 +705,8 @@ mod tests {
         let (mut app, session, recorder) = scripted_export_app(|_| None);
         let mut profiles = crate::application_layouts::DeviceApplicationLayouts::default();
         profiles.create_for_application(&crate::application_layouts::DetectedApplication {
-            executable: "vial".into(),
-            display_name: "Vial".into(),
+            executable: "entropy".into(),
+            display_name: "Entropy".into(),
             ..Default::default()
         });
         app.app_settings
@@ -829,8 +829,8 @@ mod tests {
         app.connect_hid = Some(hid);
         let mut profiles = crate::application_layouts::DeviceApplicationLayouts::default();
         profiles.create_for_application(&crate::application_layouts::DetectedApplication {
-            executable: "vial".into(),
-            display_name: "Vial".into(),
+            executable: "entropy".into(),
+            display_name: "Entropy".into(),
             ..Default::default()
         });
         app.app_settings
@@ -935,8 +935,8 @@ mod tests {
             app.connect_hid = Some(hid);
             let mut profiles = crate::application_layouts::DeviceApplicationLayouts::default();
             profiles.create_for_application(&crate::application_layouts::DetectedApplication {
-                executable: "vial".into(),
-                display_name: "Vial".into(),
+                executable: "entropy".into(),
+                display_name: "Entropy".into(),
                 ..Default::default()
             });
             app.app_settings
