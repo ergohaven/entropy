@@ -93,12 +93,11 @@ pub fn tr_catalog(language: Language, key: &'static str) -> &'static str {
         .unwrap_or(key)
 }
 
+/// A catalog string with its placeholders filled. Its escapes (`\n`) become
+/// the characters they stand for, as in `tr_text`; plain `tr_catalog` keeps
+/// them as written.
 pub fn tr_catalog_format(language: Language, key: &'static str, vars: &[(&str, &str)]) -> String {
-    let mut text = tr_catalog(language, key).to_owned();
-    for (name, value) in vars {
-        text = text.replace(&format!("{{{name}}}"), value);
-    }
-    text
+    tr_catalog_string_format(language, key, vars)
 }
 
 fn tr_catalog_string_format(
@@ -1978,5 +1977,31 @@ pub fn tr_text(language: Language, text: &str) -> String {
                 )
         }
         other => other.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formatted_catalog_strings_turn_escapes_into_characters() {
+        for language in [Language::English, Language::Russian] {
+            let report = tr_catalog_format(
+                language,
+                "entsettings.import_complete_report",
+                &[
+                    ("path", "dir/a.entsettings"),
+                    ("backup", "dir/b.entsettings"),
+                ],
+            );
+            assert!(
+                report.contains("\n\n") && !report.contains("\\n"),
+                "{report}"
+            );
+            assert!(report.contains("dir/a.entsettings") && report.contains("dir/b.entsettings"));
+        }
+        // A plain lookup keeps the text as written: this hint shows the escape.
+        assert!(tr_catalog(Language::English, "text_expander.replacement_hint").contains("\\n"));
     }
 }
