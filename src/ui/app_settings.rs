@@ -699,10 +699,7 @@ impl EntropyApp {
                         },
                     );
                     if *setting != before {
-                        if *setting && !self.update_notifications.request_permission() {
-                            self.status_msg =
-                                crate::i18n::tr_catalog(lang, "notifications.unbundled").into();
-                        }
+                        self.authorize_notification_setting(firmware, before);
                         save_app_settings(&self.app_settings);
                     }
                 }

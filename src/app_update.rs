@@ -392,20 +392,43 @@ pub(crate) fn firmware_release_target(
     native_rmk_marker: bool,
 ) -> Option<FirmwareReleaseTarget> {
     let version = firmware_version?.trim();
+    let firmware_name_is_rmk = vial_json
+        .pointer("/firmware/name")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|name| name.to_ascii_lowercase().contains("rmk"));
     let is_rmk = native_rmk_marker
         || numeric_version_parts(version).first() == Some(&0)
-        || vial_json
-            .pointer("/firmware/name")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|name| name.to_ascii_lowercase().contains("rmk"));
-    if is_rmk {
+        || firmware_name_is_rmk;
+    let explicit_family = match vial_json.pointer("/entropy/firmwareUpdate/family") {
+        None => None,
+        Some(value) => Some(match value.as_str()? {
+            "rmk" => FirmwareReleaseFamily::Rmk,
+            "qmk" => FirmwareReleaseFamily::Qmk,
+            _ => return None,
+        }),
+    };
+    if explicit_family == Some(FirmwareReleaseFamily::Qmk)
+        && (native_rmk_marker || firmware_name_is_rmk)
+    {
+        return None;
+    }
+    // Asset-only overrides predate QMK checks and belong to RMK. QMK revision
+    // overrides declare family = "qmk" alongside the asset to avoid changing that contract.
+    let family = explicit_family.unwrap_or_else(|| {
+        if is_rmk || vial_json.pointer("/entropy/firmwareUpdate/asset").is_some() {
+            FirmwareReleaseFamily::Rmk
+        } else {
+            FirmwareReleaseFamily::Qmk
+        }
+    });
+    if family == FirmwareReleaseFamily::Rmk {
         return rmk_firmware_release_target(
             vendor_id,
             product_id,
             Some(version),
             vial_json,
             legacy_qube,
-            native_rmk_marker,
+            native_rmk_marker || explicit_family == Some(FirmwareReleaseFamily::Rmk),
         );
     }
     if vendor_id != ERGOHAVEN_VENDOR_ID {
@@ -1257,18 +1280,51 @@ mod tests {
     }
 
     #[test]
+    fn legacy_explicit_rmk_asset_keeps_its_release_family_without_markers() {
+        let definition = serde_json::json!({"entropy": {"firmwareUpdate": {"asset": "k04"}}});
+        let legacy =
+            rmk_firmware_release_target(0xE126, 0x0090, Some("1.0.0"), &definition, false, false)
+                .unwrap();
+        let current =
+            firmware_release_target(0xE126, 0x0090, Some("1.0.0"), &definition, false, false)
+                .unwrap();
+        assert_eq!(current, legacy);
+    }
+
+    #[test]
     fn qmk_host_features_and_explicit_revision_keep_qmk_release_source() {
         let target = firmware_release_target(
             0xE126,
             0x0070,
             Some("4.0.6"),
-            &serde_json::json!({"entropy": {"firmwareUpdate": {"asset": "k03_v3_v4"}}}),
+            &serde_json::json!({"entropy": {"firmwareUpdate": {"asset": "k03_v3_v4", "family": "qmk"}}}),
             true,
             false,
         )
         .unwrap();
         assert_eq!(target.family, FirmwareReleaseFamily::Qmk);
         assert_eq!(target.asset_prefix, "k03_v3_v4");
+    }
+
+    #[test]
+    fn explicit_firmware_family_is_validated_and_cannot_contradict_rmk_capabilities() {
+        for family in [serde_json::json!("unknown"), serde_json::json!(true)] {
+            assert!(firmware_release_target(0xE126, 0x0070, Some("4.0.6"),
+                &serde_json::json!({"entropy": {"firmwareUpdate": {"asset": "k03_v3_v4", "family": family}}}),
+                false, false).is_none());
+        }
+        let qmk = serde_json::json!({"entropy": {"firmwareUpdate": {"asset": "k03_v3_v4", "family": "qmk"}}});
+        assert!(
+            firmware_release_target(0xE126, 0x0070, Some("4.0.6"), &qmk, false, true).is_none()
+        );
+        let rmk =
+            serde_json::json!({"entropy": {"firmwareUpdate": {"asset": "k04", "family": "rmk"}}});
+        assert_eq!(
+            firmware_release_target(0xE126, 0x0090, Some("1.0.0"), &rmk, false, false)
+                .unwrap()
+                .family,
+            FirmwareReleaseFamily::Rmk
+        );
     }
 
     #[test]

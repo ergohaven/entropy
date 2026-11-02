@@ -7,9 +7,18 @@ use objc2::{
     runtime::{Bool, ProtocolObject},
     AnyThread, DefinedClass,
 };
-use objc2_foundation::{NSBundle, NSError, NSObject, NSObjectProtocol, NSString};
+use objc2_foundation::{NSBundle, NSError, NSObject, NSObjectProtocol, NSProcessInfo, NSString};
 use objc2_user_notifications::*;
 use std::sync::mpsc;
+
+#[allow(deprecated)]
+fn presentation_options_for_major_version(major: isize) -> UNNotificationPresentationOptions {
+    if major >= 11 {
+        UNNotificationPresentationOptions::Banner | UNNotificationPresentationOptions::List
+    } else {
+        UNNotificationPresentationOptions::Alert
+    }
+}
 
 struct DelegateState {
     sender: mpsc::Sender<Event>,
@@ -41,9 +50,11 @@ define_class!(
             _notification: &UNNotification,
             completion: &DynBlock<dyn Fn(UNNotificationPresentationOptions)>,
         ) {
-            completion
-                .call((UNNotificationPresentationOptions::Banner
-                    | UNNotificationPresentationOptions::List,));
+            completion.call((presentation_options_for_major_version(
+                NSProcessInfo::processInfo()
+                    .operatingSystemVersion()
+                    .majorVersion,
+            ),));
         }
 
         #[unsafe(method(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:))]
@@ -206,7 +217,11 @@ impl Backend {
             }
             // SAFETY: NSError is valid for the duration of Apple's completion callback.
             else {
-                Event::Failed(unsafe { &*error }.localizedDescription().to_string())
+                Event::Failed {
+                    key: notification.key.clone(),
+                    version: notification.version.clone(),
+                    error: unsafe { &*error }.localizedDescription().to_string(),
+                }
             };
             let _ = sender.send(event);
             ctx.request_repaint();
@@ -227,6 +242,19 @@ impl Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(deprecated)]
+    fn foreground_presentation_supports_the_macos_10_15_deployment_target() {
+        assert_eq!(
+            presentation_options_for_major_version(10),
+            UNNotificationPresentationOptions::Alert
+        );
+        assert_eq!(
+            presentation_options_for_major_version(11),
+            UNNotificationPresentationOptions::Banner | UNNotificationPresentationOptions::List
+        );
+    }
 
     #[test]
     fn unbundled_test_host_does_not_initialize_native_notification_center() {
