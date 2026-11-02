@@ -370,6 +370,27 @@ fn version_compat_connect_rejects_unknown_native_version() {
         Some(Ok(out))
     });
     assert!(rmk_native_capabilities(&device).is_err());
+    assert!(device.cached_rmk_native_capabilities().is_err());
+    assert!(device
+        .set_rmk_key_action(0, 0, 0, rmk_types::action::KeyAction::No)
+        .is_err());
+    assert!(recorder.requests().iter().all(|r| r[0] == 8));
+}
+
+#[test]
+fn version_compat_connect_rejects_malformed_explicit_native_capabilities() {
+    let (device, recorder) = crate::hid::HidDevice::test_device();
+    recorder.respond_by(|r| {
+        let mut out = *r;
+        // An explicit RMK reply with no valid codec, not an unchanged QMK echo.
+        out[4] = 1;
+        Some(Ok(out))
+    });
+    assert!(rmk_native_capabilities(&device).is_err());
+    assert!(device
+        .encode_vial_binding(rmk_types::action::KeyAction::No.into())
+        .is_err());
+    assert!(recorder.requests().iter().all(|r| r[0] == 8));
 }
 
 fn rmk_native_capabilities(
@@ -1968,7 +1989,7 @@ mod tests {
 
     #[test]
     fn timeout_after_initial_keymap_read_keeps_rmk_capability_probe_optional() {
-        let (device, _) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+        let (device, recorder) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
             1,
             crate::hid::TestHidFault::Timeout,
         )));
@@ -1979,6 +2000,20 @@ mod tests {
             rmk_native_capabilities(&device).unwrap(),
             crate::rmk_native::RmkNativeCapabilities::default()
         );
+        assert_eq!(
+            device.cached_rmk_native_capabilities().unwrap(),
+            crate::rmk_native::RmkNativeCapabilities::default()
+        );
+        assert!(device
+            .encode_vial_binding(rmk_types::action::KeyAction::No.into())
+            .is_err());
+        assert!(device
+            .set_rmk_key_action(0, 0, 0, rmk_types::action::KeyAction::No)
+            .is_err());
+        assert!(recorder.requests().iter().all(|r| r[0] != 7));
+        assert_eq!(recorder.requests().len(), 2, "absence is cached");
+        // Standard Vial keymaps remain usable without a native codec.
+        device.get_keymap_buffer(1, 1, 1).unwrap();
     }
 
     #[test]

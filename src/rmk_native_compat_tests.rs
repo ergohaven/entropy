@@ -9,6 +9,16 @@ fn unhex(hex: &str) -> Vec<u8> {
 }
 
 #[test]
+fn version_compat_explicit_unknown_capability_reply_reaches_version_validation() {
+    let command = [8, 0xe8, 2, 0, 0];
+    for version in [0, 3, 255] {
+        let mut reply = [0; 32];
+        reply[..5].copy_from_slice(&[8, 0xe8, 2, version, 1]);
+        assert_eq!(matches_rmk_native_response(&command, &reply), Some(true));
+    }
+}
+
+#[test]
 fn version_compat_all_native_consumers_use_negotiated_codec() {
     for version in [1, 2] {
         let action = KeyAction::Single(Action::KeyboardControl(KeyboardAction::ClearEeprom));

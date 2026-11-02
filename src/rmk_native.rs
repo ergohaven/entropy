@@ -265,9 +265,12 @@ pub(crate) fn matches_rmk_native_response(
     let header_matches = response[0] == command[0]
         && response[1] == ERGOHAVEN_CUSTOM_NAMESPACE
         && response[2] == subcommand
-        && matches!(response[3], 1 | 2)
+        // Capability replies must reach the version validator even when the
+        // advertised codec is unknown. Discarding them as stale could turn an
+        // explicit rejection into an optional no-response timeout.
         && (subcommand == ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS
-            || response[3] == command.get(3).copied().unwrap_or(0));
+            || (matches!(response[3], 1 | 2)
+                && response[3] == command.get(3).copied().unwrap_or(0)));
     if subcommand == ERGOHAVEN_CUSTOM_COMBO_LAYER {
         return Some(header_matches && response[7] == command.get(4).copied().unwrap_or(u8::MAX));
     }
@@ -455,7 +458,22 @@ impl crate::hid::HidDevice {
         command[0] = CMD_VIA_CUSTOM_GET_VALUE;
         command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
         command[2] = ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS;
-        let response = self.usb_send(&command)?;
+        let response = match self.usb_send(&command) {
+            Ok(response) => response,
+            Err(error)
+                if error
+                    .chain()
+                    .any(|cause| cause.to_string() == "HID timeout — device did not respond") =>
+            {
+                // Legacy Vial firmware may not answer this optional extension.
+                // Cache absence, never a speculative v1 codec. All native
+                // authoring still fails preflight without negotiated support.
+                let caps = RmkNativeCapabilities::default();
+                *self.native_capabilities.lock().unwrap() = Some(caps);
+                return Ok(caps);
+            }
+            Err(error) => return Err(error),
+        };
         let caps = decode_native_capabilities(&response);
         if native_response_header_matches(&response, ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS)
             && response != command

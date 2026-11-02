@@ -187,6 +187,14 @@ fn native_v1_board() -> (crate::hid::HidDevice, crate::hid::TestHidRecorder) {
     let (hid, recorder) = crate::hid::HidDevice::test_device();
     let mut stored = std::collections::HashMap::new();
     recorder.respond_by(move |request| {
+        // Run discovery through the real handler before importing. This fixture
+        // previously began post-discovery without recording its negotiated v1.
+        if request[..3] == [0x08, 0xE8, 0x02] {
+            let mut response = *request;
+            response[3] = 1;
+            response[4] = 1; // Native key-action GET/SET only, not Numero.
+            return Some(Ok(response));
+        }
         // Ergohaven namespace, native key action.
         if request[1..3] != [0xE8, 0x03] {
             return None;
@@ -203,6 +211,10 @@ fn native_v1_board() -> (crate::hid::HidDevice, crate::hid::TestHidRecorder) {
         }
         Some(Ok(response))
     });
+    let caps = hid.get_rmk_native_capabilities().unwrap();
+    assert_eq!(caps.version, 1);
+    assert!(caps.key_actions);
+    assert!(!caps.universal_numero);
     (hid, recorder)
 }
 
