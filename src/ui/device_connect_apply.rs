@@ -1,21 +1,13 @@
 use super::*;
 
-fn is_default_layer_name(index: usize, name: &str) -> bool {
-    let trimmed = name.trim();
-    trimmed.is_empty()
-        || trimmed == index.to_string()
-        || (index == 0 && trimmed.eq_ignore_ascii_case("main"))
-        || trimmed.eq_ignore_ascii_case(&format!("layer {index}"))
-}
-
 /// Merge firmware-read layer names with locally saved ones.
 ///
 /// A name the firmware actually stored (`from_firmware[i]`) is authoritative,
 /// even when it looks like a default such as "Main". A locally saved name only
-/// fills a layer the firmware left as a generated descriptor placeholder, so
-/// provenance — not the string — decides. One real firmware name therefore no
-/// longer suppresses saved names for the other layers.
-fn resolve_layer_names(
+/// overrides names from the keyboard definition, including named factory
+/// defaults such as "Base" or "Fn". Provenance, rather than the text of a name,
+/// decides whether a locally saved rename can be restored.
+pub(super) fn resolve_layer_names(
     firmware_names: &[String],
     from_firmware: &[bool],
     local_names: Option<&[String]>,
@@ -30,8 +22,7 @@ fn resolve_layer_names(
     if let Some(local) = local_names {
         for (idx, name) in local.iter().enumerate().take(layer_count) {
             let from_firmware = from_firmware.get(idx).copied().unwrap_or(false);
-            if !name.trim().is_empty() && !from_firmware && is_default_layer_name(idx, &names[idx])
-            {
+            if !name.trim().is_empty() && !from_firmware {
                 names[idx] = name.clone();
             }
         }
@@ -886,6 +877,24 @@ mod tests {
         );
         // Empty local name leaves the placeholder untouched.
         assert_eq!(names, s(&["BASE", "LOWER", "2"]));
+    }
+
+    #[test]
+    fn resolve_restores_saved_names_over_named_definition_defaults() {
+        let definition = serde_json::json!({
+            "name": "Named layers",
+            "matrix": {"rows": 1, "cols": 1},
+            "layouts": {"keymap": [["0,0"]]},
+            "layer_names": ["Base", "Fn", "Symbols"]
+        });
+        let layout = crate::keyboard::KeyboardLayout::from_vial_json(&definition).unwrap();
+        let names = resolve_layer_names(
+            &layout.layer_names,
+            &[false, false, false],
+            Some(&s(&["Работа", "Навигация", ""])),
+            3,
+        );
+        assert_eq!(names, s(&["Работа", "Навигация", "Symbols"]));
     }
 
     #[test]

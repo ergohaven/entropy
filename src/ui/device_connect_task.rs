@@ -346,21 +346,6 @@ fn canonical_layout_device_name(device: &crate::device::Device) -> &str {
     }
 }
 
-fn is_default_layer_name(index: usize, name: &str) -> bool {
-    let trimmed = name.trim();
-    trimmed.is_empty()
-        || trimmed == index.to_string()
-        || (index == 0 && trimmed.eq_ignore_ascii_case("main"))
-        || trimmed.eq_ignore_ascii_case(&format!("layer {index}"))
-}
-
-fn has_firmware_layer_names(names: &[String]) -> bool {
-    names
-        .iter()
-        .enumerate()
-        .any(|(index, name)| !is_default_layer_name(index, name))
-}
-
 fn rmk_native_capabilities(
     dev_conn: &crate::hid::HidDevice,
 ) -> anyhow::Result<crate::rmk_native::RmkNativeCapabilities> {
@@ -1153,17 +1138,13 @@ impl EntropyApp {
                     }
                 }
 
-                if staged_bluetooth_load || !has_firmware_layer_names(&layout.layer_names) {
-                    if let Some(local_layer_names) = load_saved_layer_names(&dev.name) {
-                        for (layer, name) in
-                            local_layer_names.into_iter().enumerate().take(layer_count)
-                        {
-                            if !layer_names_from_firmware[layer] && !name.trim().is_empty() {
-                                layout.layer_names[layer] = name;
-                            }
-                        }
-                    }
-                }
+                let local_layer_names = load_saved_layer_names(&dev.name);
+                layout.layer_names = super::device_connect_apply::resolve_layer_names(
+                    &layout.layer_names,
+                    &layer_names_from_firmware,
+                    local_layer_names.as_deref(),
+                    layer_count,
+                );
 
                 let layer_name_updates = (!staged_bluetooth_load)
                     .then(|| {
