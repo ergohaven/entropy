@@ -1211,6 +1211,8 @@ impl EntropyApp {
         let mut timeout_unit = LayerLedTimeoutUnit::Minutes;
         let mut bt_profiles = Vec::<(usize, u16)>::new();
         let mut layers = Vec::<(usize, u16)>::new();
+        let mut layer_contracts = Vec::new();
+        let mut other_led_qsids = Vec::new();
 
         if let Some(tabs) = json.get("settings").and_then(|value| value.as_array()) {
             for field in tabs
@@ -1227,7 +1229,7 @@ impl EntropyApp {
                 let Some(qsid) = field
                     .get("qsid")
                     .and_then(|value| value.as_u64())
-                    .map(|value| value as u16)
+                    .and_then(|value| u16::try_from(value).ok())
                 else {
                     continue;
                 };
@@ -1243,6 +1245,7 @@ impl EntropyApp {
                 let max = Self::layer_led_field_max(field, width);
 
                 if lower_title.contains("led brightness") {
+                    other_led_qsids.push(qsid);
                     brightness = Some(Self::read_layer_led_numeric_setting(
                         dev_conn,
                         qsid,
@@ -1252,6 +1255,7 @@ impl EntropyApp {
                         "layer_led brightness",
                     ));
                 } else if lower_title.contains("led timeout") {
+                    other_led_qsids.push(qsid);
                     let lower_unit = field
                         .get("unit")
                         .or_else(|| field.get("units"))
@@ -1277,6 +1281,7 @@ impl EntropyApp {
                         "layer_led timeout",
                     ));
                 } else if lower_title.contains("bt profile") && lower_title.contains("color") {
+                    other_led_qsids.push(qsid);
                     if let Some(profile) =
                         Self::parse_trailing_setting_index(&lower_title, "bt profile", "color")
                     {
@@ -1287,6 +1292,22 @@ impl EntropyApp {
                         Self::parse_trailing_setting_index(&lower_title, "layer", "color")
                     {
                         layers.push((layer, qsid));
+                        // Do not normalize malformed widths or palette entries into
+                        // a contract that would allow writes to unrelated firmware.
+                        let valid = field.get("type").and_then(|v| v.as_str()) == Some("select")
+                            && field.get("width").is_none_or(|v| v.as_u64() == Some(1))
+                            && field.get("bit").is_none()
+                            && field.get("min").is_none_or(|v| v.as_u64() == Some(0))
+                            && field.get("max").is_none_or(|v| v.as_u64() == Some(24))
+                            && field
+                                .get("variants")
+                                .and_then(|v| v.as_array())
+                                .is_some_and(|v| {
+                                    v.iter()
+                                        .map(|v| v.as_str())
+                                        .eq(LAYER_LED_PALETTE.iter().copied().map(Some))
+                                });
+                        layer_contracts.push((layer, qsid, valid));
                     }
                 }
             }
@@ -1308,27 +1329,40 @@ impl EntropyApp {
             .into_iter()
             .filter(|(profile, _)| *profile <= 4)
             .map(|(_, qsid)| {
-                let value = dev_conn.get_qmk_setting_u8(qsid).unwrap_or_else(|e| {
+                let result = dev_conn.get_qmk_setting_u8(qsid);
+                let loaded = result.is_ok();
+                let value = result.unwrap_or_else(|e| {
                     log::warn!("get_qmk_setting_u8(layer_led bt profile qsid {qsid}): {e}");
                     0
                 });
-                LayerLedColorSetting::new(qsid, value)
+                let mut setting = LayerLedColorSetting::new(qsid, value);
+                setting.loaded = loaded;
+                setting
             })
             .collect::<Vec<_>>();
 
         let layer_colors = Self::layer_led_color_qsid_groups(layers, layer_count)
             .into_iter()
-            .filter_map(|(_, qsids)| {
+            .filter_map(|(layer, qsids)| {
                 let (&qsid, linked_qsids) = qsids.split_first()?;
-                let value = dev_conn.get_qmk_setting_u8(qsid).unwrap_or_else(|e| {
+                let result = dev_conn.get_qmk_setting_u8(qsid);
+                let loaded = result.is_ok();
+                let value = result.unwrap_or_else(|e| {
                     log::warn!("get_qmk_setting_u8(layer_led layer qsid {qsid}): {e}");
                     0
                 });
-                Some(LayerLedColorSetting::with_linked_qsids(
-                    qsid,
-                    linked_qsids.to_vec(),
-                    value,
-                ))
+                let mut setting =
+                    LayerLedColorSetting::with_linked_qsids(qsid, linked_qsids.to_vec(), value);
+                if !qsids.iter().any(|id| other_led_qsids.contains(id))
+                    && layer_contracts
+                        .iter()
+                        .filter(|(_, id, _)| qsids.contains(id))
+                        .all(|(identity, _, valid)| *identity == layer && *valid)
+                {
+                    setting.portable_layer = Some(layer);
+                }
+                setting.loaded = loaded;
+                Some(setting)
             })
             .collect::<Vec<_>>();
 
@@ -1367,12 +1401,15 @@ impl EntropyApp {
             if !has_qmk_setting(qsid) {
                 break;
             }
-            let value = dev_conn.get_qmk_setting_u8(qsid).unwrap_or_else(|e| {
+            let result = dev_conn.get_qmk_setting_u8(qsid);
+            let loaded = result.is_ok();
+            let value = result.unwrap_or_else(|e| {
                 log::warn!("get_qmk_setting_u8(layer_led qsid {qsid}): {e}");
                 0
             });
-            leds.layer_colors
-                .push(LayerLedColorSetting::new(qsid, value));
+            let mut setting = LayerLedColorSetting::new(qsid, value);
+            setting.loaded = loaded;
+            leds.layer_colors.push(setting);
         }
         leds.supported = !leds.layer_colors.is_empty();
         if leds.supported {
