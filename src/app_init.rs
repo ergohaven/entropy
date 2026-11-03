@@ -49,6 +49,11 @@ impl EntropyApp {
         });
         #[cfg(unix)]
         app.start_console_export_server(&cc.egui_ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        app.update_notifications.initialize(
+            &cc.egui_ctx,
+            app_settings_path().with_file_name("update-notifications.json"),
+        );
         app
     }
 
@@ -347,6 +352,8 @@ impl EntropyApp {
             device_about_info: None,
             update_check,
             firmware_update_check: FirmwareUpdateCheckState::Unsupported,
+            #[cfg(not(target_arch = "wasm32"))]
+            update_notifications: Default::default(),
             tour_state: TourState::default(),
             tour_target_rects: Vec::new(),
             unlock_open: false,

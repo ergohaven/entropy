@@ -50,7 +50,12 @@ use app_update::*;
 #[path = "app_repaint.rs"]
 mod app_repaint;
 #[cfg(not(target_arch = "wasm32"))]
+#[path = "update_notifications.rs"]
+mod update_notifications;
+#[cfg(not(target_arch = "wasm32"))]
 use app_repaint::*;
+#[cfg(target_os = "macos")]
+pub(crate) use update_notifications::prepare_macos_update_notifications;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "application_layout_portable.rs"]
 mod application_layout_portable;

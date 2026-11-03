@@ -667,6 +667,42 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
+                #[cfg(not(target_arch = "wasm32"))]
+                13 | 14 => {
+                    let firmware = row_idx == 14;
+                    let setting = if firmware {
+                        &mut self.app_settings.firmware_update_notifications
+                    } else {
+                        &mut self.app_settings.app_update_notifications
+                    };
+                    let before = *setting;
+                    let key = if firmware {
+                        "notifications.firmware_label"
+                    } else {
+                        "notifications.app_label"
+                    };
+                    crate::ui_style::settings_list_row_with_tooltip(
+                        ui,
+                        content_width,
+                        row_height,
+                        crate::i18n::tr_catalog(lang, key),
+                        true,
+                        tooltip(crate::i18n::tr_catalog(lang, "notifications.tooltip")),
+                        switch_width,
+                        |ui| {
+                            crate::ui_style::settings_switch_sized_stable(
+                                ui,
+                                key,
+                                setting,
+                                switch_size,
+                            );
+                        },
+                    );
+                    if *setting != before {
+                        self.authorize_notification_setting(firmware, before);
+                        save_app_settings(&self.app_settings);
+                    }
+                }
                 _ => {}
             }
         }
@@ -746,6 +782,13 @@ impl EntropyApp {
 
 fn total_app_settings_rows() -> usize {
     let rows = 13;
+    #[cfg(not(target_arch = "wasm32"))]
+    let rows = rows
+        + if super::update_notifications::SUPPORTED {
+            2
+        } else {
+            0
+        };
     #[cfg(target_os = "linux")]
     {
         rows + 1

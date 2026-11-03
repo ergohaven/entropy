@@ -2,6 +2,8 @@ const ENTROPY_LATEST_RELEASE_API: &str =
     "https://api.github.com/repos/ergohaven/entropy/releases/latest";
 const ENTROPY_LATEST_RELEASE_PAGE: &str = "https://github.com/ergohaven/entropy/releases/latest";
 const RMK_RELEASES_API: &str = "https://api.github.com/repos/ergohaven/rmk/releases?per_page=30";
+const QMK_RELEASES_API: &str =
+    "https://api.github.com/repos/ergohaven/vial-qmk/releases?per_page=30";
 const ERGOHAVEN_VENDOR_ID: u16 = 0xE126;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,8 +44,15 @@ impl UpdateCheckResult {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FirmwareReleaseFamily {
+    Rmk,
+    Qmk,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FirmwareReleaseTarget {
+    pub(crate) family: FirmwareReleaseFamily,
     pub(crate) current_version: String,
     pub(crate) asset_prefix: String,
 }
@@ -178,7 +187,10 @@ pub(crate) fn start_firmware_update_check(
         let worker_target = target.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let outcome = match fetch_rmk_releases() {
+            let outcome = match fetch_github_json(match worker_target.family {
+                FirmwareReleaseFamily::Rmk => RMK_RELEASES_API,
+                FirmwareReleaseFamily::Qmk => QMK_RELEASES_API,
+            }) {
                 Ok(releases) => build_firmware_update_result(&worker_target, releases)
                     .map(FirmwareUpdateCheckOutcome::Success)
                     .unwrap_or(FirmwareUpdateCheckOutcome::Unavailable),
@@ -365,8 +377,93 @@ pub(crate) fn rmk_firmware_release_target(
     }
 
     Some(FirmwareReleaseTarget {
+        family: FirmwareReleaseFamily::Rmk,
         current_version: current_version.to_owned(),
         asset_prefix: explicit_asset.or_else(|| catalog_asset.map(str::to_owned))?,
+    })
+}
+
+pub(crate) fn firmware_release_target(
+    vendor_id: u16,
+    product_id: u16,
+    firmware_version: Option<&str>,
+    vial_json: &serde_json::Value,
+    legacy_qube: bool,
+    native_rmk_marker: bool,
+) -> Option<FirmwareReleaseTarget> {
+    let version = firmware_version?.trim();
+    let firmware_name_is_rmk = vial_json
+        .pointer("/firmware/name")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|name| name.to_ascii_lowercase().contains("rmk"));
+    let is_rmk = native_rmk_marker
+        || numeric_version_parts(version).first() == Some(&0)
+        || firmware_name_is_rmk;
+    let explicit_family = match vial_json.pointer("/entropy/firmwareUpdate/family") {
+        None => None,
+        Some(value) => Some(match value.as_str()? {
+            "rmk" => FirmwareReleaseFamily::Rmk,
+            "qmk" => FirmwareReleaseFamily::Qmk,
+            _ => return None,
+        }),
+    };
+    if explicit_family == Some(FirmwareReleaseFamily::Qmk)
+        && (native_rmk_marker || firmware_name_is_rmk)
+    {
+        return None;
+    }
+    // Asset-only overrides predate QMK checks and belong to RMK. QMK revision
+    // overrides declare family = "qmk" alongside the asset to avoid changing that contract.
+    let family = explicit_family.unwrap_or_else(|| {
+        if is_rmk || vial_json.pointer("/entropy/firmwareUpdate/asset").is_some() {
+            FirmwareReleaseFamily::Rmk
+        } else {
+            FirmwareReleaseFamily::Qmk
+        }
+    });
+    if family == FirmwareReleaseFamily::Rmk {
+        return rmk_firmware_release_target(
+            vendor_id,
+            product_id,
+            Some(version),
+            vial_json,
+            legacy_qube,
+            native_rmk_marker || explicit_family == Some(FirmwareReleaseFamily::Rmk),
+        );
+    }
+    if vendor_id != ERGOHAVEN_VENDOR_ID {
+        return None;
+    }
+    parse_semver(version)?;
+    let explicit = vial_json.pointer("/entropy/firmwareUpdate/asset");
+    let asset_prefix = if let Some(value) = explicit {
+        normalized_asset_prefix(value.as_str()?)?
+    } else {
+        // Verified against ergohaven/vial-qmk keyboard.json USB identities and release assets.
+        // Shared PIDs with ambiguous revisions need explicit definition metadata.
+        match product_id {
+            0x0010 => "remnant_v1",
+            0x0020 => "k02_v1",
+            0x0030 => "planeta_v1",
+            0x0031 => "planeta_v2",
+            0x0040 => "macropad_v1",
+            0x0041 => "macropad_v2",
+            0x0042 => "macropad_v3",
+            0x0050 => "hpd_v1",
+            0x0052 => "phenom_v1",
+            0x0053 => "phenom_mini_v1",
+            0x0054 => "phenom_micro_v1",
+            0x0060 => "velvet_v1",
+            0x00A0 => "k03pro_43mm_v1",
+            0x00B0 => "sm30_v1",
+            _ => return None,
+        }
+        .to_owned()
+    };
+    Some(FirmwareReleaseTarget {
+        family: FirmwareReleaseFamily::Qmk,
+        current_version: version.to_owned(),
+        asset_prefix,
     })
 }
 
@@ -479,10 +576,10 @@ fn is_trusted_release_url(url: &str) -> bool {
         return false;
     };
     match segments.collect::<Vec<_>>().as_slice() {
-        ["ergohaven", repository @ ("entropy" | "rmk"), "releases", "tag", tag] => {
+        ["ergohaven", repository @ ("entropy" | "rmk" | "vial-qmk"), "releases", "tag", tag] => {
             !repository.is_empty() && !tag.is_empty()
         }
-        ["ergohaven", repository @ ("entropy" | "rmk"), "releases", "download", tag, asset] => {
+        ["ergohaven", repository @ ("entropy" | "rmk" | "vial-qmk"), "releases", "download", tag, asset] => {
             !repository.is_empty() && !tag.is_empty() && !asset.is_empty()
         }
         _ => false,
@@ -593,11 +690,6 @@ fn canonical_entropy_release_url(tag: &str) -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn fetch_rmk_releases() -> Result<Vec<GitHubRelease>, String> {
-    fetch_github_json(RMK_RELEASES_API)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 fn fetch_github_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, String> {
     ureq::get(url)
         .set("User-Agent", concat!("Entropy/", env!("CARGO_PKG_VERSION")))
@@ -646,7 +738,14 @@ fn build_firmware_update_result(
         .into_iter()
         .filter(|release| !release.draft && !release.prerelease)
         .filter_map(|mut release| {
-            let expected_asset = format!("{}-{}.zip", target.asset_prefix, release.tag_name);
+            let expected_asset = match target.family {
+                FirmwareReleaseFamily::Rmk => {
+                    format!("{}-{}.zip", target.asset_prefix, release.tag_name)
+                }
+                FirmwareReleaseFamily::Qmk => {
+                    format!("{}_{}.uf2", release.tag_name, target.asset_prefix)
+                }
+            };
             let asset = release
                 .assets
                 .drain(..)
@@ -1102,6 +1201,7 @@ mod tests {
     #[test]
     fn selects_newest_stable_release_containing_exact_asset() {
         let target = FirmwareReleaseTarget {
+            family: FirmwareReleaseFamily::Rmk,
             current_version: "0.1.3".to_owned(),
             asset_prefix: "k03".to_owned(),
         };
@@ -1123,6 +1223,7 @@ mod tests {
     #[test]
     fn reports_no_firmware_package_when_no_release_contains_asset() {
         let target = FirmwareReleaseTarget {
+            family: FirmwareReleaseFamily::Rmk,
             current_version: "0.1.6".to_owned(),
             asset_prefix: "missing-package".to_owned(),
         };
@@ -1135,8 +1236,101 @@ mod tests {
     }
 
     #[test]
+    fn qmk_phenom_matches_its_own_release_asset() {
+        let target = firmware_release_target(
+            0xE126,
+            0x0052,
+            Some("4.0.6"),
+            &serde_json::json!({}),
+            false,
+            false,
+        )
+        .unwrap();
+        let mut release = release(
+            "4.1.0",
+            false,
+            false,
+            &["4.1.0_phenom_mini_v1.uf2", "4.1.0_phenom_v1.uf2"],
+        );
+        release.html_url = "https://github.com/ergohaven/vial-qmk/releases/tag/4.1.0".into();
+        let result = build_firmware_update_result(&target, vec![release]).unwrap();
+        assert_eq!(result.asset.name, "4.1.0_phenom_v1.uf2");
+        assert_eq!(result.relation, VersionRelation::UpdateAvailable);
+        assert!(is_trusted_release_url(&result.release_url));
+    }
+
+    #[test]
+    fn ambiguous_qmk_revision_and_unknown_version_are_not_guessed() {
+        for (vendor, product, version) in [
+            (0xE126, 0x0070, Some("4.0.6")),
+            (0xE126, 0x0052, None),
+            (0x1234, 0x0052, Some("4.0.6")),
+            (0xE126, 0x0052, Some("unknown")),
+        ] {
+            assert!(firmware_release_target(
+                vendor,
+                product,
+                version,
+                &serde_json::json!({}),
+                false,
+                false
+            )
+            .is_none());
+        }
+    }
+
+    #[test]
+    fn legacy_explicit_rmk_asset_keeps_its_release_family_without_markers() {
+        let definition = serde_json::json!({"entropy": {"firmwareUpdate": {"asset": "k04"}}});
+        let legacy =
+            rmk_firmware_release_target(0xE126, 0x0090, Some("1.0.0"), &definition, false, false)
+                .unwrap();
+        let current =
+            firmware_release_target(0xE126, 0x0090, Some("1.0.0"), &definition, false, false)
+                .unwrap();
+        assert_eq!(current, legacy);
+    }
+
+    #[test]
+    fn qmk_host_features_and_explicit_revision_keep_qmk_release_source() {
+        let target = firmware_release_target(
+            0xE126,
+            0x0070,
+            Some("4.0.6"),
+            &serde_json::json!({"entropy": {"firmwareUpdate": {"asset": "k03_v3_v4", "family": "qmk"}}}),
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(target.family, FirmwareReleaseFamily::Qmk);
+        assert_eq!(target.asset_prefix, "k03_v3_v4");
+    }
+
+    #[test]
+    fn explicit_firmware_family_is_validated_and_cannot_contradict_rmk_capabilities() {
+        for family in [serde_json::json!("unknown"), serde_json::json!(true)] {
+            assert!(firmware_release_target(0xE126, 0x0070, Some("4.0.6"),
+                &serde_json::json!({"entropy": {"firmwareUpdate": {"asset": "k03_v3_v4", "family": family}}}),
+                false, false).is_none());
+        }
+        let qmk = serde_json::json!({"entropy": {"firmwareUpdate": {"asset": "k03_v3_v4", "family": "qmk"}}});
+        assert!(
+            firmware_release_target(0xE126, 0x0070, Some("4.0.6"), &qmk, false, true).is_none()
+        );
+        let rmk =
+            serde_json::json!({"entropy": {"firmwareUpdate": {"asset": "k04", "family": "rmk"}}});
+        assert_eq!(
+            firmware_release_target(0xE126, 0x0090, Some("1.0.0"), &rmk, false, false)
+                .unwrap()
+                .family,
+            FirmwareReleaseFamily::Rmk
+        );
+    }
+
+    #[test]
     fn ensure_keeps_completed_check_for_same_target() {
         let target = FirmwareReleaseTarget {
+            family: FirmwareReleaseFamily::Rmk,
             current_version: "0.1.6".to_owned(),
             asset_prefix: "k04".to_owned(),
         };
@@ -1164,6 +1358,7 @@ mod tests {
     #[test]
     fn disconnected_firmware_worker_preserves_target_and_reports_failure() {
         let target = FirmwareReleaseTarget {
+            family: FirmwareReleaseFamily::Rmk,
             current_version: "0.1.6".to_owned(),
             asset_prefix: "k04".to_owned(),
         };
@@ -1189,6 +1384,7 @@ mod tests {
     #[test]
     fn missing_firmware_asset_finishes_as_unavailable() {
         let target = FirmwareReleaseTarget {
+            family: FirmwareReleaseFamily::Rmk,
             current_version: "0.1.6".to_owned(),
             asset_prefix: "missing-package".to_owned(),
         };
