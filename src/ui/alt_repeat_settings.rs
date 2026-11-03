@@ -380,7 +380,7 @@ impl EntropyApp {
                                         if let Some(name) = self.alt_repeat_names.get_mut(idx) {
                                             let resp = crate::ui_style::modern_text_field_sized(
                                                 ui,
-                                                egui::Id::new(("alt_repeat_name", idx)),
+                                                egui::Id::unique(("alt_repeat_name", idx)),
                                                 name,
                                                 control_width,
                                                 metrics.settings_control_height(),

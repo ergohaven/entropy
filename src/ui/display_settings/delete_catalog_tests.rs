@@ -229,6 +229,7 @@ fn full_ui_every_macropad_default_mask_can_be_chosen_without_losing_user_art() {
                             phase: egui::TouchPhase::Move,
                             delta: egui::vec2(0.0, clip.center().y - pos.y),
                             modifiers: egui::Modifiers::NONE,
+                            source: egui::MouseWheelSource::Unknown,
                         },
                     ],
                 );
@@ -354,24 +355,24 @@ fn full_ui_delete_catalog_native_chooser_screenshot() {
         }
         fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
             let ctx = ui.ctx().clone();
-            for event in ctx.input(|i| i.events.clone()) {
-                if let egui::Event::Screenshot { image, .. } = event {
-                    let rgba: Vec<_> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
-                    image::save_buffer(
-                        &self.path,
-                        &rgba,
-                        image.size[0] as u32,
-                        image.size[1] as u32,
-                        image::ColorType::Rgba8,
-                    )
-                    .unwrap();
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            }
             eframe::App::ui(&mut self.app, ui, frame);
             self.frames += 1;
             if self.frames == 5 {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+                let (path, close) = (self.path.clone(), ctx.clone());
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                    egui::ScreenshotCallback::new(move |image| {
+                        let rgba: Vec<_> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
+                        image::save_buffer(
+                            &path,
+                            &rgba,
+                            image.size[0] as u32,
+                            image.size[1] as u32,
+                            image::ColorType::Rgba8,
+                        )
+                        .unwrap();
+                        close.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }),
+                ));
             }
             assert!(self.frames < 120);
             ctx.request_repaint();
@@ -460,6 +461,7 @@ fn full_ui_delete_catalog_native_chooser_screenshot() {
                             phase: egui::TouchPhase::Move,
                             delta: egui::vec2(0.0, clip.center().y - (pos.y + next.y) * 0.5),
                             modifiers: egui::Modifiers::NONE,
+                            source: egui::MouseWheelSource::Unknown,
                         },
                     ],
                 );

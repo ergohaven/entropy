@@ -10,7 +10,7 @@ pub(super) fn frame_events(
     ctx: &egui::Context,
     events: Vec<egui::Event>,
 ) -> egui::FullOutput {
-    ctx.run(
+    crate::app::discard_texture_deltas(ctx.run_pass(
         egui::RawInput {
             events,
             screen_rect: Some(egui::Rect::from_min_size(
@@ -20,11 +20,13 @@ pub(super) fn frame_events(
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                app.draw_sm62_display_settings_page(ui, ui.max_rect());
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    app.draw_sm62_display_settings_page(ui, ui.max_rect());
+                })
             });
         },
-    )
+    ))
 }
 
 pub(super) fn drain(app: &mut EntropyApp, ctx: &egui::Context) {
@@ -298,7 +300,7 @@ fn shared_sm62_disabled_page_does_not_enqueue_unconfirmed_values() {
         let before = app.display_settings.clone();
         if read_only {
             for _ in 0..3 {
-                let _ = ctx.run(
+                ctx.run_pass(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -307,13 +309,16 @@ fn shared_sm62_disabled_page_does_not_enqueue_unconfirmed_values() {
                         ..Default::default()
                     },
                     |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            ui.add_enabled_ui(false, |ui| {
-                                app.draw_sm62_display_settings_page(ui, ui.max_rect())
-                            });
+                        ctx.root_ui(|ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
+                                ui.add_enabled_ui(false, |ui| {
+                                    app.draw_sm62_display_settings_page(ui, ui.max_rect())
+                                });
+                            })
                         });
                     },
-                );
+                )
+                .drop_without_applying_deltas();
             }
         } else {
             click_shared(&mut app, &ctx, "Star animation");

@@ -1687,7 +1687,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn click_layer_menu(app: &mut EntropyApp, ctx: &egui::Context, item: usize) {
         let draw = |app: &mut EntropyApp, events| {
-            ctx.run_ui(
+            crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1699,7 +1699,7 @@ mod tests {
                 |ui| {
                     app.draw_layer_operations_submenu(ui, 240.0);
                 },
-            )
+            ))
         };
         let _ = draw(app, vec![]);
         let output = draw(app, vec![]);

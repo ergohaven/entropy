@@ -386,10 +386,11 @@ mod tests {
 
                 app.settings_tab = tab;
                 app.main_menu_tab = menu;
-                let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ctx.run_ui(egui::RawInput::default(), |ui| {
                     let ctx = ui.ctx().clone();
                     app.draw_layout(ui, &layout, &ctx);
-                });
+                })
+                .drop_without_applying_deltas();
                 assert!(!app.application_picker_open);
                 assert!(!app.application_categories_open);
                 assert!(app.application_picker_target_layout_id.is_none());
@@ -398,10 +399,11 @@ mod tests {
                 assert!(app.application_categories_name.is_empty());
 
                 app.open_application_layouts_page();
-                let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ctx.run_ui(egui::RawInput::default(), |ui| {
                     let ctx = ui.ctx().clone();
                     app.draw_layout(ui, &layout, &ctx);
-                });
+                })
+                .drop_without_applying_deltas();
                 assert!(!app.application_picker_open);
                 assert!(!app.application_categories_open);
             }
@@ -443,7 +445,7 @@ mod tests {
         }))
         .unwrap();
         let frame = |app: &mut EntropyApp| {
-            let output = ctx.run_ui(
+            let output = crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -455,7 +457,7 @@ mod tests {
                     let ctx = ui.ctx().clone();
                     app.draw_layout(ui, &layout, &ctx);
                 },
-            );
+            ));
             ["Autolayer", "Enable", "Add"].map(|label| {
                 output
                     .shapes
@@ -544,10 +546,11 @@ mod tests {
             app.vial_unlocked = Some(false);
             let layout = app.layout.as_ref().unwrap().clone();
 
-            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
                 let ctx = ui.ctx().clone();
                 app.draw_layout(ui, &layout, &ctx);
-            });
+            })
+            .drop_without_applying_deltas();
 
             assert!(app.main_menu_tab == menu);
             assert!(app.settings_tab == tab);
@@ -569,13 +572,14 @@ mod tests {
         assert!(app.unlock_open);
         app.dismiss_vial_unlock_preflight();
 
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_ui(egui::RawInput::default(), |ui| {
             app.draw_auto_shift_settings_page(
                 ui,
                 egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0)),
                 true,
             );
-        });
+        })
+        .drop_without_applying_deltas();
         assert!(!app.unlock_open);
         assert!(recorder.requests().is_empty());
 
@@ -595,10 +599,11 @@ mod tests {
         app.reset_matrix_tester_state();
         let layout = app.layout.as_ref().unwrap().clone();
 
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_ui(egui::RawInput::default(), |ui| {
             let ctx = ui.ctx().clone();
             app.draw_layout(ui, &layout, &ctx);
-        });
+        })
+        .drop_without_applying_deltas();
 
         assert!(app.main_menu_tab == MainMenuTab::Settings);
         assert!(app.unlock_open);

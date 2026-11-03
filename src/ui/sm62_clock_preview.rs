@@ -21,15 +21,7 @@ mod clock_player_parity_tests {
             fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
                 let ctx = ui.ctx().clone();
                 ctx.set_pixels_per_point(1.0);
-                for event in ctx.input(|i| i.events.clone()) {
-                    if let egui::Event::Screenshot { image, .. } = event {
-                        assert_eq!(image.size, [240,280]);
-                        let rgba: Vec<u8> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
-                        image::save_buffer(&self.path, &rgba, 240, 280, image::ColorType::Rgba8).unwrap();
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                }
-                egui::CentralPanel::default().frame(egui::Frame::NONE).show_inside(ui, |ui| {
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
                     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(240.0,280.0));
                     // Identical production background and owning bitmap painters,
                     // without fabricated production time/date or HID activity.
@@ -44,8 +36,16 @@ mod clock_player_parity_tests {
                     paint_sm62_language(ui, screen, self.language.as_deref());
                 });
                 self.frames += 1;
-                if self.frames == 5 { ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default())); }
-                assert!(self.frames < 120, "screenshot event did not arrive");
+                if self.frames == 5 {
+                    let (path, close) = (self.path.clone(), ctx.clone());
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |image| {
+                        assert_eq!(image.size, [240,280]);
+                        let rgba: Vec<u8> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
+                        image::save_buffer(&path, &rgba, 240, 280, image::ColorType::Rgba8).unwrap();
+                        close.send_viewport_cmd(egui::ViewportCommand::Close);
+                    })));
+                }
+                assert!(self.frames < 120, "screenshot did not arrive");
                 ctx.request_repaint();
             }
         }
@@ -84,8 +84,8 @@ mod clock_player_parity_tests {
                             egui::vec2(240.0, 280.0) * scale);
                         // Same context as the real mode switch: texture IDs stay stable.
                         let render = |mode, live| {
-                            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                                egui::CentralPanel::default().frame(egui::Frame::NONE).show_inside(ui, |ui| {
+                            let output = crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
+                                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
                                     if framed {
                                         ui.set_width(240.0 * scale + 14.0);
                                         draw_sm62_preview(ui, &[mode,0,20,1,1], 0, true,
@@ -95,7 +95,7 @@ mod clock_player_parity_tests {
                                             true, side, language, stars, false, live);
                                     }
                                 });
-                            });
+                            }));
                             let screen = if framed {
                                 output.shapes.iter().find_map(|s| match &s.shape {
                                     egui::Shape::Rect(r) if r.stroke.color == Color32::from_gray(75) => Some(r.rect.shrink(7.0)),

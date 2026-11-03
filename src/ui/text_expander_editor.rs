@@ -1200,8 +1200,7 @@ impl EntropyApp {
                 if let Some(stored_rule) = self.app_settings.text_expansion_rules.get_mut(idx) {
                     *stored_rule = rule;
                 }
-                let now = ui.input(|input| input.time);
-                self.queue_text_expander_settings_save(now);
+                self.queue_text_expander_settings_save();
                 if should_flush_save {
                     self.flush_pending_text_expander_settings();
                 }

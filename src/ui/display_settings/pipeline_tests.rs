@@ -376,7 +376,7 @@ fn frame(app: &mut EntropyApp, ctx: &egui::Context, events: Vec<egui::Event>) ->
     assert!(!app.app_settings.sticky_layout_window);
     assert!(!app.keycode_picker.macro_metadata_dirty && !app.keycode_picker.tap_dance_dirty);
     assert!(!app.combo_names_dirty && !app.combo_colors_dirty);
-    ctx.run_ui(
+    crate::app::discard_texture_deltas(ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -389,7 +389,7 @@ fn frame(app: &mut EntropyApp, ctx: &egui::Context, events: Vec<egui::Event>) ->
             let mut frame = eframe::Frame::_new_kittest();
             eframe::App::ui(app, ui, &mut frame);
         },
-    )
+    ))
 }
 fn rendered_texts(output: &egui::FullOutput) -> Vec<String> {
     output

@@ -265,8 +265,14 @@ fn move_text_cursor_past_typography(ctx: &egui::Context, id: egui::Id, original:
     let Some(mut range) = state.cursor.char_range() else {
         return;
     };
-    range.primary.index = typography_normalized_char_index(original, range.primary.index);
-    range.secondary.index = typography_normalized_char_index(original, range.secondary.index);
+    range.primary.index = egui::text::CharIndex(typography_normalized_char_index(
+        original,
+        range.primary.index.0,
+    ));
+    range.secondary.index = egui::text::CharIndex(typography_normalized_char_index(
+        original,
+        range.secondary.index.0,
+    ));
     state.cursor.set_char_range(Some(range));
     egui::TextEdit::store_state(ctx, id, state);
 }
@@ -1245,13 +1251,13 @@ mod tests {
             events,
             ..Default::default()
         };
-        ctx.run_ui(input, |_ui| {
+        crate::app::discard_texture_deltas(ctx.run_ui(input, |_ui| {
             picker.show(
                 ctx,
                 DeferredPickerDataState::Ready,
                 DeferredPickerDataState::Ready,
             );
-        })
+        }))
     }
 
     fn macro_picker_text_position(output: &egui::FullOutput, label: &str) -> Option<egui::Pos2> {
@@ -1341,6 +1347,7 @@ mod tests {
                             delta: egui::vec2(0.0, -180.0),
                             modifiers: egui::Modifiers::NONE,
                             phase: egui::TouchPhase::Move,
+                            source: egui::MouseWheelSource::Unknown,
                         },
                     ],
                 );
@@ -1542,9 +1549,9 @@ mod tests {
             events,
             ..Default::default()
         };
-        ctx.run_ui(input, |ui| {
+        crate::app::discard_texture_deltas(ctx.run_ui(input, |ui| {
             picker.show_macro_settings_editor(ui, 0, "macro_settings_test", None);
-        })
+        }))
     }
 
     #[test]

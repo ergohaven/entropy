@@ -206,7 +206,7 @@ impl EntropyApp {
                             self.draw_settings_write_status(ui, 120, metrics, suppress_tooltips);
                             if variants.is_empty() {
                                 let current = self.touchpad_settings.dpi;
-                                let edit_id = egui::Id::new(("touchpad_edit", 120u16));
+                                let edit_id = egui::Id::unique(("touchpad_edit", 120u16));
                                 let mut text = ui.ctx().data_mut(|d| {
                                     d.get_temp::<String>(edit_id)
                                         .unwrap_or_else(|| current.to_string())

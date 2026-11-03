@@ -393,20 +393,21 @@ impl EntropyApp {
                             || (submenu_was_open && pointer_over_current_layer_operations_bridge));
 
                     if submenu_open {
-                        let submenu_area =
-                            egui::Area::new(egui::Id::new("device_layer_operations_submenu_area"))
-                                .order(egui::Order::Foreground)
-                                .fixed_pos(desired_submenu_rect.min)
-                                .show(ctx, |ui| {
-                                    top_dropdown_frame(ui.visuals().dark_mode)
-                                        .show(ui, |ui| {
-                                            self.draw_layer_operations_submenu(
-                                                ui,
-                                                layer_operations_submenu_width - 16.0,
-                                            )
-                                        })
-                                        .inner
-                                });
+                        let submenu_area = egui::Area::new(egui::Id::unique(
+                            "device_layer_operations_submenu_area",
+                        ))
+                        .order(egui::Order::Foreground)
+                        .fixed_pos(desired_submenu_rect.min)
+                        .show(ctx, |ui| {
+                            top_dropdown_frame(ui.visuals().dark_mode)
+                                .show(ui, |ui| {
+                                    self.draw_layer_operations_submenu(
+                                        ui,
+                                        layer_operations_submenu_width - 16.0,
+                                    )
+                                })
+                                .inner
+                        });
                         let action_clicked = submenu_area.inner;
                         submenu_rect_for_state = Some(submenu_area.response.rect);
                         if action_clicked {

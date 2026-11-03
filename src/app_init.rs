@@ -213,6 +213,7 @@ impl EntropyApp {
             dark_mode,
             last_applied_theme: None,
             app_settings,
+            app_clock: std::time::Instant::now(),
             text_expander_rules_signature,
             text_expander_rules_last_check_at: 0.0,
             text_expander_settings_save_pending: false,

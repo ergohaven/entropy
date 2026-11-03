@@ -126,14 +126,14 @@ fn p2p_pair() -> (zbus::blocking::Connection, zbus::blocking::Connection) {
     let (client, server) = std::os::unix::net::UnixStream::pair().expect("socket pair");
     let guid = zbus::Guid::generate();
     let server = thread::spawn(move || {
-        zbus::blocking::connection::Builder::unix_stream(server)
+        zbus::blocking::connection::Builder::async_io_unix_stream(server)
             .server(guid)
             .expect("server guid")
             .p2p()
             .build()
             .expect("server connection")
     });
-    let client = zbus::blocking::connection::Builder::unix_stream(client)
+    let client = zbus::blocking::connection::Builder::async_io_unix_stream(client)
         .p2p()
         .build()
         .expect("client connection");
@@ -295,7 +295,7 @@ fn session_bus(
     let (session, bus) = std::os::unix::net::UnixStream::pair().expect("socket pair");
     let guid = zbus::Guid::generate();
     let bus = thread::spawn(move || {
-        zbus::blocking::connection::Builder::unix_stream(bus)
+        zbus::blocking::connection::Builder::async_io_unix_stream(bus)
             .server(guid)
             .expect("server guid")
             .p2p()
@@ -304,7 +304,7 @@ fn session_bus(
             .build()
             .expect("bus connection")
     });
-    let session = zbus::blocking::connection::Builder::unix_stream(session)
+    let session = zbus::blocking::connection::Builder::async_io_unix_stream(session)
         .p2p()
         .build()
         .expect("session connection");

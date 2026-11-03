@@ -214,7 +214,7 @@ fn draw_sticky_layout_transparency_dropdown(
             (OPACITY_VALUES[selected_idx] * 100.0).round() as i32
         )
     };
-    let dropdown_id = ui.id().with("sticky_layout_transparency_dropdown");
+    let dropdown_id = ui.scope_id().with("sticky_layout_transparency_dropdown");
     let width = 136.0;
     let dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
         ui,
@@ -864,12 +864,12 @@ impl EntropyApp {
                     );
                     let title_drag_response = ui.interact(
                         title_drag_rect,
-                        ui.id().with("sticky_layout_window_title_drag"),
+                        ui.scope_id().with("sticky_layout_window_title_drag"),
                         Sense::click_and_drag(),
                     );
                     let footer_drag_response = ui.interact(
                         footer_drag_rect,
-                        ui.id().with("sticky_layout_window_footer_drag"),
+                        ui.scope_id().with("sticky_layout_window_footer_drag"),
                         Sense::click_and_drag(),
                     );
                     if title_drag_response.drag_started() || footer_drag_response.drag_started() {
@@ -948,7 +948,7 @@ impl EntropyApp {
                         );
                         let resize_resp = ui.interact(
                             resize_rect,
-                            ui.id().with("sticky_layout_resize_grip"),
+                            ui.scope_id().with("sticky_layout_resize_grip"),
                             Sense::click_and_drag(),
                         );
                         if resize_resp.hovered() || resize_resp.dragged() {
@@ -992,7 +992,7 @@ impl EntropyApp {
                 } else {
                     egui::CentralPanel::default()
                         .frame(egui::Frame::NONE.fill(app_panel_fill(dark)))
-                        .show_inside(viewport_ui, |ui| {
+                        .show(viewport_ui, |ui| {
                             draw_contents(ui, &mut should_close);
                         });
                 }
@@ -1105,9 +1105,10 @@ mod tests {
             app.app_settings.sticky_layout_always_on_top = always_on_top;
             app.vial_unlocked = Some(true);
 
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                app.draw_sticky_layout_window(ui.ctx());
-            });
+            let output =
+                crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
+                    app.draw_sticky_layout_window(ui.ctx());
+                }));
             let viewport = output
                 .viewport_output
                 .get(&sticky_layout_viewport_id())

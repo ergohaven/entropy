@@ -745,7 +745,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn click_ordinary_export(app: &mut EntropyApp, path: &Path, ctx: &egui::Context) {
         let draw = |app: &mut EntropyApp, events| {
-            ctx.run_ui(
+            crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -768,7 +768,7 @@ mod tests {
                         false,
                     )
                 },
-            )
+            ))
         };
         let _ = draw(app, vec![]);
         let output = draw(app, vec![]);

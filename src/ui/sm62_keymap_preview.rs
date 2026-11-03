@@ -6,7 +6,7 @@ const LEFT_SECONDARY: [[&str; 3]; 3] = [["Й", "Ц", "У"], ["Ф", "Ы", "В"], 
 const RIGHT_SECONDARY: [[&str; 3]; 3] = [["Н", "Г", "Ш"], ["Р", "О", "Л"], ["Т", "Ь", "Б"]];
 
 fn sm62_keymap_texture(ctx: &egui::Context, name: &'static str, bytes: &[u8]) -> egui::TextureHandle {
-    let id = egui::Id::new(name);
+    let id = egui::Id::unique(name);
     if let Some(texture) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) { return texture; }
     let image = image::load_from_memory(bytes).expect("embedded firmware bitmap").into_rgba8();
     let size = [image.width() as usize, image.height() as usize];

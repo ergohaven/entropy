@@ -233,3 +233,11 @@ use vial_hid_task::VialHidTask;
 mod vial_unlock;
 #[path = "ui/window_lifecycle.rs"]
 mod window_lifecycle;
+
+/// egui checks in debug builds that the texture changes of every pass reach a
+/// painter. Tests that run passes on a bare `egui::Context` have no painter.
+#[cfg(test)]
+pub(crate) fn discard_texture_deltas(mut output: egui::FullOutput) -> egui::FullOutput {
+    output.textures_delta.clear();
+    output
+}

@@ -13,16 +13,16 @@ fn labels(app: &mut EntropyApp, ctx: &egui::Context, lang: crate::i18n::Language
     let mut output = None;
     // Areas need one layout pass before their visible paint pass.
     for _ in 0..2 {
-        output = Some(ctx.run(egui::RawInput {
+        output = Some(crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 1600.0))),
             ..Default::default()
         }, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+            ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
                 app.draw_layout_settings_dropdown(ui, &layout, lang,
                     Some(egui::Rect::from_min_size(egui::pos2(500.0, 0.0), egui::vec2(80.0, 30.0))),
                     false, false, true);
-            });
-        }));
+            }));
+        })));
     }
     output.unwrap().shapes.into_iter().filter_map(|s| match s.shape {
         egui::Shape::Text(t) => Some(t.galley.text().to_owned()), _ => None,
@@ -167,12 +167,12 @@ fn legacy_lcd_contract_and_oled_preset_page_stay_separate_from_dedicated_page() 
             let indices = app.user_layout_option_indices(app.layout.as_ref().unwrap());
             if oled && !indices.is_empty() {
                 let options = app.layout.as_ref().unwrap().layout_options.clone();
-                let out = ctx.run(egui::RawInput::default(), |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                let out = crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
+                    ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
                         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0,1600.0));
                         app.draw_layout_options_settings_page(ui, rect);
-                    });
-                });
+                    }));
+                }));
                 let painted: Vec<String> = out.shapes.into_iter().filter_map(|s| match s.shape {egui::Shape::Text(t) => Some(t.galley.text().to_owned()), _=>None}).collect();
                 assert!(indices.iter().any(|&i| painted.iter().any(|s| s == &crate::i18n::tr_text(lang, &options[i].label))), "working OLED preset controls: {name} {painted:?}");
                 oled_count += 1;
