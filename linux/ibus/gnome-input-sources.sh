@@ -90,12 +90,16 @@ for layout in us ru; do
 done
 
 updated="[$(printf '%s\n' "$entries" | awk 'NF { printf "%s%s", (n++ ? ", " : ""), $0 }')]"
-if [ "$updated" != "$(printf '%s\n' "$current" | sed 's/^@a(ss) //')" ]; then
-    # The note is the only record of what restore must put back, so it is
-    # committed before the sources: a failed write changes nothing, and a
-    # failed gsettings set rolls the note back to what it said before.
-    replaced=$(printf '%s\n' "$replaced" | sed '/^$/d')
-    previous_note=$(cat "$replaced_file" 2>/dev/null || true)
+replaced=$(printf '%s\n' "$replaced" | sed '/^$/d')
+previous_note=$(cat "$replaced_file" 2>/dev/null || true)
+list_changed=0
+[ "$updated" != "$(printf '%s\n' "$current" | sed 's/^@a(ss) //')" ] && list_changed=1
+note_changed=0
+[ "$replaced" != "$previous_note" ] && note_changed=1
+# The note is the only record of what restore must put back, so it is
+# committed before the sources: a failed write changes nothing, and a
+# failed gsettings set rolls the note back to what it said before.
+if [ "$note_changed" = 1 ]; then
     if [ -n "$replaced" ]; then
         if ! { mkdir -p "$(dirname -- "$replaced_file")" && printf '%s\n' "$replaced" > "$replaced_file"; }; then
             printf '%s\n' "Could not record the replaced layouts; GNOME input sources are left as they are." >&2
@@ -104,6 +108,8 @@ if [ "$updated" != "$(printf '%s\n' "$current" | sed 's/^@a(ss) //')" ]; then
     else
         rm -f "$replaced_file"
     fi
+fi
+if [ "$list_changed" = 1 ]; then
     if ! gsettings set "$schema" "$key" "$updated"; then
         if [ -n "$previous_note" ]; then
             printf '%s\n' "$previous_note" > "$replaced_file"

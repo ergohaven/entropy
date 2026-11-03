@@ -920,6 +920,39 @@ mod tests {
         assert_eq!(writable.current(), "[('xkb', 'us+intl'), ('xkb', 'us')]");
     }
 
+    /// A restore that prunes a note whose source was taken out by hand commits
+    /// the pruning even when the source list itself needs no write, so the
+    /// stale note cannot bring a layout back on the next restore.
+    #[test]
+    fn a_pruned_note_is_kept_even_without_a_source_change() {
+        let script =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("linux/ibus/gnome-input-sources.sh");
+        let sandbox = GnomeSourcesSandbox::new("gnome-sources-note-prune");
+        let record = sandbox
+            .root
+            .join("data/entropy/ibus/gnome-replaced-layouts");
+        // use replaces the plain us and records it.
+        sandbox.set_sources("[('xkb', 'us+intl'), ('xkb', 'us')]");
+        assert!(sandbox.run(&script, &["use"]).status.success());
+        assert_eq!(
+            sandbox.current(),
+            "[('xkb', 'us+intl'), ('ibus', 'entropy-universal-symbols-us')]"
+        );
+        // The Entropy source is taken out by hand: restore has no list change.
+        sandbox.set_sources("[('xkb', 'us+intl')]");
+        assert!(sandbox.run(&script, &["restore"]).status.success());
+        assert_eq!(sandbox.current(), "[('xkb', 'us+intl')]");
+        assert!(
+            !record.exists(),
+            "the stale note is pruned even though the list did not change"
+        );
+        // An Entropy source added by hand next to the variant goes away, and
+        // the pruned note keeps restore from turning it into a plain us.
+        sandbox.set_sources("[('xkb', 'us+intl'), ('ibus', 'entropy-universal-symbols-us')]");
+        assert!(sandbox.run(&script, &["restore"]).status.success());
+        assert_eq!(sandbox.current(), "[('xkb', 'us+intl')]");
+    }
+
     /// A failed gsettings set rolls the record back to what it said before,
     /// so a retry starts from the old replacement list.
     #[test]
