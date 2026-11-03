@@ -1,5 +1,18 @@
 use rmk_types::action::{Action, KeyAction};
 
+pub(crate) fn binding_contains_numero(binding: crate::keyboard::KeyBinding) -> bool {
+    use crate::keyboard::KeyBinding;
+    let is_numero = |a| matches!(a, Action::User(0xB4));
+    match binding {
+        KeyBinding::Rmk(KeyAction::Single(a) | KeyAction::Tap(a)) => is_numero(a),
+        KeyBinding::Rmk(KeyAction::TapHold(a, b, _))
+        | KeyBinding::VialTapHold {
+            tap: a, hold: b, ..
+        } => is_numero(a) || is_numero(b),
+        _ => false,
+    }
+}
+
 pub(crate) const USER_TOGGLE: u8 = 0x80;
 pub(crate) const USER_SYNC: u8 = 0x81;
 pub(crate) const USER_SET_ENGLISH: u8 = 0x82;
@@ -88,6 +101,11 @@ pub(crate) const SYMBOLS: &[UniversalSymbol] = &[
     symbol(29, '|', "Vertical bar"),
     symbol(30, '\\', "Backslash"),
     symbol(31, '_', "Underscore"),
+    // 0xB0..=0xB3 remain reserved for the legacy Russian letters.
+    UniversalSymbol {
+        user_id: 0xB4,
+        symbol: '№',
+    },
 ];
 
 pub(crate) const RUSSIAN_LETTERS: &[UniversalRussianLetter] = &[
@@ -230,14 +248,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn firmware_table_has_stable_unique_ids_and_only_ascii_punctuation() {
-        assert_eq!(SYMBOLS.len(), 32);
-        let ids = SYMBOLS
+    fn numero_catalog_entry_round_trips_native_action_without_shifting_legacy_ids() {
+        use crate::keycode::KeyOutputLayout;
+
+        let entry = SYMBOLS
+            .iter()
+            .find(|entry| entry.symbol == '№')
+            .expect("Universal Symbols must include №");
+        assert_eq!(entry.user_id, 0xB4);
+        let binding = binding(entry.user_id);
+        let action = binding.rmk_action().unwrap();
+        assert_eq!(action, KeyAction::Single(Action::User(0xB4)));
+        let mut buffer = [0u8; 32];
+        let encoded = postcard::to_slice(&action, &mut buffer).unwrap();
+        let decoded: KeyAction = postcard::from_bytes(encoded).unwrap();
+        assert_eq!(decoded, action);
+        assert_eq!(user_id(decoded), Some(0xB4));
+        assert_eq!(label(decoded).as_deref(), Some("Universal\n№"));
+        assert_eq!(russian_letter_user_id(decoded), None);
+        for layout in [KeyOutputLayout::English, KeyOutputLayout::Russian] {
+            assert_eq!(printable_output(decoded, layout), Some(('№', None)));
+        }
+        assert!(tooltip(decoded).unwrap().contains('№'));
+        assert!(label(KeyAction::Single(Action::User(0xB5))).is_none());
+        let mut ids = CONTROLS
             .iter()
             .map(|entry| entry.user_id)
+            .chain(SYMBOLS.iter().map(|entry| entry.user_id))
+            .chain(RUSSIAN_LETTERS.iter().map(|entry| entry.user_id))
             .collect::<Vec<_>>();
+        let count = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), count);
+    }
+
+    #[test]
+    fn firmware_table_preserves_legacy_ascii_punctuation_ids() {
+        assert_eq!(SYMBOLS.len(), 33);
+        let legacy = &SYMBOLS[..32];
+        let ids = legacy.iter().map(|entry| entry.user_id).collect::<Vec<_>>();
         assert_eq!(ids, (0x90..0xB0).collect::<Vec<_>>());
-        assert!(SYMBOLS
+        assert_eq!(
+            legacy.iter().map(|entry| entry.symbol).collect::<String>(),
+            ".,;:!?/`~'\"()[]{}<>-+*=#@$%^&|\\_"
+        );
+        assert!(legacy
             .iter()
             .all(|entry| entry.symbol.is_ascii_punctuation()));
     }

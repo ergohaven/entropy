@@ -197,6 +197,8 @@ pub(crate) use hid_vial::decode_vial_definition;
 #[cfg(not(target_arch = "wasm32"))]
 pub struct HidDevice {
     backend: HidBackend,
+    pub(crate) native_capabilities:
+        std::sync::Mutex<Option<crate::rmk_native::RmkNativeCapabilities>>,
     unlock_confirmation_pending: std::sync::atomic::AtomicBool,
     read_only: Option<ReadOnlyHidSession>,
 }
@@ -687,6 +689,7 @@ impl HidDevice {
         };
         let device = Self {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: None,
             backend: HidBackend::Test {
                 recorder: recorder.clone(),
@@ -764,6 +767,7 @@ impl HidDevice {
                 Ok(bluez_device) => {
                     return Ok(Self {
                         unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+                        native_capabilities: std::sync::Mutex::new(None),
                         read_only: read_only_hid_session(),
                         backend: HidBackend::LinuxBle(bluez_device),
                     })
@@ -799,7 +803,9 @@ impl HidDevice {
         match &self.backend {
             HidBackend::Proxy(proxy) => proxy.host_output.with_settings_write_paused(operation),
             #[cfg(test)]
-            HidBackend::Test { recorder, .. } => recorder.host_output.with_settings_write_paused(operation),
+            HidBackend::Test { recorder, .. } => {
+                recorder.host_output.with_settings_write_paused(operation)
+            }
             _ => operation(),
         }
     }
@@ -867,6 +873,7 @@ impl HidDevice {
     fn open_proxy_for(device: &crate::device::Device) -> Result<Self> {
         Ok(Self {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: read_only_hid_session(),
             backend: HidBackend::Proxy(std::sync::Arc::new(HidProxy::open(device)?)),
         })
@@ -915,6 +922,7 @@ impl HidDevice {
             let write_framing = detect_hid_write_framing(&hid_device, transport)?;
             return Ok(Self {
                 unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+                native_capabilities: std::sync::Mutex::new(None),
                 read_only: read_only_hid_session(),
                 backend: HidBackend::Local {
                     device: hid_device,

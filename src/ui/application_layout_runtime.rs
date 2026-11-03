@@ -2961,7 +2961,7 @@ mod tests {
             macro_count:0, macro_memory_bytes:Some(0), tap_dance_count:0, combo_count:0,
             key_override_count:0, alt_repeat_count:0, modules_supported:false, touchpad_supported:false,
             bluetooth_supported:false, layer_leds_supported:false, rgb_supported:false, lighting_mode:None,
-            supports_rmk_native_key_actions:false, supports_universal_symbols:false,
+            supports_rmk_native_key_actions:false, supports_universal_numero: false, supports_universal_symbols:false,
             supports_universal_russian_letters:false, supports_rmk_native_combo_output:false,
             supports_rmk_native_tap_dance_actions:false, supports_rmk_combo_layers:false,
         });

@@ -327,6 +327,8 @@ impl EntropyApp {
             #[cfg(not(target_arch = "wasm32"))]
             pending_layer_name_writes: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
+            pending_universal_geometry: None,
+            #[cfg(not(target_arch = "wasm32"))]
             uncertain_layer_names: Vec::new(),
             current_device_name: String::new(),
             current_keyboard_id: None,
@@ -373,7 +375,7 @@ impl EntropyApp {
                 .map(|keys| {
                     keys.iter().any(|binding| {
                         let kc = binding.vial_keycode();
-                        binding.rmk_action().is_some() || (kc != 0x0000 && kc != 0x0001)
+                        binding.is_vial_native() || (kc != 0x0000 && kc != 0x0001)
                     })
                 })
                 .collect();

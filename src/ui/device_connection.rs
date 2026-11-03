@@ -121,6 +121,7 @@ impl EntropyApp {
         self.pending_layout_undo = false;
         self.pending_layer_write = None;
         self.keycode_picker.open = false;
+        self.keycode_picker.supports_universal_numero = false;
         self.selected_key = None;
         self.selected_encoder = None;
         self.unlock_open = false;
@@ -235,6 +236,7 @@ impl EntropyApp {
         self.vial_unlock_last_poll = None;
         self.pending_layout_indicator_open_after_unlock = false;
         self.keycode_picker.open = false;
+        self.keycode_picker.supports_universal_numero = false;
         self.current_device_name.clear();
         self.current_keyboard_id = None;
         self.current_encoder_visibility_id.clear();

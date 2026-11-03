@@ -22,7 +22,7 @@ impl EntropyApp {
                     None => self.selected_key.is_some(),
                 }
             };
-            if binding.rmk_action().is_some() && !native_target_supported {
+            if binding.is_vial_native() && !native_target_supported {
                 self.status_msg =
                     "This lossless RMK action is not supported for this target".into();
                 return;
@@ -45,6 +45,7 @@ impl EntropyApp {
                                     )
                                 }
                                 crate::keyboard::KeyBinding::Rmk(_)
+                                | crate::keyboard::KeyBinding::VialTapHold { .. }
                                 | crate::keyboard::KeyBinding::Rynk(_) => binding,
                             };
                         }
@@ -296,7 +297,8 @@ impl EntropyApp {
             crate::keyboard::KeyBinding::Rynk(action) => {
                 crate::rynk::native_v1::v1_label_action(action)
             }
-            crate::keyboard::KeyBinding::Vial(_) => None,
+            crate::keyboard::KeyBinding::Vial(_)
+            | crate::keyboard::KeyBinding::VialTapHold { .. } => None,
         };
         if let Some(action) = native {
             if let Some(parts) = crate::rmk_native::rmk_mod_tap_parts(action) {

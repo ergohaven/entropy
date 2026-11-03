@@ -2319,7 +2319,33 @@ impl eframe::App for EntropyApp {
             if entries_to_write.is_empty() {
                 // Names are local metadata; no device round-trip is needed.
             } else if let Some(hid) = &self.hid_device {
+                // Validate this entire pending batch before any entry can be
+                // written or marked synced. Rynk keeps its own write policy.
+                let preflight = (|| -> anyhow::Result<()> {
+                    if let Some(vial) = hid.as_vial() {
+                        for &i in &entries_to_write {
+                            let td = &self.keycode_picker.tap_dance_entries[i];
+                            for binding in [td.on_tap, td.on_hold, td.on_double_tap, td.on_tap_hold] {
+                                if binding.is_vial_native() {
+                                    vial.preflight_vial_dynamic(binding, true)?;
+                                }
+                            }
+                        }
+                    }
+                    Ok(())
+                })();
+                if let Err(e) = preflight {
+                    self.status_msg = crate::i18n::tr_catalog_format(
+                        self.app_settings.language,
+                        "status_messages.tap_dance_write_error",
+                        &[("error", &e.to_string())],
+                    );
+                    td_save_ok = false;
+                }
                 for i in entries_to_write {
+                    if !td_save_ok {
+                        break;
+                    }
                     let Some(td) = self.keycode_picker.tap_dance_entries.get(i).cloned() else {
                         continue;
                     };

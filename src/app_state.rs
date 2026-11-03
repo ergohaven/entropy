@@ -23,8 +23,8 @@ pub(crate) const COMBO_COLOR_SEED_PALETTE: [u32; 16] = [
 ];
 
 use super::typing_trainer_symbols::{
-    TYPING_TRAINER_SYMBOL_COUNTS, TypingTrainerCharacterStatsMap, record_symbol_attempt,
-    weighted_symbol_text,
+    record_symbol_attempt, weighted_symbol_text, TypingTrainerCharacterStatsMap,
+    TYPING_TRAINER_SYMBOL_COUNTS,
 };
 use super::*;
 
@@ -429,6 +429,10 @@ pub(crate) fn key_binding_label_with_macro_names(
             tap_dance_names,
             key_legend_layout,
         ),
+        crate::keyboard::KeyBinding::VialTapHold { tap, hold, profile } => format!(
+            "Vial TapHold {tap:?} / {hold:?} (profile {}: {:#x})",
+            profile.index, profile.raw
+        ),
         crate::keyboard::KeyBinding::Rmk(action) => {
             if let Some(label) = crate::universal_symbols::label(action) {
                 return label;
@@ -474,6 +478,9 @@ pub(crate) fn key_binding_printable_output(
     match binding {
         crate::keyboard::KeyBinding::Vial(value) => {
             crate::keycode::printable_output(value, key_output_layout)
+        }
+        crate::keyboard::KeyBinding::VialTapHold { tap, .. } => {
+            rmk_action_printable_output(rmk_types::action::KeyAction::Tap(tap), key_output_layout)
         }
         crate::keyboard::KeyBinding::Rmk(action) => {
             if let Some(parts) = crate::rmk_native::rmk_mod_tap_parts(action) {
@@ -534,6 +541,10 @@ pub(crate) fn key_binding_tooltip_with_macro_names(
             macro_names,
             macro_descriptions,
             tap_dance_names,
+        ),
+        crate::keyboard::KeyBinding::VialTapHold { tap, hold, profile } => format!(
+            "Vial TapHold {tap:?} / {hold:?}; packed profile {:#x}, index {}",
+            profile.raw, profile.index
         ),
         crate::keyboard::KeyBinding::Rmk(action) => {
             if let Some(tooltip) = crate::universal_symbols::tooltip(action) {
@@ -760,6 +771,7 @@ pub(crate) struct DeferredDeviceLoadContext {
     pub(crate) rgb_supported: bool,
     pub(crate) lighting_mode: Option<String>,
     pub(crate) supports_rmk_native_key_actions: bool,
+    pub(crate) supports_universal_numero: bool,
     pub(crate) supports_universal_symbols: bool,
     pub(crate) supports_universal_russian_letters: bool,
     pub(crate) supports_rmk_native_combo_output: bool,
@@ -808,6 +820,7 @@ impl DeferredDeviceLoadContext {
             && self.rgb_supported == other.rgb_supported
             && self.lighting_mode == other.lighting_mode
             && self.supports_rmk_native_key_actions == other.supports_rmk_native_key_actions
+            && self.supports_universal_numero == other.supports_universal_numero
             && self.supports_universal_symbols == other.supports_universal_symbols
             && self.supports_universal_russian_letters == other.supports_universal_russian_letters
             && self.supports_rmk_native_combo_output == other.supports_rmk_native_combo_output
@@ -1200,6 +1213,7 @@ pub(crate) struct ConnectResult {
     /// Firmware exposes the lossless RMK KeyAction Get/Set extension.
     pub(crate) supports_rmk_native_key_actions: bool,
     /// Firmware implements native EN/RU Universal Symbols actions.
+    pub(crate) supports_universal_numero: bool,
     pub(crate) supports_universal_symbols: bool,
     /// Firmware implements native Russian-letter Universal Symbols actions.
     pub(crate) supports_universal_russian_letters: bool,
@@ -3616,7 +3630,7 @@ pub(crate) const TYPING_TRAINER_DURATIONS: [u32; 4] = [15, 30, 60, 120];
 pub(crate) const TYPING_TRAINER_WORD_COUNTS: [usize; 4] = [10, 25, 50, 100];
 pub(crate) const TYPING_TRAINER_HISTORY_LIMIT: usize = 20;
 const TYPING_TRAINER_DEFAULT_TEXT_WORDS: usize = 72;
-pub(crate) use super::typing_trainer_words::{TYPING_TRAINER_LANGUAGES, TypingTrainerLanguage};
+pub(crate) use super::typing_trainer_words::{TypingTrainerLanguage, TYPING_TRAINER_LANGUAGES};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -5747,6 +5761,8 @@ pub struct EntropyApp {
     pub(crate) editing_layer_generation: Option<u64>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) pending_layer_name_writes: std::collections::VecDeque<vial_hid_task::LayerNameWrite>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) pending_universal_geometry: Option<vial_hid_task::UniversalGeometryWrite>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) uncertain_layer_names: Vec<vial_hid_task::LayerNameWrite>,
     /// Current connected device name (for per-device layer names)

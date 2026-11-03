@@ -89,6 +89,7 @@ impl EntropyApp {
     pub(super) fn hid_write_lifecycle_busy(&self) -> bool {
         self.hid_write_task_active() || self.qmk_settings_write_pending()
             || !self.pending_layer_name_writes.is_empty()
+            || self.pending_universal_geometry.is_some()
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -149,18 +150,34 @@ impl EntropyApp {
                 };
 
                 let task_entry = entry.clone();
+                // Snapshot the whole pending revision, not just the selected
+                // slot. Every worker revalidates its own snapshot, so a newer
+                // edit while the handle is borrowed cannot reuse stale approval.
+                let pending_entries: Vec<_> = self.combo_entries.iter().enumerate()
+                    .filter(|(i, entry)| self.combo_synced_entries.get(*i) != Some(*entry))
+                    .map(|(_, entry)| entry.clone())
+                    .collect();
                 let supports_rmk_combo_layers = self.supports_rmk_combo_layers;
                 let (sender, receiver) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
                     #[cfg(target_os = "macos")]
                     let _hid_lock = hid_device.macos_hid_operation_lock();
 
-                    let write_result = hid_device.set_combo_entry(
-                        index as u8,
-                        &task_entry,
-                        true,
-                        supports_rmk_combo_layers,
-                    );
+                    let write_result = (|| -> anyhow::Result<()> {
+                        if let Some(vial) = hid_device.as_vial() {
+                            for entry in &pending_entries {
+                                if entry.output.is_vial_native() {
+                                    vial.preflight_vial_dynamic(entry.output, false)?;
+                                }
+                            }
+                        }
+                        hid_device.set_combo_entry(
+                            index as u8,
+                            &task_entry,
+                            true,
+                            supports_rmk_combo_layers,
+                        )
+                    })();
                     let disconnected = write_result
                         .as_ref()
                         .err()

@@ -54,6 +54,7 @@ pub(crate) fn rynk_board_binding(binding: KeyBinding) -> Option<KeyBinding> {
                 .is_empty()
                 .then(|| key_binding(upgrade.action))
         }
+        KeyBinding::VialTapHold { .. } => None,
         other => Some(other),
     }
 }
@@ -80,7 +81,7 @@ pub(crate) fn binding_action(binding: KeyBinding) -> Result<KeyAction, KeyBindin
             vial_keycode_action(keycode).ok_or(KeyBindingError::UnsupportedKeycode(keycode))
         }
         KeyBinding::Rynk(action) => Ok(action),
-        KeyBinding::Rmk(_) => Err(KeyBindingError::NativeV1),
+        KeyBinding::Rmk(_) | KeyBinding::VialTapHold { .. } => Err(KeyBindingError::NativeV1),
     }
 }
 

@@ -1136,10 +1136,16 @@ impl EntropyApp {
             for layer in 1..result.layer_count {
                 // A potentially mutating SET invalidates only this owner's
                 // name cache. Reconnect must reload rather than copy it as Loaded.
-                if self.uncertain_layer_names.iter().any(|request| request.layer == layer
-                    && self.selected_device.and_then(|i| self.device_manager.devices().get(i))
-                        .is_some_and(|device| device.permits_hid_target(&request.device))) {
-                    result.deferred_load.set_layer_status(layer, DeferredLoadStatus::NotLoaded);
+                if self.uncertain_layer_names.iter().any(|request| {
+                    request.layer == layer
+                        && self
+                            .selected_device
+                            .and_then(|i| self.device_manager.devices().get(i))
+                            .is_some_and(|device| device.permits_hid_target(&request.device))
+                }) {
+                    result
+                        .deferred_load
+                        .set_layer_status(layer, DeferredLoadStatus::NotLoaded);
                     continue;
                 }
                 if !matches!(
@@ -1540,6 +1546,7 @@ mod tests {
             rgb_supported: false,
             lighting_mode: None,
             supports_rmk_native_key_actions: false,
+            supports_universal_numero: false,
             supports_universal_symbols: false,
             supports_universal_russian_letters: false,
             supports_rmk_native_combo_output: false,

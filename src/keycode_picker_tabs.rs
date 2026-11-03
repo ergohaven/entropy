@@ -145,7 +145,10 @@ fn one_shot_modifier_choices(gui_label: &str, gui_mod_name: &str) -> Vec<OneShot
 }
 
 /// Universal Symbols controls and punctuation (native RMK actions).
-pub(super) fn universal_symbol_rows(language: crate::i18n::Language) -> Vec<PickerRow> {
+pub(super) fn universal_symbol_rows(
+    language: crate::i18n::Language,
+    supports_numero: bool,
+) -> Vec<PickerRow> {
     let tab = KeycodeTab::UniversalSymbols;
     let mut rows = Vec::new();
     for control in crate::universal_symbols::CONTROLS {
@@ -163,6 +166,9 @@ pub(super) fn universal_symbol_rows(language: crate::i18n::Language) -> Vec<Pick
         );
     }
     for symbol in crate::universal_symbols::SYMBOLS {
+        if symbol.user_id == 0xB4 && !supports_numero {
+            continue;
+        }
         let label = crate::universal_symbols::label_for_user_id(symbol.user_id)
             .expect("universal symbol should have a display label");
         let tooltip = format!(

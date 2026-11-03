@@ -401,8 +401,83 @@ fn plan_entlayout_portable_settings_import(
     EntPortableSettingsImportPlan { compatible, report }
 }
 
+#[cfg(test)]
+mod version_compat_export_tests {
+    use super::*;
+    #[test]
+    fn version_compat_preset_preflight_prevents_all_device_writes() {
+        use crate::keyboard::{KeyBinding, VialMorseProfile};
+        for unsupported in [
+            KeyBinding::VialTapHold {
+                tap: rmk_types::action::Action::User(144),
+                hold: rmk_types::action::Action::User(145),
+                profile: VialMorseProfile { raw: 999, index: 0 },
+            },
+            crate::universal_symbols::binding(180),
+        ] {
+            let mut source = super::tests::module_app();
+            source.layout.as_mut().unwrap().layers[0][0] = 4.into();
+            source.layout.as_mut().unwrap().layers[0][1] = unsupported;
+            let bundle = source.entlayout_snapshot().unwrap();
+            let mut target = super::tests::module_app();
+            target.keycode_picker.supports_rmk_native_key_actions = true;
+            let (hid, recorder) = crate::hid::HidDevice::test_device();
+            *hid.native_capabilities.lock().unwrap() =
+                Some(crate::rmk_native::RmkNativeCapabilities {
+                    version: 2,
+                    key_actions: true,
+                    profile_resolution: true,
+                    ..Default::default()
+                });
+            recorder.respond_by(|r| {
+                if r[1..3] != [0xe8, 8] {
+                    return None;
+                }
+                let mut reply = [0; 32];
+                reply[..8].copy_from_slice(&[8, 0xe8, 8, 2, 0, r[4], 0, 0]);
+                reply[8..16].copy_from_slice(&200u64.to_le_bytes());
+                reply[16..24].copy_from_slice(&200u64.to_le_bytes());
+                Some(Ok(reply))
+            });
+            target.hid_device = Some(hid.into());
+            assert!(target.apply_entlayout(&bundle).is_err());
+            assert!(
+                recorder.requests().iter().all(|r| r[0] == 8),
+                "preset wrote before conversion preflight"
+            );
+        }
+    }
+
+    #[test]
+    fn version_compat_export_native_profile_roundtrip() {
+        let binding = crate::keyboard::KeyBinding::VialTapHold {
+            tap: rmk_types::action::Action::User(180),
+            hold: rmk_types::action::Action::User(144),
+            profile: crate::keyboard::VialMorseProfile {
+                raw: (1u64 << 45) | 200,
+                index: 255,
+            },
+        };
+        let encoded = encode_native_binding(binding).unwrap();
+        assert_eq!(
+            entlayout_native_binding(7, Some(&encoded), None, NativeTarget::Vial).unwrap(),
+            Some(binding)
+        );
+    }
+}
+
 fn native_keymap_is_empty(keymap: &[Vec<Option<String>>]) -> bool {
     keymap.iter().all(|layer| layer.iter().all(Option::is_none))
+}
+
+fn encode_native_binding(binding: crate::keyboard::KeyBinding) -> Option<String> {
+    match binding {
+        crate::keyboard::KeyBinding::Rmk(action) => encode_native_key_action(action),
+        crate::keyboard::KeyBinding::VialTapHold { .. } => serde_json::to_string(&binding)
+            .ok()
+            .map(|s| format!("vial-profile:{s}")),
+        _ => None,
+    }
 }
 
 fn encode_native_key_action(action: rmk_types::action::KeyAction) -> Option<String> {
@@ -459,9 +534,20 @@ fn entlayout_native_binding(
         (None, Some(encoded)) if version == crate::rynk::entlayout::NATIVE_V2_ENTLAYOUT_VERSION => {
             KeyBinding::Rynk(crate::rynk::entlayout::decode_v10_native_field(encoded)?)
         }
+        (None, Some(encoded)) if encoded.starts_with("vial-profile:") => {
+            let binding =
+                serde_json::from_str(&encoded[13..]).context("Invalid Vial profile binding")?;
+            if !matches!(binding, KeyBinding::VialTapHold { .. }) {
+                bail!("Invalid Vial profile action variant");
+            }
+            binding
+        }
         (None, Some(encoded)) => KeyBinding::Rmk(decode_native_key_action(encoded)?),
     };
     Ok(Some(match (binding, target) {
+        (KeyBinding::VialTapHold { .. }, NativeTarget::Rynk) => bail!(
+            "Vial profile imports into Rynk are not supported; use a protocol-matching preset"
+        ),
         (KeyBinding::Rmk(action), NativeTarget::Rynk) => {
             KeyBinding::Rynk(crate::rynk::native_v1::upgrade_native_v1_key_action(action).action)
         }
@@ -471,6 +557,59 @@ fn entlayout_native_binding(
         ),
         (binding, _) => binding,
     }))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn preflight_vial_entlayout(
+    hid: &crate::device_session::DeviceSession,
+    bundle: &EntLayoutFile,
+) -> Result<()> {
+    let Some(vial) = hid.as_vial() else {
+        return Ok(());
+    };
+    let mut bindings = Vec::new();
+    for (layer, keys) in bundle.data.keymap.iter().enumerate() {
+        for key in 0..keys.len() {
+            if let Some(binding) =
+                entlayout_native_key_action(bundle, layer, key, NativeTarget::Vial)?
+            {
+                bindings.push(binding);
+            }
+        }
+    }
+    for entry in &bundle.data.combos.entries {
+        if let Some(binding) = entlayout_native_binding(
+            bundle.version,
+            entry.native_output.as_deref(),
+            entry.rynk_output,
+            NativeTarget::Vial,
+        )? {
+            vial.preflight_vial_dynamic(binding, false)?;
+            bindings.push(binding);
+        }
+    }
+    for entry in &bundle.data.tap_dance.entries {
+        for (native, rynk) in [
+            (&entry.native_on_tap, entry.rynk_on_tap),
+            (&entry.native_on_hold, entry.rynk_on_hold),
+            (&entry.native_on_double_tap, entry.rynk_on_double_tap),
+            (&entry.native_on_tap_hold, entry.rynk_on_tap_hold),
+        ] {
+            if let Some(binding) = entlayout_native_binding(
+                bundle.version,
+                native.as_deref(),
+                rynk,
+                NativeTarget::Vial,
+            )? {
+                vial.preflight_vial_dynamic(binding, true)?;
+                bindings.push(binding);
+            }
+        }
+    }
+    for binding in bindings {
+        vial.encode_vial_binding(binding)?;
+    }
+    Ok(())
 }
 
 fn entlayout_dynamic_binding(
@@ -1391,7 +1530,7 @@ impl EntropyApp {
                     .map(|layer| {
                         layer
                             .iter()
-                            .map(|binding| binding.rmk_action().and_then(encode_native_key_action))
+                            .map(|binding| encode_native_binding(*binding))
                             .collect()
                     })
                     .collect(),
@@ -1448,10 +1587,7 @@ impl EntropyApp {
                         .map(|entry| EntComboEntry {
                             keys: entry.keys,
                             output: entry.output.vial_keycode(),
-                            native_output: entry
-                                .output
-                                .rmk_action()
-                                .and_then(encode_native_key_action),
+                            native_output: encode_native_binding(entry.output),
                             rynk_output: encode_rynk_key_action(entry.output),
                             layer: entry.layer,
                         })
@@ -1467,28 +1603,16 @@ impl EntropyApp {
                         .iter()
                         .map(|entry| EntTapDanceEntry {
                             on_tap: entry.on_tap.vial_keycode(),
-                            native_on_tap: entry
-                                .on_tap
-                                .rmk_action()
-                                .and_then(encode_native_key_action),
+                            native_on_tap: encode_native_binding(entry.on_tap),
                             rynk_on_tap: encode_rynk_key_action(entry.on_tap),
                             on_hold: entry.on_hold.vial_keycode(),
-                            native_on_hold: entry
-                                .on_hold
-                                .rmk_action()
-                                .and_then(encode_native_key_action),
+                            native_on_hold: encode_native_binding(entry.on_hold),
                             rynk_on_hold: encode_rynk_key_action(entry.on_hold),
                             on_double_tap: entry.on_double_tap.vial_keycode(),
-                            native_on_double_tap: entry
-                                .on_double_tap
-                                .rmk_action()
-                                .and_then(encode_native_key_action),
+                            native_on_double_tap: encode_native_binding(entry.on_double_tap),
                             rynk_on_double_tap: encode_rynk_key_action(entry.on_double_tap),
                             on_tap_hold: entry.on_tap_hold.vial_keycode(),
-                            native_on_tap_hold: entry
-                                .on_tap_hold
-                                .rmk_action()
-                                .and_then(encode_native_key_action),
+                            native_on_tap_hold: encode_native_binding(entry.on_tap_hold),
                             rynk_on_tap_hold: encode_rynk_key_action(entry.on_tap_hold),
                             tapping_term: entry.tapping_term,
                         })
@@ -2041,6 +2165,7 @@ impl EntropyApp {
         self.hid_device
             .as_ref()
             .context("No active keyboard connection")?;
+        preflight_vial_entlayout(self.hid_device.as_ref().unwrap(), bundle)?;
         let mapping = self.entlayout_import_mapping(bundle)?;
         let mut sidecars = EntLayoutSidecars::default();
         if bundle.application_layouts.is_some() && !self.current_device_is_likely_rmk() {
@@ -3094,6 +3219,7 @@ impl EntropyApp {
         let supports_rmk_native_tap_dance_actions =
             self.keycode_picker.supports_rmk_native_tap_dance_actions;
         let supports_rmk_combo_layers = self.supports_rmk_combo_layers || rynk_target;
+        preflight_vial_entlayout(hid, bundle)?;
         let mut failures = EntFirmwareFailures::default();
         let target_portable_settings = self.entlayout_portable_settings_snapshot();
         let EntPortableSettingsImportPlan {
@@ -3311,7 +3437,7 @@ impl EntropyApp {
                     combo.rynk_output,
                     target,
                 )?;
-                if output.rmk_action().is_some() && !supports_rmk_native_combo_output {
+                if output.is_vial_native() && !supports_rmk_native_combo_output {
                     bail!("target firmware does not support native RMK Combo outputs");
                 }
                 if combo.layer.is_some() && !supports_rmk_combo_layers {
@@ -3372,7 +3498,7 @@ impl EntropyApp {
                     )?,
                     binding(td.on_tap_hold, &td.native_on_tap_hold, td.rynk_on_tap_hold)?,
                 ];
-                if actions.iter().any(|binding| binding.rmk_action().is_some())
+                if actions.iter().any(|binding| binding.is_vial_native())
                     && !supports_rmk_native_tap_dance_actions
                 {
                     bail!("target firmware does not support native RMK Tap Dance actions");
@@ -5548,6 +5674,24 @@ mod tests {
                 String::new(),
                 "last".to_owned(),
             ]
+        );
+    }
+
+    #[test]
+    fn universal_numero_round_trips_through_native_entlayout_encoding() {
+        use rmk_types::action::{Action, KeyAction};
+
+        let action = KeyAction::Single(Action::User(0xB4));
+        let encoded = encode_native_key_action(action).expect("№ action should fit");
+        let decoded = decode_native_key_action(&encoded).unwrap();
+        assert_eq!(decoded, action);
+        assert_eq!(
+            crate::universal_symbols::label(decoded).as_deref(),
+            Some("Universal\n№")
+        );
+        assert_eq!(
+            entlayout_dynamic_binding(ENTLAYOUT_VERSION, 0, Some(&encoded), None, NativeTarget::Vial).unwrap(),
+            crate::universal_symbols::binding(0xB4)
         );
     }
 

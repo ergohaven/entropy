@@ -340,6 +340,7 @@ impl EntropyApp {
             // 16-bit macro keycode; symbols and Russian letters are per board.
             supports_macro_ext_keycodes: true,
             supports_rmk_native_key_actions: true,
+            supports_universal_numero: false,
             supports_universal_symbols: info.caps & caps::UNIVERSAL_SYMBOLS != 0,
             supports_universal_russian_letters: info.caps & caps::RUSSIAN_LETTERS != 0,
             supports_rmk_native_combo_output: true,

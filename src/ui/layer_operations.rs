@@ -344,6 +344,9 @@ fn mirrored_layer_snapshot_with_mapping(
             crate::keyboard::KeyBinding::Vial(keycode) => {
                 toggle_handed_modifier(keycode).unwrap_or(keycode).into()
             }
+            binding @ crate::keyboard::KeyBinding::VialTapHold { .. } => {
+                crate::rmk_native::toggle_handed_vial_binding(binding)
+            }
             crate::keyboard::KeyBinding::Rmk(action) => {
                 crate::rmk_native::toggle_handed_key_action(action).into()
             }
@@ -650,13 +653,8 @@ impl EntropyApp {
         menu_width: f32,
     ) -> bool {
         let language = self.app_settings.language;
-        let [
-            copy_label,
-            paste_label,
-            mirror_label,
-            fill_none_label,
-            fill_inherit_label,
-        ] = layer_operation_menu_labels(language);
+        let [copy_label, paste_label, mirror_label, fill_none_label, fill_inherit_label] =
+            layer_operation_menu_labels(language);
         let paste_snapshot = self.layer_paste_snapshot();
         let mirror_mapping = self
             .layout
@@ -1244,26 +1242,44 @@ impl EntropyApp {
             #[cfg(target_os = "macos")]
             let _hid_lock = hid_device.macos_hid_operation_lock();
 
-            let mut progress = run_layer_writes(
-                &key_changes,
-                &encoder_changes,
-                |row, col, binding| match hid_device.set_key_binding(layer_u8, row, col, binding) {
-                    Ok(()) => KeyWriteOutcome::Saved,
-                    // Only a VIA keycode write reports what the keyboard holds instead.
-                    Err(error) => match crate::hid::keycode_writeback_readback(&error) {
-                        Some(readback) => KeyWriteOutcome::Mismatch {
-                            readback: readback.into(),
-                            error: error.to_string(),
+            let preflight = match hid_device.as_vial() {
+                Some(vial) => key_changes
+                    .iter()
+                    .filter(|c| c.3.is_vial_native())
+                    .try_for_each(|c| vial.encode_vial_binding(c.3).map(|_| ())),
+                None => Ok(()),
+            };
+            let mut progress = match preflight {
+                Ok(()) => run_layer_writes(
+                    &key_changes,
+                    &encoder_changes,
+                    |row, col, binding| match hid_device
+                        .set_key_binding(layer_u8, row, col, binding)
+                    {
+                        Ok(()) => KeyWriteOutcome::Saved,
+                        // Only a VIA keycode write reports what the keyboard holds instead.
+                        Err(error) => match crate::hid::keycode_writeback_readback(&error) {
+                            Some(readback) => KeyWriteOutcome::Mismatch {
+                                readback: readback.into(),
+                                error: error.to_string(),
+                            },
+                            None => KeyWriteOutcome::Failed(error.to_string()),
                         },
-                        None => KeyWriteOutcome::Failed(error.to_string()),
                     },
+                    |device_idx, direction, keycode| {
+                        hid_device
+                            .set_encoder(layer_u8, device_idx, direction, keycode)
+                            .map_err(|error| error.to_string())
+                    },
+                ),
+                Err(error) => LayerWriteProgress {
+                    key_updates: Vec::new(),
+                    encoder_updates: Vec::new(),
+                    written: 0,
+                    error: Some(error.to_string()),
+                    disconnect: false,
                 },
-                |device_idx, direction, keycode| {
-                    hid_device
-                        .set_encoder(layer_u8, device_idx, direction, keycode)
-                        .map_err(|error| error.to_string())
-                },
-            );
+            };
             if context.default_target.is_some() {
                 progress.key_updates.extend(unchanged_keys);
                 progress.encoder_updates.extend(unchanged_encoders);
@@ -1815,7 +1831,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn macropad_profile_paste_matrix_persists_without_firmware_or_default_mutation() {
         use crate::application_layouts::{
-            DEFAULT_APPLICATION_LAYOUT_ID as DEFAULT, DetectedApplication,
+            DetectedApplication, DEFAULT_APPLICATION_LAYOUT_ID as DEFAULT,
         };
         for source in [DEFAULT, "fixture_app_1", "other_app_2"] {
             for target in ["fixture_app_1", "other_app_2"] {
@@ -2234,6 +2250,40 @@ mod tests {
     }
 
     #[test]
+    fn version_compat_layer_paste_preflights_all_changes_before_write() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let (mut app, recorder, ctx) = macropad_fixture();
+        let mut device = app.device_manager.devices()[0].clone();
+        device.product_id = 0x0074;
+        device.name = "K:04".into();
+        app.device_manager.replace_devices(vec![device]);
+        app.keycode_picker.supports_rmk_native_key_actions = true;
+        *app.hid_device
+            .as_ref()
+            .unwrap()
+            .as_vial()
+            .unwrap()
+            .native_capabilities
+            .lock()
+            .unwrap() = Some(crate::rmk_native::RmkNativeCapabilities {
+            version: 1,
+            key_actions: true,
+            universal_symbols: true,
+            ..Default::default()
+        });
+        let mut desired = capture_layer(app.layout.as_ref().unwrap(), 1).unwrap();
+        desired.keycodes[0] = 4.into();
+        desired.keycodes[1] = crate::universal_symbols::binding(180);
+        app.apply_layer_snapshot(1, desired, "layer_actions.paste");
+        drain_layer_write(&mut app, &ctx);
+        assert!(
+            recorder.requests().is_empty(),
+            "partial layer write before unsupported-action preflight"
+        );
+        assert!(app.hid_device.is_some());
+    }
+
+    #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn k04_native_layer_paste_keeps_rmk_actions_and_profiles_unchanged() {
         let _storage = crate::app::app_storage::ScopedTempConfig::new();
@@ -2242,6 +2292,18 @@ mod tests {
         device.product_id = 0x0074;
         device.name = "K:04".into();
         app.device_manager.replace_devices(vec![device]);
+        *app.hid_device
+            .as_ref()
+            .unwrap()
+            .as_vial()
+            .unwrap()
+            .native_capabilities
+            .lock()
+            .unwrap() = Some(crate::rmk_native::RmkNativeCapabilities {
+            version: 1,
+            key_actions: true,
+            ..Default::default()
+        });
         let action = rmk_types::action::KeyAction::Single(rmk_types::action::Action::LayerOn(2));
         let board = app.layout.as_mut().unwrap();
         board.layers[0] = vec![KeyBinding::Rmk(action); 13];

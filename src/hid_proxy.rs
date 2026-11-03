@@ -1412,6 +1412,7 @@ mod tests {
         for name in ["A", "B", "C"] {
             let hid = HidDevice {
                 unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+                native_capabilities: std::sync::Mutex::new(None),
                 read_only: None,
                 backend: super::super::HidBackend::Proxy(Arc::new(start("echo", name))),
             };
@@ -1447,20 +1448,47 @@ mod tests {
     fn real_helper_failed_startups_cannot_accumulate_unreclaimed_workers() {
         let _guard = serial_test();
         let gate = Arc::new(AtomicBool::new(false));
-        for name in ["failed-A", "failed-B"] {
-            assert!(HidProxy::start(
-                &device(name),
-                spec("startup-silence", Some(gate.clone()), None),
-                Duration::from_millis(80),
-            )
-            .is_err());
+        // A failed assertion must not strand gated workers in the shared
+        // registry and turn every subsequent lifecycle test into a timeout.
+        struct ReleaseGate(Arc<AtomicBool>);
+        impl Drop for ReleaseGate {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
         }
+        let _release_gate = ReleaseGate(gate.clone());
+        // Admission is part of the startup deadline. Exercise a busy registry
+        // so a pre-admission timeout cannot masquerade as a retained worker.
+        let (locked_tx, locked_rx) = mpsc::sync_channel(0);
+        let admission = std::thread::spawn(move || {
+            let _registry = REGISTRY.lock().unwrap();
+            locked_tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+        });
+        locked_rx.recv().unwrap();
+        for name in ["failed-A", "failed-B"] {
+            // Fail on an actual helper response, not elapsed scheduling time:
+            // a startup timeout may occur BEFORE admission and create no debt.
+            let error = HidProxy::start(
+                &device(name),
+                spec("startup-malformed", Some(gate.clone()), None),
+                Duration::from_secs(3),
+            )
+            .err()
+            .expect("malformed startup must fail");
+            assert!(
+                error.to_string().contains("malformed response"),
+                "{error:#}"
+            );
+        }
+        admission.join().unwrap();
         await_condition(|| {
             let registry = REGISTRY.lock().unwrap();
-            registry
-                .entries
-                .iter()
-                .all(|entry| entry.slot.reaped.load(Ordering::Acquire))
+            registry.entries.len() == MAX_UNSETTLED_HELPERS
+                && registry
+                    .entries
+                    .iter()
+                    .all(|entry| entry.slot.reaped.load(Ordering::Acquire))
         });
         for index in 0..12 {
             let fresh_target = device(&format!("failed-retry-{index}"));
@@ -1676,6 +1704,7 @@ mod tests {
         let proxy = start("echo", "A");
         let hid = HidDevice {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: None,
             backend: super::super::HidBackend::Proxy(Arc::new(proxy)),
         };
@@ -1696,6 +1725,7 @@ mod tests {
         let slot = proxy.slot.clone();
         let hid = HidDevice {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: None,
             backend: super::super::HidBackend::Proxy(Arc::new(proxy)),
         };
@@ -1754,6 +1784,7 @@ mod tests {
         let first_slot = first.slot.clone();
         let hid = HidDevice {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: None,
             backend: super::super::HidBackend::Proxy(first.clone()),
         };
@@ -1785,6 +1816,7 @@ mod tests {
         assert!(!first.is_available());
         let keyboard = HidDevice {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: None,
             backend: super::super::HidBackend::Proxy(selected.clone()),
         };
@@ -1834,6 +1866,7 @@ mod tests {
         let last_slot = last.slot.clone();
         let hid = HidDevice {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: None,
             backend: super::super::HidBackend::Proxy(last.clone()),
         };
@@ -1871,6 +1904,7 @@ mod tests {
         let slot = proxy.slot.clone();
         let hid = HidDevice {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: None,
             backend: super::super::HidBackend::Proxy(proxy.clone()),
         };
@@ -1917,6 +1951,7 @@ mod tests {
         let proxy = Arc::new(start("echo", "A"));
         let hid = HidDevice {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: None,
             backend: super::super::HidBackend::Proxy(proxy.clone()),
         };
@@ -1944,11 +1979,13 @@ mod tests {
         // Two wrappers of the SAME physical proxy must share the ordering domain.
         let first = HidDevice {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: None,
             backend: super::super::HidBackend::Proxy(proxy.clone()),
         };
         let second = HidDevice {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            native_capabilities: std::sync::Mutex::new(None),
             read_only: None,
             backend: super::super::HidBackend::Proxy(proxy.clone()),
         };

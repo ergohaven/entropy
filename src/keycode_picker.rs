@@ -163,6 +163,7 @@ pub struct KeycodePicker {
     pub supports_persistent_default_layer: bool,
     pub supports_macro_ext_keycodes: bool,
     pub supports_rmk_native_key_actions: bool,
+    pub supports_universal_numero: bool,
     pub supports_universal_symbols: bool,
     pub supports_universal_russian_letters: bool,
     pub supports_rmk_native_combo_output: bool,
@@ -534,6 +535,7 @@ mod tests {
 
         let supported = KeycodePicker {
             supports_rmk_native_key_actions: true,
+            supports_universal_numero: false,
             supports_universal_symbols: true,
             supports_universal_russian_letters: true,
             rmk_native_key_actions_allowed_for_target: true,
@@ -544,6 +546,7 @@ mod tests {
         for unsupported in [
             KeycodePicker {
                 supports_rmk_native_key_actions: false,
+                supports_universal_numero: false,
                 supports_universal_symbols: true,
                 supports_universal_russian_letters: true,
                 rmk_native_key_actions_allowed_for_target: true,
@@ -551,6 +554,7 @@ mod tests {
             },
             KeycodePicker {
                 supports_rmk_native_key_actions: true,
+                supports_universal_numero: false,
                 supports_universal_symbols: false,
                 supports_universal_russian_letters: true,
                 rmk_native_key_actions_allowed_for_target: true,
@@ -558,6 +562,7 @@ mod tests {
             },
             KeycodePicker {
                 supports_rmk_native_key_actions: true,
+                supports_universal_numero: false,
                 supports_universal_symbols: true,
                 supports_universal_russian_letters: true,
                 rmk_native_key_actions_allowed_for_target: false,
@@ -570,6 +575,7 @@ mod tests {
         assert!(supported.universal_russian_letters_available());
         assert!(!KeycodePicker {
             supports_rmk_native_key_actions: true,
+            supports_universal_numero: false,
             supports_universal_symbols: true,
             supports_universal_russian_letters: false,
             rmk_native_key_actions_allowed_for_target: true,
@@ -585,6 +591,28 @@ mod tests {
             crate::universal_symbols::USER_RUSSIAN_LETTER_START,
         ));
         assert_eq!(picker.selected_tab, KeycodeTab::Special);
+    }
+
+    #[test]
+    fn universal_numero_is_searchable_assignable_and_reopens_on_universal_tab() {
+        let binding = crate::universal_symbols::binding(0xB4);
+        for language in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            let rows = universal_symbol_rows(language, true);
+            let matches = rows
+                .iter()
+                .filter(|row| row.matches("№", None))
+                .collect::<Vec<_>>();
+            assert_eq!(matches.len(), 1);
+            assert_eq!(matches[0].label, "Universal\n№");
+            assert_eq!(matches[0].action, PickerAction::Assign(binding));
+            assert_eq!(matches[0].tab, KeycodeTab::UniversalSymbols);
+        }
+        let mut picker = KeycodePicker::default();
+        picker.select_tab_for_binding(binding);
+        assert_eq!(picker.selected_tab, KeycodeTab::UniversalSymbols);
     }
 
     #[test]
@@ -605,6 +633,7 @@ mod tests {
 
         let supported = KeycodePicker {
             supports_rmk_native_key_actions: true,
+            supports_universal_numero: false,
             supports_universal_symbols: true,
             rmk_native_key_actions_allowed_for_target: true,
             ..Default::default()
@@ -891,17 +920,67 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod version_compat_numero_tests {
+    use super::*;
+    #[test]
+    fn version_compat_numero_authoring_and_cache_follow_device_changes() {
+        let mut picker = KeycodePicker {
+            supports_rmk_native_key_actions: true,
+            supports_universal_symbols: true,
+            rmk_native_key_actions_allowed_for_target: true,
+            ..Default::default()
+        };
+        let numero = crate::universal_symbols::binding(180);
+        picker.perform_picker_action(PickerAction::Assign(numero));
+        assert!(picker.result.is_none());
+        let old = picker.row_fingerprint();
+        picker.supports_universal_numero = true;
+        assert_ne!(old, picker.row_fingerprint());
+        assert!(picker
+            .cached_tab_rows(KeycodeTab::UniversalSymbols)
+            .iter()
+            .any(|r| r.action == PickerAction::Assign(numero)));
+        picker.perform_picker_action(PickerAction::Assign(numero));
+        assert_eq!(picker.result, Some(numero));
+        picker.supports_universal_numero = false;
+        assert!(!picker
+            .cached_tab_rows(KeycodeTab::UniversalSymbols)
+            .iter()
+            .any(|r| r.action == PickerAction::Assign(numero)));
+    }
+    #[test]
+    fn version_compat_old_broad_bit_does_not_offer_numero() {
+        let picker = KeycodePicker {
+            supports_rmk_native_key_actions: true,
+            supports_universal_numero: false,
+            supports_universal_symbols: true,
+            rmk_native_key_actions_allowed_for_target: true,
+            ..Default::default()
+        };
+        assert!(!picker
+            .tab_rows(KeycodeTab::UniversalSymbols)
+            .iter()
+            .any(|r| r.action == PickerAction::Assign(crate::universal_symbols::binding(180))));
+        assert!(picker
+            .tab_rows(KeycodeTab::UniversalSymbols)
+            .iter()
+            .any(|r| r.action == PickerAction::Assign(crate::universal_symbols::binding(144))));
+    }
+}
+
 /// Universal Symbols as a section inside another chooser (e.g. the Tap Dance
 /// key picker). Returns the picked binding.
 fn show_universal_symbol_section(
     ui: &mut egui::Ui,
     language: crate::i18n::Language,
+    supports_numero: bool,
 ) -> Option<crate::keyboard::KeyBinding> {
     show_section_heading(
         ui,
         tr_picker(language, "key_picker.section_universal_symbols"),
     );
-    match show_row_grid(ui, &universal_symbol_rows(language)) {
+    match show_row_grid(ui, &universal_symbol_rows(language, supports_numero)) {
         Some(PickerAction::Assign(binding)) => Some(binding),
         _ => None,
     }
@@ -1099,6 +1178,7 @@ impl Default for KeycodePicker {
             supports_persistent_default_layer: true,
             supports_macro_ext_keycodes: true,
             supports_rmk_native_key_actions: false,
+            supports_universal_numero: false,
             supports_universal_symbols: false,
             supports_universal_russian_letters: false,
             supports_rmk_native_combo_output: false,
@@ -1449,7 +1529,10 @@ impl KeycodePicker {
             {
                 self.selected_tab = KeycodeTab::UniversalSymbols
             }
-            crate::keyboard::KeyBinding::Rmk(_) => self.selected_tab = KeycodeTab::Basic,
+            crate::keyboard::KeyBinding::Rmk(_)
+            | crate::keyboard::KeyBinding::VialTapHold { .. } => {
+                self.selected_tab = KeycodeTab::Basic
+            }
             crate::keyboard::KeyBinding::Rynk(action) => {
                 match crate::rynk::native_v1::v1_label_action(action) {
                     Some(action) => self.select_tab_for_binding(action.into()),

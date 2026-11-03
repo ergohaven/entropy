@@ -86,6 +86,14 @@ fn import_into_rmk_keyboard_sends_the_same_vial_requests() {
     let mut target = rmk_k04();
     let (hid, recorder) = crate::hid::HidDevice::test_device();
     crate::golden_frames::fake_rmk_keyboard(&recorder);
+    *hid.native_capabilities.lock().unwrap() = Some(crate::rmk_native::RmkNativeCapabilities {
+        version: 1,
+        key_actions: true,
+        combo_output: true,
+        tap_dance_actions: true,
+        combo_layers: true,
+        ..Default::default()
+    });
     target.hid_device = Some(hid.into());
     let (failures, _, _) = target.apply_entlayout(&bundle).unwrap();
     assert!(failures.is_empty(), "{failures:?}");

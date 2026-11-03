@@ -1,3 +1,4 @@
+use crate::keyboard::KeyBinding;
 use anyhow::{bail, Context, Result};
 use rmk_types::action::KeyAction;
 
@@ -11,6 +12,7 @@ const ERGOHAVEN_CUSTOM_NEXT_NATIVE_KEY_ACTION: u8 = 0x04;
 const ERGOHAVEN_CUSTOM_NATIVE_DYNAMIC_ACTION: u8 = 0x05;
 const ERGOHAVEN_CUSTOM_NEXT_NATIVE_DYNAMIC_ACTION: u8 = 0x06;
 const ERGOHAVEN_CUSTOM_COMBO_LAYER: u8 = 0x07;
+const ERGOHAVEN_CUSTOM_PROFILE_RESOLUTION: u8 = 0x08;
 const ERGOHAVEN_NATIVE_KEY_ACTION_VERSION: u8 = 0x01;
 const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_GET_SET: u16 = 0x0001;
 const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_UNIVERSAL_SYMBOLS: u16 = 0x0002;
@@ -34,6 +36,9 @@ const NATIVE_KEY_ACTION_MAX_PAYLOAD: usize = MSG_LEN - NATIVE_KEY_ACTION_SET_PAY
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct RmkNativeCapabilities {
+    pub(crate) version: u8,
+    pub(crate) universal_numero: bool,
+    pub(crate) profile_resolution: bool,
     pub(crate) key_actions: bool,
     pub(crate) universal_symbols: bool,
     pub(crate) russian_letters: bool,
@@ -47,13 +52,13 @@ pub(crate) struct RmkNativeCapabilities {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RmkNativeActionAt {
     pub(crate) flat_index: usize,
-    pub(crate) action: KeyAction,
+    pub(crate) action: KeyBinding,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RmkNativeDynamicActionAt {
     pub(crate) flat_index: usize,
-    pub(crate) action: KeyAction,
+    pub(crate) action: KeyBinding,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,7 +121,7 @@ pub(crate) fn apply_rmk_native_actions(
         else {
             continue;
         };
-        layout.set_rmk_key_action(layer, key_index, native.action);
+        layout.set_key_binding(layer, key_index, native.action);
         applied += 1;
     }
     applied
@@ -132,7 +137,7 @@ pub(crate) fn apply_rmk_native_dynamic_actions(
     for native in actions {
         if native.flat_index < combo_count {
             if let Some(combo) = combos.get_mut(native.flat_index) {
-                combo.output = crate::keyboard::KeyBinding::Rmk(native.action);
+                combo.output = native.action;
                 applied += 1;
             }
             continue;
@@ -144,7 +149,7 @@ pub(crate) fn apply_rmk_native_dynamic_actions(
         let Some(entry) = tap_dances.get_mut(entry_index) else {
             continue;
         };
-        let binding = crate::keyboard::KeyBinding::Rmk(native.action);
+        let binding = native.action;
         match field {
             0 => entry.on_tap = binding,
             1 => entry.on_hold = binding,
@@ -155,6 +160,21 @@ pub(crate) fn apply_rmk_native_dynamic_actions(
         applied += 1;
     }
     applied
+}
+
+pub(crate) fn toggle_handed_vial_binding(binding: KeyBinding) -> KeyBinding {
+    match binding {
+        KeyBinding::VialTapHold { tap, hold, profile } => {
+            let KeyAction::TapHold(tap, hold, _) =
+                toggle_handed_key_action(KeyAction::TapHold(tap, hold, Default::default()))
+            else {
+                unreachable!()
+            };
+            KeyBinding::VialTapHold { tap, hold, profile }
+        }
+        KeyBinding::Rmk(action) => toggle_handed_key_action(action).into(),
+        other => other,
+    }
 }
 
 pub(crate) fn toggle_handed_key_action(action: KeyAction) -> KeyAction {
@@ -227,6 +247,7 @@ pub(crate) fn matches_rmk_native_response(
             | ERGOHAVEN_CUSTOM_NATIVE_DYNAMIC_ACTION
             | ERGOHAVEN_CUSTOM_NEXT_NATIVE_DYNAMIC_ACTION
             | ERGOHAVEN_CUSTOM_COMBO_LAYER
+            | ERGOHAVEN_CUSTOM_PROFILE_RESOLUTION
     ) {
         return None;
     }
@@ -244,7 +265,12 @@ pub(crate) fn matches_rmk_native_response(
     let header_matches = response[0] == command[0]
         && response[1] == ERGOHAVEN_CUSTOM_NAMESPACE
         && response[2] == subcommand
-        && response[3] == ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
+        // Capability replies must reach the version validator even when the
+        // advertised codec is unknown. Discarding them as stale could turn an
+        // explicit rejection into an optional no-response timeout.
+        && (subcommand == ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS
+            || (matches!(response[3], 1 | 2)
+                && response[3] == command.get(3).copied().unwrap_or(0)));
     if subcommand == ERGOHAVEN_CUSTOM_COMBO_LAYER {
         return Some(header_matches && response[7] == command.get(4).copied().unwrap_or(u8::MAX));
     }
@@ -270,12 +296,15 @@ pub(crate) fn matches_rmk_native_response(
 
 fn decode_native_capabilities(response: &[u8; MSG_LEN]) -> RmkNativeCapabilities {
     if !native_response_header_matches(response, ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS)
-        || response[3] != ERGOHAVEN_NATIVE_KEY_ACTION_VERSION
+        || !matches!(response[3], 1 | 2)
     {
         return RmkNativeCapabilities::default();
     }
     let flags = u16::from_le_bytes([response[4], response[5]]);
     RmkNativeCapabilities {
+        version: response[3],
+        universal_numero: flags & 0x0100 != 0,
+        profile_resolution: flags & 0x0200 != 0,
         key_actions: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_GET_SET != 0,
         universal_symbols: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_UNIVERSAL_SYMBOLS != 0,
         russian_letters: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_RUSSIAN_LETTERS != 0,
@@ -314,31 +343,164 @@ fn decode_native_action(
 
 #[cfg(not(target_arch = "wasm32"))]
 impl crate::hid::HidDevice {
+    pub(crate) fn cached_rmk_native_capabilities(&self) -> Result<RmkNativeCapabilities> {
+        let cached = *self.native_capabilities.lock().unwrap();
+        if let Some(caps) = cached {
+            return Ok(caps);
+        }
+        self.get_rmk_native_capabilities()
+    }
+
+    fn rmk_native_version(&self) -> Result<u8> {
+        let caps = self.cached_rmk_native_capabilities()?;
+        if !caps.key_actions || !matches!(caps.version, 1 | 2) {
+            bail!("Device does not advertise a supported Vial native codec");
+        }
+        Ok(caps.version)
+    }
+
+    pub(crate) fn resolve_vial_profile(
+        &self,
+        index: u8,
+    ) -> Result<crate::vial_native::ProfileResolution> {
+        let caps = self.cached_rmk_native_capabilities()?;
+        if caps.version != 2 || !caps.profile_resolution {
+            bail!("Firmware needs the Vial profile-resolution capability; update firmware before using native v2 TapHold");
+        }
+        let mut command = [0; 32];
+        command[..5].copy_from_slice(&[8, 0xe8, 8, 2, index]);
+        crate::vial_native::profile_response(&self.usb_send(&command)?, index)
+    }
+
+    pub(crate) fn encode_vial_binding(
+        &self,
+        binding: crate::keyboard::KeyBinding,
+    ) -> Result<Vec<u8>> {
+        let caps = self.cached_rmk_native_capabilities()?;
+        if crate::universal_symbols::binding_contains_numero(binding) && !caps.universal_numero {
+            bail!("Numero is not supported by this device; update its firmware");
+        }
+        crate::vial_native::encode(
+            binding,
+            self.rmk_native_version()?,
+            |raw, preferred, inherited| {
+                let first = self.resolve_vial_profile(preferred.unwrap_or(0))?;
+                let wanted = if inherited { first.default } else { raw };
+                if first.raw == wanted {
+                    return Ok(first.index);
+                }
+                for index in 0..first.count {
+                    if index == u16::from(first.index) {
+                        continue;
+                    }
+                    let p = self.resolve_vial_profile(index as u8)?;
+                    if p.count != first.count || p.default != first.default {
+                        bail!("Vial profile table changed during preflight; reconnect and retry");
+                    }
+                    if p.raw == wanted {
+                        return Ok(p.index);
+                    }
+                }
+                if wanted == first.default && first.count < 256 {
+                    return Ok(first.count as u8);
+                }
+                bail!("No exact profile match on this device (packed {wanted:#x}); select an advertised profile or update firmware configuration. Read-only Vial cannot install profiles")
+            },
+        )
+    }
+
+    pub(crate) fn preflight_vial_dynamic(
+        &self,
+        binding: KeyBinding,
+        morse: bool,
+    ) -> Result<Vec<u8>> {
+        let caps = self.cached_rmk_native_capabilities()?;
+        if (morse && !caps.tap_dance_actions) || (!morse && !caps.combo_output) {
+            bail!("Device does not advertise this native dynamic action capability");
+        }
+        if morse
+            && !matches!(
+                binding,
+                KeyBinding::Rmk(KeyAction::No | KeyAction::Single(_))
+            )
+        {
+            bail!("Morse fields accept only No or Single actions; a compound TapHold cannot be installed here");
+        }
+        self.encode_vial_binding(binding)
+    }
+
+    fn decode_vial_action(
+        &self,
+        response: &[u8; 32],
+        status: usize,
+        len: usize,
+        offset: usize,
+    ) -> Result<crate::keyboard::KeyBinding> {
+        if response[status] != 0 {
+            bail!(
+                "Vial native action failed: {}",
+                native_status_error(response[status])
+            );
+        }
+        let len = response[len] as usize;
+        if len == 0 || offset + len > 32 {
+            bail!("Invalid Vial native payload length");
+        }
+        crate::vial_native::decode(
+            &response[offset..offset + len],
+            self.rmk_native_version()?,
+            |index| Ok(self.resolve_vial_profile(index)?.raw),
+        )
+    }
+
     pub(crate) fn get_rmk_native_capabilities(&self) -> Result<RmkNativeCapabilities> {
         let mut command = [0u8; MSG_LEN];
         command[0] = CMD_VIA_CUSTOM_GET_VALUE;
         command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
         command[2] = ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS;
-        let response = self.usb_send(&command)?;
-        Ok(decode_native_capabilities(&response))
+        let response = match self.usb_send(&command) {
+            Ok(response) => response,
+            Err(error)
+                if error
+                    .chain()
+                    .any(|cause| cause.to_string() == "HID timeout — device did not respond") =>
+            {
+                // Legacy Vial firmware may not answer this optional extension.
+                // Cache absence, never a speculative v1 codec. All native
+                // authoring still fails preflight without negotiated support.
+                let caps = RmkNativeCapabilities::default();
+                *self.native_capabilities.lock().unwrap() = Some(caps);
+                return Ok(caps);
+            }
+            Err(error) => return Err(error),
+        };
+        let caps = decode_native_capabilities(&response);
+        if native_response_header_matches(&response, ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS)
+            && response != command
+            && !matches!(response[3], 1 | 2)
+        {
+            bail!("Unsupported Vial native version {}", response[3]);
+        }
+        *self.native_capabilities.lock().unwrap() = Some(caps);
+        Ok(caps)
     }
 
-    pub(crate) fn get_rmk_key_action(&self, layer: u8, row: u8, col: u8) -> Result<KeyAction> {
+    pub(crate) fn get_rmk_key_action(&self, layer: u8, row: u8, col: u8) -> Result<KeyBinding> {
         let mut command = [0u8; MSG_LEN];
         command[0] = CMD_VIA_CUSTOM_GET_VALUE;
         command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
         command[2] = ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION;
-        command[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
+        command[3] = self.rmk_native_version()?;
         command[4] = layer;
         command[5] = row;
         command[6] = col;
         let response = self.usb_send(&command)?;
         if !native_response_header_matches(&response, ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION)
-            || response[3] != ERGOHAVEN_NATIVE_KEY_ACTION_VERSION
+            || response[3] != command[3]
         {
             bail!("unexpected RMK native key action response");
         }
-        decode_native_action(
+        self.decode_vial_action(
             &response,
             4,
             NATIVE_KEY_ACTION_GET_PAYLOAD_OFFSET - 1,
@@ -351,26 +513,28 @@ impl crate::hid::HidDevice {
         layer: u8,
         row: u8,
         col: u8,
-        action: KeyAction,
+        action: impl Into<KeyBinding>,
     ) -> Result<()> {
-        let mut encoded = [0u8; NATIVE_KEY_ACTION_MAX_PAYLOAD];
-        let payload =
-            postcard::to_slice(&action, &mut encoded).context("failed to encode RMK key action")?;
+        let action = action.into();
+        let payload = self.encode_vial_binding(action)?;
+        if payload.len() > NATIVE_KEY_ACTION_MAX_PAYLOAD {
+            bail!("Vial native action is too large");
+        }
         let mut command = [0u8; MSG_LEN];
         command[0] = CMD_VIA_CUSTOM_SET_VALUE;
         command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
         command[2] = ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION;
-        command[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
+        command[3] = self.rmk_native_version()?;
         command[4] = layer;
         command[5] = row;
         command[6] = col;
         command[7] = payload.len() as u8;
         command[NATIVE_KEY_ACTION_SET_PAYLOAD_OFFSET
             ..NATIVE_KEY_ACTION_SET_PAYLOAD_OFFSET + payload.len()]
-            .copy_from_slice(payload);
+            .copy_from_slice(&payload);
         let response = self.usb_send(&command)?;
         if !native_response_header_matches(&response, ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION)
-            || response[3] != ERGOHAVEN_NATIVE_KEY_ACTION_VERSION
+            || response[3] != command[3]
         {
             bail!("unexpected RMK native key action write response");
         }
@@ -381,7 +545,7 @@ impl crate::hid::HidDevice {
             );
         }
         let readback = self.get_rmk_key_action(layer, row, col)?;
-        if readback != action {
+        if self.encode_vial_binding(readback)? != payload {
             bail!("RMK native key action readback mismatch at layer {layer}, row {row}, col {col}");
         }
         Ok(())
@@ -397,18 +561,18 @@ impl crate::hid::HidDevice {
         command[0] = CMD_VIA_CUSTOM_GET_VALUE;
         command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
         command[2] = ERGOHAVEN_CUSTOM_NEXT_NATIVE_KEY_ACTION;
-        command[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
+        command[3] = self.rmk_native_version()?;
         command[4..6].copy_from_slice(&start.to_le_bytes());
         let response = self.usb_send(&command)?;
         if !native_response_header_matches(&response, ERGOHAVEN_CUSTOM_NEXT_NATIVE_KEY_ACTION)
-            || response[3] != ERGOHAVEN_NATIVE_KEY_ACTION_VERSION
+            || response[3] != command[3]
         {
             bail!("unexpected RMK native key action scan response");
         }
         if response[4] == NATIVE_KEY_ACTION_STATUS_END {
             return Ok(None);
         }
-        let action = decode_native_action(
+        let action = self.decode_vial_action(
             &response,
             4,
             NATIVE_KEY_ACTION_NEXT_PAYLOAD_OFFSET - 1,
@@ -447,22 +611,22 @@ impl crate::hid::HidDevice {
         Ok(actions)
     }
 
-    fn get_rmk_native_dynamic_action(&self, kind: u8, index: u8, field: u8) -> Result<KeyAction> {
+    fn get_rmk_native_dynamic_action(&self, kind: u8, index: u8, field: u8) -> Result<KeyBinding> {
         let mut command = [0u8; MSG_LEN];
         command[0] = CMD_VIA_CUSTOM_GET_VALUE;
         command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
         command[2] = ERGOHAVEN_CUSTOM_NATIVE_DYNAMIC_ACTION;
-        command[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
+        command[3] = self.rmk_native_version()?;
         command[4] = kind;
         command[5] = index;
         command[6] = field;
         let response = self.usb_send(&command)?;
         if !native_response_header_matches(&response, ERGOHAVEN_CUSTOM_NATIVE_DYNAMIC_ACTION)
-            || response[3] != ERGOHAVEN_NATIVE_KEY_ACTION_VERSION
+            || response[3] != command[3]
         {
             bail!("unexpected RMK native dynamic action response");
         }
-        decode_native_action(
+        self.decode_vial_action(
             &response,
             4,
             NATIVE_KEY_ACTION_GET_PAYLOAD_OFFSET - 1,
@@ -475,26 +639,29 @@ impl crate::hid::HidDevice {
         kind: u8,
         index: u8,
         field: u8,
-        action: KeyAction,
+        action: impl Into<KeyBinding>,
     ) -> Result<()> {
-        let mut encoded = [0u8; NATIVE_KEY_ACTION_MAX_PAYLOAD];
-        let payload = postcard::to_slice(&action, &mut encoded)
-            .context("failed to encode RMK native dynamic action")?;
+        let action = action.into();
+        let payload =
+            self.preflight_vial_dynamic(action, kind == NATIVE_DYNAMIC_ACTION_KIND_MORSE)?;
+        if payload.len() > NATIVE_KEY_ACTION_MAX_PAYLOAD {
+            bail!("Vial native action is too large");
+        }
         let mut command = [0u8; MSG_LEN];
         command[0] = CMD_VIA_CUSTOM_SET_VALUE;
         command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
         command[2] = ERGOHAVEN_CUSTOM_NATIVE_DYNAMIC_ACTION;
-        command[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
+        command[3] = self.rmk_native_version()?;
         command[4] = kind;
         command[5] = index;
         command[6] = field;
         command[7] = payload.len() as u8;
         command[NATIVE_KEY_ACTION_SET_PAYLOAD_OFFSET
             ..NATIVE_KEY_ACTION_SET_PAYLOAD_OFFSET + payload.len()]
-            .copy_from_slice(payload);
+            .copy_from_slice(&payload);
         let response = self.usb_send(&command)?;
         if !native_response_header_matches(&response, ERGOHAVEN_CUSTOM_NATIVE_DYNAMIC_ACTION)
-            || response[3] != ERGOHAVEN_NATIVE_KEY_ACTION_VERSION
+            || response[3] != command[3]
         {
             bail!("unexpected RMK native dynamic action write response");
         }
@@ -505,13 +672,17 @@ impl crate::hid::HidDevice {
             );
         }
         let readback = self.get_rmk_native_dynamic_action(kind, index, field)?;
-        if readback != action {
+        if self.encode_vial_binding(readback)? != payload {
             bail!("RMK native dynamic action readback mismatch at kind {kind}, index {index}, field {field}");
         }
         Ok(())
     }
 
-    pub(crate) fn set_rmk_combo_output(&self, index: u8, action: KeyAction) -> Result<()> {
+    pub(crate) fn set_rmk_combo_output(
+        &self,
+        index: u8,
+        action: impl Into<KeyBinding>,
+    ) -> Result<()> {
         self.set_rmk_native_dynamic_action(
             NATIVE_DYNAMIC_ACTION_KIND_COMBO_OUTPUT,
             index,
@@ -525,11 +696,11 @@ impl crate::hid::HidDevice {
         command[0] = CMD_VIA_CUSTOM_GET_VALUE;
         command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
         command[2] = ERGOHAVEN_CUSTOM_COMBO_LAYER;
-        command[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
+        command[3] = self.rmk_native_version()?;
         command[4] = index;
         let response = self.usb_send(&command)?;
         if !native_response_header_matches(&response, ERGOHAVEN_CUSTOM_COMBO_LAYER)
-            || response[3] != ERGOHAVEN_NATIVE_KEY_ACTION_VERSION
+            || response[3] != command[3]
             || response[7] != index
         {
             bail!("unexpected RMK Combo layer response");
@@ -552,13 +723,13 @@ impl crate::hid::HidDevice {
         command[0] = CMD_VIA_CUSTOM_SET_VALUE;
         command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
         command[2] = ERGOHAVEN_CUSTOM_COMBO_LAYER;
-        command[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
+        command[3] = self.rmk_native_version()?;
         command[4] = index;
         command[5] = u8::from(layer.is_some());
         command[6] = layer.unwrap_or(0);
         let response = self.usb_send(&command)?;
         if !native_response_header_matches(&response, ERGOHAVEN_CUSTOM_COMBO_LAYER)
-            || response[3] != ERGOHAVEN_NATIVE_KEY_ACTION_VERSION
+            || response[3] != command[3]
             || response[7] != index
         {
             bail!("unexpected RMK Combo layer write response");
@@ -582,7 +753,7 @@ impl crate::hid::HidDevice {
         &self,
         index: u8,
         field: u8,
-        action: KeyAction,
+        action: impl Into<KeyBinding>,
     ) -> Result<()> {
         self.set_rmk_native_dynamic_action(NATIVE_DYNAMIC_ACTION_KIND_MORSE, index, field, action)
     }
@@ -597,18 +768,18 @@ impl crate::hid::HidDevice {
         command[0] = CMD_VIA_CUSTOM_GET_VALUE;
         command[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
         command[2] = ERGOHAVEN_CUSTOM_NEXT_NATIVE_DYNAMIC_ACTION;
-        command[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
+        command[3] = self.rmk_native_version()?;
         command[4..6].copy_from_slice(&start.to_le_bytes());
         let response = self.usb_send(&command)?;
         if !native_response_header_matches(&response, ERGOHAVEN_CUSTOM_NEXT_NATIVE_DYNAMIC_ACTION)
-            || response[3] != ERGOHAVEN_NATIVE_KEY_ACTION_VERSION
+            || response[3] != command[3]
         {
             bail!("unexpected RMK native dynamic action scan response");
         }
         if response[4] == NATIVE_KEY_ACTION_STATUS_END {
             return Ok(None);
         }
-        let action = decode_native_action(
+        let action = self.decode_vial_action(
             &response,
             4,
             NATIVE_KEY_ACTION_NEXT_PAYLOAD_OFFSET - 1,
@@ -650,11 +821,133 @@ impl crate::hid::HidDevice {
 }
 
 #[cfg(test)]
+#[path = "rmk_native_compat_tests.rs"]
+mod compatibility_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use rmk_types::action::Action;
     use rmk_types::keycode::HidKeyCode;
     use rmk_types::modifier::ModifierCombination;
+
+    #[test]
+    fn version_compat_numero_rejected_on_legacy_device_before_write() {
+        let (device, recorder) = crate::hid::HidDevice::test_device();
+        *device.native_capabilities.lock().unwrap() = Some(RmkNativeCapabilities {
+            version: 1,
+            key_actions: true,
+            universal_symbols: true,
+            ..Default::default()
+        });
+        for action in [
+            KeyAction::Single(Action::User(180)),
+            KeyAction::Tap(Action::User(180)),
+            KeyAction::TapHold(Action::User(180), Action::User(144), Default::default()),
+        ] {
+            assert!(device.set_rmk_key_action(0, 0, 0, action).is_err());
+        }
+        assert!(
+            recorder.requests().is_empty(),
+            "unsupported numero reached transport"
+        );
+    }
+
+    #[test]
+    fn version_compat_unmatched_dynamic_profile_fails_before_any_write() {
+        let (device, recorder) = crate::hid::HidDevice::test_device();
+        recorder.respond_by(|request| {
+            let mut response = *request;
+            if request[1..3] == [0xe8, 2] {
+                response[3..6].copy_from_slice(&[2, 25, 2]);
+            } else if request[1..3] == [0xe8, 8] {
+                response = [0; 32];
+                response[..8].copy_from_slice(&[
+                    8,
+                    0xe8,
+                    8,
+                    2,
+                    0,
+                    request[4],
+                    u8::from(request[4] == 0),
+                    0,
+                ]);
+                response[8..16]
+                    .copy_from_slice(&if request[4] == 0 { 180u64 } else { 200 }.to_le_bytes());
+                response[16..24].copy_from_slice(&200u64.to_le_bytes());
+                response[24] = 1;
+            } else {
+                return None;
+            }
+            Some(Ok(response))
+        });
+        let action = KeyBinding::VialTapHold {
+            tap: Action::User(144),
+            hold: Action::User(145),
+            profile: crate::keyboard::VialMorseProfile { raw: 999, index: 0 },
+        };
+        assert!(device.set_combo_binding(0, [4, 5, 0, 0], action).is_err());
+        assert!(device
+            .set_tap_dance_bindings(0, [0.into(), action, 0.into(), 0.into()], 200)
+            .is_err());
+        assert!(
+            recorder.requests().iter().all(|r| r[0] == 8),
+            "writes occurred before profile preflight: {:?}",
+            recorder.requests()
+        );
+    }
+
+    #[test]
+    fn version_compat_native_get_uses_device_negotiated_version() {
+        for version in [1, 2] {
+            let (device, recorder) = crate::hid::HidDevice::test_device();
+            recorder.respond_by(move |request| {
+                let mut response = *request;
+                if request[1..3] == [0xe8, 2] {
+                    response[3..6].copy_from_slice(&[version, 1, 3]);
+                } else if request[1..3] == [0xe8, 3] {
+                    assert_eq!(request[3], version);
+                    let action = KeyAction::Single(Action::User(0x90));
+                    let bytes = postcard::to_slice(&action, &mut response[6..]).unwrap();
+                    let len = bytes.len();
+                    response[4] = 0;
+                    response[5] = len as u8;
+                } else {
+                    return None;
+                }
+                Some(Ok(response))
+            });
+            assert!(device.get_rmk_native_capabilities().unwrap().key_actions);
+            device.get_rmk_key_action(0, 0, 0).unwrap();
+        }
+    }
+
+    #[test]
+    fn version_compat_v2_caps_and_numero_are_explicit() {
+        let mut reply = [0; 32];
+        reply[..6].copy_from_slice(&[8, 0xe8, 2, 2, 3, 3]);
+        let caps = decode_native_capabilities(&reply);
+        assert!(caps.key_actions, "v2 negotiation rejected");
+        assert!(caps.universal_numero);
+        assert!(caps.profile_resolution);
+        assert_eq!(caps.version, 2);
+        reply[5] = 0;
+        assert!(!decode_native_capabilities(&reply).universal_numero);
+    }
+
+    #[test]
+    fn version_compat_v2_native_response_matches_negotiated_request() {
+        for opcode in 2..=8 {
+            let mut request = [0; 32];
+            request[..4].copy_from_slice(&[8, 0xe8, opcode, 2]);
+            let response = request;
+            assert_eq!(
+                matches_rmk_native_response(&request, &response),
+                Some(true),
+                "opcode {opcode}"
+            );
+        }
+    }
 
     #[test]
     fn decodes_universal_symbols_capability_independently() {
@@ -673,6 +966,9 @@ mod tests {
         assert_eq!(
             decode_native_capabilities(&response),
             RmkNativeCapabilities {
+                version: 1,
+                universal_numero: false,
+                profile_resolution: false,
                 key_actions: true,
                 universal_symbols: true,
                 russian_letters: true,
@@ -705,7 +1001,7 @@ mod tests {
         assert!(dynamic.vial_macro_ext);
         assert!(dynamic.repeat_key);
         assert!(!dynamic.universal_symbols);
-        response[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION + 1;
+        response[3] = 3;
         assert_eq!(
             decode_native_capabilities(&response),
             RmkNativeCapabilities::default()
@@ -715,6 +1011,9 @@ mod tests {
     #[test]
     fn universal_symbols_capability_enables_existing_layout_sync_bridge() {
         assert!(supports_layout_sync(RmkNativeCapabilities {
+            version: 1,
+            universal_numero: false,
+            profile_resolution: false,
             key_actions: true,
             universal_symbols: true,
             russian_letters: false,
@@ -725,6 +1024,9 @@ mod tests {
             repeat_key: false,
         }));
         assert!(!supports_layout_sync(RmkNativeCapabilities {
+            version: 1,
+            universal_numero: false,
+            profile_resolution: false,
             key_actions: true,
             universal_symbols: false,
             russian_letters: false,
@@ -791,11 +1093,11 @@ mod tests {
             &[
                 RmkNativeDynamicActionAt {
                     flat_index: 1,
-                    action: combo_action,
+                    action: combo_action.into(),
                 },
                 RmkNativeDynamicActionAt {
                     flat_index: 2 + 3,
-                    action: tap_action,
+                    action: tap_action.into(),
                 },
             ],
         );

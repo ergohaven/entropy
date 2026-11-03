@@ -38,6 +38,7 @@ mod smart_input;
 mod text_expander;
 mod ui_style;
 mod universal_symbols;
+mod vial_native;
 
 use app::EntropyApp;
 

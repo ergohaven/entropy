@@ -361,17 +361,42 @@ pub(super) fn has_firmware_layer_names(names: &[String]) -> bool {
         .any(|(index, name)| !is_default_layer_name(index, name))
 }
 
+#[test]
+fn version_compat_connect_rejects_unknown_native_version() {
+    let (device, recorder) = crate::hid::HidDevice::test_device();
+    recorder.respond_by(|r| {
+        let mut out = *r;
+        out[3..6].copy_from_slice(&[3, 1, 0]);
+        Some(Ok(out))
+    });
+    assert!(rmk_native_capabilities(&device).is_err());
+    assert!(device.cached_rmk_native_capabilities().is_err());
+    assert!(device
+        .set_rmk_key_action(0, 0, 0, rmk_types::action::KeyAction::No)
+        .is_err());
+    assert!(recorder.requests().iter().all(|r| r[0] == 8));
+}
+
+#[test]
+fn version_compat_connect_rejects_malformed_explicit_native_capabilities() {
+    let (device, recorder) = crate::hid::HidDevice::test_device();
+    recorder.respond_by(|r| {
+        let mut out = *r;
+        // An explicit RMK reply with no valid codec, not an unchanged QMK echo.
+        out[4] = 1;
+        Some(Ok(out))
+    });
+    assert!(rmk_native_capabilities(&device).is_err());
+    assert!(device
+        .encode_vial_binding(rmk_types::action::KeyAction::No.into())
+        .is_err());
+    assert!(recorder.requests().iter().all(|r| r[0] == 8));
+}
+
 fn rmk_native_capabilities(
     dev_conn: &crate::hid::HidDevice,
 ) -> anyhow::Result<crate::rmk_native::RmkNativeCapabilities> {
-    match dev_conn.get_rmk_native_capabilities() {
-        Ok(capabilities) => Ok(capabilities),
-        Err(error) if crate::hid::is_transport_disconnect_error(&error) => Err(error),
-        Err(error) => {
-            log::debug!("RMK native capabilities unavailable: {error:#}");
-            Ok(crate::rmk_native::RmkNativeCapabilities::default())
-        }
-    }
+    dev_conn.get_rmk_native_capabilities()
 }
 
 fn firmware_layer_name(
@@ -671,6 +696,7 @@ impl EntropyApp {
             self.selected_key = None;
             self.selected_encoder = None;
             self.keycode_picker.open = false;
+            self.keycode_picker.supports_universal_numero = false;
             self.reset_matrix_tester_state();
         } else {
             self.status_msg = format!(
@@ -1107,6 +1133,7 @@ impl EntropyApp {
                         format!("RMK native key-action capability read failed: {error:#}")
                     })?;
                 let supports_rmk_native_key_actions = rmk_native_capabilities.key_actions;
+                let supports_universal_numero = rmk_native_capabilities.universal_numero;
                 let supports_universal_symbols = rmk_native_capabilities.universal_symbols;
                 let supports_universal_russian_letters = rmk_native_capabilities.russian_letters;
                 let supports_rmk_native_combo_output = rmk_native_capabilities.combo_output;
@@ -1541,6 +1568,7 @@ impl EntropyApp {
                         rgb_supported: layout.supports_rgb,
                         lighting_mode: layout.lighting_mode.clone(),
                         supports_rmk_native_key_actions,
+                        supports_universal_numero,
                         supports_universal_symbols,
                         supports_universal_russian_letters,
                         supports_rmk_native_combo_output,
@@ -1607,6 +1635,7 @@ impl EntropyApp {
                     macro_texts,
                     supports_macro_ext_keycodes,
                     supports_rmk_native_key_actions,
+                    supports_universal_numero,
                     supports_universal_symbols,
                     supports_universal_russian_letters,
                     supports_rmk_native_combo_output,
@@ -1960,7 +1989,7 @@ mod tests {
 
     #[test]
     fn timeout_after_initial_keymap_read_keeps_rmk_capability_probe_optional() {
-        let (device, _) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
+        let (device, recorder) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
             1,
             crate::hid::TestHidFault::Timeout,
         )));
@@ -1971,6 +2000,20 @@ mod tests {
             rmk_native_capabilities(&device).unwrap(),
             crate::rmk_native::RmkNativeCapabilities::default()
         );
+        assert_eq!(
+            device.cached_rmk_native_capabilities().unwrap(),
+            crate::rmk_native::RmkNativeCapabilities::default()
+        );
+        assert!(device
+            .encode_vial_binding(rmk_types::action::KeyAction::No.into())
+            .is_err());
+        assert!(device
+            .set_rmk_key_action(0, 0, 0, rmk_types::action::KeyAction::No)
+            .is_err());
+        assert!(recorder.requests().iter().all(|r| r[0] != 7));
+        assert_eq!(recorder.requests().len(), 2, "absence is cached");
+        // Standard Vial keymaps remain usable without a native codec.
+        device.get_keymap_buffer(1, 1, 1).unwrap();
     }
 
     #[test]

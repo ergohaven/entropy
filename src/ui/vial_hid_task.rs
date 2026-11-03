@@ -1,5 +1,17 @@
 use super::*;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "universal_geometry_hid_diagnostic_tests.rs"]
+mod universal_geometry_hid_diagnostic_tests;
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+pub(super) struct UniversalGeometryWrite {
+    device: crate::device::Device,
+    generation: u64,
+    packed: u32,
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 pub(super) struct LayerNameWrite {
@@ -26,6 +38,40 @@ pub(super) fn layer_name_write_error(language: crate::i18n::Language, error: &st
 }
 
 impl EntropyApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn queue_universal_geometry_write(&mut self, packed: u32) {
+        let Some(device) = self.selected_device.and_then(|i| self.device_manager.devices().get(i)).cloned() else {
+            return;
+        };
+        self.pending_universal_geometry = Some(UniversalGeometryWrite {
+            device, generation: self.connection_generation, packed,
+        });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn maybe_start_universal_geometry_write(&mut self, ctx: &egui::Context) {
+        let Some(mut request) = self.pending_universal_geometry.clone() else { return; };
+        if request.generation != self.connection_generation
+            || !self.selected_device.and_then(|i| self.device_manager.devices().get(i))
+                .is_some_and(|device| device.path == request.device.path
+                    && device.instance_token == request.device.instance_token
+                    && device.permits_hid_target(&request.device)) {
+            self.pending_universal_geometry = None;
+            return;
+        }
+        // Layout options share one packed word. Preserve later edits to other
+        // fields while waiting for the owner; this is still the same session.
+        request.packed = self.layout_options_value.unwrap_or(request.packed);
+        match self.start_vial_hid_operation(ctx, VialHidOperation::UniversalGeometryWrite(request)) {
+            VialHidTaskStart::Started => self.pending_universal_geometry = None,
+            VialHidTaskStart::Busy => {},
+            VialHidTaskStart::NoDevice => {
+                self.pending_universal_geometry = None;
+                self.status_msg = "Universal Symbols: device is disconnected".into();
+            }
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn selected_layer_names_uncertain(&self) -> bool {
         let key = self.application_layout_device_key();
@@ -142,6 +188,7 @@ fn battery_refresh_delay(battery: Option<crate::hid::BatteryHalves>) -> std::tim
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 pub(super) enum VialHidOperation {
+    UniversalGeometryWrite(UniversalGeometryWrite),
     LayerNameWrite(LayerNameWrite),
     UnlockStart,
     UnlockPoll,
@@ -220,6 +267,7 @@ impl VialHidOperation {
 
 #[cfg(not(target_arch = "wasm32"))]
 enum VialHidOutcome {
+    UniversalGeometryWritten,
     LayerNameWritten(String),
     UnlockStarted {
         unlocked: bool,
@@ -262,6 +310,7 @@ struct VialHidTaskResult {
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) struct VialHidTask {
     receiver: std::sync::mpsc::Receiver<VialHidTaskResult>,
+    target: Option<crate::device::Device>,
     operation: VialHidOperation,
     generation: u64,
     progress: std::sync::Arc<std::sync::atomic::AtomicU32>,
@@ -284,6 +333,14 @@ fn run_vial_hid_operation_with_progress(
     cancel: &std::sync::atomic::AtomicBool,
 ) -> anyhow::Result<VialHidOutcome> {
     match operation {
+        VialHidOperation::UniversalGeometryWrite(request) => {
+            let hid = hid.require_vial()?;
+            hid.set_layout_options(request.packed)?;
+            let actual = hid.get_layout_options()?;
+            anyhow::ensure!(actual == request.packed,
+                "Universal Symbols readback mismatch: expected {}, got {}", request.packed, actual);
+            Ok(VialHidOutcome::UniversalGeometryWritten)
+        }
         VialHidOperation::LayerNameWrite(request) => {
             let qsid = 200 + request.layer as u16;
             hid.set_qmk_setting_string(qsid, &request.name)?;
@@ -410,6 +467,21 @@ fn run_vial_hid_operation(
 }
 
 impl EntropyApp {
+    // A handle borrowed by a same-session worker is still a connection, not
+    // a disconnect. Never lend that readiness to another selected instance.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn universal_geometry_connection_ready(&self) -> bool {
+        self.hid_device.is_some() || self.vial_hid_task.as_ref().is_some_and(|task| {
+            task.generation == self.connection_generation
+                && task.target.as_ref().is_some_and(|target| {
+                    self.selected_device.and_then(|i| self.device_manager.devices().get(i))
+                        .is_some_and(|device| device.path == target.path
+                            && device.instance_token == target.instance_token
+                            && device.permits_hid_target(target))
+                })
+        })
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn schedule_initial_battery_refresh(&mut self) {
         self.next_battery_refresh_at = self
@@ -628,6 +700,7 @@ impl EntropyApp {
             repaint_ctx.request_repaint();
         });
         self.vial_hid_task = Some(VialHidTask {
+            target: self.selected_device.and_then(|i| self.device_manager.devices().get(i)).cloned(),
             receiver,
             operation: task_operation,
             generation,
@@ -739,6 +812,7 @@ impl EntropyApp {
     pub(super) fn poll_vial_hid_task(&mut self, ctx: &egui::Context) {
         self.poll_vial_hid_task_with_settings_save(ctx, save_app_settings);
         self.maybe_start_layer_name_write(ctx);
+        self.maybe_start_universal_geometry_write(ctx);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -773,13 +847,25 @@ impl EntropyApp {
             }
         };
 
+        // Never return a borrowed handle (or its completion) to a different
+        // selected physical instance, even if selection changed before the
+        // connection generation was advanced.
+        let target_matches = self.vial_hid_task.as_ref().and_then(|task| task.target.as_ref())
+            .is_none_or(|target| self.selected_device
+                .and_then(|i| self.device_manager.devices().get(i))
+                .is_some_and(|device| device.path == target.path
+                    && device.instance_token == target.instance_token
+                    && device.permits_hid_target(target)));
         self.vial_hid_task = None;
-        if result.generation != self.connection_generation {
+        if result.generation != self.connection_generation || !target_matches {
             return;
         }
 
         self.hid_device = result.hid_device;
         match result.outcome {
+            // The UI already shows the latest choice. An older completion must
+            // never replace a newer pending edit.
+            Ok(VialHidOutcome::UniversalGeometryWritten) => {}
             Ok(VialHidOutcome::LayerNameWritten(actual)) => {
                 if let VialHidOperation::LayerNameWrite(request) = result.operation {
                     if !self.selected_device.and_then(|i| self.device_manager.devices().get(i))
@@ -1289,6 +1375,9 @@ impl EntropyApp {
         }
 
         match operation {
+            VialHidOperation::UniversalGeometryWrite(_) => {
+                self.status_msg = format!("Universal Symbols: {error}");
+            }
             VialHidOperation::UnlockStart => self.fail_vial_unlock_start(error),
             VialHidOperation::LayerNameWrite(_) => {
                 self.status_msg = layer_name_write_error(self.app_settings.language, &error);
@@ -1819,7 +1908,7 @@ mod tests {
             rgb_supported: false,
             lighting_mode: None,
             supports_rmk_native_key_actions: false,
-            supports_universal_symbols: false,
+            supports_universal_numero: false, supports_universal_symbols: false,
             supports_universal_russian_letters: false,
             supports_rmk_native_combo_output: false,
             supports_rmk_native_tap_dance_actions: false,
@@ -1842,6 +1931,10 @@ mod tests {
     fn protocol_neutral_operations_send_the_same_vial_requests() {
         use rmk_types::action::{Action, KeyAction};
         let (hid, recorder) = crate::hid::HidDevice::test_device();
+        // Fixture begins after connection discovery: retain operation-only golden traffic.
+        *hid.native_capabilities.lock().unwrap() = Some(crate::rmk_native::RmkNativeCapabilities {
+            version: 1, key_actions: true, ..Default::default()
+        });
         let hid = crate::device_session::DeviceSession::from(hid);
         crate::golden_frames::fake_rmk_keyboard(&recorder);
         let key_write = |binding| VialHidOperation::KeyWrite {
@@ -1908,6 +2001,7 @@ mod tests {
             };
             let (sender, receiver) = std::sync::mpsc::channel();
             app.vial_hid_task = Some(VialHidTask {
+                target: None,
                 receiver,
                 operation: operation.clone(),
                 generation: app.connection_generation,

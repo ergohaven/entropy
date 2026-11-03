@@ -382,7 +382,9 @@ impl KeycodePicker {
         }
         if self.supports_universal_symbols {
             ui.add_space(crate::ui_style::modal_space_sm());
-            if let Some(binding) = show_universal_symbol_section(ui, self.language) {
+            if let Some(binding) =
+                show_universal_symbol_section(ui, self.language, self.supports_universal_numero)
+            {
                 self.set_tap_dance_binding(td_idx, field, binding);
                 self.td_key_pick = None;
             }
@@ -410,6 +412,11 @@ impl KeycodePicker {
     }
 
     fn set_tap_dance_binding(&mut self, n: usize, field: u8, value: crate::keyboard::KeyBinding) {
+        if crate::universal_symbols::binding_contains_numero(value)
+            && !self.supports_universal_numero
+        {
+            return;
+        }
         if n >= self.tap_dance_entries.len() {
             return;
         }
@@ -475,6 +482,7 @@ mod tests {
         let available = KeycodePicker {
             supports_rmk_native_key_actions: true,
             supports_rmk_native_tap_dance_actions: true,
+            supports_universal_numero: false,
             supports_universal_symbols: true,
             ..Default::default()
         };
