@@ -1303,6 +1303,72 @@ mod tests {
     }
 
     #[test]
+    fn firmware_macro_keys_are_visible_and_encode_in_both_views() {
+        for view in [PickerViewMode::Layout, PickerViewMode::List] {
+            for (action, opcode) in [
+                (MacroAction::Tap(0x04), 5),
+                (MacroAction::Down(0x04), 6),
+                (MacroAction::Up(0x04), 7),
+            ] {
+                for (label, value) in [("Layout EN", 0x7E00), ("Universal !", 0x7E02)] {
+                    let ctx = egui::Context::default();
+                    let mut picker = KeycodePicker {
+                        language: crate::i18n::Language::English,
+                        popup_view_mode: view,
+                        macro_key_pick: Some((0, 0)),
+                        macro_actions: vec![vec![action.clone()]],
+                        custom_keycodes: vec![(label.into(), label.into(), label.into(), value)],
+                        ..Default::default()
+                    };
+                    let _ = macro_picker_frame(&mut picker, &ctx, vec![]);
+                    let output = macro_picker_frame(&mut picker, &ctx, vec![]);
+                    let pos = macro_picker_text_position(&output, label)
+                        .expect("firmware keys should be visible without scrolling");
+                    macro_picker_click(&mut picker, &ctx, pos);
+                    assert_eq!(
+                        picker.macro_texts[0],
+                        if value & 0xFF == 0 {
+                            vec![1, opcode, (value >> 8) as u8, 0xFF]
+                        } else {
+                            vec![1, opcode, value as u8, (value >> 8) as u8]
+                        }
+                    );
+                    assert_eq!(
+                        decode_macro_actions(&picker.macro_texts[0]),
+                        picker.macro_actions[0]
+                    );
+                    assert!(picker.macros_dirty);
+                    assert!(picker.macro_key_pick.is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn firmware_macro_keys_remain_hidden_without_extended_macro_support() {
+        for view in [PickerViewMode::Layout, PickerViewMode::List] {
+            let ctx = egui::Context::default();
+            let mut picker = KeycodePicker {
+                popup_view_mode: view,
+                supports_macro_ext_keycodes: false,
+                macro_key_pick: Some((0, 0)),
+                macro_actions: vec![vec![MacroAction::Tap(0x04)]],
+                custom_keycodes: vec![(
+                    "Layout EN".into(),
+                    "Layout EN".into(),
+                    "Layout EN".into(),
+                    0x7E00,
+                )],
+                ..Default::default()
+            };
+            let _ = macro_picker_frame(&mut picker, &ctx, vec![]);
+            let output = macro_picker_frame(&mut picker, &ctx, vec![]);
+            assert!(macro_picker_text_position(&output, "Layout EN").is_none());
+            assert!(!picker.macros_dirty);
+        }
+    }
+
+    #[test]
     fn macro_modifier_picker_mouse_selection_encodes_hyper_f16_for_each_action_kind() {
         for (action, expected, opcode) in [
             (MacroAction::Tap(0x04), MacroAction::Tap(0x0F6B), 5),
