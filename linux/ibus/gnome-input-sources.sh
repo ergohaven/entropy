@@ -91,13 +91,27 @@ done
 
 updated="[$(printf '%s\n' "$entries" | awk 'NF { printf "%s%s", (n++ ? ", " : ""), $0 }')]"
 if [ "$updated" != "$(printf '%s\n' "$current" | sed 's/^@a(ss) //')" ]; then
-    gsettings set "$schema" "$key" "$updated"
-fi
-replaced=$(printf '%s\n' "$replaced" | sed '/^$/d')
-if [ -n "$replaced" ]; then
-    mkdir -p "$(dirname -- "$replaced_file")"
-    printf '%s\n' "$replaced" > "$replaced_file"
-else
-    rm -f "$replaced_file"
+    # The note is the only record of what restore must put back, so it is
+    # committed before the sources: a failed write changes nothing, and a
+    # failed gsettings set rolls the note back to what it said before.
+    replaced=$(printf '%s\n' "$replaced" | sed '/^$/d')
+    previous_note=$(cat "$replaced_file" 2>/dev/null || true)
+    if [ -n "$replaced" ]; then
+        if ! { mkdir -p "$(dirname -- "$replaced_file")" && printf '%s\n' "$replaced" > "$replaced_file"; }; then
+            printf '%s\n' "Could not record the replaced layouts; GNOME input sources are left as they are." >&2
+            exit 1
+        fi
+    else
+        rm -f "$replaced_file"
+    fi
+    if ! gsettings set "$schema" "$key" "$updated"; then
+        if [ -n "$previous_note" ]; then
+            printf '%s\n' "$previous_note" > "$replaced_file"
+        else
+            rm -f "$replaced_file"
+        fi
+        printf '%s\n' "Setting GNOME input sources failed; the replaced-layouts note is left as it was." >&2
+        exit 1
+    fi
 fi
 printf '%s\n' "GNOME input sources: $updated"

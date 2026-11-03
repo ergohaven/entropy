@@ -691,7 +691,7 @@ mod tests {
                  case $1 in\n\
                  get) cat \"$ENTROPY_TEST_SOURCES\" ;;\n\
                  writable) cat \"$ENTROPY_TEST_SOURCES.writable\" 2>/dev/null || echo true ;;\n\
-                 set) printf '%s\\n' \"$4\" > \"$ENTROPY_TEST_SOURCES\"; echo set >> \"$ENTROPY_TEST_SOURCES.sets\" ;;\n\
+                 set) [ -e \"$ENTROPY_TEST_SOURCES.setfail\" ] && exit 1; printf '%s\\n' \"$4\" > \"$ENTROPY_TEST_SOURCES\"; echo set >> \"$ENTROPY_TEST_SOURCES.sets\" ;;\n\
                  esac\n",
             )
             .unwrap();
@@ -889,6 +889,117 @@ mod tests {
             sandbox.current(),
             "[('ibus', 'entropy-universal-symbols-us'), ('xkb', 'ru')]"
         );
+    }
+
+    /// A failed write of the replaced-layouts record must not commit the
+    /// sources: the list stands as it did, and where the record can be saved
+    /// the same run restores exactly.
+    #[test]
+    fn a_failed_record_writes_no_sources() {
+        let script =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("linux/ibus/gnome-input-sources.sh");
+        let sandbox = GnomeSourcesSandbox::new("gnome-sources-note-blocked");
+        sandbox.set_sources("[('xkb', 'us+intl'), ('xkb', 'us')]");
+        // An ordinary file where the record's directory would be: mkdir -p
+        // fails with ENOTDIR.
+        std::fs::create_dir_all(sandbox.root.join("data")).unwrap();
+        std::fs::write(sandbox.root.join("data/entropy"), "blocked").unwrap();
+        let used = sandbox.run(&script, &["use"]);
+        assert!(!used.status.success(), "{used:?}");
+        assert_eq!(sandbox.current(), "[('xkb', 'us+intl'), ('xkb', 'us')]");
+        assert_eq!(sandbox.sets(), 0);
+
+        let writable = GnomeSourcesSandbox::new("gnome-sources-note-writable");
+        writable.set_sources("[('xkb', 'us+intl'), ('xkb', 'us')]");
+        assert!(writable.run(&script, &["use"]).status.success());
+        assert_eq!(
+            writable.current(),
+            "[('xkb', 'us+intl'), ('ibus', 'entropy-universal-symbols-us')]"
+        );
+        assert!(writable.run(&script, &["restore"]).status.success());
+        assert_eq!(writable.current(), "[('xkb', 'us+intl'), ('xkb', 'us')]");
+    }
+
+    /// A failed gsettings set rolls the record back to what it said before,
+    /// so a retry starts from the old replacement list.
+    #[test]
+    fn a_failed_commit_leaves_the_previous_record_in_place() {
+        let script =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("linux/ibus/gnome-input-sources.sh");
+        let sandbox = GnomeSourcesSandbox::new("gnome-sources-note-rollback");
+        let record = sandbox
+            .root
+            .join("data/entropy/ibus/gnome-replaced-layouts");
+        // A note outlives its source: ru was replaced earlier and its Entropy
+        // source was taken out by hand.
+        std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+        std::fs::write(&record, "ru\n").unwrap();
+        sandbox.set_sources("[('xkb', 'us'), ('xkb', 'ru')]");
+        std::fs::write(sandbox.root.join("sources.setfail"), "").unwrap();
+        let used = sandbox.run(&script, &["use"]);
+        assert!(!used.status.success(), "{used:?}");
+        assert_eq!(sandbox.current(), "[('xkb', 'us'), ('xkb', 'ru')]");
+        assert_eq!(
+            std::fs::read_to_string(&record).unwrap(),
+            "ru\n",
+            "the failed commit leaves the previous record in place"
+        );
+        std::fs::remove_file(sandbox.root.join("sources.setfail")).unwrap();
+        assert!(sandbox.run(&script, &["use"]).status.success());
+        assert_eq!(
+            sandbox.current(),
+            "[('ibus', 'entropy-universal-symbols-us'), ('ibus', 'entropy-universal-symbols-ru')]"
+        );
+        assert_eq!(std::fs::read_to_string(&record).unwrap(), "us\nru\n");
+
+        let fresh = GnomeSourcesSandbox::new("gnome-sources-note-rollback-empty");
+        fresh.set_sources("[('xkb', 'us')]");
+        std::fs::write(fresh.root.join("sources.setfail"), "").unwrap();
+        assert!(!fresh.run(&script, &["use"]).status.success());
+        assert!(!fresh
+            .root
+            .join("data/entropy/ibus/gnome-replaced-layouts")
+            .exists());
+    }
+
+    /// A restore that cannot give GNOME its sources back keeps the engine and
+    /// its files installed and fails, instead of deleting the only working
+    /// source backend.
+    #[test]
+    fn an_unfinished_restore_keeps_the_engine_for_a_retry() {
+        let uninstall = Path::new(env!("CARGO_MANIFEST_DIR")).join("linux/ibus/uninstall-user.sh");
+        let sandbox = GnomeSourcesSandbox::new("gnome-sources-uninstall-failed");
+        let data_home = sandbox.root.join("data");
+        // Russian was the only source; use replaced it with the Entropy source.
+        sandbox.set_sources("[('ibus', 'entropy-universal-symbols-ru')]");
+        std::fs::create_dir_all(data_home.join("entropy/ibus")).unwrap();
+        std::fs::write(
+            data_home.join("entropy/ibus/gnome-replaced-layouts"),
+            "ru\n",
+        )
+        .unwrap();
+        let component = data_home.join("ibus/component/entropy-universal-symbols.xml");
+        std::fs::create_dir_all(component.parent().unwrap()).unwrap();
+        std::fs::write(&component, "<component/>\n").unwrap();
+        std::fs::write(sandbox.root.join("sources.setfail"), "").unwrap();
+        let failed = sandbox.run(&uninstall, &[]);
+        assert!(!failed.status.success(), "{failed:?}");
+        assert_eq!(
+            sandbox.current(),
+            "[('ibus', 'entropy-universal-symbols-ru')]"
+        );
+        assert!(component.exists(), "the engine stays for a retry");
+        assert!(
+            data_home.join("entropy/ibus").exists(),
+            "the record stays for a retry"
+        );
+        // With the write failure gone, the retry finishes the uninstall.
+        std::fs::remove_file(sandbox.root.join("sources.setfail")).unwrap();
+        let done = sandbox.run(&uninstall, &[]);
+        assert!(done.status.success(), "{done:?}");
+        assert_eq!(sandbox.current(), "[('xkb', 'ru')]");
+        assert!(!component.exists());
+        assert!(!data_home.join("entropy/ibus").exists());
     }
 
     #[test]
