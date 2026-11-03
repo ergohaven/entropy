@@ -76,6 +76,23 @@ pub struct Device {
     pub firmware: FirmwareProtocol,
 }
 
+fn describe_devices(devices: &[Device]) -> String {
+    let vial = devices
+        .iter()
+        .filter(|device| device.firmware == FirmwareProtocol::Vial)
+        .count();
+    let rynk = devices
+        .iter()
+        .filter(|device| device.firmware == FirmwareProtocol::Rynk)
+        .count();
+    match (vial, rynk) {
+        (0, 0) => "Found 0 device(s)".to_string(),
+        (_, 0) => format!("Found {vial} Vial device(s)"),
+        (0, _) => format!("Found {rynk} Rynk device(s)"),
+        (_, _) => format!("Found {vial} Vial and {rynk} Rynk device(s)"),
+    }
+}
+
 impl Device {
     /// The dedicated customization page implements only these two protocols.
     /// Other LCD/OLED devices keep their definition-driven settings routes;
@@ -657,7 +674,7 @@ impl DeviceManager {
             }
         }
 
-        log::info!("Found {} Vial device(s)", self.devices.len());
+        log::info!("{}", describe_devices(&self.devices));
     }
 
     #[cfg(all(test, not(target_os = "macos")))]
@@ -667,7 +684,7 @@ impl DeviceManager {
 
     pub fn replace_devices(&mut self, devices: Vec<Device>) {
         self.devices = devices;
-        log::info!("Found {} Vial device(s)", self.devices.len());
+        log::info!("{}", describe_devices(&self.devices));
     }
 
     pub fn devices(&self) -> &[Device] {
