@@ -4308,6 +4308,7 @@ fn fresh_dedicated_owner_never_receives_previous_profile_snapshot() {
             None
         }
     });
+    let (opening, opened) = std::sync::mpsc::channel();
     let (release, wait) = std::sync::mpsc::channel();
     let mut hid = Some(hid);
     let mut bridge = QmkHidHostBridge::start_with_sources(
@@ -4317,10 +4318,14 @@ fn fresh_dedicated_owner_never_receives_previous_profile_snapshot() {
         HostProtocol::Discover,
         || None,
         move |_, _| {
+            opening.send(()).unwrap();
             wait.recv_timeout(Duration::from_secs(3)).unwrap();
             Ok(HostDataHid::Dedicated(hid.take().unwrap()))
         },
     );
+    // The worker revokes existing trust before calling the opener. Bind only
+    // after that revocation, while acquisition of the fresh endpoint is blocked.
+    opened.recv_timeout(Duration::from_secs(3)).unwrap();
     let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
     settings
         .layouts
