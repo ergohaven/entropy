@@ -273,6 +273,7 @@ timeout_tooltip = "Время удержания перед отправкой s
 timeout_field_tooltip = "Таймаут в миллисекундах"
 
 [connection]
+keyboard_locked_import_layout = "Устройство заблокировано, разблокируйте его для импорта раскладки"
 keyboard_locked_edit_macros = "Устройство заблокировано, разблокируйте его для редактирования макросов"
 keyboard_locked_edit_tap_dance = "Устройство заблокировано, разблокируйте его для редактирования Tap Dance"
 waiting_for_keyboard = "Ожидание устройства"

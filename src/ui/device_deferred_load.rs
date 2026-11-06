@@ -673,6 +673,12 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn request_entlayout_import_after_full_load(&mut self) {
+        if !self.deferred_device_load.is_staged() {
+            if let Err(error) = self.confirm_entlayout_macros() {
+                self.status_msg = error.to_string();
+                return;
+            }
+        }
         self.retry_failed_full_layout_loads(DeferredFullLayoutAction::ImportEntlayout);
         if self.deferred_full_layout_action_ready(DeferredFullLayoutAction::ImportEntlayout) {
             self.import_entlayout_dialog();
@@ -688,6 +694,13 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn request_entlayout_export_after_full_load(&mut self) {
+        // Eagerly loaded devices have no deferred context to schedule a GET.
+        if !self.deferred_device_load.is_staged() {
+            if let Err(error) = self.confirm_entlayout_macros() {
+                self.status_msg = error.to_string();
+                return;
+            }
+        }
         self.retry_failed_full_layout_loads(DeferredFullLayoutAction::ExportEntlayout);
         if self.deferred_full_layout_action_ready(DeferredFullLayoutAction::ExportEntlayout) {
             self.export_entlayout_dialog();

@@ -944,7 +944,43 @@ fn macropad_unified_persistence_failure_keeps_memory_and_hid_untouched() {
 #[test]
 fn macropad_unified_shared_macros_and_tap_dance_round_trip_every_profile() {
     let storage = crate::app::app_storage::ScopedTempConfig::new();
-    let (mut app, _, application) = fixture();
+    let (mut app, recorder, application) = fixture();
+    let mut macro_memory = vec![0; 64];
+    macro_memory[..11].copy_from_slice(b"macro body\0");
+    let mut key_memory = std::collections::BTreeMap::new();
+    recorder.respond_by(move |request| {
+        let mut response = [0; 32];
+        match request[0] {
+            0x05 => {
+                key_memory.insert(
+                    (request[1], request[2], request[3]),
+                    [request[4], request[5]],
+                );
+                Some(Ok(response))
+            }
+            0x04 => {
+                if let Some(code) = key_memory.get(&(request[1], request[2], request[3])) {
+                    response[4..6].copy_from_slice(code);
+                }
+                Some(Ok(response))
+            }
+            0x0d => {
+                response[2] = 64;
+                Some(Ok(response))
+            }
+            0x0e | 0x0f => {
+                let offset = u16::from_be_bytes([request[1], request[2]]) as usize;
+                let len = request[3] as usize;
+                if request[0] == 0x0f {
+                    macro_memory[offset..offset + len].copy_from_slice(&request[4..4 + len]);
+                } else {
+                    response[4..4 + len].copy_from_slice(&macro_memory[offset..offset + len]);
+                }
+                Some(Ok(response))
+            }
+            _ => None,
+        }
+    });
     app.keycode_picker.macro_count = 1;
     app.keycode_picker.macro_texts = vec![b"macro body".to_vec()];
     app.keycode_picker.tap_dance_entries = vec![crate::keycode_picker::TapDanceEntry::default()];
@@ -2711,7 +2747,8 @@ fn macropad_import_while_application_active_preserves_profiles_and_unmapped_defa
         .get_mut(DEFAULT_APPLICATION_LAYOUT_ID)
         .unwrap()
         .set_keycode(0, 1, 12);
-    app.apply_entlayout_local_state(&bundle, &mapping).unwrap();
+    app.apply_entlayout_local_state(&bundle, &mapping, true)
+        .unwrap();
     let settings = app.application_layout_settings().unwrap();
     assert_eq!(
         settings.layouts[DEFAULT_APPLICATION_LAYOUT_ID].layers[0][0],
@@ -3223,4 +3260,230 @@ fn reviewed_final_merged_rules_check_alias_overlap_for_existing_ids() {
         .unwrap()
         .contains_key(&application));
     assert!(app.validate_entlayout_file(&bundle).is_err());
+}
+
+#[test]
+fn ordinary_layout_import_waits_for_unlock_and_cancel_discards_it() {
+    let _storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app, recorder, _) = fixture();
+    app.vial_unlocked = Some(false);
+    let ctx = egui::Context::default();
+    app.begin_entlayout_import(_storage.path().join("not-read-before-unlock.entlayout"));
+    assert!(app.unlock_open);
+    app.tick_layout_import_lifecycle_for_test(&ctx, 1.0);
+    app.tick_layout_import_lifecycle_for_test(&ctx, 1.1);
+    assert!(app.pending_entlayout_import_path.is_some());
+    assert!(recorder.requests().is_empty());
+    app.dismiss_vial_unlock_preflight();
+    assert!(app.pending_entlayout_import_path.is_none());
+    app.finish_vial_unlock_start(true, vec![]);
+    app.tick_layout_import_lifecycle_for_test(&ctx, 1.2);
+    assert!(recorder.requests().is_empty());
+}
+
+#[test]
+fn ordinary_layout_import_refuses_locked_direct_call_before_backup_or_writes() {
+    let storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app, recorder, _) = fixture();
+    let mut bundle = app.entlayout_snapshot().unwrap();
+    bundle.version = 7;
+    bundle.application_layouts = None;
+    let path = storage.path().join("locked.entlayout");
+    write_entlayout_file(&path, &bundle, app.app_settings.language).unwrap();
+    app.vial_unlocked = Some(false);
+    assert!(app.import_entlayout_from_path(&path).is_err());
+    assert!(recorder.requests().is_empty());
+    assert!(!storage.path().join("entropy/backups").exists());
+}
+
+#[test]
+fn ordinary_layout_import_restores_macro_and_tap_dance_after_unlock() {
+    ordinary_macro_restore(true);
+}
+
+#[test]
+fn ordinary_layout_import_reports_silently_ignored_macro_write() {
+    ordinary_macro_restore(false);
+}
+
+fn ordinary_macro_restore(accept_write: bool) {
+    let storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app, recorder, _) = fixture();
+    // An ordinary v7 document, with a Tap Dance that invokes macro 0.
+    app.keycode_picker.macro_count = 1;
+    app.keycode_picker.macro_texts = vec![b"restored".to_vec()];
+    app.keycode_picker.tap_dance_entries = vec![crate::keycode_picker::TapDanceEntry::default()];
+    let mut bundle = app.entlayout_snapshot().unwrap();
+    bundle.version = 7;
+    bundle.application_layouts = None;
+    bundle.data.tap_dance.entries[0].on_tap = 0x7700;
+    // Keep an equal cache in the success case to model EEPROM reset after reflash.
+    if !accept_write {
+        app.keycode_picker.macro_texts = vec![b"old".to_vec()];
+    }
+    let memory = std::sync::Arc::new(std::sync::Mutex::new(vec![0u8; 64]));
+    let firmware = memory.clone();
+    recorder.respond_by(move |r| {
+        let mut response = [0; 32];
+        match r[0] {
+            0x0d => {
+                response[2] = 64;
+                Some(Ok(response))
+            }
+            0x0f => {
+                if accept_write {
+                    let offset = u16::from_be_bytes([r[1], r[2]]) as usize;
+                    let len = r[3] as usize;
+                    firmware.lock().unwrap()[offset..offset + len].copy_from_slice(&r[4..4 + len]);
+                }
+                Some(Ok(response))
+            }
+            0x0e => {
+                let offset = u16::from_be_bytes([r[1], r[2]]) as usize;
+                let len = r[3] as usize;
+                response[4..4 + len]
+                    .copy_from_slice(&firmware.lock().unwrap()[offset..offset + len]);
+                Some(Ok(response))
+            }
+            _ => None,
+        }
+    });
+    let path = storage.path().join("ordinary.entlayout");
+    write_entlayout_file(&path, &bundle, app.app_settings.language).unwrap();
+    app.vial_unlocked = Some(false);
+    app.begin_entlayout_import(path);
+    let ctx = egui::Context::default();
+    app.tick_layout_import_lifecycle_for_test(&ctx, 1.0);
+    app.tick_layout_import_lifecycle_for_test(&ctx, 1.1);
+    assert!(recorder.requests().is_empty());
+    app.finish_vial_unlock_start(false, vec![(0, 0)]);
+    app.tick_layout_import_lifecycle_for_test(&ctx, 1.15);
+    assert!(recorder.requests().is_empty());
+    app.finish_vial_unlock_poll(true, false, 0);
+    app.tick_layout_import_lifecycle_for_test(&ctx, 1.2);
+    app.tick_layout_import_lifecycle_for_test(&ctx, 1.3);
+    assert!(app.import_report_open);
+    assert!(app.pending_entlayout_import_path.is_none());
+    if accept_write {
+        assert_eq!(&memory.lock().unwrap()[..9], b"restored\0");
+        assert_eq!(
+            app.keycode_picker.tap_dance_entries[0]
+                .on_tap
+                .vial_keycode(),
+            0x7700
+        );
+    } else {
+        assert_eq!(app.keycode_picker.macro_texts, vec![b"old".to_vec()]);
+        assert!(
+            app.import_report_body
+                .contains("Macro bytecode readback mismatch"),
+            "{}",
+            app.import_report_body
+        );
+    }
+    assert!(recorder.requests().iter().any(|r| r[0] == 0x0f));
+    assert!(recorder.requests().iter().any(|r| r[0] == 0x0e));
+}
+
+#[test]
+fn ordinary_layout_import_discards_stale_connection_after_unlock() {
+    let storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app, recorder, _) = fixture();
+    app.vial_unlocked = Some(false);
+    app.begin_entlayout_import(storage.path().join("stale.entlayout"));
+    app.connection_generation = app.connection_generation.wrapping_add(1);
+    app.finish_vial_unlock_start(true, vec![]);
+    let ctx = egui::Context::default();
+    app.tick_layout_import_lifecycle_for_test(&ctx, 1.0);
+    app.tick_layout_import_lifecycle_for_test(&ctx, 1.1);
+    assert!(app.pending_entlayout_import_path.is_none());
+    assert!(recorder.requests().is_empty());
+    assert!(!storage.path().join("entropy/backups").exists());
+}
+
+#[test]
+fn ordinary_layout_import_unlock_failure_opens_report() {
+    let storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app, recorder, _) = fixture();
+    app.vial_unlocked = Some(false);
+    app.begin_entlayout_import(storage.path().join("pending.entlayout"));
+    app.fail_vial_unlock_start("synthetic transport failure".into());
+    assert!(app.pending_entlayout_import_path.is_none());
+    assert!(!app.unlock_open);
+    assert!(app.import_report_open);
+    assert!(app
+        .import_report_body
+        .contains("synthetic transport failure"));
+    assert!(recorder.requests().is_empty());
+}
+
+#[test]
+fn uncertain_macro_write_blocks_snapshot_until_read_only_recovery() {
+    for partial_set in [false, true] {
+        let storage = crate::app::app_storage::ScopedTempConfig::new();
+        let (mut app, recorder, _) = fixture();
+        app.keycode_picker.macro_count = 1;
+        app.keycode_picker.macro_texts = vec![vec![b'x'; 40]];
+        let mut bundle = app.entlayout_snapshot().unwrap();
+        bundle.version = 7;
+        bundle.application_layouts = None;
+        app.keycode_picker.macro_texts = vec![b"old".to_vec()];
+        app.deferred_device_load = DeferredDeviceLoadState::complete(app.layer_count);
+        let failing = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let fail = failing.clone();
+        let memory = std::sync::Arc::new(std::sync::Mutex::new(vec![0u8; 64]));
+        let firmware = memory.clone();
+        recorder.respond_by(move |r| {
+            let mut response = [0; 32];
+            let offset = u16::from_be_bytes([r[1], r[2]]) as usize;
+            let len = r[3] as usize;
+            match r[0] {
+                0x0d => {
+                    response[2] = 64;
+                    Some(Ok(response))
+                }
+                0x0f => {
+                    if partial_set && offset >= 28 {
+                        return Some(Err("partial SET".into()));
+                    }
+                    firmware.lock().unwrap()[offset..offset + len].copy_from_slice(&r[4..4 + len]);
+                    Some(Ok(response))
+                }
+                0x0e => {
+                    if fail.load(std::sync::atomic::Ordering::SeqCst) {
+                        return Some(Err("GET failed".into()));
+                    }
+                    response[4..4 + len]
+                        .copy_from_slice(&firmware.lock().unwrap()[offset..offset + len]);
+                    Some(Ok(response))
+                }
+                _ => None,
+            }
+        });
+        let path = storage.path().join("uncertain.entlayout");
+        write_entlayout_file(&path, &bundle, app.app_settings.language).unwrap();
+        app.import_entlayout_from_path(&path).unwrap();
+        assert_eq!(app.keycode_picker.macro_texts, vec![b"old".to_vec()]);
+        assert!(!app.deferred_full_layout_action_ready(DeferredFullLayoutAction::ExportEntlayout));
+        assert!(app.entlayout_snapshot().is_none());
+        assert!(app.write_entlayout_auto_backup().is_err());
+        assert!(app.entlayout_export_json().unwrap().is_err());
+        app.request_entlayout_export_after_full_load();
+        assert!(app.deferred_full_layout_action.is_none());
+        app.request_entlayout_import_after_full_load();
+        assert!(app.deferred_full_layout_action.is_none());
+        assert!(app.entlayout_snapshot().is_none());
+        let writes = recorder.requests().iter().filter(|r| r[0] == 0x0f).count();
+        failing.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(app.entlayout_export_json().unwrap().is_ok());
+        assert_eq!(
+            app.keycode_picker.macro_texts,
+            crate::hid::HidDevice::parse_macros(&memory.lock().unwrap(), 1)
+        );
+        assert!(app.deferred_full_layout_action_ready(DeferredFullLayoutAction::ExportEntlayout));
+        assert_eq!(
+            writes,
+            recorder.requests().iter().filter(|r| r[0] == 0x0f).count()
+        );
+    }
 }
