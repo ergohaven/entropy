@@ -22,6 +22,7 @@ const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_MORSE_ACTIONS: u16 = 0x0010;
 const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_LAYER: u16 = 0x0020;
 const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_VIAL_MACRO_EXT: u16 = 0x0040;
 const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_REPEAT_KEY: u16 = 0x0080;
+const ERGOHAVEN_NATIVE_KEY_ACTION_CAP_UNIVERSAL_MACROS: u16 = 0x0400;
 const NATIVE_DYNAMIC_ACTION_KIND_COMBO_OUTPUT: u8 = 0x00;
 const NATIVE_DYNAMIC_ACTION_KIND_MORSE: u8 = 0x01;
 const NATIVE_KEY_ACTION_STATUS_OK: u8 = 0x00;
@@ -46,6 +47,7 @@ pub(crate) struct RmkNativeCapabilities {
     pub(crate) tap_dance_actions: bool,
     pub(crate) combo_layers: bool,
     pub(crate) vial_macro_ext: bool,
+    pub(crate) universal_macros: bool,
     pub(crate) repeat_key: bool,
 }
 
@@ -97,6 +99,19 @@ pub(crate) fn rmk_mod_tap_parts(action: KeyAction) -> Option<RmkModTapParts> {
         tap_value: ((tap_modifiers.into_packed_bits() as u16) << 8) | key as u16,
         hold_modifier_bits: hold_modifiers.into_packed_bits(),
     })
+}
+
+pub(crate) fn rmk_macro_tap_hold_parts(action: KeyAction) -> Option<(u16, u16)> {
+    use rmk_types::action::Action;
+    let KeyAction::TapHold(Action::TriggerMacro(slot), hold, _) = action else {
+        return None;
+    };
+    let base = match hold {
+        Action::Modifier(modifiers) => 0x2000 | ((modifiers.into_packed_bits() as u16) << 8),
+        Action::LayerOn(layer) if layer < 16 => 0x4000 | (u16::from(layer) << 8),
+        _ => return None,
+    };
+    Some((0x7700 + u16::from(slot), base))
 }
 
 pub(crate) fn apply_rmk_native_actions(
@@ -312,6 +327,7 @@ fn decode_native_capabilities(response: &[u8; MSG_LEN]) -> RmkNativeCapabilities
         tap_dance_actions: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_MORSE_ACTIONS != 0,
         combo_layers: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_LAYER != 0,
         vial_macro_ext: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_VIAL_MACRO_EXT != 0,
+        universal_macros: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_UNIVERSAL_MACROS != 0,
         repeat_key: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_REPEAT_KEY != 0,
     }
 }
@@ -976,6 +992,7 @@ mod tests {
                 tap_dance_actions: false,
                 combo_layers: false,
                 vial_macro_ext: false,
+                universal_macros: false,
                 repeat_key: false,
             }
         );
@@ -1009,6 +1026,20 @@ mod tests {
     }
 
     #[test]
+    fn universal_macro_capability_is_independent_of_extended_macros() {
+        let mut response = [0; MSG_LEN];
+        response[0] = CMD_VIA_CUSTOM_GET_VALUE;
+        response[1] = ERGOHAVEN_CUSTOM_NAMESPACE;
+        response[2] = ERGOHAVEN_CUSTOM_NATIVE_KEY_ACTION_CAPS;
+        response[3] = ERGOHAVEN_NATIVE_KEY_ACTION_VERSION;
+        response[4..6].copy_from_slice(&0x0040u16.to_le_bytes());
+        assert!(decode_native_capabilities(&response).vial_macro_ext);
+        assert!(!decode_native_capabilities(&response).universal_macros);
+        response[4..6].copy_from_slice(&0x0440u16.to_le_bytes());
+        assert!(decode_native_capabilities(&response).universal_macros);
+    }
+
+    #[test]
     fn universal_symbols_capability_enables_existing_layout_sync_bridge() {
         assert!(supports_layout_sync(RmkNativeCapabilities {
             version: 1,
@@ -1021,6 +1052,7 @@ mod tests {
             tap_dance_actions: false,
             combo_layers: false,
             vial_macro_ext: false,
+            universal_macros: false,
             repeat_key: false,
         }));
         assert!(!supports_layout_sync(RmkNativeCapabilities {
@@ -1034,6 +1066,7 @@ mod tests {
             tap_dance_actions: false,
             combo_layers: false,
             vial_macro_ext: false,
+            universal_macros: false,
             repeat_key: false,
         }));
     }
