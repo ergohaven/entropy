@@ -1520,6 +1520,9 @@ impl EntropyApp {
     }
 
     fn is_module_settings_title(title: &str) -> bool {
+        if title.eq_ignore_ascii_case("Qube display") {
+            return true;
+        }
         let words = Self::settings_title_words(title);
         let identifies_side = words
             .iter()
