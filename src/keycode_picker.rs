@@ -39,6 +39,7 @@ mod keycode_picker_lighting_quantum;
 #[path = "keycode_picker_macro.rs"]
 mod keycode_picker_macro;
 pub(crate) use keycode_picker_macro::decode_macro_actions;
+use keycode_picker_macro::{MacroSnapshot, MacroUndoEntry};
 #[path = "keycode_picker_special.rs"]
 mod keycode_picker_special;
 #[path = "keycode_picker_tabs.rs"]
@@ -214,8 +215,12 @@ pub struct KeycodePicker {
     /// Last revision attempted by the HID worker. A failed revision is not
     /// retried until another edit creates a new snapshot.
     pub macro_attempted_revision: Option<u64>,
-    /// Undo stack for macro editor: (macro_idx, previous_actions)
-    macro_undo_stack: Vec<(usize, Vec<MacroAction>)>,
+    /// Action edits preserve metadata; Paste and Clear restore the whole slot.
+    macro_undo_stack: Vec<MacroUndoEntry>,
+    /// In-app clipboard, scoped to the connected keyboard.
+    macro_clipboard: Option<MacroSnapshot>,
+    /// Typographic characters replaced with ASCII while editing Text steps of
+    /// this macro: (macro_idx, count). Shown so the rewrite is never silent.
     /// Macro key picker: (macro_idx, action_idx) being edited
     macro_key_pick: Option<(usize, usize)>,
     macro_mod_key_pick: Option<u16>,
@@ -1212,6 +1217,7 @@ impl Default for KeycodePicker {
             macro_metadata_dirty: false,
             macro_actions: vec![vec![]; 16],
             macro_undo_stack: Vec::new(),
+            macro_clipboard: None,
             macro_key_pick: None,
             macro_mod_key_pick: None,
             advanced_slot_picker: None,
