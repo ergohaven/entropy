@@ -3867,7 +3867,7 @@ mod tests {
 
     #[test]
     fn catalog_upgrade_adds_photoshop_and_only_fills_untouched_second_layers() {
-        let presets = builtin_application_layout_presets_for(ShortcutPlatform::WindowsLinux);
+        let presets = builtin_application_layout_presets();
         let obs = presets
             .iter()
             .find(|preset| preset.id == "obs_studio")
@@ -3945,7 +3945,12 @@ mod tests {
 
     #[test]
     fn catalog_revision_five_removes_only_untouched_retired_layouts() {
-        let presets = all_application_layout_presets_for(ShortcutPlatform::WindowsLinux);
+        let platform = if cfg!(target_os = "macos") {
+            ShortcutPlatform::MacOs
+        } else {
+            ShortcutPlatform::WindowsLinux
+        };
+        let presets = all_application_layout_presets_for(platform);
         let mut settings = DeviceApplicationLayouts::default();
         let mut retired_ids = Vec::new();
         for preset in presets
@@ -4012,7 +4017,7 @@ mod tests {
 
     #[test]
     fn catalog_revision_three_adds_third_layer_only_to_stock_profiles() {
-        let presets = builtin_application_layout_presets_for(ShortcutPlatform::WindowsLinux);
+        let presets = builtin_application_layout_presets();
         let code = presets
             .iter()
             .find(|preset| preset.id == "visual_studio_code")
@@ -4209,7 +4214,7 @@ mod tests {
 
     #[test]
     fn changed_preset_command_loses_its_old_icon_and_visuals_are_transmitted() {
-        let preset = builtin_application_layout_presets_for(ShortcutPlatform::WindowsLinux)
+        let preset = builtin_application_layout_presets()
             .into_iter()
             .find(|preset| preset.id == "google_chrome")
             .unwrap();
