@@ -848,6 +848,8 @@ mod tests {
             crate::rynk::session::RynkSession::new(link),
         ));
 
+        app.firmware = FirmwareProtocol::Rynk;
+
         // What the board would lose waits for the user, before any write.
         app.begin_entlayout_import(file.clone());
         app.handle_pending_imports(&ctx, 1.0);
