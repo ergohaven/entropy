@@ -291,6 +291,26 @@ impl EntropyApp {
         encoder_target: Option<usize>,
     ) {
         let kc = binding.vial_keycode();
+        if let crate::keyboard::KeyBinding::Rmk(action) = binding {
+            if let Some((_, base)) = crate::rmk_native::rmk_macro_tap_hold_parts(action) {
+                if ctrl_held && base & 0xF000 != 0x4000 {
+                    if let Some(ki) = key_target {
+                        self.drop_queued_middle_click_assignment(self.selected_layer, ki);
+                        self.pending_handed_swap = Some((
+                            self.selected_layer,
+                            ki,
+                            crate::rmk_native::toggle_handed_key_action(action).into(),
+                        ));
+                    }
+                } else {
+                    self.open_picker_for_target(key_target, encoder_target);
+                    self.keycode_picker.vial_quantum_pending_mt = Some(base);
+                    self.keycode_picker.vial_quantum_pending_mod = None;
+                }
+                self.secondary_click_handled = true;
+                return;
+            }
+        }
         // A Rynk mod-tap without a keycode reads through its v1 label.
         let native = match binding {
             crate::keyboard::KeyBinding::Rmk(action) => Some(action),
@@ -852,6 +872,29 @@ mod tests {
     use rmk_types::action::{Action, KeyAction};
     use rmk_types::keycode::HidKeyCode;
     use rmk_types::modifier::ModifierCombination;
+
+    #[test]
+    fn right_click_reopens_macro_tap_hold_without_changing_the_hold() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        for (hold, base) in [
+            (Action::LayerOn(3), 0x4300),
+            (Action::Modifier(ModifierCombination::RCTRL), 0x3100),
+        ] {
+            let mut app = EntropyApp::new(&creation_context);
+            app.handle_secondary_target(
+                &ctx,
+                false,
+                KeyAction::TapHold(Action::TriggerMacro(5), hold, Default::default()).into(),
+                Some(0),
+                None,
+            );
+            assert!(app.secondary_click_handled);
+            assert!(app.keycode_picker.open);
+            assert_eq!(app.keycode_picker.vial_quantum_pending_mt, Some(base));
+            assert!(app.keycode_picker.rmk_native_key_actions_allowed_for_target);
+        }
+    }
 
     #[test]
     fn right_click_reopens_native_mod_tap_tap_key_picker() {

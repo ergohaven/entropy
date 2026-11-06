@@ -162,6 +162,7 @@ pub struct KeycodePicker {
     pub supports_layer_lock: bool,
     pub supports_persistent_default_layer: bool,
     pub supports_macro_ext_keycodes: bool,
+    pub supports_universal_macros: bool,
     pub supports_rmk_native_key_actions: bool,
     pub supports_universal_numero: bool,
     pub supports_universal_symbols: bool,
@@ -812,6 +813,72 @@ mod tests {
     }
 
     #[test]
+    fn macros_can_be_tap_actions_without_truncating_the_slot() {
+        use rmk_types::action::{Action, KeyAction};
+        use rmk_types::modifier::ModifierCombination;
+        for (base, hold) in [
+            (0x3100, Action::Modifier(ModifierCombination::RCTRL)),
+            (0x4300, Action::LayerOn(3)),
+        ] {
+            let mut picker = KeycodePicker {
+                supports_rmk_native_key_actions: true,
+                rmk_native_key_actions_allowed_for_target: true,
+                ..Default::default()
+            };
+            picker.finish_quantum_pending_key(base, 0x7705, true);
+            let action = KeyAction::TapHold(Action::TriggerMacro(5), hold, Default::default());
+            assert_eq!(picker.result, Some(action.into()));
+            assert_eq!(
+                crate::rmk_native::rmk_macro_tap_hold_parts(action),
+                Some((0x7705, base))
+            );
+            picker.select_tab_for_binding(action.into());
+            assert_eq!(picker.selected_tab, KeycodeTab::Modifiers);
+        }
+    }
+
+    #[test]
+    fn macro_tap_hold_requires_native_support_for_the_target() {
+        for (supported, allowed) in [(false, false), (true, false), (false, true)] {
+            let mut picker = KeycodePicker {
+                open: true,
+                vial_quantum_pending_mt: Some(0x2100),
+                supports_rmk_native_key_actions: supported,
+                rmk_native_key_actions_allowed_for_target: allowed,
+                ..Default::default()
+            };
+            picker.finish_quantum_pending_key(0x2100, 0x7705, true);
+            assert!(picker.result.is_none());
+            assert!(picker.open);
+            assert_eq!(picker.vial_quantum_pending_mt, Some(0x2100));
+        }
+    }
+
+    #[test]
+    fn retargeting_macro_layer_tap_to_a_shifted_key_keeps_the_layer() {
+        use rmk_types::action::{Action, KeyAction};
+        use rmk_types::keycode::HidKeyCode;
+        use rmk_types::modifier::ModifierCombination;
+        let mut picker = KeycodePicker {
+            supports_rmk_native_key_actions: true,
+            rmk_native_key_actions_allowed_for_target: true,
+            ..Default::default()
+        };
+        picker.finish_quantum_pending_key(0x4300, 0x0222, true);
+        assert_eq!(
+            picker.result,
+            Some(
+                KeyAction::TapHold(
+                    Action::KeyWithModifier(HidKeyCode::from(0x22), ModifierCombination::LSHIFT),
+                    Action::LayerOn(3),
+                    Default::default(),
+                )
+                .into()
+            )
+        );
+    }
+
+    #[test]
     fn shifted_mod_tap_uses_lossless_rmk_action_when_supported() {
         use rmk_types::action::{Action, KeyAction};
         use rmk_types::keycode::HidKeyCode;
@@ -1177,6 +1244,7 @@ impl Default for KeycodePicker {
             supports_layer_lock: true,
             supports_persistent_default_layer: true,
             supports_macro_ext_keycodes: true,
+            supports_universal_macros: false,
             supports_rmk_native_key_actions: false,
             supports_universal_numero: false,
             supports_universal_symbols: false,
@@ -1308,6 +1376,16 @@ impl KeycodePicker {
         } else {
             value
         };
+        if matches!(value, 0x7E80..=0x7E84 | 0x7E90..=0x7EB3)
+            && (!self.supports_universal_macros
+                || !self.supports_universal_symbols
+                || self.macro_key_pick_kind(macro_idx, action_idx) != Some(MacroKeyPickKind::Tap))
+        {
+            return;
+        }
+        if matches!(value, 0x7EB0..=0x7EB3) && !self.supports_universal_russian_letters {
+            return;
+        }
         if !self.supports_macro_ext_keycodes && value >= 0x0100 {
             return;
         }
@@ -1327,6 +1405,43 @@ impl KeycodePicker {
         self.macro_key_pick = None;
         self.macro_mod_key_pick = None;
         self.advanced_slot_picker = None;
+    }
+
+    fn macro_universal_key_choices(&self, kind: MacroKeyPickKind) -> Vec<(u16, String, String)> {
+        if kind != MacroKeyPickKind::Tap
+            || !self.supports_universal_macros
+            || !self.supports_universal_symbols
+            || !self.supports_macro_ext_keycodes
+        {
+            return Vec::new();
+        }
+        crate::universal_symbols::CONTROLS
+            .iter()
+            .map(|item| item.user_id)
+            .chain(
+                crate::universal_symbols::SYMBOLS
+                    .iter()
+                    .map(|item| item.user_id),
+            )
+            .chain(
+                crate::universal_symbols::RUSSIAN_LETTERS
+                    .iter()
+                    .filter(|_| self.supports_universal_russian_letters)
+                    .map(|item| item.user_id),
+            )
+            .map(|id| {
+                let label = crate::universal_symbols::label_for_user_id(id).unwrap();
+                let tooltip = crate::universal_symbols::tooltip(
+                    crate::universal_symbols::binding(id).rmk_action().unwrap(),
+                )
+                .unwrap();
+                (
+                    0x7E00 | u16::from(id),
+                    label,
+                    crate::i18n::tr_text(self.language, &tooltip),
+                )
+            })
+            .collect()
     }
 
     fn macro_layer_key_choices(&self, kind: MacroKeyPickKind) -> Vec<(u16, String, String)> {
@@ -1390,26 +1505,33 @@ impl KeycodePicker {
     }
 
     fn finish_quantum_pending_key(&mut self, base: u16, key_value: u16, is_mt: bool) {
-        let binding = if is_mt
-            && (0x0100..0x2000).contains(&key_value)
+        let is_macro = (0x7700..=0x77FF).contains(&key_value);
+        let native_tap_hold = is_mt
             && self.supports_rmk_native_key_actions
-            && self.rmk_native_key_actions_allowed_for_target
-        {
+            && self.rmk_native_key_actions_allowed_for_target;
+        if is_mt && is_macro && !native_tap_hold {
+            return;
+        }
+        let binding = if native_tap_hold && (is_macro || (0x0100..0x2000).contains(&key_value)) {
             use rmk_types::action::{Action, KeyAction};
             use rmk_types::keycode::HidKeyCode;
             use rmk_types::modifier::ModifierCombination;
-
-            KeyAction::TapHold(
+            let tap = if is_macro {
+                Action::TriggerMacro((key_value - 0x7700) as u8)
+            } else {
                 Action::KeyWithModifier(
                     HidKeyCode::from((key_value & 0x00FF) as u8),
                     ModifierCombination::from_packed_bits((key_value >> 8) as u8),
-                ),
+                )
+            };
+            let hold = if base & 0xF000 == 0x4000 {
+                Action::LayerOn(((base >> 8) & 0x0F) as u8)
+            } else {
                 Action::Modifier(ModifierCombination::from_packed_bits(
                     ((base >> 8) & 0x1F) as u8,
-                )),
-                Default::default(),
-            )
-            .into()
+                ))
+            };
+            KeyAction::TapHold(tap, hold, Default::default()).into()
         } else {
             crate::keyboard::KeyBinding::Vial(base | key_value)
         };
@@ -1696,6 +1818,10 @@ impl KeycodePicker {
                     .macro_key_pick_kind(macro_idx, action_idx)
                     .map(|kind| self.macro_layer_key_choices(kind))
                     .unwrap_or_default();
+                let universal_choices = self
+                    .macro_key_pick_kind(macro_idx, action_idx)
+                    .map(|kind| self.macro_universal_key_choices(kind))
+                    .unwrap_or_default();
                 let supports_macro_ext_keycodes = self.supports_macro_ext_keycodes;
                 let key_choices: Vec<&'static crate::keycode::Keycode> = KEYCODES
                     .iter()
@@ -1711,6 +1837,32 @@ impl KeycodePicker {
                     .max_height(key_picker_popup_scroll_height(popup_size))
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        if self.macro_key_pick.is_some()
+                            && pending_mod_key.is_none()
+                            && !universal_choices.is_empty()
+                        {
+                            if let Some(value) = show_grouped_popup_choice_buttons(
+                                ui,
+                                vec![(
+                                    tr_picker(
+                                        self.language,
+                                        "key_picker.section_universal_symbols",
+                                    ),
+                                    universal_choices,
+                                )],
+                                self.language,
+                            ) {
+                                self.set_macro_key_pick_value(macro_idx, action_idx, value);
+                            }
+                        }
+                        if self.macro_key_pick.is_some()
+                            && pending_mod_key.is_none()
+                            && supports_macro_ext_keycodes
+                        {
+                            if let Some(value) = self.show_custom_keycode_choice_section(ui) {
+                                self.set_macro_key_pick_value(macro_idx, action_idx, value);
+                            }
+                        }
                         if self.macro_key_pick.is_some() {
                             match self.popup_view_mode {
                                 PickerViewMode::Layout => {
@@ -2465,6 +2617,22 @@ impl KeycodePicker {
                         if let Some(value) = self.show_popup_key_choice_view(ui, key_choices, false)
                         {
                             self.finish_quantum_pending_key(base, value, is_mt);
+                        }
+                        if is_mt
+                            && self.supports_macro
+                            && self.supports_rmk_native_key_actions
+                            && self.rmk_native_key_actions_allowed_for_target
+                        {
+                            ui.label(tr_picker(self.language, "macro_editor.title"));
+                            if let Some(slot) =
+                                self.show_macro_slot_grid(ui, None, "tap_hold_macros")
+                            {
+                                self.finish_quantum_pending_key(
+                                    base,
+                                    0x7700 + u16::from(slot),
+                                    true,
+                                );
+                            }
                         }
                     });
             });
