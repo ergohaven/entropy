@@ -1286,6 +1286,7 @@ mod tests {
         let mut display_settings = DisplaySettingsState::default();
         let mut layer_led_settings = LayerLedSettingsState {
             brightness: Some(LayerLedNumericSetting {
+                loaded: true,
                 qsid: 316,
                 width: 2,
                 value: 32,

@@ -380,6 +380,9 @@ fn missing_sections(app: &EntropyApp, sessions: &ReadOnlySessions) -> Vec<String
         .into_iter()
         .filter_map(rynk_section_of_read);
     for section in hid.chain(rynk) {
+        if section == "Rgb" && app.rgb_settings.loaded {
+            continue;
+        }
         if !missing.iter().any(|name| name == section) {
             missing.push(section.to_owned());
         }
@@ -543,6 +546,18 @@ pub(crate) fn run_headless_export(request: HeadlessExportRequest) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_rgb_reads_make_headless_backups_incomplete_unless_fallback_loaded() {
+        let session = ReadOnlySessions::default();
+        let (hid, recorder) = crate::hid::HidDevice::test_read_only_device(session.hid.clone());
+        recorder.respond_by(|r| (r[0] == 8).then(|| Err("RGB read failed".into())));
+        assert!(hid.get_qmk_rgblight_brightness().is_err());
+        let mut app = EntropyApp::new_inert_for_test();
+        assert!(missing_sections(&app, &session).iter().any(|s| s == "Rgb"));
+        app.rgb_settings.loaded = true;
+        assert!(!missing_sections(&app, &session).iter().any(|s| s == "Rgb"));
+    }
 
     fn parse(args: &[&str]) -> Result<Option<HeadlessExportRequest>, String> {
         HeadlessExportRequest::from_args(std::iter::once("entropy").chain(args.iter().copied()))
