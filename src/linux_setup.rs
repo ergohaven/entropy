@@ -1035,6 +1035,47 @@ mod tests {
         assert!(!data_home.join("entropy/ibus").exists());
     }
 
+    /// A locked source list makes restore a no-op that still exits 0: the
+    /// uninstall must notice that the list keeps naming the user engine and
+    /// keep the engine and its files for a retry, instead of deleting the
+    /// backend of the source that stays in the list.
+    #[test]
+    fn a_locked_list_keeps_the_engine_for_a_retry() {
+        let uninstall = Path::new(env!("CARGO_MANIFEST_DIR")).join("linux/ibus/uninstall-user.sh");
+        let sandbox = GnomeSourcesSandbox::new("gnome-sources-uninstall-locked");
+        let data_home = sandbox.root.join("data");
+        // Russian was the only source; use replaced it with the Entropy source.
+        sandbox.set_sources("[('ibus', 'entropy-universal-symbols-ru')]");
+        std::fs::create_dir_all(data_home.join("entropy/ibus")).unwrap();
+        std::fs::write(
+            data_home.join("entropy/ibus/gnome-replaced-layouts"),
+            "ru\n",
+        )
+        .unwrap();
+        let component = data_home.join("ibus/component/entropy-universal-symbols.xml");
+        std::fs::create_dir_all(component.parent().unwrap()).unwrap();
+        std::fs::write(&component, "<component/>\n").unwrap();
+        std::fs::write(sandbox.root.join("sources.writable"), "false\n").unwrap();
+        let locked = sandbox.run(&uninstall, &[]);
+        assert!(!locked.status.success(), "{locked:?}");
+        assert_eq!(
+            sandbox.current(),
+            "[('ibus', 'entropy-universal-symbols-ru')]"
+        );
+        assert!(component.exists(), "the engine stays for a retry");
+        assert!(
+            data_home.join("entropy/ibus").exists(),
+            "the record stays for a retry"
+        );
+        // With the lock lifted, the retry finishes the uninstall.
+        std::fs::remove_file(sandbox.root.join("sources.writable")).unwrap();
+        let done = sandbox.run(&uninstall, &[]);
+        assert!(done.status.success(), "{done:?}");
+        assert_eq!(sandbox.current(), "[('xkb', 'ru')]");
+        assert!(!component.exists());
+        assert!(!data_home.join("entropy/ibus").exists());
+    }
+
     #[test]
     fn uninstalling_beside_a_system_registration_keeps_the_gnome_sources() {
         let ibus = Path::new(env!("CARGO_MANIFEST_DIR")).join("linux/ibus");

@@ -10,19 +10,21 @@ component_path="$component_dir/entropy-universal-symbols.xml"
 # of what they replaced (in $lib_dir) is still there. Entropy passes
 # --keep-gnome-sources when the engine stays registered system-wide, where the
 # sources keep working without this copy.
-restore_failed=
-if [ "${1:-}" != --keep-gnome-sources ] && [ -f "$script_dir/gnome-input-sources.sh" ]; then
-    sh "$script_dir/gnome-input-sources.sh" restore || restore_failed=yes
-fi
-
-# A failed restore leaves the Entropy sources standing in GNOME's list. Taking
-# the engine out then would drop those sources, so the engine and its files
-# stay installed and the failure is reported for a retry.
-if [ -n "$restore_failed" ] && gsettings get org.gnome.desktop.input-sources sources 2>/dev/null | grep -q entropy-universal-symbols-; then
-    printf '%s\n' "Could not give GNOME its input sources back; the Entropy sources still stand in its list." >&2
-    printf '%s\n' "The engine and its files are left installed, so the restore can be retried:" >&2
-    printf '%s\n' "sh \"$script_dir/gnome-input-sources.sh\" restore" >&2
-    exit 1
+if [ "${1:-}" != --keep-gnome-sources ]; then
+    if [ -f "$script_dir/gnome-input-sources.sh" ]; then
+        sh "$script_dir/gnome-input-sources.sh" restore || true
+    fi
+    # A failed restore leaves the Entropy sources standing in GNOME's list, and
+    # so does a locked or absent list, where restore exits 0 without changing
+    # anything. Taking the engine out then would drop those sources, so the
+    # engine and its files stay installed and the failure is reported for a
+    # retry.
+    if gsettings get org.gnome.desktop.input-sources sources 2>/dev/null | grep -q entropy-universal-symbols-; then
+        printf '%s\n' "Could not give GNOME its input sources back; the Entropy sources still stand in its list." >&2
+        printf '%s\n' "The engine and its files are left installed, so the restore can be retried:" >&2
+        printf '%s\n' "sh \"$script_dir/gnome-input-sources.sh\" restore" >&2
+        exit 1
+    fi
 fi
 
 if [ -f "$component_path" ]; then
