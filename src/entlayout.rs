@@ -3833,6 +3833,7 @@ impl EntropyApp {
             return Ok(());
         }
 
+        self.keycode_picker.reset_macro_editor();
         self.keycode_picker.macro_texts = entmacro_bytecode(&bundle.data.macros)?;
         self.keycode_picker.macro_texts.resize(
             self.keycode_picker

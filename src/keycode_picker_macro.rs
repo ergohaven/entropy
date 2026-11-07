@@ -9,10 +9,38 @@ const VIAL_MACRO_EXT_TAP: u8 = 5;
 const VIAL_MACRO_EXT_DOWN: u8 = 6;
 const VIAL_MACRO_EXT_UP: u8 = 7;
 
-fn macro_settings_total_rows(action_count: usize) -> usize {
-    // Slot, name, description, all configured actions, and one trailing
-    // selector that creates the next action in place.
-    4 + action_count
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct MacroSnapshot {
+    bytecode: Vec<u8>,
+    actions: Vec<MacroAction>,
+    name: String,
+    description: String,
+}
+
+#[derive(Clone, Copy)]
+enum MacroUndoScope {
+    Actions,
+    Slot,
+}
+
+pub(super) struct MacroUndoEntry {
+    slot: usize,
+    snapshot: MacroSnapshot,
+    scope: MacroUndoScope,
+}
+
+#[derive(Clone, Copy)]
+enum MacroEditorCommand {
+    Copy,
+    Paste,
+    Clear,
+    Undo,
+}
+
+fn macro_settings_total_rows(action_rows: usize) -> usize {
+    // Slot, name, description, all action rows, and one trailing selector
+    // that creates the next action in place.
+    4 + action_rows
 }
 
 fn append_macro_key_action(encoded: &mut Vec<u8>, basic_opcode: u8, ext_opcode: u8, keycode: u16) {
@@ -312,7 +340,8 @@ impl KeycodePicker {
         let action_control_width = metrics.value(300.0);
         let language = self.language;
         let custom_pairs = self.custom_keycode_pairs();
-        let original_actions = self.macro_actions[n].clone();
+        let original = self.macro_snapshot(n);
+        let original_actions = original.actions.clone();
         let mut edited_actions = original_actions.clone();
         let original_name = self.macro_names[n].clone();
         let original_description = self.macro_descriptions[n].clone();
@@ -322,7 +351,7 @@ impl KeycodePicker {
         let mut remove_idx = None;
         let mut move_up = None;
         let mut move_down = None;
-        let mut undo_applied = false;
+        let mut command = None;
 
         if let Some(notice) = self.macro_ext_keycodes_notice(language) {
             crate::ui_style::modal_hint(ui, notice);
@@ -789,58 +818,64 @@ impl KeycodePicker {
                     );
                 }
 
-                let action_size = crate::ui_style::modal_action_button_size() * scale;
                 let action_gap = metrics.value(8.0);
+                let mut action_size = crate::ui_style::modal_action_button_size() * scale;
+                action_size.x = action_size
+                    .x
+                    .min((list.viewport.width() - 3.0 * action_gap) / 4.0)
+                    .max(0.0);
                 let actions_rect = crate::app::fixed_settings_action_bar_rect(
                     list.viewport,
                     metrics,
                     action_size,
-                    2,
+                    4,
                     action_gap,
                 );
+                let paste_blocked = self.macro_paste_blocked(n, memory_use);
                 crate::ui_style::allocate_ui_at_rect(ui, actions_rect, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = action_gap;
                         let can_clear = !edited_actions.is_empty()
                             || !edited_name.trim().is_empty()
                             || !edited_description.trim().is_empty();
-                        let clear_response = crate::ui_style::modern_button_with_font(
-                            ui,
-                            crate::i18n::tr_catalog(language, "alt_repeat_editor.clear"),
-                            action_size,
-                            control_font_size,
-                            can_clear,
-                        )
-                        .on_hover_text(crate::i18n::tr_catalog(
-                            language,
-                            "key_picker_text.remove_all_actions_from_this_macro",
-                        ));
-                        if clear_response.clicked() && can_clear {
-                            edited_actions.clear();
-                            edited_name.clear();
-                            edited_description.clear();
-                        }
-
-                        let undo_position = self
-                            .macro_undo_stack
-                            .iter()
-                            .rposition(|(macro_idx, _)| *macro_idx == n);
-                        let undo_response = crate::ui_style::modern_button_with_font(
-                            ui,
-                            crate::i18n::tr_catalog(language, "alt_repeat_editor.undo"),
-                            action_size,
-                            control_font_size,
-                            undo_position.is_some(),
-                        )
-                        .on_hover_text(crate::i18n::tr_catalog(
-                            language,
-                            "key_picker_text.undo_last_change",
-                        ));
-                        if undo_response.clicked() {
-                            if let Some(position) = undo_position {
-                                let (_, previous) = self.macro_undo_stack.remove(position);
-                                edited_actions = previous;
-                                undo_applied = true;
+                        let can_undo = self.macro_undo_stack.iter().any(|entry| entry.slot == n);
+                        for (label, tooltip, enabled, action) in [
+                            (
+                                "macro_editor.copy",
+                                "macro_editor.copy_tooltip",
+                                true,
+                                MacroEditorCommand::Copy,
+                            ),
+                            (
+                                "macro_editor.paste",
+                                paste_blocked.unwrap_or("macro_editor.paste_tooltip"),
+                                paste_blocked.is_none(),
+                                MacroEditorCommand::Paste,
+                            ),
+                            (
+                                "alt_repeat_editor.clear",
+                                "key_picker_text.remove_all_actions_from_this_macro",
+                                can_clear,
+                                MacroEditorCommand::Clear,
+                            ),
+                            (
+                                "alt_repeat_editor.undo",
+                                "key_picker_text.undo_last_change",
+                                can_undo,
+                                MacroEditorCommand::Undo,
+                            ),
+                        ] {
+                            let response = crate::ui_style::modern_button_with_font(
+                                ui,
+                                crate::i18n::tr_catalog(language, label),
+                                action_size,
+                                control_font_size,
+                                enabled,
+                            )
+                            .on_disabled_hover_text(crate::i18n::tr_catalog(language, tooltip))
+                            .on_hover_text(crate::i18n::tr_catalog(language, tooltip));
+                            if response.clicked() && enabled {
+                                command = Some(action);
                             }
                         }
                     });
@@ -870,21 +905,68 @@ impl KeycodePicker {
             }
         }
 
-        if edited_actions != original_actions {
-            if !undo_applied {
-                self.macro_undo_stack.push((n, original_actions));
-                if self.macro_undo_stack.len() > 64 {
-                    self.macro_undo_stack.remove(0);
+        let actions_changed = edited_actions != original_actions;
+        if actions_changed
+            || edited_name != original_name
+            || edited_description != original_description
+        {
+            let bytecode = if actions_changed {
+                encode_macro_actions(&edited_actions)
+            } else {
+                original.bytecode
+            };
+            self.apply_macro_snapshot(
+                n,
+                MacroSnapshot {
+                    bytecode,
+                    actions: edited_actions,
+                    name: edited_name,
+                    description: edited_description,
+                },
+                actions_changed.then_some(MacroUndoScope::Actions),
+            );
+        }
+        let replaced_slot = match command {
+            Some(MacroEditorCommand::Copy) => {
+                let mut snapshot = self.macro_snapshot(n);
+                snapshot.actions = decode_macro_actions(&snapshot.bytecode);
+                self.macro_clipboard = Some(snapshot);
+                false
+            }
+            Some(MacroEditorCommand::Paste)
+                if self.macro_paste_blocked(n, memory_use).is_none() =>
+            {
+                let snapshot = self.macro_clipboard.clone().expect("checked clipboard");
+                self.apply_macro_snapshot(n, snapshot, Some(MacroUndoScope::Slot));
+                true
+            }
+            Some(MacroEditorCommand::Clear) => {
+                self.apply_macro_snapshot(n, MacroSnapshot::default(), Some(MacroUndoScope::Slot));
+                true
+            }
+            Some(MacroEditorCommand::Undo) => {
+                if let Some(position) = self
+                    .macro_undo_stack
+                    .iter()
+                    .rposition(|entry| entry.slot == n)
+                {
+                    let entry = self.macro_undo_stack.remove(position);
+                    let mut snapshot = entry.snapshot;
+                    if matches!(entry.scope, MacroUndoScope::Actions) {
+                        snapshot.name = self.macro_names[n].clone();
+                        snapshot.description = self.macro_descriptions[n].clone();
+                    }
+                    self.apply_macro_snapshot(n, snapshot, None);
+                    true
+                } else {
+                    false
                 }
             }
-            self.macro_actions[n] = edited_actions;
-            self.encode_macro(n);
-            self.mark_macros_dirty();
-        }
-        if edited_name != original_name || edited_description != original_description {
-            self.macro_names[n] = edited_name;
-            self.macro_descriptions[n] = edited_description;
-            self.macro_metadata_dirty = true;
+            _ => false,
+        };
+        if replaced_slot {
+            self.macro_key_pick = None;
+            self.macro_mod_key_pick = None;
         }
         if let Some(slot) = picked_slot {
             selected_macro = slot;
@@ -892,6 +974,74 @@ impl KeycodePicker {
         }
 
         selected_macro
+    }
+
+    fn macro_snapshot(&self, n: usize) -> MacroSnapshot {
+        MacroSnapshot {
+            bytecode: self.macro_texts.get(n).cloned().unwrap_or_default(),
+            actions: self.macro_actions.get(n).cloned().unwrap_or_default(),
+            name: self.macro_names.get(n).cloned().unwrap_or_default(),
+            description: self.macro_descriptions.get(n).cloned().unwrap_or_default(),
+        }
+    }
+
+    fn apply_macro_snapshot(
+        &mut self,
+        n: usize,
+        snapshot: MacroSnapshot,
+        undo_scope: Option<MacroUndoScope>,
+    ) {
+        self.ensure_macro_meta_len(n);
+        let previous = self.macro_snapshot(n);
+        if previous == snapshot {
+            return;
+        }
+        let bytecode_changed = previous.bytecode != snapshot.bytecode;
+        let metadata_changed =
+            previous.name != snapshot.name || previous.description != snapshot.description;
+        if let Some(scope) = undo_scope {
+            self.macro_undo_stack.push(MacroUndoEntry {
+                slot: n,
+                snapshot: previous,
+                scope,
+            });
+            if self.macro_undo_stack.len() > 64 {
+                self.macro_undo_stack.remove(0);
+            }
+        }
+        self.macro_texts[n] = snapshot.bytecode;
+        self.macro_actions[n] = snapshot.actions;
+        self.macro_names[n] = snapshot.name;
+        self.macro_descriptions[n] = snapshot.description;
+        if bytecode_changed {
+            self.mark_macros_dirty();
+        }
+        self.macro_metadata_dirty |= metadata_changed;
+    }
+
+    fn macro_paste_blocked(
+        &self,
+        n: usize,
+        memory_use: Option<(usize, usize)>,
+    ) -> Option<&'static str> {
+        let Some(snapshot) = &self.macro_clipboard else {
+            return Some("macro_editor.clipboard_empty");
+        };
+        if let Some((_, capacity)) = memory_use {
+            let used = crate::hid::macro_buffer_len(&self.macro_texts);
+            let current = self.macro_texts.get(n).map_or(0, Vec::len);
+            if used - current + snapshot.bytecode.len() > capacity {
+                return Some("macro_editor.paste_memory_full");
+            }
+        }
+        None
+    }
+
+    pub(crate) fn reset_macro_editor(&mut self) {
+        self.macro_clipboard = None;
+        self.macro_undo_stack.clear();
+        self.macro_key_pick = None;
+        self.macro_mod_key_pick = None;
     }
 
     fn macro_has_content(&self, n: usize) -> bool {
@@ -1302,6 +1452,324 @@ mod tests {
     fn macro_editor_keeps_one_trailing_action_selector_row() {
         assert_eq!(macro_settings_total_rows(0), 4);
         assert_eq!(macro_settings_total_rows(3), 7);
+    }
+
+    fn macro_settings_frame(
+        picker: &mut KeycodePicker,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1_100.0, 900.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        std::convert::identity(ctx.run_ui(input, |ui| {
+            picker.show_macro_settings_editor(ui, 0, "macro_settings_test", None);
+        }))
+    }
+
+    fn macro_clipboard_click(
+        picker: &mut KeycodePicker,
+        ctx: &egui::Context,
+        slot: u8,
+        memory: Option<(usize, usize)>,
+        label: &str,
+    ) {
+        let mut frame = |events| {
+            std::convert::identity(ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    picker.show_macro_settings_editor(ui, slot, "clipboard_test", memory);
+                },
+            ))
+        };
+        let _ = frame(vec![]);
+        let output = frame(vec![]);
+        let pos = macro_picker_text_position(&output, label).expect(label);
+        for pressed in [true, false] {
+            let _ = frame(vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+        }
+    }
+
+    #[test]
+    fn macro_clipboard_copies_whole_slot_and_undo_restores_target() {
+        let ctx = egui::Context::default();
+        let source = vec![b'A', 1, 2, 0xE0, 1, 1, 4, 1, 3, 0xE0, 1, 4, 11, 1, 0xEF];
+        let mut picker = KeycodePicker {
+            language: crate::i18n::Language::English,
+            macro_count: 2,
+            macro_texts: vec![source.clone(), b"old".to_vec()],
+            macro_actions: vec![
+                decode_macro_actions(&source),
+                vec![MacroAction::Text("old".into())],
+            ],
+            macro_names: vec!["Source".into(), "Target".into()],
+            macro_descriptions: vec!["All steps".into(), "Original".into()],
+            ..Default::default()
+        };
+        macro_clipboard_click(&mut picker, &ctx, 0, None, "Copy");
+        assert!(!picker.macros_dirty && !picker.macro_metadata_dirty);
+        macro_clipboard_click(&mut picker, &ctx, 1, None, "Paste");
+        assert_eq!(picker.macro_texts, [source.clone(), source]);
+        assert_eq!(picker.macro_actions[1], picker.macro_actions[0]);
+        assert_eq!(picker.macro_names[1], "Source");
+        assert_eq!(picker.macro_descriptions[1], "All steps");
+        assert!(picker.macros_dirty && picker.macro_metadata_dirty);
+        macro_clipboard_click(&mut picker, &ctx, 1, None, "Undo");
+        assert_eq!(picker.macro_texts[1], b"old");
+        assert_eq!(picker.macro_names[1], "Target");
+        assert_eq!(picker.macro_descriptions[1], "Original");
+    }
+
+    #[test]
+    fn macro_clipboard_paste_checks_shared_memory_and_exact_fit() {
+        let ctx = egui::Context::default();
+        let mut picker = KeycodePicker {
+            language: crate::i18n::Language::English,
+            macro_count: 2,
+            macro_texts: vec![b"abcd".to_vec(), b"x".to_vec()],
+            macro_actions: vec![
+                vec![MacroAction::Text("abcd".into())],
+                vec![MacroAction::Text("x".into())],
+            ],
+            ..Default::default()
+        };
+        macro_clipboard_click(&mut picker, &ctx, 1, None, "Paste");
+        assert_eq!(picker.macro_texts[1], b"x");
+        macro_clipboard_click(&mut picker, &ctx, 0, None, "Copy");
+        macro_clipboard_click(&mut picker, &ctx, 1, Some((7, 9)), "Paste");
+        assert_eq!(picker.macro_texts[1], b"x");
+        assert!(!picker.macros_dirty);
+        macro_clipboard_click(&mut picker, &ctx, 1, Some((7, 10)), "Paste");
+        assert_eq!(picker.macro_texts[1], b"abcd");
+        assert!(picker.macros_dirty);
+    }
+
+    #[test]
+    fn macro_clipboard_metadata_only_paste_undo_and_reset_do_not_write_bytecode() {
+        let ctx = egui::Context::default();
+        let mut picker = KeycodePicker {
+            language: crate::i18n::Language::English,
+            macro_count: 2,
+            macro_texts: vec![Vec::new(); 2],
+            macro_actions: vec![Vec::new(); 2],
+            macro_names: vec!["Source".into(), "Target".into()],
+            ..Default::default()
+        };
+        macro_clipboard_click(&mut picker, &ctx, 0, None, "Copy");
+        picker.macro_names[0] = "Changed".into();
+        macro_clipboard_click(&mut picker, &ctx, 1, None, "Paste");
+        assert_eq!(picker.macro_names[1], "Source");
+        assert!(picker.macro_metadata_dirty);
+        assert!(!picker.macros_dirty);
+        picker.macro_metadata_dirty = false;
+        macro_clipboard_click(&mut picker, &ctx, 1, None, "Paste");
+        assert!(!picker.macro_metadata_dirty);
+        macro_clipboard_click(&mut picker, &ctx, 1, None, "Undo");
+        assert_eq!(picker.macro_names[1], "Target");
+        assert!(!picker.macros_dirty);
+        picker.reset_macro_editor();
+        macro_clipboard_click(&mut picker, &ctx, 1, None, "Paste");
+        macro_clipboard_click(&mut picker, &ctx, 1, None, "Undo");
+        assert_eq!(picker.macro_names[1], "Target");
+    }
+
+    #[test]
+    fn macro_clipboard_paste_undo_survives_metadata_typing_in_another_slot() {
+        fn metadata_frame(
+            picker: &mut KeycodePicker,
+            ctx: &egui::Context,
+            events: Vec<egui::Event>,
+        ) -> egui::FullOutput {
+            std::convert::identity(ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    picker.show_macro_settings_editor(ui, 2, "metadata_test", None);
+                },
+            ))
+        }
+        let ctx = egui::Context::default();
+        let mut picker = KeycodePicker {
+            language: crate::i18n::Language::English,
+            macro_count: 3,
+            macro_texts: vec![b"a".to_vec(), b"b".to_vec(), Vec::new()],
+            macro_actions: vec![
+                vec![MacroAction::Text("a".into())],
+                vec![MacroAction::Text("b".into())],
+                Vec::new(),
+            ],
+            macro_descriptions: vec![String::new(), String::new(), "Edit".into()],
+            ..Default::default()
+        };
+        macro_clipboard_click(&mut picker, &ctx, 0, None, "Copy");
+        macro_clipboard_click(&mut picker, &ctx, 1, None, "Paste");
+        let _ = metadata_frame(&mut picker, &ctx, vec![]);
+        let output = metadata_frame(&mut picker, &ctx, vec![]);
+        let pos = macro_picker_text_position(&output, "Edit").expect("description field");
+        for pressed in [true, false] {
+            let _ = metadata_frame(
+                &mut picker,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        for _ in 0..70 {
+            let _ = metadata_frame(&mut picker, &ctx, vec![egui::Event::Text("x".into())]);
+        }
+        assert!(picker.macro_descriptions[2].len() >= 70);
+        macro_clipboard_click(&mut picker, &ctx, 1, None, "Undo");
+        assert_eq!(picker.macro_texts[1], b"b");
+    }
+
+    #[test]
+    fn macro_action_undo_keeps_later_metadata_edits() {
+        let ctx = egui::Context::default();
+        let mut picker = KeycodePicker {
+            language: crate::i18n::Language::English,
+            macro_count: 1,
+            macro_names: vec!["A".into()],
+            macro_descriptions: vec!["Before".into()],
+            ..Default::default()
+        };
+        macro_clipboard_click(&mut picker, &ctx, 0, None, "+ Delay");
+        assert_eq!(picker.macro_actions[0], [MacroAction::Delay(100)]);
+        // Metadata edits do not enter the action undo history.
+        picker.macro_names[0] = "B".into();
+        picker.macro_descriptions[0] = "After".into();
+        macro_clipboard_click(&mut picker, &ctx, 0, None, "Undo");
+        assert!(picker.macro_actions[0].is_empty());
+        assert!(picker.macro_texts[0].is_empty());
+        assert_eq!(picker.macro_names[0], "B");
+        assert_eq!(picker.macro_descriptions[0], "After");
+    }
+
+    #[test]
+    fn macro_clipboard_uses_stored_bytecode_when_import_left_stale_editor_actions() {
+        let ctx = egui::Context::default();
+        let mut picker = KeycodePicker {
+            language: crate::i18n::Language::English,
+            macro_count: 2,
+            macro_texts: vec![b"new".to_vec(), Vec::new()],
+            macro_actions: vec![vec![MacroAction::Text("old".into())], Vec::new()],
+            ..Default::default()
+        };
+        macro_clipboard_click(&mut picker, &ctx, 0, None, "Copy");
+        macro_clipboard_click(&mut picker, &ctx, 1, None, "Paste");
+        assert_eq!(picker.macro_texts[1], b"new");
+        assert_eq!(picker.macro_actions[1], [MacroAction::Text("new".into())]);
+    }
+
+    #[test]
+    fn macro_clear_undo_restores_opaque_bytes_and_metadata() {
+        let ctx = egui::Context::default();
+        let bytes = vec![0xEF, 1, 0x99, 0xAA, 1];
+        let mut picker = KeycodePicker {
+            language: crate::i18n::Language::English,
+            macro_count: 1,
+            macro_texts: vec![bytes.clone()],
+            macro_actions: vec![decode_macro_actions(&bytes)],
+            macro_names: vec!["Raw".into()],
+            macro_descriptions: vec!["Preserve".into()],
+            ..Default::default()
+        };
+        macro_clipboard_click(&mut picker, &ctx, 0, None, "Clear");
+        assert!(picker.macro_texts[0].is_empty());
+        assert!(picker.macro_names[0].is_empty());
+        assert!(picker.macro_descriptions[0].is_empty());
+        macro_clipboard_click(&mut picker, &ctx, 0, None, "Undo");
+        assert_eq!(picker.macro_texts[0], bytes);
+        assert_eq!(picker.macro_names[0], "Raw");
+        assert_eq!(picker.macro_descriptions[0], "Preserve");
+    }
+
+    #[test]
+    fn macro_clipboard_buttons_fit_in_both_languages_and_window_widths() {
+        for language in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            for width in [600.0, 1100.0] {
+                let ctx = egui::Context::default();
+                let mut picker = KeycodePicker {
+                    language,
+                    ..Default::default()
+                };
+                let mut render = || {
+                    std::convert::identity(ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 600.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            picker.show_macro_settings_editor(ui, 0, "button_layout_test", None);
+                        },
+                    ))
+                };
+                let _ = render();
+                let output = render();
+                for key in [
+                    "macro_editor.copy",
+                    "macro_editor.paste",
+                    "alt_repeat_editor.clear",
+                    "alt_repeat_editor.undo",
+                ] {
+                    let label = crate::i18n::tr_catalog(language, key);
+                    let shape = output
+                        .shapes
+                        .iter()
+                        .find_map(|s| match &s.shape {
+                            egui::Shape::Text(text) if text.galley.job.text == label => {
+                                Some((s.clip_rect, text))
+                            }
+                            _ => None,
+                        })
+                        .expect(label);
+                    assert!(
+                        shape
+                            .0
+                            .contains_rect(shape.1.galley.rect.translate(shape.1.pos.to_vec2())),
+                        "clipped {label}, width {width}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -750,6 +750,7 @@ impl EntropyApp {
             self.display_settings = DisplaySettingsState::default();
             self.layout_options_value = None;
             self.encoder_visibility.clear();
+            self.keycode_picker.reset_macro_editor();
             self.keycode_picker.macro_count = 0;
             self.keycode_picker.macro_texts.clear();
             self.keycode_picker.macro_names.clear();
