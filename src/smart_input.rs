@@ -142,27 +142,6 @@ pub fn platform_open_window_candidates() -> Vec<TextExpanderAppCandidate> {
 }
 
 #[cfg(target_os = "linux")]
-pub fn text_expander_runs_outside_entropy_process() -> bool {
-    linux_input_method_env().contains("ibus")
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn text_expander_runs_outside_entropy_process() -> bool {
-    false
-}
-
-#[cfg(target_os = "linux")]
-fn linux_input_method_env() -> String {
-    let im_vars = ["GTK_IM_MODULE", "QT_IM_MODULE", "XMODIFIERS"];
-    im_vars
-        .iter()
-        .filter_map(|name| std::env::var(name).ok())
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_ascii_lowercase()
-}
-
-#[cfg(target_os = "linux")]
 fn linux_command_available(command: &str) -> bool {
     std::process::Command::new(command)
         .arg("--version")
