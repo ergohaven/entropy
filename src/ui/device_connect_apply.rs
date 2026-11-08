@@ -1,21 +1,14 @@
 use super::*;
 
-fn is_default_layer_name(index: usize, name: &str) -> bool {
-    let trimmed = name.trim();
-    trimmed.is_empty()
-        || trimmed == index.to_string()
-        || (index == 0 && trimmed.eq_ignore_ascii_case("main"))
-        || trimmed.eq_ignore_ascii_case(&format!("layer {index}"))
-}
-
 /// Merge firmware-read layer names with locally saved ones.
 ///
 /// A name the firmware actually stored (`from_firmware[i]`) is authoritative,
 /// even when it looks like a default such as "Main". A locally saved name only
-/// fills a layer the firmware left as a generated descriptor placeholder, so
-/// provenance — not the string — decides. One real firmware name therefore no
-/// longer suppresses saved names for the other layers.
-fn resolve_layer_names(
+/// overrides names from the keyboard definition, including named factory
+/// defaults such as "Base" or "Fn". Provenance, rather than the text of a name,
+/// decides whether a locally saved rename can be restored. An empty name is an
+/// explicit unnamed layer; only a missing entry falls back to a definition name.
+pub(super) fn resolve_layer_names(
     firmware_names: &[String],
     from_firmware: &[bool],
     local_names: Option<&[String]>,
@@ -30,8 +23,7 @@ fn resolve_layer_names(
     if let Some(local) = local_names {
         for (idx, name) in local.iter().enumerate().take(layer_count) {
             let from_firmware = from_firmware.get(idx).copied().unwrap_or(false);
-            if !name.trim().is_empty() && !from_firmware && is_default_layer_name(idx, &names[idx])
-            {
+            if !from_firmware {
                 names[idx] = name.clone();
             }
         }
@@ -865,6 +857,22 @@ mod tests {
     }
 
     #[test]
+    fn cleared_local_layer_name_overrides_definition_but_missing_name_does_not() {
+        assert_eq!(
+            resolve_layer_names(&s(&["Base", "Fn"]), &[false, false], Some(&s(&[""])), 2),
+            s(&["", "Fn"]),
+        );
+    }
+
+    #[test]
+    fn cleared_firmware_layer_name_overrides_stale_local_name() {
+        assert_eq!(
+            resolve_layer_names(&s(&[""]), &[true], Some(&s(&["Old"])), 1),
+            s(&[""]),
+        );
+    }
+
+    #[test]
     fn resolve_prefers_firmware_names_even_when_default_looking() {
         // Firmware stored "Main" for layer 0; a stale local name must not win.
         let names = resolve_layer_names(
@@ -885,8 +893,25 @@ mod tests {
             Some(&s(&["BASE", "LOWER", ""])),
             3,
         );
-        // Empty local name leaves the placeholder untouched.
-        assert_eq!(names, s(&["BASE", "LOWER", "2"]));
+        assert_eq!(names, s(&["BASE", "LOWER", ""]));
+    }
+
+    #[test]
+    fn resolve_restores_saved_names_over_named_definition_defaults() {
+        let definition = serde_json::json!({
+            "name": "Named layers",
+            "matrix": {"rows": 1, "cols": 1},
+            "layouts": {"keymap": [["0,0"]]},
+            "layer_names": ["Base", "Fn", "Symbols"]
+        });
+        let layout = crate::keyboard::KeyboardLayout::from_vial_json(&definition).unwrap();
+        let names = resolve_layer_names(
+            &layout.layer_names,
+            &[false, false, false],
+            Some(&s(&["Работа", "Навигация"])),
+            3,
+        );
+        assert_eq!(names, s(&["Работа", "Навигация", "Symbols"]));
     }
 
     #[test]
@@ -1032,12 +1057,23 @@ mod tests {
     }
 
     #[test]
-    fn sync_skips_matching_and_empty_names() {
+    fn cleared_imported_layer_name_is_written_to_firmware() {
+        let store = MockStore::new(&[200]).with_stored(200, "Old");
+        assert!(sync_layer_names_to_store(&store, &s(&[""]), 1).is_empty());
+        assert_eq!(store.writes.borrow().as_slice(), &[(200, String::new())]);
+        assert_eq!(store.stored.borrow()[&200], "");
+        store.writes.borrow_mut().clear();
+        assert!(sync_layer_names_to_store(&store, &s(&[""]), 1).is_empty());
+        assert!(store.writes.borrow().is_empty());
+    }
+
+    #[test]
+    fn sync_skips_matching_names_including_empty() {
         let store = MockStore::new(&[200, 201]).with_stored(201, "LOWER");
-        // Layer 0 empty (skipped, no read); layer 1 already matches (no write).
+        // Both already match, including the explicitly unnamed layer.
         let failed = sync_layer_names_to_store(&store, &s(&["", "LOWER"]), 2);
         assert!(failed.is_empty());
-        assert_eq!(store.reads.borrow().as_slice(), &[201]);
+        assert_eq!(store.reads.borrow().as_slice(), &[200, 201]);
         assert!(store.writes.borrow().is_empty());
     }
 
@@ -1616,9 +1652,6 @@ pub(super) fn sync_layer_names_to_store<S: LayerNameStore>(
     for (layer, name) in names.iter().enumerate().take(layer_count) {
         let qsid = 200 + layer as u16;
         let name = name.trim();
-        if name.is_empty() {
-            continue;
-        }
         if !store.is_supported(qsid) {
             // Firmware exposes no storage for this layer name; nothing to persist.
             continue;
