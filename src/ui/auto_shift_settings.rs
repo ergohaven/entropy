@@ -246,7 +246,7 @@ impl EntropyApp {
                 tooltip,
                 field_width,
                 |ui| {
-                    let edit_id = egui::Id::new("auto_shift_timeout");
+                    let edit_id = egui::Id::unique("auto_shift_timeout");
                     let resp = crate::ui_style::modern_text_field_interactive(
                         ui,
                         edit_id,

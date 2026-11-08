@@ -1,9 +1,9 @@
 /// Keycode picker modal for Vial/QMK keycodes.
 use crate::app::MacroExtKeycodesDisabledReason;
 use crate::keycode::{
-    gui_label, gui_mod_name, is_extended_function_key, key_label_font_sizes,
-    keycode_label_with_names_and_layout, keycode_tooltip, modifier_label_from_bits,
-    KeyLegendLayout, KeycodeCategory, KEYCODES,
+    KEYCODES, KeyLegendLayout, KeycodeCategory, gui_label, gui_mod_name, is_extended_function_key,
+    key_label_font_sizes, keycode_label_with_names_and_layout, keycode_tooltip,
+    modifier_label_from_bits,
 };
 use crate::popup_state::{PopupKey, PopupState};
 use egui::{Color32, Key, RichText, Vec2};
@@ -242,16 +242,18 @@ mod tests {
             ..Default::default()
         };
         picker.search.query = "tap dan".into();
-        let mut harness = egui_kittest::Harness::new_state(
-            |ctx, picker: &mut KeycodePicker| {
-                picker.show(
-                    ctx,
-                    DeferredPickerDataState::Ready,
-                    DeferredPickerDataState::Ready,
-                );
-            },
-            picker,
-        );
+        let mut harness = egui_kittest::Harness::builder()
+            .allow_missing_glyphs()
+            .build_ui_state(
+                |ui, picker: &mut KeycodePicker| {
+                    picker.show(
+                        ui.ctx(),
+                        DeferredPickerDataState::Ready,
+                        DeferredPickerDataState::Ready,
+                    );
+                },
+                picker,
+            );
         harness.run();
         assert!(harness.state().open, "picker should be showing before Esc");
 
@@ -274,16 +276,18 @@ mod tests {
             vial_quantum_pending_mod: Some(0x0100),
             ..Default::default()
         };
-        let mut harness = egui_kittest::Harness::new_state(
-            |ctx, picker: &mut KeycodePicker| {
-                picker.show(
-                    ctx,
-                    DeferredPickerDataState::Ready,
-                    DeferredPickerDataState::Ready,
-                );
-            },
-            picker,
-        );
+        let mut harness = egui_kittest::Harness::builder()
+            .allow_missing_glyphs()
+            .build_ui_state(
+                |ui, picker: &mut KeycodePicker| {
+                    picker.show(
+                        ui.ctx(),
+                        DeferredPickerDataState::Ready,
+                        DeferredPickerDataState::Ready,
+                    );
+                },
+                picker,
+            );
         harness.run();
         harness.key_press(egui::Key::Escape);
         harness.run();
@@ -307,10 +311,11 @@ mod tests {
     fn open_picker_harness(picker: KeycodePicker) -> egui_kittest::Harness<'static, KeycodePicker> {
         let mut harness = egui_kittest::Harness::builder()
             .with_size(egui::vec2(1_400.0, 1_000.0))
-            .build_state(
-                |ctx, picker: &mut KeycodePicker| {
+            .allow_missing_glyphs()
+            .build_ui_state(
+                |ui, picker: &mut KeycodePicker| {
                     picker.show(
-                        ctx,
+                        ui.ctx(),
                         DeferredPickerDataState::Ready,
                         DeferredPickerDataState::Ready,
                     );
@@ -346,9 +351,10 @@ mod tests {
 
         let mut harness = open_picker_harness(english_picker());
         let list = harness.get_by_role(Role::TabList);
-        assert!(list
-            .children()
-            .any(|node| node.accesskit_node().role() == Role::Tab));
+        assert!(
+            list.children()
+                .any(|node| node.accesskit_node().role() == Role::Tab)
+        );
         let panel = harness.get_by_role(Role::TabPanel);
         let basic = harness.get_by_role_and_label(Role::Tab, "Basic");
         assert_eq!(
@@ -573,15 +579,17 @@ mod tests {
         }
 
         assert!(supported.universal_russian_letters_available());
-        assert!(!KeycodePicker {
-            supports_rmk_native_key_actions: true,
-            supports_universal_numero: false,
-            supports_universal_symbols: true,
-            supports_universal_russian_letters: false,
-            rmk_native_key_actions_allowed_for_target: true,
-            ..Default::default()
-        }
-        .universal_russian_letters_available());
+        assert!(
+            !KeycodePicker {
+                supports_rmk_native_key_actions: true,
+                supports_universal_numero: false,
+                supports_universal_symbols: true,
+                supports_universal_russian_letters: false,
+                rmk_native_key_actions_allowed_for_target: true,
+                ..Default::default()
+            }
+            .universal_russian_letters_available()
+        );
     }
 
     #[test]
@@ -627,9 +635,11 @@ mod tests {
     #[test]
     fn universal_symbols_tab_is_gated_and_follows_symbols() {
         let unsupported = KeycodePicker::default();
-        assert!(!unsupported
-            .visible_vial_tabs()
-            .contains(&KeycodeTab::UniversalSymbols));
+        assert!(
+            !unsupported
+                .visible_vial_tabs()
+                .contains(&KeycodeTab::UniversalSymbols)
+        );
 
         let supported = KeycodePicker {
             supports_rmk_native_key_actions: true,
@@ -732,13 +742,17 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(picker
-            .macro_layer_key_choices(MacroKeyPickKind::Tap)
-            .is_empty());
-        assert!(picker
-            .macro_ext_keycodes_notice(crate::i18n::Language::English)
-            .expect("RMK notice should be present")
-            .contains("RMK"));
+        assert!(
+            picker
+                .macro_layer_key_choices(MacroKeyPickKind::Tap)
+                .is_empty()
+        );
+        assert!(
+            picker
+                .macro_ext_keycodes_notice(crate::i18n::Language::English)
+                .expect("RMK notice should be present")
+                .contains("RMK")
+        );
     }
 
     #[test]
@@ -754,13 +768,13 @@ mod tests {
                 egui::Pos2::ZERO,
                 egui::vec2(1_100.0, 800.0),
             ));
-            ctx.run_ui(input, |_ui| {
+            crate::app::discard_texture_deltas(ctx.run_ui(input, |_ui| {
                 picker.show(
                     &ctx,
                     DeferredPickerDataState::Ready,
                     DeferredPickerDataState::Ready,
                 );
-            })
+            }))
         };
         let _ = render();
         let output = render();
@@ -804,10 +818,12 @@ mod tests {
             assert!(is_mod_key_tap_key_choice(keycode));
             assert!(picker.pending_quantum_key_supported(keycode, false));
             assert!(picker.pending_quantum_key_supported(keycode, true));
-            assert!(picker
-                .regular_key_pick_choices()
-                .iter()
-                .any(|choice| choice.value == value));
+            assert!(
+                picker
+                    .regular_key_pick_choices()
+                    .iter()
+                    .any(|choice| choice.value == value)
+            );
         }
     }
 
@@ -937,17 +953,21 @@ mod version_compat_numero_tests {
         let old = picker.row_fingerprint();
         picker.supports_universal_numero = true;
         assert_ne!(old, picker.row_fingerprint());
-        assert!(picker
-            .cached_tab_rows(KeycodeTab::UniversalSymbols)
-            .iter()
-            .any(|r| r.action == PickerAction::Assign(numero)));
+        assert!(
+            picker
+                .cached_tab_rows(KeycodeTab::UniversalSymbols)
+                .iter()
+                .any(|r| r.action == PickerAction::Assign(numero))
+        );
         picker.perform_picker_action(PickerAction::Assign(numero));
         assert_eq!(picker.result, Some(numero));
         picker.supports_universal_numero = false;
-        assert!(!picker
-            .cached_tab_rows(KeycodeTab::UniversalSymbols)
-            .iter()
-            .any(|r| r.action == PickerAction::Assign(numero)));
+        assert!(
+            !picker
+                .cached_tab_rows(KeycodeTab::UniversalSymbols)
+                .iter()
+                .any(|r| r.action == PickerAction::Assign(numero))
+        );
     }
     #[test]
     fn version_compat_old_broad_bit_does_not_offer_numero() {
@@ -958,14 +978,18 @@ mod version_compat_numero_tests {
             rmk_native_key_actions_allowed_for_target: true,
             ..Default::default()
         };
-        assert!(!picker
-            .tab_rows(KeycodeTab::UniversalSymbols)
-            .iter()
-            .any(|r| r.action == PickerAction::Assign(crate::universal_symbols::binding(180))));
-        assert!(picker
-            .tab_rows(KeycodeTab::UniversalSymbols)
-            .iter()
-            .any(|r| r.action == PickerAction::Assign(crate::universal_symbols::binding(144))));
+        assert!(
+            !picker
+                .tab_rows(KeycodeTab::UniversalSymbols)
+                .iter()
+                .any(|r| r.action == PickerAction::Assign(crate::universal_symbols::binding(180)))
+        );
+        assert!(
+            picker
+                .tab_rows(KeycodeTab::UniversalSymbols)
+                .iter()
+                .any(|r| r.action == PickerAction::Assign(crate::universal_symbols::binding(144)))
+        );
     }
 }
 
@@ -1877,7 +1901,7 @@ impl KeycodePicker {
                     egui::TextEdit::singleline(&mut self.search.query)
                         .hint_text(tr_picker(self.language, "key_picker.search_hint"))
                         .font(egui::FontId::proportional(12.5))
-                        .vertical_align(egui::Align::Center)
+                        .align(egui::Align2::LEFT_CENTER)
                         .margin(egui::Margin {
                             left: 8,
                             right: 26,
@@ -1897,7 +1921,7 @@ impl KeycodePicker {
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .on_hover_text(clear_label);
                     clear_resp.widget_info(|| {
-                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, clear_label)
+                        egui::WidgetInfo::labeled(egui::Role::Button, true, clear_label)
                     });
                     paint_focus_ring(ui, &clear_resp, 4.0);
                     let color = if clear_resp.hovered() {
@@ -1925,7 +1949,7 @@ impl KeycodePicker {
 
             // Tab bar
             let visible_tabs = self.visible_vial_tabs();
-            let panel_id = ui.id().with("picker_tab_panel");
+            let panel_id = ui.scope_id().with("picker_tab_panel");
             let mut selected_tab_id = None;
             let tab_spacing = 6.0;
             let tab_bar_width: f32 = visible_tabs
@@ -1973,7 +1997,7 @@ impl KeycodePicker {
             let searching = self.search.is_active();
 
             let content_height = key_picker_main_content_height(picker_size);
-            ui.scope_builder(egui::UiBuilder::new().id(panel_id), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().scope_id(panel_id), |ui| {
                 ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
                     node.set_role(egui::accesskit::Role::TabPanel);
                     if let Some(tab_id) = selected_tab_id {

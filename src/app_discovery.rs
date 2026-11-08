@@ -1,6 +1,6 @@
 use crate::application_layouts::DetectedApplication;
 use std::process::Command;
-use std::sync::{mpsc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
@@ -3169,9 +3169,11 @@ mod macos_tests {
 
     #[test]
     fn native_process_name_is_available_for_current_pid() {
-        assert!(!macos_process_name(std::process::id() as i32)
-            .unwrap()
-            .is_empty());
+        assert!(
+            !macos_process_name(std::process::id() as i32)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -3199,10 +3201,12 @@ mod tests {
             panic!("expected a focused application: {:?}", status.state);
         };
         assert_eq!(application.window_title, "Draft");
-        assert!(application
-            .identities
-            .iter()
-            .any(|identity| identity.contains("kate")));
+        assert!(
+            application
+                .identities
+                .iter()
+                .any(|identity| identity.contains("kate"))
+        );
     }
 
     #[test]
@@ -3388,14 +3392,18 @@ mod tests {
         else {
             panic!("expected a focused application");
         };
-        assert!(application
-            .identities
-            .iter()
-            .any(|identity| identity.contains("kwrite")));
-        assert!(!application
-            .identities
-            .iter()
-            .any(|identity| identity.contains("kate")));
+        assert!(
+            application
+                .identities
+                .iter()
+                .any(|identity| identity.contains("kwrite"))
+        );
+        assert!(
+            !application
+                .identities
+                .iter()
+                .any(|identity| identity.contains("kate"))
+        );
         assert_eq!(reports("caption"), [window("Notes", "org.kde.kwrite")]);
         assert_eq!(reports("focus"), [window("Docs", "firefox")]);
         // A window that lost the focus no longer reports its changes.
@@ -3438,7 +3446,7 @@ mod tests {
         let (client, server) = std::os::unix::net::UnixStream::pair().expect("socket pair");
         let guid = zbus::Guid::generate();
         let server = std::thread::spawn(move || {
-            zbus::blocking::connection::Builder::unix_stream(server)
+            zbus::blocking::connection::Builder::async_io_unix_stream(server)
                 .server(guid)
                 .expect("server guid")
                 .p2p()
@@ -3446,7 +3454,7 @@ mod tests {
         });
         let timeout = Duration::from_millis(500);
         let connection = kwin_connection(
-            Ok(zbus::blocking::connection::Builder::unix_stream(client).p2p()),
+            Ok(zbus::blocking::connection::Builder::async_io_unix_stream(client).p2p()),
             timeout,
         )
         .expect("client connection");
@@ -3617,12 +3625,14 @@ mod tests {
             !matches!(status.state, ForegroundState::BackendUnavailable(_)),
             "{status:?}"
         );
-        assert!(!kwin_foreground_script_dir()
-            .join(format!(
-                "{}.js",
-                kwin_foreground_script_name(std::process::id())
-            ))
-            .exists());
+        assert!(
+            !kwin_foreground_script_dir()
+                .join(format!(
+                    "{}.js",
+                    kwin_foreground_script_name(std::process::id())
+                ))
+                .exists()
+        );
     }
 
     #[test]
@@ -3639,9 +3649,11 @@ mod tests {
         let applications = parse_sway_apps(
             r#"{"nodes":[{"nodes":[{"pid":0,"app_id":"code","name":"main.rs"}]}]}"#,
         );
-        assert!(applications
-            .iter()
-            .any(|application| application.executable == "code"));
+        assert!(
+            applications
+                .iter()
+                .any(|application| application.executable == "code")
+        );
     }
 
     #[test]
@@ -3684,10 +3696,12 @@ mod tests {
         )
         .unwrap();
 
-        assert!(application
-            .identities
-            .iter()
-            .any(|value| value == "examplepaint"));
+        assert!(
+            application
+                .identities
+                .iter()
+                .any(|value| value == "examplepaint")
+        );
         assert!(crate::application_layouts::application_identities_match(
             std::iter::once(application.executable.as_str())
                 .chain(application.identities.iter().map(String::as_str)),
@@ -3764,9 +3778,11 @@ mod tests {
         assert_eq!(choices.len(), 2);
         assert_eq!(choices[0].display_name, "Blender");
         assert_eq!(choices[1].display_name, "Telegram");
-        assert!(choices
-            .iter()
-            .all(|application| application.window_title.is_empty()));
+        assert!(
+            choices
+                .iter()
+                .all(|application| application.window_title.is_empty())
+        );
     }
 
     #[test]
@@ -4140,9 +4156,11 @@ mod tests {
             (writer.xlib.XFlush)(writer.display);
         }
 
-        assert!(reader
-            .wait_for_foreground_event(1_000)
-            .expect("X11 event wait failed"));
+        assert!(
+            reader
+                .wait_for_foreground_event(1_000)
+                .expect("X11 event wait failed")
+        );
         unsafe {
             (writer.xlib.XDeleteProperty)(writer.display, root, property);
             (writer.xlib.XFlush)(writer.display);

@@ -100,7 +100,7 @@ impl EntropyApp {
                     advanced_clicked,
                 ) = show_top_dropdown(
                     ui.ctx(),
-                    egui::Id::new("advanced_dropdown_area"),
+                    egui::Id::unique("advanced_dropdown_area"),
                     dropdown_rect.min,
                     |ui| {
                         ui.set_min_width(item_width);
@@ -334,7 +334,7 @@ mod tests {
         .unwrap();
         let tab = egui::Rect::from_min_size(egui::pos2(400.0, 10.0), egui::vec2(100.0, 32.0));
         let draw = |app: &mut EntropyApp, advanced: bool, lang, events| {
-            ctx.run_ui(
+            crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -358,7 +358,7 @@ mod tests {
                         );
                     }
                 },
-            )
+            ))
         };
         let label_pos = |output: &egui::FullOutput, label: &str| {
             output.shapes.iter().find_map(|shape| match &shape.shape {
@@ -433,7 +433,7 @@ mod tests {
         app.keycode_picker.macro_count = 1;
         let tab = egui::Rect::from_min_size(egui::pos2(400.0, 10.0), egui::vec2(100.0, 32.0));
         let draw = |app: &mut EntropyApp, events| {
-            let _ = ctx.run_ui(
+            ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -452,7 +452,8 @@ mod tests {
                         false,
                     )
                 },
-            );
+            )
+            .drop_without_applying_deltas();
         };
         draw(&mut app, vec![]);
         // Two host-tool rows, then a divider, then the Macros row.

@@ -92,22 +92,29 @@ fn event_defers_automatic_background_load(event: &egui::Event) -> bool {
         egui::Event::Copy
         | egui::Event::Cut
         | egui::Event::Paste(_)
+        | egui::Event::PasteImage(_)
+        | egui::Event::MiddleClickPaste { .. }
         | egui::Event::Text(_)
         | egui::Event::Zoom(_)
         | egui::Event::Rotate(_)
         | egui::Event::MouseWheel { .. }
         | egui::Event::AccessKitActionRequest(_) => true,
         egui::Event::Key { pressed, .. } | egui::Event::PointerButton { pressed, .. } => *pressed,
-        egui::Event::Ime(egui::ImeEvent::Preedit(_) | egui::ImeEvent::Commit(_)) => true,
+        egui::Event::Ime(
+            egui::ImeEvent::Preedit { .. }
+            | egui::ImeEvent::Commit(_)
+            | egui::ImeEvent::DeleteSurrounding { .. },
+        ) => true,
         egui::Event::Touch { phase, .. } => {
             matches!(phase, egui::TouchPhase::Start | egui::TouchPhase::Move)
         }
         egui::Event::PointerMoved(_)
         | egui::Event::MouseMoved(_)
         | egui::Event::PointerGone
-        | egui::Event::Ime(egui::ImeEvent::Enabled | egui::ImeEvent::Disabled)
-        | egui::Event::WindowFocused(_)
-        | egui::Event::Screenshot { .. } => false,
+        | egui::Event::ModifiersChanged(_)
+        // `Enabled` and `Disabled`, which egui no longer sends.
+        | egui::Event::Ime(_)
+        | egui::Event::WindowFocused(_) => false,
     }
 }
 
@@ -1976,26 +1983,30 @@ mod tests {
 
         let (layer, step) = state.next_background_layer_step().unwrap();
         assert_eq!(step, BackgroundLayerStep::Keymap { local_offset: 0 });
-        assert!(state
-            .record_background_layer_step(
-                layer,
-                BackgroundLayerStepResult::Keymap {
-                    local_offset: 0,
-                    keycodes: vec![0],
-                },
-            )
-            .unwrap()
-            .is_none());
+        assert!(
+            state
+                .record_background_layer_step(
+                    layer,
+                    BackgroundLayerStepResult::Keymap {
+                        local_offset: 0,
+                        keycodes: vec![0],
+                    },
+                )
+                .unwrap()
+                .is_none()
+        );
 
         let (_, step) = state.next_background_layer_step().unwrap();
         assert_eq!(step, BackgroundLayerStep::NativeActions);
-        assert!(state
-            .record_background_layer_step(
-                layer,
-                BackgroundLayerStepResult::NativeActions(Vec::new()),
-            )
-            .unwrap()
-            .is_none());
+        assert!(
+            state
+                .record_background_layer_step(
+                    layer,
+                    BackgroundLayerStepResult::NativeActions(Vec::new()),
+                )
+                .unwrap()
+                .is_none()
+        );
 
         assert_eq!(
             state.next_background_layer_step(),
@@ -2084,9 +2095,11 @@ mod tests {
 
         state.defer_background_for_user_input();
 
-        assert!(state
-            .background_layer_resume_delay()
-            .is_some_and(|delay| delay > std::time::Duration::from_millis(500)));
+        assert!(
+            state
+                .background_layer_resume_delay()
+                .is_some_and(|delay| delay > std::time::Duration::from_millis(500))
+        );
     }
 
     #[test]
@@ -2096,9 +2109,11 @@ mod tests {
         state.defer_background_for_user_input();
         state.mark_background_layer_finished();
 
-        assert!(state
-            .background_layer_resume_delay()
-            .is_some_and(|delay| delay > std::time::Duration::from_millis(500)));
+        assert!(
+            state
+                .background_layer_resume_delay()
+                .is_some_and(|delay| delay > std::time::Duration::from_millis(500))
+        );
     }
 
     #[test]
@@ -2127,6 +2142,7 @@ mod tests {
                 delta: egui::vec2(0.0, 10.0),
                 modifiers: egui::Modifiers::NONE,
                 phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
             }
         ));
     }

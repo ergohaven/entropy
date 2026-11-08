@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
-use egui::{Event, UserData, ViewportId};
-use egui_wgpu::{
-    RenderState, SurfaceErrorAction,
-    capture::{CaptureReceiver, CaptureSender, CaptureState, capture_channel},
-};
+use egui::ScreenshotCallback;
+use egui_wgpu::{RenderState, SurfaceErrorAction, capture::CaptureState};
 use wasm_bindgen::JsValue;
 use web_sys::HtmlCanvasElement;
 
@@ -12,6 +9,7 @@ use super::web_painter::WebPainter;
 
 pub(crate) struct WebPainterWgpu {
     canvas: HtmlCanvasElement,
+    instance: wgpu::Instance,
     surface: wgpu::Surface<'static>,
     surface_configuration: wgpu::SurfaceConfiguration,
     render_state: Option<RenderState>,
@@ -19,10 +17,9 @@ pub(crate) struct WebPainterWgpu {
     depth_stencil_format: Option<wgpu::TextureFormat>,
     depth_texture_view: Option<wgpu::TextureView>,
     screen_capture_state: Option<CaptureState>,
-    capture_tx: CaptureSender,
-    capture_rx: CaptureReceiver,
     ctx: egui::Context,
     needs_reconfigure: bool,
+    needs_recreate: bool,
 }
 
 /// Owned web display handle that is `Send + Sync`.
@@ -88,7 +85,7 @@ impl WebPainterWgpu {
             && create_new.display_handle.is_none()
         {
             // Force WebGL, useful for quick & dirty testing:
-            //create_new.instance_descriptor.backends = wgpu::Backends::GL;
+            // create_new.instance_descriptor.backends = wgpu::Backends::GL;
             create_new.display_handle = Some(Box::new(WebDisplay));
         }
 
@@ -118,17 +115,16 @@ impl WebPainterWgpu {
 
         let surface_configuration = wgpu::SurfaceConfiguration {
             format: render_state.target_format,
-            present_mode: wgpu_options.present_mode,
+            present_mode: wgpu_options.surface.present_mode,
             view_formats: vec![render_state.target_format],
             ..default_configuration
         };
 
         log::debug!("wgpu painter initialized.");
 
-        let (capture_tx, capture_rx) = capture_channel();
-
         Ok(Self {
             canvas,
+            instance,
             render_state: Some(render_state),
             surface,
             surface_configuration,
@@ -136,10 +132,9 @@ impl WebPainterWgpu {
             depth_texture_view: None,
             on_surface_status: Arc::clone(&wgpu_options.on_surface_status) as _,
             screen_capture_state: None,
-            capture_tx,
-            capture_rx,
             ctx,
             needs_reconfigure: false,
+            needs_recreate: false,
         })
     }
 }
@@ -160,8 +155,8 @@ impl WebPainter for WebPainterWgpu {
         clear_color: [f32; 4],
         clipped_primitives: &[egui::ClippedPrimitive],
         pixels_per_point: f32,
-        textures_delta: &egui::TexturesDelta,
-        capture_data: Vec<UserData>,
+        textures_delta: &mut egui::TexturesDelta,
+        capture_data: Vec<ScreenshotCallback>,
     ) -> Result<(), JsValue> {
         let capture = !capture_data.is_empty();
 
@@ -172,6 +167,24 @@ impl WebPainter for WebPainterWgpu {
                 "Can't paint, wgpu renderer was already disposed",
             ));
         };
+
+        // If the previous frame produced `CurrentSurfaceTexture::Lost`, drop and recreate the
+        // surface from the canvas before re-borrowing `self.render_state` for the rest of paint.
+        if self.needs_recreate {
+            self.needs_recreate = false;
+            match self
+                .instance
+                .create_surface(wgpu::SurfaceTarget::Canvas(self.canvas.clone()))
+            {
+                Ok(new_surface) => {
+                    new_surface.configure(&render_state.device, &self.surface_configuration);
+                    self.surface = new_surface;
+                }
+                Err(err) => {
+                    log::error!("Failed to recreate wgpu surface for canvas: {err}");
+                }
+            }
+        }
 
         let mut encoder =
             render_state
@@ -188,13 +201,16 @@ impl WebPainter for WebPainterWgpu {
 
         let user_cmd_bufs = {
             let mut renderer = render_state.renderer.write();
-            for (id, image_delta) in &textures_delta.set {
-                renderer.update_texture(
-                    &render_state.device,
-                    &render_state.queue,
-                    *id,
-                    image_delta,
-                );
+            #[expect(clippy::iter_over_hash_type)] // Order doesn't matter here
+            for (id, image_deltas) in textures_delta.set.drain() {
+                for image_delta in image_deltas {
+                    renderer.update_texture(
+                        &render_state.device,
+                        &render_state.queue,
+                        id,
+                        &image_delta,
+                    );
+                }
             }
 
             renderer.update_buffers(
@@ -239,9 +255,17 @@ impl WebPainter for WebPainterWgpu {
                 }
                 other => {
                     match (*self.on_surface_status)(&other) {
-                        SurfaceErrorAction::RecreateSurface => {
+                        SurfaceErrorAction::Reconfigure => {
                             self.surface
                                 .configure(&render_state.device, &self.surface_configuration);
+                        }
+                        SurfaceErrorAction::RecreateSurface => {
+                            // Full recovery needs `&mut self`, which conflicts with the live
+                            // `render_state` / `self.surface` borrows here. Defer to the top
+                            // of the next paint via the `needs_recreate` flag, and request a
+                            // repaint so the next frame actually invokes `paint` to consume it.
+                            self.needs_recreate = true;
+                            self.ctx.request_repaint();
                         }
                         SurfaceErrorAction::SkipFrame => {}
                     }
@@ -253,10 +277,12 @@ impl WebPainter for WebPainterWgpu {
                 let renderer = render_state.renderer.read();
 
                 let target_texture = if capture {
+                    let size = output_frame.texture.size();
+                    let format = output_frame.texture.format();
                     let capture_state = self.screen_capture_state.get_or_insert_with(|| {
-                        CaptureState::new(&render_state.device, &output_frame.texture)
+                        CaptureState::new(&render_state.device, size, format)
                     });
-                    capture_state.update(&render_state.device, &output_frame.texture);
+                    capture_state.update(&render_state.device, size);
 
                     &capture_state.texture
                 } else {
@@ -321,13 +347,16 @@ impl WebPainter for WebPainterWgpu {
                 );
             }
 
-            let capture_buffer = if capture
-                && let Some(capture_state) = &mut self.screen_capture_state
-            {
-                Some(capture_state.copy_textures(&render_state.device, &output_frame, &mut encoder))
-            } else {
-                None
-            };
+            let capture_buffer =
+                if capture && let Some(capture_state) = &mut self.screen_capture_state {
+                    Some(capture_state.copy_textures(
+                        &render_state.device,
+                        Some(&output_frame),
+                        &mut encoder,
+                    ))
+                } else {
+                    None
+                };
 
             Some((output_frame, capture_buffer))
         };
@@ -335,22 +364,16 @@ impl WebPainter for WebPainterWgpu {
         // Submit the commands: both the main buffer and user-defined ones.
         render_state
             .queue
-            .submit(user_cmd_bufs.into_iter().chain([encoder.finish()]));
+            .submit(core::iter::chain(user_cmd_bufs, [encoder.finish()]));
 
         if let Some((frame, capture_buffer)) = frame_and_capture_buffer {
             if let Some(capture_buffer) = capture_buffer
                 && let Some(capture_state) = &self.screen_capture_state
             {
-                capture_state.read_screen_rgba(
-                    self.ctx.clone(),
-                    capture_buffer,
-                    capture_data,
-                    self.capture_tx.clone(),
-                    ViewportId::ROOT,
-                );
+                capture_state.read_screen_rgba(capture_buffer, capture_data);
             }
 
-            frame.present();
+            render_state.queue.present(frame);
         }
 
         // Free textures marked for destruction **after** queue submit since they might still be used in the current frame.
@@ -358,25 +381,13 @@ impl WebPainter for WebPainterWgpu {
         // However, once we called `wgpu::Queue::submit`, it is up for wgpu to determine how long the underlying gpu resource has to live.
         {
             let mut renderer = render_state.renderer.write();
-            for id in &textures_delta.free {
-                renderer.free_texture(id);
+            #[expect(clippy::iter_over_hash_type)] // Order doesn't matter here
+            for id in textures_delta.free.drain() {
+                renderer.free_texture(&id);
             }
         }
 
         Ok(())
-    }
-
-    fn handle_screenshots(&mut self, events: &mut Vec<Event>) {
-        for (viewport_id, user_data, screenshot) in self.capture_rx.try_iter() {
-            let screenshot = Arc::new(screenshot);
-            for data in user_data {
-                events.push(Event::Screenshot {
-                    viewport_id,
-                    user_data: data,
-                    image: Arc::clone(&screenshot),
-                });
-            }
-        }
     }
 
     fn destroy(&mut self) {

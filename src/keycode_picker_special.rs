@@ -365,7 +365,7 @@ mod layout_tests {
     fn bluetooth_and_custom_keycaps_use_the_same_horizontal_insets() {
         let ctx = egui::Context::default();
         let mut widths = Vec::new();
-        let _ = ctx.run_ui(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -385,7 +385,8 @@ mod layout_tests {
                     KeycodePicker::key_grid_width(ui, 13, ui.spacing().item_spacing.x)
                 );
             },
-        );
+        )
+        .drop_without_applying_deltas();
         assert_eq!(widths[0], widths[1]);
     }
 }

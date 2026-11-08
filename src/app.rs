@@ -3,8 +3,8 @@ use crate::firmware::FirmwareProtocol;
 
 use crate::keyboard::{KeyboardLayout, LayoutOption, PhysicalEncoder, PhysicalKey};
 use crate::keycode::{
-    key_label_font_sizes, keycode_label_with_names_and_layout, keycode_tooltip, KeyLegendLayout,
-    KeyOutputLayout,
+    KeyLegendLayout, KeyOutputLayout, key_label_font_sizes, keycode_label_with_names_and_layout,
+    keycode_tooltip,
 };
 use crate::keycode_picker::{DeferredPickerDataState, KeycodePicker, KeycodeTab};
 use egui::{Color32, FontId, RichText, Sense, Stroke, Vec2};
@@ -33,10 +33,10 @@ mod app_state;
 #[path = "pictogram_origin.rs"]
 mod pictogram_origin;
 pub use app_state::*;
-#[cfg(not(target_arch = "wasm32"))]
-use pictogram_origin::is_known_migrated_stock_pictogram;
 #[cfg(test)]
 use pictogram_origin::LEGACY_NAME_LOOKUPS;
+#[cfg(not(target_arch = "wasm32"))]
+use pictogram_origin::is_known_migrated_stock_pictogram;
 
 #[path = "app_init.rs"]
 mod app_init;
@@ -61,7 +61,7 @@ mod entlayout;
 mod headless_export;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use headless_export::{
-    run_headless_export, HeadlessExportRequest, EXIT_INSTANCE_RUNNING, EXIT_USAGE,
+    EXIT_INSTANCE_RUNNING, EXIT_USAGE, HeadlessExportRequest, run_headless_export,
 };
 #[path = "entsettings.rs"]
 mod entsettings;
@@ -233,3 +233,11 @@ use vial_hid_task::VialHidTask;
 mod vial_unlock;
 #[path = "ui/window_lifecycle.rs"]
 mod window_lifecycle;
+
+/// egui checks in debug builds that the texture changes of every pass reach a
+/// painter. Tests that run passes on a bare `egui::Context` have no painter.
+#[cfg(test)]
+pub(crate) fn discard_texture_deltas(mut output: egui::FullOutput) -> egui::FullOutput {
+    output.textures_delta.clear();
+    output
+}
