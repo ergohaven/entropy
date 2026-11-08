@@ -94,11 +94,26 @@ pub fn tr_catalog(language: Language, key: &'static str) -> &'static str {
 }
 
 pub fn tr_catalog_format(language: Language, key: &'static str, vars: &[(&str, &str)]) -> String {
-    let mut text = tr_catalog(language, key).to_owned();
-    for (name, value) in vars {
-        text = text.replace(&format!("{{{name}}}"), value);
+    tr_catalog_string_format(language, key, vars)
+}
+
+#[cfg(test)]
+mod formatted_catalog_tests {
+    use super::*;
+
+    #[test]
+    fn formatted_catalog_strings_turn_escapes_into_characters() {
+        for language in [Language::English, Language::Russian] {
+            let report = tr_catalog_format(
+                language,
+                "entsettings.import_complete_report",
+                &[("path", "dir/a.entsettings"), ("backup", "dir/b.entsettings")],
+            );
+            assert!(report.contains("\n\n") && !report.contains("\\n"), "{report}");
+            assert!(report.contains("dir/a.entsettings") && report.contains("dir/b.entsettings"));
+        }
+        assert!(tr_catalog(Language::English, "text_expander.replacement_hint").contains("\\n"));
     }
-    text
 }
 
 fn tr_catalog_string_format(
