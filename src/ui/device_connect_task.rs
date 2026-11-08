@@ -1584,7 +1584,7 @@ impl EntropyApp {
                     || supports_rmk_native_tap_dance_actions
                     || supports_rmk_combo_layers;
                 let legacy_qube = layout.live_features.time && layout.live_features.media;
-                let firmware_update_target = crate::app::rmk_firmware_release_target(
+                let firmware_update_target = crate::app::firmware_release_target(
                     dev.vendor_id,
                     dev.product_id,
                     firmware_version.as_deref(),

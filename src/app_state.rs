@@ -94,6 +94,10 @@ pub(crate) struct AppSettings {
     pub(crate) launch_at_startup: bool,
     #[serde(default)]
     pub(crate) launch_minimized: bool,
+    #[serde(default)]
+    pub(crate) app_update_notifications: bool,
+    #[serde(default)]
+    pub(crate) firmware_update_notifications: bool,
     #[serde(default = "default_show_shifted_number_symbols")]
     pub(crate) show_shifted_number_symbols: bool,
     #[serde(default = "default_layer_hover_preview")]
@@ -267,6 +271,8 @@ impl Default for AppSettings {
             close_to_tray_behavior: CloseToTrayBehavior::Ask,
             launch_at_startup: false,
             launch_minimized: false,
+            app_update_notifications: false,
+            firmware_update_notifications: false,
             show_shifted_number_symbols: default_show_shifted_number_symbols(),
             layer_hover_preview: default_layer_hover_preview(),
             middle_click_assigns_transparent: false,
@@ -5779,6 +5785,8 @@ pub struct EntropyApp {
     pub(crate) device_about_info: Option<DeviceAboutInfo>,
     pub(crate) update_check: UpdateCheckState,
     pub(crate) firmware_update_check: FirmwareUpdateCheckState,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) update_notifications: super::update_notifications::UpdateNotifications,
     pub(crate) tour_state: TourState,
     pub(crate) tour_target_rects: Vec<(TourTarget, egui::Rect)>,
     /// Vial unlock dialog open

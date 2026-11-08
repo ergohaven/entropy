@@ -344,6 +344,8 @@ fn main() -> eframe::Result<()> {
 
     #[cfg(target_os = "macos")]
     hid::initialize_macos_hid_on_main_thread();
+    #[cfg(target_os = "macos")]
+    app::prepare_macos_update_notifications();
 
     let viewport = egui::ViewportBuilder::default()
         .with_title(APP_TITLE)
