@@ -3487,3 +3487,199 @@ fn uncertain_macro_write_blocks_snapshot_until_read_only_recovery() {
         );
     }
 }
+
+#[test]
+fn gui_import_confirms_macros_after_borrowed_hid_returns() {
+    for staged in [false, true] {
+        for borrowed in [false, true] {
+            gui_macro_confirmation(
+                DeferredFullLayoutAction::ImportEntlayout,
+                staged,
+                borrowed,
+                true,
+            );
+        }
+    }
+}
+
+#[test]
+fn gui_export_confirms_macros_after_borrowed_hid_returns() {
+    for staged in [false, true] {
+        for borrowed in [false, true] {
+            gui_macro_confirmation(
+                DeferredFullLayoutAction::ExportEntlayout,
+                staged,
+                borrowed,
+                true,
+            );
+        }
+    }
+}
+
+#[test]
+fn gui_macro_confirmation_failure_after_borrowed_hid_stops_without_retry() {
+    for action in [
+        DeferredFullLayoutAction::ImportEntlayout,
+        DeferredFullLayoutAction::ExportEntlayout,
+    ] {
+        gui_macro_confirmation(action, false, true, false);
+    }
+}
+
+fn gui_macro_confirmation(
+    action: DeferredFullLayoutAction,
+    staged: bool,
+    borrowed: bool,
+    readable: bool,
+) {
+    let _storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app, recorder, _) = fixture();
+    let ctx = egui::Context::default();
+    app.tick_layout_import_lifecycle_for_test(&ctx, 1.0);
+    app.keycode_picker.macro_count = 1;
+    app.keycode_picker.macro_texts = vec![b"stale editor bytes".to_vec()];
+    app.deferred_device_load = if staged {
+        DeferredDeviceLoadState::staged(DeferredDeviceLoadContext {
+            json: std::sync::Arc::new(serde_json::json!({})),
+            supported_qmk_settings: std::sync::Arc::new(vec![]),
+            definition_fingerprint: 42,
+            layer_count: 8,
+            rows: 5,
+            cols: 3,
+            encoder_count: 0,
+            macro_count: 1,
+            macro_memory_bytes: Some(64),
+            tap_dance_count: 0,
+            combo_count: 0,
+            key_override_count: 0,
+            alt_repeat_count: 0,
+            modules_supported: false,
+            touchpad_supported: false,
+            bluetooth_supported: false,
+            layer_leds_supported: false,
+            rgb_supported: false,
+            lighting_mode: None,
+            supports_rmk_native_key_actions: false,
+            supports_universal_numero: false,
+            supports_universal_symbols: false,
+            supports_universal_russian_letters: false,
+            supports_rmk_native_combo_output: false,
+            supports_rmk_native_tap_dance_actions: false,
+            supports_rmk_combo_layers: false,
+        })
+    } else {
+        DeferredDeviceLoadState::complete(app.layer_count)
+    };
+    for layer in 0..app.layer_count {
+        app.deferred_device_load
+            .set_layer_status(layer, DeferredLoadStatus::Loaded);
+    }
+    app.deferred_device_load.set_section_status(
+        DeferredLoadSection::Macros,
+        DeferredLoadStatus::Failed("Macro write has not been confirmed".into()),
+    );
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    recorder.respond_by(move |r| {
+        let mut response = [0; 32];
+        match r[0] {
+            0xfe if r[1] == 0x08 => {
+                entered_tx.send(()).unwrap();
+                release_rx
+                    .recv_timeout(std::time::Duration::from_secs(3))
+                    .unwrap();
+            }
+            0x0d => response[2] = 64,
+            0x0e => {
+                if !readable {
+                    return Some(Err("macro recovery GET failed".into()));
+                }
+                let mut firmware = [0; 64];
+                firmware[..9].copy_from_slice(b"firmware\0");
+                let offset = u16::from_be_bytes([r[1], r[2]]) as usize;
+                let len = r[3] as usize;
+                response[4..4 + len].copy_from_slice(&firmware[offset..offset + len]);
+            }
+            _ => return None,
+        }
+        Some(Ok(response))
+    });
+    let before = recorder.requests().len();
+    if borrowed {
+        assert_eq!(
+            app.start_vial_hid_operation(&ctx, crate::app::vial_hid_task::VialHidOperation::Lock),
+            crate::app::vial_hid_task::VialHidTaskStart::Started
+        );
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        assert!(app.hid_device.is_none());
+    }
+    crate::app::file_dialog::set_test_dialog_result(None);
+    match action {
+        DeferredFullLayoutAction::ImportEntlayout => app.request_entlayout_import_after_full_load(),
+        DeferredFullLayoutAction::ExportEntlayout => app.request_entlayout_export_after_full_load(),
+        _ => unreachable!(),
+    }
+    if borrowed {
+        // A native frame must retain the request while the real worker owns HID.
+        app.tick_layout_import_lifecycle_for_test(&ctx, 1.0);
+        release_tx.send(()).unwrap();
+        assert_eq!(app.deferred_full_layout_action, Some(action));
+        assert!(app.pending_file_dialog.is_none());
+        assert!(app.entlayout_snapshot().is_none());
+        assert!(!recorder.requests()[before..].iter().any(|r| r[0] == 0x0e));
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while app.deferred_full_layout_action_pending() || app.vial_hid_task_active() {
+        app.tick_layout_import_lifecycle_for_test(&ctx, 1.0);
+        assert!(
+            std::time::Instant::now() < deadline,
+            "menu action never resumed: {}",
+            app.status_msg
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    if readable {
+        let expected = if matches!(action, DeferredFullLayoutAction::ImportEntlayout) {
+            crate::app::file_dialog::FileDialogAction::ImportEntlayout
+        } else {
+            crate::app::file_dialog::FileDialogAction::ExportEntlayout
+        };
+        assert_eq!(
+            app.pending_file_dialog.as_ref().map(|pending| &pending.0),
+            Some(&expected)
+        );
+        assert_eq!(app.keycode_picker.macro_texts, vec![b"firmware".to_vec()]);
+        assert!(app.entlayout_snapshot().is_some());
+        app.poll_file_dialog(&ctx); // Cancel without importing or writing an export.
+    } else {
+        assert!(app.pending_file_dialog.is_none());
+        assert!(
+            app.status_msg.contains("failed to read macro buffer"),
+            "{}",
+            app.status_msg
+        );
+        assert!(app.entlayout_snapshot().is_none());
+        assert_eq!(
+            app.keycode_picker.macro_texts,
+            vec![b"stale editor bytes".to_vec()]
+        );
+    }
+    let reads = recorder.requests().iter().filter(|r| r[0] == 0x0e).count();
+    assert!(reads > 0);
+    for _ in 0..3 {
+        app.tick_layout_import_lifecycle_for_test(&ctx, 1.0);
+    }
+    assert_eq!(
+        recorder.requests().iter().filter(|r| r[0] == 0x0e).count(),
+        reads,
+        "confirmation repeated after the action completed or failed"
+    );
+    assert!(
+        !recorder.requests()[before..]
+            .iter()
+            .any(|r| matches!(r[0], 0x05 | 0x07 | 0x0f)),
+        "macro confirmation must not retry device writes"
+    );
+}

@@ -673,7 +673,7 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn request_entlayout_import_after_full_load(&mut self) {
-        if !self.deferred_device_load.is_staged() {
+        if !self.deferred_device_load.is_staged() && !self.hid_write_task_owner_active() {
             if let Err(error) = self.confirm_entlayout_macros() {
                 self.status_msg = error.to_string();
                 return;
@@ -694,8 +694,9 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn request_entlayout_export_after_full_load(&mut self) {
-        // Eagerly loaded devices have no deferred context to schedule a GET.
-        if !self.deferred_device_load.is_staged() {
+        // Eager devices have no deferred GET context. If a worker owns HID,
+        // queue the action and confirm when that owner returns the handle.
+        if !self.deferred_device_load.is_staged() && !self.hid_write_task_owner_active() {
             if let Err(error) = self.confirm_entlayout_macros() {
                 self.status_msg = error.to_string();
                 return;
@@ -734,6 +735,27 @@ impl EntropyApp {
         let Some(action) = self.deferred_full_layout_action else {
             return;
         };
+        if !self.deferred_device_load.is_staged()
+            && !matches!(action, DeferredFullLayoutAction::OpenImageExport)
+            && self.keycode_picker.macro_count > 0
+            && !self
+                .deferred_device_load
+                .section_status(DeferredLoadSection::Macros)
+                .ready()
+        {
+            if self.hid_write_task_owner_active() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(80));
+                return;
+            }
+            // Resume this explicit request with GET only. A failed read ends
+            // the action; later frames must not retry either GET or SET.
+            if let Err(error) = self.confirm_entlayout_macros() {
+                self.deferred_full_layout_action = None;
+                self.status_msg = error.to_string();
+                ctx.request_repaint();
+                return;
+            }
+        }
         let failed_layer = (0..self.layer_count.max(1)).find_map(|layer| {
             match self.deferred_device_load.layer_status(layer) {
                 DeferredLoadStatus::Failed(error) => Some(format!("Layer{layer}: {error}")),
