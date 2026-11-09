@@ -24,9 +24,9 @@ RUN set -eux; \
 
 # Тот же набор, что ставит scripts/prepare_env.sh для debian, плюс bsdtar из
 # libarchive-tools — им проверяет содержимое пакетов scripts/test_linux_packages.sh.
+COPY scripts/install_debian_dependencies.sh /usr/local/lib/entropy/install_debian_dependencies.sh
 RUN set -eux; \
-	apt-get update; \
-	apt-get install -y --no-install-recommends \
+	PATH="$PATH:/usr/lib/apt" sh /usr/local/lib/entropy/install_debian_dependencies.sh \
 		libgtk-3-dev \
 		libudev-dev \
 		libhidapi-dev \
