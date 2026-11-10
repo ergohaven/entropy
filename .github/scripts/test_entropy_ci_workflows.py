@@ -89,6 +89,7 @@ class EntropyCIContract(unittest.TestCase):
 
     def test_macos_runs_the_complete_native_suite_in_parallel(self):
         owner = job(workflow('build.yml'), 'build')
+        self.assertIn('uses: taiki-e/install-action@v2', owner)
         self.assertIn('tool: cargo-nextest@0.9.150', owner)
         match = re.search(
             r'      - name: Test full macOS suite in parallel\n(.*?)(?=      - name:|\Z)',
