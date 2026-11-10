@@ -5565,6 +5565,8 @@ pub struct EntropyApp {
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) test_connect_requests:
         Option<mpsc::Sender<(Device, mpsc::Sender<ConnectTaskMessage>)>>,
+    #[cfg(all(test, target_os = "linux"))]
+    pub(super) test_device_scan_udev_access: Option<super::app_settings_ui::UdevAccess>,
     /// Scripted HID handle for the next real connect worker, in place of
     /// opening the device.
     #[cfg(all(test, not(target_arch = "wasm32")))]

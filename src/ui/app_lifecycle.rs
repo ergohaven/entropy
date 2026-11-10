@@ -1,12 +1,5 @@
 use super::*;
 
-fn should_poll_device_scan(main_window_hidden_to_tray: bool, _hid_lifecycle_busy: bool) -> bool {
-    // HID work belongs to one connection generation. Discovery must still run
-    // so an unplug can invalidate that generation instead of deadlocking scan
-    // behind a request which is waiting on the vanished device.
-    !main_window_hidden_to_tray
-}
-
 fn periodic_device_scan_allowed(
     selected_device_is_bluetooth: bool,
     hid_session_active: bool,
@@ -212,57 +205,57 @@ impl EntropyApp {
         self.poll_sticky_layout_background(ctx);
         self.poll_settings_write(ctx);
         self.flush_due_qmk_setting_writes();
-        if should_poll_device_scan(main_window_hidden_to_tray, self.hid_write_lifecycle_busy()) {
-            if hid_lifecycle_writes_available(self.hid_write_lifecycle_busy()) {
-                self.handle_pending_imports(ctx, now);
-            }
-            // Discovery must keep progressing independently from device-scoped HID
-            // work. After an unplug that work can remain pending until a scan
-            // observes the missing endpoint and advances connection_generation.
-            self.poll_device_scan(ctx);
-            if !self.rynk_host_opens.is_empty() {
-                // A remembered Rynk board's link opened, or its retry is due.
-                self.sync_rynk_host_bridges();
-            }
-            self.maybe_start_bluetooth_reconnect_scan(ctx);
+        if !main_window_hidden_to_tray
+            && hid_lifecycle_writes_available(self.hid_write_lifecycle_busy())
+        {
+            self.handle_pending_imports(ctx, now);
+        }
+        // Discovery must progress while hidden and during device-scoped HID
+        // work. After an unplug that work can remain pending until a scan
+        // observes the missing endpoint and advances connection_generation.
+        self.poll_device_scan(ctx);
+        if !self.rynk_host_opens.is_empty() {
+            // A remembered Rynk board's link opened, or its retry is due.
+            self.sync_rynk_host_bridges();
+        }
+        self.maybe_start_bluetooth_reconnect_scan(ctx);
 
-            // A worker temporarily borrows the handle; it is still the same
-            // active transport and must not authorize full Bluetooth enumeration.
-            // A Rynk session whose link broke is over: the next full scan,
-            // which reopens its board, is not held back as for a live one.
-            let hid_session_active = self
-                .hid_device
-                .as_ref()
-                .is_some_and(|session| !session.link_lost())
-                || self.hid_write_task_owner_active()
-                || matches!(self.connect_state, ConnectState::Loading { .. });
-            let bluetooth_busy = (selected_device_is_bluetooth && hid_session_active)
-                || self.bluetooth_discovery_owner_active();
-            // USB-only metadata enumeration is implemented without Bluetooth
-            // device opens on these platforms. Keep the old fail-safe elsewhere.
-            let has_discovered_devices = !self.device_manager.devices().is_empty();
-            let full_interval = periodic_device_scan_interval_secs(hid_session_active, has_discovered_devices);
-            // USB hotplug on every supported OS must not wait for global HID
-            // refresh even with no Bluetooth keyboards. Keep full discovery for
-            // cold startup/new Bluetooth devices, only when every owner allows it.
-            let usb_metadata_supported = matches!(discovery_platform, "linux" | "windows" | "macos");
-            let full_due = self.last_full_device_scan_at == 0.0
-                || now - self.last_full_device_scan_at >= full_interval;
-            let usb_only = usb_metadata_supported && (bluetooth_busy || !full_due);
-            let interval = if usb_only || usb_metadata_supported { 2.0 } else { full_interval };
-            if usb_only || periodic_device_scan_allowed(bluetooth_busy, hid_session_active || bluetooth_busy) {
-                if (self.last_device_scan_at == 0.0 || now - self.last_device_scan_at >= interval)
-                    && (!usb_metadata_supported || matches!(self.device_scan_state, DeviceScanState::Idle)) {
-                    self.scan_frame = self.scan_frame.wrapping_add(1);
-                    self.last_device_scan_at = now;
-                    if !usb_only { self.last_full_device_scan_at = now; }
-                    if usb_only { self.start_usb_device_scan(); }
-                    else { self.start_device_scan(); }
-                }
-                if usb_only || usb_metadata_supported {
-                    ctx.request_repaint_after(std::time::Duration::from_secs_f64(
-                        (interval - (now - self.last_device_scan_at)).clamp(0.025, interval)));
-                }
+        // A worker temporarily borrows the handle; it is still the same
+        // active transport and must not authorize full Bluetooth enumeration.
+        // A Rynk session whose link broke is over: the next full scan,
+        // which reopens its board, is not held back as for a live one.
+        let hid_session_active = self
+            .hid_device
+            .as_ref()
+            .is_some_and(|session| !session.link_lost())
+            || self.hid_write_task_owner_active()
+            || matches!(self.connect_state, ConnectState::Loading { .. });
+        let bluetooth_busy = (selected_device_is_bluetooth && hid_session_active)
+            || self.bluetooth_discovery_owner_active();
+        // USB-only metadata enumeration is implemented without Bluetooth
+        // device opens on these platforms. Keep the old fail-safe elsewhere.
+        let has_discovered_devices = !self.device_manager.devices().is_empty();
+        let full_interval = periodic_device_scan_interval_secs(hid_session_active, has_discovered_devices);
+        // USB hotplug on every supported OS must not wait for global HID
+        // refresh even with no Bluetooth keyboards. Keep full discovery for
+        // cold startup/new Bluetooth devices, only when every owner allows it.
+        let usb_metadata_supported = matches!(discovery_platform, "linux" | "windows" | "macos");
+        let full_due = self.last_full_device_scan_at == 0.0
+            || now - self.last_full_device_scan_at >= full_interval;
+        let usb_only = usb_metadata_supported && (bluetooth_busy || !full_due);
+        let interval = if usb_only || usb_metadata_supported { 2.0 } else { full_interval };
+        if usb_only || periodic_device_scan_allowed(bluetooth_busy, hid_session_active || bluetooth_busy) {
+            if (self.last_device_scan_at == 0.0 || now - self.last_device_scan_at >= interval)
+                && (!usb_metadata_supported || matches!(self.device_scan_state, DeviceScanState::Idle)) {
+                self.scan_frame = self.scan_frame.wrapping_add(1);
+                self.last_device_scan_at = now;
+                if !usb_only { self.last_full_device_scan_at = now; }
+                if usb_only { self.start_usb_device_scan(); }
+                else { self.start_device_scan(); }
+            }
+            if usb_only || usb_metadata_supported {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(
+                    (interval - (now - self.last_device_scan_at)).clamp(0.025, interval)));
             }
         }
 
@@ -1627,19 +1620,6 @@ mod tests {
         assert_eq!(app.combo_synced_entries.first(), Some(&first));
         assert!(app.combo_write_task.is_some());
         assert!(app.exit_after_hid_write);
-    }
-
-    #[test]
-    fn hidden_to_tray_skips_device_scan_polling() {
-        assert!(!should_poll_device_scan(true, false));
-        // Minimized and occluded windows are not tray-hidden, so App::logic
-        // keeps their background device polling alive while App::ui is skipped.
-        assert!(should_poll_device_scan(false, false));
-    }
-
-    #[test]
-    fn pending_hid_work_does_not_block_device_scan_polling() {
-        assert!(should_poll_device_scan(false, true));
     }
 
     #[test]

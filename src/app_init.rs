@@ -374,6 +374,8 @@ impl EntropyApp {
             test_device_scan_requests: None,
             #[cfg(all(test, not(target_arch = "wasm32")))]
             test_connect_requests: None,
+            #[cfg(all(test, target_os = "linux"))]
+            test_device_scan_udev_access: None,
             #[cfg(all(test, not(target_arch = "wasm32")))]
             test_connect_hid: None,
             #[cfg(not(target_arch = "wasm32"))]
