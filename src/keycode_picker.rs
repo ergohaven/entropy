@@ -38,7 +38,7 @@ use keycode_picker_basic::*;
 mod keycode_picker_lighting_quantum;
 #[path = "keycode_picker_macro.rs"]
 mod keycode_picker_macro;
-pub(crate) use keycode_picker_macro::decode_macro_actions;
+pub(crate) use keycode_picker_macro::{decode_macro_actions, macro_storage_used};
 use keycode_picker_macro::{MacroSnapshot, MacroUndoEntry};
 #[path = "keycode_picker_special.rs"]
 mod keycode_picker_special;

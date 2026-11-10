@@ -9,6 +9,15 @@ const VIAL_MACRO_EXT_TAP: u8 = 5;
 const VIAL_MACRO_EXT_DOWN: u8 = 6;
 const VIAL_MACRO_EXT_UP: u8 = 7;
 
+/// Storage used after the active backend converts the editor's bytecode.
+pub(crate) fn macro_storage_used(macros: &[Vec<u8>], slots: usize, rynk_board: bool) -> usize {
+    if rynk_board {
+        crate::rynk::macros::vial_macros_space_used(macros, slots)
+    } else {
+        crate::hid::macro_buffer_len(macros)
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct MacroSnapshot {
     bytecode: Vec<u8>,
@@ -1028,9 +1037,9 @@ impl KeycodePicker {
             return Some("macro_editor.clipboard_empty");
         };
         if let Some((_, capacity)) = memory_use {
-            let used = crate::hid::macro_buffer_len(&self.macro_texts);
-            let current = self.macro_texts.get(n).map_or(0, Vec::len);
-            if used - current + snapshot.bytecode.len() > capacity {
+            let mut projected = self.macro_texts.clone();
+            projected[n] = snapshot.bytecode.clone();
+            if macro_storage_used(&projected, self.macro_count, self.rynk_board) > capacity {
                 return Some("macro_editor.paste_memory_full");
             }
         }
@@ -1562,6 +1571,45 @@ mod tests {
         macro_clipboard_click(&mut picker, &ctx, 1, Some((7, 10)), "Paste");
         assert_eq!(picker.macro_texts[1], b"abcd");
         assert!(picker.macros_dirty);
+    }
+
+    #[test]
+    fn macro_clipboard_native_pool_rejects_overflow_and_accepts_exact_fit() {
+        for (len, initial, projected) in [(4, 10, 18), (64, 131, 260)] {
+            let ctx = egui::Context::default();
+            let source = vec![b'a'; len];
+            let mut picker = KeycodePicker {
+                language: crate::i18n::Language::English,
+                rynk_board: true,
+                macro_count: 2,
+                macro_texts: vec![source.clone(), Vec::new()],
+                macro_actions: vec![decode_macro_actions(&source), Vec::new()],
+                macro_names: vec!["Source".into(), "Target".into()],
+                macro_descriptions: vec!["Copied".into(), "Keep".into()],
+                ..Default::default()
+            };
+            assert_eq!(
+                crate::rynk::macros::vial_macros_space_used(&picker.macro_texts, 2),
+                initial
+            );
+            macro_clipboard_click(&mut picker, &ctx, 0, None, "Copy");
+            let target = picker.macro_snapshot(1);
+            let revision = picker.macro_edit_revision;
+            let capacity = if len == 4 { 10 } else { projected - 1 };
+            macro_clipboard_click(&mut picker, &ctx, 1, Some((initial, capacity)), "Paste");
+            assert_eq!(picker.macro_snapshot(1), target);
+            assert!(!picker.macros_dirty && !picker.macro_metadata_dirty);
+            assert_eq!(picker.macro_edit_revision, revision);
+            assert!(picker.macro_undo_stack.is_empty());
+            macro_clipboard_click(&mut picker, &ctx, 1, Some((initial, projected)), "Paste");
+            assert_eq!(picker.macro_texts[1], source);
+            assert_eq!(picker.macro_names[1], "Source");
+            assert_eq!(
+                crate::rynk::macros::vial_macros_space_used(&picker.macro_texts, 2),
+                projected
+            );
+            assert!(picker.macros_dirty && picker.macro_metadata_dirty);
+        }
     }
 
     #[test]
