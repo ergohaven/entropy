@@ -141,12 +141,20 @@ pub(crate) struct DetectedApplication {
 }
 
 impl DetectedApplication {
-    pub(crate) fn label(&self) -> String {
-        let name = if self.display_name.trim().is_empty() {
+    pub(crate) fn name(&self) -> &str {
+        // Window-system labels can retain the old launch name even when the
+        // executable or bundle identity identifies Entropy unambiguously.
+        if is_entropy_executable(&self.executable) {
+            crate::APP_TITLE
+        } else if self.display_name.trim().is_empty() {
             self.executable.trim()
         } else {
             self.display_name.trim()
-        };
+        }
+    }
+
+    pub(crate) fn label(&self) -> String {
+        let name = self.name();
         if self.window_title.trim().is_empty() || self.window_title.trim() == name {
             name.to_owned()
         } else {
@@ -672,7 +680,8 @@ impl DeviceApplicationLayouts {
                 .layouts
                 .values()
                 .find(|layout| {
-                    layout.name == "Vial" && normalize_executable(&layout.executable) == "entropy"
+                    layout.name.trim().eq_ignore_ascii_case("vial")
+                        && is_entropy_executable(&layout.executable)
                 })
                 .map(|layout| layout.id.clone());
             if let Some(id) = legacy_entropy {
@@ -722,11 +731,7 @@ impl DeviceApplicationLayouts {
         title_contains: &str,
     ) -> String {
         let id = self.unique_id(&application.executable);
-        let default_name = if application.display_name.trim().is_empty() {
-            application.executable.trim()
-        } else {
-            application.display_name.trim()
-        };
+        let default_name = application.name();
         let name = requested_name
             .map(str::trim)
             .filter(|name| !name.is_empty())
@@ -1073,7 +1078,7 @@ impl DeviceApplicationLayouts {
         );
         let name = name.trim();
         let name = if name.is_empty() {
-            application.display_name.trim()
+            application.name()
         } else {
             name
         };
@@ -1454,6 +1459,13 @@ fn application_layout_name_bytes(name: &str) -> &[u8] {
         end -= 1;
     }
     &name.as_bytes()[..end]
+}
+
+fn is_entropy_executable(value: &str) -> bool {
+    matches!(
+        normalize_executable(value).as_str(),
+        "entropy" | "comergohavenentropy"
+    )
 }
 
 pub(crate) fn normalize_executable(value: &str) -> String {
@@ -3867,7 +3879,7 @@ mod tests {
 
     #[test]
     fn catalog_upgrade_adds_photoshop_and_only_fills_untouched_second_layers() {
-        let presets = builtin_application_layout_presets_for(ShortcutPlatform::WindowsLinux);
+        let presets = builtin_application_layout_presets();
         let obs = presets
             .iter()
             .find(|preset| preset.id == "obs_studio")
@@ -3945,7 +3957,12 @@ mod tests {
 
     #[test]
     fn catalog_revision_five_removes_only_untouched_retired_layouts() {
-        let presets = all_application_layout_presets_for(ShortcutPlatform::WindowsLinux);
+        let platform = if cfg!(target_os = "macos") {
+            ShortcutPlatform::MacOs
+        } else {
+            ShortcutPlatform::WindowsLinux
+        };
+        let presets = all_application_layout_presets_for(platform);
         let mut settings = DeviceApplicationLayouts::default();
         let mut retired_ids = Vec::new();
         for preset in presets
@@ -4012,7 +4029,7 @@ mod tests {
 
     #[test]
     fn catalog_revision_three_adds_third_layer_only_to_stock_profiles() {
-        let presets = builtin_application_layout_presets_for(ShortcutPlatform::WindowsLinux);
+        let presets = builtin_application_layout_presets();
         let code = presets
             .iter()
             .find(|preset| preset.id == "visual_studio_code")
@@ -4209,7 +4226,7 @@ mod tests {
 
     #[test]
     fn changed_preset_command_loses_its_old_icon_and_visuals_are_transmitted() {
-        let preset = builtin_application_layout_presets_for(ShortcutPlatform::WindowsLinux)
+        let preset = builtin_application_layout_presets()
             .into_iter()
             .find(|preset| preset.id == "google_chrome")
             .unwrap();

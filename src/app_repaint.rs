@@ -16,30 +16,37 @@ fn bluetooth_visible_repaint_interval_for_target(
     selected_device_is_bluetooth: bool,
     target_is_macos: bool,
     target_is_wayland: bool,
+    window_attended: bool,
 ) -> Option<std::time::Duration> {
     // macOS input already wakes eframe. A continuous Bluetooth heartbeat
     // redraws the visible keyboard even when there is no input or new data.
     if !selected_device_is_bluetooth || target_is_macos {
         None
-    } else if target_is_wayland {
+    } else if target_is_wayland && window_attended {
         // On the tested Wayland stack, cursor motion does not reliably drive
         // another eframe pass. A 20 FPS heartbeat keeps hover, tooltips, and
         // hover-open menus live without restoring the saturating 60 FPS loop.
+        // Nobody hovers a window that has neither the focus nor the pointer,
+        // and Wayland does not say when it is minimized or covered, so such a
+        // window keeps the normal visible cadence instead.
         Some(WAYLAND_BLUETOOTH_VISIBLE_REPAINT_INTERVAL)
     } else {
         None
     }
 }
 
+/// `window_attended`: the window has the keyboard focus or the pointer.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn bluetooth_visible_repaint_interval(
     selected_device_is_bluetooth: bool,
     target_is_wayland: bool,
+    window_attended: bool,
 ) -> Option<std::time::Duration> {
     bluetooth_visible_repaint_interval_for_target(
         selected_device_is_bluetooth,
         cfg!(target_os = "macos"),
         target_is_wayland,
+        window_attended,
     )
 }
 
@@ -141,13 +148,13 @@ mod tests {
     #[test]
     fn wayland_bluetooth_uses_a_bounded_visible_heartbeat() {
         assert_eq!(
-            bluetooth_visible_repaint_interval_for_target(true, false, true),
+            bluetooth_visible_repaint_interval_for_target(true, false, true, true),
             Some(WAYLAND_BLUETOOTH_VISIBLE_REPAINT_INTERVAL)
         );
         assert_eq!(
             native_repaint_interval(
                 false,
-                bluetooth_visible_repaint_interval_for_target(true, false, true),
+                bluetooth_visible_repaint_interval_for_target(true, false, true, true),
                 false,
                 false,
                 None,
@@ -157,15 +164,38 @@ mod tests {
     }
 
     #[test]
-    fn event_driven_platforms_keep_the_normal_visible_idle_cadence() {
+    fn wayland_bluetooth_window_without_focus_or_pointer_skips_the_heartbeat() {
         assert_eq!(
-            bluetooth_visible_repaint_interval_for_target(true, false, false),
+            bluetooth_visible_repaint_interval_for_target(true, false, true, false),
             None
         );
         assert_eq!(
             native_repaint_interval(
                 false,
-                bluetooth_visible_repaint_interval_for_target(true, false, false),
+                bluetooth_visible_repaint_interval_for_target(true, false, true, false),
+                false,
+                false,
+                None,
+            ),
+            VISIBLE_REPAINT_INTERVAL
+        );
+        assert_eq!(
+            bluetooth_visible_repaint_interval_for_target(true, true, false, false),
+            None,
+            "macOS wakes on input without a Bluetooth heartbeat"
+        );
+    }
+
+    #[test]
+    fn event_driven_platforms_keep_the_normal_visible_idle_cadence() {
+        assert_eq!(
+            bluetooth_visible_repaint_interval_for_target(true, false, false, true),
+            None
+        );
+        assert_eq!(
+            native_repaint_interval(
+                false,
+                bluetooth_visible_repaint_interval_for_target(true, false, false, true),
                 false,
                 false,
                 None,
@@ -177,13 +207,13 @@ mod tests {
     #[test]
     fn macos_bluetooth_uses_normal_visible_idle_cadence() {
         assert_eq!(
-            bluetooth_visible_repaint_interval_for_target(true, true, false),
+            bluetooth_visible_repaint_interval_for_target(true, true, false, true),
             None
         );
         assert_eq!(
             native_repaint_interval(
                 false,
-                bluetooth_visible_repaint_interval_for_target(true, true, false),
+                bluetooth_visible_repaint_interval_for_target(true, true, false, true),
                 false,
                 false,
                 None,

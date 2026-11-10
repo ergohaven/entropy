@@ -15,6 +15,16 @@ impl EntropyApp {
         self.vial_unlock_counter = self.vial_unlock_total;
         self.vial_unlock_best = self.vial_unlock_total;
         self.pending_layout_indicator_open_after_unlock = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.pending_entlayout_import_path.take().is_some() {
+                self.report_import_failure(
+                    "status_messages.layout_import_failed_title",
+                    self.status_msg.clone(),
+                );
+            }
+            self.import_progress_started_at = None;
+        }
         self.macro_auto_unlock_cancelled = true;
     }
 
@@ -147,7 +157,7 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn fail_vial_unlock_poll(&mut self, error: String) {
-        log::warn!("Vial unlock poll failed; retrying: {error}");
+        log::warn!("Keyboard unlock poll failed; retrying: {error}");
         self.status_msg = crate::i18n::tr_catalog_format(
             self.app_settings.language,
             "status_messages.unlock_poll_retry",
