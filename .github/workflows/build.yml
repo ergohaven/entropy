@@ -179,6 +179,10 @@ jobs:
           cargo test --all-targets i18n::tests::indexed_catalog_keeps_sections_and_quoted_values -- --exact --test-threads=1
           cargo test --all-targets i18n::tests::indexed_catalog_preserves_borrowed_escapes_and_decodes_owned_strings -- --exact --test-threads=1
 
+      - name: Test full macOS suite in parallel
+        if: matrix.kind == 'macos'
+        run: cargo test --all-targets -- --test-threads=4
+
       - name: Test macOS Text Expander discovery and callbacks
         if: matrix.kind == 'macos'
         run: |

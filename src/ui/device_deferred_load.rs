@@ -917,6 +917,7 @@ impl EntropyApp {
                 }
             }
             DeferredLoadPayload::Macros(texts) => {
+                self.keycode_picker.reset_macro_editor();
                 self.keycode_picker.macro_count = texts.len();
                 self.keycode_picker.macro_texts = texts.clone();
                 self.keycode_picker.macro_actions = texts

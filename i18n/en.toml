@@ -1034,6 +1034,12 @@ unswap_caps_lock_and_escape = "Unswap Caps Lock and Escape"
 toggle_caps_lock_and_escape_swap = "Toggle Caps Lock and Escape swap"
 
 [macro_editor]
+copy = "Copy"
+paste = "Paste"
+copy_tooltip = "Copy this macro with its name, description, and all actions"
+paste_tooltip = "Replace this slot with the copied macro; Undo restores the previous macro"
+clipboard_empty = "Copy a macro first; the macro clipboard lasts until the keyboard disconnects or macros reload"
+paste_memory_full = "Not enough shared macro memory to paste this macro"
 title = "Macros"
 description = "Create and edit the macro slots stored on the connected keyboard"
 picker_intro = "Choose Macro, then select its slot number"

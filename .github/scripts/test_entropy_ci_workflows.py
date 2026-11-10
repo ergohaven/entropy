@@ -87,6 +87,17 @@ class EntropyCIContract(unittest.TestCase):
             f'cargo test --all-targets {name} -- --exact --test-threads=1'
             for name in required])
 
+    def test_macos_runs_the_complete_native_suite_in_parallel(self):
+        owner = job(workflow('build.yml'), 'build')
+        match = re.search(
+            r'      - name: Test full macOS suite in parallel\n(.*?)(?=      - name:|\Z)',
+            owner, re.S)
+        if match is None:
+            self.fail('Missing full parallel macOS suite')
+        self.assertEqual(textwrap.dedent(match.group(1)).strip(),
+                         "if: matrix.kind == 'macos'\n"
+                         'run: cargo test --all-targets -- --test-threads=4')
+
     def test_build_proof_requires_complete_full_graph(self):
         owner = job(workflow('build.yml'), 'complete')
         self.assertIn('needs: [plan, build, container, packages]', owner)

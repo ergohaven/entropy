@@ -1342,6 +1342,7 @@ impl EntropyApp {
                 self.selected_combo = self
                     .selected_combo
                     .min(self.combo_visible_count.saturating_sub(1));
+                self.keycode_picker.reset_macro_editor();
                 self.keycode_picker.macro_count = r.macro_texts.len();
                 self.keycode_picker.macro_texts = r.macro_texts.clone();
                 let mut macro_metadata = load_macro_metadata(&self.current_device_name);
