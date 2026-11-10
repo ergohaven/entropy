@@ -29,6 +29,11 @@ const BUNDLED_LINUX_FILES: &[BundledLinuxFile] = &[
         executable: false,
     },
     BundledLinuxFile {
+        path: "linux/ibus/gnome-input-sources.sh",
+        bytes: include_bytes!("../linux/ibus/gnome-input-sources.sh"),
+        executable: true,
+    },
+    BundledLinuxFile {
         path: "linux/udev/install-vial-rules.sh",
         bytes: include_bytes!("../linux/udev/install-vial-rules.sh"),
         executable: true,
@@ -577,5 +582,514 @@ mod tests {
             from_component_path,
             vec![PathBuf::from("/usr/share/ibus/component")]
         );
+    }
+
+    // `ibus restart` would make IBus the input method KWin launches on KDE
+    // Plasma Wayland; the scripts only rewrite the registry cache and leave
+    // the restart to Entropy.
+    #[test]
+    fn ibus_setup_scripts_rewrite_the_registry_cache_and_leave_the_daemon_alone() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "entropy-ibus-scripts-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let bin = root.join("bin");
+        let scripts = root.join("ibus");
+        let data_home = root.join("data");
+        let calls = root.join("ibus-calls");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&scripts).unwrap();
+        for file in [
+            "install-user.sh",
+            "uninstall-user.sh",
+            "entropy-universal-symbols.xml.in",
+        ] {
+            std::fs::copy(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("linux/ibus")
+                    .join(file),
+                scripts.join(file),
+            )
+            .unwrap();
+        }
+        // `ibus` logs how it was called. The engine only has to pass its
+        // dependency check, which needs no Python here.
+        for (path, body) in [
+            (
+                bin.join("ibus"),
+                "printf '%s|%s\\n' \"$*\" \"$IBUS_COMPONENT_PATH\" >> \"$ENTROPY_TEST_IBUS_CALLS\"\n",
+            ),
+            (scripts.join("entropy-ibus-engine"), "exit 0\n"),
+        ] {
+            std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = std::env::join_paths(
+            std::iter::once(bin.clone()).chain(
+                std::env::var_os("PATH")
+                    .iter()
+                    .flat_map(std::env::split_paths),
+            ),
+        )
+        .unwrap();
+
+        for script in ["install-user.sh", "uninstall-user.sh"] {
+            let output = std::process::Command::new("sh")
+                .arg(scripts.join(script))
+                .env("PATH", &path)
+                .env("XDG_DATA_HOME", &data_home)
+                .env("ENTROPY_TEST_IBUS_CALLS", &calls)
+                .env_remove("IBUS_COMPONENT_PATH")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{script}: {output:?}");
+        }
+
+        let user_components = format!("{}:", data_home.join("ibus/component").display());
+        let calls = std::fs::read_to_string(&calls).unwrap();
+        let calls: Vec<&str> = calls.lines().collect();
+        assert_eq!(calls.len(), 2, "one ibus call per script: {calls:?}");
+        for call in calls {
+            let (args, component_path) = call.split_once('|').unwrap();
+            assert_eq!(args, "write-cache");
+            assert!(component_path.starts_with(&user_components), "{call}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A sandbox for the GNOME input sources script: a `gsettings` that keeps
+    /// the list in a file, and a data home for the record of what it replaced.
+    struct GnomeSourcesSandbox {
+        root: PathBuf,
+        path: std::ffi::OsString,
+    }
+
+    impl GnomeSourcesSandbox {
+        fn new(name: &str) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+
+            let root = std::env::temp_dir().join(format!(
+                "entropy-{name}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let bin = root.join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            let gsettings = bin.join("gsettings");
+            std::fs::write(
+                &gsettings,
+                "#!/bin/sh\n\
+                 case $1 in\n\
+                 get) cat \"$ENTROPY_TEST_SOURCES\" ;;\n\
+                 writable) cat \"$ENTROPY_TEST_SOURCES.writable\" 2>/dev/null || echo true ;;\n\
+                 set) [ -e \"$ENTROPY_TEST_SOURCES.setfail\" ] && exit 1; printf '%s\\n' \"$4\" > \"$ENTROPY_TEST_SOURCES\"; echo set >> \"$ENTROPY_TEST_SOURCES.sets\" ;;\n\
+                 esac\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(&gsettings, std::fs::Permissions::from_mode(0o755)).unwrap();
+            // An `ibus` that lists the engines named in ENTROPY_TEST_ENGINES, both by
+            // default; uninstall-user.sh also rewrites its registry cache, which
+            // keeps the real one out of it.
+            let ibus = bin.join("ibus");
+            std::fs::write(
+                &ibus,
+                "#!/bin/sh\n\
+                 [ \"$1\" = list-engine ] && printf '%s\\n' ${ENTROPY_TEST_ENGINES-entropy-universal-symbols-us entropy-universal-symbols-ru}\n\
+                 exit 0\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(&ibus, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let path = std::env::join_paths(
+                std::iter::once(bin).chain(
+                    std::env::var_os("PATH")
+                        .iter()
+                        .flat_map(std::env::split_paths),
+                ),
+            )
+            .unwrap();
+            Self { root, path }
+        }
+
+        fn sources(&self) -> PathBuf {
+            self.root.join("sources")
+        }
+
+        fn set_sources(&self, sources: &str) {
+            std::fs::write(self.sources(), format!("{sources}\n")).unwrap();
+        }
+
+        fn current(&self) -> String {
+            std::fs::read_to_string(self.sources())
+                .unwrap()
+                .trim()
+                .to_owned()
+        }
+
+        fn sets(&self) -> usize {
+            std::fs::read_to_string(self.root.join("sources.sets"))
+                .map_or(0, |sets| sets.lines().count())
+        }
+
+        fn command(&self, script: &Path, args: &[&str]) -> std::process::Command {
+            let mut command = std::process::Command::new("sh");
+            command
+                .arg(script)
+                .args(args)
+                .env("PATH", &self.path)
+                .env("XDG_DATA_HOME", self.root.join("data"))
+                .env("ENTROPY_TEST_SOURCES", self.sources());
+            command
+        }
+
+        fn run(&self, script: &Path, args: &[&str]) -> std::process::Output {
+            self.command(script, args).output().unwrap()
+        }
+    }
+
+    impl Drop for GnomeSourcesSandbox {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn gnome_input_sources_swap_in_place_and_come_back_as_they_were() {
+        let script =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("linux/ibus/gnome-input-sources.sh");
+        let us = "('ibus', 'entropy-universal-symbols-us')";
+        let ru = "('ibus', 'entropy-universal-symbols-ru')";
+        for (before, used) in [
+            (
+                "[('xkb', 'us'), ('xkb', 'ru')]".to_owned(),
+                format!("[{us}, {ru}]"),
+            ),
+            // A variant stays; the Entropy source goes right after it.
+            (
+                "[('xkb', 'us'), ('xkb', 'ru+winkeys'), ('ibus', 'mozc-jp')]".to_owned(),
+                format!("[{us}, ('xkb', 'ru+winkeys'), {ru}, ('ibus', 'mozc-jp')]"),
+            ),
+            // The plain layout is replaced even next to a variant of it, and
+            // comes back on restore although the variant is still listed.
+            (
+                "[('xkb', 'de'), ('xkb', 'us+intl'), ('xkb', 'us')]".to_owned(),
+                format!("[('xkb', 'de'), ('xkb', 'us+intl'), {us}]"),
+            ),
+            ("@a(ss) []".to_owned(), "@a(ss) []".to_owned()),
+        ] {
+            let sandbox = GnomeSourcesSandbox::new("gnome-sources");
+            sandbox.set_sources(&before);
+            for _ in 0..2 {
+                assert!(sandbox.run(&script, &["use"]).status.success());
+                assert_eq!(sandbox.current(), used, "use on {before}");
+            }
+            let changed = usize::from(used != before);
+            assert_eq!(sandbox.sets(), changed, "a second use changes nothing");
+            for _ in 0..2 {
+                assert!(sandbox.run(&script, &["restore"]).status.success());
+                assert_eq!(sandbox.current(), before, "restore on {used}");
+            }
+            assert_eq!(sandbox.sets(), 2 * changed);
+        }
+    }
+
+    #[test]
+    fn gnome_input_sources_restore_drops_a_source_added_next_to_a_listed_layout() {
+        let script =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("linux/ibus/gnome-input-sources.sh");
+        let sandbox = GnomeSourcesSandbox::new("gnome-sources-added");
+        // Added by hand, never by `use`: nothing was replaced.
+        sandbox.set_sources("[('xkb', 'us+intl'), ('ibus', 'entropy-universal-symbols-us'), ('xkb', 'de'), ('ibus', 'entropy-universal-symbols-ru')]");
+        assert!(sandbox.run(&script, &["restore"]).status.success());
+        assert_eq!(
+            sandbox.current(),
+            "[('xkb', 'us+intl'), ('xkb', 'de'), ('xkb', 'ru')]"
+        );
+    }
+
+    #[test]
+    fn locked_gnome_input_sources_are_left_alone() {
+        let script =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("linux/ibus/gnome-input-sources.sh");
+        let sandbox = GnomeSourcesSandbox::new("gnome-sources-locked");
+        sandbox.set_sources("[('xkb', 'us')]");
+        std::fs::write(sandbox.root.join("sources.writable"), "false\n").unwrap();
+        let used = sandbox.run(&script, &["use"]);
+        assert!(!used.status.success());
+        assert!(String::from_utf8_lossy(&used.stderr).contains("locked"));
+        assert!(sandbox.run(&script, &["restore"]).status.success());
+        assert_eq!(sandbox.current(), "[('xkb', 'us')]");
+        assert_eq!(sandbox.sets(), 0);
+    }
+
+    #[test]
+    fn uninstalling_gives_gnome_its_layouts_back() {
+        let ibus = Path::new(env!("CARGO_MANIFEST_DIR")).join("linux/ibus");
+        let sandbox = GnomeSourcesSandbox::new("gnome-sources-uninstall");
+        sandbox.set_sources("[('xkb', 'us'), ('xkb', 'ru')]");
+        assert!(sandbox
+            .run(&ibus.join("gnome-input-sources.sh"), &["use"])
+            .status
+            .success());
+        assert!(sandbox
+            .run(&ibus.join("uninstall-user.sh"), &[])
+            .status
+            .success());
+        assert_eq!(sandbox.current(), "[('xkb', 'us'), ('xkb', 'ru')]");
+    }
+
+    #[test]
+    fn a_layout_entropy_no_longer_holds_is_not_put_back() {
+        let script =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("linux/ibus/gnome-input-sources.sh");
+        let sandbox = GnomeSourcesSandbox::new("gnome-sources-stale");
+        sandbox.set_sources("[('xkb', 'us'), ('xkb', 'ru')]");
+        assert!(sandbox.run(&script, &["use"]).status.success());
+        // Put back by hand in Settings, with Russian now as a variant.
+        sandbox.set_sources("[('xkb', 'us'), ('xkb', 'ru+winkeys')]");
+        assert!(sandbox.run(&script, &["use"]).status.success());
+        assert_eq!(
+            sandbox.current(),
+            "[('ibus', 'entropy-universal-symbols-us'), ('xkb', 'ru+winkeys'), ('ibus', 'entropy-universal-symbols-ru')]"
+        );
+        assert!(sandbox.run(&script, &["restore"]).status.success());
+        assert_eq!(sandbox.current(), "[('xkb', 'us'), ('xkb', 'ru+winkeys')]");
+    }
+
+    #[test]
+    fn a_layout_is_traded_only_for_an_engine_ibus_lists() {
+        let script =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("linux/ibus/gnome-input-sources.sh");
+        let sandbox = GnomeSourcesSandbox::new("gnome-sources-engines");
+        sandbox.set_sources("[('xkb', 'us'), ('xkb', 'ru')]");
+        let used = sandbox
+            .command(&script, &["use"])
+            .env("ENTROPY_TEST_ENGINES", "")
+            .output()
+            .unwrap();
+        assert!(!used.status.success());
+        assert!(String::from_utf8_lossy(&used.stderr).contains("does not list"));
+        assert_eq!(sandbox.sets(), 0);
+
+        let used = sandbox
+            .command(&script, &["use"])
+            .env("ENTROPY_TEST_ENGINES", "entropy-universal-symbols-us")
+            .output()
+            .unwrap();
+        assert!(used.status.success());
+        assert_eq!(
+            sandbox.current(),
+            "[('ibus', 'entropy-universal-symbols-us'), ('xkb', 'ru')]"
+        );
+    }
+
+    /// A failed write of the replaced-layouts record must not commit the
+    /// sources: the list stands as it did, and where the record can be saved
+    /// the same run restores exactly.
+    #[test]
+    fn a_failed_record_writes_no_sources() {
+        let script =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("linux/ibus/gnome-input-sources.sh");
+        let sandbox = GnomeSourcesSandbox::new("gnome-sources-note-blocked");
+        sandbox.set_sources("[('xkb', 'us+intl'), ('xkb', 'us')]");
+        // An ordinary file where the record's directory would be: mkdir -p
+        // fails with ENOTDIR.
+        std::fs::create_dir_all(sandbox.root.join("data")).unwrap();
+        std::fs::write(sandbox.root.join("data/entropy"), "blocked").unwrap();
+        let used = sandbox.run(&script, &["use"]);
+        assert!(!used.status.success(), "{used:?}");
+        assert_eq!(sandbox.current(), "[('xkb', 'us+intl'), ('xkb', 'us')]");
+        assert_eq!(sandbox.sets(), 0);
+
+        let writable = GnomeSourcesSandbox::new("gnome-sources-note-writable");
+        writable.set_sources("[('xkb', 'us+intl'), ('xkb', 'us')]");
+        assert!(writable.run(&script, &["use"]).status.success());
+        assert_eq!(
+            writable.current(),
+            "[('xkb', 'us+intl'), ('ibus', 'entropy-universal-symbols-us')]"
+        );
+        assert!(writable.run(&script, &["restore"]).status.success());
+        assert_eq!(writable.current(), "[('xkb', 'us+intl'), ('xkb', 'us')]");
+    }
+
+    /// A restore that prunes a note whose source was taken out by hand commits
+    /// the pruning even when the source list itself needs no write, so the
+    /// stale note cannot bring a layout back on the next restore.
+    #[test]
+    fn a_pruned_note_is_kept_even_without_a_source_change() {
+        let script =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("linux/ibus/gnome-input-sources.sh");
+        let sandbox = GnomeSourcesSandbox::new("gnome-sources-note-prune");
+        let record = sandbox
+            .root
+            .join("data/entropy/ibus/gnome-replaced-layouts");
+        // use replaces the plain us and records it.
+        sandbox.set_sources("[('xkb', 'us+intl'), ('xkb', 'us')]");
+        assert!(sandbox.run(&script, &["use"]).status.success());
+        assert_eq!(
+            sandbox.current(),
+            "[('xkb', 'us+intl'), ('ibus', 'entropy-universal-symbols-us')]"
+        );
+        // The Entropy source is taken out by hand: restore has no list change.
+        sandbox.set_sources("[('xkb', 'us+intl')]");
+        assert!(sandbox.run(&script, &["restore"]).status.success());
+        assert_eq!(sandbox.current(), "[('xkb', 'us+intl')]");
+        assert!(
+            !record.exists(),
+            "the stale note is pruned even though the list did not change"
+        );
+        // An Entropy source added by hand next to the variant goes away, and
+        // the pruned note keeps restore from turning it into a plain us.
+        sandbox.set_sources("[('xkb', 'us+intl'), ('ibus', 'entropy-universal-symbols-us')]");
+        assert!(sandbox.run(&script, &["restore"]).status.success());
+        assert_eq!(sandbox.current(), "[('xkb', 'us+intl')]");
+    }
+
+    /// A failed gsettings set rolls the record back to what it said before,
+    /// so a retry starts from the old replacement list.
+    #[test]
+    fn a_failed_commit_leaves_the_previous_record_in_place() {
+        let script =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("linux/ibus/gnome-input-sources.sh");
+        let sandbox = GnomeSourcesSandbox::new("gnome-sources-note-rollback");
+        let record = sandbox
+            .root
+            .join("data/entropy/ibus/gnome-replaced-layouts");
+        // A note outlives its source: ru was replaced earlier and its Entropy
+        // source was taken out by hand.
+        std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+        std::fs::write(&record, "ru\n").unwrap();
+        sandbox.set_sources("[('xkb', 'us'), ('xkb', 'ru')]");
+        std::fs::write(sandbox.root.join("sources.setfail"), "").unwrap();
+        let used = sandbox.run(&script, &["use"]);
+        assert!(!used.status.success(), "{used:?}");
+        assert_eq!(sandbox.current(), "[('xkb', 'us'), ('xkb', 'ru')]");
+        assert_eq!(
+            std::fs::read_to_string(&record).unwrap(),
+            "ru\n",
+            "the failed commit leaves the previous record in place"
+        );
+        std::fs::remove_file(sandbox.root.join("sources.setfail")).unwrap();
+        assert!(sandbox.run(&script, &["use"]).status.success());
+        assert_eq!(
+            sandbox.current(),
+            "[('ibus', 'entropy-universal-symbols-us'), ('ibus', 'entropy-universal-symbols-ru')]"
+        );
+        assert_eq!(std::fs::read_to_string(&record).unwrap(), "us\nru\n");
+
+        let fresh = GnomeSourcesSandbox::new("gnome-sources-note-rollback-empty");
+        fresh.set_sources("[('xkb', 'us')]");
+        std::fs::write(fresh.root.join("sources.setfail"), "").unwrap();
+        assert!(!fresh.run(&script, &["use"]).status.success());
+        assert!(!fresh
+            .root
+            .join("data/entropy/ibus/gnome-replaced-layouts")
+            .exists());
+    }
+
+    /// A restore that cannot give GNOME its sources back keeps the engine and
+    /// its files installed and fails, instead of deleting the only working
+    /// source backend.
+    #[test]
+    fn an_unfinished_restore_keeps_the_engine_for_a_retry() {
+        let uninstall = Path::new(env!("CARGO_MANIFEST_DIR")).join("linux/ibus/uninstall-user.sh");
+        let sandbox = GnomeSourcesSandbox::new("gnome-sources-uninstall-failed");
+        let data_home = sandbox.root.join("data");
+        // Russian was the only source; use replaced it with the Entropy source.
+        sandbox.set_sources("[('ibus', 'entropy-universal-symbols-ru')]");
+        std::fs::create_dir_all(data_home.join("entropy/ibus")).unwrap();
+        std::fs::write(
+            data_home.join("entropy/ibus/gnome-replaced-layouts"),
+            "ru\n",
+        )
+        .unwrap();
+        let component = data_home.join("ibus/component/entropy-universal-symbols.xml");
+        std::fs::create_dir_all(component.parent().unwrap()).unwrap();
+        std::fs::write(&component, "<component/>\n").unwrap();
+        std::fs::write(sandbox.root.join("sources.setfail"), "").unwrap();
+        let failed = sandbox.run(&uninstall, &[]);
+        assert!(!failed.status.success(), "{failed:?}");
+        assert_eq!(
+            sandbox.current(),
+            "[('ibus', 'entropy-universal-symbols-ru')]"
+        );
+        assert!(component.exists(), "the engine stays for a retry");
+        assert!(
+            data_home.join("entropy/ibus").exists(),
+            "the record stays for a retry"
+        );
+        // With the write failure gone, the retry finishes the uninstall.
+        std::fs::remove_file(sandbox.root.join("sources.setfail")).unwrap();
+        let done = sandbox.run(&uninstall, &[]);
+        assert!(done.status.success(), "{done:?}");
+        assert_eq!(sandbox.current(), "[('xkb', 'ru')]");
+        assert!(!component.exists());
+        assert!(!data_home.join("entropy/ibus").exists());
+    }
+
+    /// A locked source list makes restore a no-op that still exits 0: the
+    /// uninstall must notice that the list keeps naming the user engine and
+    /// keep the engine and its files for a retry, instead of deleting the
+    /// backend of the source that stays in the list.
+    #[test]
+    fn a_locked_list_keeps_the_engine_for_a_retry() {
+        let uninstall = Path::new(env!("CARGO_MANIFEST_DIR")).join("linux/ibus/uninstall-user.sh");
+        let sandbox = GnomeSourcesSandbox::new("gnome-sources-uninstall-locked");
+        let data_home = sandbox.root.join("data");
+        // Russian was the only source; use replaced it with the Entropy source.
+        sandbox.set_sources("[('ibus', 'entropy-universal-symbols-ru')]");
+        std::fs::create_dir_all(data_home.join("entropy/ibus")).unwrap();
+        std::fs::write(
+            data_home.join("entropy/ibus/gnome-replaced-layouts"),
+            "ru\n",
+        )
+        .unwrap();
+        let component = data_home.join("ibus/component/entropy-universal-symbols.xml");
+        std::fs::create_dir_all(component.parent().unwrap()).unwrap();
+        std::fs::write(&component, "<component/>\n").unwrap();
+        std::fs::write(sandbox.root.join("sources.writable"), "false\n").unwrap();
+        let locked = sandbox.run(&uninstall, &[]);
+        assert!(!locked.status.success(), "{locked:?}");
+        assert_eq!(
+            sandbox.current(),
+            "[('ibus', 'entropy-universal-symbols-ru')]"
+        );
+        assert!(component.exists(), "the engine stays for a retry");
+        assert!(
+            data_home.join("entropy/ibus").exists(),
+            "the record stays for a retry"
+        );
+        // With the lock lifted, the retry finishes the uninstall.
+        std::fs::remove_file(sandbox.root.join("sources.writable")).unwrap();
+        let done = sandbox.run(&uninstall, &[]);
+        assert!(done.status.success(), "{done:?}");
+        assert_eq!(sandbox.current(), "[('xkb', 'ru')]");
+        assert!(!component.exists());
+        assert!(!data_home.join("entropy/ibus").exists());
+    }
+
+    #[test]
+    fn uninstalling_beside_a_system_registration_keeps_the_gnome_sources() {
+        let ibus = Path::new(env!("CARGO_MANIFEST_DIR")).join("linux/ibus");
+        let sandbox = GnomeSourcesSandbox::new("gnome-sources-keep");
+        sandbox.set_sources("[('xkb', 'us'), ('xkb', 'ru')]");
+        assert!(sandbox
+            .run(&ibus.join("gnome-input-sources.sh"), &["use"])
+            .status
+            .success());
+        let used = sandbox.current();
+        assert!(sandbox
+            .run(&ibus.join("uninstall-user.sh"), &["--keep-gnome-sources"])
+            .status
+            .success());
+        assert_eq!(sandbox.current(), used);
     }
 }

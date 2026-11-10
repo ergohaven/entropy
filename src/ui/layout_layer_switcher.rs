@@ -401,7 +401,9 @@ impl EntropyApp {
                     self.editing_layer_layout_id = None;
                     self.editing_layer_device_key = None;
                     #[cfg(not(target_arch = "wasm32"))]
-                    { self.editing_layer_generation = None; }
+                    {
+                        self.editing_layer_generation = None;
+                    }
                 }
             } else {
                 // Fixed arrow positions based on max 7-char name width so
@@ -501,7 +503,9 @@ impl EntropyApp {
                     self.editing_layer = Some(selected);
                     self.editing_layer_device_key = self.application_layout_device_key();
                     #[cfg(not(target_arch = "wasm32"))]
-                    { self.editing_layer_generation = Some(self.connection_generation); }
+                    {
+                        self.editing_layer_generation = Some(self.connection_generation);
+                    }
                     self.editing_layer_text = raw_name.clone();
                     self.editing_layer_layout_id = self
                         .application_layout_editor_active

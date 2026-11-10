@@ -13,6 +13,7 @@ for development history. The first public beta is `v0.1.0-beta.1`.
 - Added cross-tab keycode search, including localized descriptions, custom keycodes, named Macro and Tap Dance slots, and Universal Symbols
 - Added headless `--export-layout` for scripted `.entlayout` backups, with device selection and read-only keyboard access
 - Added local Show/Hide Keys editing per keyboard, preserved in layout backups and exported images
+- Extended layout backups to preserve LED brightness and timeout, Bluetooth profile colors, and RGB lighting, with compatible restore and Bluetooth loading
 - Extended layout backups to include compatible module settings and, on supported Macropads, Default and all application layouts together with their shared resources
 
 ### Improvements

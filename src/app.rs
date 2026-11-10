@@ -50,7 +50,12 @@ use app_update::*;
 #[path = "app_repaint.rs"]
 mod app_repaint;
 #[cfg(not(target_arch = "wasm32"))]
+#[path = "update_notifications.rs"]
+mod update_notifications;
+#[cfg(not(target_arch = "wasm32"))]
 use app_repaint::*;
+#[cfg(target_os = "macos")]
+pub(crate) use update_notifications::prepare_macos_update_notifications;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "application_layout_portable.rs"]
 mod application_layout_portable;
@@ -215,6 +220,7 @@ mod text_expander_emoji;
 mod text_expander_runtime;
 #[path = "ui/text_expander_settings.rs"]
 mod text_expander_settings_ui;
+use text_expander_settings_ui::text_expander_setup_row_count;
 #[path = "ui/universal_symbols_setup.rs"]
 mod text_expander_setup;
 #[cfg(target_os = "linux")]

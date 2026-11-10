@@ -70,7 +70,7 @@ pub(super) enum DeferredLoadPayload {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-const ENTLAYOUT_EXPORT_SECTIONS: [DeferredLoadSection; 7] = [
+const ENTLAYOUT_EXPORT_SECTIONS: [DeferredLoadSection; 10] = [
     DeferredLoadSection::Macros,
     DeferredLoadSection::Combos,
     DeferredLoadSection::TapDance,
@@ -78,6 +78,9 @@ const ENTLAYOUT_EXPORT_SECTIONS: [DeferredLoadSection; 7] = [
     DeferredLoadSection::AltRepeat,
     DeferredLoadSection::BehaviorSettings,
     DeferredLoadSection::Touchpad,
+    DeferredLoadSection::LayerLeds,
+    DeferredLoadSection::Rgb,
+    DeferredLoadSection::Modules,
 ];
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -671,6 +674,12 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn request_entlayout_import_after_full_load(&mut self) {
+        if !self.deferred_device_load.is_staged() && !self.hid_write_task_owner_active() {
+            if let Err(error) = self.confirm_entlayout_macros() {
+                self.status_msg = error.to_string();
+                return;
+            }
+        }
         self.retry_failed_full_layout_loads(DeferredFullLayoutAction::ImportEntlayout);
         if self.deferred_full_layout_action_ready(DeferredFullLayoutAction::ImportEntlayout) {
             self.import_entlayout_dialog();
@@ -686,6 +695,14 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn request_entlayout_export_after_full_load(&mut self) {
+        // Eager devices have no deferred GET context. If a worker owns HID,
+        // queue the action and confirm when that owner returns the handle.
+        if !self.deferred_device_load.is_staged() && !self.hid_write_task_owner_active() {
+            if let Err(error) = self.confirm_entlayout_macros() {
+                self.status_msg = error.to_string();
+                return;
+            }
+        }
         self.retry_failed_full_layout_loads(DeferredFullLayoutAction::ExportEntlayout);
         if self.deferred_full_layout_action_ready(DeferredFullLayoutAction::ExportEntlayout) {
             self.export_entlayout_dialog();
@@ -719,6 +736,27 @@ impl EntropyApp {
         let Some(action) = self.deferred_full_layout_action else {
             return;
         };
+        if !self.deferred_device_load.is_staged()
+            && !matches!(action, DeferredFullLayoutAction::OpenImageExport)
+            && self.keycode_picker.macro_count > 0
+            && !self
+                .deferred_device_load
+                .section_status(DeferredLoadSection::Macros)
+                .ready()
+        {
+            if self.hid_write_task_owner_active() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(80));
+                return;
+            }
+            // Resume this explicit request with GET only. A failed read ends
+            // the action; later frames must not retry either GET or SET.
+            if let Err(error) = self.confirm_entlayout_macros() {
+                self.deferred_full_layout_action = None;
+                self.status_msg = error.to_string();
+                ctx.request_repaint();
+                return;
+            }
+        }
         let failed_layer = (0..self.layer_count.max(1)).find_map(|layer| {
             match self.deferred_device_load.layer_status(layer) {
                 DeferredLoadStatus::Failed(error) => Some(format!("Layer{layer}: {error}")),
@@ -880,6 +918,7 @@ impl EntropyApp {
                 }
             }
             DeferredLoadPayload::Macros(texts) => {
+                self.keycode_picker.reset_macro_editor();
                 self.keycode_picker.macro_count = texts.len();
                 self.keycode_picker.macro_texts = texts.clone();
                 self.keycode_picker.macro_actions = texts
@@ -1035,8 +1074,13 @@ impl EntropyApp {
                     .map(|layout| layout.supports_rgb)
                     .unwrap_or(false)
                     || self.rgb_settings.supported;
+                let status = if self.rgb_settings.loaded {
+                    DeferredLoadStatus::Loaded
+                } else {
+                    DeferredLoadStatus::Failed("Failed to read RGB lighting settings".into())
+                };
                 self.deferred_device_load
-                    .set_section_status(DeferredLoadSection::Rgb, DeferredLoadStatus::Loaded);
+                    .set_section_status(DeferredLoadSection::Rgb, status);
             }
         }
     }
@@ -1069,6 +1113,11 @@ impl EntropyApp {
                 }
             }
             if let Some(name) = firmware_name {
+                self.layer_names_from_firmware
+                    .resize(layout.layers.len(), false);
+                if let Some(confirmed) = self.layer_names_from_firmware.get_mut(layer) {
+                    *confirmed = true;
+                }
                 if let Some(layer_name) = layout.layer_names.get_mut(layer) {
                     *layer_name = name.clone();
                 }
@@ -1169,6 +1218,14 @@ impl EntropyApp {
                     self.layer_names.get(layer),
                 ) {
                     *current = previous.clone();
+                    result
+                        .layer_names_from_firmware
+                        .resize(result.layer_count, false);
+                    result.layer_names_from_firmware[layer] = self
+                        .layer_names_from_firmware
+                        .get(layer)
+                        .copied()
+                        .unwrap_or(false);
                 }
             }
         }
@@ -1530,15 +1587,21 @@ mod tests {
         context.supported_qmk_settings = std::sync::Arc::new(vec![200]);
         let context = std::sync::Arc::new(context);
         for request in [
-            DeferredLoadRequest::Layer { layer: 0, context: context.clone() },
+            DeferredLoadRequest::Layer {
+                layer: 0,
+                context: context.clone(),
+            },
             DeferredLoadRequest::BackgroundLayerStep {
-                layer: 0, step: BackgroundLayerStep::FirmwareName, context: context.clone(),
+                layer: 0,
+                step: BackgroundLayerStep::FirmwareName,
+                context: context.clone(),
             },
         ] {
             let name = match run_deferred_load(&hid, &request).unwrap() {
                 DeferredLoadPayload::Layer { firmware_name, .. } => firmware_name,
                 DeferredLoadPayload::BackgroundLayerStep {
-                    result: BackgroundLayerStepResult::FirmwareName(name), ..
+                    result: BackgroundLayerStepResult::FirmwareName(name),
+                    ..
                 } => name,
                 _ => panic!("unexpected layer response"),
             };
@@ -1546,13 +1609,19 @@ mod tests {
         }
 
         let mut app = EntropyApp::new_inert_for_test();
-        app.layout = Some(KeyboardLayout::from_vial_json(&serde_json::json!({
-            "name": "Cleared", "matrix": {"rows": 1, "cols": 1},
-            "layouts": {"keymap": [["0,0"]]}, "layer_names": ["Old"]
-        })).unwrap());
+        app.layout = Some(
+            KeyboardLayout::from_vial_json(&serde_json::json!({
+                "name": "Cleared", "matrix": {"rows": 1, "cols": 1},
+                "layouts": {"keymap": [["0,0"]]}, "layer_names": ["Old"]
+            }))
+            .unwrap(),
+        );
         app.layer_names = vec!["Old".into()];
         app.apply_deferred_layer(0, vec![0], vec![], vec![], None);
-        assert_eq!(app.layer_names[0], "Old", "missing read must preserve the cached name");
+        assert_eq!(
+            app.layer_names[0], "Old",
+            "missing read must preserve the cached name"
+        );
         app.apply_deferred_layer(0, vec![0], vec![], vec![], Some(String::new()));
         assert_eq!(app.layer_names[0], "");
         assert_eq!(app.layout.as_ref().unwrap().layer_names[0], "");
@@ -1790,6 +1859,61 @@ mod tests {
             &state,
             DeferredFullLayoutAction::ImportEntlayout
         ));
+    }
+
+    #[test]
+    fn entlayout_lighting_and_modules_wait_for_bluetooth_load() {
+        let mut state = DeferredDeviceLoadState::staged(context());
+        for layer in 1..4 {
+            state.set_layer_status(layer, DeferredLoadStatus::Loaded);
+        }
+        for section in ENTLAYOUT_EXPORT_SECTIONS {
+            if state.section_supported(section) {
+                state.set_section_status(section, DeferredLoadStatus::Loaded);
+            }
+        }
+        for section in [DeferredLoadSection::Rgb, DeferredLoadSection::Modules] {
+            state.set_section_status(section, DeferredLoadStatus::NotLoaded);
+            for action in [
+                DeferredFullLayoutAction::ExportEntlayout,
+                DeferredFullLayoutAction::ImportEntlayout,
+            ] {
+                assert!(!deferred_full_layout_data_ready(&state, action));
+            }
+            state.set_section_status(section, DeferredLoadStatus::Loaded);
+            assert!(deferred_full_layout_data_ready(
+                &state,
+                DeferredFullLayoutAction::ExportEntlayout
+            ));
+        }
+    }
+
+    #[test]
+    fn entlayout_layer_colors_wait_for_bluetooth_load() {
+        let mut load_context = context();
+        load_context.layer_leds_supported = true;
+        let mut state = DeferredDeviceLoadState::staged(load_context);
+        for layer in 1..4 {
+            state.set_layer_status(layer, DeferredLoadStatus::Loaded);
+        }
+        for section in ENTLAYOUT_EXPORT_SECTIONS {
+            if state.section_supported(section) && section != DeferredLoadSection::LayerLeds {
+                state.set_section_status(section, DeferredLoadStatus::Loaded);
+            }
+        }
+        for action in [
+            DeferredFullLayoutAction::ExportEntlayout,
+            DeferredFullLayoutAction::ImportEntlayout,
+        ] {
+            assert!(!deferred_full_layout_data_ready(&state, action));
+        }
+        state.set_section_status(DeferredLoadSection::LayerLeds, DeferredLoadStatus::Loaded);
+        for action in [
+            DeferredFullLayoutAction::ExportEntlayout,
+            DeferredFullLayoutAction::ImportEntlayout,
+        ] {
+            assert!(deferred_full_layout_data_ready(&state, action));
+        }
     }
 
     #[test]
