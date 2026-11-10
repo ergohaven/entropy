@@ -301,8 +301,8 @@ impl EntropyApp {
         self.maybe_start_pending_layer_write();
         self.maybe_start_combo_write(ctx);
         self.finish_deferred_exit_after_hid_write(ctx);
-        self.poll_text_expander_deferred_save(now);
-        self.auto_reload_text_expander_rules_file(now);
+        self.poll_text_expander_deferred_save();
+        self.auto_reload_text_expander_rules_file();
         #[cfg(target_os = "linux")]
         self.poll_linux_universal_symbols_setup(ctx);
         self.poll_single_instance_signal(ctx);
@@ -342,6 +342,14 @@ impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn handle_pending_imports(&mut self, ctx: &egui::Context, now: f64) {
         if !self.import_pending() {
+            self.import_progress_started_at = None;
+            return;
+        }
+        // Unlock owns the foreground and the transport until it completes.
+        // Leave the queued path (and its connection generation) intact.
+        if self.pending_entlayout_import_path.is_some()
+            && (self.unlock_open || self.vial_unlock_session_started || self.vial_unlock_polling)
+        {
             self.import_progress_started_at = None;
             return;
         }
@@ -439,7 +447,7 @@ impl EntropyApp {
     /// A failed import says why in the report window and the log: with a
     /// layout on screen the status message is drawn nowhere.
     #[cfg(not(target_arch = "wasm32"))]
-    fn report_import_failure(&mut self, title_key: &'static str, message: String) {
+    pub(super) fn report_import_failure(&mut self, title_key: &'static str, message: String) {
         log::warn!("{message}");
         self.import_report_title =
             crate::i18n::tr_catalog(self.app_settings.language, title_key).into();
@@ -563,7 +571,7 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn draw_import_progress_overlay(&mut self, ctx: &egui::Context) {
-        if !self.import_pending() {
+        if !self.import_pending() || self.unlock_open || self.vial_unlock_polling {
             return;
         }
         let screen_rect = ctx.content_rect();
@@ -760,6 +768,99 @@ mod tests {
     use crate::keyboard::{KeyboardLayout, LayoutOption, PhysicalKey};
 
     #[test]
+    fn logic_only_ticks_advance_device_discovery_with_frozen_painted_time() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        ctx.run_ui(
+            egui::RawInput {
+                time: Some(10.0),
+                ..Default::default()
+            },
+            |_| {},
+        ).drop_without_applying_deltas();
+        let painted_time = ctx.input(|i| i.time);
+        let (tx, scans) = mpsc::channel();
+        app.test_device_scan_requests = Some(tx);
+        app.last_device_scan_at = 10.0;
+        app.last_full_device_scan_at = 10.0;
+        let mut frame = eframe::Frame::_new_kittest();
+        for (now, due) in [(11.5, false), (12.1, true), (12.2, false), (14.2, true)] {
+            app.test_set_app_clock(now);
+            let raw = egui::RawInput {
+                time: Some(now),
+                ..Default::default()
+            };
+            let _ = ctx.run_logic(&raw, |ctx| eframe::App::logic(&mut app, ctx, &mut frame));
+            assert_eq!(ctx.input(|i| i.time), painted_time);
+            if due {
+                let (usb_only, complete) = scans
+                    .try_recv()
+                    .expect("live deadline must dispatch discovery");
+                assert!(!usb_only, "an empty inventory needs full discovery");
+                complete.send(Ok(vec![])).unwrap();
+            } else {
+                assert!(scans.try_recv().is_err(), "keep the scan rate limit");
+            }
+        }
+        assert!(app.last_full_device_scan_at >= 14.2);
+    }
+
+    #[test]
+    fn hidden_window_keeps_text_expander_debounce_and_reload_progressing() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let mut app = EntropyApp::new_inert_for_test();
+        let ctx = egui::Context::default();
+        let hi = crate::text_expander::TextExpansionRule {
+            enabled: true,
+            trigger: "hi".into(),
+            replacement: "hello".into(),
+        };
+        app.app_settings.text_expansion_rules.push(hi);
+        // An edit at t=10s queues a save. The window then hides, so every
+        // background tick below paints nothing: the painted egui input time
+        // stays frozen at 10.0 while the monotonic app clock keeps advancing.
+        app.test_set_app_clock(10.0);
+        app.queue_text_expander_settings_save();
+        assert!(app.text_expander_settings_save_pending);
+        // Hidden 0.2s later, before the 0.45s debounce deadline: no save yet.
+        app.test_set_app_clock(10.2);
+        app.update_native_background(&ctx, 10.0, true, false);
+        assert!(
+            app.text_expander_settings_save_pending,
+            "debounce must not fire before its deadline"
+        );
+        // Hidden past the deadline: the deferred save fires even though the
+        // painted time never moved (only `run_logic` ticked).
+        app.test_set_app_clock(10.5);
+        app.update_native_background(&ctx, 10.0, true, false);
+        assert!(
+            !app.text_expander_settings_save_pending,
+            "deferred save must fire while the window is hidden"
+        );
+        // External reload: rewrite the primary rules file (new content) and mark
+        // the stored signature stale, then tick hidden past the 1.0s interval.
+        let bye = crate::text_expander::TextExpansionRule {
+            enabled: true,
+            trigger: "bye".into(),
+            replacement: "goodbye".into(),
+        };
+        crate::app::app_storage::save_text_expansion_rules(&[bye.clone()]);
+        app.text_expander_rules_signature = Vec::new();
+        app.test_set_app_clock(12.0);
+        app.update_native_background(&ctx, 10.0, true, false);
+        assert!(
+            app.text_expander_rules_last_check_at > 10.5,
+            "the reload check must keep advancing on the app clock"
+        );
+        assert_eq!(
+            app.app_settings.text_expansion_rules,
+            vec![bye],
+            "the external reload must progress while the window is hidden"
+        );
+    }
+
+    #[test]
     fn tray_background_tick_keeps_macropad_service_alive_with_k04_selected() {
         let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let mut app = EntropyApp::new_inert_for_test();
@@ -867,15 +968,16 @@ mod tests {
             crate::rynk::session::RynkSession::new(link),
         ));
 
+        app.firmware = FirmwareProtocol::Rynk;
+
         // What the board would lose waits for the user, before any write.
         app.begin_entlayout_import(file.clone());
         app.handle_pending_imports(&ctx, 1.0);
         app.handle_pending_imports(&ctx, 1.1);
-        assert!(
-            app.entlayout_losses_prompt
-                .as_ref()
-                .is_some_and(|(path, _, _)| *path == file)
-        );
+        assert!(app
+            .entlayout_losses_prompt
+            .as_ref()
+            .is_some_and(|(path, _, _)| *path == file));
         assert!(!app.import_report_open);
         assert_eq!(state.lock().unwrap().writes(), []);
 
@@ -931,6 +1033,7 @@ mod tests {
 
     #[test]
     fn logic_never_paints_the_layout_indicator_viewport() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -1047,6 +1150,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn locked_vial_retains_pending_tap_dance_write_until_unlock() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -1096,6 +1200,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn settings_task_defers_and_drains_hid_writes_before_exit() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -1153,21 +1258,15 @@ mod tests {
         assert!(!app.key_override_dirty);
         assert!(app.pending_tap_hold_numeric_writes.is_empty());
         let requests = recorder.requests();
-        assert!(
-            requests
-                .iter()
-                .any(|request| request[..3] == [0xfe, 0x0d, 0x04])
-        );
-        assert!(
-            requests
-                .iter()
-                .any(|request| request[..3] == [0xfe, 0x0d, 0x02])
-        );
-        assert!(
-            requests
-                .iter()
-                .any(|request| request[..4] == [0xfe, 0x0b, 7, 0])
-        );
+        assert!(requests
+            .iter()
+            .any(|request| request[..3] == [0xfe, 0x0d, 0x04]));
+        assert!(requests
+            .iter()
+            .any(|request| request[..3] == [0xfe, 0x0d, 0x02]));
+        assert!(requests
+            .iter()
+            .any(|request| request[..4] == [0xfe, 0x0b, 7, 0]));
     }
 
     fn combo(keys: [u16; 4], output: u16) -> ComboEntry {
@@ -1232,6 +1331,7 @@ mod tests {
 
     #[test]
     fn combo_task_defers_settings_changes_and_exit_writes_until_handle_returns() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -1285,14 +1385,12 @@ mod tests {
         let close_output = crate::app::discard_texture_deltas(ctx.run_ui(close_input, |_ui| {
             app.handle_close_to_tray(&ctx);
         }));
-        assert!(
-            close_output
-                .viewport_output
-                .get(&egui::ViewportId::ROOT)
-                .expect("root viewport output exists")
-                .commands
-                .contains(&egui::ViewportCommand::CancelClose)
-        );
+        assert!(close_output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .expect("root viewport output exists")
+            .commands
+            .contains(&egui::ViewportCommand::CancelClose));
         assert!(app.exit_after_hid_write);
         eframe::App::on_exit(&mut app, None);
         assert_eq!(app.pending_tap_hold_numeric_writes.get(&7), Some(&175));
@@ -1344,14 +1442,12 @@ mod tests {
         assert!(app.exit_after_hid_write);
         assert!(app.pending_tap_hold_numeric_writes.is_empty());
         assert!(app.settings_write_task.is_some());
-        assert!(
-            !first_close_output
-                .viewport_output
-                .get(&egui::ViewportId::ROOT)
-                .into_iter()
-                .flat_map(|viewport| &viewport.commands)
-                .any(|command| *command == egui::ViewportCommand::Close)
-        );
+        assert!(!first_close_output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .into_iter()
+            .flat_map(|viewport| &viewport.commands)
+            .any(|command| *command == egui::ViewportCommand::Close));
 
         let mut close_sent = false;
         for _ in 0..200 {
@@ -1407,6 +1503,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn combo_completion_starts_settings_queued_behind_it() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -1434,6 +1531,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn layer_completion_starts_settings_queued_behind_it() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -1492,6 +1590,7 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn settings_worker_fault_allows_deferred_exit(fault: crate::hid::TestHidFault) {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -1554,14 +1653,12 @@ mod tests {
 
         let output =
             crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |_ui| {}));
-        assert!(
-            !output
-                .viewport_output
-                .get(&egui::ViewportId::ROOT)
-                .into_iter()
-                .flat_map(|viewport| &viewport.commands)
-                .any(|command| *command == egui::ViewportCommand::Close)
-        );
+        assert!(!output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .into_iter()
+            .flat_map(|viewport| &viewport.commands)
+            .any(|command| *command == egui::ViewportCommand::Close));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1578,6 +1675,7 @@ mod tests {
 
     #[test]
     fn background_lifecycle_chains_combo_writes_before_deferred_exit() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -1699,6 +1797,7 @@ impl eframe::App for EntropyApp {
 
             crate::app::poll_update_check(&mut self.update_check);
             crate::app::poll_firmware_update_check(&mut self.firmware_update_check);
+            self.poll_update_notifications(ctx);
             let main_window_hidden_to_tray = self.main_window_hidden_to_tray();
             let selected_device_is_bluetooth = self
                 .selected_device
@@ -1710,9 +1809,13 @@ impl eframe::App for EntropyApp {
                 self.parent_display_handle,
                 Some(raw_window_handle::RawDisplayHandle::Wayland(_))
             );
+            // Wayland reports keyboard focus and pointer enter/leave even when
+            // it hides minimizing: a window left for another one has neither.
+            let main_window_attended = ctx.input(|i| i.focused || i.pointer.has_pointer());
             let bluetooth_visible_interval = bluetooth_visible_repaint_interval(
                 selected_device_is_bluetooth,
                 main_window_uses_wayland,
+                main_window_attended,
             );
             let connect_pending = matches!(self.connect_state, ConnectState::Loading { .. });
             let update_check_pending =
@@ -1733,7 +1836,7 @@ impl eframe::App for EntropyApp {
             ));
             self.update_native_background(
                 ctx,
-                ctx.input(|i| i.time),
+                self.app_clock_now(),
                 main_window_hidden_to_tray,
                 selected_device_is_bluetooth,
             );
@@ -1743,9 +1846,8 @@ impl eframe::App for EntropyApp {
         {
             crate::app::poll_update_check(&mut self.update_check);
             crate::app::poll_firmware_update_check(&mut self.firmware_update_check);
-            let now = ctx.input(|i| i.time);
-            self.poll_text_expander_deferred_save(now);
-            self.auto_reload_text_expander_rules_file(now);
+            self.poll_text_expander_deferred_save();
+            self.auto_reload_text_expander_rules_file();
         }
     }
 
@@ -1890,7 +1992,7 @@ impl eframe::App for EntropyApp {
                             ui.label(
                                 RichText::new(crate::i18n::tr_catalog(
                                     self.app_settings.language,
-                                    "connection.linux_vial_udev_required_title",
+                                    "connection.linux_device_udev_required_title",
                                 ))
                                 .size(20.0)
                                 .strong()
@@ -1906,7 +2008,7 @@ impl eframe::App for EntropyApp {
                                 egui::Label::new(
                                     RichText::new(crate::i18n::tr_catalog(
                                         self.app_settings.language,
-                                        "connection.linux_vial_udev_required_body",
+                                        "connection.linux_device_udev_required_body",
                                     ))
                                     .size(13.0)
                                     .color(app_muted_text(self.dark_mode)),
@@ -1919,14 +2021,14 @@ impl eframe::App for EntropyApp {
                                 ui,
                                 crate::i18n::tr_catalog(
                                     self.app_settings.language,
-                                    "ui.install_vial_udev_rules",
+                                    "ui.install_device_udev_rules",
                                 ),
                                 egui::vec2(168.0, 34.0),
                                 true,
                             )
                             .clicked()
                             {
-                                self.run_linux_vial_udev_rules_install();
+                                self.run_linux_device_udev_rules_install();
                                 self.start_device_scan();
                             }
                         });
@@ -1965,7 +2067,7 @@ impl eframe::App for EntropyApp {
                         ui.label(
                             RichText::new(crate::i18n::tr_catalog(
                                 self.app_settings.language,
-                                "connection.connect_vial_device",
+                                "connection.connect_device",
                             ))
                             .size(13.0)
                             .color(app_muted_text(self.dark_mode)),

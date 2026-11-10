@@ -147,6 +147,40 @@ fi''')
         self.assertEqual(result.returncode, 23, result.stdout + result.stderr)
         self.assertFalse((self.root / 'dist/macos/dmg-staging').exists())
 
+    def test_dmg_verification_retries_are_bounded_and_do_not_recreate_image(self):
+        create_tool = (self.tools / 'hdiutil').read_text()
+        self.tool('sleep', 'printf "%s\\n" "$1" >> "$PWD/sleep.log"')
+        self.tool('hdiutil', '''printf '%s\\n' "$1" >> "$PWD/hdiutil.log"
+if [[ "$1" == verify ]]; then
+ [[ "$#" == 2 && -f "$2" ]]
+ count=0
+ if [[ -f "$PWD/verify-count" ]]; then read -r count < "$PWD/verify-count"; fi
+ count=$((count + 1))
+ printf '%s\\n' "$count" > "$PWD/verify-count"
+ if ((count <= VERIFY_FAILURES)); then
+  echo 'hdiutil: verify failed - Resource temporarily unavailable' >&2
+  exit 23
+ fi
+ exit 0
+fi
+''' + create_tool)
+        for failures, attempts, expected_status in [(0, 1, 0), (2, 3, 0), (3, 3, 23)]:
+            with self.subTest(failures=failures):
+                for name in ['hdiutil.log', 'sleep.log', 'verify-count']:
+                    (self.root / name).unlink(missing_ok=True)
+                self.env['VERIFY_FAILURES'] = str(failures)
+                result = self.run_package()
+                self.assertEqual(result.returncode, expected_status, result.stdout + result.stderr)
+                calls = (self.root / 'hdiutil.log').read_text().splitlines()
+                self.assertEqual(calls, ['create'] + ['verify'] * attempts)
+                sleep_log = self.root / 'sleep.log'
+                delays = sleep_log.read_text().splitlines() if sleep_log.exists() else []
+                self.assertEqual(delays, [] if attempts == 1 else ['2', '4'])
+                self.assertFalse((self.root / 'dist/macos/dmg-staging').exists())
+                if expected_status:
+                    self.assertIn('hdiutil verify failed after 3 attempts', result.stderr)
+                    self.assertNotRegex(result.stdout, r'(?m)^Built .*/Entropy\.app$')
+
     def test_prebuilt_release_signs_binary_and_bundle_and_stages_applications(self):
         result = self.run_package()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

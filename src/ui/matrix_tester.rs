@@ -290,7 +290,7 @@ impl EntropyApp {
                 egui::Align2::CENTER_CENTER,
                 crate::i18n::tr_catalog(
                     self.app_settings.language,
-                    "matrix_tester.matrix_tester_is_currently_available_only_for_vial_keyboards",
+                    "matrix_tester.matrix_tester_requires_supported_firmware",
                 ),
                 FontId::proportional(15.0),
                 app_muted_text(dark),
@@ -304,7 +304,7 @@ impl EntropyApp {
                 egui::Align2::CENTER_CENTER,
                 crate::i18n::tr_catalog(
                     self.app_settings.language,
-                    "matrix_tester.connect_a_vial_keyboard_to_start_live_switch_testing",
+                    "matrix_tester.connect_device_to_start_live_switch_testing",
                 ),
                 FontId::proportional(15.0),
                 app_muted_text(dark),
