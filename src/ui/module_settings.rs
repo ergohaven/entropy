@@ -2,6 +2,18 @@ use super::*;
 
 fn module_setting_catalog_keys(title: &str) -> Option<(&'static str, &'static str)> {
     match title.to_ascii_lowercase().as_str() {
+        "display brightness" => Some((
+            "modules_settings.display_brightness",
+            "modules_settings.display_brightness_tooltip",
+        )),
+        "display background" => Some((
+            "modules_settings.display_background",
+            "modules_settings.display_background_tooltip",
+        )),
+        "display text size" => Some((
+            "modules_settings.display_text_size",
+            "modules_settings.display_text_size_tooltip",
+        )),
         "module" => Some(("modules_settings.module", "modules_settings.module_tooltip")),
         "mode" => Some(("modules_settings.mode", "modules_settings.mode_tooltip")),
         "ball axis" => Some((
@@ -122,6 +134,10 @@ fn module_setting_catalog_keys(title: &str) -> Option<(&'static str, &'static st
 
 fn module_setting_variant_label(language: crate::i18n::Language, variant: &str) -> String {
     let key = match variant.to_ascii_lowercase().as_str() {
+        "black" => Some("modules_settings.display_black"),
+        "blue" => Some("modules_settings.display_blue"),
+        "compact" => Some("modules_settings.display_compact"),
+        "large" => Some("modules_settings.display_large"),
         "none" => Some("modules_settings.none"),
         "normal" => Some("modules_settings.normal"),
         "sniper" => Some("modules_settings.sniper"),
@@ -708,6 +724,9 @@ impl EntropyApp {
             ModuleSettingsGroupKind::AutoLayer => {
                 crate::i18n::tr_catalog(lang, "modules_settings.auto_layer_section").to_owned()
             }
+            ModuleSettingsGroupKind::Other if group.title.eq_ignore_ascii_case("Qube display") => {
+                crate::i18n::tr_catalog(lang, "modules_settings.qube_display").to_owned()
+            }
             ModuleSettingsGroupKind::Other => crate::i18n::tr_text(lang, &group.title),
         }
     }
@@ -913,6 +932,72 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn qube_display_definition() -> serde_json::Value {
+        serde_json::from_str(include_str!(
+            "../../tests/fixtures/qube-display-settings.json"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn qube_display_controls_require_firmware_fields_and_capabilities() {
+        let json = qube_display_definition();
+        let groups = EntropyApp::module_settings_groups(&json, &[336, 337, 338]);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].title, "Qube display");
+        assert_eq!(groups[0].kind, ModuleSettingsGroupKind::Other);
+        assert_eq!(
+            groups[0]
+                .fields
+                .iter()
+                .map(|f| (f.qsid, f.width, f.max))
+                .collect::<Vec<_>>(),
+            vec![(336, 1, 100), (337, 1, 1), (338, 1, 1)]
+        );
+        assert!(EntropyApp::module_settings_groups(&json, &[316, 318, 330]).is_empty());
+        assert!(
+            EntropyApp::module_settings_groups(&serde_json::json!({}), &[336, 337, 338]).is_empty()
+        );
+        let partial = EntropyApp::module_settings_groups(&json, &[336]);
+        assert_eq!(partial[0].fields.len(), 1);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn qube_display_writes_use_declared_byte_settings_and_stay_visible_without_modules() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        add_filterable_module_groups(&mut app);
+        app.module_settings
+            .groups
+            .extend(EntropyApp::module_settings_groups(
+                &qube_display_definition(),
+                &[336, 337, 338],
+            ));
+        let group_idx = app.module_settings.groups.len() - 1;
+        for module in 0..=3 {
+            app.module_settings.set_value(149, module);
+            let qsids = visible_module_qsids(&app);
+            for qsid in [336, 337, 338] {
+                assert!(qsids.contains(&qsid));
+            }
+        }
+        let (device, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(device.into());
+        for (field_idx, value) in [35, 1, 0].into_iter().enumerate() {
+            let field = app.module_settings.groups[group_idx].fields[field_idx].clone();
+            app.write_module_setting_value(group_idx, &field, value);
+            drain_hid_writes(&mut app, &ctx);
+            assert_eq!(app.module_settings.value(field.qsid), value);
+        }
+        let requests = recorder.requests();
+        assert_eq!(requests.len(), 3);
+        for (request, (qsid, value)) in requests.iter().zip([(336u16, 35), (337, 1), (338, 0)]) {
+            assert_eq!(&request[2..4], &qsid.to_le_bytes());
+            assert_eq!(request[4], value);
+        }
+    }
 
     fn test_app() -> EntropyApp {
         let ctx = egui::Context::default();

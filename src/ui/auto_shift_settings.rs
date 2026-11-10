@@ -53,7 +53,7 @@ impl EntropyApp {
                 if !hid_ready {
                     crate::ui_style::modal_empty_state(
                         ui,
-                        crate::i18n::tr_catalog(self.app_settings.language, "auto_shift_settings.connect_a_vial_keyboard_to_edit_auto_shift_settings"),
+                        crate::i18n::tr_catalog(self.app_settings.language, "auto_shift_settings.connect_device_to_edit_auto_shift_settings"),
                         None,
                     );
                     return;

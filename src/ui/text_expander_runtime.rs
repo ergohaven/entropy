@@ -1,6 +1,19 @@
 use super::*;
 
 impl EntropyApp {
+    /// Monotonic app clock in seconds since startup. Independent of painted
+    /// egui input time, so background scheduling keeps advancing while the
+    /// window is hidden and only `run_logic` runs.
+    fn app_clock_now(&self) -> f64 {
+        self.app_clock.elapsed().as_secs_f64()
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_set_app_clock(&mut self, elapsed_secs: f64) {
+        self.app_clock =
+            std::time::Instant::now() - std::time::Duration::from_secs_f64(elapsed_secs);
+    }
+
     pub(super) fn text_expander_rule_issue(
         &self,
         idx: usize,
@@ -57,9 +70,9 @@ impl EntropyApp {
         self.sync_text_expander_runtime();
     }
 
-    pub(super) fn queue_text_expander_settings_save(&mut self, now: f64) {
+    pub(super) fn queue_text_expander_settings_save(&mut self) {
         self.text_expander_settings_save_pending = true;
-        self.text_expander_settings_last_edit_at = now;
+        self.text_expander_settings_last_edit_at = self.app_clock_now();
     }
 
     pub(super) fn flush_pending_text_expander_settings(&mut self) {
@@ -68,7 +81,8 @@ impl EntropyApp {
         }
     }
 
-    pub(super) fn poll_text_expander_deferred_save(&mut self, now: f64) {
+    pub(super) fn poll_text_expander_deferred_save(&mut self) {
+        let now = self.app_clock_now();
         if self.text_expander_settings_save_pending
             && now - self.text_expander_settings_last_edit_at >= TEXT_EXPANDER_SAVE_DEBOUNCE_SECS
         {
@@ -144,7 +158,8 @@ impl EntropyApp {
         }
     }
 
-    pub(super) fn auto_reload_text_expander_rules_file(&mut self, now: f64) {
+    pub(super) fn auto_reload_text_expander_rules_file(&mut self) {
+        let now = self.app_clock_now();
         if self.text_expander_settings_save_pending {
             return;
         }

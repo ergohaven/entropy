@@ -408,7 +408,10 @@ impl EntropyApp {
         let (title, body, remember, close_label, tray_label, cancel_label) =
             linux_close_to_tray_prompt_copy(
                 lang,
-                crate::smart_input::text_expander_runs_outside_entropy_process(),
+                text_expander_through_ibus(
+                    self.app_settings.text_expander_enabled,
+                    self.ibus_registration.get(),
+                ),
             );
         #[cfg(target_os = "macos")]
         let (title, body, remember, close_label, tray_label, cancel_label) = match lang {
@@ -1089,10 +1092,22 @@ fn plist_xml_escape(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+/// Whether Text Expander keeps running once Entropy closes; `None` with it
+/// off. On Linux it lives only in the Entropy IBus engine, so what counts is
+/// that IBus has the engine to load, not whether this process was started
+/// with IBus input-module variables.
+#[cfg(target_os = "linux")]
+fn text_expander_through_ibus(
+    enabled: bool,
+    registration: crate::linux_setup::IbusRegistration,
+) -> Option<bool> {
+    enabled.then_some(registration.user || registration.system)
+}
+
 #[cfg(target_os = "linux")]
 fn linux_close_to_tray_prompt_copy(
     lang: crate::i18n::Language,
-    input_method_backend: bool,
+    input_method_backend: Option<bool>,
 ) -> (
     &'static str,
     &'static str,
@@ -1102,7 +1117,7 @@ fn linux_close_to_tray_prompt_copy(
     &'static str,
 ) {
     match (lang, input_method_backend) {
-        (crate::i18n::Language::Russian, true) => (
+        (crate::i18n::Language::Russian, Some(true)) => (
             "Закрыть Entropy?",
             "Text Expander продолжит работать через IBus после закрытия Entropy",
             "Запомнить выбор",
@@ -1110,7 +1125,7 @@ fn linux_close_to_tray_prompt_copy(
             "В фон",
             "Отмена",
         ),
-        (crate::i18n::Language::English, true) => (
+        (crate::i18n::Language::English, Some(true)) => (
             "Close Entropy?",
             "Text Expander keeps running through IBus after Entropy closes",
             "Remember my choice",
@@ -1118,7 +1133,7 @@ fn linux_close_to_tray_prompt_copy(
             "Keep running",
             "Cancel",
         ),
-        (crate::i18n::Language::Russian, false) => (
+        (crate::i18n::Language::Russian, Some(false)) => (
             "Закрыть Entropy?",
             "Text Expander работает через IBus; фоновое окно Entropy его не заменяет",
             "Запомнить выбор",
@@ -1126,9 +1141,25 @@ fn linux_close_to_tray_prompt_copy(
             "В фон",
             "Отмена",
         ),
-        (crate::i18n::Language::English, false) => (
+        (crate::i18n::Language::English, Some(false)) => (
             "Close Entropy?",
             "Text Expander uses IBus; keeping the Entropy window open does not replace it",
+            "Remember my choice",
+            "Close",
+            "Keep running",
+            "Cancel",
+        ),
+        (crate::i18n::Language::Russian, None) => (
+            "Закрыть Entropy?",
+            "Синхронизация раскладки и live-данные остановятся, если закрыть Entropy",
+            "Запомнить выбор",
+            "Закрыть",
+            "В фон",
+            "Отмена",
+        ),
+        (crate::i18n::Language::English, None) => (
+            "Close Entropy?",
+            "Layout sync and live keyboard data stop if Entropy is closed",
             "Remember my choice",
             "Close",
             "Keep running",
@@ -1227,6 +1258,30 @@ mod tests {
             app.restore_from_tray(ui.ctx())
         });
         assert!(app.linux_background_since.is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_close_prompt_keeps_text_expander_running_wherever_the_engine_is_registered() {
+        use crate::linux_setup::IbusRegistration;
+
+        let registered = |user, system| IbusRegistration { user, system };
+        assert_eq!(
+            text_expander_through_ibus(false, registered(true, true)),
+            None
+        );
+        assert_eq!(
+            text_expander_through_ibus(true, registered(false, false)),
+            Some(false)
+        );
+        assert_eq!(
+            text_expander_through_ibus(true, registered(true, false)),
+            Some(true)
+        );
+        assert_eq!(
+            text_expander_through_ibus(true, registered(false, true)),
+            Some(true)
+        );
     }
 
     #[test]

@@ -347,6 +347,8 @@ fn main() -> eframe::Result<()> {
 
     #[cfg(target_os = "macos")]
     hid::initialize_macos_hid_on_main_thread();
+    #[cfg(target_os = "macos")]
+    app::prepare_macos_update_notifications();
 
     #[cfg(target_os = "windows")]
     let (background_app, launch_minimized) = if launch_minimized {

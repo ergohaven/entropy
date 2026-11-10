@@ -38,7 +38,8 @@ use keycode_picker_basic::*;
 mod keycode_picker_lighting_quantum;
 #[path = "keycode_picker_macro.rs"]
 mod keycode_picker_macro;
-pub(crate) use keycode_picker_macro::decode_macro_actions;
+pub(crate) use keycode_picker_macro::{decode_macro_actions, macro_storage_used};
+use keycode_picker_macro::{MacroSnapshot, MacroUndoEntry};
 #[path = "keycode_picker_special.rs"]
 mod keycode_picker_special;
 #[path = "keycode_picker_tabs.rs"]
@@ -214,8 +215,12 @@ pub struct KeycodePicker {
     /// Last revision attempted by the HID worker. A failed revision is not
     /// retried until another edit creates a new snapshot.
     pub macro_attempted_revision: Option<u64>,
-    /// Undo stack for macro editor: (macro_idx, previous_actions)
-    macro_undo_stack: Vec<(usize, Vec<MacroAction>)>,
+    /// Action edits preserve metadata; Paste and Clear restore the whole slot.
+    macro_undo_stack: Vec<MacroUndoEntry>,
+    /// In-app clipboard, scoped to the connected keyboard.
+    macro_clipboard: Option<MacroSnapshot>,
+    /// Typographic characters replaced with ASCII while editing Text steps of
+    /// this macro: (macro_idx, count). Shown so the rewrite is never silent.
     /// Macro key picker: (macro_idx, action_idx) being edited
     macro_key_pick: Option<(usize, usize)>,
     macro_mod_key_pick: Option<u16>,
@@ -234,6 +239,33 @@ fn tr_picker(language: crate::i18n::Language, key: &'static str) -> &'static str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alt_title_does_not_mislabel_a_layer_tap_as_a_modifier() {
+        use egui_kittest::kittest::Queryable;
+
+        let picker = KeycodePicker {
+            open: true,
+            language: crate::i18n::Language::English,
+            vial_quantum_pending_mt: Some(0x4400),
+            ..Default::default()
+        };
+        let mut harness = egui_kittest::Harness::builder().build_ui_state(
+            |ui, picker: &mut KeycodePicker| {
+                picker.show(
+                    ui.ctx(),
+                    DeferredPickerDataState::Ready,
+                    DeferredPickerDataState::Ready,
+                );
+            },
+            picker,
+        );
+        harness.run();
+        harness.get_by_label(tr_picker(
+            crate::i18n::Language::English,
+            "key_picker.pick_tap_key_title",
+        ));
+    }
 
     #[test]
     fn escape_mid_search_closes_the_picker_and_keeps_it_closed() {
@@ -1037,7 +1069,7 @@ fn mod_key_choices(compact_only: bool) -> Vec<ModKeyChoice> {
             compact: true,
         },
         ModKeyChoice {
-            label: picker_mod_key_label(0x0400),
+            label: "Alt/key".into(),
             left_value: 0x0400,
             right_value: Some(0x1400),
             mod_name: "Alt".into(),
@@ -1212,6 +1244,7 @@ impl Default for KeycodePicker {
             macro_metadata_dirty: false,
             macro_actions: vec![vec![]; 16],
             macro_undo_stack: Vec::new(),
+            macro_clipboard: None,
             macro_key_pick: None,
             macro_mod_key_pick: None,
             advanced_slot_picker: None,
@@ -2383,16 +2416,27 @@ impl KeycodePicker {
         });
 
         if let Some(base) = pending {
-            let title = if is_mt {
-                tr_picker(self.language, "key_picker.pick_tap_key_title")
+            let title_key = if is_mt {
+                "key_picker.pick_tap_key_title"
             } else {
-                tr_picker(self.language, "key_picker.pick_modifier_combo_title")
+                "key_picker.pick_modifier_combo_title"
             };
+            let mut title = tr_picker(self.language, title_key).to_owned();
+            // Layer-Tap shares the tap-key picker but has no modifier bits.
+            if !is_mt || base & 0xE000 == 0x2000 {
+                let selected_label = if is_mt {
+                    picker_mod_tap_label(base)
+                } else {
+                    picker_mod_key_label(base)
+                };
+                title.push_str(": ");
+                title.push_str(&selected_label);
+            }
             let mut still_open = true;
             let popup_size = key_picker_popup_size(ctx);
             let _resp_win = crate::ui_style::centered_modal_window(
                 ctx,
-                title,
+                &title,
                 self.popup_state.id(PopupKey::PendingKeyPickWindow),
                 &mut still_open,
                 popup_size,
