@@ -273,6 +273,7 @@ timeout_tooltip = "Hold time before Auto Shift sends the shifted key"
 timeout_field_tooltip = "Timeout is in milliseconds"
 
 [connection]
+keyboard_locked_import_layout = "Device is locked, unlock it to import the layout"
 keyboard_locked_edit_macros = "Device is locked, unlock it to edit macros"
 keyboard_locked_edit_tap_dance = "Device is locked, unlock it to edit Tap Dance"
 waiting_for_keyboard = "Waiting for a device"

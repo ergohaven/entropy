@@ -318,6 +318,14 @@ impl EntropyApp {
             self.import_progress_started_at = None;
             return;
         }
+        // Unlock owns the foreground and the transport until it completes.
+        // Leave the queued path (and its connection generation) intact.
+        if self.pending_entlayout_import_path.is_some()
+            && (self.unlock_open || self.vial_unlock_session_started || self.vial_unlock_polling)
+        {
+            self.import_progress_started_at = None;
+            return;
+        }
         let Some(started_at) = self.import_progress_started_at else {
             self.import_progress_started_at = Some(now);
             ctx.request_repaint_after(std::time::Duration::from_millis(80));
@@ -412,7 +420,7 @@ impl EntropyApp {
     /// A failed import says why in the report window and the log: with a
     /// layout on screen the status message is drawn nowhere.
     #[cfg(not(target_arch = "wasm32"))]
-    fn report_import_failure(&mut self, title_key: &'static str, message: String) {
+    pub(super) fn report_import_failure(&mut self, title_key: &'static str, message: String) {
         log::warn!("{message}");
         self.import_report_title =
             crate::i18n::tr_catalog(self.app_settings.language, title_key).into();
@@ -536,7 +544,7 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn draw_import_progress_overlay(&mut self, ctx: &egui::Context) {
-        if !self.import_pending() {
+        if !self.import_pending() || self.unlock_open || self.vial_unlock_polling {
             return;
         }
         let screen_rect = ctx.content_rect();
@@ -839,6 +847,8 @@ mod tests {
         app.hid_device = Some(crate::device_session::DeviceSession::Rynk(
             crate::rynk::session::RynkSession::new(link),
         ));
+
+        app.firmware = FirmwareProtocol::Rynk;
 
         // What the board would lose waits for the user, before any write.
         app.begin_entlayout_import(file.clone());
