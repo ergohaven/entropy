@@ -221,6 +221,7 @@ pub struct KeycodePicker {
     macro_clipboard: Option<MacroSnapshot>,
     /// Typographic characters replaced with ASCII while editing Text steps of
     /// this macro: (macro_idx, count). Shown so the rewrite is never silent.
+    macro_text_ascii_replaced: Option<(usize, usize)>,
     /// Macro key picker: (macro_idx, action_idx) being edited
     macro_key_pick: Option<(usize, usize)>,
     macro_mod_key_pick: Option<u16>,
@@ -1245,6 +1246,7 @@ impl Default for KeycodePicker {
             macro_actions: vec![vec![]; 16],
             macro_undo_stack: Vec::new(),
             macro_clipboard: None,
+            macro_text_ascii_replaced: None,
             macro_key_pick: None,
             macro_mod_key_pick: None,
             advanced_slot_picker: None,
