@@ -2307,3 +2307,14 @@ tooltip_pictogram_slot = "Select the Macro or Tap Dance whose icon you want to c
 tooltip_pictogram_choice = "Select a stock or saved icon. The assignment is sent to the selected action."
 tooltip_pictogram_action_type = "Choose the action type to assign an icon to."
 tooltip_pictogram_name = "Name of your icon. Red text means the name is already in use."
+
+[notifications]
+app_label = "App update notifications"
+firmware_label = "Firmware update notifications"
+tooltip = "Show native macOS notifications for available updates. Checks run when Entropy starts or a keyboard connects. Requires notification permission in macOS."
+app_title = "Entropy update available"
+app_body = "Entropy {version} is available. Click to view update details."
+firmware_title = "Keyboard firmware update available"
+firmware_body = "{device}: firmware {version} is available. Click to view update details."
+permission_denied = "Notifications are disabled for Entropy. Allow them in macOS System Settings → Notifications."
+unbundled = "Native notifications require the Entropy macOS app bundle."

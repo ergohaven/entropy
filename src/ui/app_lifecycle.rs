@@ -1723,6 +1723,7 @@ impl eframe::App for EntropyApp {
 
             crate::app::poll_update_check(&mut self.update_check);
             crate::app::poll_firmware_update_check(&mut self.firmware_update_check);
+            self.poll_update_notifications(ctx);
             let main_window_hidden_to_tray = self.main_window_hidden_to_tray();
             let selected_device_is_bluetooth = self
                 .selected_device
