@@ -23,19 +23,18 @@ fn sm62_preview_mode(settings: &[u8], scene: u8) -> u8 {
 }
 
 fn sm62_orbit_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
-    let id = egui::Id::new("sm62_orbit_firmware_frames");
-    if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
-        return Some(texture);
-    }
-    // Decoded from firmware anim_00..15 and flame_00..15 at 240x280.
-    let image = image::load_from_memory(include_bytes!("../../assets/sm62/orbit_frames.png"))
-        .ok()?.into_rgba8();
-    if image.dimensions() != (960, 1120) { return None; }
-    let color_image = egui::ColorImage::from_rgba_unmultiplied([960, 1120], image.as_raw());
-    let texture = ctx.load_texture("sm62-orbit-firmware-frames", color_image,
-        egui::TextureOptions::LINEAR);
-    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
-    Some(texture)
+    crate::ui_textures::texture(ctx, "sm62_orbit_firmware_frames", 0, || {
+        let image = image::load_from_memory(include_bytes!("../../assets/sm62/orbit_frames.png"))
+            .ok()?
+            .into_rgba8();
+        if image.dimensions() != (960, 1120) {
+            return None;
+        }
+        Some(egui::ColorImage::from_rgba_unmultiplied(
+            [960, 1120],
+            image.as_raw(),
+        ))
+    })
 }
 
 include!("sm62_keymap_preview.rs");
@@ -972,43 +971,39 @@ impl EntropyApp {
     }
 
     fn standby_preview_texture(&self, ctx: &egui::Context) -> Option<egui::TextureHandle> {
-        let frames = &self.display_settings.clock_background_preview_frames_rgba;
-        let frame_index = if frames.is_empty() {
-            0
-        } else {
-            animation_frame_index(
-                &self.display_settings.clock_background_preview_delays_ms,
-                frames.len(),
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = ctx;
+            None
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let preview = self.display_settings.clock_background_preview.as_ref()?;
+            let frame_index = animation_frame_index(
+                &preview.delays_ms(),
+                preview.frame_count(),
                 (ctx.input(|input| input.time) * 1000.0).max(0.0) as u64,
                 self.display_settings.clock_background_speed_percent,
+            );
+            if preview.frame_count() > 1 {
+                ctx.request_repaint_after(std::time::Duration::from_millis(20));
+            }
+            crate::ui_textures::texture(
+                ctx,
+                "standby_background_preview",
+                (
+                    self.connection_generation,
+                    self.display_settings.clock_background_preview_revision,
+                    frame_index,
+                ),
+                || {
+                    Some(egui::ColorImage::from_rgba_unmultiplied(
+                        [240, 280],
+                        &preview.frame_rgba(frame_index)?,
+                    ))
+                },
             )
-        };
-        let rgba = frames
-            .get(frame_index)
-            .unwrap_or(&self.display_settings.clock_background_preview_rgba);
-        if rgba.len() != 240usize * 280usize * 4 {
-            return None;
         }
-        if frames.len() > 1 {
-            ctx.request_repaint_after(std::time::Duration::from_millis(20));
-        }
-        let id = egui::Id::new((
-            "standby_background_preview",
-            self.connection_generation,
-            self.display_settings.clock_background_preview_revision,
-            frame_index,
-        ));
-        if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
-            return Some(texture);
-        }
-        let image = egui::ColorImage::from_rgba_unmultiplied([240, 280], rgba);
-        let texture = ctx.load_texture(
-            format!("standby-background-preview-{frame_index}"),
-            image,
-            egui::TextureOptions::LINEAR,
-        );
-        ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
-        Some(texture)
     }
 
     fn startup_preview_texture(&self, ctx: &egui::Context) -> Option<egui::TextureHandle> {
@@ -1016,42 +1011,32 @@ impl EntropyApp {
         if rgba.len() != 240usize * 280usize * 4 {
             return None;
         }
-        let id = egui::Id::new((
+        crate::ui_textures::texture(
+            ctx,
             "startup_image_preview",
-            self.connection_generation,
-            self.display_settings.startup_image_preview_revision,
-        ));
-        if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
-            return Some(texture);
-        }
-        let image = egui::ColorImage::from_rgba_unmultiplied([240, 280], rgba);
-        let texture =
-            ctx.load_texture("startup-image-preview", image, egui::TextureOptions::LINEAR);
-        ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
-        Some(texture)
+            (
+                self.connection_generation,
+                self.display_settings.startup_image_preview_revision,
+            ),
+            || Some(egui::ColorImage::from_rgba_unmultiplied([240, 280], rgba)),
+        )
     }
 
     fn builtin_startup_logo_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
-        let id = egui::Id::new("m4cr0pad_builtin_startup_logo");
-        if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
-            return Some(texture);
-        }
-        let image = image::load_from_memory(include_bytes!(
-            "../../assets/ergohaven-macropad-startup-logo.png"
-        ))
-        .ok()?
-        .into_rgba8();
-        if image.dimensions() != (240, 72) {
-            return None;
-        }
-        let color_image = egui::ColorImage::from_rgba_unmultiplied([240, 72], image.as_raw());
-        let texture = ctx.load_texture(
-            "m4cr0pad-builtin-startup-logo",
-            color_image,
-            egui::TextureOptions::LINEAR,
-        );
-        ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
-        Some(texture)
+        crate::ui_textures::texture(ctx, "m4cr0pad_builtin_startup_logo", 0, || {
+            let image = image::load_from_memory(include_bytes!(
+                "../../assets/ergohaven-macropad-startup-logo.png"
+            ))
+            .ok()?
+            .into_rgba8();
+            if image.dimensions() != (240, 72) {
+                return None;
+            }
+            Some(egui::ColorImage::from_rgba_unmultiplied(
+                [240, 72],
+                image.as_raw(),
+            ))
+        })
     }
 
     fn paint_startup_display_preview(&self, ui: &mut egui::Ui, screen: egui::Rect) {
@@ -1688,6 +1673,24 @@ mod tests {
     use image::GenericImageView;
 
     use super::*;
+
+    #[test]
+    fn startup_preview_reuses_one_texture_across_revisions() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        let before = ctx.tex_manager().read().num_allocated();
+        app.display_settings.startup_image_preview_rgba = vec![255; 240 * 280 * 4];
+        for revision in 0..20 {
+            app.connection_generation = revision;
+            app.display_settings.startup_image_preview_revision = revision;
+            drop(app.startup_preview_texture(&ctx).unwrap());
+        }
+        assert_eq!(
+            ctx.tex_manager().read().num_allocated(),
+            before + 1,
+            "obsolete preview revisions must release their textures"
+        );
+    }
 
     #[test]
     fn sm62_preview_reflects_each_configured_scene() {

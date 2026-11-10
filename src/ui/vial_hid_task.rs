@@ -1002,10 +1002,7 @@ impl EntropyApp {
                 self.display_settings.clock_background_frames = upload.frame_count;
                 self.display_settings.clock_background_bytes = upload.total_size;
                 self.display_settings.clock_background_file_name = Some(upload.file_name);
-                self.display_settings.clock_background_preview_rgba = upload.preview_rgba;
-                self.display_settings.clock_background_preview_frames_rgba =
-                    upload.preview_frames_rgba;
-                self.display_settings.clock_background_preview_delays_ms = upload.preview_delays_ms;
+                self.display_settings.clock_background_preview = Some(upload.preview);
                 self.display_settings.clock_background_preview_revision = self
                     .display_settings
                     .clock_background_preview_revision
@@ -1031,13 +1028,7 @@ impl EntropyApp {
                 self.display_settings.clock_background_frames = 0;
                 self.display_settings.clock_background_bytes = 0;
                 self.display_settings.clock_background_file_name = None;
-                self.display_settings.clock_background_preview_rgba.clear();
-                self.display_settings
-                    .clock_background_preview_frames_rgba
-                    .clear();
-                self.display_settings
-                    .clock_background_preview_delays_ms
-                    .clear();
+                self.display_settings.clock_background_preview = None;
                 self.display_settings.clock_background_preview_revision = self
                     .display_settings
                     .clock_background_preview_revision

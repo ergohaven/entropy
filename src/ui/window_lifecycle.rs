@@ -175,8 +175,11 @@ impl EntropyApp {
 
     pub(super) fn restore_from_tray(&mut self, ctx: &egui::Context) {
         #[cfg(target_os = "windows")]
-        if let Some(hwnd) = self.windows_hwnd {
+        {
             self.windows_window_hidden_to_tray = false;
+        }
+        #[cfg(target_os = "windows")]
+        if let Some(hwnd) = self.windows_hwnd {
             unsafe {
                 use windows_sys::Win32::UI::WindowsAndMessaging::{
                     SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
@@ -204,7 +207,7 @@ impl EntropyApp {
     }
 
     #[cfg(target_os = "windows")]
-    pub(super) fn cache_windows_hwnd(&mut self, frame: &eframe::Frame) {
+    pub(super) fn cache_windows_hwnd(&mut self, frame: &eframe::Frame, ctx: &egui::Context) {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         if self.windows_hwnd.is_some() {
             return;
@@ -212,6 +215,9 @@ impl EntropyApp {
         if let Ok(handle) = frame.window_handle() {
             if let RawWindowHandle::Win32(win32) = handle.as_raw() {
                 self.windows_hwnd = Some(win32.hwnd.get());
+                if self.tray_icon.is_some() {
+                    self.bind_tray_handlers(ctx);
+                }
             }
         }
     }
@@ -761,6 +767,28 @@ impl EntropyApp {
         let Some(icon) = crate::app_icon::tray_icon(32) else {
             return;
         };
+        self.bind_tray_handlers(ctx);
+        let tray_menu = tray_icon::menu::Menu::new();
+        let quit_item =
+            tray_icon::menu::MenuItem::with_id("entropy_tray_quit", "Quit Entropy", true, None);
+        if let Err(e) = tray_menu.append(&quit_item) {
+            log::warn!("failed to create tray menu: {e}");
+        }
+        match tray_icon::TrayIconBuilder::new()
+            .with_tooltip("Entropy")
+            .with_menu(Box::new(tray_menu))
+            .with_menu_on_left_click(false)
+            .with_menu_on_right_click(true)
+            .with_icon(icon)
+            .build()
+        {
+            Ok(icon) => self.tray_icon = Some(icon),
+            Err(e) => log::warn!("failed to create tray icon: {e}"),
+        }
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    fn bind_tray_handlers(&self, ctx: &egui::Context) {
         let ctx_for_handler = ctx.clone();
         #[cfg(target_os = "windows")]
         let hwnd_for_handler = self.windows_hwnd;
@@ -812,23 +840,6 @@ impl EntropyApp {
                 }
             },
         ));
-        let tray_menu = tray_icon::menu::Menu::new();
-        let quit_item =
-            tray_icon::menu::MenuItem::with_id("entropy_tray_quit", "Quit Entropy", true, None);
-        if let Err(e) = tray_menu.append(&quit_item) {
-            log::warn!("failed to create tray menu: {e}");
-        }
-        match tray_icon::TrayIconBuilder::new()
-            .with_tooltip("Entropy")
-            .with_menu(Box::new(tray_menu))
-            .with_menu_on_left_click(false)
-            .with_menu_on_right_click(true)
-            .with_icon(icon)
-            .build()
-        {
-            Ok(icon) => self.tray_icon = Some(icon),
-            Err(e) => log::warn!("failed to create tray icon: {e}"),
-        }
     }
 
     #[cfg(any(target_os = "windows", target_os = "macos"))]

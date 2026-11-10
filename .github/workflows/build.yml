@@ -151,6 +151,15 @@ jobs:
           scripts/test_linux_packages.sh
           desktop-file-validate packaging/linux/entropy.desktop
 
+      - name: Test background memory lifecycle
+        if: matrix.kind != 'linux'
+        run: |
+          cargo test --all-targets app::background_startup::tests -- --test-threads=1
+          cargo test --all-targets ui_textures::tests
+          cargo test --all-targets app::text_expander_emoji::texture_memory_tests
+          cargo test --all-targets app::display_preview::tests::startup_preview_reuses_one_texture_across_revisions -- --exact
+          cargo test --all-targets app::standby_background
+
       - name: Test layout indicator window policy
         if: matrix.kind != 'linux'
         run: cargo test --all-targets app::layout_indicator_window::tests

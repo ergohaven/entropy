@@ -112,6 +112,69 @@ fn connection_replaces_layout_canvas(connect_state: &ConnectState, layout_loaded
 }
 
 impl EntropyApp {
+    /// Services shared by the renderer and the Windows windowless tray loop.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn tick_background(&mut self, ctx: &egui::Context) {
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        self.handle_tray_quit_request(ctx);
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        self.handle_tray_restore_request(ctx);
+        self.handle_close_to_tray(ctx);
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        self.poll_tray_events(ctx);
+        #[cfg(target_os = "macos")]
+        self.handle_macos_dock_reopen(ctx);
+
+        crate::app::poll_update_check(&mut self.update_check);
+        crate::app::poll_firmware_update_check(&mut self.firmware_update_check);
+        self.poll_update_notifications(ctx);
+        let main_window_hidden_to_tray = self.main_window_hidden_to_tray();
+        let selected_device_is_bluetooth = self
+            .selected_device
+            .and_then(|idx| self.device_manager.devices().get(idx))
+            .map(|device| device.is_bluetooth_transport())
+            .unwrap_or(false)
+            || self.bluetooth_reconnect_active();
+        let main_window_uses_wayland = matches!(
+            self.parent_display_handle,
+            Some(raw_window_handle::RawDisplayHandle::Wayland(_))
+        );
+        let main_window_attended = ctx.input(|i| i.focused || i.pointer.has_pointer());
+        let bluetooth_visible_interval = bluetooth_visible_repaint_interval(
+            selected_device_is_bluetooth,
+            main_window_uses_wayland,
+            main_window_attended,
+        );
+        let connect_pending = matches!(self.connect_state, ConnectState::Loading { .. });
+        let update_check_pending = matches!(self.update_check, UpdateCheckState::Checking { .. })
+            || crate::app::firmware_update_check_pending(&self.firmware_update_check);
+        let layout_indicator_interval = self
+            .app_settings
+            .sticky_layout_window
+            .then(|| self.matrix_tester_poll_interval());
+        #[cfg(target_os = "linux")]
+        self.track_linux_background_window(ctx);
+        ctx.request_repaint_after(native_repaint_interval(
+            self.main_window_in_background(),
+            bluetooth_visible_interval,
+            connect_pending,
+            update_check_pending,
+            layout_indicator_interval,
+        ));
+        // Wayland may keep painting a window requested to minimize. Retain its
+        // bounded cache until the backend confirms that painting has stopped.
+        if self.main_window_hidden_to_tray()
+            || ctx.input(|input| input.viewport().minimized == Some(true)) {
+            crate::ui_textures::clear(ctx);
+        }
+        self.update_native_background(
+            ctx,
+            ctx.input(|i| i.time),
+            main_window_hidden_to_tray,
+            selected_device_is_bluetooth,
+        );
+    }
+
     /// Shared ownership gate for shortcuts on pages behind app modals.
     pub(super) fn modal_or_popup_open(&self, ctx: &egui::Context) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
@@ -1679,11 +1742,19 @@ impl eframe::App for EntropyApp {
         crate::app_discovery::unload_kwin_foreground_script();
     }
 
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
+        // eframe starts its clock when the graphics window is created. Keep
+        // discovery, reconnect and deferred-write deadlines continuous.
+        if let Some(time) = input.time.as_mut() {
+            *time += self.native_time_offset;
+        }
+    }
+
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(not(target_arch = "wasm32"))]
         {
             #[cfg(target_os = "windows")]
-            self.cache_windows_hwnd(frame);
+            self.cache_windows_hwnd(frame, ctx);
             #[cfg(target_os = "windows")]
             self.handle_windows_start_hidden_to_tray(ctx);
             #[cfg(target_os = "macos")]
@@ -1691,61 +1762,7 @@ impl eframe::App for EntropyApp {
             // Cache the winit window/display handles so native file dialogs can be
             // parented to the main window instead of opening behind it.
             self.cache_parent_window_handles(frame);
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
-            self.handle_tray_quit_request(ctx);
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
-            self.handle_tray_restore_request(ctx);
-            self.handle_close_to_tray(ctx);
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
-            self.poll_tray_events(ctx);
-            #[cfg(target_os = "macos")]
-            self.handle_macos_dock_reopen(ctx);
-
-            crate::app::poll_update_check(&mut self.update_check);
-            crate::app::poll_firmware_update_check(&mut self.firmware_update_check);
-            self.poll_update_notifications(ctx);
-            let main_window_hidden_to_tray = self.main_window_hidden_to_tray();
-            let selected_device_is_bluetooth = self
-                .selected_device
-                .and_then(|idx| self.device_manager.devices().get(idx))
-                .map(|device| device.is_bluetooth_transport())
-                .unwrap_or(false)
-                || self.bluetooth_reconnect_active();
-            let main_window_uses_wayland = matches!(
-                self.parent_display_handle,
-                Some(raw_window_handle::RawDisplayHandle::Wayland(_))
-            );
-            // Wayland reports keyboard focus and pointer enter/leave even when
-            // it hides minimizing: a window left for another one has neither.
-            let main_window_attended = ctx.input(|i| i.focused || i.pointer.has_pointer());
-            let bluetooth_visible_interval = bluetooth_visible_repaint_interval(
-                selected_device_is_bluetooth,
-                main_window_uses_wayland,
-                main_window_attended,
-            );
-            let connect_pending = matches!(self.connect_state, ConnectState::Loading { .. });
-            let update_check_pending =
-                matches!(self.update_check, UpdateCheckState::Checking { .. })
-                    || crate::app::firmware_update_check_pending(&self.firmware_update_check);
-            let layout_indicator_interval = self
-                .app_settings
-                .sticky_layout_window
-                .then(|| self.matrix_tester_poll_interval());
-            #[cfg(target_os = "linux")]
-            self.track_linux_background_window(ctx);
-            ctx.request_repaint_after(native_repaint_interval(
-                self.main_window_in_background(),
-                bluetooth_visible_interval,
-                connect_pending,
-                update_check_pending,
-                layout_indicator_interval,
-            ));
-            self.update_native_background(
-                ctx,
-                ctx.input(|i| i.time),
-                main_window_hidden_to_tray,
-                selected_device_is_bluetooth,
-            );
+            self.tick_background(ctx);
         }
 
         #[cfg(target_arch = "wasm32")]

@@ -14,10 +14,14 @@ struct AppBootstrap {
 
 impl EntropyApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        Self::new_with_context(&cc.egui_ctx)
+    }
+
+    pub(crate) fn new_with_context(ctx: &egui::Context) -> Self {
         let mut app_settings = load_app_settings();
         app_settings.ui_scale = clamp_ui_scale(app_settings.ui_scale);
         crate::diagnostics::set_enabled(app_settings.diagnostics_enabled);
-        cc.egui_ctx.set_zoom_factor(app_settings.ui_scale);
+        ctx.set_zoom_factor(app_settings.ui_scale);
         crate::ui_style::set_accent(app_settings.accent_color.color());
         crate::smart_input::set_text_expander_config(
             app_settings.text_expander_enabled,
@@ -49,7 +53,7 @@ impl EntropyApp {
         });
         #[cfg(not(target_arch = "wasm32"))]
         app.update_notifications.initialize(
-            &cc.egui_ctx,
+            ctx,
             app_settings_path().with_file_name("update-notifications.json"),
         );
         app
@@ -220,6 +224,7 @@ impl EntropyApp {
             linux_setup_task: None,
             dark_mode,
             last_applied_theme: None,
+            native_time_offset: 0.0,
             app_settings,
             app_clock: std::time::Instant::now(),
             text_expander_rules_signature,
