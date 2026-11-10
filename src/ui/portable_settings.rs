@@ -403,7 +403,7 @@ impl EntropyApp {
     pub(super) fn apply_entlayout_portable_setting_local(&mut self, setting: &EntPortableSetting) {
         let value = setting.value;
         if setting.is_layer_led_color() || setting.is_indication_setting() {
-            self.layer_led_settings.set_value(setting.qsid, value);
+            self.reconcile_indication_setting(setting.qsid, value);
             return;
         }
         if setting.module.is_some() {

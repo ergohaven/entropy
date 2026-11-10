@@ -2696,6 +2696,7 @@ mod tests {
         app.module_settings.set_value(134, 0);
         app.layer_led_settings = LayerLedSettingsState {
             brightness: Some(LayerLedNumericSetting {
+                min: 0,
                 loaded: true,
                 qsid: 316,
                 width: 2,

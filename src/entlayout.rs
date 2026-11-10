@@ -3448,12 +3448,23 @@ impl EntropyApp {
                     color.loaded = false;
                 }
             }
+            for p in &mut self.bluetooth_settings.profile_colors {
+                if p.setting.qsid == setting.qsid {
+                    p.setting.loaded = false;
+                }
+            }
             let current = match setting.width {
                 EntPortableSettingWidth::U8 => hid.get_qmk_setting_u8(setting.qsid).map(u16::from),
                 EntPortableSettingWidth::U16 => hid.get_qmk_setting_u16(setting.qsid),
             };
             if let Ok(value) = current {
                 self.layer_led_settings.set_value(setting.qsid, value);
+                for p in &mut self.bluetooth_settings.profile_colors {
+                    if p.setting.qsid == setting.qsid {
+                        p.setting.value = value;
+                        p.setting.loaded = true;
+                    }
+                }
             }
         }
         verified_portable_settings.retain(|setting| !failed_layer_colors.contains(&setting.id));

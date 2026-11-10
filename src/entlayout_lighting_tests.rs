@@ -188,6 +188,7 @@ fn entlayout_lighting_rgb_roundtrip_verifies_and_saves_both_protocols() {
                 writes.iter().map(|r| r[..4].to_vec()).collect::<Vec<_>>(),
                 vec![
                     vec![7, 0x81, 1, 0],
+                    vec![7, 0x81, 1, 0],
                     vec![7, 0x80, 80, 0],
                     vec![7, 0x83, 17, 200],
                     vec![7, 0x82, 42, 0],
@@ -491,18 +492,38 @@ fn entlayout_lighting_unconfirmed_matching_ram_still_saves_on_retry() {
 fn entlayout_lighting_rgblight_restores_hsv_when_disabled_or_animated() {
     use std::sync::{Arc, Mutex};
     for source_effect in [0, 6] {
-        for target_effect in [0, 6] {
+        for (enabled, retained_mode) in [(false, 6), (false, 10), (false, 1), (true, 6), (true, 10)]
+        {
             let bundle = roundtrip(&rgb_app(RgbSupportKind::QmkRgblight, source_effect));
-            let mut target = rgb_app(RgbSupportKind::QmkRgblight, target_effect);
+            let mut target = rgb_app(
+                RgbSupportKind::QmkRgblight,
+                if enabled { retained_mode } else { 0 },
+            );
             target.rgb_settings.brightness = 1;
-            let state = Arc::new(Mutex::new([target_effect as u8, 1, 0, 0, 0]));
+            let state = Arc::new(Mutex::new([
+                retained_mode as u8,
+                1,
+                0,
+                0,
+                0,
+                u8::from(enabled),
+            ]));
             let device_state = state.clone();
             let (hid, recorder) = crate::hid::HidDevice::test_device();
             recorder.respond_by(move |r| {
                 let mut state = device_state.lock().unwrap();
                 let mut reply = [0; 32];
                 match &r[..2] {
-                    [7, 0x81] => state[0] = r[2],
+                    [7, 0x81] => {
+                        if r[2] == 0 {
+                            state[5] = 0;
+                        } else {
+                            if state[5] != 0 {
+                                state[0] = r[2];
+                            }
+                            state[5] = 1;
+                        }
+                    }
                     [7, 0x80] if state[0] == 1 => state[1] = r[2],
                     [7, 0x83] if state[0] == 1 => {
                         state[3] = r[2];
@@ -510,7 +531,7 @@ fn entlayout_lighting_rgblight_restores_hsv_when_disabled_or_animated() {
                     }
                     [7, 0x82] => state[2] = r[2],
                     [7, 0x80 | 0x83] => {}
-                    [8, 0x81] => reply[2] = state[0],
+                    [8, 0x81] => reply[2] = if state[5] == 0 { 0 } else { state[0] },
                     [8, 0x80] => reply[2] = state[1],
                     [8, 0x82] => reply[2] = state[2],
                     [8, 0x83] => {
@@ -527,9 +548,125 @@ fn entlayout_lighting_rgblight_restores_hsv_when_disabled_or_animated() {
             assert_eq!(report.failed, 0);
             assert_eq!(
                 *state.lock().unwrap(),
-                [source_effect as u8, 80, 42, 17, 200]
+                [
+                    if source_effect == 0 {
+                        1
+                    } else {
+                        source_effect as u8
+                    },
+                    80,
+                    42,
+                    17,
+                    200,
+                    u8::from(source_effect != 0)
+                ]
             );
             assert!(recorder.requests().iter().any(|r| r[0] == 9));
         }
     }
+}
+
+#[test]
+fn review_real_k04_bluetooth_owner_and_minimum() {
+    let mut definition: serde_json::Value =
+        serde_json::from_str(include_str!("../tests/fixtures/k04-vial-b4709ab9.json")).unwrap();
+    let mut app = module_app();
+    app.supported_qmk_settings = (316..=322).collect();
+    let (hid, recorder) = crate::hid::HidDevice::test_device();
+    recorder.respond_by(|r| {
+        (r[..2] == [0xfe, 0x0a]).then(|| {
+            let mut out = [0; 32];
+            out[1] = 16;
+            Ok(out)
+        })
+    });
+    app.bluetooth_settings =
+        EntropyApp::read_bluetooth_settings(&definition, &app.supported_qmk_settings, &hid);
+    app.layer_led_settings =
+        EntropyApp::read_layer_led_settings(&definition, &app.supported_qmk_settings, 4, &hid);
+    let saved = app.entlayout_portable_settings_snapshot();
+    assert_eq!(
+        saved
+            .iter()
+            .filter(|s| s.id.starts_with("bt_profile_color:"))
+            .count(),
+        5
+    );
+    let bundle = roundtrip(&app);
+    for p in &mut app.bluetooth_settings.profile_colors {
+        p.setting.value = 0;
+    }
+    app.hid_device = Some(hid.into());
+    let (failures, _, _) = app.apply_entlayout(&bundle).unwrap();
+    assert!(failures.is_empty());
+    assert!(app
+        .bluetooth_settings
+        .profile_colors
+        .iter()
+        .all(|p| p.setting.value == 16 && p.setting.loaded));
+    let (hid, recorder) = crate::hid::HidDevice::test_device();
+    recorder.respond_by(|r| (r[..2] == [0xfe, 0x0a]).then(|| Err("lost GET response".into())));
+    app.bluetooth_settings =
+        EntropyApp::read_bluetooth_settings(&definition, &app.supported_qmk_settings, &hid);
+    assert!(app
+        .bluetooth_settings
+        .profile_colors
+        .iter()
+        .all(|p| !p.setting.loaded));
+    assert!(!app
+        .entlayout_portable_settings_snapshot()
+        .iter()
+        .any(|s| s.id.starts_with("bt_profile_color:")));
+    let (hid, recorder) = crate::hid::HidDevice::test_device();
+    recorder.respond_by(|r| {
+        (r[..2] == [0xfe, 0x0a]).then(|| {
+            let mut out = [0; 32];
+            out[1] = 120;
+            Ok(out)
+        })
+    });
+    for tab in definition["settings"].as_array_mut().unwrap() {
+        for field in tab["fields"].as_array_mut().unwrap() {
+            if field["qsid"] == 316 {
+                field["min"] = 100.into();
+            }
+        }
+    }
+    app.layer_led_settings =
+        EntropyApp::read_layer_led_settings(&definition, &app.supported_qmk_settings, 4, &hid);
+    let target = app.entlayout_indication_settings_snapshot(&[], true);
+    let source = saved.iter().find(|s| s.qsid == 316).unwrap();
+    let changed = target.iter().find(|t| t.qsid == 316).unwrap();
+    assert_eq!(changed.value, 120);
+    assert!(!ent_portable_setting_contracts_match(source, changed));
+}
+
+#[test]
+fn review_numeric_minimum_contract_and_old_backup() {
+    let source = indication_app(16);
+    let saved = source.entlayout_portable_settings_snapshot();
+    let source = saved.iter().find(|s| s.qsid == 316).unwrap();
+    let mut target = indication_app(120);
+    assert_eq!(source.variants, vec!["max:255"]);
+    let before = target.entlayout_portable_settings_snapshot();
+    assert!(ent_portable_setting_contracts_match(
+        source,
+        before.iter().find(|s| s.qsid == 316).unwrap()
+    ));
+    target.layer_led_settings.brightness.as_mut().unwrap().min = 100;
+    let settings = target.entlayout_portable_settings_snapshot();
+    let changed = settings.iter().find(|s| s.qsid == 316).unwrap();
+    assert!(!ent_portable_setting_contracts_match(source, changed));
+    let mut below = changed.clone();
+    below.value = 16;
+    assert!(!ent_portable_setting_is_valid(&below));
+    let bundle = roundtrip(&indication_app(16));
+    let (hid, recorder) = crate::hid::HidDevice::test_device();
+    target.hid_device = Some(hid.into());
+    let (_, _, report) = target.apply_entlayout(&bundle).unwrap();
+    assert_eq!(report.incompatible, 1);
+    assert!(!recorder
+        .requests()
+        .iter()
+        .any(|r| r[..4] == [0xfe, 0x0b, 60, 1]));
 }

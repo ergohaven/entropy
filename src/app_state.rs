@@ -1787,6 +1787,8 @@ impl TouchpadSettingsState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BluetoothSelectSetting {
+    pub(crate) loaded: bool,
+    pub(crate) portable: bool,
     pub(crate) qsid: u16,
     pub(crate) width: u8,
     pub(crate) value: u16,
@@ -2368,6 +2370,7 @@ pub(crate) enum LayerLedTimeoutUnit {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LayerLedNumericSetting {
+    pub(crate) min: u16,
     pub(crate) loaded: bool,
     pub(crate) qsid: u16,
     pub(crate) width: u8,

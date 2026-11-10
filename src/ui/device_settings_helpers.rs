@@ -890,18 +890,22 @@ impl EntropyApp {
             return None;
         }
         let width = Self::layer_led_field_width(field);
-        let value = if width > 1 {
+        let result = if width > 1 {
             dev_conn.get_qmk_setting_u16(qsid)
         } else {
             dev_conn.get_qmk_setting_u8(qsid).map(|value| value as u16)
-        }
-        .unwrap_or_else(|e| {
-            log::warn!("get_qmk_setting({label} qsid {qsid}): {e}");
-            0
-        })
-        .min(variants.len().saturating_sub(1) as u16);
+        };
+        let loaded = result.is_ok();
+        let value = result
+            .unwrap_or_else(|e| {
+                log::warn!("get_qmk_setting({label} qsid {qsid}): {e}");
+                0
+            })
+            .min(variants.len().saturating_sub(1) as u16);
 
         Some(BluetoothSelectSetting {
+            loaded,
+            portable: Self::layer_led_palette_field_is_portable(field),
             qsid,
             width,
             value,
@@ -1162,6 +1166,7 @@ impl EntropyApp {
             .min(max);
 
         LayerLedNumericSetting {
+            min: 0,
             loaded,
             qsid,
             width,
@@ -1286,6 +1291,11 @@ impl EntropyApp {
                         Vec::new(),
                         "layer_led brightness",
                     ));
+                    brightness.as_mut().unwrap().min = field
+                        .get("min")
+                        .and_then(|v| v.as_u64())
+                        .and_then(|v| u16::try_from(v).ok())
+                        .unwrap_or(0);
                 } else if lower_title.contains("led timeout") {
                     other_led_qsids.push(qsid);
                     let lower_unit = field
@@ -1312,6 +1322,11 @@ impl EntropyApp {
                         Self::layer_led_field_variants(field),
                         "layer_led timeout",
                     ));
+                    timeout.as_mut().unwrap().min = field
+                        .get("min")
+                        .and_then(|v| v.as_u64())
+                        .and_then(|v| u16::try_from(v).ok())
+                        .unwrap_or(0);
                 } else if lower_title.contains("bt profile") && lower_title.contains("color") {
                     other_led_qsids.push(qsid);
                     if let Some(profile) =

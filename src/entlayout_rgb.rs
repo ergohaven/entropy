@@ -103,6 +103,9 @@ impl EntropyApp {
                     // RGBLight ignores HSV while disabled; animated effects can mask channels.
                     // Restore color through static mode before selecting the saved effect.
                     hid.set_qmk_rgblight_effect(1)?;
+                    // The first SET enables a disabled board with its retained mode.
+                    // Select static again now that mode changes are admitted.
+                    hid.set_qmk_rgblight_effect(1)?;
                     hid.set_qmk_rgblight_brightness(source.brightness)?;
                     hid.set_qmk_rgblight_color(source.hue, source.saturation)?;
                     hid.set_qmk_rgblight_effect_speed(source.speed)?;

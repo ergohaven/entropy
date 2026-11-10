@@ -324,6 +324,7 @@ impl EntropyApp {
                 self.autosave_rgb_settings();
             }
             Err(e) => {
+                self.rgb_settings.loaded = false;
                 self.status_msg = format!("Failed to update RGB effect: {}", e);
                 log::warn!("set_rgb_effect failed: {e}");
             }
@@ -358,6 +359,7 @@ impl EntropyApp {
                 self.autosave_rgb_settings();
             }
             Err(e) => {
+                self.rgb_settings.loaded = false;
                 self.status_msg = format!("Failed to update RGB brightness: {}", e);
                 log::warn!("set_rgb_brightness failed: {e}");
             }
@@ -393,6 +395,7 @@ impl EntropyApp {
                 self.autosave_rgb_settings();
             }
             Err(e) => {
+                self.rgb_settings.loaded = false;
                 self.status_msg = format!("Failed to update RGB color: {}", e);
                 log::warn!("set_rgb_color failed: {e}");
             }
@@ -427,6 +430,7 @@ impl EntropyApp {
                 self.autosave_rgb_settings();
             }
             Err(e) => {
+                self.rgb_settings.loaded = false;
                 self.status_msg = format!("Failed to update RGB speed: {}", e);
                 log::warn!("set_rgb_speed failed: {e}");
             }
@@ -442,6 +446,7 @@ impl EntropyApp {
             return;
         };
         if let Err(e) = hid.save_rgb() {
+            self.rgb_settings.loaded = false;
             self.status_msg = format!("Failed to save RGB settings: {}", e);
             log::warn!("save_rgb failed: {e}");
         }
@@ -851,5 +856,59 @@ mod lighting_backup_tests {
             (17, 200)
         );
         assert_eq!(recorder.requests().iter().filter(|r| r[0] == 9).count(), 1);
+    }
+
+    #[test]
+    fn review_rgb_applied_set_lost_response_revokes_confirmation() {
+        let mut app = EntropyApp::new_inert_for_test();
+        let definition: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/k04-vial-b4709ab9.json"))
+                .unwrap();
+        app.layout = Some(KeyboardLayout::from_vial_json(&definition).unwrap());
+        app.layout.as_mut().unwrap().lighting_mode = Some("qmk_rgblight".into());
+        app.rgb_settings = RgbSettingsState {
+            loaded: true,
+            supported: true,
+            kind: RgbSupportKind::QmkRgblight,
+            brightness: 32,
+            ..Default::default()
+        };
+        let actual = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(32));
+        let device = actual.clone();
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        recorder.respond_by(move |r| {
+            if r[..2] == [7, 0x80] {
+                device.store(r[2], std::sync::atomic::Ordering::SeqCst);
+                Some(Err("lost response".into()))
+            } else if r[0] == 8 {
+                Some(Err("read unavailable".into()))
+            } else {
+                None
+            }
+        });
+        app.hid_device = Some(hid.into());
+        app.set_rgb_brightness(128);
+        assert_eq!(actual.load(std::sync::atomic::Ordering::SeqCst), 128);
+        assert!(!app.rgb_settings.loaded);
+        app.set_rgb_speed(99);
+        assert!(!recorder.requests().iter().any(|r| r[..2] == [7, 0x82]));
+        recorder.respond_by(|r| {
+            let mut response = [0; 32];
+            match &r[..2] {
+                [8, 0x80] => response[2] = 128,
+                [8, 0x81] => response[2] = 6,
+                [8, 0x82] => response[2] = 42,
+                [8, 0x83] => {
+                    response[2] = 17;
+                    response[3] = 200;
+                }
+                _ => return None,
+            }
+            Some(Ok(response))
+        });
+        app.set_rgb_speed(99);
+        assert!(app.rgb_settings.loaded);
+        assert_eq!(app.rgb_settings.brightness, 128);
+        assert_eq!(app.rgb_settings.speed, 99);
     }
 }
