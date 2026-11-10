@@ -46,8 +46,11 @@ fn sm62_timeout_failed_set_get_and_mismatch_never_confirm_requested_value() {
         (1, crate::hid::TestHidFault::Disconnect),
     ] {
         let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EntropyApp::new(&cc);
+        let mut app = EntropyApp::new_inert_for_test();
+        // A disconnect must exercise recovery without enumerating real host HID.
+        let (scan_requests, scans) = std::sync::mpsc::channel();
+        app.test_device_scan_requests = Some(scan_requests);
+        let disconnect = matches!(fault, crate::hid::TestHidFault::Disconnect | crate::hid::TestHidFault::Timeout);
         let (hid, recorder) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((after, fault)));
         app.hid_device = Some(hid.into());
         app.display_settings.sm62_supported = true;
@@ -72,6 +75,8 @@ fn sm62_timeout_failed_set_get_and_mismatch_never_confirm_requested_value() {
                 egui::Shape::Text(t) if t.galley.job.text == "!")), "SM62 timeout failure remains visible");
         }
         assert_eq!(recorder.requests().len(), count, "painting a failure must not retry");
+        assert_eq!(scans.try_iter().count(), usize::from(disconnect),
+            "transport failure starts discovery once; a readback mismatch does not");
     }
 }
 
@@ -79,8 +84,7 @@ fn sm62_timeout_failed_set_get_and_mismatch_never_confirm_requested_value() {
 fn sm62_timeout_unsupported_control_never_queues_and_does_not_mutate_defaults() {
     let _storage = crate::app::app_storage::ScopedTempConfig::new();
     let ctx = egui::Context::default();
-    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-    let mut app = EntropyApp::new(&cc);
+    let mut app = EntropyApp::new_inert_for_test();
     let (hid, recorder) = crate::hid::HidDevice::test_device();
     app.hid_device = Some(hid.into());
     let before = app.display_settings.clone();
@@ -98,8 +102,7 @@ fn sm62_timeout_real_dropdown_queues_each_index_and_reloads_without_other_writes
     for lang in [crate::i18n::Language::English, crate::i18n::Language::Russian] {
         for index in 0..8u8 {
             let ctx = egui::Context::default();
-            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-            let mut app = EntropyApp::new(&cc);
+            let mut app = EntropyApp::new_inert_for_test();
             app.app_settings.language = lang;
             let mut fonts = egui::FontDefinitions::default();
             fonts.families.insert(egui::FontFamily::Name("display_preview".into()), fonts.families[&egui::FontFamily::Proportional].clone());
@@ -155,8 +158,7 @@ fn sm62_timeout_real_dropdown_queues_each_index_and_reloads_without_other_writes
 fn sm62_timeout_saved_check_is_hidden_but_generic_saved_status_is_retained() {
     let _storage = crate::app::app_storage::ScopedTempConfig::new();
     let ctx = egui::Context::default();
-    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-    let mut app = EntropyApp::new(&cc);
+    let mut app = EntropyApp::new_inert_for_test();
     let (hid, _) = crate::hid::HidDevice::test_device();
     app.hid_device = Some(hid.into());
     app.display_settings.sm62_supported = true;

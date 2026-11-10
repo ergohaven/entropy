@@ -328,7 +328,11 @@ impl Owner {
         }
     }
 
-    fn run(mut self, events: &mpsc::Receiver<Event>) {
+    fn run(self, events: &mpsc::Receiver<Event>) {
+        self.run_with_clock(events, Instant::now);
+    }
+
+    fn run_with_clock(mut self, events: &mpsc::Receiver<Event>, now: impl Fn() -> Instant) {
         loop {
             // Take everything that arrived; sleep only when there is no work.
             let idle = self.editor.is_empty() && self.posts.is_empty();
@@ -350,7 +354,7 @@ impl Owner {
                 }
                 Err(false) => {}
             }
-            let Some(job) = self.next_job() else {
+            let Some(job) = self.next_job_at(now()) else {
                 continue;
             };
             if job(&mut self.client).is_err() {
@@ -372,11 +376,11 @@ impl Owner {
         }
     }
 
-    fn next_job(&mut self) -> Option<Job> {
+    fn next_job_at(&mut self, now: Instant) -> Option<Job> {
         let post_overdue = self
             .posts
             .front()
-            .is_some_and(|(_, queued)| queued.elapsed() >= POST_MAX_WAIT);
+            .is_some_and(|(_, queued)| now.saturating_duration_since(*queued) >= POST_MAX_WAIT);
         if !post_overdue {
             if let Some(job) = self.editor.pop_front() {
                 return Some(job);
@@ -550,35 +554,52 @@ mod tests {
         log.lock().unwrap().clone()
     }
 
+    // Exercise event draining and wire requests with a fixed decision time.
+    // Sleeping below POST_MAX_WAIT is not a guarantee on a busy CI runner.
+    fn editor_post_order(wait: Duration) -> Vec<(Cmd, u8)> {
+        let (board, log) = layer_board();
+        let transport: BoxedTransport = Box::new(board.transport());
+        let (client, _) = Client::connect(transport, quick()).unwrap();
+        let owner = Owner::new(client);
+        let queued = Instant::now();
+        let (sender, events) = mpsc::channel();
+        // Each queued job keeps the channel open until it has run. Once both
+        // finish, the owner observes disconnection and exits normally.
+        let post_sender = sender.clone();
+        sender
+            .send(Event::Post {
+                key: PostKey {
+                    cmd: Cmd::SetDefaultLayer,
+                    slot: 0,
+                },
+                queued,
+                job: Box::new(move |client| {
+                    let _keep_open = post_sender;
+                    client.request::<command::SetDefaultLayer>(&7)
+                }),
+            })
+            .unwrap();
+        let editor_sender = sender.clone();
+        sender
+            .send(Event::Request(Box::new(move |client| {
+                let _keep_open = editor_sender;
+                assert_eq!(client.request::<command::GetCurrentLayer>(&())?, 3);
+                Ok(())
+            })))
+            .unwrap();
+        drop(sender);
+        owner.run_with_clock(&events, || queued + wait);
+        commands(&log)
+    }
+
     #[test]
     fn the_editor_goes_before_posts() {
-        let (board, log, release, held) = gated_board();
-        let link = RynkLink::acquire(id("order"), quick(), open(&board)).unwrap();
-        // The first read holds the owner at the gate.
-        let blocker = {
-            let link = link.clone();
-            std::thread::spawn(move || link.request::<command::GetDefaultLayer>(()))
-        };
-        held.recv_timeout(Duration::from_secs(3)).unwrap();
-        link.post::<command::SetDefaultLayer>(0, 7).unwrap();
-        let editor = {
-            let link = link.clone();
-            std::thread::spawn(move || link.request::<command::GetCurrentLayer>(()))
-        };
-        std::thread::sleep(Duration::from_millis(50));
-        release.send(()).unwrap();
-        assert_eq!(editor.join().unwrap().unwrap(), 3);
-        blocker.join().unwrap().unwrap();
-        eventually("the post is sent", || commands(&log).len() == 3);
-
-        assert_eq!(
-            commands(&log),
-            [
-                (Cmd::GetDefaultLayer, 0),
-                (Cmd::GetCurrentLayer, 0),
-                (Cmd::SetDefaultLayer, 7),
-            ]
-        );
+        for wait in [Duration::ZERO, POST_MAX_WAIT - Duration::from_nanos(1)] {
+            assert_eq!(
+                editor_post_order(wait),
+                [(Cmd::GetCurrentLayer, 0), (Cmd::SetDefaultLayer, 7)]
+            );
+        }
     }
 
     #[test]
@@ -685,27 +706,9 @@ mod tests {
 
     #[test]
     fn an_overdue_post_goes_before_the_editor() {
-        let (board, log, release, held) = gated_board();
-        let link = RynkLink::acquire(id("overdue"), quick(), open(&board)).unwrap();
-        let blocker = {
-            let link = link.clone();
-            std::thread::spawn(move || link.request::<command::GetDefaultLayer>(()))
-        };
-        held.recv_timeout(Duration::from_secs(3)).unwrap();
-        link.post::<command::SetDefaultLayer>(0, 5).unwrap();
-        std::thread::sleep(POST_MAX_WAIT + Duration::from_millis(50));
-        let editor = {
-            let link = link.clone();
-            std::thread::spawn(move || link.request::<command::GetCurrentLayer>(()))
-        };
-        std::thread::sleep(Duration::from_millis(20));
-        release.send(()).unwrap();
-        editor.join().unwrap().unwrap();
-        blocker.join().unwrap().unwrap();
-
         assert_eq!(
-            commands(&log)[1..],
-            [(Cmd::SetDefaultLayer, 5), (Cmd::GetCurrentLayer, 0)]
+            editor_post_order(POST_MAX_WAIT),
+            [(Cmd::SetDefaultLayer, 7), (Cmd::GetCurrentLayer, 0)]
         );
     }
 
