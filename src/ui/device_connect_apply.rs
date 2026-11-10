@@ -1118,7 +1118,7 @@ impl EntropyApp {
                     self.status_msg.clone()
                 };
                 let error = format!(
-                    "Connect timeout — RMK/Vial device did not finish loading while: {stage}"
+                    "Connect timeout — device did not finish loading while: {stage}"
                 );
                 log::warn!("{error}; retiring worker");
                 let reconnect = reconnect.clone();
@@ -1342,6 +1342,7 @@ impl EntropyApp {
                 self.selected_combo = self
                     .selected_combo
                     .min(self.combo_visible_count.saturating_sub(1));
+                self.keycode_picker.reset_macro_editor();
                 self.keycode_picker.macro_count = r.macro_texts.len();
                 self.keycode_picker.macro_texts = r.macro_texts.clone();
                 let mut macro_metadata = load_macro_metadata(&self.current_device_name);
@@ -1628,7 +1629,7 @@ pub(super) fn sync_layer_names_to_store<S: LayerNameStore>(
             Ok(_) => {
                 if let Err(e) = store.set_string(qsid, name) {
                     log::warn!(
-                        "Vial set_qmk_setting_string failed while syncing layer {layer}: {e}"
+                        "set_qmk_setting_string failed while syncing layer {layer}: {e}"
                     );
                     failed.push(layer);
                 }
@@ -1636,7 +1637,7 @@ pub(super) fn sync_layer_names_to_store<S: LayerNameStore>(
             Err(e) => {
                 // The id is advertised as supported, so a read error is a real
                 // transport failure, not missing storage — surface it.
-                log::warn!("Vial get_qmk_setting_string failed while syncing layer {layer}: {e}");
+                log::warn!("get_qmk_setting_string failed while syncing layer {layer}: {e}");
                 failed.push(layer);
             }
         }

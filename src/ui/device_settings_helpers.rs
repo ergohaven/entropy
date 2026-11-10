@@ -890,18 +890,22 @@ impl EntropyApp {
             return None;
         }
         let width = Self::layer_led_field_width(field);
-        let value = if width > 1 {
+        let result = if width > 1 {
             dev_conn.get_qmk_setting_u16(qsid)
         } else {
             dev_conn.get_qmk_setting_u8(qsid).map(|value| value as u16)
-        }
-        .unwrap_or_else(|e| {
-            log::warn!("get_qmk_setting({label} qsid {qsid}): {e}");
-            0
-        })
-        .min(variants.len().saturating_sub(1) as u16);
+        };
+        let loaded = result.is_ok();
+        let value = result
+            .unwrap_or_else(|e| {
+                log::warn!("get_qmk_setting({label} qsid {qsid}): {e}");
+                0
+            })
+            .min(variants.len().saturating_sub(1) as u16);
 
         Some(BluetoothSelectSetting {
+            loaded,
+            portable: Self::layer_led_palette_field_is_portable(field),
             qsid,
             width,
             value,
@@ -1148,24 +1152,44 @@ impl EntropyApp {
         variants: Vec<String>,
         label: &str,
     ) -> LayerLedNumericSetting {
-        let value = if width > 1 {
+        let result = if width > 1 {
             dev_conn.get_qmk_setting_u16(qsid)
         } else {
             dev_conn.get_qmk_setting_u8(qsid).map(|value| value as u16)
-        }
-        .unwrap_or_else(|e| {
-            log::warn!("get_qmk_setting({label} qsid {qsid}): {e}");
-            0
-        })
-        .min(max);
+        };
+        let loaded = result.is_ok();
+        let value = result
+            .unwrap_or_else(|e| {
+                log::warn!("get_qmk_setting({label} qsid {qsid}): {e}");
+                0
+            })
+            .min(max);
 
         LayerLedNumericSetting {
+            min: 0,
+            loaded,
             qsid,
             width,
             value,
             max,
             variants,
         }
+    }
+
+    fn layer_led_palette_field_is_portable(field: &serde_json::Value) -> bool {
+        field.get("type").and_then(|v| v.as_str()) == Some("select")
+            && field.get("width").is_none_or(|v| v.as_u64() == Some(1))
+            && field.get("bit").is_none()
+            && field.get("min").is_none_or(|v| v.as_u64() == Some(0))
+            && field.get("max").is_none_or(|v| v.as_u64() == Some(24))
+            && field
+                .get("variants")
+                .and_then(|v| v.as_array())
+                .is_some_and(|v| {
+                    v.iter()
+                        .map(|v| v.as_str())
+                        .eq(LAYER_LED_PALETTE.iter().copied().map(Some))
+                })
     }
 
     pub(super) fn layer_led_settings_supported(
@@ -1222,7 +1246,10 @@ impl EntropyApp {
         let mut timeout = None;
         let mut timeout_unit = LayerLedTimeoutUnit::Minutes;
         let mut bt_profiles = Vec::<(usize, u16)>::new();
+        let mut bt_contracts = Vec::new();
         let mut layers = Vec::<(usize, u16)>::new();
+        let mut layer_contracts = Vec::new();
+        let mut other_led_qsids = Vec::new();
 
         if let Some(tabs) = json.get("settings").and_then(|value| value.as_array()) {
             for field in tabs
@@ -1239,7 +1266,7 @@ impl EntropyApp {
                 let Some(qsid) = field
                     .get("qsid")
                     .and_then(|value| value.as_u64())
-                    .map(|value| value as u16)
+                    .and_then(|value| u16::try_from(value).ok())
                 else {
                     continue;
                 };
@@ -1255,6 +1282,7 @@ impl EntropyApp {
                 let max = Self::layer_led_field_max(field, width);
 
                 if lower_title.contains("led brightness") {
+                    other_led_qsids.push(qsid);
                     brightness = Some(Self::read_layer_led_numeric_setting(
                         dev_conn,
                         qsid,
@@ -1263,7 +1291,13 @@ impl EntropyApp {
                         Vec::new(),
                         "layer_led brightness",
                     ));
+                    brightness.as_mut().unwrap().min = field
+                        .get("min")
+                        .and_then(|v| v.as_u64())
+                        .and_then(|v| u16::try_from(v).ok())
+                        .unwrap_or(0);
                 } else if lower_title.contains("led timeout") {
+                    other_led_qsids.push(qsid);
                     let lower_unit = field
                         .get("unit")
                         .or_else(|| field.get("units"))
@@ -1288,17 +1322,29 @@ impl EntropyApp {
                         Self::layer_led_field_variants(field),
                         "layer_led timeout",
                     ));
+                    timeout.as_mut().unwrap().min = field
+                        .get("min")
+                        .and_then(|v| v.as_u64())
+                        .and_then(|v| u16::try_from(v).ok())
+                        .unwrap_or(0);
                 } else if lower_title.contains("bt profile") && lower_title.contains("color") {
+                    other_led_qsids.push(qsid);
                     if let Some(profile) =
                         Self::parse_trailing_setting_index(&lower_title, "bt profile", "color")
                     {
                         bt_profiles.push((profile, qsid));
+                        let valid = Self::layer_led_palette_field_is_portable(field);
+                        bt_contracts.push((profile, qsid, valid));
                     }
                 } else if lower_title.contains("layer") && lower_title.contains("color") {
                     if let Some(layer) =
                         Self::parse_trailing_setting_index(&lower_title, "layer", "color")
                     {
                         layers.push((layer, qsid));
+                        // Do not normalize malformed widths or palette entries into
+                        // a contract that would allow writes to unrelated firmware.
+                        let valid = Self::layer_led_palette_field_is_portable(field);
+                        layer_contracts.push((layer, qsid, valid));
                     }
                 }
             }
@@ -1319,28 +1365,49 @@ impl EntropyApp {
         let bt_profile_colors = bt_profiles
             .into_iter()
             .filter(|(profile, _)| *profile <= 4)
-            .map(|(_, qsid)| {
-                let value = dev_conn.get_qmk_setting_u8(qsid).unwrap_or_else(|e| {
+            .map(|(profile, qsid)| {
+                let result = dev_conn.get_qmk_setting_u8(qsid);
+                let loaded = result.is_ok();
+                let value = result.unwrap_or_else(|e| {
                     log::warn!("get_qmk_setting_u8(layer_led bt profile qsid {qsid}): {e}");
                     0
                 });
-                LayerLedColorSetting::new(qsid, value)
+                let mut setting = LayerLedColorSetting::new(qsid, value);
+                if bt_contracts.iter().filter(|(_, id, _)| *id == qsid).count() == 1
+                    && bt_contracts.contains(&(profile, qsid, true))
+                    && !layers.iter().any(|(_, id)| *id == qsid)
+                    && brightness.as_ref().is_none_or(|s| s.qsid != qsid)
+                    && timeout.as_ref().is_none_or(|s| s.qsid != qsid)
+                {
+                    setting.portable_profile = Some(profile);
+                }
+                setting.loaded = loaded;
+                setting
             })
             .collect::<Vec<_>>();
 
         let layer_colors = Self::layer_led_color_qsid_groups(layers, layer_count)
             .into_iter()
-            .filter_map(|(_, qsids)| {
+            .filter_map(|(layer, qsids)| {
                 let (&qsid, linked_qsids) = qsids.split_first()?;
-                let value = dev_conn.get_qmk_setting_u8(qsid).unwrap_or_else(|e| {
+                let result = dev_conn.get_qmk_setting_u8(qsid);
+                let loaded = result.is_ok();
+                let value = result.unwrap_or_else(|e| {
                     log::warn!("get_qmk_setting_u8(layer_led layer qsid {qsid}): {e}");
                     0
                 });
-                Some(LayerLedColorSetting::with_linked_qsids(
-                    qsid,
-                    linked_qsids.to_vec(),
-                    value,
-                ))
+                let mut setting =
+                    LayerLedColorSetting::with_linked_qsids(qsid, linked_qsids.to_vec(), value);
+                if !qsids.iter().any(|id| other_led_qsids.contains(id))
+                    && layer_contracts
+                        .iter()
+                        .filter(|(_, id, _)| qsids.contains(id))
+                        .all(|(identity, _, valid)| *identity == layer && *valid)
+                {
+                    setting.portable_layer = Some(layer);
+                }
+                setting.loaded = loaded;
+                Some(setting)
             })
             .collect::<Vec<_>>();
 
@@ -1379,12 +1446,15 @@ impl EntropyApp {
             if !has_qmk_setting(qsid) {
                 break;
             }
-            let value = dev_conn.get_qmk_setting_u8(qsid).unwrap_or_else(|e| {
+            let result = dev_conn.get_qmk_setting_u8(qsid);
+            let loaded = result.is_ok();
+            let value = result.unwrap_or_else(|e| {
                 log::warn!("get_qmk_setting_u8(layer_led qsid {qsid}): {e}");
                 0
             });
-            leds.layer_colors
-                .push(LayerLedColorSetting::new(qsid, value));
+            let mut setting = LayerLedColorSetting::new(qsid, value);
+            setting.loaded = loaded;
+            leds.layer_colors.push(setting);
         }
         leds.supported = !leds.layer_colors.is_empty();
         if leds.supported {
@@ -1520,6 +1590,9 @@ impl EntropyApp {
     }
 
     fn is_module_settings_title(title: &str) -> bool {
+        if title.eq_ignore_ascii_case("Qube display") {
+            return true;
+        }
         let words = Self::settings_title_words(title);
         let identifies_side = words
             .iter()
