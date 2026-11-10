@@ -103,6 +103,18 @@ and `appimagetool` come from the same pins the host path uses;
 `scripts/test_toolchain_pins.sh` fails the build if `.tool-versions`, the
 `Dockerfile` and the CI `setup-task` version ever disagree.
 
+`install_debian_dependencies.sh` keeps package selection on that authenticated
+snapshot. If a snapshot package download fails, it can fetch the same pool path
+from `deb.debian.org`, but only with the exact SHA-256 supplied by the snapshot's
+APT metadata. It does not add rolling package indexes, select newer versions or
+disable signature checks. Missing snapshot indexes, unavailable matching pool
+objects and checksum mismatches still fail the build. This is a transport
+fallback, not a replacement archive: packages removed from both services need
+an intentional pin update or restoration of the snapshot service.
+
+The dependency-layer regression tests run with the other cheap CI contracts:
+`python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v`.
+
 ## Reproducibility
 
 Same tree in, same bytes out — `task linux:repro` (or `task docker:repro`) is

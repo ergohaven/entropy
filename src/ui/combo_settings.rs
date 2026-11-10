@@ -958,6 +958,92 @@ mod tests {
     use super::*;
 
     #[test]
+    fn combo_output_picker_preserves_alt_side_for_chords_and_mod_taps() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+
+        for (button, expected, caption, selected_label) in [
+            (egui::PointerButton::Primary, 0x042D, "Alt/key", "LAlt/key"),
+            (
+                egui::PointerButton::Secondary,
+                0x142D,
+                "Alt/key",
+                "RAlt/key",
+            ),
+            (
+                egui::PointerButton::Primary,
+                0x242D,
+                "Hold Alt/key",
+                "Hold LAlt/key",
+            ),
+            (
+                egui::PointerButton::Secondary,
+                0x342D,
+                "Hold Alt/key",
+                "Hold RAlt/key",
+            ),
+        ] {
+            let ctx = egui::Context::default();
+            let creation_context = eframe::CreationContext::_new_kittest(ctx);
+            let mut app = EntropyApp::new(&creation_context);
+            app.combo_entries = vec![ComboEntry::default()];
+            app.keycode_picker.language = crate::i18n::Language::English;
+            app.open_combo_key_picker(0, ComboPickField::Output);
+            app.keycode_picker.selected_tab = crate::keycode_picker::KeycodeTab::Modifiers;
+
+            let mut harness = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(1_400.0, 1_000.0))
+                .build_ui_state(
+                    |ui, app: &mut EntropyApp| {
+                        app.keycode_picker.show(
+                            ui.ctx(),
+                            crate::app::DeferredPickerDataState::Ready,
+                            crate::app::DeferredPickerDataState::Ready,
+                        );
+                    },
+                    app,
+                );
+            harness.run();
+            harness
+                .get_by_role_and_label(Role::Button, caption)
+                .click_button(button);
+            harness.run();
+            let is_mod_tap = expected & 0x2000 != 0;
+            let pending = if is_mod_tap {
+                harness.state().keycode_picker.vial_quantum_pending_mt
+            } else {
+                harness.state().keycode_picker.vial_quantum_pending_mod
+            };
+            assert_eq!(pending, Some(expected & 0xFF00));
+            let title_key = if is_mod_tap {
+                "key_picker.pick_tap_key_title"
+            } else {
+                "key_picker.pick_modifier_combo_title"
+            };
+            let title = format!(
+                "{}: {selected_label}",
+                crate::i18n::tr_catalog(crate::i18n::Language::English, title_key),
+            );
+            harness.get_by_label(&title);
+
+            harness.get_by_role_and_label(Role::Button, "_ -").click();
+            harness.run();
+            assert_eq!(
+                harness.state().keycode_picker.result,
+                Some(crate::keyboard::KeyBinding::Vial(expected)),
+            );
+
+            let ctx = harness.ctx.clone();
+            harness.state_mut().apply_picker_results(&ctx);
+            assert_eq!(
+                harness.state().combo_entries[0].output,
+                crate::keyboard::KeyBinding::Vial(expected),
+            );
+            assert!(harness.state().combo_dirty);
+        }
+    }
+
+    #[test]
     fn native_actions_are_available_only_for_combo_output() {
         assert!(combo_picker_allows_native_actions(
             ComboPickField::Output,
