@@ -179,9 +179,17 @@ jobs:
           cargo test --all-targets i18n::tests::indexed_catalog_keeps_sections_and_quoted_values -- --exact --test-threads=1
           cargo test --all-targets i18n::tests::indexed_catalog_preserves_borrowed_escapes_and_decodes_owned_strings -- --exact --test-threads=1
 
+      - name: Install macOS test runner
+        if: matrix.kind == 'macos'
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+        with:
+          tool: cargo-nextest@0.9.150
+
+      # Native desktop services and test fixtures have process-wide state.
+      # Keep full coverage and parallelism, with a fresh process for each test.
       - name: Test full macOS suite in parallel
         if: matrix.kind == 'macos'
-        run: cargo test --all-targets -- --test-threads=4
+        run: cargo nextest run --locked --all-targets --test-threads 4 --no-fail-fast
 
       - name: Test macOS Text Expander discovery and callbacks
         if: matrix.kind == 'macos'
