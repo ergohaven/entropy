@@ -3,9 +3,6 @@ const VISIBLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_
 #[cfg(not(target_arch = "wasm32"))]
 const HIDDEN_TO_TRAY_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 #[cfg(not(target_arch = "wasm32"))]
-const BLUETOOTH_VISIBLE_REPAINT_INTERVAL: std::time::Duration =
-    std::time::Duration::from_millis(16);
-#[cfg(not(target_arch = "wasm32"))]
 const WAYLAND_BLUETOOTH_VISIBLE_REPAINT_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(50);
 #[cfg(not(target_arch = "wasm32"))]
@@ -20,10 +17,10 @@ fn bluetooth_visible_repaint_interval_for_target(
     target_is_macos: bool,
     target_is_wayland: bool,
 ) -> Option<std::time::Duration> {
-    if !selected_device_is_bluetooth {
+    // macOS input already wakes eframe. A continuous Bluetooth heartbeat
+    // redraws the visible keyboard even when there is no input or new data.
+    if !selected_device_is_bluetooth || target_is_macos {
         None
-    } else if target_is_macos {
-        Some(BLUETOOTH_VISIBLE_REPAINT_INTERVAL)
     } else if target_is_wayland {
         // On the tested Wayland stack, cursor motion does not reliably drive
         // another eframe pass. A 20 FPS heartbeat keeps hover, tooltips, and
@@ -88,17 +85,17 @@ mod tests {
         assert_eq!(
             native_repaint_interval(
                 false,
-                Some(BLUETOOTH_VISIBLE_REPAINT_INTERVAL),
+                Some(WAYLAND_BLUETOOTH_VISIBLE_REPAINT_INTERVAL),
                 false,
                 false,
                 None,
             ),
-            BLUETOOTH_VISIBLE_REPAINT_INTERVAL
+            WAYLAND_BLUETOOTH_VISIBLE_REPAINT_INTERVAL
         );
         assert_eq!(
             native_repaint_interval(
                 true,
-                Some(BLUETOOTH_VISIBLE_REPAINT_INTERVAL),
+                Some(WAYLAND_BLUETOOTH_VISIBLE_REPAINT_INTERVAL),
                 false,
                 false,
                 None,
@@ -178,7 +175,11 @@ mod tests {
     }
 
     #[test]
-    fn macos_bluetooth_keeps_continuous_visible_cadence() {
+    fn macos_bluetooth_uses_normal_visible_idle_cadence() {
+        assert_eq!(
+            bluetooth_visible_repaint_interval_for_target(true, true, false),
+            None
+        );
         assert_eq!(
             native_repaint_interval(
                 false,
@@ -187,7 +188,7 @@ mod tests {
                 false,
                 None,
             ),
-            BLUETOOTH_VISIBLE_REPAINT_INTERVAL
+            VISIBLE_REPAINT_INTERVAL
         );
     }
 }
