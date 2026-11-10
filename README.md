@@ -101,7 +101,7 @@ new stable identity.
 
 1. Download the build for your platform from GitHub Releases
 2. Connect a Vial-compatible device
-3. On Linux, install Vial udev rules if Entropy cannot open the device
+3. On Linux, install device access rules if Entropy cannot open the device
    and install the IBus backend if you want Text Expander on Linux
 4. Launch Entropy
 5. Select the device from the top-left device dropdown
@@ -125,6 +125,13 @@ both the wait for a Bluetooth keyboard to be discovered and its loading. Close
 the Entropy window first: the export refuses to run next to another instance
 that owns the keyboard.
 
+Device backups include compatible module settings, layer and Bluetooth profile
+colors, LED brightness and timeout, and QMK RGBLight or VialRGB lighting settings
+when successfully read from the keyboard. Import reports unsupported or
+incompatible settings; older backups leave settings they do not contain unchanged.
+Entropy application preferences use the separate `.entsettings` export.
+
+
 The export is read-only: the HID transport refuses every command that would
 change the keyboard. It writes only a complete snapshot of one connection: if a
 section fails to load or the keyboard reconnects midway, nothing is written. A
@@ -138,7 +145,7 @@ are logged), `64` usage error.
 ## Linux Device Access
 
 Vial devices use hidraw access on Linux. If your device appears but cannot be opened,
-use the **Install Vial udev rules** action in Entropy settings, or install the
+use **Entropy device access → Install rules** in Entropy settings, or install the
 included udev rule manually from a source checkout:
 
 ```sh
@@ -172,7 +179,7 @@ A flake is included. Run without installing:
 nix run github:ergohaven/entropy
 ```
 
-The in-app setup actions cannot work on NixOS: **Install Vial udev rules**
+The in-app setup actions cannot work on NixOS: **Entropy device access → Install rules**
 writes to `/etc/udev/rules.d`, and IBus loads engines only from its own store
 path, so a copy under `~/.local/share` is never picked up. Use the NixOS module
 instead, which covers both declaratively:

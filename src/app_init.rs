@@ -38,7 +38,7 @@ impl EntropyApp {
             text_expander_rules_signature(&app_settings.text_expander_rule_files);
         let mut typing_trainer = TypingTrainerState::from_settings(app_settings.typing_trainer);
         typing_trainer.set_symbol_stats(load_typing_trainer_symbol_stats());
-        Self::from_bootstrap(AppBootstrap {
+        let mut app = Self::from_bootstrap(AppBootstrap {
             app_settings,
             device_manager: DeviceManager::new(),
             typing_trainer,
@@ -46,7 +46,13 @@ impl EntropyApp {
             last_single_instance_signal: read_single_instance_signal(),
             layer_names: load_layer_names("default"),
             update_check: start_update_check(),
-        })
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        app.update_notifications.initialize(
+            &cc.egui_ctx,
+            app_settings_path().with_file_name("update-notifications.json"),
+        );
+        app
     }
 
     /// The app without a window, for `--export-layout`. Reads the same
@@ -201,6 +207,12 @@ impl EntropyApp {
             ibus_registration: Default::default(),
             #[cfg(target_os = "linux")]
             pending_ibus_reload: None,
+            #[cfg(target_os = "linux")]
+            text_expander_probe: None,
+            #[cfg(target_os = "linux")]
+            pending_text_expander_probe: None,
+            #[cfg(target_os = "linux")]
+            text_expander_ibus_modal: None,
             import_progress_started_at: None,
             import_progress_title: String::new(),
             import_progress_body: String::new(),
@@ -209,6 +221,7 @@ impl EntropyApp {
             dark_mode,
             last_applied_theme: None,
             app_settings,
+            app_clock: std::time::Instant::now(),
             text_expander_rules_signature,
             text_expander_rules_last_check_at: 0.0,
             text_expander_settings_save_pending: false,
@@ -338,6 +351,8 @@ impl EntropyApp {
             device_about_info: None,
             update_check,
             firmware_update_check: FirmwareUpdateCheckState::Unsupported,
+            #[cfg(not(target_arch = "wasm32"))]
+            update_notifications: Default::default(),
             tour_state: TourState::default(),
             tour_target_rects: Vec::new(),
             unlock_open: false,
