@@ -967,6 +967,7 @@ mod tests {
 
     #[test]
     fn logic_never_paints_the_layout_indicator_viewport() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -1082,6 +1083,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn locked_vial_retains_pending_tap_dance_write_until_unlock() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -1129,6 +1131,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn settings_task_defers_and_drains_hid_writes_before_exit() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -1258,6 +1261,7 @@ mod tests {
 
     #[test]
     fn combo_task_defers_settings_changes_and_exit_writes_until_handle_returns() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -1427,6 +1431,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn combo_completion_starts_settings_queued_behind_it() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -1454,6 +1459,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn layer_completion_starts_settings_queued_behind_it() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -1512,6 +1518,7 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn settings_worker_fault_allows_deferred_exit(fault: crate::hid::TestHidFault) {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
@@ -1594,6 +1601,7 @@ mod tests {
 
     #[test]
     fn background_lifecycle_chains_combo_writes_before_deferred_exit() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
