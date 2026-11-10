@@ -201,6 +201,12 @@ impl EntropyApp {
             ibus_registration: Default::default(),
             #[cfg(target_os = "linux")]
             pending_ibus_reload: None,
+            #[cfg(target_os = "linux")]
+            text_expander_probe: None,
+            #[cfg(target_os = "linux")]
+            pending_text_expander_probe: None,
+            #[cfg(target_os = "linux")]
+            text_expander_ibus_modal: None,
             import_progress_started_at: None,
             import_progress_title: String::new(),
             import_progress_body: String::new(),
@@ -209,6 +215,7 @@ impl EntropyApp {
             dark_mode,
             last_applied_theme: None,
             app_settings,
+            app_clock: std::time::Instant::now(),
             text_expander_rules_signature,
             text_expander_rules_last_check_at: 0.0,
             text_expander_settings_save_pending: false,

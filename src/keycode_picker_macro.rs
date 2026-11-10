@@ -1188,18 +1188,22 @@ mod tests {
         })
     }
 
-    fn macro_picker_text_position(output: &egui::FullOutput, label: &str) -> Option<egui::Pos2> {
-        fn find(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
-            match shape {
-                egui::Shape::Text(text) if text.galley.job.text == label => {
-                    Some(text.pos + text.galley.rect.center().to_vec2())
-                }
-                egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| find(shape, label)),
-                _ => None,
+    fn macro_picker_shape_text_position(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
+        match shape {
+            egui::Shape::Text(text) if text.galley.job.text == label => {
+                Some(text.pos + text.galley.rect.center().to_vec2())
             }
+            egui::Shape::Vec(shapes) => shapes
+                .iter()
+                .find_map(|shape| macro_picker_shape_text_position(shape, label)),
+            _ => None,
         }
+    }
+
+    fn macro_picker_text_position(output: &egui::FullOutput, label: &str) -> Option<egui::Pos2> {
         output.shapes.iter().find_map(|shape| {
-            find(&shape.shape, label).filter(|pos| shape.clip_rect.contains(*pos))
+            macro_picker_shape_text_position(&shape.shape, label)
+                .filter(|pos| shape.clip_rect.contains(*pos))
         })
     }
 
@@ -1227,6 +1231,191 @@ mod tests {
                     },
                 ],
             );
+        }
+    }
+
+    #[test]
+    fn macro_profile_switch_selects_layer_and_bluetooth_in_both_views() {
+        for view in PickerViewMode::ALL {
+            let ctx = egui::Context::default();
+            let mut picker = KeycodePicker {
+                language: crate::i18n::Language::English,
+                popup_view_mode: view,
+                macro_key_pick: Some((0, 0)),
+                macro_actions: vec![vec![MacroAction::Tap(0x04); 3]],
+                layer_count: 2,
+                custom_keycodes: vec![
+                    (
+                        "BT0".into(),
+                        "BT0".into(),
+                        "Bluetooth Profile 0".into(),
+                        0x7E00,
+                    ),
+                    (
+                        "BT1".into(),
+                        "BT1".into(),
+                        "Bluetooth Profile 1".into(),
+                        0x7E01,
+                    ),
+                ],
+                ..Default::default()
+            };
+            for (idx, label) in [(0, "DF(1)"), (1, "BT0"), (2, "BT1")] {
+                picker.macro_key_pick = Some((0, idx));
+                let _ = macro_picker_frame(&mut picker, &ctx, vec![]);
+                let output = macro_picker_frame(&mut picker, &ctx, vec![]);
+                let pos = macro_picker_text_position(&output, label)
+                    .unwrap_or_else(|| panic!("missing {label} in {view:?}"));
+                macro_picker_click(&mut picker, &ctx, pos);
+                assert!(picker.macro_key_pick.is_none());
+            }
+            assert_eq!(
+                picker.macro_actions[0],
+                [
+                    MacroAction::Tap(0x5241),
+                    MacroAction::Tap(0x7E00),
+                    MacroAction::Tap(0x7E01)
+                ]
+            );
+            assert_eq!(
+                picker.macro_texts[0],
+                [1, 5, 0x41, 0x52, 1, 5, 0x7E, 0xFF, 1, 5, 0x01, 0x7E]
+            );
+            assert_eq!(
+                decode_macro_actions(&picker.macro_texts[0]),
+                picker.macro_actions[0]
+            );
+            assert!(picker.macros_dirty);
+            assert!(picker.result.is_none());
+        }
+    }
+
+    #[test]
+    fn macro_special_choices_follow_capabilities_and_action_kind() {
+        for view in PickerViewMode::ALL {
+            for supported in [true, false] {
+                for pending_mod in [None, Some(0x0F00)] {
+                    for action in [
+                        MacroAction::Tap(0x04),
+                        MacroAction::Down(0x04),
+                        MacroAction::Up(0x04),
+                    ] {
+                        let ctx = egui::Context::default();
+                        let tap = matches!(action, MacroAction::Tap(_));
+                        let mut picker = KeycodePicker {
+                            language: crate::i18n::Language::English,
+                            popup_view_mode: view,
+                            supports_macro_ext_keycodes: supported,
+                            macro_mod_key_pick: pending_mod,
+                            macro_key_pick: Some((0, 0)),
+                            macro_actions: vec![vec![action]],
+                            layer_count: 1,
+                            custom_keycodes: vec![
+                                (
+                                    "BT1".into(),
+                                    "BT1".into(),
+                                    "Bluetooth Profile 1".into(),
+                                    0x7E01,
+                                ),
+                                (
+                                    "Layout EN".into(),
+                                    "Layout EN".into(),
+                                    "Layout EN".into(),
+                                    0x7E02,
+                                ),
+                            ],
+                            ..Default::default()
+                        };
+                        let _ = macro_picker_frame(&mut picker, &ctx, vec![]);
+                        let output = macro_picker_frame(&mut picker, &ctx, vec![]);
+                        let visible = supported && pending_mod.is_none();
+                        for (label, expected) in [
+                            ("BT1", visible),
+                            ("Layout EN", visible),
+                            ("DF(0)", visible && tap),
+                            ("MO(0)", visible && !tap),
+                        ] {
+                            assert_eq!(macro_picker_text_position(&output, label).is_some(), expected, "{label}, {view:?}, supported={supported}, pending_mod={pending_mod:?}, tap={tap}");
+                            if !expected {
+                                assert!(
+                                    output.shapes.iter().all(|shape| {
+                                        macro_picker_shape_text_position(&shape.shape, label)
+                                            .is_none()
+                                    }),
+                                    "{label} must be absent, including outside the clip rectangle"
+                                );
+                            }
+                        }
+                        assert!(!picker.macros_dirty);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn firmware_macro_keys_are_visible_and_encode_in_both_views() {
+        for view in [PickerViewMode::Layout, PickerViewMode::List] {
+            for (action, opcode) in [
+                (MacroAction::Tap(0x04), 5),
+                (MacroAction::Down(0x04), 6),
+                (MacroAction::Up(0x04), 7),
+            ] {
+                for (label, value) in [("Layout EN", 0x7E00), ("Universal !", 0x7E02)] {
+                    let ctx = egui::Context::default();
+                    let mut picker = KeycodePicker {
+                        language: crate::i18n::Language::English,
+                        popup_view_mode: view,
+                        macro_key_pick: Some((0, 0)),
+                        macro_actions: vec![vec![action.clone()]],
+                        custom_keycodes: vec![(label.into(), label.into(), label.into(), value)],
+                        ..Default::default()
+                    };
+                    let _ = macro_picker_frame(&mut picker, &ctx, vec![]);
+                    let output = macro_picker_frame(&mut picker, &ctx, vec![]);
+                    let pos = macro_picker_text_position(&output, label)
+                        .expect("firmware keys should be visible without scrolling");
+                    macro_picker_click(&mut picker, &ctx, pos);
+                    assert_eq!(
+                        picker.macro_texts[0],
+                        if value & 0xFF == 0 {
+                            vec![1, opcode, (value >> 8) as u8, 0xFF]
+                        } else {
+                            vec![1, opcode, value as u8, (value >> 8) as u8]
+                        }
+                    );
+                    assert_eq!(
+                        decode_macro_actions(&picker.macro_texts[0]),
+                        picker.macro_actions[0]
+                    );
+                    assert!(picker.macros_dirty);
+                    assert!(picker.macro_key_pick.is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn firmware_macro_keys_remain_hidden_without_extended_macro_support() {
+        for view in [PickerViewMode::Layout, PickerViewMode::List] {
+            let ctx = egui::Context::default();
+            let mut picker = KeycodePicker {
+                popup_view_mode: view,
+                supports_macro_ext_keycodes: false,
+                macro_key_pick: Some((0, 0)),
+                macro_actions: vec![vec![MacroAction::Tap(0x04)]],
+                custom_keycodes: vec![(
+                    "Layout EN".into(),
+                    "Layout EN".into(),
+                    "Layout EN".into(),
+                    0x7E00,
+                )],
+                ..Default::default()
+            };
+            let _ = macro_picker_frame(&mut picker, &ctx, vec![]);
+            let output = macro_picker_frame(&mut picker, &ctx, vec![]);
+            assert!(macro_picker_text_position(&output, "Layout EN").is_none());
+            assert!(!picker.macros_dirty);
         }
     }
 

@@ -1,0 +1,10 @@
+{
+  "settings": [{
+    "name": "Qube display",
+    "fields": [
+      {"type": "integer", "title": "Display brightness", "qsid": 336, "min": 0, "max": 100, "width": 1},
+      {"type": "select", "title": "Display background", "qsid": 337, "variants": ["Black", "Blue"]},
+      {"type": "select", "title": "Display text size", "qsid": 338, "variants": ["Compact", "Large"]}
+    ]
+  }]
+}

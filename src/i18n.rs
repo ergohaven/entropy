@@ -1,3 +1,9 @@
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Language {
@@ -78,27 +84,52 @@ fn windows_user_locale_tag() -> Option<String> {
     String::from_utf16(&buffer[..len as usize - 1]).ok()
 }
 
-const EN_CATALOG: &str = include_str!("../i18n/en.toml");
-const RU_CATALOG: &str = include_str!("../i18n/ru.toml");
+type Catalog = HashMap<String, &'static str>;
+
+static EN_CATALOG: LazyLock<Catalog> =
+    LazyLock::new(|| index_catalog(include_str!("../i18n/en.toml")));
+static RU_CATALOG: LazyLock<Catalog> =
+    LazyLock::new(|| index_catalog(include_str!("../i18n/ru.toml")));
 
 pub fn tr_catalog(language: Language, key: &'static str) -> &'static str {
     let lookup_key = static_catalog_key(key).unwrap_or(key);
     let translated = match language {
-        Language::English => catalog_lookup(EN_CATALOG, lookup_key),
-        Language::Russian => catalog_lookup(RU_CATALOG, lookup_key),
+        Language::English => catalog_lookup(&EN_CATALOG, lookup_key),
+        Language::Russian => catalog_lookup(&RU_CATALOG, lookup_key),
     };
 
     translated
-        .or_else(|| catalog_lookup(EN_CATALOG, lookup_key))
+        .or_else(|| catalog_lookup(&EN_CATALOG, lookup_key))
         .unwrap_or(key)
 }
 
 pub fn tr_catalog_format(language: Language, key: &'static str, vars: &[(&str, &str)]) -> String {
-    let mut text = tr_catalog(language, key).to_owned();
-    for (name, value) in vars {
-        text = text.replace(&format!("{{{name}}}"), value);
+    tr_catalog_string_format(language, key, vars)
+}
+
+#[cfg(test)]
+mod formatted_catalog_tests {
+    use super::*;
+
+    #[test]
+    fn formatted_catalog_strings_turn_escapes_into_characters() {
+        for language in [Language::English, Language::Russian] {
+            let report = tr_catalog_format(
+                language,
+                "entsettings.import_complete_report",
+                &[
+                    ("path", "dir/a.entsettings"),
+                    ("backup", "dir/b.entsettings"),
+                ],
+            );
+            assert!(
+                report.contains("\n\n") && !report.contains("\\n"),
+                "{report}"
+            );
+            assert!(report.contains("dir/a.entsettings") && report.contains("dir/b.entsettings"));
+        }
+        assert!(tr_catalog(Language::English, "text_expander.replacement_hint").contains("\\n"));
     }
-    text
 }
 
 fn tr_catalog_string_format(
@@ -116,17 +147,17 @@ fn tr_catalog_string_format(
 fn tr_catalog_string(language: Language, key: &'static str) -> String {
     let lookup_key = static_catalog_key(key).unwrap_or(key);
     let translated = match language {
-        Language::English => catalog_lookup_owned(EN_CATALOG, lookup_key),
-        Language::Russian => catalog_lookup_owned(RU_CATALOG, lookup_key),
+        Language::English => catalog_lookup_owned(&EN_CATALOG, lookup_key),
+        Language::Russian => catalog_lookup_owned(&RU_CATALOG, lookup_key),
     };
 
     translated
-        .or_else(|| catalog_lookup_owned(EN_CATALOG, lookup_key))
+        .or_else(|| catalog_lookup_owned(&EN_CATALOG, lookup_key))
         .unwrap_or_else(|| key.to_owned())
 }
 
-fn catalog_lookup(catalog: &'static str, key: &str) -> Option<&'static str> {
-    let (wanted_section, wanted_name) = key.rsplit_once('.')?;
+fn index_catalog(catalog: &'static str) -> Catalog {
+    let mut index = Catalog::new();
     let mut section = "";
 
     for raw_line in catalog.lines() {
@@ -140,59 +171,30 @@ fn catalog_lookup(catalog: &'static str, key: &str) -> Option<&'static str> {
             continue;
         }
 
-        if section != wanted_section {
-            continue;
-        }
-
         let Some((name, value)) = line.split_once('=') else {
             continue;
         };
-        if name.trim() != wanted_name {
-            continue;
-        }
-
-        let value = value.trim();
-        if value.len() >= 2
-            && ((value.starts_with('"') && value.ends_with('"'))
-                || (value.starts_with('\'') && value.ends_with('\'')))
-        {
-            return Some(&value[1..value.len() - 1]);
-        }
+        index
+            .entry(format!("{section}.{}", name.trim()))
+            .or_insert(value.trim());
     }
 
+    index
+}
+
+fn catalog_lookup(catalog: &Catalog, key: &str) -> Option<&'static str> {
+    let value = catalog.get(key)?;
+    if value.len() >= 2
+        && ((value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\'')))
+    {
+        return Some(&value[1..value.len() - 1]);
+    }
     None
 }
 
-fn catalog_lookup_owned(catalog: &'static str, key: &str) -> Option<String> {
-    let (wanted_section, wanted_name) = key.rsplit_once('.')?;
-    let mut section = "";
-
-    for raw_line in catalog.lines() {
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-
-        if line.starts_with('[') && line.ends_with(']') {
-            section = line[1..line.len() - 1].trim();
-            continue;
-        }
-
-        if section != wanted_section {
-            continue;
-        }
-
-        let Some((name, value)) = line.split_once('=') else {
-            continue;
-        };
-        if name.trim() != wanted_name {
-            continue;
-        }
-
-        return parse_catalog_value(value.trim());
-    }
-
-    None
+fn catalog_lookup_owned(catalog: &Catalog, key: &str) -> Option<String> {
+    parse_catalog_value(catalog.get(key)?)
 }
 
 fn parse_catalog_value(value: &str) -> Option<String> {
