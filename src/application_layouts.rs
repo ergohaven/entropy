@@ -376,14 +376,7 @@ impl ApplicationLayout {
         let Some(slot) = self.layer_names.get_mut(layer) else {
             return false;
         };
-        let name = if name.trim().is_empty() {
-            default_layer_names()
-                .get(layer)
-                .cloned()
-                .unwrap_or_else(|| format!("Layer {layer}"))
-        } else {
-            name.trim().to_owned()
-        };
+        let name = name.trim().to_owned();
         if *slot == name {
             return false;
         }
@@ -3323,6 +3316,22 @@ mod tests {
         assert!(executables_match("com.acme.paint.desktop", "paint"));
         assert!(executables_match("io.github.zen_browser.Zen", "zen"));
         assert!(!executables_match("com.acme.paint.desktop", "painter"));
+    }
+
+    #[test]
+    fn cleared_layer_name_survives_serialization_and_normalization() {
+        let mut settings = DeviceApplicationLayouts::default();
+        let layout = settings.layouts.get_mut(DEFAULT_APPLICATION_LAYOUT_ID).unwrap();
+        assert!(layout.set_layer_name(0, "Custom".into()));
+        assert!(layout.set_layer_name(0, "   ".into()));
+        assert_eq!(layout.layer_names[0], "");
+        assert!(!layout.set_layer_name(0, String::new()));
+
+        let json = serde_json::to_string(&settings).unwrap();
+        let mut restored: DeviceApplicationLayouts = serde_json::from_str(&json).unwrap();
+        restored.normalize();
+        assert_eq!(restored.layouts[DEFAULT_APPLICATION_LAYOUT_ID].layer_names[0], "");
+        assert_eq!(restored.layouts[DEFAULT_APPLICATION_LAYOUT_ID].layer_names[1], default_layer_names()[1]);
     }
 
     #[test]

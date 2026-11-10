@@ -280,7 +280,9 @@ impl EntropyApp {
                 .unwrap_or_else(|| selected.to_string());
             let visible_raw_name: String = raw_name.chars().take(12).collect();
             // display_name — с префиксом для отображения
-            let display_name = if !raw_name.is_empty() && raw_name != selected.to_string() {
+            let display_name = if raw_name.is_empty() {
+                selected.to_string()
+            } else if raw_name != selected.to_string() {
                 format!("{}. {}", selected, visible_raw_name)
             } else {
                 visible_raw_name.clone()
@@ -349,51 +351,45 @@ impl EntropyApp {
                 }
                 if commit || cancel {
                     if !cancel {
-                        let proposed_name = self.editing_layer_text.trim().to_string();
-                        if proposed_name.is_empty() {
-                            self.editing_layer_text = raw_name.clone();
+                        let new_name = self.editing_layer_text.trim().to_string();
+                        if self.application_layout_editor_active {
+                            if let Some(layout_id) = self.editing_layer_layout_id.clone() {
+                                self.rename_application_layout_layer(
+                                    &layout_id, selected, new_name,
+                                );
+                            }
                         } else {
-                            let new_name = proposed_name;
-                            if self.application_layout_editor_active {
-                                if let Some(layout_id) = self.editing_layer_layout_id.clone() {
-                                    self.rename_application_layout_layer(
-                                        &layout_id, selected, new_name,
-                                    );
-                                }
+                            // Recover before applying the explicit edit: GET may replace
+                            // the same layer's cached name with its previous firmware value.
+                            #[cfg(not(target_arch = "wasm32"))]
+                            let confirmation = self.confirm_uncertain_layer_names();
+                            while self.layer_names.len() <= selected {
+                                self.layer_names.push(self.layer_names.len().to_string());
+                            }
+                            self.layer_names[selected] = new_name.clone();
+                            #[cfg(not(target_arch = "wasm32"))]
+                            if let Err(error) = confirmation {
+                                self.status_msg = error.to_string();
                             } else {
-                                // Recover before applying the explicit edit: GET may replace
-                                // the same layer's cached name with its previous firmware value.
-                                #[cfg(not(target_arch = "wasm32"))]
-                                let confirmation = self.confirm_uncertain_layer_names();
-                                while self.layer_names.len() <= selected {
-                                    self.layer_names.push(self.layer_names.len().to_string());
-                                }
-                                self.layer_names[selected] = new_name.clone();
-                                #[cfg(not(target_arch = "wasm32"))]
-                                if let Err(error) = confirmation {
-                                    self.status_msg = error.to_string();
-                                } else {
-                                    save_layer_names(&self.layer_names, &self.current_device_name);
-                                }
-                                #[cfg(target_arch = "wasm32")]
-                                save_layer_names(&self.layer_names, "default");
-                                // Also write name back to the connected device
-                                #[cfg(not(target_arch = "wasm32"))]
-                                if matches!(
-                                    self.firmware,
-                                    FirmwareProtocol::Vial | FirmwareProtocol::Rynk
-                                ) {
-                                    if let Some(dev) = &self.hid_device {
-                                        if let Err(e) = dev.set_qmk_setting_string(
-                                            200 + selected as u16,
-                                            &new_name,
-                                        ) {
-                                            log::warn!(
-                                                "set_qmk_setting_string failed for layer {}: {}",
-                                                selected,
-                                                e
-                                            );
-                                        }
+                                save_layer_names(&self.layer_names, &self.current_device_name);
+                            }
+                            #[cfg(target_arch = "wasm32")]
+                            save_layer_names(&self.layer_names, "default");
+                            // Also write name back to the connected device
+                            #[cfg(not(target_arch = "wasm32"))]
+                            if matches!(
+                                self.firmware,
+                                FirmwareProtocol::Vial | FirmwareProtocol::Rynk
+                            ) {
+                                if let Some(dev) = &self.hid_device {
+                                    if let Err(e) =
+                                        dev.set_qmk_setting_string(200 + selected as u16, &new_name)
+                                    {
+                                        log::warn!(
+                                            "set_qmk_setting_string failed for layer {}: {}",
+                                            selected,
+                                            e
+                                        );
                                     }
                                 }
                             }
@@ -405,7 +401,9 @@ impl EntropyApp {
                     self.editing_layer_layout_id = None;
                     self.editing_layer_device_key = None;
                     #[cfg(not(target_arch = "wasm32"))]
-                    { self.editing_layer_generation = None; }
+                    {
+                        self.editing_layer_generation = None;
+                    }
                 }
             } else {
                 // Fixed arrow positions based on max 7-char name width so
@@ -505,7 +503,9 @@ impl EntropyApp {
                     self.editing_layer = Some(selected);
                     self.editing_layer_device_key = self.application_layout_device_key();
                     #[cfg(not(target_arch = "wasm32"))]
-                    { self.editing_layer_generation = Some(self.connection_generation); }
+                    {
+                        self.editing_layer_generation = Some(self.connection_generation);
+                    }
                     self.editing_layer_text = raw_name.clone();
                     self.editing_layer_layout_id = self
                         .application_layout_editor_active

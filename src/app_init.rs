@@ -331,6 +331,7 @@ impl EntropyApp {
             settings_tab: SettingsTab::MatrixTester,
             layer_names,
             editing_layer: None,
+            layer_names_from_firmware: Vec::new(),
             editing_layer_text: String::new(),
             editing_layer_focus_requested: false,
             editing_layer_layout_id: None,

@@ -5820,6 +5820,7 @@ pub struct EntropyApp {
     pub(crate) macro_auto_unlock_cancelled: bool,
     pub(crate) settings_tab: SettingsTab,
     pub(crate) layer_names: Vec<String>,
+    pub(crate) layer_names_from_firmware: Vec<bool>,
     pub(crate) editing_layer: Option<usize>, // layer being renamed
     pub(crate) editing_layer_text: String,
     pub(crate) editing_layer_focus_requested: bool,
