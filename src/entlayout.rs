@@ -1136,6 +1136,31 @@ struct EntAltRepeatEntry {
 
 impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn confirm_entlayout_macros(&mut self) -> Result<()> {
+        if self.keycode_picker.macro_count == 0
+            || self
+                .deferred_device_load
+                .section_status(DeferredLoadSection::Macros)
+                .ready()
+        {
+            return Ok(());
+        }
+        let hid = self
+            .hid_device
+            .as_ref()
+            .context("Macro data is unconfirmed; keyboard is busy or disconnected")?;
+        let size = hid.get_macro_buffer_size()?;
+        let count = self.keycode_picker.macro_count as u8;
+        let buffer = hid.get_macro_buffer(size, count)?;
+        self.finish_deferred_device_load(
+            crate::app::device_deferred_load::DeferredLoadPayload::Macros(
+                crate::hid::HidDevice::parse_macros(&buffer, count),
+            ),
+        );
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn export_entlayout_dialog(&mut self) {
         // The safe snapshot gate also protects unattended backups. Explicit
         // export must recover names before that gate, not only after the picker.
@@ -1145,7 +1170,10 @@ impl EntropyApp {
             self.deferred_full_layout_action = Some(DeferredFullLayoutAction::ExportEntlayout);
             return;
         }
-        if let Err(error) = self.confirm_uncertain_layer_names() {
+        if let Err(error) = self
+            .confirm_entlayout_macros()
+            .and_then(|()| self.confirm_uncertain_layer_names())
+        {
             self.status_msg = error.to_string();
             return;
         }
@@ -1172,7 +1200,10 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn write_entlayout_export(&mut self, path: &Path) {
-        if let Err(error) = self.confirm_uncertain_layer_names() {
+        if let Err(error) = self
+            .confirm_entlayout_macros()
+            .and_then(|()| self.confirm_uncertain_layer_names())
+        {
             self.status_msg = error.to_string();
             return;
         }
@@ -1224,6 +1255,14 @@ impl EntropyApp {
         // Remember which connection this import belongs to; the deferred write
         // in handle_pending_imports re-checks it before touching the device.
         self.pending_entlayout_import_path = Some((path, self.connection_generation));
+        if self.is_vial_locked() {
+            self.unlock_open = true;
+            self.status_msg = crate::i18n::tr_catalog(
+                self.app_settings.language,
+                "connection.keyboard_locked_import_layout",
+            )
+            .into();
+        }
         self.import_progress_started_at = None;
         self.import_progress_title =
             crate::i18n::tr_catalog(self.app_settings.language, "entlayout.importing_layout")
@@ -1267,6 +1306,14 @@ impl EntropyApp {
         }
         self.validate_entlayout_file(&bundle)?;
         self.consent_to_rynk_losses(&mut bundle, losses_accepted)?;
+        // The GUI resumes this operation after physical unlock. Keep direct
+        // callers from partially applying a layout while macro writes are gated.
+        if self.firmware == FirmwareProtocol::Vial && self.vial_unlocked != Some(true) {
+            bail!(
+                "{}",
+                crate::i18n::tr_catalog(lang, "connection.keyboard_locked_import_layout",)
+            );
+        }
         let backup_path = self.write_entlayout_auto_backup()?;
         let (firmware_failures, mapping, portable_settings) = self.apply_entlayout(&bundle)?;
         Ok(self.entlayout_import_report(
@@ -1354,7 +1401,10 @@ impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn entlayout_export_json(&mut self) -> Option<Result<String>> {
         self.layout.as_ref()?;
-        if let Err(error) = self.confirm_uncertain_layer_names() {
+        if let Err(error) = self
+            .confirm_entlayout_macros()
+            .and_then(|()| self.confirm_uncertain_layer_names())
+        {
             return Some(Err(error));
         }
         if let Err(error) = self.prepare_entlayout_pictograms() {
@@ -1376,7 +1426,13 @@ impl EntropyApp {
         // Even callers without a transport (including automatic backups) must
         // not serialize a last-known cache as confirmed after a failed SET/GET.
         #[cfg(not(target_arch = "wasm32"))]
-        if self.selected_layer_names_uncertain() {
+        if self.selected_layer_names_uncertain()
+            || (self.keycode_picker.macro_count > 0
+                && !self
+                    .deferred_device_load
+                    .section_status(DeferredLoadSection::Macros)
+                    .ready())
+        {
             return None;
         }
         let layout = self.layout.as_ref()?;
@@ -2409,7 +2465,11 @@ impl EntropyApp {
             self.display_settings.pictograms.loaded = true;
         }
         sidecars.complete = true;
-        self.apply_entlayout_local_state(bundle, &mapping)?;
+        self.apply_entlayout_local_state(
+            bundle,
+            &mapping,
+            !firmware_failures.sections.contains(&"entlayout.macros"),
+        )?;
         if bundle
             .data
             .portable_settings
@@ -3391,26 +3451,22 @@ impl EntropyApp {
                 macro_texts.resize(self.keycode_picker.macro_count, Vec::new());
                 macro_texts.truncate(self.keycode_picker.macro_count);
 
-                let mut current_macro_texts = self.keycode_picker.macro_texts.clone();
-                current_macro_texts.resize(self.keycode_picker.macro_count, Vec::new());
-                current_macro_texts.truncate(self.keycode_picker.macro_count);
-                if macro_texts == current_macro_texts {
-                    return Ok(());
-                }
-
                 let size = hid.get_macro_buffer_size()?;
                 let buf = hid.encode_macros(&macro_texts, size)?;
+                // SET can fail after mutating a prefix, and GET can fail after
+                // a successful SET. Old editor bytes are no longer confirmed.
+                self.deferred_device_load.set_section_status(
+                    DeferredLoadSection::Macros,
+                    DeferredLoadStatus::Failed("Macro write has not been confirmed".into()),
+                );
                 hid.set_macro_buffer(&buf)?;
-                if bundle.version == MACROPAD_ENTLAYOUT_VERSION {
-                    let confirmed =
-                        hid.get_macro_buffer(size, self.keycode_picker.macro_count as u8)?;
-                    if crate::hid::HidDevice::parse_macros(
-                        &confirmed,
-                        self.keycode_picker.macro_count as u8,
-                    ) != macro_texts
-                    {
-                        bail!("Macro bytecode readback mismatch");
-                    }
+                let confirmed = hid.get_macro_buffer(size, self.keycode_picker.macro_count as u8)?;
+                if crate::hid::HidDevice::parse_macros(
+                    &confirmed,
+                    self.keycode_picker.macro_count as u8,
+                ) != macro_texts
+                {
+                    bail!("Macro bytecode readback mismatch");
                 }
                 Ok(())
             })() {
@@ -3600,6 +3656,7 @@ impl EntropyApp {
         &mut self,
         bundle: &EntLayoutFile,
         mapping: &EntLayoutImportMapping,
+        apply_macros: bool,
     ) -> Result<()> {
         let limits = self.entlayout_keycode_import_limits();
         let rynk_target = self.entlayout_target_is_rynk();
@@ -3833,43 +3890,48 @@ impl EntropyApp {
             return Ok(());
         }
 
-        self.keycode_picker.macro_texts = entmacro_bytecode(&bundle.data.macros)?;
-        self.keycode_picker.macro_texts.resize(
-            self.keycode_picker
-                .macro_count
-                .max(entmacro_count(&bundle.data.macros)),
-            Vec::new(),
-        );
-        self.keycode_picker
-            .macro_texts
-            .truncate(self.keycode_picker.macro_count);
-        self.keycode_picker.macro_names = normalized_strings(
-            &bundle.data.macros.names,
-            self.keycode_picker
-                .macro_count
-                .max(bundle.data.macros.names.len()),
-        );
-        self.keycode_picker
-            .macro_names
-            .truncate(self.keycode_picker.macro_count);
-        self.keycode_picker.macro_descriptions = normalized_strings(
-            &bundle.data.macros.descriptions,
-            self.keycode_picker
-                .macro_count
-                .max(bundle.data.macros.descriptions.len()),
-        );
-        self.keycode_picker
-            .macro_descriptions
-            .truncate(self.keycode_picker.macro_count);
-        if bundle.application_layouts.is_none() {
-            save_macro_metadata(
-                &self.keycode_picker.macro_names,
-                &self.keycode_picker.macro_descriptions,
-                &self.current_device_name,
+        if apply_macros {
+            self.keycode_picker.macro_texts = entmacro_bytecode(&bundle.data.macros)?;
+            self.keycode_picker.macro_texts.resize(
+                self.keycode_picker
+                    .macro_count
+                    .max(entmacro_count(&bundle.data.macros)),
+                Vec::new(),
             );
+            self.keycode_picker
+                .macro_texts
+                .truncate(self.keycode_picker.macro_count);
+            self.keycode_picker.macro_names = normalized_strings(
+                &bundle.data.macros.names,
+                self.keycode_picker
+                    .macro_count
+                    .max(bundle.data.macros.names.len()),
+            );
+            self.keycode_picker
+                .macro_names
+                .truncate(self.keycode_picker.macro_count);
+            self.keycode_picker.macro_descriptions = normalized_strings(
+                &bundle.data.macros.descriptions,
+                self.keycode_picker
+                    .macro_count
+                    .max(bundle.data.macros.descriptions.len()),
+            );
+            self.keycode_picker
+                .macro_descriptions
+                .truncate(self.keycode_picker.macro_count);
+            if bundle.application_layouts.is_none() {
+                save_macro_metadata(
+                    &self.keycode_picker.macro_names,
+                    &self.keycode_picker.macro_descriptions,
+                    &self.current_device_name,
+                );
+            }
+            self.keycode_picker.macro_metadata_dirty = false;
+            self.keycode_picker.mark_macros_clean();
+            #[cfg(not(target_arch = "wasm32"))]
+            self.deferred_device_load
+                .set_section_status(DeferredLoadSection::Macros, DeferredLoadStatus::Loaded);
         }
-        self.keycode_picker.macro_metadata_dirty = false;
-        self.keycode_picker.mark_macros_clean();
 
         if let Some(layout) = &self.layout {
             let mut combo_entries = self.combo_entries.clone();
@@ -4047,6 +4109,9 @@ impl EntropyApp {
                 DeferredLoadSection::KeyOverrides,
                 DeferredLoadSection::AltRepeat,
             ] {
+                if section == DeferredLoadSection::Macros && !apply_macros {
+                    continue;
+                }
                 if self.deferred_device_load.section_supported(section) {
                     self.deferred_device_load
                         .set_section_status(section, DeferredLoadStatus::NotLoaded);
