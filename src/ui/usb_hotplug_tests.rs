@@ -735,6 +735,13 @@ mod usb_hotplug_tests {
         for platform in ["linux", "windows", "macos"] {
             for bus in ["Usb", "Bluetooth"] {
                 let mut app = EntropyApp::new_inert_for_test();
+                #[cfg(target_os = "linux")]
+                {
+                    app.test_device_scan_udev_access = Some(super::super::app_settings_ui::UdevAccess {
+                        vial: true,
+                        rynk: true,
+                    });
+                }
                 let ctx = egui::Context::default();
                 let (scan_tx, scans) = mpsc::channel();
                 let (connect_tx, connects) = mpsc::channel();
@@ -781,6 +788,33 @@ mod usb_hotplug_tests {
         assert!(app.hid_device.is_some());
         assert!(app.layout.is_some());
         assert!(rx.try_recv().is_err());
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn tray_hidden_startup_requires_udev_access_for_hidraw_devices() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        for bus in ["Usb", "Bluetooth"] {
+            let mut app = EntropyApp::new_inert_for_test();
+            app.test_device_scan_udev_access = Some(Default::default());
+            let ctx = egui::Context::default();
+            let (scan_tx, scans) = mpsc::channel();
+            let (connect_tx, connects) = mpsc::channel();
+            app.test_device_scan_requests = Some(scan_tx);
+            app.test_connect_requests = Some(connect_tx);
+
+            app.update_native_background_for_platform(&ctx, 12.0, true, false, "linux");
+            let (usb_only, complete) = scans.try_recv().unwrap();
+            assert!(!usb_only);
+            complete.send(Ok(vec![device("Tray startup keyboard", bus)])).unwrap();
+            app.update_native_background_for_platform(&ctx, 12.1, true, false, "linux");
+
+            assert_eq!(app.device_manager.devices().len(), 1);
+            assert!(matches!(app.device_scan_state, DeviceScanState::Idle));
+            assert!(matches!(app.connect_state, ConnectState::Idle));
+            assert!(app.selected_device.is_none());
+            assert!(matches!(connects.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                "a hidden {bus} hidraw device still needs udev access");
+        }
     }
     #[test]
     fn usb_hotplug_while_bluetooth_selected_keeps_owner_and_selection() {
