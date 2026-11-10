@@ -70,7 +70,7 @@ pub(super) enum DeferredLoadPayload {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-const ENTLAYOUT_EXPORT_SECTIONS: [DeferredLoadSection; 7] = [
+const ENTLAYOUT_EXPORT_SECTIONS: [DeferredLoadSection; 10] = [
     DeferredLoadSection::Macros,
     DeferredLoadSection::Combos,
     DeferredLoadSection::TapDance,
@@ -78,6 +78,9 @@ const ENTLAYOUT_EXPORT_SECTIONS: [DeferredLoadSection; 7] = [
     DeferredLoadSection::AltRepeat,
     DeferredLoadSection::BehaviorSettings,
     DeferredLoadSection::Touchpad,
+    DeferredLoadSection::LayerLeds,
+    DeferredLoadSection::Rgb,
+    DeferredLoadSection::Modules,
 ];
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1073,8 +1076,13 @@ impl EntropyApp {
                     .map(|layout| layout.supports_rgb)
                     .unwrap_or(false)
                     || self.rgb_settings.supported;
+                let status = if self.rgb_settings.loaded {
+                    DeferredLoadStatus::Loaded
+                } else {
+                    DeferredLoadStatus::Failed("Failed to read RGB lighting settings".into())
+                };
                 self.deferred_device_load
-                    .set_section_status(DeferredLoadSection::Rgb, DeferredLoadStatus::Loaded);
+                    .set_section_status(DeferredLoadSection::Rgb, status);
             }
         }
     }
@@ -1791,6 +1799,61 @@ mod tests {
             &state,
             DeferredFullLayoutAction::ImportEntlayout
         ));
+    }
+
+    #[test]
+    fn entlayout_lighting_and_modules_wait_for_bluetooth_load() {
+        let mut state = DeferredDeviceLoadState::staged(context());
+        for layer in 1..4 {
+            state.set_layer_status(layer, DeferredLoadStatus::Loaded);
+        }
+        for section in ENTLAYOUT_EXPORT_SECTIONS {
+            if state.section_supported(section) {
+                state.set_section_status(section, DeferredLoadStatus::Loaded);
+            }
+        }
+        for section in [DeferredLoadSection::Rgb, DeferredLoadSection::Modules] {
+            state.set_section_status(section, DeferredLoadStatus::NotLoaded);
+            for action in [
+                DeferredFullLayoutAction::ExportEntlayout,
+                DeferredFullLayoutAction::ImportEntlayout,
+            ] {
+                assert!(!deferred_full_layout_data_ready(&state, action));
+            }
+            state.set_section_status(section, DeferredLoadStatus::Loaded);
+            assert!(deferred_full_layout_data_ready(
+                &state,
+                DeferredFullLayoutAction::ExportEntlayout
+            ));
+        }
+    }
+
+    #[test]
+    fn entlayout_layer_colors_wait_for_bluetooth_load() {
+        let mut load_context = context();
+        load_context.layer_leds_supported = true;
+        let mut state = DeferredDeviceLoadState::staged(load_context);
+        for layer in 1..4 {
+            state.set_layer_status(layer, DeferredLoadStatus::Loaded);
+        }
+        for section in ENTLAYOUT_EXPORT_SECTIONS {
+            if state.section_supported(section) && section != DeferredLoadSection::LayerLeds {
+                state.set_section_status(section, DeferredLoadStatus::Loaded);
+            }
+        }
+        for action in [
+            DeferredFullLayoutAction::ExportEntlayout,
+            DeferredFullLayoutAction::ImportEntlayout,
+        ] {
+            assert!(!deferred_full_layout_data_ready(&state, action));
+        }
+        state.set_section_status(DeferredLoadSection::LayerLeds, DeferredLoadStatus::Loaded);
+        for action in [
+            DeferredFullLayoutAction::ExportEntlayout,
+            DeferredFullLayoutAction::ImportEntlayout,
+        ] {
+            assert!(deferred_full_layout_data_ready(&state, action));
+        }
     }
 
     #[test]

@@ -1787,6 +1787,8 @@ impl TouchpadSettingsState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BluetoothSelectSetting {
+    pub(crate) loaded: bool,
+    pub(crate) portable: bool,
     pub(crate) qsid: u16,
     pub(crate) width: u8,
     pub(crate) value: u16,
@@ -2322,6 +2324,11 @@ pub(crate) struct BehaviorSettingsState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LayerLedColorSetting {
+    pub(crate) loaded: bool,
+    /// Firmware layer identity, present only for a verified U8 palette contract.
+    /// Legacy reads have no portable layer contract.
+    pub(crate) portable_layer: Option<usize>,
+    pub(crate) portable_profile: Option<usize>,
     pub(crate) qsid: u16,
     pub(crate) linked_qsids: Vec<u16>,
     pub(crate) value: u8,
@@ -2330,6 +2337,9 @@ pub(crate) struct LayerLedColorSetting {
 impl LayerLedColorSetting {
     pub(crate) fn new(qsid: u16, value: u8) -> Self {
         Self {
+            loaded: true,
+            portable_layer: None,
+            portable_profile: None,
             qsid,
             linked_qsids: Vec::new(),
             value,
@@ -2338,6 +2348,9 @@ impl LayerLedColorSetting {
 
     pub(crate) fn with_linked_qsids(qsid: u16, linked_qsids: Vec<u16>, value: u8) -> Self {
         Self {
+            loaded: true,
+            portable_layer: None,
+            portable_profile: None,
             qsid,
             linked_qsids,
             value,
@@ -2357,6 +2370,8 @@ pub(crate) enum LayerLedTimeoutUnit {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LayerLedNumericSetting {
+    pub(crate) min: u16,
+    pub(crate) loaded: bool,
     pub(crate) qsid: u16,
     pub(crate) width: u8,
     pub(crate) value: u16,
@@ -2387,10 +2402,12 @@ impl LayerLedSettingsState {
             .filter(|setting| setting.qsid == qsid)
         {
             setting.value = value.min(setting.max);
+            setting.loaded = true;
             return true;
         }
         if let Some(setting) = self.timeout.as_mut().filter(|setting| setting.qsid == qsid) {
             setting.value = value.min(setting.max);
+            setting.loaded = true;
             return true;
         }
 
@@ -2402,6 +2419,7 @@ impl LayerLedSettingsState {
         {
             if setting.qsid == qsid || setting.linked_qsids.contains(&qsid) {
                 setting.value = color;
+                setting.loaded = true;
                 return true;
             }
         }
@@ -2560,6 +2578,8 @@ pub(crate) enum RgbSupportKind {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RgbSettingsState {
+    /// Every exported channel came from a successful device read.
+    pub(crate) loaded: bool,
     pub(crate) supported: bool,
     pub(crate) kind: RgbSupportKind,
     pub(crate) effect: u16,
@@ -3435,10 +3455,14 @@ pub(crate) fn load_rgb_settings_for_mode(
         _ => return RgbSettingsState::default(),
     }
 
+    // A failed preferred-protocol read must not turn echoed fallback packets
+    // into confirmed backup values.
+    let mut probe_failed = false;
     for kind in candidates {
         match kind {
             RgbSupportKind::VialRgb => {
                 let Ok((version, max_brightness)) = dev_conn.get_vialrgb_info() else {
+                    probe_failed = true;
                     continue;
                 };
                 if version != 1 {
@@ -3446,14 +3470,17 @@ pub(crate) fn load_rgb_settings_for_mode(
                 }
                 let Ok((effect, speed, hue, saturation, brightness)) = dev_conn.get_vialrgb_mode()
                 else {
+                    probe_failed = true;
                     continue;
                 };
-                let mut supported_effects =
-                    dev_conn.get_vialrgb_supported_effects().unwrap_or_default();
+                let effects_result = dev_conn.get_vialrgb_supported_effects();
+                let loaded = effects_result.is_ok();
+                let mut supported_effects = effects_result.unwrap_or_default();
                 if !supported_effects.contains(&0) {
                     supported_effects.insert(0, 0);
                 }
                 let mut state = RgbSettingsState {
+                    loaded: loaded && !probe_failed,
                     supported: true,
                     kind,
                     effect,
@@ -3472,14 +3499,20 @@ pub(crate) fn load_rgb_settings_for_mode(
             }
             RgbSupportKind::QmkRgblight => {
                 let Ok(brightness) = dev_conn.get_qmk_rgblight_brightness() else {
+                    probe_failed = true;
                     continue;
                 };
                 let Ok(effect) = dev_conn.get_qmk_rgblight_effect() else {
+                    probe_failed = true;
                     continue;
                 };
-                let speed = dev_conn.get_qmk_rgblight_effect_speed().unwrap_or(0);
-                let (hue, saturation) = dev_conn.get_qmk_rgblight_color().unwrap_or((0, 0));
+                let speed_result = dev_conn.get_qmk_rgblight_effect_speed();
+                let color_result = dev_conn.get_qmk_rgblight_color();
+                let loaded = speed_result.is_ok() && color_result.is_ok();
+                let speed = speed_result.unwrap_or(0);
+                let (hue, saturation) = color_result.unwrap_or((0, 0));
                 let mut state = RgbSettingsState {
+                    loaded: loaded && !probe_failed,
                     supported: true,
                     kind,
                     effect: effect as u16,

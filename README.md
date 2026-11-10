@@ -125,6 +125,13 @@ both the wait for a Bluetooth keyboard to be discovered and its loading. Close
 the Entropy window first: the export refuses to run next to another instance
 that owns the keyboard.
 
+Device backups include compatible module settings, layer and Bluetooth profile
+colors, LED brightness and timeout, and QMK RGBLight or VialRGB lighting settings
+when successfully read from the keyboard. Import reports unsupported or
+incompatible settings; older backups leave settings they do not contain unchanged.
+Entropy application preferences use the separate `.entsettings` export.
+
+
 The export is read-only: the HID transport refuses every command that would
 change the keyboard. It writes only a complete snapshot of one connection: if a
 section fails to load or the keyboard reconnects midway, nothing is written. A

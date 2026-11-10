@@ -152,6 +152,31 @@ create_dmg_with_retries() {
 	return "$status"
 }
 
+verify_dmg_with_retries() {
+	local max_attempts=3
+	local attempt=1
+	local status=1
+
+	while ((attempt <= max_attempts)); do
+		if hdiutil verify "$DMG_PATH" >/dev/null; then
+			return 0
+		else
+			status=$?
+		fi
+
+		if ((attempt == max_attempts)); then
+			echo "hdiutil verify failed after $max_attempts attempts" >&2
+			return "$status"
+		fi
+
+		echo "hdiutil verify failed (attempt $attempt/$max_attempts); retrying" >&2
+		sleep "$((attempt * 2))"
+		attempt=$((attempt + 1))
+	done
+
+	return "$status"
+}
+
 cd "$ROOT"
 if [[ "${SKIP_BUILD:-0}" != 1 ]]; then cargo build "${BUILD_ARGS[@]}"; fi
 [[ -x "$BIN" ]] || { echo 'Prebuilt binary is missing' >&2; exit 1; }
@@ -220,7 +245,7 @@ if command -v hdiutil >/dev/null 2>&1; then
     ditto "$APP_PATH" "$DMG_STAGING/$APP_NAME.app"
     ln -s /Applications "$DMG_STAGING/Applications"
 	create_dmg_with_retries
-    hdiutil verify "$DMG_PATH" >/dev/null
+	verify_dmg_with_retries
 else
 	echo "hdiutil not found; skipped DMG build"
 fi
