@@ -106,12 +106,16 @@ pub(crate) fn rmk_macro_tap_hold_parts(action: KeyAction) -> Option<(u16, u16)> 
     let KeyAction::TapHold(Action::TriggerMacro(slot), hold, _) = action else {
         return None;
     };
-    let base = match hold {
+    Some((0x7700 + u16::from(slot), tap_hold_retarget_base(hold)?))
+}
+
+pub(crate) fn tap_hold_retarget_base(hold: rmk_types::action::Action) -> Option<u16> {
+    use rmk_types::action::Action;
+    Some(match hold {
         Action::Modifier(modifiers) => 0x2000 | ((modifiers.into_packed_bits() as u16) << 8),
         Action::LayerOn(layer) if layer < 16 => 0x4000 | (u16::from(layer) << 8),
         _ => return None,
-    };
-    Some((0x7700 + u16::from(slot), base))
+    })
 }
 
 pub(crate) fn apply_rmk_native_actions(

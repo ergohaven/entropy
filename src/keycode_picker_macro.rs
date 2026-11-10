@@ -1199,6 +1199,52 @@ mod tests {
             .is_empty());
     }
 
+    #[test]
+    fn numero_is_not_a_supported_macro_choice_even_with_keymap_capability() {
+        for numero in [false, true] {
+            let picker = KeycodePicker {
+                supports_universal_numero: numero,
+                supports_universal_macros: true,
+                supports_universal_symbols: true,
+                supports_universal_russian_letters: true,
+                ..Default::default()
+            };
+            let choices = picker.macro_universal_key_choices(MacroKeyPickKind::Tap);
+            assert!(!choices.iter().any(|(value, _, _)| *value == 0x7EB4));
+            for supported in [0x7E82, 0x7E90, 0x7EB3] {
+                assert!(choices.iter().any(|(value, _, _)| *value == supported));
+            }
+        }
+    }
+
+    #[test]
+    fn numero_macro_assignment_is_rejected_without_changing_existing_bytes() {
+        for numero in [false, true] {
+            for action in [
+                MacroAction::Tap(4),
+                MacroAction::Down(4),
+                MacroAction::Up(4),
+            ] {
+                let mut picker = KeycodePicker {
+                    supports_universal_numero: numero,
+                    supports_universal_macros: true,
+                    supports_universal_symbols: true,
+                    supports_universal_russian_letters: true,
+                    macro_actions: vec![vec![action.clone()]],
+                    macro_key_pick: Some((0, 0)),
+                    ..Default::default()
+                };
+                picker.encode_macro(0);
+                let bytes = picker.macro_texts.clone();
+                picker.set_macro_key_pick_value(0, 0, 0x7EB4);
+                assert_eq!(picker.macro_actions[0], [action]);
+                assert_eq!(picker.macro_texts, bytes);
+                assert_eq!(picker.macro_key_pick, Some((0, 0)));
+                assert!(!picker.macros_dirty);
+            }
+        }
+    }
+
     fn macro_picker_frame(
         picker: &mut KeycodePicker,
         ctx: &egui::Context,

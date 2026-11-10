@@ -232,6 +232,7 @@ impl EntropyApp {
         };
         self.keycode_picker.vial_quantum_pending_mod = None;
         self.keycode_picker.vial_quantum_pending_mt = None;
+        self.keycode_picker.native_tap_hold_retarget = None;
         self.keycode_picker.vial_layer_pending = None;
         self.keycode_picker.tap_dance_editor_open = None;
         self.keycode_picker.macro_inline_selected = None;
@@ -291,25 +292,33 @@ impl EntropyApp {
         encoder_target: Option<usize>,
     ) {
         let kc = binding.vial_keycode();
-        if let crate::keyboard::KeyBinding::Rmk(action) = binding {
-            if let Some((_, base)) = crate::rmk_native::rmk_macro_tap_hold_parts(action) {
-                if ctrl_held && base & 0xF000 != 0x4000 {
-                    if let Some(ki) = key_target {
-                        self.drop_queued_middle_click_assignment(self.selected_layer, ki);
-                        self.pending_handed_swap = Some((
-                            self.selected_layer,
-                            ki,
-                            crate::rmk_native::toggle_handed_key_action(action).into(),
-                        ));
-                    }
-                } else {
-                    self.open_picker_for_target(key_target, encoder_target);
-                    self.keycode_picker.vial_quantum_pending_mt = Some(base);
-                    self.keycode_picker.vial_quantum_pending_mod = None;
-                }
-                self.secondary_click_handled = true;
-                return;
+        let native_tap_hold_base = match binding {
+            crate::keyboard::KeyBinding::Rmk(action) => {
+                crate::rmk_native::rmk_macro_tap_hold_parts(action).map(|(_, base)| base)
             }
+            crate::keyboard::KeyBinding::VialTapHold { hold, .. } => {
+                crate::rmk_native::tap_hold_retarget_base(hold)
+            }
+            _ => None,
+        };
+        if let Some(base) = native_tap_hold_base {
+            if ctrl_held && base & 0xF000 != 0x4000 {
+                if let Some(ki) = key_target {
+                    self.drop_queued_middle_click_assignment(self.selected_layer, ki);
+                    self.pending_handed_swap = Some((
+                        self.selected_layer,
+                        ki,
+                        crate::rmk_native::toggle_handed_vial_binding(binding),
+                    ));
+                }
+            } else {
+                self.open_picker_for_target(key_target, encoder_target);
+                self.keycode_picker.vial_quantum_pending_mt = Some(base);
+                self.keycode_picker.native_tap_hold_retarget = Some(binding);
+                self.keycode_picker.vial_quantum_pending_mod = None;
+            }
+            self.secondary_click_handled = true;
+            return;
         }
         // A Rynk mod-tap without a keycode reads through its v1 label.
         let native = match binding {
@@ -340,6 +349,9 @@ impl EntropyApp {
                 } else {
                     self.open_picker_for_target(key_target, encoder_target);
                     self.keycode_picker.vial_quantum_pending_mt = Some(parts.vial_base());
+                    if binding.is_vial_native() {
+                        self.keycode_picker.native_tap_hold_retarget = Some(binding);
+                    }
                     self.keycode_picker.vial_quantum_pending_mod = None;
                 }
                 self.secondary_click_handled = true;
@@ -922,6 +934,118 @@ mod tests {
             Some(0x2000 | ((ModifierCombination::RCTRL.into_packed_bits() as u16) << 8))
         );
         assert!(app.keycode_picker.rmk_native_key_actions_allowed_for_target);
+    }
+
+    #[test]
+    fn macro_tap_hold_v2_readback_can_retarget_without_losing_profile_or_hold() {
+        assert_macro_tap_hold_readback_retarget(2);
+    }
+
+    #[test]
+    fn macro_tap_hold_v1_readback_can_retarget_without_losing_profile_or_hold() {
+        assert_macro_tap_hold_readback_retarget(1);
+    }
+
+    fn assert_macro_tap_hold_readback_retarget(version: u8) {
+        use crate::keyboard::{KeyBinding, VialMorseProfile};
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        for (hold, base) in [
+            (Action::LayerOn(3), 0x4300),
+            (Action::Modifier(ModifierCombination::RCTRL), 0x3100),
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = EntropyApp::new_inert_for_test();
+            app.layout = Some(test_layout(&[0], &[]));
+            app.keycode_picker.supports_rmk_native_key_actions = true;
+            let profile = VialMorseProfile {
+                raw: (1u64 << 45) | 180,
+                index: 7,
+            };
+            let source = if version == 2 {
+                KeyBinding::VialTapHold {
+                    tap: Action::TriggerMacro(5),
+                    hold,
+                    profile,
+                }
+            } else {
+                KeyAction::TapHold(Action::TriggerMacro(5), hold, 180.into()).into()
+            };
+            let wire = crate::vial_native::encode(source, version, |raw, index, inherited| {
+                assert_eq!(
+                    (raw, index, inherited),
+                    (profile.raw, Some(profile.index), false)
+                );
+                Ok(profile.index)
+            })
+            .unwrap();
+            let decoded = crate::vial_native::decode(&wire, version, |index| {
+                assert_eq!(index, profile.index);
+                Ok(profile.raw)
+            })
+            .unwrap();
+            assert_eq!(decoded, source);
+            assert_eq!(
+                crate::rmk_native::apply_rmk_native_actions(
+                    app.layout.as_mut().unwrap(),
+                    &[crate::rmk_native::RmkNativeActionAt {
+                        flat_index: 0,
+                        action: decoded
+                    }],
+                ),
+                1
+            );
+            let binding = app.layout.as_ref().unwrap().get_key_binding(0, 0);
+            app.handle_secondary_target(&ctx, false, binding, Some(0), None);
+            assert!(app.secondary_click_handled);
+            assert!(app.keycode_picker.open);
+            assert_eq!(app.keycode_picker.vial_quantum_pending_mt, Some(base));
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    // A second key in the same frame must not overwrite the first
+                    // result after the retargeting context has been consumed.
+                    events: [egui::Key::B, egui::Key::C]
+                        .into_iter()
+                        .map(|key| egui::Event::Key {
+                            key,
+                            physical_key: Some(key),
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        })
+                        .collect(),
+                    ..Default::default()
+                },
+                |_ui| {
+                    app.keycode_picker.show(
+                        &ctx,
+                        crate::keycode_picker::DeferredPickerDataState::Ready,
+                        crate::keycode_picker::DeferredPickerDataState::Ready,
+                    );
+                },
+            );
+            let tap = Action::KeyWithModifier(HidKeyCode::B, ModifierCombination::default());
+            let expected = if version == 2 {
+                KeyBinding::VialTapHold { tap, hold, profile }
+            } else {
+                KeyAction::TapHold(tap, hold, 180.into()).into()
+            };
+            assert_eq!(app.keycode_picker.result, Some(expected));
+            app.apply_picker_results(&ctx);
+            let edited = app.layout.as_ref().unwrap().get_key_binding(0, 0);
+            assert_eq!(edited, expected);
+            let wire = crate::vial_native::encode(edited, version, |raw, index, inherited| {
+                assert_eq!(
+                    (raw, index, inherited),
+                    (profile.raw, Some(profile.index), false)
+                );
+                Ok(profile.index)
+            })
+            .unwrap();
+            assert_eq!(
+                crate::vial_native::decode(&wire, version, |_| Ok(profile.raw)).unwrap(),
+                expected
+            );
+        }
     }
 
     #[test]
