@@ -236,6 +236,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn alt_title_does_not_mislabel_a_layer_tap_as_a_modifier() {
+        use egui_kittest::kittest::Queryable;
+
+        let picker = KeycodePicker {
+            open: true,
+            language: crate::i18n::Language::English,
+            vial_quantum_pending_mt: Some(0x4400),
+            ..Default::default()
+        };
+        let mut harness = egui_kittest::Harness::builder().build_ui_state(
+            |ui, picker: &mut KeycodePicker| {
+                picker.show(
+                    ui.ctx(),
+                    DeferredPickerDataState::Ready,
+                    DeferredPickerDataState::Ready,
+                );
+            },
+            picker,
+        );
+        harness.run();
+        harness.get_by_label(tr_picker(
+            crate::i18n::Language::English,
+            "key_picker.pick_tap_key_title",
+        ));
+    }
+
+    #[test]
     fn escape_mid_search_closes_the_picker_and_keeps_it_closed() {
         let mut picker = KeycodePicker {
             open: true,
@@ -1037,7 +1064,7 @@ fn mod_key_choices(compact_only: bool) -> Vec<ModKeyChoice> {
             compact: true,
         },
         ModKeyChoice {
-            label: picker_mod_key_label(0x0400),
+            label: "Alt/key".into(),
             left_value: 0x0400,
             right_value: Some(0x1400),
             mod_name: "Alt".into(),
@@ -1711,6 +1738,28 @@ impl KeycodePicker {
                     .max_height(key_picker_popup_scroll_height(popup_size))
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        if self.macro_key_pick.is_some()
+                            && pending_mod_key.is_none()
+                            && supports_macro_ext_keycodes
+                        {
+                            if let Some(value) = self.show_device_keycode_choice_section(ui, true) {
+                                self.set_macro_key_pick_value(macro_idx, action_idx, value);
+                            }
+                            if self.macro_key_pick.is_some() {
+                                if let Some(value) = show_grouped_popup_choice_buttons(
+                                    ui,
+                                    vec![("Layers", layer_choices)],
+                                    self.language,
+                                ) {
+                                    self.set_macro_key_pick_value(macro_idx, action_idx, value);
+                                }
+                            }
+                            if self.macro_key_pick.is_some() {
+                                if let Some(value) = self.show_custom_keycode_choice_section(ui) {
+                                    self.set_macro_key_pick_value(macro_idx, action_idx, value);
+                                }
+                            }
+                        }
                         if self.macro_key_pick.is_some() {
                             match self.popup_view_mode {
                                 PickerViewMode::Layout => {
@@ -1730,29 +1779,6 @@ impl KeycodePicker {
                                         self.key_legend_layout,
                                     ) {
                                         self.set_macro_key_pick_value(macro_idx, action_idx, value);
-                                    }
-                                    if self.macro_key_pick.is_some() && pending_mod_key.is_none() {
-                                        if let Some(value) = show_grouped_popup_choice_buttons(
-                                            ui,
-                                            vec![("Layers", layer_choices)],
-                                            self.language,
-                                        ) {
-                                            self.set_macro_key_pick_value(
-                                                macro_idx, action_idx, value,
-                                            );
-                                        }
-                                    }
-                                    if self.macro_key_pick.is_some()
-                                        && pending_mod_key.is_none()
-                                        && supports_macro_ext_keycodes
-                                    {
-                                        if let Some(value) =
-                                            self.show_custom_keycode_choice_section(ui)
-                                        {
-                                            self.set_macro_key_pick_value(
-                                                macro_idx, action_idx, value,
-                                            );
-                                        }
                                     }
                                 }
                             }
@@ -2384,16 +2410,27 @@ impl KeycodePicker {
         });
 
         if let Some(base) = pending {
-            let title = if is_mt {
-                tr_picker(self.language, "key_picker.pick_tap_key_title")
+            let title_key = if is_mt {
+                "key_picker.pick_tap_key_title"
             } else {
-                tr_picker(self.language, "key_picker.pick_modifier_combo_title")
+                "key_picker.pick_modifier_combo_title"
             };
+            let mut title = tr_picker(self.language, title_key).to_owned();
+            // Layer-Tap shares the tap-key picker but has no modifier bits.
+            if !is_mt || base & 0xE000 == 0x2000 {
+                let selected_label = if is_mt {
+                    picker_mod_tap_label(base)
+                } else {
+                    picker_mod_key_label(base)
+                };
+                title.push_str(": ");
+                title.push_str(&selected_label);
+            }
             let mut still_open = true;
             let popup_size = key_picker_popup_size(ctx);
             let _resp_win = crate::ui_style::centered_modal_window(
                 ctx,
-                title,
+                &title,
                 self.popup_state.id(PopupKey::PendingKeyPickWindow),
                 &mut still_open,
                 popup_size,

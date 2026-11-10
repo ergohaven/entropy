@@ -6,10 +6,13 @@ Entropy uses this IBus backend for Text Expander on Linux. While selected as an 
 
 ```sh
 ./linux/ibus/install-user.sh
-ibus restart
 ```
 
-Then add/select the two Entropy input sources in the system input-source/input-method settings:
+Then log out and back in so that IBus loads it; Install IBus in Entropy restarts a running IBus
+itself. `ibus restart` works too, but since ibus 1.5.30 it also makes IBus the input method KWin
+launches in a KDE Plasma Wayland session, replacing the one chosen there.
+
+After that, add/select the two Entropy input sources in the system input-source/input-method settings:
 
 - **English (Entropy)** for the `us` layout
 - **Russian (Entropy)** for the `ru` layout
@@ -19,7 +22,18 @@ Entropy also reads the selected source's base layout (`EN` or `RU`) for firmware
 Universal Symbols, including on KDE and X11 desktops where the normal layout tracker is
 not IBus.
 
-To remove the Entropy IBus sources:
+On GNOME, registering the engine is not enough: GNOME Shell switches only the sources listed in
+`org.gnome.desktop.input-sources`. This puts English (Entropy) and Russian (Entropy) where English (US)
+and Russian stand, once IBus lists the engine, and `restore` puts them back:
+
+```sh
+./linux/ibus/gnome-input-sources.sh use
+```
+
+On KDE Plasma Wayland, IBus runs only when it is chosen under System Settings → Keyboard → Virtual
+Keyboard (IBus Wayland); add the Entropy sources in IBus Preferences.
+
+To remove the Entropy IBus sources (on GNOME this also restores the layouts they replaced):
 
 ```sh
 ./linux/ibus/uninstall-user.sh
