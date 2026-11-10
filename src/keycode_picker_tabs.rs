@@ -271,14 +271,29 @@ impl KeycodePicker {
     /// Custom keycodes as a section inside another chooser (e.g. the Tap
     /// Dance key picker). Returns the picked keycode.
     pub(super) fn show_custom_keycode_choice_section(&self, ui: &mut egui::Ui) -> Option<u16> {
-        let rows = self.custom_keycode_rows(false);
+        self.show_device_keycode_choice_section(ui, false)
+    }
+
+    pub(super) fn show_device_keycode_choice_section(
+        &self,
+        ui: &mut egui::Ui,
+        bluetooth: bool,
+    ) -> Option<u16> {
+        let rows = self.custom_keycode_rows(bluetooth);
         if rows.is_empty() {
             return None;
         }
         ui.add_space(2.0);
         show_section_heading(
             ui,
-            tr_picker(self.language, "key_picker.section_custom_keycodes"),
+            tr_picker(
+                self.language,
+                if bluetooth {
+                    "key_picker.tab_bluetooth"
+                } else {
+                    "key_picker.section_custom_keycodes"
+                },
+            ),
         );
         let picked = show_row_grid(ui, &rows);
         ui.add_space(8.0);

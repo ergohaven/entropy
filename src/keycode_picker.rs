@@ -1738,6 +1738,28 @@ impl KeycodePicker {
                     .max_height(key_picker_popup_scroll_height(popup_size))
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        if self.macro_key_pick.is_some()
+                            && pending_mod_key.is_none()
+                            && supports_macro_ext_keycodes
+                        {
+                            if let Some(value) = self.show_device_keycode_choice_section(ui, true) {
+                                self.set_macro_key_pick_value(macro_idx, action_idx, value);
+                            }
+                            if self.macro_key_pick.is_some() {
+                                if let Some(value) = show_grouped_popup_choice_buttons(
+                                    ui,
+                                    vec![("Layers", layer_choices)],
+                                    self.language,
+                                ) {
+                                    self.set_macro_key_pick_value(macro_idx, action_idx, value);
+                                }
+                            }
+                            if self.macro_key_pick.is_some() {
+                                if let Some(value) = self.show_custom_keycode_choice_section(ui) {
+                                    self.set_macro_key_pick_value(macro_idx, action_idx, value);
+                                }
+                            }
+                        }
                         if self.macro_key_pick.is_some() {
                             match self.popup_view_mode {
                                 PickerViewMode::Layout => {
@@ -1757,29 +1779,6 @@ impl KeycodePicker {
                                         self.key_legend_layout,
                                     ) {
                                         self.set_macro_key_pick_value(macro_idx, action_idx, value);
-                                    }
-                                    if self.macro_key_pick.is_some() && pending_mod_key.is_none() {
-                                        if let Some(value) = show_grouped_popup_choice_buttons(
-                                            ui,
-                                            vec![("Layers", layer_choices)],
-                                            self.language,
-                                        ) {
-                                            self.set_macro_key_pick_value(
-                                                macro_idx, action_idx, value,
-                                            );
-                                        }
-                                    }
-                                    if self.macro_key_pick.is_some()
-                                        && pending_mod_key.is_none()
-                                        && supports_macro_ext_keycodes
-                                    {
-                                        if let Some(value) =
-                                            self.show_custom_keycode_choice_section(ui)
-                                        {
-                                            self.set_macro_key_pick_value(
-                                                macro_idx, action_idx, value,
-                                            );
-                                        }
                                     }
                                 }
                             }
