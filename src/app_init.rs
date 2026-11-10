@@ -14,10 +14,14 @@ struct AppBootstrap {
 
 impl EntropyApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        Self::new_with_context(&cc.egui_ctx)
+    }
+
+    pub(crate) fn new_with_context(ctx: &egui::Context) -> Self {
         let mut app_settings = load_app_settings();
         app_settings.ui_scale = clamp_ui_scale(app_settings.ui_scale);
         crate::diagnostics::set_enabled(app_settings.diagnostics_enabled);
-        cc.egui_ctx.set_zoom_factor(app_settings.ui_scale);
+        ctx.set_zoom_factor(app_settings.ui_scale);
         crate::ui_style::set_accent(app_settings.accent_color.color());
         crate::smart_input::set_text_expander_config(
             app_settings.text_expander_enabled,
@@ -214,6 +218,7 @@ impl EntropyApp {
             linux_setup_task: None,
             dark_mode,
             last_applied_theme: None,
+            native_time_offset: 0.0,
             app_settings,
             text_expander_rules_signature,
             text_expander_rules_last_check_at: 0.0,
@@ -364,6 +369,8 @@ impl EntropyApp {
             test_device_scan_requests: None,
             #[cfg(all(test, not(target_arch = "wasm32")))]
             test_connect_requests: None,
+            #[cfg(all(test, target_os = "linux"))]
+            test_device_scan_udev_access: None,
             #[cfg(all(test, not(target_arch = "wasm32")))]
             test_connect_hid: None,
             #[cfg(not(target_arch = "wasm32"))]

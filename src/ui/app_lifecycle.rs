@@ -1,12 +1,5 @@
 use super::*;
 
-fn should_poll_device_scan(main_window_hidden_to_tray: bool, _hid_lifecycle_busy: bool) -> bool {
-    // HID work belongs to one connection generation. Discovery must still run
-    // so an unplug can invalidate that generation instead of deadlocking scan
-    // behind a request which is waiting on the vanished device.
-    !main_window_hidden_to_tray
-}
-
 fn periodic_device_scan_allowed(
     selected_device_is_bluetooth: bool,
     hid_session_active: bool,
@@ -119,6 +112,66 @@ fn connection_replaces_layout_canvas(connect_state: &ConnectState, layout_loaded
 }
 
 impl EntropyApp {
+    /// Services shared by the renderer and the Windows windowless tray loop.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn tick_background(&mut self, ctx: &egui::Context) {
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        self.handle_tray_quit_request(ctx);
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        self.handle_tray_restore_request(ctx);
+        self.handle_close_to_tray(ctx);
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        self.poll_tray_events(ctx);
+        #[cfg(target_os = "macos")]
+        self.handle_macos_dock_reopen(ctx);
+
+        crate::app::poll_update_check(&mut self.update_check);
+        crate::app::poll_firmware_update_check(&mut self.firmware_update_check);
+        let main_window_hidden_to_tray = self.main_window_hidden_to_tray();
+        let selected_device_is_bluetooth = self
+            .selected_device
+            .and_then(|idx| self.device_manager.devices().get(idx))
+            .map(|device| device.is_bluetooth_transport())
+            .unwrap_or(false)
+            || self.bluetooth_reconnect_active();
+        let main_window_uses_wayland = matches!(
+            self.parent_display_handle,
+            Some(raw_window_handle::RawDisplayHandle::Wayland(_))
+        );
+        let bluetooth_visible_interval = bluetooth_visible_repaint_interval(
+            selected_device_is_bluetooth,
+            main_window_uses_wayland,
+        );
+        let connect_pending = matches!(self.connect_state, ConnectState::Loading { .. });
+        let update_check_pending = matches!(self.update_check, UpdateCheckState::Checking { .. })
+            || crate::app::firmware_update_check_pending(&self.firmware_update_check);
+        let layout_indicator_interval = self
+            .app_settings
+            .sticky_layout_window
+            .then(|| self.matrix_tester_poll_interval());
+        #[cfg(target_os = "linux")]
+        self.track_linux_background_window(ctx);
+        ctx.request_repaint_after(native_repaint_interval(
+            self.main_window_in_background(),
+            bluetooth_visible_interval,
+            connect_pending,
+            update_check_pending,
+            layout_indicator_interval,
+        ));
+        // Wayland may keep painting a window requested to minimize. Retain its
+        // bounded cache until the backend confirms that painting has stopped.
+        if self.main_window_hidden_to_tray()
+            || ctx.input(|input| input.viewport().minimized == Some(true)) {
+            crate::ui_textures::clear(ctx);
+        }
+        self.update_native_background(
+            ctx,
+            ctx.input(|i| i.time),
+            main_window_hidden_to_tray,
+            selected_device_is_bluetooth,
+        );
+    }
+
     /// Shared ownership gate for shortcuts on pages behind app modals.
     pub(super) fn modal_or_popup_open(&self, ctx: &egui::Context) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
@@ -212,57 +265,57 @@ impl EntropyApp {
         self.poll_sticky_layout_background(ctx);
         self.poll_settings_write(ctx);
         self.flush_due_qmk_setting_writes();
-        if should_poll_device_scan(main_window_hidden_to_tray, self.hid_write_lifecycle_busy()) {
-            if hid_lifecycle_writes_available(self.hid_write_lifecycle_busy()) {
-                self.handle_pending_imports(ctx, now);
-            }
-            // Discovery must keep progressing independently from device-scoped HID
-            // work. After an unplug that work can remain pending until a scan
-            // observes the missing endpoint and advances connection_generation.
-            self.poll_device_scan(ctx);
-            if !self.rynk_host_opens.is_empty() {
-                // A remembered Rynk board's link opened, or its retry is due.
-                self.sync_rynk_host_bridges();
-            }
-            self.maybe_start_bluetooth_reconnect_scan(ctx);
+        if !main_window_hidden_to_tray
+            && hid_lifecycle_writes_available(self.hid_write_lifecycle_busy())
+        {
+            self.handle_pending_imports(ctx, now);
+        }
+        // Discovery must progress while hidden and during device-scoped HID
+        // work. After an unplug that work can remain pending until a scan
+        // observes the missing endpoint and advances connection_generation.
+        self.poll_device_scan(ctx);
+        if !self.rynk_host_opens.is_empty() {
+            // A remembered Rynk board's link opened, or its retry is due.
+            self.sync_rynk_host_bridges();
+        }
+        self.maybe_start_bluetooth_reconnect_scan(ctx);
 
-            // A worker temporarily borrows the handle; it is still the same
-            // active transport and must not authorize full Bluetooth enumeration.
-            // A Rynk session whose link broke is over: the next full scan,
-            // which reopens its board, is not held back as for a live one.
-            let hid_session_active = self
-                .hid_device
-                .as_ref()
-                .is_some_and(|session| !session.link_lost())
-                || self.hid_write_task_owner_active()
-                || matches!(self.connect_state, ConnectState::Loading { .. });
-            let bluetooth_busy = (selected_device_is_bluetooth && hid_session_active)
-                || self.bluetooth_discovery_owner_active();
-            // USB-only metadata enumeration is implemented without Bluetooth
-            // device opens on these platforms. Keep the old fail-safe elsewhere.
-            let has_discovered_devices = !self.device_manager.devices().is_empty();
-            let full_interval = periodic_device_scan_interval_secs(hid_session_active, has_discovered_devices);
-            // USB hotplug on every supported OS must not wait for global HID
-            // refresh even with no Bluetooth keyboards. Keep full discovery for
-            // cold startup/new Bluetooth devices, only when every owner allows it.
-            let usb_metadata_supported = matches!(discovery_platform, "linux" | "windows" | "macos");
-            let full_due = self.last_full_device_scan_at == 0.0
-                || now - self.last_full_device_scan_at >= full_interval;
-            let usb_only = usb_metadata_supported && (bluetooth_busy || !full_due);
-            let interval = if usb_only || usb_metadata_supported { 2.0 } else { full_interval };
-            if usb_only || periodic_device_scan_allowed(bluetooth_busy, hid_session_active || bluetooth_busy) {
-                if (self.last_device_scan_at == 0.0 || now - self.last_device_scan_at >= interval)
-                    && (!usb_metadata_supported || matches!(self.device_scan_state, DeviceScanState::Idle)) {
-                    self.scan_frame = self.scan_frame.wrapping_add(1);
-                    self.last_device_scan_at = now;
-                    if !usb_only { self.last_full_device_scan_at = now; }
-                    if usb_only { self.start_usb_device_scan(); }
-                    else { self.start_device_scan(); }
-                }
-                if usb_only || usb_metadata_supported {
-                    ctx.request_repaint_after(std::time::Duration::from_secs_f64(
-                        (interval - (now - self.last_device_scan_at)).clamp(0.025, interval)));
-                }
+        // A worker temporarily borrows the handle; it is still the same
+        // active transport and must not authorize full Bluetooth enumeration.
+        // A Rynk session whose link broke is over: the next full scan,
+        // which reopens its board, is not held back as for a live one.
+        let hid_session_active = self
+            .hid_device
+            .as_ref()
+            .is_some_and(|session| !session.link_lost())
+            || self.hid_write_task_owner_active()
+            || matches!(self.connect_state, ConnectState::Loading { .. });
+        let bluetooth_busy = (selected_device_is_bluetooth && hid_session_active)
+            || self.bluetooth_discovery_owner_active();
+        // USB-only metadata enumeration is implemented without Bluetooth
+        // device opens on these platforms. Keep the old fail-safe elsewhere.
+        let has_discovered_devices = !self.device_manager.devices().is_empty();
+        let full_interval = periodic_device_scan_interval_secs(hid_session_active, has_discovered_devices);
+        // USB hotplug on every supported OS must not wait for global HID
+        // refresh even with no Bluetooth keyboards. Keep full discovery for
+        // cold startup/new Bluetooth devices, only when every owner allows it.
+        let usb_metadata_supported = matches!(discovery_platform, "linux" | "windows" | "macos");
+        let full_due = self.last_full_device_scan_at == 0.0
+            || now - self.last_full_device_scan_at >= full_interval;
+        let usb_only = usb_metadata_supported && (bluetooth_busy || !full_due);
+        let interval = if usb_only || usb_metadata_supported { 2.0 } else { full_interval };
+        if usb_only || periodic_device_scan_allowed(bluetooth_busy, hid_session_active || bluetooth_busy) {
+            if (self.last_device_scan_at == 0.0 || now - self.last_device_scan_at >= interval)
+                && (!usb_metadata_supported || matches!(self.device_scan_state, DeviceScanState::Idle)) {
+                self.scan_frame = self.scan_frame.wrapping_add(1);
+                self.last_device_scan_at = now;
+                if !usb_only { self.last_full_device_scan_at = now; }
+                if usb_only { self.start_usb_device_scan(); }
+                else { self.start_device_scan(); }
+            }
+            if usb_only || usb_metadata_supported {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(
+                    (interval - (now - self.last_device_scan_at)).clamp(0.025, interval)));
             }
         }
 
@@ -1558,19 +1611,6 @@ mod tests {
     }
 
     #[test]
-    fn hidden_to_tray_skips_device_scan_polling() {
-        assert!(!should_poll_device_scan(true, false));
-        // Minimized and occluded windows are not tray-hidden, so App::logic
-        // keeps their background device polling alive while App::ui is skipped.
-        assert!(should_poll_device_scan(false, false));
-    }
-
-    #[test]
-    fn pending_hid_work_does_not_block_device_scan_polling() {
-        assert!(should_poll_device_scan(false, true));
-    }
-
-    #[test]
     fn selected_bluetooth_device_does_not_hide_new_usb_devices() {
         assert!(periodic_device_scan_allowed(true, false));
         assert!(periodic_device_scan_allowed(false, false));
@@ -1627,11 +1667,19 @@ impl eframe::App for EntropyApp {
         crate::app_discovery::unload_kwin_foreground_script();
     }
 
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
+        // eframe starts its clock when the graphics window is created. Keep
+        // discovery, reconnect and deferred-write deadlines continuous.
+        if let Some(time) = input.time.as_mut() {
+            *time += self.native_time_offset;
+        }
+    }
+
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(not(target_arch = "wasm32"))]
         {
             #[cfg(target_os = "windows")]
-            self.cache_windows_hwnd(frame);
+            self.cache_windows_hwnd(frame, ctx);
             #[cfg(target_os = "windows")]
             self.handle_windows_start_hidden_to_tray(ctx);
             #[cfg(target_os = "macos")]
@@ -1639,56 +1687,7 @@ impl eframe::App for EntropyApp {
             // Cache the winit window/display handles so native file dialogs can be
             // parented to the main window instead of opening behind it.
             self.cache_parent_window_handles(frame);
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
-            self.handle_tray_quit_request(ctx);
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
-            self.handle_tray_restore_request(ctx);
-            self.handle_close_to_tray(ctx);
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
-            self.poll_tray_events(ctx);
-            #[cfg(target_os = "macos")]
-            self.handle_macos_dock_reopen(ctx);
-
-            crate::app::poll_update_check(&mut self.update_check);
-            crate::app::poll_firmware_update_check(&mut self.firmware_update_check);
-            let main_window_hidden_to_tray = self.main_window_hidden_to_tray();
-            let selected_device_is_bluetooth = self
-                .selected_device
-                .and_then(|idx| self.device_manager.devices().get(idx))
-                .map(|device| device.is_bluetooth_transport())
-                .unwrap_or(false)
-                || self.bluetooth_reconnect_active();
-            let main_window_uses_wayland = matches!(
-                self.parent_display_handle,
-                Some(raw_window_handle::RawDisplayHandle::Wayland(_))
-            );
-            let bluetooth_visible_interval = bluetooth_visible_repaint_interval(
-                selected_device_is_bluetooth,
-                main_window_uses_wayland,
-            );
-            let connect_pending = matches!(self.connect_state, ConnectState::Loading { .. });
-            let update_check_pending =
-                matches!(self.update_check, UpdateCheckState::Checking { .. })
-                    || crate::app::firmware_update_check_pending(&self.firmware_update_check);
-            let layout_indicator_interval = self
-                .app_settings
-                .sticky_layout_window
-                .then(|| self.matrix_tester_poll_interval());
-            #[cfg(target_os = "linux")]
-            self.track_linux_background_window(ctx);
-            ctx.request_repaint_after(native_repaint_interval(
-                self.main_window_in_background(),
-                bluetooth_visible_interval,
-                connect_pending,
-                update_check_pending,
-                layout_indicator_interval,
-            ));
-            self.update_native_background(
-                ctx,
-                ctx.input(|i| i.time),
-                main_window_hidden_to_tray,
-                selected_device_is_bluetooth,
-            );
+            self.tick_background(ctx);
         }
 
         #[cfg(target_arch = "wasm32")]

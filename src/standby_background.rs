@@ -69,9 +69,7 @@ pub(crate) struct BackgroundUploadResult {
     pub(crate) frame_count: u8,
     pub(crate) total_size: u32,
     pub(crate) file_name: String,
-    pub(crate) preview_rgba: Vec<u8>,
-    pub(crate) preview_frames_rgba: Vec<Vec<u8>>,
-    pub(crate) preview_delays_ms: Vec<u16>,
+    pub(crate) preview: BackgroundPreview,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -300,9 +298,9 @@ impl crate::hid::HidDevice {
                 .and_then(|name| name.to_str())
                 .unwrap_or("background")
                 .to_owned(),
-            preview_rgba: prepared.preview_rgba,
-            preview_frames_rgba: prepared.preview_frames_rgba,
-            preview_delays_ms: prepared.preview_delays_ms,
+            preview: BackgroundPreview {
+                package: prepared.package.into(),
+            },
         }))
     }
 
@@ -444,8 +442,11 @@ struct PreparedBackground {
     kind: u8,
     frame_count: u8,
     package: Vec<u8>,
+    #[cfg(test)]
     preview_rgba: Vec<u8>,
+    #[cfg(test)]
     preview_frames_rgba: Vec<Vec<u8>>,
+    #[cfg(test)]
     preview_delays_ms: Vec<u16>,
 }
 
@@ -503,14 +504,57 @@ fn decode_cached_background(
     {
         return None;
     }
-    let mut frames = Vec::new();
-    let mut delays = Vec::new();
-    for (number, frame) in package[HEADER_SIZE..].chunks_exact(frame_size).enumerate() {
+    Some(BackgroundUploadResult {
+        source_path: String::new(),
+        kind: info.kind,
+        frame_count: info.frame_count,
+        total_size: info.total_size,
+        file_name: String::new(),
+        preview: BackgroundPreview {
+            package: package.into(),
+        },
+    })
+}
+
+/// Keep firmware's indexed pixels; expand only the frame being painted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BackgroundPreview {
+    package: std::sync::Arc<[u8]>,
+}
+
+impl BackgroundPreview {
+    pub(crate) fn frame_count(&self) -> usize {
+        self.package[6] as usize
+    }
+
+    pub(crate) fn delays_ms(&self) -> Vec<u16> {
+        (0..self.frame_count())
+            .map(|number| {
+                u16::from_le_bytes([self.package[28 + number * 2], self.package[29 + number * 2]])
+            })
+            .collect()
+    }
+
+    pub(crate) fn frame_rgba(&self, number: usize) -> Option<Vec<u8>> {
+        if number >= self.frame_count() {
+            return None;
+        }
+        let kind = self.package[5];
+        let version = self.package[4];
+        let frame_size = if kind == 1 {
+            IMAGE_FRAME_SIZE
+        } else if version == LEGACY_FORMAT_VERSION {
+            LEGACY_ANIMATION_FRAME_SIZE
+        } else {
+            ANIMATION_FRAME_SIZE
+        };
+        let start = HEADER_SIZE + number * frame_size;
+        let frame = self.package.get(start..start + frame_size)?;
         let mut rgba = Vec::with_capacity(WIDTH as usize * HEIGHT as usize * 4);
         for pixel in 0..WIDTH as usize * HEIGHT as usize {
-            let index = if info.kind == 1 {
+            let index = if kind == 1 {
                 frame[1024 + pixel] as usize
-            } else if header[4] == LEGACY_FORMAT_VERSION {
+            } else if version == LEGACY_FORMAT_VERSION {
                 let packed = frame[LEGACY_ANIMATION_PALETTE_SIZE + pixel / 2];
                 (if pixel % 2 == 0 {
                     packed >> 4
@@ -529,22 +573,8 @@ fn decode_cached_background(
             let color = &frame[index * 4..index * 4 + 4];
             rgba.extend_from_slice(&[color[2], color[1], color[0], color[3]]);
         }
-        frames.push(rgba);
-        delays.push(u16::from_le_bytes([
-            header[28 + number * 2],
-            header[29 + number * 2],
-        ]));
+        Some(rgba)
     }
-    Some(BackgroundUploadResult {
-        source_path: String::new(),
-        kind: info.kind,
-        frame_count: info.frame_count,
-        total_size: info.total_size,
-        file_name: String::new(),
-        preview_rgba: frames[0].clone(),
-        preview_frames_rgba: frames,
-        preview_delays_ms: delays,
-    })
 }
 
 pub(crate) fn restore_background_preview(info: BackgroundInfo) -> Option<BackgroundUploadResult> {
@@ -750,21 +780,24 @@ fn prepare_background(
         LEGACY_ANIMATION_FRAME_SIZE
     };
     let mut payload = Vec::with_capacity(frame_count * frame_size);
+    #[cfg(test)]
     let mut preview_frames_rgba = Vec::with_capacity(frame_count);
     for (index, image) in images.iter().enumerate() {
-        let quantized = if kind == 1 {
+        let _quantized = if kind == 1 {
             encode_rgb332_transparent(image, &mut payload)
         } else if format_version == FORMAT_VERSION {
             encode_adaptive_6bit(image, &mut payload)
         } else {
             encode_adaptive_4bit_legacy(image, &mut payload)
         };
-        preview_frames_rgba.push(quantized.into_raw());
+        #[cfg(test)]
+        preview_frames_rgba.push(_quantized.into_raw());
         progress.store(
             100 + ((index + 1) as u32 * 45 / frame_count as u32),
             Ordering::Relaxed,
         );
     }
+    #[cfg(test)]
     let preview_rgba = preview_frames_rgba[0].clone();
     let data_crc = crc32(&payload);
     let total_size = HEADER_SIZE + payload.len();
@@ -792,8 +825,11 @@ fn prepare_background(
         kind,
         frame_count: frame_count as u8,
         package,
+        #[cfg(test)]
         preview_rgba,
+        #[cfg(test)]
         preview_frames_rgba,
+        #[cfg(test)]
         preview_delays_ms: delays,
     })
 }
@@ -805,48 +841,54 @@ fn decode_gif(
     max_frames: usize,
     progress: &AtomicU32,
 ) -> Result<(Vec<RgbaImage>, Vec<u16>)> {
-    let file = std::fs::File::open(path)?;
-    let decoder = image::codecs::gif::GifDecoder::new(BufReader::new(file))?;
-    let frames = decoder
-        .into_frames()
-        .take(MAX_SOURCE_FRAMES + 1)
-        .collect::<image::ImageResult<Vec<_>>>()?;
-    if frames.len() > MAX_SOURCE_FRAMES {
-        bail!("GIF contains more than {MAX_SOURCE_FRAMES} frames");
+    // Count and time frames without retaining their full-resolution canvases.
+    // A second streaming pass resizes only the frames selected for the firmware.
+    let open_frames = || -> Result<_> {
+        let file = std::fs::File::open(path)?;
+        Ok(image::codecs::gif::GifDecoder::new(BufReader::new(file))?.into_frames())
+    };
+    let mut source_delays = Vec::new();
+    for frame in open_frames()?.take(MAX_SOURCE_FRAMES + 1) {
+        let frame = frame?;
+        if source_delays.len() == MAX_SOURCE_FRAMES {
+            bail!("GIF contains more than {MAX_SOURCE_FRAMES} frames");
+        }
+        let (numerator, denominator) = frame.delay().numer_denom_ms();
+        source_delays.push(if denominator == 0 {
+            100
+        } else {
+            (numerator / denominator).max(20)
+        });
     }
-    if frames.is_empty() {
+    if source_delays.is_empty() {
         bail!("GIF contains no frames");
     }
-
-    let source_delays: Vec<u32> = frames
-        .iter()
-        .map(|frame| {
-            let (numerator, denominator) = frame.delay().numer_denom_ms();
-            if denominator == 0 {
-                100
-            } else {
-                (numerator / denominator).max(20)
-            }
-        })
-        .collect();
-    let output_count = frames.len().min(max_frames);
+    let output_count = source_delays.len().min(max_frames);
     let mut images = Vec::with_capacity(output_count);
     let mut delays = Vec::with_capacity(output_count);
-    for output in 0..output_count {
-        let start = output * frames.len() / output_count;
-        let end = ((output + 1) * frames.len() / output_count).max(start + 1);
+    for (index, frame) in open_frames()?.enumerate() {
+        let frame = frame?;
+        let output = images.len();
+        if output == output_count {
+            break;
+        }
+        let start = output * source_delays.len() / output_count;
+        if index != start {
+            continue;
+        }
+        let end = ((output + 1) * source_delays.len() / output_count).max(start + 1);
         images.push(prepare_frame(
-            DynamicImage::ImageRgba8(frames[start].buffer().clone()),
+            DynamicImage::ImageRgba8(frame.into_buffer()),
             fallback,
             scale_mode,
         )?);
-        let delay = source_delays[start..end]
-            .iter()
-            .copied()
-            .sum::<u32>()
-            .max(20)
-            .min(u16::MAX as u32) as u16;
-        delays.push(delay);
+        delays.push(
+            source_delays[start..end]
+                .iter()
+                .copied()
+                .sum::<u32>()
+                .clamp(20, u16::MAX as u32) as u16,
+        );
         progress.store(
             10 + ((output + 1) as u32 * 80 / output_count as u32),
             Ordering::Relaxed,
@@ -1402,8 +1444,16 @@ mod tests {
             ..Default::default()
         };
         let restored = decode_cached_background(&prepared.package, info).unwrap();
-        assert_eq!(restored.preview_frames_rgba, prepared.preview_frames_rgba);
-        assert_eq!(restored.preview_delays_ms, prepared.preview_delays_ms);
+        let retained_bytes = restored.preview.package.len();
+        assert!(retained_bytes <= prepared.package.len() + 240 * 280 * 4,
+            "a restored preview must keep indexed frames, not all decoded RGBA frames: {retained_bytes}");
+        assert_eq!(
+            (0..restored.preview.frame_count())
+                .map(|i| restored.preview.frame_rgba(i).unwrap())
+                .collect::<Vec<_>>(),
+            prepared.preview_frames_rgba
+        );
+        assert_eq!(restored.preview.delays_ms(), prepared.preview_delays_ms);
         let mut damaged = prepared.package.clone();
         damaged[HEADER_SIZE + 110] ^= 1;
         assert!(decode_cached_background(&damaged, info).is_none());
@@ -1479,7 +1529,9 @@ mod tests {
         assert_eq!(
             decode_cached_background(&prepared.package, info)
                 .unwrap()
-                .preview_rgba,
+                .preview
+                .frame_rgba(0)
+                .unwrap(),
             prepared.preview_rgba
         );
 
@@ -1709,11 +1761,21 @@ mod legacy_preview_tests {
                     ..Default::default()
                 };
                 let restored = decode_cached_background(&prepared.package, info).unwrap();
-                assert_eq!(restored.preview_rgba, prepared.preview_rgba);
-                assert_eq!(restored.preview_frames_rgba, prepared.preview_frames_rgba);
-                assert_eq!(restored.preview_delays_ms, prepared.preview_delays_ms);
+                assert_eq!(
+                    restored.preview.frame_rgba(0).unwrap(),
+                    prepared.preview_rgba
+                );
+                assert_eq!(
+                    (0..restored.preview.frame_count())
+                        .map(|i| restored.preview.frame_rgba(i).unwrap())
+                        .collect::<Vec<_>>(),
+                    prepared.preview_frames_rgba
+                );
+                assert_eq!(restored.preview.delays_ms(), prepared.preview_delays_ms);
                 assert!(restored
-                    .preview_rgba
+                    .preview
+                    .frame_rgba(0)
+                    .unwrap()
                     .chunks_exact(4)
                     .any(|pixel| pixel[3] == 0));
                 let mut damaged = prepared.package.clone();

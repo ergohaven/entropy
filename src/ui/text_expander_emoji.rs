@@ -384,22 +384,12 @@ fn twemoji_asset(emoji: &str) -> Option<&'static twemoji_assets::png::PngTwemoji
 }
 
 fn twemoji_texture(ctx: &egui::Context, emoji: &str) -> Option<egui::TextureHandle> {
-    let id = egui::Id::new(("text_expander_twemoji", emoji));
-    if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
-        return Some(texture);
-    }
-
-    let asset = twemoji_asset(emoji)?;
+    crate::ui_textures::texture(ctx, ("text_expander_twemoji", emoji), 0, || {
+        let asset = twemoji_asset(emoji)?;
     let rgba = image::load_from_memory(asset.data.0).ok()?.into_rgba8();
     let size = [rgba.width() as usize, rgba.height() as usize];
-    let image = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
-    let texture = ctx.load_texture(
-        format!("text-expander-twemoji-{emoji}"),
-        image,
-        egui::TextureOptions::LINEAR,
-    );
-    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
-    Some(texture)
+    Some(egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw(),
+    ))})
 }
 
 fn emoji_matches(emoji: &emojis::Emoji, query: &str) -> bool {
@@ -659,5 +649,30 @@ mod tests {
                 egui::Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default()
             )
         }));
+    }
+}
+#[cfg(test)]
+mod texture_memory_tests {
+    use super::*;
+
+    #[test]
+    fn browsing_emoji_bounds_retained_textures() {
+        let ctx = egui::Context::default();
+        let before = ctx.tex_manager().read().num_allocated();
+        let mut loaded = 0;
+        for emoji in emojis::iter() {
+            if let Some(texture) = twemoji_texture(&ctx, emoji.as_str()) {
+                drop(texture);
+                loaded += 1;
+                if loaded == 200 {
+                    break;
+                }
+            }
+        }
+        assert_eq!(loaded, 200);
+        assert!(
+            ctx.tex_manager().read().num_allocated() <= before + 128,
+            "browsing must not retain every emoji for the process lifetime"
+        );
     }
 }

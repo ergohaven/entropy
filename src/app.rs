@@ -89,6 +89,9 @@ mod application_layout_runtime;
 mod application_layouts_settings_ui;
 #[path = "ui/auto_shift_settings.rs"]
 mod auto_shift_settings_ui;
+#[cfg(any(target_os = "windows", test))]
+#[path = "ui/background_startup.rs"]
+mod background_startup;
 #[path = "ui/bluetooth_settings.rs"]
 mod bluetooth_settings_ui;
 #[path = "ui/combo_write.rs"]
