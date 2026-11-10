@@ -16,9 +16,22 @@ pub(crate) fn fake_rmk_keyboard(recorder: &crate::hid::TestHidRecorder) {
     let mut combo_layers = HashMap::<u8, [u8; 2]>::new();
     let mut settings = HashMap::<[u8; 2], Vec<u8>>::new();
     let mut dynamic_entries = HashMap::<[u8; 2], Vec<u8>>::new();
+    let mut macros = vec![0u8; 8192];
     recorder.respond_by(move |request| {
         let mut reply = [0u8; 32];
         match request[..3] {
+            [0x0f, ..] => {
+                let offset = u16::from_be_bytes([request[1], request[2]]) as usize;
+                let len = usize::from(request[3]);
+                macros[offset..offset + len].copy_from_slice(&request[4..4 + len]);
+                reply = *request;
+            }
+            [0x0e, ..] => {
+                let offset = u16::from_be_bytes([request[1], request[2]]) as usize;
+                let len = usize::from(request[3]);
+                reply = *request;
+                reply[4..4 + len].copy_from_slice(&macros[offset..offset + len]);
+            }
             // Tap dance, combo, key override and alt repeat SET (even op) and
             // GET (odd op): the GET reply carries the SET payload after status.
             [0xfe, 0x0d, op @ (0x02 | 0x04 | 0x06 | 0x08)] => {

@@ -273,6 +273,7 @@ timeout_tooltip = "Время удержания перед отправкой s
 timeout_field_tooltip = "Таймаут в миллисекундах"
 
 [connection]
+keyboard_locked_import_layout = "Устройство заблокировано, разблокируйте его для импорта раскладки"
 keyboard_locked_edit_macros = "Устройство заблокировано, разблокируйте его для редактирования макросов"
 keyboard_locked_edit_tap_dance = "Устройство заблокировано, разблокируйте его для редактирования Tap Dance"
 waiting_for_keyboard = "Ожидание устройства"
@@ -1474,6 +1475,17 @@ right_numbered_encoder = "Правый энкодер {number}"
 right_numbered_encoder_tooltip = "Показывать правый энкодер {number} на раскладке в главном меню"
 
 [modules_settings]
+qube_display = "Экран Qube"
+display_brightness = "Яркость экрана, %"
+display_brightness_tooltip = "Яркость подсветки экрана Qube, независимо от светодиодов клавиатуры. Ноль выключает подсветку."
+display_background = "Фон экрана"
+display_background_tooltip = "Чёрный или синий фон экрана Qube."
+display_text_size = "Размер текста на экране"
+display_text_size_tooltip = "Увеличить текст трека, слоя, модификаторов и заряда на экране Qube."
+display_black = "Чёрный"
+display_blue = "Синий"
+display_compact = "Компактный"
+display_large = "Крупный"
 title = "Настройки модулей"
 description = "Настройки тачпада, трекбола и мышиного автослоя, которые отдаёт прошивка устройства"
 trackball_title = "Настройки трекбола"
