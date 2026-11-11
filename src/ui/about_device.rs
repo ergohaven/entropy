@@ -821,10 +821,11 @@ fn draw_about_rows(
                         if row.monospace {
                             text = text.monospace();
                         }
-                        let resp = ui.add(egui::Label::new(text).truncate());
-                        if row.value.chars().count() > 20 {
-                            resp.on_hover_text(row.value.as_str());
-                        }
+                        ui.add(
+                            egui::Label::new(text)
+                                .truncate()
+                                .show_tooltip_when_elided(tooltip_enabled),
+                        );
                     });
                 },
             );
