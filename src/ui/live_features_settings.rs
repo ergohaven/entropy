@@ -45,7 +45,7 @@ impl EntropyApp {
             || (self
                 .selected_device
                 .and_then(|i| self.device_manager.devices().get(i))
-                .is_some_and(|device| device.firmware == FirmwareProtocol::Vial)
+                .is_some()
                 && self.layout.as_ref().is_some_and(|layout| {
                     layout
                         .layout_options
@@ -59,9 +59,6 @@ impl EntropyApp {
         ui: &mut egui::Ui,
         metrics: crate::ui_style::ResponsiveMetrics,
     ) {
-        if self.layout.as_ref().is_none_or(|layout| layout.firmware != FirmwareProtocol::Vial) {
-            return;
-        }
         let Some((index, option)) = self.layout.as_ref().and_then(|layout| {
             layout
                 .layout_options
@@ -85,12 +82,15 @@ impl EntropyApp {
         );
         let selected = Self::selected_layout_option_idx(&option, &values, index);
         #[cfg(not(target_arch = "wasm32"))]
-        let ready = self.universal_geometry_connection_ready()
-            && self.layout_options_value.is_some()
+        let ready = self.layout_options_value.is_some()
             && self
                 .selected_device
                 .and_then(|i| self.device_manager.devices().get(i))
-                .is_some_and(|device| device.firmware == FirmwareProtocol::Vial);
+                .is_some_and(|device| match device.firmware {
+                    FirmwareProtocol::Vial => self.universal_geometry_connection_ready(),
+                    // Rynk writes directly through the session; it has no geometry queue.
+                    FirmwareProtocol::Rynk => self.hid_device.is_some(),
+                });
         #[cfg(target_arch = "wasm32")]
         let ready = false;
         ui.add_enabled_ui(ready, |ui| {
