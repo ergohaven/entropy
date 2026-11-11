@@ -1342,8 +1342,8 @@ mod tests {
         })
         .to_string();
         lzma_rs::xz_compress(&mut definition.as_bytes(), &mut stored.definition).unwrap();
-        // Layer 1 is unnamed on the board, so the connect names it, and the
-        // halves wake for a battery reading.
+        // The board's empty layer name is authoritative. A battery reading
+        // would wake the halves, so the read-only session must refuse it.
         stored.settings.insert(200, b"Base\0".to_vec());
         stored.settings.insert(201, b"\0".to_vec());
         stored.caps = caps::BATTERY_HALVES;
@@ -1380,10 +1380,12 @@ mod tests {
         assert_eq!(state.writes(), [], "writes reached the board");
         assert!(!state.received.contains(&Cmd::GetBatteryHalves));
         let refused = session.rynk.refused_requests();
-        assert!(refused.contains(&Cmd::SetSetting.raw()), "{refused:04x?}");
+        assert!(refused.contains(&Cmd::GetBatteryHalves.raw()), "{refused:04x?}");
+        assert!(!refused.contains(&Cmd::SetSetting.raw()), "{refused:04x?}");
         assert!(session.rynk.failed_reads().is_empty());
         let bundle: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert!(bundle["data"]["keymap"].is_array(), "{bundle}");
+        assert_eq!(bundle["data"]["layer_names"], serde_json::json!(["Base", ""]));
         println!("{COMPLETION}");
     }
 

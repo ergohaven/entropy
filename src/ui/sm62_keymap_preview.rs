@@ -10,21 +10,17 @@ fn sm62_keymap_texture(
     name: &'static str,
     bytes: &[u8],
 ) -> egui::TextureHandle {
-    let id = egui::Id::unique(name);
-    if let Some(texture) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
-        return texture;
-    }
-    let image = image::load_from_memory(bytes)
-        .expect("embedded firmware bitmap")
-        .into_rgba8();
-    let size = [image.width() as usize, image.height() as usize];
-    let texture = ctx.load_texture(
-        name,
-        egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw()),
-        egui::TextureOptions::LINEAR,
-    );
-    ctx.data_mut(|d| d.insert_temp(id, texture.clone()));
-    texture
+    crate::ui_textures::texture(ctx, name, 0, || {
+        let image = image::load_from_memory(bytes)
+            .expect("embedded firmware bitmap")
+            .into_rgba8();
+        let size = [image.width() as usize, image.height() as usize];
+        Some(egui::ColorImage::from_rgba_unmultiplied(
+            size,
+            image.as_raw(),
+        ))
+    })
+    .expect("embedded firmware bitmap")
 }
 
 fn paint_sm62_keymap_glyph(

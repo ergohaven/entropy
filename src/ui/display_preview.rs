@@ -23,25 +23,18 @@ fn sm62_preview_mode(settings: &[u8], scene: u8) -> u8 {
 }
 
 fn sm62_orbit_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
-    let id = egui::Id::unique("sm62_orbit_firmware_frames");
-    if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
-        return Some(texture);
-    }
-    // Decoded from firmware anim_00..15 and flame_00..15 at 240x280.
-    let image = image::load_from_memory(include_bytes!("../../assets/sm62/orbit_frames.png"))
-        .ok()?
-        .into_rgba8();
-    if image.dimensions() != (960, 1120) {
-        return None;
-    }
-    let color_image = egui::ColorImage::from_rgba_unmultiplied([960, 1120], image.as_raw());
-    let texture = ctx.load_texture(
-        "sm62-orbit-firmware-frames",
-        color_image,
-        egui::TextureOptions::LINEAR,
-    );
-    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
-    Some(texture)
+    crate::ui_textures::texture(ctx, "sm62_orbit_firmware_frames", 0, || {
+        let image = image::load_from_memory(include_bytes!("../../assets/sm62/orbit_frames.png"))
+            .ok()?
+            .into_rgba8();
+        if image.dimensions() != (960, 1120) {
+            return None;
+        }
+        Some(egui::ColorImage::from_rgba_unmultiplied(
+            [960, 1120],
+            image.as_raw(),
+        ))
+    })
 }
 
 include!("sm62_keymap_preview.rs");
@@ -1060,43 +1053,39 @@ impl EntropyApp {
     }
 
     fn standby_preview_texture(&self, ctx: &egui::Context) -> Option<egui::TextureHandle> {
-        let frames = &self.display_settings.clock_background_preview_frames_rgba;
-        let frame_index = if frames.is_empty() {
-            0
-        } else {
-            animation_frame_index(
-                &self.display_settings.clock_background_preview_delays_ms,
-                frames.len(),
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = ctx;
+            None
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let preview = self.display_settings.clock_background_preview.as_ref()?;
+            let frame_index = animation_frame_index(
+                &preview.delays_ms(),
+                preview.frame_count(),
                 (ctx.input(|input| input.time) * 1000.0).max(0.0) as u64,
                 self.display_settings.clock_background_speed_percent,
+            );
+            if preview.frame_count() > 1 {
+                ctx.request_repaint_after(std::time::Duration::from_millis(20));
+            }
+            crate::ui_textures::texture(
+                ctx,
+                "standby_background_preview",
+                (
+                    self.connection_generation,
+                    self.display_settings.clock_background_preview_revision,
+                    frame_index,
+                ),
+                || {
+                    Some(egui::ColorImage::from_rgba_unmultiplied(
+                        [240, 280],
+                        &preview.frame_rgba(frame_index)?,
+                    ))
+                },
             )
-        };
-        let rgba = frames
-            .get(frame_index)
-            .unwrap_or(&self.display_settings.clock_background_preview_rgba);
-        if rgba.len() != 240usize * 280usize * 4 {
-            return None;
         }
-        if frames.len() > 1 {
-            ctx.request_repaint_after(std::time::Duration::from_millis(20));
-        }
-        let id = egui::Id::unique((
-            "standby_background_preview",
-            self.connection_generation,
-            self.display_settings.clock_background_preview_revision,
-            frame_index,
-        ));
-        if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
-            return Some(texture);
-        }
-        let image = egui::ColorImage::from_rgba_unmultiplied([240, 280], rgba);
-        let texture = ctx.load_texture(
-            format!("standby-background-preview-{frame_index}"),
-            image,
-            egui::TextureOptions::LINEAR,
-        );
-        ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
-        Some(texture)
     }
 
     fn startup_preview_texture(&self, ctx: &egui::Context) -> Option<egui::TextureHandle> {
@@ -1104,42 +1093,32 @@ impl EntropyApp {
         if rgba.len() != 240usize * 280usize * 4 {
             return None;
         }
-        let id = egui::Id::unique((
+        crate::ui_textures::texture(
+            ctx,
             "startup_image_preview",
-            self.connection_generation,
-            self.display_settings.startup_image_preview_revision,
-        ));
-        if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
-            return Some(texture);
-        }
-        let image = egui::ColorImage::from_rgba_unmultiplied([240, 280], rgba);
-        let texture =
-            ctx.load_texture("startup-image-preview", image, egui::TextureOptions::LINEAR);
-        ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
-        Some(texture)
+            (
+                self.connection_generation,
+                self.display_settings.startup_image_preview_revision,
+            ),
+            || Some(egui::ColorImage::from_rgba_unmultiplied([240, 280], rgba)),
+        )
     }
 
     fn builtin_startup_logo_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
-        let id = egui::Id::unique("m4cr0pad_builtin_startup_logo");
-        if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
-            return Some(texture);
-        }
-        let image = image::load_from_memory(include_bytes!(
-            "../../assets/ergohaven-macropad-startup-logo.png"
-        ))
-        .ok()?
-        .into_rgba8();
-        if image.dimensions() != (240, 72) {
-            return None;
-        }
-        let color_image = egui::ColorImage::from_rgba_unmultiplied([240, 72], image.as_raw());
-        let texture = ctx.load_texture(
-            "m4cr0pad-builtin-startup-logo",
-            color_image,
-            egui::TextureOptions::LINEAR,
-        );
-        ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
-        Some(texture)
+        crate::ui_textures::texture(ctx, "m4cr0pad_builtin_startup_logo", 0, || {
+            let image = image::load_from_memory(include_bytes!(
+                "../../assets/ergohaven-macropad-startup-logo.png"
+            ))
+            .ok()?
+            .into_rgba8();
+            if image.dimensions() != (240, 72) {
+                return None;
+            }
+            Some(egui::ColorImage::from_rgba_unmultiplied(
+                [240, 72],
+                image.as_raw(),
+            ))
+        })
     }
 
     fn paint_startup_display_preview(&self, ui: &mut egui::Ui, screen: egui::Rect) {
@@ -1921,6 +1900,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn startup_preview_reuses_one_texture_across_revisions() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        let before = ctx.tex_manager().read().num_allocated();
+        app.display_settings.startup_image_preview_rgba = vec![255; 240 * 280 * 4];
+        for revision in 0..20 {
+            app.connection_generation = revision;
+            app.display_settings.startup_image_preview_revision = revision;
+            drop(app.startup_preview_texture(&ctx).unwrap());
+        }
+        assert_eq!(
+            ctx.tex_manager().read().num_allocated(),
+            before + 1,
+            "obsolete preview revisions must release their textures"
+        );
+    }
+
+    #[test]
     fn sm62_preview_reflects_each_configured_scene() {
         let clock = [0, 0, 20, 1, 1];
         assert_eq!(sm62_preview_mode(&clock, 0), 0);
@@ -2059,21 +2056,17 @@ mod tests {
             })
             .collect();
         let active = egui::Rect::from_min_size(egui::pos2(85.0, 105.0), egui::vec2(69.0, 69.0));
-        assert!(
-            rectangles
-                .iter()
-                .any(|r| r.rect == active && r.fill == Color32::from_rgb(242, 219, 149))
-        );
+        assert!(rectangles
+            .iter()
+            .any(|r| r.rect == active && r.fill == Color32::from_rgb(242, 219, 149)));
         let separators: Vec<_> = rectangles
             .iter()
             .filter(|r| r.rect.width() == 2.0 || r.rect.height() == 2.0)
             .collect();
         assert_eq!(separators.len(), 12);
-        assert!(
-            separators
-                .iter()
-                .all(|r| r.fill == Color32::from_rgb(131, 127, 118))
-        );
+        assert!(separators
+            .iter()
+            .all(|r| r.fill == Color32::from_rgb(131, 127, 118)));
         assert!(separators.iter().all(|r| r.rect.left() != 6.0
             && r.rect.left() != 231.0
             && r.rect.top() != 26.0
@@ -2117,11 +2110,10 @@ mod tests {
             images >= 15,
             "actual 48px time and 16px date must use firmware glyphs; got {images}"
         );
-        assert!(
-            !output.shapes.iter().any(
-                |s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text.contains(':'))
-            )
-        );
+        assert!(!output
+            .shapes
+            .iter()
+            .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text.contains(':'))));
     }
 
     #[test]
@@ -2187,11 +2179,9 @@ mod tests {
         );
         assert!(output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r)
             if r.rect == egui::Rect::from_min_size(egui::pos2(20.0, 121.0), egui::vec2(5.0, 17.0)))));
-        assert!(
-            !labels
-                .iter()
-                .any(|(label, _)| matches!(*label, "NO SIGNAL" | "Waiting for host"))
-        );
+        assert!(!labels
+            .iter()
+            .any(|(label, _)| matches!(*label, "NO SIGNAL" | "Waiting for host")));
     }
 
     #[test]
@@ -2242,12 +2232,10 @@ mod tests {
                 .collect();
             assert_eq!(icons.len(), 1);
             let expected = Color32::from_rgb(color[0], color[1], color[2]);
-            assert!(
-                icons[0]
-                    .vertices
-                    .iter()
-                    .all(|vertex| vertex.color == expected)
-            );
+            assert!(icons[0]
+                .vertices
+                .iter()
+                .all(|vertex| vertex.color == expected));
         }
     }
 

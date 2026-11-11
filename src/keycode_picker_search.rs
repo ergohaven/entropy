@@ -251,11 +251,9 @@ mod tests {
         assert!(!results.is_empty());
         assert!(results.iter().all(|row| row.tab == KeycodeTab::Basic));
         assert!(results.iter().all(|row| row.section.is_empty()));
-        assert!(
-            results
-                .iter()
-                .all(|row| row.matches("standard keyboard layout", Some(basic_heading)))
-        );
+        assert!(results
+            .iter()
+            .all(|row| row.matches("standard keyboard layout", Some(basic_heading))));
     }
 
     #[test]
@@ -390,13 +388,11 @@ mod tests {
 
         // Mouse keys follow the tab: hidden when the firmware lacks them.
         search(&mut picker, "mouse");
-        assert!(
-            !picker
-                .search
-                .results()
-                .iter()
-                .any(|row| { row.section == special_section(&picker, "key_picker_text.mouse") })
-        );
+        assert!(!picker
+            .search
+            .results()
+            .iter()
+            .any(|row| { row.section == special_section(&picker, "key_picker_text.mouse") }));
     }
 
     #[test]
@@ -454,13 +450,11 @@ mod tests {
         assert!(search(&mut picker, "нампад").is_empty());
         picker.language = crate::i18n::Language::Russian;
         picker.refresh_vial_search_results();
-        assert!(
-            picker
-                .search
-                .results()
-                .iter()
-                .any(|row| row.section == special_section(&picker, "key_picker_text.numpad"))
-        );
+        assert!(picker
+            .search
+            .results()
+            .iter()
+            .any(|row| row.section == special_section(&picker, "key_picker_text.numpad")));
     }
 
     #[test]
@@ -554,13 +548,11 @@ mod tests {
         search(&mut picker, "tap dan");
         assert!(results_contain(&picker, 0x5700));
         assert!(results_contain(&picker, 0x5701));
-        assert!(
-            picker
-                .search
-                .results()
-                .iter()
-                .any(|row| { row.action == PickerAction::ChooseSlot(AdvancedSlotKind::TapDance) })
-        );
+        assert!(picker
+            .search
+            .results()
+            .iter()
+            .any(|row| { row.action == PickerAction::ChooseSlot(AdvancedSlotKind::TapDance) }));
 
         search(&mut picker, "волна");
         assert_eq!(picker.search.results().len(), 1);
@@ -574,12 +566,10 @@ mod tests {
 
         search(&mut picker, "macro");
         assert!(results_contain(&picker, 0x7700));
-        assert!(
-            picker
-                .search
-                .results()
-                .iter()
-                .any(|row| { row.action == PickerAction::ChooseSlot(AdvancedSlotKind::Macro) })
-        );
+        assert!(picker
+            .search
+            .results()
+            .iter()
+            .any(|row| { row.action == PickerAction::ChooseSlot(AdvancedSlotKind::Macro) }));
     }
 }

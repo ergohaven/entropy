@@ -943,6 +943,25 @@ impl GlowWinitRunning<'_> {
 
         egui_winit.handle_platform_output_with_event_loop(&window, event_loop, platform_output);
 
+        if !is_visible && (!pending_deltas.set.is_empty() || !pending_deltas.free.is_empty()) {
+            change_gl_context(
+                current_gl_context,
+                not_current_gl_context,
+                current_viewport,
+                viewport_id,
+                gl_surface,
+            );
+            for (id, deltas) in &pending_deltas.set {
+                for delta in deltas {
+                    painter.set_texture(*id, delta);
+                }
+            }
+            for id in &pending_deltas.free {
+                painter.free_texture(*id);
+            }
+            pending_deltas.clear();
+        }
+
         if is_visible {
             let clipped_primitives = integration.egui_ctx.tessellate(shapes, pixels_per_point);
 

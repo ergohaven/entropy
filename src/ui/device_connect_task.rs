@@ -346,21 +346,6 @@ fn canonical_layout_device_name(device: &crate::device::Device) -> &str {
     }
 }
 
-fn is_default_layer_name(index: usize, name: &str) -> bool {
-    let trimmed = name.trim();
-    trimmed.is_empty()
-        || trimmed == index.to_string()
-        || (index == 0 && trimmed.eq_ignore_ascii_case("main"))
-        || trimmed.eq_ignore_ascii_case(&format!("layer {index}"))
-}
-
-pub(super) fn has_firmware_layer_names(names: &[String]) -> bool {
-    names
-        .iter()
-        .enumerate()
-        .any(|(index, name)| !is_default_layer_name(index, name))
-}
-
 #[test]
 fn version_compat_connect_rejects_unknown_native_version() {
     let (device, recorder) = crate::hid::HidDevice::test_device();
@@ -429,7 +414,7 @@ pub(super) fn layer_name_sync_updates(
 
             let current = current_names.get(layer)?.as_deref()?;
             let name = name.trim();
-            if name.is_empty() || current == name {
+            if current == name {
                 None
             } else {
                 Some((qsid, name.to_owned()))
@@ -1181,25 +1166,21 @@ impl EntropyApp {
                             })?
                         {
                             *current_firmware_name = Some(name.clone());
-                            if !name.is_empty() {
-                                layout.layer_names[layer] = name;
-                                layer_names_from_firmware[layer] = true;
-                            }
+                            // A successful empty read is an unnamed layer, not
+                            // absent storage: do not resurrect a stale local name.
+                            layout.layer_names[layer] = name;
+                            layer_names_from_firmware[layer] = true;
                         }
                     }
                 }
 
-                if staged_bluetooth_load || !has_firmware_layer_names(&layout.layer_names) {
-                    if let Some(local_layer_names) = load_saved_layer_names(&dev.name) {
-                        for (layer, name) in
-                            local_layer_names.into_iter().enumerate().take(layer_count)
-                        {
-                            if !layer_names_from_firmware[layer] && !name.trim().is_empty() {
-                                layout.layer_names[layer] = name;
-                            }
-                        }
-                    }
-                }
+                let local_layer_names = load_saved_layer_names(&dev.name);
+                layout.layer_names = super::device_connect_apply::resolve_layer_names(
+                    &layout.layer_names,
+                    &layer_names_from_firmware,
+                    local_layer_names.as_deref(),
+                    layer_count,
+                );
 
                 let layer_name_updates = (!staged_bluetooth_load)
                     .then(|| {
@@ -1990,10 +1971,9 @@ mod tests {
 
     #[test]
     fn timeout_after_initial_keymap_read_keeps_rmk_capability_probe_optional() {
-        let (device, recorder) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
-            1,
-            crate::hid::TestHidFault::Timeout,
-        )));
+        let (device, recorder) = crate::hid::HidDevice::test_device_with_fault_after_requests(
+            Some((1, crate::hid::TestHidFault::Timeout)),
+        );
 
         device.get_keymap_buffer(1, 1, 1).unwrap();
 
@@ -2035,6 +2015,16 @@ mod tests {
         let current = vec![None, None];
 
         assert!(layer_name_sync_updates(&names, &current, &[1, 2, 3]).is_empty());
+    }
+
+    #[test]
+    fn cleared_layer_name_sync_writes_empty_only_when_supported_and_read() {
+        let names = vec![String::new(); 3];
+        let current = vec![Some("Old".into()), None, Some("Old".into())];
+        assert_eq!(
+            layer_name_sync_updates(&names, &current, &[200, 201]),
+            vec![(200, String::new())]
+        );
     }
 
     #[test]

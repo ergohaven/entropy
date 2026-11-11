@@ -39,6 +39,7 @@ mod rynk;
 mod smart_input;
 mod text_expander;
 mod ui_style;
+mod ui_textures;
 mod universal_symbols;
 mod vial_native;
 
@@ -349,6 +350,24 @@ fn main() -> eframe::Result<()> {
     #[cfg(target_os = "macos")]
     app::prepare_macos_update_notifications();
 
+    #[cfg(target_os = "windows")]
+    let (background_app, launch_minimized) = if launch_minimized {
+        let ctx = egui::Context::default();
+        let mut app = app::EntropyApp::new_with_context(&ctx);
+        // The layout indicator is itself a graphics window. Keep its existing
+        // startup behavior, including the hidden main window.
+        if app.app_settings.sticky_layout_window {
+            (Some(app), true)
+        } else {
+            if app.run_windowless_until_restore(&ctx) {
+                return Ok(());
+            }
+            (Some(app), false)
+        }
+    } else {
+        (None, false)
+    };
+
     let viewport = egui::ViewportBuilder::default()
         .with_title(APP_TITLE)
         .with_app_id(APP_ID)
@@ -486,7 +505,11 @@ fn main() -> eframe::Result<()> {
                     .insert(egui::FontFamily::Name(family.into()), vec![font.to_owned()]);
             }
             cc.egui_ctx.set_fonts(fonts);
+            #[cfg(target_os = "windows")]
+            let app = background_app.unwrap_or_else(|| EntropyApp::new(cc));
+            #[cfg(not(target_os = "windows"))]
             let app = EntropyApp::new(cc);
+            cc.egui_ctx.set_zoom_factor(app.app_settings.ui_scale);
             #[cfg(target_os = "windows")]
             let app = if launch_minimized {
                 app.with_start_hidden_to_tray()

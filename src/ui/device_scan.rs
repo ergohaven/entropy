@@ -94,6 +94,15 @@ fn in_listed_order(listed: &[Device], mut scanned: Vec<Device>) -> Vec<Device> {
 }
 
 impl EntropyApp {
+    #[cfg(target_os = "linux")]
+    fn device_scan_udev_access(&self) -> super::app_settings_ui::UdevAccess {
+        #[cfg(test)]
+        if let Some(access) = self.test_device_scan_udev_access {
+            return access;
+        }
+        super::app_settings_ui::linux_udev_access()
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn maybe_start_bluetooth_reconnect_scan(&mut self, ctx: &egui::Context) {
         let Some(next_attempt_at) = (match &self.connect_state {
@@ -410,7 +419,7 @@ impl EntropyApp {
             && !was_loading
             && udev_rule_missing(
                 self.device_manager.devices(),
-                super::app_settings_ui::linux_udev_access(),
+                self.device_scan_udev_access(),
             )
         {
             self.retain_connected_qmk_hid_host_bridges();

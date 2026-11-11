@@ -2701,9 +2701,8 @@ pub(crate) struct DisplaySettingsState {
     pub(crate) confirmed_clock_background_speed_percent: u16,
     pub(crate) clock_background_speed_write_due: Option<std::time::Instant>,
     pub(crate) clock_background_file_name: Option<String>,
-    pub(crate) clock_background_preview_rgba: Vec<u8>,
-    pub(crate) clock_background_preview_frames_rgba: Vec<Vec<u8>>,
-    pub(crate) clock_background_preview_delays_ms: Vec<u16>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) clock_background_preview: Option<standby_background::BackgroundPreview>,
     pub(crate) clock_background_preview_revision: u64,
     pub(crate) clock_background_dim_supported: bool,
     pub(crate) clock_background_dim: u8,
@@ -2804,9 +2803,8 @@ impl Default for DisplaySettingsState {
             confirmed_clock_background_speed_percent: 100,
             clock_background_speed_write_due: None,
             clock_background_file_name: None,
-            clock_background_preview_rgba: Vec::new(),
-            clock_background_preview_frames_rgba: Vec::new(),
-            clock_background_preview_delays_ms: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            clock_background_preview: None,
             clock_background_preview_revision: 0,
             clock_background_dim_supported: false,
             clock_background_dim: 30,
@@ -3201,9 +3199,8 @@ pub(crate) fn load_display_settings(
         confirmed_clock_background_speed_percent: clock_background_speed_percent,
         clock_background_speed_write_due: None,
         clock_background_file_name: None,
-        clock_background_preview_rgba: Vec::new(),
-        clock_background_preview_frames_rgba: Vec::new(),
-        clock_background_preview_delays_ms: Vec::new(),
+        #[cfg(not(target_arch = "wasm32"))]
+        clock_background_preview: None,
         clock_background_preview_revision: 0,
         clock_background_dim_supported,
         clock_background_dim,
@@ -3229,9 +3226,7 @@ pub(crate) fn load_display_settings(
     };
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(preview) = cached_background {
-        state.clock_background_preview_rgba = preview.preview_rgba;
-        state.clock_background_preview_frames_rgba = preview.preview_frames_rgba;
-        state.clock_background_preview_delays_ms = preview.preview_delays_ms;
+        state.clock_background_preview = Some(preview.preview);
         state.clock_background_file_name =
             (!preview.file_name.is_empty()).then_some(preview.file_name);
         state.clock_background_preview_revision = 1;
@@ -5565,6 +5560,8 @@ pub struct EntropyApp {
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) test_connect_requests:
         Option<mpsc::Sender<(Device, mpsc::Sender<ConnectTaskMessage>)>>,
+    #[cfg(all(test, target_os = "linux"))]
+    pub(super) test_device_scan_udev_access: Option<super::app_settings_ui::UdevAccess>,
     /// Scripted HID handle for the next real connect worker, in place of
     /// opening the device.
     #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -5704,6 +5701,7 @@ pub struct EntropyApp {
     pub(crate) jump_back_stack: Vec<usize>,
     pub(crate) dark_mode: bool,
     pub(crate) last_applied_theme: Option<(bool, AppAccentColor)>,
+    pub(crate) native_time_offset: f64,
     pub(crate) app_settings: AppSettings,
     /// Monotonic app clock, independent of painted egui input time. The
     /// text-expander save debounce and external rules-file reload schedule on
@@ -5820,6 +5818,7 @@ pub struct EntropyApp {
     pub(crate) macro_auto_unlock_cancelled: bool,
     pub(crate) settings_tab: SettingsTab,
     pub(crate) layer_names: Vec<String>,
+    pub(crate) layer_names_from_firmware: Vec<bool>,
     pub(crate) editing_layer: Option<usize>, // layer being renamed
     pub(crate) editing_layer_text: String,
     pub(crate) editing_layer_focus_requested: bool,

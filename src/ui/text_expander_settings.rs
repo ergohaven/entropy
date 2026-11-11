@@ -1264,7 +1264,7 @@ mod setup_state_tests {
                 Some(TextExpanderIbusModal::UseGnomeSources),
             ] {
                 app.text_expander_ibus_modal = modal;
-                let _ = ctx.run_ui(
+                let _ = crate::app::discard_texture_deltas(ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -1281,7 +1281,7 @@ mod setup_state_tests {
                         }
                         app.draw_text_expander_ibus_modal(ui.ctx(), metrics);
                     },
-                );
+                ));
                 assert_eq!(
                     app.text_expander_ibus_modal, modal,
                     "drawing alone keeps it open"
