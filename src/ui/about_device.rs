@@ -187,6 +187,10 @@ fn firmware_update_rows(
                     crate::i18n::Language::Russian => "актуальная версия".to_owned(),
                     crate::i18n::Language::English => "up to date".to_owned(),
                 },
+                VersionRelation::Unknown => match lang {
+                    crate::i18n::Language::Russian => "не удалось сравнить сборки".to_owned(),
+                    crate::i18n::Language::English => "could not compare builds".to_owned(),
+                },
                 VersionRelation::DevelopmentBuild => match lang {
                     crate::i18n::Language::Russian => {
                         "установленная прошивка новее опубликованной".to_owned()
@@ -627,7 +631,7 @@ fn about_entropy_update_rows(
             "Version",
             "Версия из Cargo package metadata",
             "Version from Cargo package metadata",
-            env!("CARGO_PKG_VERSION"),
+            crate::app::current_build_label(),
         ),
         localized_row(
             lang,
@@ -639,10 +643,10 @@ fn about_entropy_update_rows(
         ),
         localized_monospace_row(
             lang,
-            "Последний релиз",
-            "Latest release",
-            "Последняя версия на GitHub Releases",
-            "Latest version on GitHub Releases",
+            "Последняя версия",
+            "Latest version",
+            "Последняя доступная версия для выбранного канала обновлений",
+            "Latest available version on the selected update track",
             latest_release_text(lang, update_check),
         ),
         localized_row(
@@ -657,8 +661,8 @@ fn about_entropy_update_rows(
             lang,
             "Файл обновления",
             "Update file",
-            "Подходящий файл релиза для этой ОС",
-            "Release asset selected for this OS",
+            "Подходящий файл обновления для этой ОС",
+            "Update download selected for this OS",
             update_asset_text(lang, update_check),
         ),
     ]
@@ -689,8 +693,8 @@ fn update_status_text(lang: crate::i18n::Language, update_check: &UpdateCheckSta
             crate::i18n::Language::English => "not checked".to_owned(),
         },
         UpdateCheckState::Checking { .. } => match lang {
-            crate::i18n::Language::Russian => "проверяем GitHub Releases".to_owned(),
-            crate::i18n::Language::English => "checking GitHub Releases".to_owned(),
+            crate::i18n::Language::Russian => "проверяем GitHub".to_owned(),
+            crate::i18n::Language::English => "checking GitHub".to_owned(),
         },
         UpdateCheckState::Ready(result) => match result.relation {
             VersionRelation::UpdateAvailable => match lang {
@@ -701,9 +705,13 @@ fn update_status_text(lang: crate::i18n::Language, update_check: &UpdateCheckSta
                 crate::i18n::Language::Russian => "актуальная версия".to_owned(),
                 crate::i18n::Language::English => "up to date".to_owned(),
             },
+            VersionRelation::Unknown => match lang {
+                crate::i18n::Language::Russian => "не удалось сравнить сборки".to_owned(),
+                crate::i18n::Language::English => "could not compare builds".to_owned(),
+            },
             VersionRelation::DevelopmentBuild => match lang {
-                crate::i18n::Language::Russian => "локальная сборка новее релиза".to_owned(),
-                crate::i18n::Language::English => "local build is newer than latest".to_owned(),
+                crate::i18n::Language::Russian => "сборка для разработки".to_owned(),
+                crate::i18n::Language::English => "development build".to_owned(),
             },
         },
         UpdateCheckState::Failed(error) => match lang {
@@ -813,10 +821,11 @@ fn draw_about_rows(
                         if row.monospace {
                             text = text.monospace();
                         }
-                        let resp = ui.add(egui::Label::new(text).truncate());
-                        if row.value.chars().count() > 20 {
-                            resp.on_hover_text(row.value.as_str());
-                        }
+                        ui.add(
+                            egui::Label::new(text)
+                                .truncate()
+                                .show_tooltip_when_elided(tooltip_enabled),
+                        );
                     });
                 },
             );
@@ -958,7 +967,6 @@ impl EntropyApp {
         let lang = self.app_settings.language;
         let dark = ui.visuals().dark_mode;
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
-        let rows = about_entropy_update_rows(lang, &self.update_check);
 
         crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
@@ -974,7 +982,25 @@ impl EntropyApp {
                         .size(metrics.value(13.0))
                         .color(app_muted_text(dark)),
                 );
-                ui.add_space(metrics.value(24.0));
+                ui.add_space(metrics.value(12.0));
+                let development_label = match lang {
+                    crate::i18n::Language::Russian => "Обновления для разработчиков (rynk)",
+                    crate::i18n::Language::English => "Development updates (rynk)",
+                };
+                let development_help = match lang {
+                    crate::i18n::Language::Russian => "Выключено: официальные релизы. Включено: последние опубликованные успешные сборки rynk, которые могут быть нестабильны. Публикуются вручную, не после каждого коммита. Для скачивания нужен вход в GitHub. Проверки кешируются на минуту.",
+                    crate::i18n::Language::English => "Off: official releases. On: latest published successful rynk builds, which may be unstable. Published manually, not after every commit. Downloads require signing in to GitHub. Checks are cached for one minute.",
+                };
+                if ui.checkbox(&mut self.app_settings.development_updates, development_label)
+                    .on_hover_text(development_help).changed()
+                {
+                    // Dropping the old receiver prevents a previous track's
+                    // in-flight check or notification from becoming current.
+                    self.update_check = crate::app::start_update_check(self.app_settings.development_updates);
+                    save_app_settings(&self.app_settings);
+                }
+                ui.add_space(metrics.value(12.0));
+                let rows = about_entropy_update_rows(lang, &self.update_check);
                 let list_viewport =
                     draw_about_rows(ui, "about_entropy", metrics, &rows, metrics.value(54.0));
 
@@ -1040,7 +1066,7 @@ impl EntropyApp {
                         )
                         .clicked()
                         {
-                            self.update_check = crate::app::start_update_check();
+                            self.update_check = crate::app::start_update_check(self.app_settings.development_updates);
                         }
 
                         if let Some(result) = ready {
@@ -1060,11 +1086,22 @@ impl EntropyApp {
 
                             if crate::ui_style::modern_button(
                                 ui,
-                                changelog_label(lang),
+                                if self.app_settings.development_updates {
+                                    match lang {
+                                        crate::i18n::Language::Russian => "О сборке",
+                                        crate::i18n::Language::English => "Build details",
+                                    }
+                                } else {
+                                    changelog_label(lang)
+                                },
                                 button_size,
                                 true,
                             )
-                            .on_hover_text(changelog_tooltip(lang))
+                            .on_hover_text(if self.app_settings.development_updates {
+                                development_help
+                            } else {
+                                changelog_tooltip(lang)
+                            })
                             .clicked()
                                 && !crate::app::open_url_in_browser(&result.release_url)
                             {
@@ -1081,6 +1118,44 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn about_entropy_renders_the_update_track_in_both_languages() {
+        for (lang, label) in [
+            (crate::i18n::Language::English, "Development updates (rynk)"),
+            (
+                crate::i18n::Language::Russian,
+                "Обновления для разработчиков (rynk)",
+            ),
+        ] {
+            for development in [false, true] {
+                let mut app = EntropyApp::new_inert_for_test();
+                app.app_settings.language = lang;
+                app.app_settings.development_updates = development;
+                let ctx = egui::Context::default();
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(600.0, 490.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| app.draw_about_entropy_page(ui, ui.max_rect()),
+                );
+                let texts: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::epaint::Shape::Text(text) => Some(text.galley.text()),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(texts.contains(&label), "{texts:?}");
+                assert_eq!(app.app_settings.development_updates, development);
+            }
+        }
+    }
 
     fn update_state(asset: UpdateAssetState) -> UpdateCheckState {
         UpdateCheckState::Ready(UpdateCheckResult {
