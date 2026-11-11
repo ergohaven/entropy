@@ -162,9 +162,18 @@ impl EntropyApp {
             KeyOverridePickField::Trigger => self
                 .keycode_picker
                 .open_key_override_trigger_picker(current_value),
-            KeyOverridePickField::Replacement => self
-                .keycode_picker
-                .open_regular_key_picker_with_mod_key(true),
+            KeyOverridePickField::Replacement => {
+                self.keycode_picker.open_key_override_replacement_picker(
+                    self.hid_device.as_ref().is_some_and(|device| {
+                        device.is_rynk()
+                            || self.device_about_info.as_ref().is_some_and(|info| {
+                                info.firmware_update_target.as_ref().is_some_and(|target| {
+                                    target.family == FirmwareReleaseFamily::Rmk
+                                })
+                            })
+                    }),
+                )
+            }
         }
     }
 
@@ -1179,6 +1188,165 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    #[test]
+    fn rynk_fork_replacement_picker_saves_a_momentary_layer() {
+        use crate::rynk::session::testing::{board, link, Stored};
+        use crate::rynk::session::RynkSession;
+        use rmk_types_rynk::action::{Action, KeyAction};
+
+        for view in [
+            crate::keycode_picker::PickerViewMode::List,
+            crate::keycode_picker::PickerViewMode::Layout,
+        ] {
+            let ctx = egui::Context::default();
+            let creation_context = eframe::CreationContext::_new_kittest(ctx);
+            let mut app = EntropyApp::new(&creation_context);
+            let mut stored = Stored::new(1, 3, 3);
+            stored.capabilities.max_forks = 1;
+            stored.forks = vec![rmk_types_rynk::fork::Fork::default()];
+            let (board, stored) = board(stored);
+            let session = RynkSession::new(link(&format!("fork-layer-{view:?}"), &board));
+            app.hid_device = Some(session.into());
+            app.key_override_entries = vec![KeyOverrideEntry {
+                trigger: 0x5221,
+                layers: u16::MAX,
+                trigger_mods: 0x11,
+                suppressed_mods: 0x11,
+                options: KeyOverrideOptionsState::from_bits(0xAF),
+                ..Default::default()
+            }];
+            app.keycode_picker.layer_count = 3;
+            app.keycode_picker.popup_view_mode = view;
+            app.open_key_override_picker(KeyOverridePickField::Replacement);
+
+            let mut harness = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(1400.0, 1000.0))
+                .build_state(
+                    |ctx, app: &mut EntropyApp| {
+                        app.keycode_picker.show(
+                            ctx,
+                            crate::keycode_picker::DeferredPickerDataState::Ready,
+                            crate::keycode_picker::DeferredPickerDataState::Ready,
+                        );
+                        app.apply_picker_results(ctx);
+                    },
+                    app,
+                );
+            harness.run();
+            harness.get_by_label("MO(2)").click();
+            harness.run();
+
+            assert_eq!(harness.state().key_override_entries[0].replacement, 0x5222);
+            let forks = harness
+                .state()
+                .hid_device
+                .as_ref()
+                .unwrap()
+                .as_rynk()
+                .unwrap()
+                .read_forks()
+                .unwrap();
+            assert_eq!(forks[0].trigger, KeyAction::Single(Action::LayerOn(1)));
+            assert_eq!(
+                forks[0].positive_output,
+                KeyAction::Single(Action::LayerOn(2))
+            );
+            assert!(forks[0].options.no_unregister_on_other_key_down());
+            assert_eq!(forks[0].suppressed_modifiers.into_bits(), 0x11);
+            assert_eq!(stored.lock().unwrap().forks[0], forks[0]);
+        }
+    }
+
+    #[test]
+    fn k04_vial_020_replacement_picker_writes_a_momentary_layer() {
+        for view in [
+            crate::keycode_picker::PickerViewMode::List,
+            crate::keycode_picker::PickerViewMode::Layout,
+        ] {
+            let ctx = egui::Context::default();
+            let creation_context = eframe::CreationContext::_new_kittest(ctx);
+            let mut app = EntropyApp::new(&creation_context);
+            let (hid, recorder) = crate::hid::HidDevice::test_device();
+            app.hid_device = Some(hid.into());
+            let target = crate::app::firmware_release_target(
+                0xE126,
+                0x0074,
+                Some("0.2.0"),
+                &serde_json::json!({}),
+                false,
+                false,
+            )
+            .expect("K04 0.2.0 must be identified as RMK");
+            assert_eq!(target.family, FirmwareReleaseFamily::Rmk);
+            app.device_about_info = Some(DeviceAboutInfo {
+                firmware_update_target: Some(target),
+                ..Default::default()
+            });
+            app.key_override_entries = vec![KeyOverrideEntry {
+                trigger: 0x5221,
+                layers: u16::MAX,
+                trigger_mods: 0x11,
+                suppressed_mods: 0x11,
+                options: KeyOverrideOptionsState::from_bits(0xAF),
+                ..Default::default()
+            }];
+            app.keycode_picker.layer_count = 3;
+            app.keycode_picker.popup_view_mode = view;
+            app.open_key_override_picker(KeyOverridePickField::Replacement);
+            let mut harness = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(1400.0, 1000.0))
+                .build_state(
+                    |ctx, app: &mut EntropyApp| {
+                        app.keycode_picker.show(
+                            ctx,
+                            crate::keycode_picker::DeferredPickerDataState::Ready,
+                            crate::keycode_picker::DeferredPickerDataState::Ready,
+                        );
+                        app.apply_picker_results(ctx);
+                    },
+                    app,
+                );
+            harness.run();
+            harness.get_by_label("MO(2)").click();
+            harness.run();
+            assert_eq!(harness.state().key_override_entries[0].replacement, 0x5222);
+            let request = recorder
+                .requests()
+                .into_iter()
+                .find(|request| request[..4] == [0xFE, 0x0D, 0x06, 0])
+                .expect("layer override must reach the Vial transport");
+            assert_eq!(
+                &request[4..14],
+                &[0x21, 0x52, 0x22, 0x52, 0xFF, 0xFF, 0x11, 0, 0x11, 0xAF]
+            );
+        }
+    }
+
+    #[test]
+    fn vial_replacement_picker_does_not_offer_momentary_layers() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid, _) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid.into());
+        app.keycode_picker.layer_count = 3;
+        app.open_key_override_picker(KeyOverridePickField::Replacement);
+        let mut harness = egui_kittest::Harness::new_state(
+            |ctx, app: &mut EntropyApp| {
+                app.keycode_picker.show(
+                    ctx,
+                    crate::keycode_picker::DeferredPickerDataState::Ready,
+                    crate::keycode_picker::DeferredPickerDataState::Ready,
+                );
+            },
+            app,
+        );
+        harness.run();
+        assert!(harness.query_by_label("MO(2)").is_none());
+        assert!(harness.state().keycode_picker.regular_key_pick);
+    }
 
     #[test]
     fn new_key_override_uses_vial_and_rmk_fork_defaults() {

@@ -137,6 +137,7 @@ enum PickerValuePolicy {
     #[default]
     Any,
     KeyOverrideTrigger,
+    RmkKeyOverrideReplacement,
 }
 
 pub struct KeycodePicker {
@@ -1311,7 +1312,7 @@ impl KeycodePicker {
 
     pub(crate) fn picker_value_supported(&self, value: u16) -> bool {
         match self.value_policy {
-            PickerValuePolicy::Any => true,
+            PickerValuePolicy::Any | PickerValuePolicy::RmkKeyOverrideReplacement => true,
             PickerValuePolicy::KeyOverrideTrigger => {
                 !matches!(value, 0x0000 | 0x0001 | 0x00E0..=0x00E7)
             }
@@ -1503,6 +1504,13 @@ impl KeycodePicker {
         self.advanced_slot_picker = None;
         self.rmk_native_key_actions_allowed_for_target = false;
         self.value_policy = PickerValuePolicy::Any;
+    }
+
+    pub(crate) fn open_key_override_replacement_picker(&mut self, allow_momentary_layers: bool) {
+        self.open_regular_key_picker_with_mod_key(true);
+        if allow_momentary_layers {
+            self.value_policy = PickerValuePolicy::RmkKeyOverrideReplacement;
+        }
     }
 
     pub(crate) fn open_full_key_picker(&mut self, selected_tab: KeycodeTab) {
@@ -2178,6 +2186,17 @@ impl KeycodePicker {
                             self.finish_regular_key_pick(base | value);
                         }
                     } else {
+                        if self.value_policy == PickerValuePolicy::RmkKeyOverrideReplacement {
+                            let layers = self.layer_action_key_choices(MacroKeyPickKind::Down);
+                            if let Some(value) = show_grouped_popup_choice_buttons(
+                                ui,
+                                vec![("Layers", layers)],
+                                self.language,
+                            ) {
+                                self.finish_regular_key_pick(value);
+                                return;
+                            }
+                        }
                         match self.popup_view_mode {
                             PickerViewMode::Layout => {
                                 if let Some(value) =
