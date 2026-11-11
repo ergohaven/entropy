@@ -6,6 +6,20 @@ const QMK_RELEASES_API: &str =
     "https://api.github.com/repos/ergohaven/vial-qmk/releases?per_page=30";
 const ERGOHAVEN_VENDOR_ID: u16 = 0xE126;
 
+#[path = "development_updates.rs"]
+mod development_updates;
+
+pub(crate) fn current_build_commit() -> Option<&'static str> {
+    option_env!("ENTROPY_BUILD_COMMIT")
+}
+
+pub(crate) fn current_build_label() -> String {
+    match current_build_commit() {
+        Some(commit) => format!("{} ({})", env!("CARGO_PKG_VERSION"), &commit[..8]),
+        None => env!("CARGO_PKG_VERSION").to_owned(),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct UpdateAsset {
     pub(crate) name: String,
@@ -17,6 +31,7 @@ pub(crate) enum VersionRelation {
     UpdateAvailable,
     UpToDate,
     DevelopmentBuild,
+    Unknown,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -155,22 +170,87 @@ pub(crate) fn current_platform_label() -> String {
     format!("{} {}", normalized_os_label(), normalized_arch_label())
 }
 
-pub(crate) fn start_update_check() -> UpdateCheckState {
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct TrackCheck {
+    cached: Option<(std::time::Instant, UpdateCheckOutcome)>,
+    waiters: Vec<std::sync::mpsc::Sender<UpdateCheckOutcome>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl TrackCheck {
+    fn subscribe(&mut self) -> (UpdateCheckState, bool) {
+        // Share both in-flight work and recent results across repeated toggles.
+        if let Some((at, outcome)) = &self.cached {
+            if at.elapsed() < std::time::Duration::from_secs(60) {
+                return (
+                    match outcome {
+                        UpdateCheckOutcome::Success(result) => {
+                            UpdateCheckState::Ready(result.clone())
+                        }
+                        UpdateCheckOutcome::Failed(error) => {
+                            UpdateCheckState::Failed(error.clone())
+                        }
+                    },
+                    false,
+                );
+            }
+        }
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let start = self.waiters.is_empty();
+        self.waiters.push(sender);
+        (UpdateCheckState::Checking { receiver }, start)
+    }
+
+    fn complete(&mut self, outcome: UpdateCheckOutcome) {
+        self.cached = Some((std::time::Instant::now(), outcome.clone()));
+        for sender in self.waiters.drain(..) {
+            let _ = sender.send(outcome.clone());
+        }
+    }
+}
+
+pub(crate) fn start_update_check(development: bool) -> UpdateCheckState {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let outcome = match fetch_latest_release() {
-                Ok(release) => UpdateCheckOutcome::Success(build_update_result(release)),
-                Err(error) => UpdateCheckOutcome::Failed(error),
-            };
-            let _ = sender.send(outcome);
-        });
-        UpdateCheckState::Checking { receiver }
+        static CHECKS: std::sync::OnceLock<std::sync::Mutex<[TrackCheck; 2]>> =
+            std::sync::OnceLock::new();
+        let checks = CHECKS.get_or_init(Default::default);
+        let index = usize::from(development);
+        let (state, start) = checks.lock().unwrap()[index].subscribe();
+        if start {
+            std::thread::spawn(move || {
+                let result = if development {
+                    development_updates::fetch_latest_build()
+                } else {
+                    fetch_latest_release().map(|release| {
+                        let mut result = build_update_result(release);
+                        // Official releases use version precedence. Local development
+                        // builds can carry an older version despite containing a release.
+                        if option_env!("ENTROPY_BUILD_DEVELOPMENT") == Some("true") {
+                            if let Some(commit) = current_build_commit() {
+                                result.relation = stable_source_relation(
+                                    result.relation,
+                                    compare_source_commits(commit, &result.latest_version).ok(),
+                                );
+                            }
+                        }
+                        result
+                    })
+                };
+                let outcome = match result {
+                    Ok(result) => UpdateCheckOutcome::Success(result),
+                    Err(error) => UpdateCheckOutcome::Failed(error),
+                };
+                checks.lock().unwrap()[index].complete(outcome);
+            });
+        }
+        state
     }
 
     #[cfg(target_arch = "wasm32")]
     {
+        let _ = development;
         UpdateCheckState::Failed("Update checks are not available in the web build".to_owned())
     }
 }
@@ -606,8 +686,16 @@ fn is_trusted_release_url(url: &str) -> bool {
         ["ergohaven", repository @ ("entropy" | "rmk" | "vial-qmk"), "releases", "download", tag, asset] => {
             !repository.is_empty() && !tag.is_empty() && !asset.is_empty()
         }
+        ["ergohaven", "entropy", "actions", "runs", run] => positive_id(run),
+        ["ergohaven", "entropy", "actions", "runs", run, "artifacts", artifact] => {
+            positive_id(run) && positive_id(artifact)
+        }
         _ => false,
     }
+}
+
+fn positive_id(value: &str) -> bool {
+    value.parse::<u64>().is_ok_and(|id| id > 0) && value.bytes().all(|b| b.is_ascii_digit())
 }
 
 fn is_trusted_github_release_url(url: &url::Url) -> bool {
@@ -716,6 +804,7 @@ fn canonical_entropy_release_url(tag: &str) -> String {
 #[cfg(not(target_arch = "wasm32"))]
 fn fetch_github_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, String> {
     ureq::get(url)
+        .timeout(std::time::Duration::from_secs(15))
         .set("User-Agent", concat!("Entropy/", env!("CARGO_PKG_VERSION")))
         .set("Accept", "application/vnd.github+json")
         .call()
@@ -743,7 +832,11 @@ fn build_update_result(latest: LatestEntropyRelease) -> UpdateCheckResult {
             .unwrap_or(UpdateAssetState::MissingForPlatform),
         EntropyReleaseAssets::Unavailable => UpdateAssetState::MetadataUnavailable,
     };
-    let relation = compare_entropy_versions(env!("CARGO_PKG_VERSION"), &tag_name);
+    let relation = compare_local_build_to_release(
+        env!("CARGO_PKG_VERSION"),
+        &tag_name,
+        option_env!("ENTROPY_BUILD_DEVELOPMENT") == Some("true"),
+    );
 
     UpdateCheckResult {
         latest_version: tag_name,
@@ -816,6 +909,64 @@ fn compare_entropy_versions(current: &str, latest: &str) -> VersionRelation {
         std::cmp::Ordering::Less => VersionRelation::UpdateAvailable,
         std::cmp::Ordering::Equal => VersionRelation::UpToDate,
         std::cmp::Ordering::Greater => VersionRelation::DevelopmentBuild,
+    }
+}
+
+fn compare_local_build_to_release(
+    current: &str,
+    latest: &str,
+    development: bool,
+) -> VersionRelation {
+    if development {
+        if let (Some(current), Some(latest)) = (parse_semver(current), parse_semver(latest)) {
+            if (current.major, current.minor, current.patch)
+                >= (latest.major, latest.minor, latest.patch)
+            {
+                return VersionRelation::DevelopmentBuild;
+            }
+        }
+    }
+    compare_entropy_versions(current, latest)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn compare_source_commits(current: &str, latest: &str) -> Result<VersionRelation, String> {
+    if current == latest {
+        return Ok(VersionRelation::UpToDate);
+    }
+    #[derive(serde::Deserialize)]
+    struct Comparison {
+        status: String,
+    }
+    // Both references come from the pinned upstream API or build metadata.
+    let comparison: Comparison = fetch_github_json(&format!(
+        "https://api.github.com/repos/ergohaven/entropy/compare/{current}...{latest}"
+    ))?;
+    source_relation(&comparison.status).ok_or_else(|| "Unknown GitHub comparison status".to_owned())
+}
+
+fn source_relation(status: &str) -> Option<VersionRelation> {
+    match status {
+        "ahead" => Some(VersionRelation::UpdateAvailable),
+        "identical" => Some(VersionRelation::UpToDate),
+        "behind" => Some(VersionRelation::DevelopmentBuild),
+        "diverged" => Some(VersionRelation::Unknown),
+        _ => None,
+    }
+}
+
+fn stable_source_relation(
+    version: VersionRelation,
+    source: Option<VersionRelation>,
+) -> VersionRelation {
+    match source {
+        // Divergent branches have no ancestry ordering. The selected Stable
+        // track still offers a release with a higher major/minor/patch version.
+        Some(VersionRelation::Unknown) => version,
+        Some(relation) => relation,
+        // Never notify about a possible cross-branch upgrade without evidence.
+        None if version == VersionRelation::UpdateAvailable => VersionRelation::Unknown,
+        None => version,
     }
 }
 
@@ -1063,6 +1214,151 @@ mod tests {
         assert_eq!(
             compare_entropy_versions("0.3.21+local", "v0.3.21"),
             VersionRelation::UpToDate
+        );
+    }
+
+    #[test]
+    fn local_checkout_does_not_offer_the_same_version_stable_release() {
+        assert_eq!(
+            compare_local_build_to_release("0.5.0-test.4", "v0.5.0", true),
+            VersionRelation::DevelopmentBuild
+        );
+        assert_eq!(
+            compare_local_build_to_release("0.5.0-test.4", "v0.6.0", true),
+            VersionRelation::UpdateAvailable
+        );
+        assert_eq!(
+            compare_local_build_to_release("0.5.0-rc.1", "v0.5.0", false),
+            VersionRelation::UpdateAvailable
+        );
+    }
+
+    #[test]
+    fn commit_ancestry_decides_updates_without_downgrading_a_local_build() {
+        assert_eq!(
+            source_relation("ahead"),
+            Some(VersionRelation::UpdateAvailable)
+        );
+        assert_eq!(
+            source_relation("identical"),
+            Some(VersionRelation::UpToDate)
+        );
+        assert_eq!(
+            source_relation("behind"),
+            Some(VersionRelation::DevelopmentBuild)
+        );
+        assert_eq!(source_relation("diverged"), Some(VersionRelation::Unknown));
+        assert_eq!(source_relation("unknown"), None);
+    }
+
+    #[test]
+    fn stable_track_preserves_ancestry_proof_and_reports_unavailable_comparisons() {
+        let future = compare_local_build_to_release("0.5.0-test.4", "v0.6.0", true);
+        assert_eq!(
+            stable_source_relation(future, None),
+            VersionRelation::Unknown
+        );
+        assert_eq!(
+            stable_source_relation(future, source_relation("diverged")),
+            VersionRelation::UpdateAvailable
+        );
+        assert_eq!(
+            stable_source_relation(future, source_relation("behind")),
+            VersionRelation::DevelopmentBuild
+        );
+        let same = compare_local_build_to_release("0.5.0-test.4", "v0.5.0", true);
+        assert_eq!(
+            stable_source_relation(same, None),
+            VersionRelation::DevelopmentBuild
+        );
+        assert_eq!(
+            stable_source_relation(same, source_relation("ahead")),
+            VersionRelation::UpdateAvailable
+        );
+    }
+
+    #[test]
+    fn repeated_checks_share_work_and_cache_both_success_and_failure_per_track() {
+        let mut track = TrackCheck::default();
+        let (mut first, start) = track.subscribe();
+        assert!(start);
+        let (mut second, start) = track.subscribe();
+        assert!(!start);
+        track.complete(UpdateCheckOutcome::Failed("rate limited".into()));
+        poll_update_check(&mut first);
+        poll_update_check(&mut second);
+        assert!(matches!(first, UpdateCheckState::Failed(_)));
+        assert!(matches!(second, UpdateCheckState::Failed(_)));
+        let (cached, start) = track.subscribe();
+        assert!(!start);
+        assert!(matches!(cached, UpdateCheckState::Failed(_)));
+        assert!(
+            TrackCheck::default().subscribe().1,
+            "another track remains independent"
+        );
+        track.cached.as_mut().unwrap().0 -= std::time::Duration::from_secs(61);
+        assert!(track.subscribe().1, "expired results can be refreshed");
+        let result = build_update_result(
+            latest_entropy_release_from_api(entropy_release("v0.5.0", &[])).unwrap(),
+        );
+        track.complete(UpdateCheckOutcome::Success(result));
+        assert!(matches!(
+            track.subscribe(),
+            (UpdateCheckState::Ready(_), false)
+        ));
+    }
+
+    #[test]
+    fn development_update_preference_survives_restart_and_legacy_settings_use_stable() {
+        let mut settings = super::super::AppSettings::default();
+        settings.development_updates = true;
+        let mut json = serde_json::to_value(&settings).unwrap();
+        let restored: super::super::AppSettings = serde_json::from_value(json.clone()).unwrap();
+        assert!(restored.development_updates);
+        json.as_object_mut().unwrap().remove("development_updates");
+        let legacy: super::super::AppSettings = serde_json::from_value(json).unwrap();
+        assert!(!legacy.development_updates);
+    }
+
+    #[test]
+    fn artifact_links_are_limited_to_upstream_runs_and_numeric_ids() {
+        for url in [
+            "https://github.com/ergohaven/entropy/actions/runs/123",
+            "https://github.com/ergohaven/entropy/actions/runs/123/artifacts/456",
+        ] {
+            assert!(is_trusted_release_url(url), "{url}");
+        }
+        for url in [
+            "https://github.com/attacker/entropy/actions/runs/123/artifacts/456",
+            "https://github.com/ergohaven/entropy/actions/runs/0/artifacts/456",
+            "https://github.com/ergohaven/entropy/actions/runs/123/artifacts/not-an-id",
+            "https://github.com/ergohaven/entropy/actions/runs/123/artifacts/456?redirect=evil",
+            "https://github.com/ergohaven/entropy/actions/runs/123/artifacts/456/extra",
+        ] {
+            assert!(!is_trusted_release_url(url), "{url}");
+        }
+    }
+
+    #[test]
+    fn discarded_track_cannot_replace_the_current_check_result() {
+        let (old_sender, old_receiver) = std::sync::mpsc::channel();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut state = UpdateCheckState::Checking {
+            receiver: old_receiver,
+        };
+        assert!(matches!(state, UpdateCheckState::Checking { .. }));
+        state = UpdateCheckState::Checking { receiver };
+        assert!(old_sender
+            .send(UpdateCheckOutcome::Failed("stale stable result".into()))
+            .is_err());
+        sender
+            .send(UpdateCheckOutcome::Failed(
+                "current development result".into(),
+            ))
+            .unwrap();
+        poll_update_check(&mut state);
+        assert!(
+            matches!(state, UpdateCheckState::Failed(error) if error == "current development result")
         );
     }
 

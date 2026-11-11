@@ -302,8 +302,10 @@ fn move_text_cursor_past_typography(ctx: &egui::Context, id: egui::Id, original:
     let Some(mut range) = state.cursor.char_range() else {
         return;
     };
-    range.primary.index = typography_normalized_char_index(original, range.primary.index);
-    range.secondary.index = typography_normalized_char_index(original, range.secondary.index);
+    range.primary.index =
+        typography_normalized_char_index(original, range.primary.index.into()).into();
+    range.secondary.index =
+        typography_normalized_char_index(original, range.secondary.index.into()).into();
     state.cursor.set_char_range(Some(range));
     egui::TextEdit::store_state(ctx, id, state);
 }
@@ -1403,13 +1405,13 @@ mod tests {
             events,
             ..Default::default()
         };
-        ctx.run_ui(input, |_ui| {
+        crate::app::discard_texture_deltas(ctx.run_ui(input, |_ui| {
             picker.show(
                 ctx,
                 DeferredPickerDataState::Ready,
                 DeferredPickerDataState::Ready,
             );
-        })
+        }))
     }
 
     fn macro_picker_shape_text_position(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
@@ -1688,6 +1690,7 @@ mod tests {
                             delta: egui::vec2(0.0, -180.0),
                             modifiers: egui::Modifiers::NONE,
                             phase: egui::TouchPhase::Move,
+                            source: egui::MouseWheelSource::Unknown,
                         },
                     ],
                 );
@@ -1889,9 +1892,12 @@ mod tests {
             events,
             ..Default::default()
         };
-        std::convert::identity(ctx.run_ui(input, |ui| {
-            picker.show_macro_settings_editor(ui, 0, "macro_settings_test", Some((0, 2048)));
-        }))
+        std::convert::identity(crate::app::discard_texture_deltas(ctx.run_ui(
+            input,
+            |ui| {
+                picker.show_macro_settings_editor(ui, 0, "macro_settings_test", Some((0, 2048)));
+            },
+        )))
     }
 
     fn macro_clipboard_click(
@@ -1902,7 +1908,7 @@ mod tests {
         label: &str,
     ) {
         let mut frame = |events| {
-            std::convert::identity(ctx.run_ui(
+            std::convert::identity(crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1914,7 +1920,7 @@ mod tests {
                 |ui| {
                     picker.show_macro_settings_editor(ui, slot, "clipboard_test", memory);
                 },
-            ))
+            )))
         };
         let _ = frame(vec![]);
         let output = frame(vec![]);
@@ -2061,7 +2067,7 @@ mod tests {
             ctx: &egui::Context,
             events: Vec<egui::Event>,
         ) -> egui::FullOutput {
-            std::convert::identity(ctx.run_ui(
+            std::convert::identity(crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2073,7 +2079,7 @@ mod tests {
                 |ui| {
                     picker.show_macro_settings_editor(ui, 2, "metadata_test", None);
                 },
-            ))
+            )))
         }
         let ctx = egui::Context::default();
         let mut picker = KeycodePicker {
@@ -2190,7 +2196,7 @@ mod tests {
                     ..Default::default()
                 };
                 let mut render = || {
-                    std::convert::identity(ctx.run_ui(
+                    std::convert::identity(crate::app::discard_texture_deltas(ctx.run_ui(
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(
                                 egui::Pos2::ZERO,
@@ -2201,7 +2207,7 @@ mod tests {
                         |ui| {
                             picker.show_macro_settings_editor(ui, 0, "button_layout_test", None);
                         },
-                    ))
+                    )))
                 };
                 let _ = render();
                 let output = render();

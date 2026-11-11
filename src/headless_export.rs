@@ -785,7 +785,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn click_ordinary_export(app: &mut EntropyApp, path: &Path, ctx: &egui::Context) {
         let draw = |app: &mut EntropyApp, events| {
-            ctx.run_ui(
+            crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -808,7 +808,7 @@ mod tests {
                         false,
                     )
                 },
-            )
+            ))
         };
         let _ = draw(app, vec![]);
         let output = draw(app, vec![]);
@@ -1186,11 +1186,13 @@ mod tests {
         );
         // The connect did try to pause the standby animation; the transport
         // refused it before it reached the keyboard.
-        assert!(session
-            .hid
-            .refused_requests()
-            .iter()
-            .any(|request| request[..2] == [0xB6, 1]));
+        assert!(
+            session
+                .hid
+                .refused_requests()
+                .iter()
+                .any(|request| request[..2] == [0xB6, 1])
+        );
         assert!(session.hid.failed_reads().is_empty());
 
         let bundle: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1305,8 +1307,8 @@ mod tests {
     /// read-only for good, so the export runs in a child of this test.
     #[test]
     fn a_rynk_export_reads_the_board_without_a_single_write() {
-        use rmk_types_rynk::protocol::rynk::ergohaven::{caps, BatteryHalves};
         use rmk_types_rynk::protocol::rynk::Cmd;
+        use rmk_types_rynk::protocol::rynk::ergohaven::{BatteryHalves, caps};
 
         const CHILD_ENV: &str = "ENTROPY_TEST_RYNK_READ_ONLY_EXPORT";
         const COMPLETION: &str = "ENTROPY_RYNK_READ_ONLY_EXPORT_COMPLETE";

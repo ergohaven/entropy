@@ -653,8 +653,13 @@ impl EntropyApp {
         menu_width: f32,
     ) -> bool {
         let language = self.app_settings.language;
-        let [copy_label, paste_label, mirror_label, fill_none_label, fill_inherit_label] =
-            layer_operation_menu_labels(language);
+        let [
+            copy_label,
+            paste_label,
+            mirror_label,
+            fill_none_label,
+            fill_inherit_label,
+        ] = layer_operation_menu_labels(language);
         let paste_snapshot = self.layer_paste_snapshot();
         let mirror_mapping = self
             .layout
@@ -1709,7 +1714,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn click_layer_menu(app: &mut EntropyApp, ctx: &egui::Context, item: usize) {
         let draw = |app: &mut EntropyApp, events| {
-            ctx.run_ui(
+            crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1721,7 +1726,7 @@ mod tests {
                 |ui| {
                     app.draw_layer_operations_submenu(ui, 240.0);
                 },
-            )
+            ))
         };
         let _ = draw(app, vec![]);
         let output = draw(app, vec![]);
@@ -1831,7 +1836,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn macropad_profile_paste_matrix_persists_without_firmware_or_default_mutation() {
         use crate::application_layouts::{
-            DetectedApplication, DEFAULT_APPLICATION_LAYOUT_ID as DEFAULT,
+            DEFAULT_APPLICATION_LAYOUT_ID as DEFAULT, DetectedApplication,
         };
         for source in [DEFAULT, "fixture_app_1", "other_app_2"] {
             for target in ["fixture_app_1", "other_app_2"] {
@@ -2747,7 +2752,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_layer_from_a_vial_board_pastes_onto_a_rynk_board_as_rynk_actions() {
-        use crate::rynk::session::testing::{board, link, Stored};
+        use crate::rynk::session::testing::{Stored, board, link};
         use rmk_types_rynk::action::{Action, KeyAction};
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());

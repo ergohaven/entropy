@@ -22,17 +22,17 @@ struct Entry {
 /// The image closure runs only on a miss, outside egui's context-data lock.
 pub(crate) fn texture(
     ctx: &egui::Context,
-    slot: impl std::hash::Hash,
-    revision: impl std::hash::Hash,
+    slot: impl std::hash::Hash + std::fmt::Debug,
+    revision: impl std::hash::Hash + std::fmt::Debug,
     image: impl FnOnce() -> Option<egui::ColorImage>,
 ) -> Option<egui::TextureHandle> {
     let cache = ctx.data_mut(|data| {
-        data.get_temp_mut_or_default::<SharedCache>(egui::Id::new("entropy_ui_textures"))
+        data.get_temp_mut_or_default::<SharedCache>(egui::Id::unique("entropy_ui_textures"))
             .clone()
     });
     let mut cache = cache.lock();
-    let slot = egui::Id::new(slot);
-    let revision = egui::Id::new(revision);
+    let slot = egui::Id::unique(slot);
+    let revision = egui::Id::unique(revision);
     let previous = cache
         .entries
         .iter()
@@ -80,7 +80,7 @@ pub(crate) fn texture(
 }
 
 pub(crate) fn clear(ctx: &egui::Context) {
-    ctx.data_mut(|data| data.remove::<SharedCache>(egui::Id::new("entropy_ui_textures")));
+    ctx.data_mut(|data| data.remove::<SharedCache>(egui::Id::unique("entropy_ui_textures")));
 }
 
 #[cfg(test)]
@@ -129,7 +129,7 @@ mod tests {
             );
         }
         let cache = ctx.data(|data| {
-            data.get_temp::<SharedCache>(egui::Id::new("entropy_ui_textures"))
+            data.get_temp::<SharedCache>(egui::Id::unique("entropy_ui_textures"))
                 .unwrap()
         });
         assert_eq!(cache.lock().bytes, MAX_BYTES);

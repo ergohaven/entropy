@@ -1693,14 +1693,14 @@ mod macos_setup_tests {
             ] {
                 let mut harness = egui_kittest::Harness::builder()
                     .with_size(egui::vec2(400.0, 100.0))
-                    .build_state(
-                        move |ctx,
+                    .build_ui_state(
+                        move |ui,
                               state: &mut (
                             crate::smart_input::MacosTextExpanderStatus,
                             Option<MacosSetupAction>,
                         )| {
-                            let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ctx);
-                            egui::CentralPanel::default().show(ctx, |ui| {
+                            let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
+                            egui::CentralPanel::default().show(ui, |ui| {
                                 if let Some(action) =
                                     draw_macos_setup_control(ui, metrics, lang, &state.0)
                                 {

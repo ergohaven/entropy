@@ -172,7 +172,7 @@ impl EntropyApp {
         crate::ui_style::centered_modal_window(
             ctx,
             crate::i18n::tr_catalog(lang, "text_expander.rule_editor_title"),
-            egui::Id::new("text_expander_rule_editor"),
+            egui::Id::unique("text_expander_rule_editor"),
             &mut open,
             size,
         )
@@ -1264,7 +1264,7 @@ mod setup_state_tests {
                 Some(TextExpanderIbusModal::UseGnomeSources),
             ] {
                 app.text_expander_ibus_modal = modal;
-                let _ = ctx.run_ui(
+                let _ = crate::app::discard_texture_deltas(ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -1281,7 +1281,7 @@ mod setup_state_tests {
                         }
                         app.draw_text_expander_ibus_modal(ui.ctx(), metrics);
                     },
-                );
+                ));
                 assert_eq!(
                     app.text_expander_ibus_modal, modal,
                     "drawing alone keeps it open"
@@ -1379,7 +1379,7 @@ mod rule_editor_tests {
             let pos = egui::pos2(x, 27.0);
             let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 420.0));
             let frame = |app: &mut EntropyApp, events| {
-                let _ = ctx.run_ui(
+                ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(screen),
                         events,
@@ -1397,7 +1397,8 @@ mod rule_editor_tests {
                             false,
                         );
                     },
-                );
+                )
+                .drop_without_applying_deltas();
             };
             frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
             for pressed in [true, false] {
@@ -1430,7 +1431,7 @@ mod rule_editor_tests {
         app.text_expander_rule_editor_focus_pending = true;
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 480.0));
         let frame = |app: &mut EntropyApp, events| {
-            let _ = ctx.run_ui(
+            ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(screen),
                     events,
@@ -1440,11 +1441,12 @@ mod rule_editor_tests {
                     let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
                     app.draw_text_expander_rule_editor(ui.ctx(), metrics);
                 },
-            );
+            )
+            .drop_without_applying_deltas();
         };
         frame(&mut app, vec![]);
         let rect = ctx
-            .memory(|memory| memory.area_rect(egui::Id::new("text_expander_rule_editor")))
+            .memory(|memory| memory.area_rect(egui::Id::unique("text_expander_rule_editor")))
             .expect("rule editor is visible");
         assert!(screen.contains_rect(rect), "modal exceeds screen: {rect:?}");
         assert!(rect.width() >= 400.0 && rect.height() >= 300.0);
@@ -1471,7 +1473,7 @@ mod rule_editor_tests {
         app.text_expander_rule_editor = Some((0, TextExpanderRuleField::Replacement));
         app.text_expander_rule_editor_focus_pending = true;
         let frame = |app: &mut EntropyApp, events| {
-            let _ = ctx.run_ui(
+            ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1484,7 +1486,8 @@ mod rule_editor_tests {
                     let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
                     app.draw_text_expander_rule_editor(ui.ctx(), metrics);
                 },
-            );
+            )
+            .drop_without_applying_deltas();
         };
         frame(&mut app, vec![]);
         frame(&mut app, vec![egui::Event::Text("First".into())]);

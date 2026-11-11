@@ -15,5 +15,8 @@ pub(crate) mod winit_integration;
 #[cfg(feature = "glow")]
 mod glow_integration;
 
+#[cfg(all(target_os = "linux", feature = "glow"))]
+pub(crate) mod linux_root;
+
 #[cfg(feature = "wgpu_no_default_features")]
 mod wgpu_integration;

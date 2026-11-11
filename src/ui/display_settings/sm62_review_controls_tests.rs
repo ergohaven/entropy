@@ -1,8 +1,8 @@
 use super::sm62_shared_write_tests::{click_shared, drain, frame, frame_events};
 use super::*;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 fn setup() -> (EntropyApp, egui::Context, crate::hid::TestHidRecorder) {
@@ -129,9 +129,13 @@ fn toggle_reversal(label: &str, qsids: [u16; 2], original: u8) {
             original,
             "explicit UI reversal must correct uncertain device qsid={qsid}"
         );
-        assert!(recorder.requests()[correction_start..]
-            .iter()
-            .any(|r| r[1] == 0x0B && u16::from_le_bytes([r[2], r[3]]) == qsid && r[4] == original));
+        assert!(
+            recorder.requests()[correction_start..]
+                .iter()
+                .any(|r| r[1] == 0x0B
+                    && u16::from_le_bytes([r[2], r[3]]) == qsid
+                    && r[4] == original)
+        );
         assert!(matches!(
             app.settings_write_status(qsid),
             Some(super::super::settings_write_queue::SettingsWriteStatus::Saved)
@@ -381,7 +385,7 @@ fn layout_no_input(connected: bool, enabled: bool) {
     let before = app.display_settings.clone();
     let start = recorder.requests().len();
     for _ in 0..3 {
-        let _ = ctx.run(
+        ctx.run_pass(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -390,13 +394,16 @@ fn layout_no_input(connected: bool, enabled: bool) {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.add_enabled_ui(enabled, |ui| {
-                        app.draw_sm62_display_settings_page(ui, ui.max_rect())
-                    });
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.add_enabled_ui(enabled, |ui| {
+                            app.draw_sm62_display_settings_page(ui, ui.max_rect())
+                        });
+                    })
                 });
             },
-        );
+        )
+        .drop_without_applying_deltas();
     }
     drain(&mut app, &ctx);
     assert_eq!(
@@ -446,8 +453,10 @@ fn review_explicit_layout_mode_selection_couples_keypress_setting() {
                 .unwrap(),
             value
         );
-        assert!(recorder.requests()[start..]
-            .iter()
-            .any(|r| r[1] == 0x0B && u16::from_le_bytes([r[2], r[3]]) == qsid && r[4] == value));
+        assert!(
+            recorder.requests()[start..]
+                .iter()
+                .any(|r| r[1] == 0x0B && u16::from_le_bytes([r[2], r[3]]) == qsid && r[4] == value)
+        );
     }
 }

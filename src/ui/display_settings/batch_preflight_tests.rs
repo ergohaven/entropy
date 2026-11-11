@@ -81,9 +81,9 @@ use crate::app::ComboEntry;
 use crate::keyboard::KeyBinding;
 
 fn ui(app: &mut EntropyApp, ctx: &egui::Context) {
-    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+    let _ = crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
         eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest());
-    });
+    }));
 }
 
 fn setup(numero: bool) -> (EntropyApp, egui::Context, crate::hid::TestHidRecorder) {
