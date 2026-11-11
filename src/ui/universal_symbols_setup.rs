@@ -65,6 +65,48 @@ enum MacosPermissionStatusKind {
     InputMonitoring,
 }
 
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MacosSetupAction {
+    OpenAccessibility,
+    RequestInputMonitoring,
+    RestartCapture,
+}
+
+#[cfg(target_os = "macos")]
+fn macos_setup_action(status: &crate::smart_input::MacosTextExpanderStatus) -> MacosSetupAction {
+    if !status.accessibility_granted {
+        MacosSetupAction::OpenAccessibility
+    } else if !status.input_monitoring_granted {
+        MacosSetupAction::RequestInputMonitoring
+    } else {
+        MacosSetupAction::RestartCapture
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn draw_macos_setup_control(
+    ui: &mut egui::Ui,
+    metrics: crate::ui_style::ResponsiveMetrics,
+    lang: crate::i18n::Language,
+    status: &crate::smart_input::MacosTextExpanderStatus,
+) -> Option<MacosSetupAction> {
+    let action = macos_setup_action(status);
+    let button_key = match action {
+        MacosSetupAction::OpenAccessibility => {
+            "universal_symbols_setup.open_accessibility_settings"
+        }
+        MacosSetupAction::RequestInputMonitoring => {
+            "universal_symbols_setup.request_input_monitoring"
+        }
+        MacosSetupAction::RestartCapture => "universal_symbols_setup.restart_event_tap_button",
+    };
+    let label = crate::i18n::tr_catalog(lang, button_key);
+    let response = crate::ui_style::modern_button(ui, label, metrics.size(168.0, 34.0), true);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    response.clicked().then_some(action)
+}
+
 #[derive(Clone, Copy)]
 struct UniversalSymbolsRowContext {
     content_width: f32,
@@ -383,9 +425,9 @@ impl EntropyApp {
                 ui,
                 row.content_width,
                 row.height,
-                crate::i18n::tr_catalog(row.lang, "universal_symbols_setup.recommended_setup"),
+                crate::i18n::tr_catalog(row.lang, "universal_symbols_setup.macos_permissions"),
                 true,
-                tooltip("universal_symbols_setup.recommended_setup_tooltip"),
+                tooltip("universal_symbols_setup.macos_permissions_tooltip"),
                 row.metrics.settings_control_width(),
                 |ui| self.draw_universal_symbols_recommended_control(ui, row.metrics, row.lang),
             ),
@@ -540,15 +582,16 @@ impl EntropyApp {
 
         #[cfg(target_os = "macos")]
         {
-            if crate::ui_style::modern_button(
-                ui,
-                crate::i18n::tr_catalog(lang, "universal_symbols_setup.request_input_monitoring"),
-                metrics.size(168.0, 34.0),
-                true,
-            )
-            .clicked()
-            {
-                self.request_macos_input_monitoring_access(lang);
+            let status = crate::smart_input::macos_text_expander_status();
+            match draw_macos_setup_control(ui, metrics, lang, &status) {
+                Some(MacosSetupAction::OpenAccessibility) => {
+                    self.open_macos_accessibility_settings(lang);
+                }
+                Some(MacosSetupAction::RequestInputMonitoring) => {
+                    self.request_macos_input_monitoring_access(lang);
+                }
+                Some(MacosSetupAction::RestartCapture) => self.restart_macos_event_tap(lang),
+                None => {}
             }
         }
 
@@ -981,12 +1024,9 @@ impl EntropyApp {
     #[cfg(target_os = "macos")]
     fn request_macos_input_monitoring_access(&mut self, lang: crate::i18n::Language) {
         crate::smart_input::request_input_monitoring_access();
-        self.status_msg = crate::i18n::tr_catalog(
-            lang,
-            "universal_symbols_setup.input_monitoring_requested_status",
-        )
-        .to_string();
-        crate::smart_input::restart_event_tap();
+        // macOS may not show another prompt after a previous denial. Always
+        // give the user a place to grant access rather than reporting success.
+        self.open_macos_input_monitoring_settings(lang);
     }
 
     #[cfg(target_os = "macos")]
@@ -1579,5 +1619,107 @@ mod linux_setup_tests {
             tr_catalog(lang, "text_expander.gnome_sources_restored_status")
         );
         std::fs::remove_file(script_path).unwrap();
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_setup_tests {
+    use super::*;
+
+    fn status(
+        accessibility: bool,
+        monitoring: bool,
+    ) -> crate::smart_input::MacosTextExpanderStatus {
+        crate::smart_input::MacosTextExpanderStatus {
+            accessibility_granted: accessibility,
+            input_monitoring_granted: monitoring,
+            event_tap_active: false,
+            last_event_ms_ago: None,
+            failure_reason: None,
+        }
+    }
+
+    #[test]
+    fn macos_setup_opens_accessibility_when_monitoring_is_already_granted() {
+        assert_eq!(
+            macos_setup_action(&status(false, true)),
+            MacosSetupAction::OpenAccessibility
+        );
+    }
+
+    #[test]
+    fn macos_setup_handles_missing_permissions_before_restarting_capture() {
+        assert_eq!(
+            macos_setup_action(&status(false, false)),
+            MacosSetupAction::OpenAccessibility
+        );
+        assert_eq!(
+            macos_setup_action(&status(true, false)),
+            MacosSetupAction::RequestInputMonitoring
+        );
+        assert_eq!(
+            macos_setup_action(&status(true, true)),
+            MacosSetupAction::RestartCapture
+        );
+    }
+
+    #[test]
+    fn macos_setup_button_routes_the_displayed_action_in_both_languages() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+
+        for lang in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            for (accessibility, monitoring, expected, key) in [
+                (
+                    false,
+                    true,
+                    MacosSetupAction::OpenAccessibility,
+                    "universal_symbols_setup.open_accessibility_settings",
+                ),
+                (
+                    true,
+                    false,
+                    MacosSetupAction::RequestInputMonitoring,
+                    "universal_symbols_setup.request_input_monitoring",
+                ),
+                (
+                    true,
+                    true,
+                    MacosSetupAction::RestartCapture,
+                    "universal_symbols_setup.restart_event_tap_button",
+                ),
+            ] {
+                let mut harness = egui_kittest::Harness::builder()
+                    .with_size(egui::vec2(400.0, 100.0))
+                    .build_state(
+                        move |ctx,
+                              state: &mut (
+                            crate::smart_input::MacosTextExpanderStatus,
+                            Option<MacosSetupAction>,
+                        )| {
+                            let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ctx);
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                if let Some(action) =
+                                    draw_macos_setup_control(ui, metrics, lang, &state.0)
+                                {
+                                    state.1 = Some(action);
+                                }
+                            });
+                        },
+                        (status(accessibility, monitoring), None),
+                    );
+                harness.run();
+                harness
+                    .get_by_role_and_label(
+                        egui::accesskit::Role::Button,
+                        crate::i18n::tr_catalog(lang, key),
+                    )
+                    .click();
+                harness.run();
+                assert_eq!(harness.state().1, Some(expected));
+            }
+        }
     }
 }
