@@ -1,8 +1,33 @@
 use super::*;
 
+#[cfg(not(target_arch = "wasm32"))]
+fn capture_import_backup_namespace() -> Result<entlayout::backup_durability::BackupNamespace, String> {
+    // Shipping startup captures this before single-instance/diagnostic storage
+    // can mkdir. Tests intentionally resolve their thread-local scoped root.
+    #[cfg(not(test))]
+    {
+        static NAMESPACE: std::sync::OnceLock<
+            Result<entlayout::backup_durability::BackupNamespace, String>,
+        > = std::sync::OnceLock::new();
+        NAMESPACE.get_or_init(resolve_import_backup_namespace).clone()
+    }
+    #[cfg(test)]
+    resolve_import_backup_namespace()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_import_backup_namespace() -> Result<entlayout::backup_durability::BackupNamespace, String> {
+    let root = storage_config_dir().ok_or_else(|| "No backup storage directory".to_owned())?;
+    let namespace = entlayout::backup_durability::BackupNamespace::resolve(&root)
+        .map_err(|error| error.to_string())?;
+    Ok(namespace)
+}
+
 // Bootstrap effects are resolved once by `new`; both real and inert callers
 // then use the same application-state initializer.
 struct AppBootstrap {
+    #[cfg(not(target_arch = "wasm32"))]
+    import_backup_namespace: Result<entlayout::backup_durability::BackupNamespace, String>,
     app_settings: AppSettings,
     device_manager: DeviceManager,
     typing_trainer: TypingTrainerState,
@@ -13,11 +38,18 @@ struct AppBootstrap {
 }
 
 impl EntropyApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn initialize_import_backup_namespace() {
+        let _ = capture_import_backup_namespace();
+    }
+
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         Self::new_with_context(&cc.egui_ctx)
     }
 
     pub(crate) fn new_with_context(ctx: &egui::Context) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        let import_backup_namespace = capture_import_backup_namespace();
         let mut app_settings = load_app_settings();
         app_settings.ui_scale = clamp_ui_scale(app_settings.ui_scale);
         crate::diagnostics::set_enabled(app_settings.diagnostics_enabled);
@@ -44,6 +76,8 @@ impl EntropyApp {
         typing_trainer.set_symbol_stats(load_typing_trainer_symbol_stats());
         let update_check = start_update_check(app_settings.development_updates);
         let mut app = Self::from_bootstrap(AppBootstrap {
+            #[cfg(not(target_arch = "wasm32"))]
+            import_backup_namespace,
             app_settings,
             device_manager: DeviceManager::new(),
             typing_trainer,
@@ -52,6 +86,8 @@ impl EntropyApp {
             layer_names: load_layer_names("default"),
             update_check,
         });
+        #[cfg(unix)]
+        app.start_console_export_server(ctx);
         #[cfg(not(target_arch = "wasm32"))]
         app.update_notifications.initialize(
             ctx,
@@ -62,15 +98,19 @@ impl EntropyApp {
 
     /// The app without a window, for `--export-layout`. Reads the same
     /// settings as `new` (language, diagnostics) but starts none of the
-    /// desktop machinery: no text expander, no update check, no zoom.
+    /// desktop machinery: no text expander, no update check, no zoom, no
+    /// device scan of its own.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn new_headless() -> Self {
+        let import_backup_namespace = capture_import_backup_namespace();
         let app_settings = load_app_settings();
         crate::diagnostics::set_enabled(app_settings.diagnostics_enabled);
         let mut app = Self::from_bootstrap(AppBootstrap {
+            #[cfg(not(target_arch = "wasm32"))]
+            import_backup_namespace,
             typing_trainer: TypingTrainerState::from_settings(app_settings.typing_trainer),
             app_settings,
-            device_manager: DeviceManager::new(),
+            device_manager: DeviceManager::empty(),
             text_expander_rules_signature: Vec::new(),
             last_single_instance_signal: String::new(),
             layer_names: Vec::new(),
@@ -82,11 +122,15 @@ impl EntropyApp {
 
     #[cfg(test)]
     pub(crate) fn new_inert_for_test() -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        let import_backup_namespace = capture_import_backup_namespace();
         let app_settings = AppSettings::default();
         Self::from_bootstrap(AppBootstrap {
+            #[cfg(not(target_arch = "wasm32"))]
+            import_backup_namespace,
             typing_trainer: TypingTrainerState::from_settings(app_settings.typing_trainer),
             app_settings,
-            device_manager: DeviceManager::empty_for_test(),
+            device_manager: DeviceManager::empty(),
             text_expander_rules_signature: Vec::new(),
             last_single_instance_signal: String::new(),
             layer_names: Vec::new(),
@@ -96,6 +140,8 @@ impl EntropyApp {
 
     fn from_bootstrap(bootstrap: AppBootstrap) -> Self {
         let AppBootstrap {
+            #[cfg(not(target_arch = "wasm32"))]
+            import_backup_namespace,
             app_settings,
             device_manager,
             typing_trainer,
@@ -107,6 +153,8 @@ impl EntropyApp {
         let dark_mode = app_settings.dark_mode;
 
         Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            import_backup_namespace,
             #[cfg(not(target_arch = "wasm32"))]
             hid_device: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -122,11 +170,17 @@ impl EntropyApp {
             #[cfg(not(target_arch = "wasm32"))]
             vial_hid_task: None,
             #[cfg(not(target_arch = "wasm32"))]
+            sm62_fps: None,
+            #[cfg(not(target_arch = "wasm32"))]
             pending_layout_undo: false,
             #[cfg(not(target_arch = "wasm32"))]
             deferred_device_load: DeferredDeviceLoadState::default(),
             #[cfg(not(target_arch = "wasm32"))]
             deferred_full_layout_action: None,
+            #[cfg(unix)]
+            console_export_server: None,
+            #[cfg(unix)]
+            pending_console_export: None,
             settings_write_queue: SettingsWriteQueueState::default(),
             settings_write_generation: 0,
             #[cfg(not(target_arch = "wasm32"))]
@@ -143,7 +197,19 @@ impl EntropyApp {
             #[cfg(target_os = "linux")]
             gnome_integration_install_result: None,
             #[cfg(not(target_arch = "wasm32"))]
+            foreground_repaint_subscription: None,
+            #[cfg(not(target_arch = "wasm32"))]
             application_layout_foreground: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            persisted_application_libraries: std::collections::HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            application_layout_edit_owners: std::collections::BTreeMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            application_layout_observed_edits: app_settings.application_layouts.iter()
+                .flat_map(|(key, settings)| settings.layouts.values()
+                    .map(move |p| ((key.clone(), p.id.clone()), p.user_edit_revision))).collect(),
+            #[cfg(not(target_arch = "wasm32"))]
+            application_layout_owner_intents: std::collections::BTreeMap::new(),
             #[cfg(not(target_arch = "wasm32"))]
             application_layout_manual_override: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -166,6 +232,8 @@ impl EntropyApp {
             application_categories_selected_id: None,
             application_categories_name: String::new(),
             pending_device_connect: None,
+            remembered_device: None,
+            pending_takeover: None,
             #[cfg(not(target_arch = "wasm32"))]
             headless: false,
             firmware: FirmwareProtocol::Vial,
@@ -204,6 +272,9 @@ impl EntropyApp {
             entlayout_losses_prompt: None,
             entlayout_losses_accepted: None,
             pending_file_dialog: None,
+            pending_entlayout_dialog_target: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            gui_entlayout_preparation: None,
             connection_generation: 0,
             parent_window_handle: None,
             parent_display_handle: None,
@@ -252,6 +323,12 @@ impl EntropyApp {
             linux_background_since: None,
             #[cfg(target_os = "linux")]
             linux_background_focus_left: false,
+            #[cfg(target_os = "linux")]
+            linux_tray: None,
+            #[cfg(target_os = "linux")]
+            linux_hidden_to_tray: false,
+            #[cfg(target_os = "linux")]
+            linux_start_hidden_to_tray_pending: false,
             close_to_tray_prompt_open: false,
             close_to_tray_prompt_remember: false,
             force_close_requested: false,
@@ -336,6 +413,7 @@ impl EntropyApp {
             macro_auto_unlock_cancelled: false,
             settings_tab: SettingsTab::MatrixTester,
             layer_names,
+            confirmed_firmware_layer_names: 0,
             editing_layer: None,
             layer_names_from_firmware: Vec::new(),
             editing_layer_text: String::new(),
@@ -366,6 +444,8 @@ impl EntropyApp {
             vial_unlocked: None,
             vial_unlock_keys: vec![],
             vial_unlock_session_started: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            vial_unlock_event_pause: None,
             vial_unlock_polling: false,
             vial_unlock_counter: 0,
             vial_unlock_best: 50,
@@ -380,10 +460,10 @@ impl EntropyApp {
             test_device_scan_requests: None,
             #[cfg(all(test, not(target_arch = "wasm32")))]
             test_connect_requests: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            connect_hid: None,
             #[cfg(all(test, target_os = "linux"))]
             test_device_scan_udev_access: None,
-            #[cfg(all(test, not(target_arch = "wasm32")))]
-            test_connect_hid: None,
             #[cfg(not(target_arch = "wasm32"))]
             device_scan_state: DeviceScanState::Idle,
         }

@@ -22,6 +22,150 @@ fn indication_app(value: u8) -> EntropyApp {
     app
 }
 
+// The OS HID boundary accepts the GUI SET before losing its acknowledgement
+// (RGB) or subsequent GET (indication). The ordinary eager ledger stays Loaded.
+fn core1_gui_uncertain(rgb: bool) -> (EntropyApp, crate::hid::TestHidRecorder) {
+    use std::sync::{Arc, atomic::{AtomicU16, Ordering}};
+    let mut app = if rgb { rgb_app(RgbSupportKind::QmkRgblight, 6) } else { indication_app(16) };
+    app.deferred_device_load = DeferredDeviceLoadState::complete(app.layer_count);
+    let actual = Arc::new(AtomicU16::new(if rgb { 80 } else { 16 }));
+    let wire = actual.clone();
+    let (hid, recorder) = crate::hid::HidDevice::test_device();
+    recorder.respond_by(move |r| {
+        if rgb && r[..2] == [7, 0x80] {
+            wire.store(u16::from(r[2]), Ordering::SeqCst);
+            return Some(Err("accepted RGB SET; response lost".into()));
+        }
+        if !rgb && r[..4] == [0xfe, 0x0b, 60, 1] {
+            wire.store(u16::from_le_bytes([r[4], r[5]]), Ordering::SeqCst);
+            return Some(Ok([0; 32]));
+        }
+        if r[0] == 8 || r[..2] == [0xfe, 0x0a] {
+            return Some(Err("read unavailable after accepted SET".into()));
+        }
+        None
+    });
+    app.hid_device = Some(hid.into());
+    if rgb {
+        app.test_gui_set_rgb_brightness(128);
+        assert!(!app.rgb_settings.loaded);
+    } else {
+        app.queue_layer_led_setting_write("LED brightness".into(), 316, 2, 16, 128);
+        let ctx = egui::Context::default();
+        for _ in 0..500 {
+            app.poll_settings_write(&ctx);
+            if !app.qmk_settings_write_busy() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(!app.qmk_settings_write_busy());
+        assert!(!app.layer_led_settings.brightness.as_ref().unwrap().loaded);
+    }
+    assert_eq!(actual.load(Ordering::SeqCst), 128, "physical SET was accepted");
+    assert!(!app.deferred_device_load.has_unconfirmed_import_data());
+    (app, recorder)
+}
+
+#[test]
+fn core1_gui_accepted_lighting_set_refuses_incomplete_snapshot() { core1_gui_accepted_lighting_set_refuses_incomplete_snapshot_case(true); }
+
+#[test]
+fn core1_gui_accepted_lighting_set_refuses_incomplete_snapshot_indication() { core1_gui_accepted_lighting_set_refuses_incomplete_snapshot_case(false); }
+
+fn core1_gui_accepted_lighting_set_refuses_incomplete_snapshot_case(rgb: bool) {
+    for rgb in [rgb] {
+        let (app, _) = core1_gui_uncertain(rgb);
+        assert!(app.entlayout_snapshot().is_none(), "uncertain lighting must not be silently omitted: rgb={rgb}");
+    }
+}
+
+#[test]
+fn core1_gui_accepted_lighting_set_preserves_export_destination() { core1_gui_accepted_lighting_set_preserves_export_destination_case(true); }
+
+#[test]
+fn core1_gui_accepted_lighting_set_preserves_export_destination_indication() { core1_gui_accepted_lighting_set_preserves_export_destination_case(false); }
+
+fn core1_gui_accepted_lighting_set_preserves_export_destination_case(rgb: bool) {
+    let storage = ScopedTempConfig::new();
+    let destination = storage.path().join("existing.entlayout");
+    for rgb in [rgb] {
+        let (mut app, recorder) = core1_gui_uncertain(rgb);
+        let cursor = recorder.requests().len();
+        std::fs::write(&destination, b"valuable existing complete backup").unwrap();
+        app.write_entlayout_export(&destination);
+        assert_eq!(std::fs::read(&destination).unwrap(), b"valuable existing complete backup", "rgb={rgb}: {}", app.status_msg);
+        assert_eq!(recorder.requests().len(), cursor, "refusal must not retry SET");
+    }
+}
+
+#[test]
+fn core1_gui_accepted_lighting_set_refuses_preimport_before_backup_or_set() { core1_gui_accepted_lighting_set_refuses_preimport_before_backup_or_set_case(true); }
+
+#[test]
+fn core1_gui_accepted_lighting_set_refuses_preimport_before_backup_or_set_indication() { core1_gui_accepted_lighting_set_refuses_preimport_before_backup_or_set_case(false); }
+
+fn core1_gui_accepted_lighting_set_refuses_preimport_before_backup_or_set_case(rgb: bool) {
+    let storage = ScopedTempConfig::new();
+    let source = storage.path().join("incoming.entlayout");
+    for rgb in [rgb] {
+        let bundle = roundtrip(&if rgb { rgb_app(RgbSupportKind::QmkRgblight, 0) } else { indication_app(4) });
+        std::fs::write(&source, serde_json::to_vec(&bundle).unwrap()).unwrap();
+        let (mut app, recorder) = core1_gui_uncertain(rgb);
+        app.vial_unlocked = Some(true);
+        let cursor = recorder.requests().len();
+        let before = serde_json::to_value(&app.app_settings).unwrap();
+        assert!(app.import_entlayout_from_path(&source).is_err(), "incomplete pre-import backup must refuse rgb={rgb}");
+        assert_eq!(serde_json::to_value(&app.app_settings).unwrap(), before);
+        assert_eq!(recorder.requests().len(), cursor, "no first import SET before complete backup");
+        assert!(!storage.path().join("entropy/backups").exists());
+    }
+}
+
+#[test]
+fn core1_gui_lighting_uncertainty_actions_terminate_before_picker() { core1_gui_lighting_uncertainty_actions_terminate_before_picker_case(true); }
+
+#[test]
+fn core1_gui_lighting_uncertainty_actions_terminate_before_picker_indication() { core1_gui_lighting_uncertainty_actions_terminate_before_picker_case(false); }
+
+fn core1_gui_lighting_uncertainty_actions_terminate_before_picker_case(rgb: bool) {
+    let _storage = ScopedTempConfig::new();
+    let ctx = egui::Context::default();
+    for rgb in [rgb] {
+        for import in [true, false] {
+            let (mut app, recorder) = core1_gui_uncertain(rgb);
+            let cursor = recorder.requests().len();
+            crate::app::file_dialog::set_test_dialog_result(None);
+            if import { app.request_entlayout_import_after_full_load(); }
+            else { app.request_entlayout_export_after_full_load(); }
+            for _ in 0..3 { app.finish_deferred_full_layout_action(&ctx); }
+            assert!(!app.deferred_full_layout_action_pending());
+            assert!(!app.pending_file_dialog.is_some(), "no picker before complete lighting backup: {}", app.status_msg);
+            assert!((app.status_msg.to_lowercase().contains("lighting") || app.status_msg.contains("подсветки")), "explicit terminal reason: {}", app.status_msg);
+            assert_eq!(recorder.requests().len(), cursor);
+            // A second explicit action must terminate too, not queue forever.
+            if import { app.request_entlayout_import_after_full_load(); }
+            else { app.request_entlayout_export_after_full_load(); }
+            assert!(!app.deferred_full_layout_action_pending());
+        }
+    }
+}
+
+#[test]
+fn core1_partial_indication_read_is_terminal_not_loaded() {
+    let (mut app, _) = core1_gui_uncertain(false);
+    app.finish_deferred_device_load(crate::app::device_deferred_load::DeferredLoadPayload::LayerLeds(app.layer_led_settings.clone()));
+    assert!(matches!(app.deferred_device_load.section_status(DeferredLoadSection::LayerLeds), DeferredLoadStatus::Failed(_)));
+}
+
+#[test]
+fn core1_confirmed_and_unsupported_lighting_remain_complete() {
+    let confirmed = rgb_app(RgbSupportKind::QmkRgblight, 6);
+    assert!(roundtrip(&confirmed).data.rgb.is_some());
+    assert_eq!(roundtrip(&indication_app(16)).data.portable_settings.len(), 3);
+    let mut unsupported = module_app();
+    unsupported.rgb_settings = RgbSettingsState::default();
+    assert!(unsupported.entlayout_snapshot().is_some());
+}
+
 fn roundtrip(app: &EntropyApp) -> EntLayoutFile {
     serde_json::from_str(&serde_json::to_string(&app.entlayout_snapshot().unwrap()).unwrap())
         .unwrap()
@@ -58,7 +202,8 @@ fn entlayout_lighting_indication_roundtrip_and_failed_reads() {
         .loaded = false;
     target.layer_led_settings.timeout.as_mut().unwrap().loaded = false;
     target.layer_led_settings.bt_profile_colors[0].loaded = false;
-    assert!(roundtrip(&target).data.portable_settings.is_empty());
+    // A complete backup must refuse, not publish a partial lighting document.
+    assert!(target.entlayout_snapshot().is_none());
 }
 
 #[test]
@@ -257,7 +402,8 @@ fn entlayout_lighting_failed_indication_write_refreshes_or_omits_cache() {
     let (failures, _, report) = target.apply_entlayout(&bundle).unwrap();
     assert_eq!(report.failed, 3);
     assert!(!failures.is_empty());
-    assert!(roundtrip(&target).data.portable_settings.is_empty());
+    // A complete backup must refuse, not publish a partial lighting document.
+    assert!(target.entlayout_snapshot().is_none());
 }
 
 #[test]

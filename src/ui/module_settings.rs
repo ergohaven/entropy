@@ -1132,6 +1132,7 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("module_scope_regression.inc");
 
     fn qube_display_definition() -> serde_json::Value {
         serde_json::from_str(include_str!(
@@ -1972,11 +1973,11 @@ mod tests {
                         vec![
                             egui::Event::PointerMoved(egui::pos2(300.0, 550.0)),
                             egui::Event::MouseWheel {
+                                source: egui::MouseWheelSource::Unknown,
                                 unit: egui::MouseWheelUnit::Point,
                                 delta: egui::vec2(-640.0, 0.0),
                                 modifiers: egui::Modifiers::NONE,
                                 phase: egui::TouchPhase::Move,
-                                source: egui::MouseWheelSource::Unknown,
                             },
                         ]
                     } else {

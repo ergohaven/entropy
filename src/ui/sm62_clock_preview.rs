@@ -1,3 +1,5 @@
+include!("sm62_clock_centering_tests.rs");
+
 #[cfg(test)]
 mod clock_player_parity_tests {
     use super::*;
@@ -23,42 +25,29 @@ mod clock_player_parity_tests {
             fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
                 let ctx = ui.ctx().clone();
                 ctx.set_pixels_per_point(1.0);
-                egui::CentralPanel::default()
-                    .frame(egui::Frame::NONE)
-                    .show(ui, |ui| {
-                        let screen =
-                            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(240.0, 280.0));
-                        // Identical production background and owning bitmap painters,
-                        // without fabricated production time/date or HID activity.
-                        ui.painter().rect_filled(
-                            screen,
-                            display_corner_radius(screen.width()),
-                            Color32::from_rgb(7, 7, 5),
-                        );
-                        paint_sm62_layer_header(ui, screen);
-                        if self.live {
-                            paint_sm62_clock_time(ui, screen, "12:34");
-                            if self.date {
-                                paint_sm62_date(ui, screen, "14.10.2026");
-                            }
-                        } else {
-                            paint_sm62_clock_fallback(ui, screen);
-                        }
-                        paint_sm62_language(ui, screen, self.language.as_deref());
-                    });
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+                    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(240.0,280.0));
+                    // Identical production background and owning bitmap painters,
+                    // without fabricated production time/date or HID activity.
+                    ui.painter().rect_filled(screen, display_corner_radius(screen.width()), Color32::from_rgb(7,7,5));
+                    paint_sm62_layer_header(ui, screen);
+                    if self.live {
+                        paint_sm62_clock_time(ui, screen, "12:34");
+                        if self.date { paint_sm62_date(ui, screen, "14.10.2026"); }
+                    } else {
+                        paint_sm62_clock_fallback(ui, screen);
+                    }
+                    paint_sm62_language(ui, screen, self.language.as_deref());
+                });
                 self.frames += 1;
                 if self.frames == 5 {
                     let (path, close) = (self.path.clone(), ctx.clone());
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
-                        egui::ScreenshotCallback::new(move |image| {
-                            assert_eq!(image.size, [240, 280]);
-                            let rgba: Vec<u8> =
-                                image.pixels.iter().flat_map(|p| p.to_array()).collect();
-                            image::save_buffer(&path, &rgba, 240, 280, image::ColorType::Rgba8)
-                                .unwrap();
-                            close.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }),
-                    ));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |image| {
+                        assert_eq!(image.size, [240,280]);
+                        let rgba: Vec<u8> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
+                        image::save_buffer(&path, &rgba, 240, 280, image::ColorType::Rgba8).unwrap();
+                        close.send_viewport_cmd(egui::ViewportCommand::Close);
+                    })));
                 }
                 assert!(self.frames < 120, "screenshot did not arrive");
                 ctx.request_repaint();
@@ -124,44 +113,18 @@ mod clock_player_parity_tests {
                         );
                         // Same context as the real mode switch: texture IDs stay stable.
                         let render = |mode, live| {
-                            let output = crate::app::discard_texture_deltas(ctx.run_ui(
-                                egui::RawInput::default(),
-                                |ui| {
-                                    egui::CentralPanel::default().frame(egui::Frame::NONE).show(
-                                        ui,
-                                        |ui| {
-                                            if framed {
-                                                ui.set_width(240.0 * scale + 14.0);
-                                                draw_sm62_preview(
-                                                    ui,
-                                                    &[mode, 0, 20, 1, 1],
-                                                    0,
-                                                    true,
-                                                    280.0 * scale + 14.0,
-                                                    side,
-                                                    language,
-                                                    stars,
-                                                    false,
-                                                    live,
-                                                );
-                                            } else {
-                                                paint_sm62_screen(
-                                                    ui,
-                                                    screen,
-                                                    &[mode, 0, 20, 1, 1],
-                                                    0,
-                                                    true,
-                                                    side,
-                                                    language,
-                                                    stars,
-                                                    false,
-                                                    live,
-                                                );
-                                            }
-                                        },
-                                    );
-                                },
-                            ));
+                            let output = crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput { time: Some(0.0), ..Default::default() }, |ui| {
+                                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+                                    if framed {
+                                        ui.set_width(240.0 * scale + 14.0);
+                                        draw_sm62_preview(ui, &[mode,0,20,1,1], 0, true,
+                                            280.0 * scale + 14.0, side, language, stars, false, live);
+                                    } else {
+                                        paint_sm62_screen(ui, screen, &[mode,0,20,1,1], 0,
+                                            true, side, language, stars, false, live);
+                                    }
+                                });
+                            }));
                             let screen = if framed {
                                 output
                                     .shapes
@@ -290,16 +253,30 @@ fn paint_sm62_clock_label(
         }
     }
 }
+// Integer firmware-pixel geometry, before any preview scaling.
+fn sm62_clock_live_shift(hours: &str, minutes: &str) -> i32 {
+    let glyph = |c: u8| sm62_clock_font(48).glyphs.iter().find(|g| g[0] == c as i32).unwrap();
+    let h = hours.as_bytes();
+    let m = minutes.as_bytes();
+    let hours_width: i32 = h.iter().map(|&c| glyph(c)[6]).sum();
+    let left = 7 + 98 - hours_width + glyph(h[0])[4];
+    let right = 132 + glyph(m[0])[6] + glyph(m[1])[4] + glyph(m[1])[2];
+    (240 - (right - left)) / 2 - left
+}
 fn paint_sm62_clock_time(ui: &egui::Ui, screen: egui::Rect, time: &str) {
-    let (hours, minutes) = time.split_once(':').unwrap_or(("SM", "62"));
-    let cream = Color32::from_rgb(255, 248, 231);
-    let gold = Color32::from_rgb(242, 219, 149);
-    paint_sm62_clock_label(ui, screen, hours, 48, 7.0, 124.0, 98.0, 2, cream);
-    paint_sm62_clock_label(ui, screen, ":", 48, 110.0, 124.0, 20.0, 1, gold);
-    paint_sm62_clock_label(ui, screen, minutes, 48, 132.0, 124.0, 84.0, 0, cream);
+    let (hours,minutes) = time.split_once(':').unwrap_or(("SM","62"));
+    let valid_pair = |s: &str| s.len() == 2 && s.bytes().all(|c| c.is_ascii_digit());
+    let shift = if valid_pair(hours) && valid_pair(minutes) && hours < "24" && minutes < "60" {
+        sm62_clock_live_shift(hours, minutes) as f32
+    } else { 0.0 };
+    let cream = Color32::from_rgb(255,248,231);
+    let gold = Color32::from_rgb(242,219,149);
+    paint_sm62_clock_label(ui,screen,hours,48,7.0+shift,124.0,98.0,2,cream);
+    paint_sm62_clock_label(ui,screen,":",48,110.0+shift,124.0,20.0,1,gold);
+    paint_sm62_clock_label(ui,screen,minutes,48,132.0+shift,124.0,84.0,0,cream);
 }
 // Mirror the accepted firmware's visible-bounds centering, using the original
-// Unbounded48 atlas/metrics. Live clock geometry is deliberately unchanged.
+// Unbounded48 atlas/metrics. Placeholder behavior remains unchanged.
 fn paint_sm62_clock_fallback(ui: &egui::Ui, screen: egui::Rect) {
     let glyph = |c: char| {
         sm62_clock_font(48)

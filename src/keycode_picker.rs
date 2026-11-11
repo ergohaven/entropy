@@ -238,6 +238,28 @@ fn tr_picker(language: crate::i18n::Language, key: &'static str) -> &'static str
     crate::i18n::tr_catalog(language, key)
 }
 
+// Native startup installs these UI fonts in main.rs; isolated kittest
+// contexts do not pass through that startup closure. Keep glyph validation
+// strict and provide the same embedded UI font chain instead of allowing tofu.
+#[cfg(test)]
+pub(crate) fn setup_picker_test_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    for (name, bytes) in [
+        ("roboto", include_bytes!("../assets/Roboto-Regular.ttf").as_slice()),
+        ("dejavu", include_bytes!("../assets/DejaVuSans.ttf").as_slice()),
+        ("noto_symbols", include_bytes!("../assets/NotoSansSymbols2-Regular.ttf").as_slice()),
+        ("noto_emoji", include_bytes!("../assets/NotoEmoji-Regular.ttf").as_slice()),
+    ] {
+        fonts.font_data.insert(name.to_owned(), egui::FontData::from_static(bytes).into());
+    }
+    let prop = fonts.families.entry(egui::FontFamily::Proportional).or_default();
+    prop.insert(0, "roboto".to_owned());
+    prop.extend(["dejavu", "noto_symbols", "noto_emoji"].map(str::to_owned));
+    fonts.families.entry(egui::FontFamily::Monospace).or_default()
+        .extend(["dejavu", "noto_symbols", "noto_emoji"].map(str::to_owned));
+    ctx.set_fonts(fonts);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,17 +275,17 @@ mod tests {
             ..Default::default()
         };
         let mut harness = egui_kittest::Harness::builder()
-            .allow_missing_glyphs()
+            .with_context_setup(setup_picker_test_fonts)
             .build_ui_state(
-                |ui, picker: &mut KeycodePicker| {
-                    picker.show(
-                        ui.ctx(),
-                        DeferredPickerDataState::Ready,
-                        DeferredPickerDataState::Ready,
-                    );
-                },
-                picker,
-            );
+            |ui, picker: &mut KeycodePicker| {
+                picker.show(
+                    ui.ctx(),
+                    DeferredPickerDataState::Ready,
+                    DeferredPickerDataState::Ready,
+                );
+            },
+            picker,
+        );
         harness.run();
         harness.get_by_label(tr_picker(
             crate::i18n::Language::English,

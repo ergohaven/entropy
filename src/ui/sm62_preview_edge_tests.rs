@@ -10,120 +10,42 @@ mod preview_edge_tests {
     }
     #[test]
     fn sm62_preview_edge_fills_outer_frame_without_moving_content() {
-        let _storage = crate::app::app_storage::ScopedTempConfig::new();
-        let (hid, recorder) = crate::hid::HidDevice::test_device();
-        for scale in [0.5, 0.825, 1.0] {
-            for mode in [0, 1, 2, 3] {
-                for side in [0, 1] {
-                    for off in [false, true] {
-                        let ctx = egui::Context::default();
-                        fonts(&ctx);
-                        let mut settings = [0u8; 8];
-                        settings[0] = mode;
-                        let mut geometry = None;
-                        let output = crate::app::discard_texture_deltas(ctx.run_pass(
-                            egui::RawInput::default(),
-                            |ctx| {
-                                ctx.root_ui(|ui| {
-                                    egui::CentralPanel::default().show(ui, |ui| {
-                                        ui.set_width(240.0 * scale + 14.0);
-                                        let start = ui.cursor().min;
-                                        let size = fitted_display_size(
-                                            (ui.available_width() - 14.0).min(240.0),
-                                            280.0 * scale,
-                                        );
-                                        let outer = egui::Rect::from_min_size(
-                                            start,
-                                            size + egui::vec2(14.0, 14.0),
-                                        );
-                                        let screen =
-                                            egui::Rect::from_center_size(outer.center(), size);
-                                        draw_sm62_preview(
-                                            ui,
-                                            &settings,
-                                            0,
-                                            true,
-                                            280.0 * scale + 14.0,
-                                            side,
-                                            Some("RU"),
-                                            true,
-                                            off,
-                                            false,
-                                        );
-                                        geometry = Some((outer, screen));
-                                    })
-                                });
-                            },
-                        ));
-                        let (outer, screen) = geometry.unwrap();
-                        let frame = output
-                            .shapes
-                            .iter()
-                            .find_map(|s| match &s.shape {
-                                egui::Shape::Rect(r) if r.rect == outer => Some(r),
-                                _ => None,
-                            })
-                            .expect("real outer frame");
-                        assert_eq!(
-                            frame.fill,
-                            if off {
-                                Color32::BLACK
-                            } else {
-                                Color32::from_rgb(7, 7, 5)
-                            },
-                            "dark fill must reach inside outer outline: mode={mode} side={side} off={off} scale={scale}"
-                        );
-                        assert_eq!(frame.stroke, Stroke::new(1.0, Color32::from_gray(75)));
-                        assert_eq!(frame.stroke_kind, egui::StrokeKind::Inside);
-                        assert_eq!(
-                            frame.corner_radius,
-                            egui::CornerRadius::from(
-                                display_corner_radius(size_from(screen)) + 7.0
-                            )
-                        );
-                        assert!(!output.shapes.iter().any(|s| matches!(&s.shape,egui::Shape::Rect(r) if r.rect==screen && r.stroke.width>0.0)),"no inset seam");
-                        let reference = crate::app::discard_texture_deltas(ctx.run_pass(
-                            egui::RawInput::default(),
-                            |ctx| {
-                                ctx.root_ui(|ui| {
-                                    egui::CentralPanel::default().show(ui, |ui| {
-                                        paint_sm62_screen(
-                                            ui,
-                                            screen,
-                                            &settings,
-                                            0,
-                                            true,
-                                            side,
-                                            Some("RU"),
-                                            true,
-                                            off,
-                                            false,
-                                        )
-                                    })
-                                });
-                            },
-                        ));
-                        // Exact production content shapes (including meshes/UV/positions) stay unchanged.
-                        let actual: Vec<_> = output
-                            .shapes
-                            .iter()
-                            .filter(|s| !matches!(&s.shape,egui::Shape::Rect(r) if r.rect==outer))
-                            .collect();
-                        assert_eq!(
-                            format!("{:?}", actual),
-                            format!("{:?}", reference.shapes.iter().collect::<Vec<_>>())
-                        );
-                        let primitives = ctx.tessellate(output.shapes, 1.0);
-                        assert!(!primitives.is_empty(), "actual egui tessellation");
-                    }
-                }
-            }
+        let _storage=crate::app::app_storage::ScopedTempConfig::new();
+        let (hid,recorder)=crate::hid::HidDevice::test_device();
+        for scale in [0.5,0.825,1.0] {
+            for mode in [0,1,2,3] { for side in [0,1] { for off in [false,true] {
+                let ctx=egui::Context::default();fonts(&ctx);
+                let mut settings=[0u8;8];settings[0]=mode;
+                let mut geometry=None;
+                let output=crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
+                    ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| {
+                        ui.set_width(240.0*scale+14.0);
+                        let start=ui.cursor().min;
+                        let size=fitted_display_size((ui.available_width()-14.0).min(240.0),280.0*scale);
+                        let outer=egui::Rect::from_min_size(start,size+egui::vec2(14.0,14.0));
+                        let screen=egui::Rect::from_center_size(outer.center(),size);
+                        draw_sm62_preview(ui,&settings,0,true,280.0*scale+14.0,side,Some("RU"),true,off,false);
+                        geometry=Some((outer,screen));
+                    }));
+                }));
+                let (outer,screen)=geometry.unwrap();
+                let frame=output.shapes.iter().find_map(|s| match &s.shape {egui::Shape::Rect(r) if r.rect==outer=>Some(r),_=>None}).expect("real outer frame");
+                assert_eq!(frame.fill,if off {Color32::BLACK} else {Color32::from_rgb(7,7,5)},"dark fill must reach inside outer outline: mode={mode} side={side} off={off} scale={scale}");
+                assert_eq!(frame.stroke,Stroke::new(1.0,Color32::from_gray(75)));
+                assert_eq!(frame.stroke_kind,egui::StrokeKind::Inside);
+                assert_eq!(frame.corner_radius,egui::CornerRadius::from(display_corner_radius(size_from(screen))+7.0));
+                assert!(!output.shapes.iter().any(|s| matches!(&s.shape,egui::Shape::Rect(r) if r.rect==screen && r.stroke.width>0.0)),"no inset seam");
+                let reference=crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(),|ctx| {
+                    ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui|paint_sm62_screen(ui,screen,&settings,0,true,side,Some("RU"),true,off,false)));
+                }));
+                // Exact production content shapes (including meshes/UV/positions) stay unchanged.
+                let actual:Vec<_>=output.shapes.iter().filter(|s| !matches!(&s.shape,egui::Shape::Rect(r) if r.rect==outer)).collect();
+                assert_eq!(format!("{:?}",actual),format!("{:?}",reference.shapes.iter().collect::<Vec<_>>()));
+                let primitives=ctx.tessellate(output.shapes,1.0);
+                assert!(!primitives.is_empty(),"actual egui tessellation");
+            }}}
         }
-        assert!(
-            recorder.requests().is_empty(),
-            "preview emits no HID requests"
-        );
-        drop(hid);
+        assert!(recorder.requests().is_empty(),"preview emits no HID requests");drop(hid);
     }
     fn size_from(screen: egui::Rect) -> f32 {
         screen.width()

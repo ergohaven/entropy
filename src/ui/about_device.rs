@@ -857,6 +857,7 @@ impl EntropyApp {
                     about_empty_title(lang),
                     Some(about_empty_detail(lang)),
                 );
+
             });
             return;
         };
@@ -878,6 +879,7 @@ impl EntropyApp {
                         .size(metrics.value(13.0))
                         .color(app_muted_text(dark)),
                 );
+
                 ui.add_space(metrics.value(24.0));
                 let bottom_reserve = if firmware_update_supported {
                     metrics.value(54.0)

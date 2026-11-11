@@ -859,7 +859,9 @@ impl EntropyApp {
 
         let fallback = request.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
+        let event_pause = hid_device.pause_application_event_polling();
         std::thread::spawn(move || {
+            let _event_pause = event_pause;
             #[cfg(target_os = "macos")]
             let _hid_lock = hid_device.macos_hid_operation_lock();
 

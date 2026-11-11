@@ -3,6 +3,9 @@ use super::*;
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 pub(super) enum DeferredLoadRequest {
+    // Preserve ordinary compatibility fallbacks, but never use them to certify
+    // values after a possibly accepted import mutation.
+    Recovery(Box<DeferredLoadRequest>),
     Layer {
         layer: usize,
         context: std::sync::Arc<DeferredDeviceLoadContext>,
@@ -22,6 +25,7 @@ pub(super) enum DeferredLoadRequest {
 impl DeferredLoadRequest {
     pub(super) fn layer(&self) -> Option<usize> {
         match self {
+            Self::Recovery(request) => request.layer(),
             Self::Layer { layer, .. } | Self::BackgroundLayerStep { layer, .. } => Some(*layer),
             Self::Section { .. } => None,
         }
@@ -29,13 +33,17 @@ impl DeferredLoadRequest {
 
     pub(super) fn section(&self) -> Option<DeferredLoadSection> {
         match self {
+            Self::Recovery(request) => request.section(),
             Self::Layer { .. } | Self::BackgroundLayerStep { .. } => None,
             Self::Section { section, .. } => Some(*section),
         }
     }
 
     pub(super) fn is_background_layer(&self) -> bool {
-        matches!(self, Self::BackgroundLayerStep { .. })
+        match self {
+            Self::Recovery(request) => request.is_background_layer(),
+            _ => matches!(self, Self::BackgroundLayerStep { .. }),
+        }
     }
 
     pub(super) fn blocks_keyboard(&self) -> bool {
@@ -77,10 +85,13 @@ const ENTLAYOUT_EXPORT_SECTIONS: [DeferredLoadSection; 10] = [
     DeferredLoadSection::KeyOverrides,
     DeferredLoadSection::AltRepeat,
     DeferredLoadSection::BehaviorSettings,
+    // Portable module values are part of the complete document too. Include
+    // their newly unconfirmed section in admission, scheduling and explicit
+    // Failed-read retry, not only the final fail-closed snapshot guard.
+    DeferredLoadSection::Modules,
     DeferredLoadSection::Touchpad,
     DeferredLoadSection::LayerLeds,
     DeferredLoadSection::Rgb,
-    DeferredLoadSection::Modules,
 ];
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -126,7 +137,13 @@ pub(super) fn run_deferred_load(
     hid: &crate::hid::HidDevice,
     request: &DeferredLoadRequest,
 ) -> anyhow::Result<DeferredLoadPayload> {
+    run_deferred_load_checked(hid,request,false)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn run_deferred_load_checked(hid: &crate::hid::HidDevice, request: &DeferredLoadRequest, strict: bool) -> anyhow::Result<DeferredLoadPayload> {
     match request {
+        DeferredLoadRequest::Recovery(request) => run_deferred_load_checked(hid,request,true),
         DeferredLoadRequest::Layer { layer, context } => {
             let keymap =
                 hid.get_keymap_layer(*layer, context.layer_count, context.rows, context.cols)?;
@@ -141,6 +158,10 @@ pub(super) fn run_deferred_load(
             };
             let mut encoders = Vec::with_capacity(context.encoder_count);
             for encoder in 0..context.encoder_count {
+                if strict {
+                    encoders.push(hid.get_encoder(*layer as u8, encoder as u8)?);
+                    continue;
+                }
                 encoders.push(
                     hid.get_encoder(*layer as u8, encoder as u8)
                         .unwrap_or_else(|error| {
@@ -199,14 +220,16 @@ pub(super) fn run_deferred_load(
                     )
                 }
                 BackgroundLayerStep::Encoder { encoder_index } => {
-                    let keycodes = hid
+                    let keycodes = if strict {
+                        hid.get_encoder(*layer as u8, encoder_index as u8)?
+                    } else { hid
                         .get_encoder(*layer as u8, encoder_index as u8)
                         .unwrap_or_else(|error| {
                             log::warn!(
                                 "get_encoder(layer={layer}, idx={encoder_index}) during background load: {error}"
                             );
                             (0, 0)
-                        });
+                        }) };
                     BackgroundLayerStepResult::Encoder {
                         encoder_index,
                         keycodes,
@@ -258,7 +281,7 @@ pub(super) fn run_deferred_load(
                                     layer,
                                 })
                             }
-                            Err(error) if crate::hid::is_disconnect_error(&error) => Err(error),
+                            Err(error) if strict || crate::hid::is_disconnect_error(&error) => Err(error),
                             Err(error) => {
                                 log::warn!("get_combo({index}) during staged load: {error}");
                                 Ok(ComboEntry::default())
@@ -292,7 +315,7 @@ pub(super) fn run_deferred_load(
                                     tapping_term,
                                 })
                             }
-                            Err(error) if crate::hid::is_disconnect_error(&error) => Err(error),
+                            Err(error) if strict || crate::hid::is_disconnect_error(&error) => Err(error),
                             Err(error) => {
                                 log::warn!("get_tap_dance({index}) during staged load: {error}");
                                 Ok(Default::default())
@@ -334,7 +357,7 @@ pub(super) fn run_deferred_load(
                                 suppressed_mods,
                                 options: KeyOverrideOptionsState::from_bits(options),
                             }),
-                            Err(error) if crate::hid::is_disconnect_error(&error) => Err(error),
+                            Err(error) if strict || crate::hid::is_disconnect_error(&error) => Err(error),
                             Err(error) => {
                                 log::warn!("get_key_override({index}) during staged load: {error}");
                                 Ok(KeyOverrideEntry::default())
@@ -354,7 +377,7 @@ pub(super) fn run_deferred_load(
                                     options: AltRepeatKeyOptionsState::from_bits(options),
                                 })
                             }
-                            Err(error) if crate::hid::is_disconnect_error(&error) => Err(error),
+                            Err(error) if strict || crate::hid::is_disconnect_error(&error) => Err(error),
                             Err(error) => {
                                 log::warn!(
                                     "get_alt_repeat_key({index}) during staged load: {error}"
@@ -402,6 +425,31 @@ pub(super) fn run_deferred_load(
                 )),
             };
             let payload = payload?;
+            if strict {
+                // These readers retain defaults for ordinary connection paint.
+                // Defaults are not confirmation after an accepted import SET.
+                for &qsid in context.supported_qmk_settings.iter() {
+                    let confirmed = match &payload {
+                        DeferredLoadPayload::Touchpad(settings) if matches!(qsid,120..=124|142|143) =>
+                            settings.loaded_qsids.contains(qsid),
+                        DeferredLoadPayload::Modules(settings) => settings.groups.iter()
+                            .flat_map(|group| &group.fields).filter(|field| field.qsid == qsid)
+                            .all(|_| settings.values.contains_key(&qsid)),
+                        DeferredLoadPayload::BehaviorSettings(settings) => match qsid {
+                            1 => settings.grave_escape.supported,
+                            3 => settings.auto_shift_options.loaded,
+                            4 => settings.auto_shift_timeout.is_some(),
+                            5 | 6 => settings.one_shot.supports_qsid(qsid),
+                            7 | 18..=20 | 22..=27 => settings.tap_hold.qsid_loaded(qsid),
+                            9..=17 => settings.mouse_keys.loaded_qsids.contains(qsid),
+                            21 => settings.magic.supported,
+                            _ => true,
+                        },
+                        _ => true,
+                    };
+                    anyhow::ensure!(confirmed,"portable setting {qsid} read-only recovery failed");
+                }
+            }
             hid.get_protocol_version().map_err(|error| {
                 anyhow::anyhow!("deferred Bluetooth transport check: {error:#}")
             })?;
@@ -457,10 +505,33 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    fn import_reconnect_required(&self) -> bool {
+        // Eager connections have no scheduler context for a read-only reload.
+        // Preserve uncertainty: reconnect must obtain fresh device data instead
+        // of retrying SET or publishing the pre-import cache as ready.
+        !self.deferred_device_load.is_staged()
+            && self.deferred_device_load.has_unconfirmed_import_data()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn refuse_import_reconnect_required(&mut self) -> bool {
+        if !self.import_reconnect_required() {
+            return false;
+        }
+        self.deferred_full_layout_action = None;
+        self.status_msg = crate::i18n::tr_catalog(
+            self.app_settings.language,
+            "connection.import_reconnect_required",
+        ).into();
+        true
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn selected_layer_data_ready(&self) -> bool {
-        self.deferred_device_load
-            .layer_status(self.selected_layer)
-            .ready()
+        !self.import_reconnect_required()
+            && self.deferred_device_load
+                .layer_status(self.selected_layer)
+                .ready()
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -681,6 +752,17 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn request_entlayout_import_after_full_load(&mut self) {
+        // Eager connections cannot schedule a cold/uncertain lighting read.
+        if !self.deferred_device_load.is_staged() {
+            if let Err(error) = self.require_complete_entlayout_lighting() {
+                self.deferred_full_layout_action = None;
+                self.status_msg = error.to_string();
+                return;
+            }
+        }
+        if self.refuse_import_reconnect_required() {
+            return;
+        }
         if !self.deferred_device_load.is_staged() && !self.hid_write_task_owner_active() {
             if let Err(error) = self.confirm_entlayout_macros() {
                 self.status_msg = error.to_string();
@@ -702,6 +784,17 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn request_entlayout_export_after_full_load(&mut self) {
+        // Eager connections cannot schedule a cold/uncertain lighting read.
+        if !self.deferred_device_load.is_staged() {
+            if let Err(error) = self.require_complete_entlayout_lighting() {
+                self.deferred_full_layout_action = None;
+                self.status_msg = error.to_string();
+                return;
+            }
+        }
+        if self.refuse_import_reconnect_required() {
+            return;
+        }
         // Eager devices have no deferred GET context. If a worker owns HID,
         // queue the action and confirm when that owner returns the handle.
         if !self.deferred_device_load.is_staged() && !self.hid_write_task_owner_active() {
@@ -725,6 +818,9 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn request_image_export_after_full_load(&mut self) {
+        if self.refuse_import_reconnect_required() {
+            return;
+        }
         self.retry_failed_full_layout_loads(DeferredFullLayoutAction::OpenImageExport);
         if self.deferred_full_layout_action_ready(DeferredFullLayoutAction::OpenImageExport) {
             self.open_layout_image_export_page();
@@ -743,6 +839,10 @@ impl EntropyApp {
         let Some(action) = self.deferred_full_layout_action else {
             return;
         };
+        if self.refuse_import_reconnect_required() {
+            ctx.request_repaint();
+            return;
+        }
         if !self.deferred_device_load.is_staged()
             && !matches!(action, DeferredFullLayoutAction::OpenImageExport)
             && self.keycode_picker.macro_count > 0
@@ -1069,9 +1169,17 @@ impl EntropyApp {
                     .set_section_status(DeferredLoadSection::Bluetooth, DeferredLoadStatus::Loaded);
             }
             DeferredLoadPayload::LayerLeds(settings) => {
+                let confirmed = [settings.brightness.as_ref(), settings.timeout.as_ref()]
+                    .into_iter().flatten().all(|s| s.loaded)
+                    && settings.layer_colors.iter().chain(&settings.bt_profile_colors).all(|s| s.loaded);
                 self.layer_led_settings = settings;
+                let status = if confirmed {
+                    DeferredLoadStatus::Loaded
+                } else {
+                    DeferredLoadStatus::Failed("Failed to read LED indication settings".into())
+                };
                 self.deferred_device_load
-                    .set_section_status(DeferredLoadSection::LayerLeds, DeferredLoadStatus::Loaded);
+                    .set_section_status(DeferredLoadSection::LayerLeds, status);
             }
             DeferredLoadPayload::Rgb(settings) => {
                 self.rgb_settings = settings;
@@ -1120,8 +1228,8 @@ impl EntropyApp {
                 }
             }
             if let Some(name) = firmware_name {
-                self.layer_names_from_firmware
-                    .resize(layout.layers.len(), false);
+                if layer < 16 { self.confirmed_firmware_layer_names |= 1u16 << layer; }
+                self.layer_names_from_firmware.resize(layout.layers.len(), false);
                 if let Some(confirmed) = self.layer_names_from_firmware.get_mut(layer) {
                     *confirmed = true;
                 }
@@ -1388,6 +1496,24 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    fn draw_import_reconnect_required(&self, ui: &mut egui::Ui, rect: egui::Rect) {
+        crate::ui_style::allocate_ui_at_rect(ui, rect, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space((rect.height() * 0.42).max(24.0));
+                ui.label(RichText::new(crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "connection.import_unconfirmed",
+                )).size(14.0).color(app_muted_text(self.dark_mode)));
+                ui.add_space(6.0);
+                ui.label(RichText::new(crate::i18n::tr_catalog(
+                    self.app_settings.language,
+                    "connection.import_reconnect_required",
+                )).size(12.0).color(app_muted_text(self.dark_mode)));
+            });
+        });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn draw_deferred_gate_body(
         &self,
         ui: &mut egui::Ui,
@@ -1396,6 +1522,10 @@ impl EntropyApp {
         loading_key: &'static str,
         failed_key: &'static str,
     ) -> bool {
+        if self.import_reconnect_required() {
+            self.draw_import_reconnect_required(ui, content_rect);
+            return false;
+        }
         crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             let mut retry = false;
             ui.vertical_centered(|ui| {
@@ -1453,6 +1583,10 @@ impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn draw_deferred_keyboard_overlay(&mut self, ui: &mut egui::Ui) {
         let rect = ui.max_rect();
+        if self.import_reconnect_required() {
+            self.draw_import_reconnect_required(ui, rect);
+            return;
+        }
         let selected_status = self.deferred_device_load.layer_status(self.selected_layer);
         let target = if !selected_status.ready() {
             DeferredOverlayTarget::Layer(self.selected_layer, selected_status)
@@ -1959,6 +2093,44 @@ mod tests {
             &state,
             DeferredFullLayoutAction::ExportEntlayout
         ));
+    }
+
+    #[test]
+    fn unconfirmed_import_recovery_refuses_default_fallback_until_real_read() {
+        for section in [None,Some(DeferredLoadSection::Combos),Some(DeferredLoadSection::TapDance),Some(DeferredLoadSection::KeyOverrides),Some(DeferredLoadSection::AltRepeat)] {
+            let mut app=EntropyApp::new_inert_for_test();
+            let mut context=context();context.encoder_count=1;context.combo_count=1;context.tap_dance_count=1;context.key_override_count=1;context.alt_repeat_count=1;
+            let context=std::sync::Arc::new(context);
+            app.deferred_device_load=DeferredDeviceLoadState::staged((*context).clone());
+            let request=if let Some(section)=section {
+                app.deferred_device_load.mark_import_section_unconfirmed(section);
+                DeferredLoadRequest::Section {section,context}
+            } else {
+                app.deferred_device_load.mark_import_layer_unconfirmed(0);
+                DeferredLoadRequest::Layer {layer:0,context}
+            };
+            let (hid,recorder)=crate::hid::HidDevice::test_device();
+            let fail=std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let transport=fail.clone();
+            recorder.respond_by(move |r| {
+                if r[0]==0xfe && matches!(r[1],3|0x0d) && transport.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Some(Err("injected recovery read error".into()));
+                }
+                None
+            });
+            app.hid_device=Some(hid.into());
+            let ctx=egui::Context::default();
+            for recovered in [false,true] {
+                fail.store(!recovered,std::sync::atomic::Ordering::SeqCst);
+                assert!(matches!(app.start_vial_hid_operation(&ctx,crate::app::vial_hid_task::VialHidOperation::Deferred(request.clone())),crate::app::vial_hid_task::VialHidTaskStart::Started));
+                let deadline=std::time::Instant::now()+std::time::Duration::from_secs(3);
+                while app.vial_hid_task.is_some() && std::time::Instant::now()<deadline {
+                    app.poll_vial_hid_task(&ctx);std::thread::yield_now();
+                }
+                assert!(app.vial_hid_task.is_none());
+                assert_eq!(app.deferred_device_load.has_unconfirmed_import_data(),!recovered,"recovery confirmed fabricated values: {section:?}");
+            }
+        }
     }
 
     #[test]

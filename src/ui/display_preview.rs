@@ -22,20 +22,7 @@ fn sm62_preview_mode(settings: &[u8], scene: u8) -> u8 {
     }
 }
 
-fn sm62_orbit_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
-    crate::ui_textures::texture(ctx, "sm62_orbit_firmware_frames", 0, || {
-        let image = image::load_from_memory(include_bytes!("../../assets/sm62/orbit_frames.png"))
-            .ok()?
-            .into_rgba8();
-        if image.dimensions() != (960, 1120) {
-            return None;
-        }
-        Some(egui::ColorImage::from_rgba_unmultiplied(
-            [960, 1120],
-            image.as_raw(),
-        ))
-    })
-}
+include!("sm62_orbit_preview.rs");
 
 include!("sm62_keymap_preview.rs");
 include!("sm62_clock_preview.rs");
@@ -57,38 +44,20 @@ fn paint_sm62_screen(
     let scale = screen.width() / DISPLAY_WIDTH;
     let at = |x: f32, y: f32| screen.min + egui::vec2(x * scale, y * scale);
     let muted = Color32::from_rgb(131, 127, 118);
-    painter.rect_filled(
-        screen,
-        display_corner_radius(screen.width()),
-        Color32::from_rgb(7, 7, 5),
-    );
-    if screens_off {
-        painter.rect_filled(
-            screen,
-            display_corner_radius(screen.width()),
-            Color32::BLACK,
-        );
-        return;
-    }
+    painter.rect_filled(screen, display_corner_radius(screen.width()), Color32::from_rgb(7, 7, 5));
     let mode = sm62_preview_mode(settings, scene);
+    let orbit = sm62_orbit_update(ui, side, mode == 2 && !screens_off && ui.is_rect_visible(screen), settings[0] == 2, screens_off || !ui.is_rect_visible(screen));
+    if screens_off { painter.rect_filled(screen, display_corner_radius(screen.width()), Color32::BLACK); return; }
+    // Advance only visible animated content, using egui's monotonic frame clock.
+    // Firmware orbit and starfield updates both use a 50 ms cadence.
+    let ticks = ui.input(|input| (input.time * 20.0).floor() as u64);
+    if ui.is_rect_visible(screen) && (mode == 2 || (stars_enabled && mode != 3)) {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+    }
     if mode == 2 {
-        if let Some(texture) = sm62_orbit_texture(ui.ctx()) {
-            // One representative firmware frame; this is a static preview.
-            let frame = 13;
-            let col = frame % 4;
-            let row = frame / 4;
-            let uv = egui::Rect::from_min_max(
-                egui::pos2(col as f32 / 4.0, row as f32 / 4.0),
-                egui::pos2((col + 1) as f32 / 4.0, (row + 1) as f32 / 4.0),
-            );
-            painter.add(
-                egui::epaint::RectShape::filled(
-                    screen,
-                    display_corner_radius(screen.width()),
-                    Color32::WHITE,
-                )
-                .with_texture(texture.id(), uv),
-            );
+        if let Some(texture) = orbit {
+            painter.add(egui::epaint::RectShape::filled(screen, display_corner_radius(screen.width()), Color32::WHITE)
+                .with_texture(texture.id(), egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0,1.0))));
         }
         return;
     }
@@ -97,15 +66,12 @@ fn paint_sm62_screen(
         return;
     }
     if stars_enabled {
-        for i in 0..26 {
-            let x = ((i * 83 + 29) % 226 + 7) as f32;
-            let y = ((i * 61 + 17) % 247 + 12) as f32;
-            painter.circle_filled(
-                at(x, y),
-                (i % 3 + 1) as f32 * 0.55 * scale,
-                muted.gamma_multiply(0.6),
-            );
-        }
+    for i in 0..26 {
+        let x = (((i * 83 + 29) % 226) as f32 - (ticks % 226) as f32 * (i % 3 + 1) as f32).rem_euclid(226.0) + 7.0;
+        let y = ((i * 61 + 17) % 247 + 12) as f32;
+        painter.circle_filled(at(x, y), (i % 3 + 1) as f32 * 0.55 * scale,
+            muted.gamma_multiply(0.6));
+    }
     }
     if mode == 1 {
         paint_sm62_player(ui, screen, language);
@@ -1666,37 +1632,20 @@ mod tests {
             include_bytes!("../../tools/artwork/backspace-delete/backspace-approved.bin"),
             include_bytes!("../../tools/artwork/backspace-delete/delete-right.bin"),
         ];
-        let rect = egui::Rect::from_center_size(egui::pos2(60.0, 80.0), egui::vec2(74.0, 42.0));
-        for (code, bits) in [0x002A, 0x004C].into_iter().zip(expected) {
-            let icon = super::preview_key_icon(code)
-                .expect("Backspace/Delete must be native bitmap icons, not font captions");
-            let ctx = egui::Context::default();
-            let output = crate::app::discard_texture_deltas(ctx.run_pass(
-                egui::RawInput::default(),
-                |ctx| {
-                    ctx.root_ui(|ui| {
-                        egui::CentralPanel::default().show(ui, |ui| {
-                            super::paint_preview_key_icon(ui, rect, icon, egui::Color32::WHITE)
-                        })
-                    });
-                },
-            ));
-            let meshes: Vec<_> = output
-                .shapes
-                .iter()
-                .filter_map(|s| match &s.shape {
-                    egui::Shape::Mesh(m) => Some(m),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(meshes.len(), 1);
-            let expected_positions: Vec<_> = (0..1225)
-                .filter(|i| bits[i / 8] & (0x80 >> (i % 8)) != 0)
-                .map(|i| egui::pos2(42.5 + (i % 35) as f32, 62.5 + (i / 35) as f32))
-                .collect();
-            assert_eq!(meshes[0].vertices.len(), expected_positions.len() * 4);
-            for (quad, pos) in meshes[0].vertices.chunks_exact(4).zip(expected_positions) {
-                assert_eq!(quad[0].pos, pos);
+        let rect=egui::Rect::from_center_size(egui::pos2(60.0,80.0),egui::vec2(74.0,42.0));
+        for (code,bits) in [0x002A,0x004C].into_iter().zip(expected) {
+            let icon=super::preview_key_icon(code).expect("Backspace/Delete must be native bitmap icons, not font captions");
+            let ctx=egui::Context::default();
+            let output=crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(),|ctx| {
+                ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| super::paint_preview_key_icon(ui,rect,icon,egui::Color32::WHITE)));
+            }));
+            let meshes:Vec<_>=output.shapes.iter().filter_map(|s| match &s.shape {egui::Shape::Mesh(m)=>Some(m),_=>None}).collect();
+            assert_eq!(meshes.len(),1);
+            let expected_positions:Vec<_>=(0..1225).filter(|i|bits[i/8]&(0x80>>(i%8))!=0)
+                .map(|i|egui::pos2(42.5+(i%35) as f32,62.5+(i/35) as f32)).collect();
+            assert_eq!(meshes[0].vertices.len(),expected_positions.len()*4);
+            for (quad,pos) in meshes[0].vertices.chunks_exact(4).zip(expected_positions) {
+                assert_eq!(quad[0].pos,pos);
             }
         }
         assert_ne!(expected[0], expected[1]);
@@ -1704,68 +1653,18 @@ mod tests {
 
     #[test]
     fn v8_unsynced_clock_uses_original_font_not_svg_or_local_time() {
-        let ctx = egui::Context::default();
-        let mut fonts = egui::FontDefinitions::default();
-        fonts.families.insert(
-            egui::FontFamily::Name("display_preview".into()),
-            fonts.families[&egui::FontFamily::Proportional].clone(),
-        );
-        ctx.set_fonts(fonts);
-        let output =
-            crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
-                ctx.root_ui(|ui| {
-                    egui::CentralPanel::default().show(ui, |ui| {
-                        super::draw_sm62_preview(
-                            ui,
-                            &[0, 0, 20, 1, 1],
-                            0,
-                            false,
-                            245.0,
-                            0,
-                            None,
-                            false,
-                            false,
-                            false,
-                        );
-                    })
-                });
-            }));
-        let meshes: Vec<_> = output
-            .shapes
-            .iter()
-            .filter_map(|s| {
-                if let egui::Shape::Mesh(m) = &s.shape {
-                    Some(m)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        assert_eq!(
-            meshes.len(),
-            16,
-            "11 actual Zen header glyphs plus original S M : 6 2, never SVG, local time or fabricated date"
-        );
-        assert!(
-            !output
-                .shapes
-                .iter()
-                .any(|s| matches!(&s.shape, egui::Shape::Text(_))),
-            "the clock header must also use actual C bitmaps"
-        );
-        let outer = output
-            .shapes
-            .iter()
-            .find_map(|s| {
-                if let egui::Shape::Rect(r) = &s.shape {
-                    (r.stroke.color == egui::Color32::from_gray(75)).then_some(r.rect)
-                } else {
-                    None
-                }
-            })
-            .unwrap();
-        let screen = outer.shrink(7.0);
-        let scale = screen.width() / 240.0;
+        let ctx=egui::Context::default();
+        let mut fonts=egui::FontDefinitions::default();
+        fonts.families.insert(egui::FontFamily::Name("display_preview".into()),fonts.families[&egui::FontFamily::Proportional].clone()); ctx.set_fonts(fonts);
+        let output=crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(),|ctx| {ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| {
+            super::draw_sm62_preview(ui,&[0,0,20,1,1],0,false,245.0,0,None,false,false,false);
+        }));}));
+        let meshes:Vec<_>=output.shapes.iter().filter_map(|s| if let egui::Shape::Mesh(m)=&s.shape {Some(m)} else {None}).collect();
+        assert_eq!(meshes.len(),16,"11 actual Zen header glyphs plus original S M : 6 2, never SVG, local time or fabricated date");
+        assert!(!output.shapes.iter().any(|s| matches!(&s.shape,egui::Shape::Text(_))),
+            "the clock header must also use actual C bitmaps");
+        let outer=output.shapes.iter().find_map(|s| if let egui::Shape::Rect(r)=&s.shape { (r.stroke.color==egui::Color32::from_gray(75)).then_some(r.rect) } else {None}).unwrap();
+        let screen=outer.shrink(7.0); let scale=screen.width()/240.0;
         // Shared Regular20 LAYER and Medium20 MAIN retain actual firmware bounds.
         assert_eq!(
             meshes[0].calc_bounds(),
@@ -1807,91 +1706,33 @@ mod tests {
             ([2, 1, 20, 1, 1], 0, true, false),
             ([0, 0, 20, 1, 1], 0, false, false),
         ] {
-            let ctx = egui::Context::default();
-            let mut fonts = egui::FontDefinitions::default();
-            fonts.families.insert(
-                egui::FontFamily::Name("display_preview".into()),
-                fonts.families[&egui::FontFamily::Proportional].clone(),
-            );
-            ctx.set_fonts(fonts);
-            let output = crate::app::discard_texture_deltas(ctx.run_pass(
-                egui::RawInput::default(),
-                |ctx| {
-                    ctx.root_ui(|ui| {
-                        egui::CentralPanel::default().show(ui, |ui| {
-                            super::draw_sm62_preview(
-                                ui, &settings, scene, false, 245.0, 0, None, false, off, false,
-                            );
-                        })
-                    });
-                },
-            ));
-            let rects: Vec<_> = output
-                .shapes
-                .iter()
-                .filter_map(|s| {
-                    if let egui::Shape::Rect(r) = &s.shape {
-                        Some(r)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            let outer = rects
-                .iter()
-                .find(|r| r.stroke.color == egui::Color32::from_gray(75))
-                .unwrap();
-            assert_eq!(
-                outer.fill,
-                if off {
-                    egui::Color32::BLACK
-                } else {
-                    egui::Color32::from_rgb(7, 7, 5)
-                },
-                "approved edge fill follows the display background in every mode"
-            );
-            let seams = rects
-                .iter()
-                .filter(|r| r.stroke.color == egui::Color32::from_gray(8))
-                .count();
-            assert_eq!(seams, 0, "no mode has an inset outline seam");
+            let ctx=egui::Context::default();
+            let mut fonts=egui::FontDefinitions::default();
+            fonts.families.insert(egui::FontFamily::Name("display_preview".into()),fonts.families[&egui::FontFamily::Proportional].clone()); ctx.set_fonts(fonts);
+            let output=crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(),|ctx| {ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| {
+                super::draw_sm62_preview(ui,&settings,scene,false,245.0,0,None,false,off,false);
+            }));}));
+            let rects:Vec<_>=output.shapes.iter().filter_map(|s| if let egui::Shape::Rect(r)=&s.shape {Some(r)} else {None}).collect();
+            let outer=rects.iter().find(|r| r.stroke.color==egui::Color32::from_gray(75)).unwrap();
+            assert_eq!(outer.fill,if off {egui::Color32::BLACK} else {egui::Color32::from_rgb(7,7,5)},"approved edge fill follows the display background in every mode");
+            let seams=rects.iter().filter(|r| r.stroke.color==egui::Color32::from_gray(8)).count();
+            assert_eq!(seams,0,"no mode has an inset outline seam");
             if ship {
-                let texture = rects.iter().find(|r| r.brush.is_some()).unwrap();
-                assert_eq!(
-                    texture.rect,
-                    outer.rect.shrink(7.0),
-                    "ship asset rectangle/scale/position must not change"
-                );
-                assert_eq!(
-                    texture.brush.as_ref().unwrap().uv,
-                    egui::Rect::from_min_max(egui::pos2(0.25, 0.75), egui::pos2(0.5, 1.0))
-                );
+                let texture=rects.iter().find(|r|r.brush.is_some()).unwrap();
+                assert_eq!(texture.rect,outer.rect.shrink(7.0),"ship asset rectangle/scale/position must not change");
+                assert_eq!(texture.brush.as_ref().unwrap().uv,egui::Rect::from_min_max(egui::Pos2::ZERO,egui::pos2(1.0,1.0)),"the production compositor uses one 240x280 texture, not a full-scene atlas cell");
             }
         }
     }
 
     #[test]
     fn v7_ship_texture_is_clipped_to_rounded_panel() {
-        let ctx = egui::Context::default();
-        let output =
-            crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
-                ctx.root_ui(|ui| {
-                    egui::CentralPanel::default().show(ui, |ui| {
-                        super::draw_sm62_preview(
-                            ui,
-                            &[2, 1, 20, 1, 1],
-                            0,
-                            true,
-                            245.0,
-                            0,
-                            None,
-                            true,
-                            false,
-                            false,
-                        );
-                    })
-                });
+        let ctx=egui::Context::default();
+        let output=crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(),|ctx| {
+            ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| {
+                super::draw_sm62_preview(ui,&[2,1,20,1,1],0,true,245.0,0,None,true,false,false);
             }));
+        }));
         assert!(output.shapes.iter().any(|s| matches!(&s.shape,egui::Shape::Rect(r) if r.brush.is_some() && r.corner_radius.nw>0)),"ship image must be a rounded textured panel, not an unclipped rectangular mesh");
     }
 
@@ -2019,42 +1860,16 @@ mod tests {
             fonts.families[&egui::FontFamily::Proportional].clone(),
         );
         ctx.set_fonts(fonts);
-        let output =
-            crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
-                ctx.root_ui(|ui| {
-                    egui::CentralPanel::default().show(ui, |ui| {
-                        paint_sm62_screen(
-                            ui,
-                            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(240.0, 280.0)),
-                            &[3, 0, 20, 1, 1],
-                            2,
-                            false,
-                            0,
-                            Some("RU"),
-                            true,
-                            false,
-                            true,
-                        );
-                    })
-                });
+        let output = crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
+                paint_sm62_screen(ui, egui::Rect::from_min_size(egui::Pos2::ZERO,
+                    egui::vec2(240.0, 280.0)), &[3, 0, 20, 1, 1], 2, false, 0, Some("RU"), true, false,true);
             }));
-        let images = output
-            .shapes
-            .iter()
-            .filter(|s| matches!(&s.shape, egui::Shape::Mesh(_)))
-            .count();
-        assert_eq!(
-            images, 22,
-            "nine Latin + nine Cyrillic glyphs + four firmware junctions"
-        );
-        let rectangles: Vec<_> = output
-            .shapes
-            .iter()
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Rect(r) => Some(r),
-                _ => None,
-            })
-            .collect();
+        }));
+        let images = output.shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::Mesh(_))).count();
+        assert_eq!(images, 22, "nine Latin + nine Cyrillic glyphs + four firmware junctions");
+        let rectangles: Vec<_> = output.shapes.iter().filter_map(|s| match &s.shape {
+            egui::Shape::Rect(r) => Some(r), _ => None }).collect();
         let active = egui::Rect::from_min_size(egui::pos2(85.0, 105.0), egui::vec2(69.0, 69.0));
         assert!(rectangles
             .iter()
@@ -2082,38 +1897,14 @@ mod tests {
             fonts.families[&egui::FontFamily::Proportional].clone(),
         );
         ctx.set_fonts(fonts);
-        let output =
-            crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
-                ctx.root_ui(|ui| {
-                    egui::CentralPanel::default().show(ui, |ui| {
-                        paint_sm62_screen(
-                            ui,
-                            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(240.0, 280.0)),
-                            &[0, 0, 20, 1, 1],
-                            0,
-                            true,
-                            0,
-                            None,
-                            true,
-                            false,
-                            true,
-                        );
-                    })
-                });
+        let output = crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
+                paint_sm62_screen(ui, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(240.0,280.0)), &[0,0,20,1,1],0,true,0,None,true,false,true);
             }));
-        let images = output
-            .shapes
-            .iter()
-            .filter(|s| matches!(&s.shape, egui::Shape::Mesh(_)))
-            .count();
-        assert!(
-            images >= 15,
-            "actual 48px time and 16px date must use firmware glyphs; got {images}"
-        );
-        assert!(!output
-            .shapes
-            .iter()
-            .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text.contains(':'))));
+        }));
+        let images = output.shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::Mesh(_))).count();
+        assert!(images >= 15, "actual 48px time and 16px date must use firmware glyphs; got {images}");
+        assert!(!output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text.contains(':'))));
     }
 
     #[test]
@@ -2127,56 +1918,21 @@ mod tests {
             fonts.families[&egui::FontFamily::Proportional].clone(),
         );
         ctx.set_fonts(fonts);
-        let output =
-            crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
-                ctx.root_ui(|ui| {
-                    egui::CentralPanel::default().show(ui, |ui| {
-                        paint_sm62_screen(
-                            ui,
-                            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(240.0, 280.0)),
-                            &[1, 0, 20, 1, 1],
-                            0,
-                            false,
-                            0,
-                            Some("RU"),
-                            true,
-                            false,
-                            true,
-                        );
-                    })
-                });
+        let output = crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
+                paint_sm62_screen(ui, egui::Rect::from_min_size(egui::Pos2::ZERO,
+                    egui::vec2(240.0, 280.0)), &[1, 0, 20, 1, 1], 0, false, 0, Some("RU"), true, false,true);
             }));
-        let labels: Vec<_> = output
-            .shapes
-            .iter()
-            .filter_map(|shape| {
-                if let egui::Shape::Text(text) = &shape.shape {
-                    Some((
-                        text.galley.job.text.as_str(),
-                        text.pos.y + text.galley.size().y / 2.0,
-                    ))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        assert!(
-            labels.is_empty(),
-            "player labels must use actual LVGL bitmaps, not host font TextShapes: {labels:?}"
-        );
-        let meshes: Vec<_> = output
-            .shapes
-            .iter()
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Mesh(m) => Some(m),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            meshes.len(),
-            38,
-            "all non-space placeholder and language glyphs must be bitmap images"
-        );
+        }));
+        let labels: Vec<_> = output.shapes.iter().filter_map(|shape| {
+            if let egui::Shape::Text(text) = &shape.shape {
+                Some((text.galley.job.text.as_str(), text.pos.y + text.galley.size().y / 2.0))
+            } else { None }
+        }).collect();
+        assert!(labels.is_empty(), "player labels must use actual LVGL bitmaps, not host font TextShapes: {labels:?}");
+        let meshes: Vec<_> = output.shapes.iter().filter_map(|s| match &s.shape {
+            egui::Shape::Mesh(m) => Some(m), _ => None }).collect();
+        assert_eq!(meshes.len(), 38, "all non-space placeholder and language glyphs must be bitmap images");
         assert!(output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r)
             if r.rect == egui::Rect::from_min_size(egui::pos2(20.0, 121.0), egui::vec2(5.0, 17.0)))));
         assert!(!labels
@@ -2206,22 +1962,14 @@ mod tests {
         app.layout = Some(single_key_layout(0x7700));
         for color in [[255, 255, 255], [19, 137, 220]] {
             app.display_settings.color = color;
-            let output = crate::app::discard_texture_deltas(ctx.run_pass(
-                egui::RawInput::default(),
-                |ctx| {
-                    ctx.root_ui(|ui| {
-                        egui::CentralPanel::default().show(ui, |ui| {
-                            app.paint_main_display_preview(
-                                ui,
-                                egui::Rect::from_min_size(
-                                    egui::pos2(0.0, 0.0),
-                                    egui::vec2(240.0, 280.0),
-                                ),
-                            );
-                        })
-                    });
-                },
-            ));
+            let output = crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
+                ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
+                    app.paint_main_display_preview(
+                        ui,
+                        egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(240.0, 280.0)),
+                    );
+                }));
+            }));
             let icons: Vec<_> = output
                 .shapes
                 .iter()
@@ -2329,3 +2077,7 @@ mod tests {
 
 #[cfg(test)]
 include!("sm62_preview_edge_tests.rs");
+
+#[cfg(test)]
+#[path = "sm62_orbit_parity_tests.rs"]
+mod sm62_orbit_parity_tests;

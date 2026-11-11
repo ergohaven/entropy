@@ -160,6 +160,10 @@ jobs:
           cargo test --all-targets app::display_preview::tests::startup_preview_reuses_one_texture_across_revisions -- --exact
           cargo test --all-targets app::standby_background
 
+      - name: Test native resident backup publication
+        if: matrix.kind != 'linux'
+        run: cargo test --all-targets app::entlayout::backup_durability::tests -- --test-threads=1
+
       - name: Test layout indicator window policy
         if: matrix.kind != 'linux'
         run: cargo test --all-targets app::layout_indicator_window::tests

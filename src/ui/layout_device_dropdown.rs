@@ -228,11 +228,7 @@ impl EntropyApp {
 
                     if let Some(idx) = requested_device {
                         #[cfg(not(target_arch = "wasm32"))]
-                        if self.selected_device != Some(idx)
-                            || self.pending_device_connect.is_some()
-                        {
-                            self.start_connect(idx);
-                        }
+                        self.pick_device(idx);
                         #[cfg(target_arch = "wasm32")]
                         {
                             self.selected_device = Some(idx);

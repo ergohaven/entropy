@@ -917,6 +917,8 @@ impl KeycodePicker {
                                                             language,
                                                             "macro_editor.type_text_here",
                                                         ),
+                                                        // The keyboard's shared macro memory
+                                                        // is the only limit; see the memory line.
                                                         usize::MAX,
                                                         egui::Align::Min,
                                                     )
@@ -1644,6 +1646,8 @@ mod tests {
             assert!(!picker.macros_dirty);
         }
     }
+
+
 
     #[test]
     fn macro_modifier_picker_mouse_selection_encodes_hyper_f16_for_each_action_kind() {

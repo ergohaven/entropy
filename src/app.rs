@@ -44,6 +44,8 @@ mod app_init;
 #[path = "app_storage.rs"]
 mod app_storage;
 use app_storage::*;
+#[cfg(test)]
+pub(crate) use app_storage::test_config_root;
 #[path = "app_update.rs"]
 mod app_update;
 use app_update::*;
@@ -64,6 +66,8 @@ mod entlayout;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "headless_export.rs"]
 mod headless_export;
+#[cfg(unix)]
+pub(crate) use headless_export::export_via_running_instance;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use headless_export::{
     EXIT_INSTANCE_RUNNING, EXIT_USAGE, HeadlessExportRequest, run_headless_export,
@@ -234,6 +238,9 @@ mod touchpad_settings_ui;
 mod typing_trainer_ui;
 #[path = "ui/ui_scale.rs"]
 mod ui_scale;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "ui/sm62_fps.rs"]
+mod sm62_fps;
 #[path = "ui/vial_hid_task.rs"]
 mod vial_hid_task;
 #[cfg(not(target_arch = "wasm32"))]

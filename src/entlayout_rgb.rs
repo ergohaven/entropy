@@ -18,6 +18,21 @@ pub(super) struct EntLayoutRgb {
 }
 
 impl EntropyApp {
+    /// Complete-device backups cannot omit known lighting whose physical value
+    /// is unknown. Component serializers may still skip it for import planning.
+    pub(super) fn entlayout_lighting_complete(&self) -> bool {
+        (!self.rgb_settings.supported || self.rgb_settings.loaded)
+            && self.entlayout_unconfirmed_indication_qsids().is_empty()
+    }
+
+    pub(in crate::app) fn require_complete_entlayout_lighting(&self) -> Result<()> {
+        anyhow::ensure!(self.entlayout_lighting_complete(), "{}", match self.app_settings.language {
+            crate::i18n::Language::Russian => "Данные подсветки не подтверждены. Переподключите клавиатуру перед экспортом или импортом; полная резервная копия не создана.",
+            crate::i18n::Language::English => "Lighting data is unconfirmed; reconnect the keyboard before export or import. No complete backup was created.",
+        });
+        Ok(())
+    }
+
     pub(super) fn entlayout_rgb_snapshot(&self) -> Option<EntLayoutRgb> {
         self.rgb_settings
             .loaded

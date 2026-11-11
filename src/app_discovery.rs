@@ -92,6 +92,37 @@ static DISCOVERY: OnceLock<Mutex<DiscoveryState>> = OnceLock::new();
 static FOREGROUND_MONITOR: OnceLock<Mutex<ForegroundStatus>> = OnceLock::new();
 static FOREGROUND_MONITOR_STARTED: OnceLock<()> = OnceLock::new();
 
+// Subscriptions follow the native runtime, not whichever application has focus.
+// Wake only the UI; profile publication still runs through the normal owner gates.
+static FOREGROUND_REPAINTS: Mutex<Vec<(std::sync::Weak<()>, egui::Context)>> = Mutex::new(Vec::new());
+pub(crate) struct ForegroundRepaintSubscription {
+    keepalive: std::sync::Arc<()>,
+}
+impl Drop for ForegroundRepaintSubscription {
+    fn drop(&mut self) {
+        let identity = std::sync::Arc::downgrade(&self.keepalive);
+        if let Ok(mut listeners) = FOREGROUND_REPAINTS.lock() {
+            listeners.retain(|(token, _)| !token.ptr_eq(&identity));
+        }
+    }
+}
+pub(crate) fn subscribe_foreground_repaint(ctx: &egui::Context) -> ForegroundRepaintSubscription {
+    let keepalive = std::sync::Arc::new(());
+    FOREGROUND_REPAINTS.lock().unwrap_or_else(|e| e.into_inner())
+        .push((std::sync::Arc::downgrade(&keepalive), ctx.clone()));
+    ForegroundRepaintSubscription { keepalive }
+}
+fn wake_foreground_runtime() {
+    let contexts: Vec<_> = {
+        let mut listeners = FOREGROUND_REPAINTS.lock().unwrap_or_else(|e| e.into_inner());
+        listeners.retain(|(token, _)| token.strong_count() != 0);
+        listeners.iter().map(|(_, ctx)| ctx.clone()).collect()
+    };
+    // An egui callback may synchronously consume discovery or drop a subscription.
+    // Never call it while holding either publication or listener locks.
+    for ctx in contexts { ctx.request_repaint_of(egui::ViewportId::ROOT); }
+}
+
 #[cfg(target_os = "macos")]
 #[derive(Clone, Debug)]
 pub(crate) struct MacosTextExpanderForeground {
@@ -202,6 +233,36 @@ fn publish_foreground_status(state: &'static Mutex<ForegroundStatus>, current: F
         current.state
     );
     *status = current;
+    drop(status);
+    wake_foreground_runtime();
+}
+
+#[cfg(test)]
+pub(crate) fn test_publish_foreground_status(current: ForegroundStatus) {
+    let state = FOREGROUND_MONITOR.get_or_init(|| Mutex::new(ForegroundStatus::default()));
+    publish_foreground_status(state, current);
+}
+
+#[cfg(test)]
+pub(crate) fn test_foreground_status_snapshot() -> ForegroundStatus {
+    FOREGROUND_MONITOR.get_or_init(|| Mutex::new(ForegroundStatus::default()))
+        .lock().unwrap().clone()
+}
+
+#[cfg(test)]
+mod foreground_repaint_tests {
+    use super::*;
+    #[test]
+    fn foreground_repaint_subscription_is_removed_on_drop() {
+        fn send_sync<T: Send + Sync>() {}
+        send_sync::<ForegroundRepaintSubscription>();
+        let subscription = subscribe_foreground_repaint(&egui::Context::default());
+        let identity = std::sync::Arc::downgrade(&subscription.keepalive);
+        assert!(FOREGROUND_REPAINTS.lock().unwrap().iter().any(|(token, _)| token.ptr_eq(&identity)));
+        drop(subscription);
+        assert!(identity.upgrade().is_none());
+        assert!(!FOREGROUND_REPAINTS.lock().unwrap().iter().any(|(token, _)| token.ptr_eq(&identity)));
+    }
 }
 
 fn polling_foreground_monitor_loop(state: &'static Mutex<ForegroundStatus>) -> ! {
@@ -273,7 +334,24 @@ fn foreground_monitor_loop(state: &'static Mutex<ForegroundStatus>) {
     polling_foreground_monitor_loop(state);
 }
 
+#[cfg(test)]
+thread_local! {
+    static TEST_DISCOVERY_SNAPSHOT: std::cell::RefCell<Option<ApplicationDiscoverySnapshot>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_application_discovery<R>(snapshot: ApplicationDiscoverySnapshot, run: impl FnOnce() -> R) -> R {
+    struct Restore(Option<ApplicationDiscoverySnapshot>);
+    impl Drop for Restore {
+        fn drop(&mut self) { TEST_DISCOVERY_SNAPSHOT.with(|slot| *slot.borrow_mut() = self.0.take()); }
+    }
+    let _restore = Restore(TEST_DISCOVERY_SNAPSHOT.with(|slot| slot.replace(Some(snapshot))));
+    run()
+}
+
 pub(crate) fn application_discovery_snapshot() -> ApplicationDiscoverySnapshot {
+    #[cfg(test)]
+    if let Some(snapshot) = TEST_DISCOVERY_SNAPSHOT.with(|slot| slot.borrow().clone()) { return snapshot; }
     let state = DISCOVERY.get_or_init(|| {
         Mutex::new(DiscoveryState {
             receiver: None,

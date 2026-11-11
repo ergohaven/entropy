@@ -103,6 +103,9 @@ pub fn tr_catalog(language: Language, key: &'static str) -> &'static str {
         .unwrap_or(key)
 }
 
+/// A catalog string with its placeholders filled. Its escapes (`\n`) become
+/// the characters they stand for, as in `tr_text`; plain `tr_catalog` keeps
+/// them as written.
 pub fn tr_catalog_format(language: Language, key: &'static str, vars: &[(&str, &str)]) -> String {
     tr_catalog_string_format(language, key, vars)
 }
@@ -662,12 +665,15 @@ fn static_catalog_key(text: &str) -> Option<&'static str> {
         "Undo last tap dance change" => Some("tap_dance_editor.undo_last_tap_dance_change"),
         "Device is locked, unlock it to use Matrix Tester" => Some("matrix_tester.keyboard_is_locked_unlock_it_to_use_matrix_tester"),
         "Click to reset Matrix Tester" => Some("matrix_tester.click_to_reset_matrix_tester"),
+        "Matrix Tester is currently available only for Vial devices" => Some("matrix_tester.matrix_tester_is_currently_available_only_for_vial_keyboards"),
+        "Connect a Vial or Rynk device to start live switch testing" => Some("matrix_tester.connect_a_vial_keyboard_to_start_live_switch_testing"),
         "Matrix Tester requires compatible device firmware" => Some("matrix_tester.matrix_tester_requires_supported_firmware"),
         "Connect a device to Entropy to start live switch testing" => Some("matrix_tester.connect_device_to_start_live_switch_testing"),
         "Click Tested to reset progress" => Some("matrix_tester.click_tested_to_reset_progress"),
         "Tested" => Some("matrix_tester.tested"),
         "Toggle firmware layout/display option" => Some("auto_shift_settings.toggle_firmware_layout_display_option"),
         "Choose firmware preset" => Some("auto_shift_settings.choose_firmware_preset"),
+        "Connect a Vial or Rynk device to edit Auto Shift settings" => Some("auto_shift_settings.connect_a_vial_keyboard_to_edit_auto_shift_settings"),
         "Connect a device to Entropy to edit Auto Shift settings" => Some("auto_shift_settings.connect_device_to_edit_auto_shift_settings"),
         "Enable" => Some("auto_shift_settings.enable"),
         "Turn Auto Shift on or off" => Some("auto_shift_settings.turn_auto_shift_on_or_off"),

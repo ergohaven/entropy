@@ -1,0 +1,167 @@
+{
+  "source": "keyboards/ergohaven/sm30/anim.c",
+  "source_sha256": "d8a692c7ddcd3091668260f9843010eb508b0cc2e803b17cdd47f4cce98fbefa",
+  "sha256": "1c0ea98e35af90ba1ca42d59c14c52047ee6a066f2f27b54d6f0602450a0ce9d",
+  "records": [
+    {
+      "name": "anim_00",
+      "bytes": 420,
+      "sha256": "8bd370cb0e8c11ff85e201dd02f563542640f6145c7f0f6caa2080e447ee9869"
+    },
+    {
+      "name": "flame_00",
+      "bytes": 53,
+      "sha256": "e33695117f8f88ae630557d831ba4cd09d0420f0c91baee3a6e2cdc44b973496"
+    },
+    {
+      "name": "anim_01",
+      "bytes": 1310,
+      "sha256": "dc50d02e4ccb94abf7eded270c75d46a6f643aa3bfefdac6441ffa187daf106a"
+    },
+    {
+      "name": "flame_01",
+      "bytes": 53,
+      "sha256": "1c45b57ac88110ab635f4b022a2094d7e2ae969f2fad1c1dbe5ecbea93118159"
+    },
+    {
+      "name": "anim_02",
+      "bytes": 2455,
+      "sha256": "3e1809cb3fc2e35a4f1eec9dc0e315837e76308389e632e7a960693c105015a8"
+    },
+    {
+      "name": "flame_02",
+      "bytes": 53,
+      "sha256": "1c45b57ac88110ab635f4b022a2094d7e2ae969f2fad1c1dbe5ecbea93118159"
+    },
+    {
+      "name": "anim_03",
+      "bytes": 3880,
+      "sha256": "6e16aaf92e9858c4319fe1cf5dd32bd2379136eb80e7dc18802c0ef2cca8374b"
+    },
+    {
+      "name": "flame_03",
+      "bytes": 205,
+      "sha256": "eb90b517d8126f68dca39941f484a4bf6c6829e5dc802703445867a516655370"
+    },
+    {
+      "name": "anim_04",
+      "bytes": 4286,
+      "sha256": "d0b4f88c22db257c15c4cb72dae93336c812b0a389fc5c344ba292c37777485c"
+    },
+    {
+      "name": "flame_04",
+      "bytes": 232,
+      "sha256": "ba8e0079d159d98912502ceb2b582db43efd3020970394a1c89cd2eae5e22937"
+    },
+    {
+      "name": "anim_05",
+      "bytes": 4655,
+      "sha256": "9be5ecedfe447b63fedf73dd9949a458c96ba10e9b7d4a24b144b3e0180f0bc0"
+    },
+    {
+      "name": "flame_05",
+      "bytes": 206,
+      "sha256": "3bcffb30c02d1c8617e5c973d215f91dadc07cfeb63810268b2117c5108cdb20"
+    },
+    {
+      "name": "anim_06",
+      "bytes": 5287,
+      "sha256": "dc941e05d0de5a1d2fd9ab6bf1752aac97af09c1ad3908eafbf622bc20d61584"
+    },
+    {
+      "name": "flame_06",
+      "bytes": 279,
+      "sha256": "1ff72fa2948b447f5578ba6f10bcf6b0e51decd2f5be5df017f6a7291c848f85"
+    },
+    {
+      "name": "anim_07",
+      "bytes": 5791,
+      "sha256": "af0e5c1a60e1a7ca14ee8c3fa2e7c3490499f6363666a5eac3e23f9a3aaeb8bd"
+    },
+    {
+      "name": "flame_07",
+      "bytes": 412,
+      "sha256": "b1e81b292ffbeeb85d246711a6ea93fd6d81af9d036b563835379c34d3db0512"
+    },
+    {
+      "name": "anim_08",
+      "bytes": 6206,
+      "sha256": "6d878956fa8ae91186b6d452cf85bddd666e16a29a735cb5a8c7b05bc93128ad"
+    },
+    {
+      "name": "flame_08",
+      "bytes": 572,
+      "sha256": "e2e425a9aa365240b2e12d942cb16c3433e2bff25317c579740170543b8b1291"
+    },
+    {
+      "name": "anim_09",
+      "bytes": 6472,
+      "sha256": "21be60f85b3257cb8804624b7e5da26aadd94085981947d0e4cf976b5641dad6"
+    },
+    {
+      "name": "flame_09",
+      "bytes": 593,
+      "sha256": "072f6a3616c0f9b805b2c3f96e2a366f514f02ac8b181ea1a06246402b473b9d"
+    },
+    {
+      "name": "anim_10",
+      "bytes": 6188,
+      "sha256": "7d01182becc5d65694b332f2807d1cada32a0bcdb8992ff9da48d26164554c44"
+    },
+    {
+      "name": "flame_10",
+      "bytes": 398,
+      "sha256": "aaf6c171c765a3b141d6ab02efbb8d018c712f6f236244b72bb833e315effea7"
+    },
+    {
+      "name": "anim_11",
+      "bytes": 6095,
+      "sha256": "7a1533de312c2b5ee2b3936e294c739c1819e3212feb765ba63422ca9d0a3bc5"
+    },
+    {
+      "name": "flame_11",
+      "bytes": 350,
+      "sha256": "e156267ac4710faefabd67cc481ca3ab0a0d2d67ce8ee158423b912bd5c4dcb1"
+    },
+    {
+      "name": "anim_12",
+      "bytes": 6156,
+      "sha256": "ca607c02b4e99ae8e8b388334f6e0607f38cf3e8ebce978ac6a139cb9954480a"
+    },
+    {
+      "name": "flame_12",
+      "bytes": 317,
+      "sha256": "8b8a3fcd3785c4463938b6305bde7a6e681d6f7ed6664073264a2878a454a701"
+    },
+    {
+      "name": "anim_13",
+      "bytes": 5901,
+      "sha256": "72df53c90e3c2a585d7b4e27788bfd7a55e89ec6235e99257950091b5532bb48"
+    },
+    {
+      "name": "flame_13",
+      "bytes": 299,
+      "sha256": "5c3fe566e173c4a7e08467f453dc60e871ba7bf68b8d984ec7e60471ca0ac460"
+    },
+    {
+      "name": "anim_14",
+      "bytes": 5902,
+      "sha256": "543c4f5e4584e9de417796b4dddb8b44bd0815116f72dd1e973179ec3d9bb804"
+    },
+    {
+      "name": "flame_14",
+      "bytes": 300,
+      "sha256": "bce6a18b3cc4252b3958a2e6cb9b49ebd7c9625c9a5c190196e0cc1dafef45b2"
+    },
+    {
+      "name": "anim_15",
+      "bytes": 6474,
+      "sha256": "b507d60f1eec192c138ff405933f614d024db61362e2de3b8a0ba39f23d1ad53"
+    },
+    {
+      "name": "flame_15",
+      "bytes": 458,
+      "sha256": "82d25a3eb87427274280a4c1764b71cda65e134d9369850b21038ccc34a0457d"
+    }
+  ]
+}

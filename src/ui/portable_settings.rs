@@ -35,6 +35,17 @@ pub(super) struct EntPortableSetting {
     pub(super) module: Option<Vec<EntModuleField>>,
 }
 
+impl EntPortableSetting {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn import_section(&self) -> DeferredLoadSection {
+        if self.is_layer_led_color() || self.is_indication_setting() { DeferredLoadSection::LayerLeds }
+        else if self.module.is_some() { DeferredLoadSection::Modules }
+        else if matches!(self.qsid, 120..=124 | 142 | 143) { DeferredLoadSection::Touchpad }
+        else { DeferredLoadSection::BehaviorSettings }
+    }
+
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct EntPortableSettingSpec {
     pub(super) id: &'static str,

@@ -1524,13 +1524,22 @@ pub fn settings_list_row_with_tooltip(
     } else {
         muted_text(dark)
     };
-    ui.painter().text(
-        egui::pos2(row_rect.left() + 2.0, row_rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        egui::FontId::proportional(13.0 * label_scale),
-        label_color,
+    // Keep label ink inside its own column. Long localized labels can wrap
+    // over two lines, but must never paint beneath an interactive control.
+    let label_width = (content_width - control_width - 20.0).max(0.0);
+    let label_rect = egui::Rect::from_min_size(
+        egui::pos2(row_rect.left() + 2.0, row_rect.top()),
+        egui::vec2(label_width, row_height),
     );
+    if label_width > 0.0 && row_height > 0.0 {
+        let font = egui::FontId::proportional(13.0 * label_scale);
+        let mut job = egui::text::LayoutJob::simple(label.to_owned(), font.clone(), label_color, label_width);
+        job.wrap.max_rows = if row_height >= font.size * 2.6 { 2 } else { 1 };
+        let galley = ui.painter().layout_job(job);
+        let position = egui::pos2(label_rect.left(), row_rect.center().y - galley.size().y / 2.0);
+        ui.painter().with_clip_rect(ui.clip_rect().intersect(label_rect))
+            .galley(position, galley, label_color);
+    }
 
     if let Some(tooltip) = tooltip {
         let text_width = (label.chars().count() as f32 * 7.4 * label_scale + 8.0)
@@ -1746,6 +1755,26 @@ fn settings_switch_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_row_long_labels_stay_out_of_controls_in_both_themes() {
+        for dark in [false,true] { for width in [386.0,560.0,900.0] {
+            for label in ["Показывать раскладку в течение", "Выключать дисплей через", "Long setting label that must not paint behind its control"] {
+                let ctx=egui::Context::default();ctx.set_visuals(if dark {egui::Visuals::dark()} else {egui::Visuals::light()});
+                let control=std::cell::Cell::new(egui::Rect::NOTHING);
+                let output=crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput {
+                    screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width+40.0,160.0))),..Default::default()
+                },|ui| {
+                    settings_list_row_with_tooltip(ui,width,54.0,label,true,None,222.0,|ui| {control.set(ui.max_rect());ui.label("control");});
+                }));
+                let painted=output.shapes.iter().find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.job.text==label => Some(egui::Rect::from_min_size(t.pos,t.galley.size()).intersect(s.clip_rect)),_=>None
+                }).expect("production label paint");
+                assert!(painted.right()<=control.get().left()-8.0,"label overlaps control: width={width} label={label} paint={painted:?} control={:?}",control.get());
+                assert!(painted.top()>=control.get().top() && painted.bottom()<=control.get().bottom(),"label escapes row vertically");
+            }
+        }}
+    }
 
     #[test]
     fn long_rule_trigger_preview_is_click_only_and_clipped() {
