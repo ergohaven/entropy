@@ -206,7 +206,7 @@ impl EntropyApp {
                             self.draw_settings_write_status(ui, 120, metrics, suppress_tooltips);
                             if variants.is_empty() {
                                 let current = self.touchpad_settings.dpi;
-                                let edit_id = egui::Id::new(("touchpad_edit", 120u16));
+                                let edit_id = egui::Id::unique(("touchpad_edit", 120u16));
                                 let mut text = ui.ctx().data_mut(|d| {
                                     d.get_temp::<String>(edit_id)
                                         .unwrap_or_else(|| current.to_string())
@@ -390,16 +390,38 @@ impl EntropyApp {
                 }
                 4..=6 => {
                     let (bit, label, tooltip) = match row_idx {
-                        4 => (0, crate::i18n::tr_catalog(self.app_settings.language, "touchpad_settings.invert_scroll"), crate::i18n::tr_catalog(self.app_settings.language, "touchpad_settings.reverse_the_touchpad_scroll_direction")),
+                        4 => (
+                            0,
+                            crate::i18n::tr_catalog(
+                                self.app_settings.language,
+                                "touchpad_settings.invert_scroll",
+                            ),
+                            crate::i18n::tr_catalog(
+                                self.app_settings.language,
+                                "touchpad_settings.reverse_the_touchpad_scroll_direction",
+                            ),
+                        ),
                         5 => (
                             1,
-                            crate::i18n::tr_catalog(self.app_settings.language, "touchpad_settings.acceleration"),
-                            crate::i18n::tr_catalog(self.app_settings.language, "touchpad_settings.use_firmware_pointer_acceleration_for_touchpad_movement"),
+                            crate::i18n::tr_catalog(
+                                self.app_settings.language,
+                                "touchpad_settings.acceleration",
+                            ),
+                            crate::i18n::tr_catalog(
+                                self.app_settings.language,
+                                "touchpad_settings.use_firmware_pointer_acceleration_for_touchpad_movement",
+                            ),
                         ),
                         6 => (
                             2,
-                            crate::i18n::tr_catalog(self.app_settings.language, "touchpad_settings.sticky_mode"),
-                            crate::i18n::tr_catalog(self.app_settings.language, "touchpad_settings.keep_the_selected_touchpad_mode_active_until_another_mode_is_selected"),
+                            crate::i18n::tr_catalog(
+                                self.app_settings.language,
+                                "touchpad_settings.sticky_mode",
+                            ),
+                            crate::i18n::tr_catalog(
+                                self.app_settings.language,
+                                "touchpad_settings.keep_the_selected_touchpad_mode_active_until_another_mode_is_selected",
+                            ),
                         ),
                         _ => unreachable!(),
                     };
@@ -446,7 +468,10 @@ impl EntropyApp {
                         if suppress_tooltips {
                             None
                         } else {
-                            Some(crate::i18n::tr_catalog(self.app_settings.language, "touchpad_settings.automatically_switch_to_the_selected_layer_while_the_touchpad_is_activ"))
+                            Some(crate::i18n::tr_catalog(
+                                self.app_settings.language,
+                                "touchpad_settings.automatically_switch_to_the_selected_layer_while_the_touchpad_is_activ",
+                            ))
                         },
                         switch_width + status_width,
                         |ui| {

@@ -42,6 +42,7 @@ impl EntropyApp {
             text_expander_rules_signature(&app_settings.text_expander_rule_files);
         let mut typing_trainer = TypingTrainerState::from_settings(app_settings.typing_trainer);
         typing_trainer.set_symbol_stats(load_typing_trainer_symbol_stats());
+        let update_check = start_update_check(app_settings.development_updates);
         let mut app = Self::from_bootstrap(AppBootstrap {
             app_settings,
             device_manager: DeviceManager::new(),
@@ -49,7 +50,7 @@ impl EntropyApp {
             text_expander_rules_signature,
             last_single_instance_signal: read_single_instance_signal(),
             layer_names: load_layer_names("default"),
-            update_check: start_update_check(),
+            update_check,
         });
         #[cfg(not(target_arch = "wasm32"))]
         app.update_notifications.initialize(

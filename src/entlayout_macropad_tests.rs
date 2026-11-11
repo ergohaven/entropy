@@ -27,11 +27,21 @@ fn gui_export_uncertain_names(mode: &str, recovered: bool) {
     app.current_device_name = "Macropad".into();
     app.app_settings.language = crate::i18n::Language::English;
     app.deferred_device_load = DeferredDeviceLoadState::complete(8);
-    for profile in app.application_layout_settings_mut().unwrap().layouts.values_mut() {
-        profile.seed_unset_keycodes([[4; crate::application_layouts::APPLICATION_LAYOUT_CONTROL_COUNT];
-            crate::application_layouts::APPLICATION_LAYOUT_LAYER_COUNT]);
+    for profile in app
+        .application_layout_settings_mut()
+        .unwrap()
+        .layouts
+        .values_mut()
+    {
+        profile.seed_unset_keycodes(
+            [[4; crate::application_layouts::APPLICATION_LAYOUT_CONTROL_COUNT];
+                crate::application_layouts::APPLICATION_LAYOUT_LAYER_COUNT],
+        );
     }
-    app.app_settings.application_layouts.insert("unrelated-device".into(), DeviceApplicationLayouts::default());
+    app.app_settings.application_layouts.insert(
+        "unrelated-device".into(),
+        DeviceApplicationLayouts::default(),
+    );
     let fail_get = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let fail = fail_get.clone();
     let (entered_tx, entered_rx) = std::sync::mpsc::channel();
@@ -42,19 +52,28 @@ fn gui_export_uncertain_names(mode: &str, recovered: bool) {
     recorder.respond_by(move |r| {
         if (r[0] == held_opcode && (r[0] != 0xfe || r[1] == 0x08)) && gate.is_some() {
             entered_tx.send(()).unwrap();
-            gate.take().unwrap().recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+            gate.take()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(3))
+                .unwrap();
             return Some(Ok([0; 32]));
         }
         if r[..4] == [0xfe, 0x0b, 200, 0] {
             let end = r[4..].iter().position(|b| *b == 0).unwrap_or(28);
-            name = String::from_utf8(r[4..4+end].to_vec()).unwrap();
+            name = String::from_utf8(r[4..4 + end].to_vec()).unwrap();
             Some(Ok([0; 32]))
         } else if r[..4] == [0xfe, 0x0a, 200, 0] {
-            if fail.load(std::sync::atomic::Ordering::SeqCst) { return Some(Ok([0xff; 32])); }
+            if fail.load(std::sync::atomic::Ordering::SeqCst) {
+                return Some(Ok([0xff; 32]));
+            }
             let mut response = [0; 32];
-            response[1..1+name.len()].copy_from_slice(name.as_bytes());
+            response[1..1 + name.len()].copy_from_slice(name.as_bytes());
             Some(Ok(response))
-        } else if r[0] == 0x12 { Some(Ok([0; 32])) } else { None }
+        } else if r[0] == 0x12 {
+            Some(Ok([0; 32]))
+        } else {
+            None
+        }
     });
     let ctx = egui::Context::default();
     // Finish ordinary first-frame binding/catalog initialization before taking
@@ -70,7 +89,10 @@ fn gui_export_uncertain_names(mode: &str, recovered: bool) {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     app.finish_deferred_exit_after_hid_write(&ctx);
-    assert!(!app.exit_after_hid_write, "failed readback blocked exit drain");
+    assert!(
+        !app.exit_after_hid_write,
+        "failed readback blocked exit drain"
+    );
     assert!(app.selected_layer_names_uncertain());
     assert!(app.entlayout_snapshot().is_none());
     assert!(app.write_entlayout_auto_backup().is_err());
@@ -79,23 +101,46 @@ fn gui_export_uncertain_names(mode: &str, recovered: bool) {
     let persisted = std::fs::read(app_settings_path()).unwrap();
     let path = storage.path().join("recovered.entlayout");
     std::fs::write(&path, b"existing destination").unwrap();
-    let reads = recorder.requests().iter().filter(|r| r[..2] == [0xfe, 0x0a]).count();
+    let reads = recorder
+        .requests()
+        .iter()
+        .filter(|r| r[..2] == [0xfe, 0x0a])
+        .count();
     fail_get.store(!recovered, std::sync::atomic::Ordering::SeqCst);
     if mode == "cold" {
         app.deferred_device_load = DeferredDeviceLoadState::staged(DeferredDeviceLoadContext {
             json: std::sync::Arc::new(serde_json::json!({})),
             supported_qmk_settings: std::sync::Arc::new(vec![]),
-            definition_fingerprint: 42, layer_count: 8, rows: 5, cols: 3, encoder_count: 1,
-            macro_count: 0, macro_memory_bytes: Some(0), tap_dance_count: 0, combo_count: 0,
-            key_override_count: 0, alt_repeat_count: 0, modules_supported: false, touchpad_supported: false,
-            bluetooth_supported: false, layer_leds_supported: false, rgb_supported: false, lighting_mode: None,
-            supports_rmk_native_key_actions: false, supports_universal_numero: false, supports_universal_symbols: false,
-            supports_universal_russian_letters: false, supports_rmk_native_combo_output: false,
-            supports_rmk_native_tap_dance_actions: false, supports_rmk_combo_layers: false,
+            definition_fingerprint: 42,
+            layer_count: 8,
+            rows: 5,
+            cols: 3,
+            encoder_count: 1,
+            macro_count: 0,
+            macro_memory_bytes: Some(0),
+            tap_dance_count: 0,
+            combo_count: 0,
+            key_override_count: 0,
+            alt_repeat_count: 0,
+            modules_supported: false,
+            touchpad_supported: false,
+            bluetooth_supported: false,
+            layer_leds_supported: false,
+            rgb_supported: false,
+            lighting_mode: None,
+            supports_rmk_native_key_actions: false,
+            supports_universal_numero: false,
+            supports_universal_symbols: false,
+            supports_universal_russian_letters: false,
+            supports_rmk_native_combo_output: false,
+            supports_rmk_native_tap_dance_actions: false,
+            supports_rmk_combo_layers: false,
         });
     } else if mode == "borrowed" {
-        assert_eq!(app.start_vial_hid_operation(&ctx, crate::app::vial_hid_task::VialHidOperation::Lock),
-            crate::app::vial_hid_task::VialHidTaskStart::Started);
+        assert_eq!(
+            app.start_vial_hid_operation(&ctx, crate::app::vial_hid_task::VialHidOperation::Lock),
+            crate::app::vial_hid_task::VialHidTaskStart::Started
+        );
     }
     crate::app::file_dialog::set_test_dialog_result(Some(path.clone()));
     app.request_entlayout_export_after_full_load();
@@ -103,27 +148,53 @@ fn gui_export_uncertain_names(mode: &str, recovered: bool) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
             app.tick_layout_import_lifecycle_for_test(&ctx, 1.0);
-            if entered_rx.try_recv().is_ok() { break; }
-            assert!(std::time::Instant::now() < deadline, "deferred read never started: {}", app.status_msg);
+            if entered_rx.try_recv().is_ok() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "deferred read never started: {}",
+                app.status_msg
+            );
             std::thread::yield_now();
         }
         assert!(app.hid_device.is_none());
         app.tick_layout_import_lifecycle_for_test(&ctx, 1.0);
         // Release before assertions so a failing regression cannot strand a worker.
         release_tx.send(()).unwrap();
-        assert!(app.deferred_full_layout_action_pending(), "export discarded while HID was borrowed: {}", app.status_msg);
+        assert!(
+            app.deferred_full_layout_action_pending(),
+            "export discarded while HID was borrowed: {}",
+            app.status_msg
+        );
         assert!(app.pending_file_dialog.is_none());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while app.deferred_full_layout_action_pending() || app.vial_hid_task_active() {
             app.tick_layout_import_lifecycle_for_test(&ctx, 1.0);
-            assert!(std::time::Instant::now() < deadline, "export never finished: {}", app.status_msg);
+            assert!(
+                std::time::Instant::now() < deadline,
+                "export never finished: {}",
+                app.status_msg
+            );
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
-    assert!(recorder.requests().iter().filter(|r| r[..2] == [0xfe, 0x0a]).count() > reads,
-        "normal export never reached read-only recovery: {}", app.status_msg);
+    assert!(
+        recorder
+            .requests()
+            .iter()
+            .filter(|r| r[..2] == [0xfe, 0x0a])
+            .count()
+            > reads,
+        "normal export never reached read-only recovery: {}",
+        app.status_msg
+    );
     if recovered {
-        assert!(app.pending_file_dialog.is_some(), "recovery did not reach picker: {}", app.status_msg);
+        assert!(
+            app.pending_file_dialog.is_some(),
+            "recovery did not reach picker: {}",
+            app.status_msg
+        );
         assert!(!app.selected_layer_names_uncertain());
         assert_eq!(app.layer_names[0], "Draft");
         app.poll_file_dialog(&ctx);
@@ -132,14 +203,32 @@ fn gui_export_uncertain_names(mode: &str, recovered: bool) {
         assert_eq!(bundle.data.layer_names[0], "Draft");
     } else {
         assert!(app.pending_file_dialog.is_none());
-        assert!(app.status_msg.contains("Layer name not saved"), "{}", app.status_msg);
+        assert!(
+            app.status_msg.contains("Layer name not saved"),
+            "{}",
+            app.status_msg
+        );
         assert!(app.selected_layer_names_uncertain());
         assert!(app.entlayout_snapshot().is_none());
         assert!(app.write_entlayout_auto_backup().is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"existing destination");
     }
-    assert_eq!(recorder.requests().iter().filter(|r| r[..2] == [0xfe, 0x0b]).count(), 1, "automatic SET retry");
-    assert!(!recorder.requests().iter().any(|r| matches!(r[0], 0x05 | 0x07 | 0x0f)), "export mutated device data");
+    assert_eq!(
+        recorder
+            .requests()
+            .iter()
+            .filter(|r| r[..2] == [0xfe, 0x0b])
+            .count(),
+        1,
+        "automatic SET retry"
+    );
+    assert!(
+        !recorder
+            .requests()
+            .iter()
+            .any(|r| matches!(r[0], 0x05 | 0x07 | 0x0f)),
+        "export mutated device data"
+    );
     assert_eq!(serde_json::to_value(&app.app_settings).unwrap(), settings);
     assert_eq!(std::fs::read(app_settings_path()).unwrap(), persisted);
 }
@@ -151,11 +240,19 @@ fn uncertain_layer_name_blocks_unchecked_snapshot_and_auto_backup() {
     let ctx = egui::Context::default();
     app.deferred_device_load = DeferredDeviceLoadState::complete(16);
     recorder.respond_by(|request| {
-        if request[..2] == [0xfe, 0x0b] { Some(Ok([0; 32])) }
-        else if request[..2] == [0xfe, 0x0a] { Some(Ok([0xff; 32])) }
-        else { None }
+        if request[..2] == [0xfe, 0x0b] {
+            Some(Ok([0; 32]))
+        } else if request[..2] == [0xfe, 0x0a] {
+            Some(Ok([0xff; 32]))
+        } else {
+            None
+        }
     });
-    app.rename_application_layout_layer(crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID, 0, "Draft".into());
+    app.rename_application_layout_layer(
+        crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID,
+        0,
+        "Draft".into(),
+    );
     app.poll_vial_hid_task(&ctx);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     while app.hid_write_lifecycle_busy() {
@@ -164,7 +261,10 @@ fn uncertain_layer_name_blocks_unchecked_snapshot_and_auto_backup() {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert!(app.selected_layer_names_uncertain());
-    assert!(app.entlayout_snapshot().is_none(), "unchecked snapshot treated uncertainty as current");
+    assert!(
+        app.entlayout_snapshot().is_none(),
+        "unchecked snapshot treated uncertainty as current"
+    );
     assert!(app.write_entlayout_auto_backup().is_err());
 }
 
@@ -626,10 +726,12 @@ fn macropad_cold_query_and_read_errors_abort_export_and_import_without_publicati
         assert_eq!(serde_json::to_value(&app.app_settings).unwrap(), before);
         assert_eq!(std::fs::read(app_settings_path()).unwrap(), settings);
         assert!(!storage.path().join("entropy/backups").exists());
-        assert!(recorder
-            .requests()
-            .iter()
-            .all(|request| matches!(request[0], 0xc0 | 0xca | 0xcb)));
+        assert!(
+            recorder
+                .requests()
+                .iter()
+                .all(|request| matches!(request[0], 0xc0 | 0xca | 0xcb))
+        );
     }
 }
 
@@ -723,7 +825,7 @@ fn macropad_cold_query_status_error_retains_unknown_and_allows_read_retry() {
 
 use super::*;
 use crate::application_layouts::{
-    DetectedApplication, DeviceApplicationLayouts, DEFAULT_APPLICATION_LAYOUT_ID,
+    DEFAULT_APPLICATION_LAYOUT_ID, DetectedApplication, DeviceApplicationLayouts,
 };
 
 fn fixture() -> (EntropyApp, crate::hid::TestHidRecorder, String) {
@@ -934,9 +1036,11 @@ fn macropad_unified_persistence_failure_keeps_memory_and_hid_untouched() {
     let before = serde_json::to_value(&app.app_settings).unwrap();
     std::fs::create_dir_all(app_settings_path()).unwrap();
     let error = app.import_entlayout_from_path(&path).unwrap_err();
-    assert!(error
-        .to_string()
-        .contains("Failed to save Macropad layouts"));
+    assert!(
+        error
+            .to_string()
+            .contains("Failed to save Macropad layouts")
+    );
     assert_eq!(serde_json::to_value(&app.app_settings).unwrap(), before);
     assert!(recorder.requests().is_empty());
 }
@@ -1136,11 +1240,13 @@ fn macropad_unified_remaps_custom_resources_in_every_key_and_encoder_stack() {
         .values()
     {
         assert!(profile.layers.iter().flatten().all(|code| *code == 0x7e01));
-        assert!(profile
-            .encoder_stacks
-            .iter()
-            .flatten()
-            .all(|action| action.clockwise == 0x7e01 && action.counter_clockwise == 0x7e00));
+        assert!(
+            profile
+                .encoder_stacks
+                .iter()
+                .flatten()
+                .all(|action| action.clockwise == 0x7e01 && action.counter_clockwise == 0x7e00)
+        );
     }
 }
 
@@ -1438,11 +1544,12 @@ fn macropad_unified_ambiguous_application_identity_is_rejected_without_mutation(
     let path = storage.path().join("ambiguous.entlayout");
     write_entlayout_file(&path, &bundle, app.app_settings.language).unwrap();
     let before = serde_json::to_value(&app.app_settings).unwrap();
-    assert!(app
-        .import_entlayout_from_path(&path)
-        .unwrap_err()
-        .to_string()
-        .contains("Ambiguous"));
+    assert!(
+        app.import_entlayout_from_path(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("Ambiguous")
+    );
     assert_eq!(serde_json::to_value(&app.app_settings).unwrap(), before);
     assert!(recorder.requests().is_empty());
     assert!(!app_settings_path().exists());
@@ -1704,9 +1811,10 @@ fn macropad_application_entlayout_envelope_is_versioned_and_not_a_device_layout(
     let mut invalid = value.clone();
     invalid["version"] = serde_json::json!(9);
     std::fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
-    assert!(app
-        .import_application_layout_from_path(&path, &application)
-        .is_err());
+    assert!(
+        app.import_application_layout_from_path(&path, &application)
+            .is_err()
+    );
     assert!(recorder.requests().is_empty());
     // Characterize unchanged Default/device schema and explicit target boundary.
     let mut device = app.entlayout_snapshot().unwrap();
@@ -1720,9 +1828,10 @@ fn macropad_application_entlayout_envelope_is_versioned_and_not_a_device_layout(
     assert_eq!(device_value["version"], 7);
     assert!(device_value.get("scope").is_none());
     let before = serde_json::to_value(&app.app_settings).unwrap();
-    assert!(app
-        .import_application_layout_from_path(&device_path, &application)
-        .is_err());
+    assert!(
+        app.import_application_layout_from_path(&device_path, &application)
+            .is_err()
+    );
     for (format, version, scope) in [
         ("entropy.layout", 7, Some("application")),
         ("entropy.layout", 8, Some("unknown")),
@@ -1739,9 +1848,10 @@ fn macropad_application_entlayout_envelope_is_versioned_and_not_a_device_layout(
             malformed.as_object_mut().unwrap().remove("scope");
         }
         std::fs::write(&path, serde_json::to_vec(&malformed).unwrap()).unwrap();
-        assert!(app
-            .import_application_layout_from_path(&path, &application)
-            .is_err());
+        assert!(
+            app.import_application_layout_from_path(&path, &application)
+                .is_err()
+        );
         assert_eq!(serde_json::to_value(&app.app_settings).unwrap(), before);
     }
 }
@@ -1777,9 +1887,10 @@ fn macropad_application_rejects_legacy_format_and_other_extensions_without_chang
             .unwrap(),
         )
         .unwrap();
-        assert!(app
-            .import_application_layout_from_path(&path, &application)
-            .is_err());
+        assert!(
+            app.import_application_layout_from_path(&path, &application)
+                .is_err()
+        );
     }
     let modern = storage.path().join("modern.entlayout");
     app.write_application_layout_export(&modern, &application)
@@ -1787,12 +1898,14 @@ fn macropad_application_rejects_legacy_format_and_other_extensions_without_chang
     for extension in ["entapp", "json"] {
         let path = storage.path().join(format!("modern.{extension}"));
         std::fs::copy(&modern, &path).unwrap();
-        assert!(app
-            .import_application_layout_from_path(&path, &application)
-            .is_err());
-        assert!(app
-            .write_application_layout_export(&path, &application)
-            .is_err());
+        assert!(
+            app.import_application_layout_from_path(&path, &application)
+                .is_err()
+        );
+        assert!(
+            app.write_application_layout_export(&path, &application)
+                .is_err()
+        );
     }
     assert_eq!(serde_json::to_value(&app.app_settings).unwrap(), before);
     assert!(!app_settings_path().exists());
@@ -1941,13 +2054,15 @@ fn macropad_application_persistence_failure_keeps_memory_library_and_existing_de
     assert!(recorder.requests().is_empty());
     // PersistError owns the temporary file until the reported error is dropped.
     drop(error);
-    assert!(std::fs::read_dir(destination.parent().unwrap())
-        .unwrap()
-        .all(|entry| !entry
+    assert!(
+        std::fs::read_dir(destination.parent().unwrap())
             .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .starts_with(".tmp")));
+            .all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".tmp"))
+    );
 }
 
 #[test]
@@ -1960,7 +2075,7 @@ fn macropad_application_menu_has_only_unified_layout_actions() {
     let ctx = egui::Context::default();
     let mut texts = Vec::new();
     for _ in 0..2 {
-        let output = ctx.run_ui(
+        let output = crate::app::discard_texture_deltas(ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1982,7 +2097,7 @@ fn macropad_application_menu_has_only_unified_layout_actions() {
                     false,
                 );
             },
-        );
+        ));
         texts = output
             .shapes
             .iter()
@@ -2097,7 +2212,8 @@ fn exercise_unified_menu_lifecycle(export: bool, nondefault: bool, failing_read:
             rgb_supported: false,
             lighting_mode: None,
             supports_rmk_native_key_actions: false,
-            supports_universal_numero: false, supports_universal_symbols: false,
+            supports_universal_numero: false,
+            supports_universal_symbols: false,
             supports_universal_russian_letters: false,
             supports_rmk_native_combo_output: false,
             supports_rmk_native_tap_dance_actions: false,
@@ -2154,7 +2270,7 @@ fn exercise_unified_menu_lifecycle(export: bool, nondefault: bool, failing_read:
     }
     let ctx = egui::Context::default();
     let draw = |app: &mut EntropyApp, events| {
-        ctx.run_ui(
+        crate::app::discard_texture_deltas(ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -2177,7 +2293,7 @@ fn exercise_unified_menu_lifecycle(export: bool, nondefault: bool, failing_read:
                     false,
                 );
             },
-        )
+        ))
     };
     let _ = draw(&mut app, vec![]);
     let output = draw(&mut app, vec![]);
@@ -2231,7 +2347,10 @@ fn exercise_unified_menu_lifecycle(export: bool, nondefault: bool, failing_read:
         let generation = app.connection_generation;
         app.tick_layout_import_lifecycle_for_test(&ctx, 0.1);
         release_tx.send(()).unwrap();
-        assert!(matches!(app.device_scan_state, DeviceScanState::Idle), "synthetic lifecycle must not start real HID discovery while the worker owns the device");
+        assert!(
+            matches!(app.device_scan_state, DeviceScanState::Idle),
+            "synthetic lifecycle must not start real HID discovery while the worker owns the device"
+        );
         assert_eq!(app.connection_generation, generation);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while std::time::Instant::now() < deadline && app.deferred_full_layout_action_pending() {
@@ -2278,7 +2397,10 @@ fn exercise_unified_menu_lifecycle(export: bool, nondefault: bool, failing_read:
         app.pending_file_dialog.as_ref().map(|pending| &pending.0),
         Some(&expected),
         "read={failing_read:#x}, nondefault={nondefault}, action={:?}, busy={}, gaps={:?}, status={}",
-        app.deferred_full_layout_action, app.hid_write_lifecycle_busy(), app.entlayout_export_gaps(), app.status_msg
+        app.deferred_full_layout_action,
+        app.hid_write_lifecycle_busy(),
+        app.entlayout_export_gaps(),
+        app.status_msg
     );
     // Keep NONDEFAULT selected across completion and production lifecycle dispatch.
     app.application_layout_settings_mut()
@@ -2524,12 +2646,14 @@ fn macropad_application_picker_rejects_stale_connection_and_deleted_target() {
         .layouts
         .remove(&application);
     let before = serde_json::to_value(&app.app_settings).unwrap();
-    assert!(app
-        .import_application_layout_from_path(&path, &application)
-        .is_err());
-    assert!(app
-        .import_application_layout_from_path(&path, DEFAULT_APPLICATION_LAYOUT_ID)
-        .is_err());
+    assert!(
+        app.import_application_layout_from_path(&path, &application)
+            .is_err()
+    );
+    assert!(
+        app.import_application_layout_from_path(&path, DEFAULT_APPLICATION_LAYOUT_ID)
+            .is_err()
+    );
     assert_eq!(serde_json::to_value(&app.app_settings).unwrap(), before);
 }
 
@@ -2819,7 +2943,7 @@ fn macropad_menu_clicks_queue_standard_import_export_without_application_gating(
         let ctx = egui::Context::default();
         let rect = egui::Rect::from_min_size(egui::pos2(400.0, 0.0), egui::vec2(80.0, 30.0));
         let draw = |app: &mut EntropyApp, events| {
-            ctx.run_ui(
+            crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2839,7 +2963,7 @@ fn macropad_menu_clicks_queue_standard_import_export_without_application_gating(
                         false,
                     )
                 },
-            )
+            ))
         };
         draw(&mut app, vec![]);
         let output = draw(&mut app, vec![]);
@@ -2976,9 +3100,10 @@ fn reviewed_source_dependencies_checked_in_firmware_and_shared_resources() {
     app.keycode_picker.tap_dance_entries = vec![crate::keycode_picker::TapDanceEntry::default()];
     app.keycode_picker.macro_texts.clear();
     app.keycode_picker.macro_names.clear();
-    assert!(app
-        .validate_entlayout_file(&app.entlayout_snapshot().unwrap())
-        .is_ok());
+    assert!(
+        app.validate_entlayout_file(&app.entlayout_snapshot().unwrap())
+            .is_ok()
+    );
     for variant in 0..4 {
         let mut bundle = app.entlayout_snapshot().unwrap();
         match variant {
@@ -3254,11 +3379,13 @@ fn reviewed_final_merged_rules_check_alias_overlap_for_existing_ids() {
     let mut bundle = app.entlayout_snapshot().unwrap();
     // Other is not imported, but remains part of the resulting device set.
     bundle.application_layouts.as_mut().unwrap().remove(&other);
-    assert!(bundle
-        .application_layouts
-        .as_ref()
-        .unwrap()
-        .contains_key(&application));
+    assert!(
+        bundle
+            .application_layouts
+            .as_ref()
+            .unwrap()
+            .contains_key(&application)
+    );
     assert!(app.validate_entlayout_file(&bundle).is_err());
 }
 

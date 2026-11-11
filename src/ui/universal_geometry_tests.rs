@@ -61,9 +61,9 @@ fn universal_geometry_rynk_appears_in_live_integrations() {
         Vec::<usize>::new(),
         "geometry belongs with Universal Symbols on both protocols"
     );
-    let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+    let output = crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
         app.draw_live_features_settings_page(ui, ui.max_rect());
-    });
+    }));
     let mut rendered = vec![];
     for shape in output.shapes {
         texts(&shape.shape, &mut rendered);
@@ -102,7 +102,7 @@ fn universal_geometry_follows_layout_sync_even_when_sync_disabled() {
                 label: "RuEn\nSync".into(),
                 title: "Sync language".into(),
             });
-        let output = ctx.run_ui(
+        let output = crate::app::discard_texture_deltas(ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -111,7 +111,7 @@ fn universal_geometry_follows_layout_sync_even_when_sync_disabled() {
                 ..Default::default()
             },
             |ui| app.draw_live_features_settings_page(ui, ui.max_rect()),
-        );
+        ));
         let mut rendered = vec![];
         for s in output.shapes {
             texts(&s.shape, &mut rendered);
@@ -185,7 +185,7 @@ fn universal_geometry_is_in_live_integrations_without_live_support_or_toggle() {
         crate::i18n::Language::English,
     ] {
         app.app_settings.language = language;
-        let output = ctx.run_ui(
+        let output = crate::app::discard_texture_deltas(ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -194,7 +194,7 @@ fn universal_geometry_is_in_live_integrations_without_live_support_or_toggle() {
                 ..Default::default()
             },
             |ui| app.draw_live_features_settings_page(ui, ui.max_rect()),
-        );
+        ));
         let mut rendered = vec![];
         for s in output.shapes {
             texts(&s.shape, &mut rendered);

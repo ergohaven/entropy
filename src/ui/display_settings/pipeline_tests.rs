@@ -3,10 +3,10 @@
 use super::*;
 use std::time::{Duration, Instant};
 
-#[path = "tap_dance_tests.rs"]
-mod tap_dance_tests;
 #[path = "delete_catalog_tests.rs"]
 mod delete_catalog_tests;
+#[path = "tap_dance_tests.rs"]
+mod tap_dance_tests;
 
 fn pictogram_canvas_rect(output: &egui::FullOutput) -> egui::Rect {
     let lines: Vec<_> = output
@@ -376,7 +376,7 @@ fn frame(app: &mut EntropyApp, ctx: &egui::Context, events: Vec<egui::Event>) ->
     assert!(!app.app_settings.sticky_layout_window);
     assert!(!app.keycode_picker.macro_metadata_dirty && !app.keycode_picker.tap_dance_dirty);
     assert!(!app.combo_names_dirty && !app.combo_colors_dirty);
-    ctx.run_ui(
+    crate::app::discard_texture_deltas(ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -389,7 +389,7 @@ fn frame(app: &mut EntropyApp, ctx: &egui::Context, events: Vec<egui::Event>) ->
             let mut frame = eframe::Frame::_new_kittest();
             eframe::App::ui(app, ui, &mut frame);
         },
-    )
+    ))
 }
 fn rendered_texts(output: &egui::FullOutput) -> Vec<String> {
     output
@@ -642,9 +642,11 @@ fn full_ui_legacy_32px_library_reader_keeps_same_name_pixel_edits() {
         app.app_settings.saved_pictograms = read_pictogram_file(&path).unwrap();
         app.display_settings.pictograms.search_query = "no-matching-fixture-name".into();
         click_label(&mut app, &ctx, "Выбрать");
-        assert!(!rendered_texts(&frame(&mut app, &ctx, vec![]))
-            .iter()
-            .any(|s| s == "Свои пиктограммы"));
+        assert!(
+            !rendered_texts(&frame(&mut app, &ctx, vec![]))
+                .iter()
+                .any(|s| s == "Свои пиктограммы")
+        );
         let mut edited = json;
         let byte = edited["user"][0]["bitmap"][0].as_u64().unwrap();
         edited["user"][0]["bitmap"][0] = (byte ^ 0x80).into();
@@ -657,9 +659,11 @@ fn full_ui_legacy_32px_library_reader_keeps_same_name_pixel_edits() {
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].origin, PictogramOrigin::Legacy);
         assert_eq!(visible[0].color, [210, 180, 140]);
-        assert!(rendered_texts(&frame(&mut app, &ctx, vec![]))
-            .iter()
-            .any(|s| s == "Свои пиктограммы"));
+        assert!(
+            rendered_texts(&frame(&mut app, &ctx, vec![]))
+                .iter()
+                .any(|s| s == "Свои пиктограммы")
+        );
         assert!(recorder.requests().is_empty());
     }
 }

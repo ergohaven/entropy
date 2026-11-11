@@ -97,6 +97,8 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) app_update_notifications: bool,
     #[serde(default)]
+    pub(crate) development_updates: bool,
+    #[serde(default)]
     pub(crate) firmware_update_notifications: bool,
     #[serde(default = "default_show_shifted_number_symbols")]
     pub(crate) show_shifted_number_symbols: bool,
@@ -272,6 +274,7 @@ impl Default for AppSettings {
             launch_at_startup: false,
             launch_minimized: false,
             app_update_notifications: false,
+            development_updates: false,
             firmware_update_notifications: false,
             show_shifted_number_symbols: default_show_shifted_number_symbols(),
             layer_hover_preview: default_layer_hover_preview(),
