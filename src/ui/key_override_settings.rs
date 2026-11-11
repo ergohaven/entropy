@@ -1222,9 +1222,11 @@ mod tests {
             app.open_key_override_picker(KeyOverridePickField::Replacement);
 
             let mut harness = egui_kittest::Harness::builder()
+                .allow_missing_glyphs()
                 .with_size(egui::vec2(1400.0, 1000.0))
-                .build_state(
-                    |ctx, app: &mut EntropyApp| {
+                .build_ui_state(
+                    |ui, app: &mut EntropyApp| {
+                        let ctx = ui.ctx();
                         app.keycode_picker.show(
                             ctx,
                             crate::keycode_picker::DeferredPickerDataState::Ready,
@@ -1296,9 +1298,11 @@ mod tests {
             app.keycode_picker.popup_view_mode = view;
             app.open_key_override_picker(KeyOverridePickField::Replacement);
             let mut harness = egui_kittest::Harness::builder()
+                .allow_missing_glyphs()
                 .with_size(egui::vec2(1400.0, 1000.0))
-                .build_state(
-                    |ctx, app: &mut EntropyApp| {
+                .build_ui_state(
+                    |ui, app: &mut EntropyApp| {
+                        let ctx = ui.ctx();
                         app.keycode_picker.show(
                             ctx,
                             crate::keycode_picker::DeferredPickerDataState::Ready,
@@ -1333,16 +1337,19 @@ mod tests {
         app.hid_device = Some(hid.into());
         app.keycode_picker.layer_count = 3;
         app.open_key_override_picker(KeyOverridePickField::Replacement);
-        let mut harness = egui_kittest::Harness::new_state(
-            |ctx, app: &mut EntropyApp| {
-                app.keycode_picker.show(
-                    ctx,
-                    crate::keycode_picker::DeferredPickerDataState::Ready,
-                    crate::keycode_picker::DeferredPickerDataState::Ready,
-                );
-            },
-            app,
-        );
+        let mut harness = egui_kittest::Harness::builder()
+            .allow_missing_glyphs()
+            .build_ui_state(
+                |ui, app: &mut EntropyApp| {
+                    let ctx = ui.ctx();
+                    app.keycode_picker.show(
+                        ctx,
+                        crate::keycode_picker::DeferredPickerDataState::Ready,
+                        crate::keycode_picker::DeferredPickerDataState::Ready,
+                    );
+                },
+                app,
+            );
         harness.run();
         assert!(harness.query_by_label("MO(2)").is_none());
         assert!(harness.state().keycode_picker.regular_key_pick);
