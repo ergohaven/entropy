@@ -46,6 +46,18 @@ and firmware settings from one coherent interface.
 - Light/dark themes, accent color, UI scaling, settings import/export, and tray mode
 - Linux udev helper plus optional IBus integration for Text Expander
 
+### Key legends
+
+In application settings, use **Key legends** to select English, English + Russian,
+or English + Typewriter. The EN/RU order toggle works with both Russian profiles.
+The image export page has its own legend selection, saved independently.
+
+Russian Typewriter uses the [Windows Russian (Typewriter) mapping](https://learn.microsoft.com/en-us/globalization/keyboards/kbdru1)
+on Windows, Linux, and macOS. This is a manual display choice: it changes keycap
+legends without changing key assignments or the system input layout. Automatic
+matching to OS layout variants is planned separately. The Shift-symbol option
+hides the extra number-row line while retaining Typewriter's direct symbols.
+
 ## Platforms
 
 | Platform | Status | Package |

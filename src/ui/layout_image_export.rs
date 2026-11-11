@@ -137,6 +137,18 @@ fn export_key_legend_label(
         (crate::i18n::Language::English, KeyLegendLayout::Russian) => "Russian: EN first",
         (crate::i18n::Language::Russian, KeyLegendLayout::RussianPrimary) => "Русская: RU сверху",
         (crate::i18n::Language::English, KeyLegendLayout::RussianPrimary) => "Russian: RU first",
+        (crate::i18n::Language::English, KeyLegendLayout::RussianTypewriter) => {
+            "Typewriter: EN first"
+        }
+        (crate::i18n::Language::English, KeyLegendLayout::RussianTypewriterPrimary) => {
+            "Typewriter: RU first"
+        }
+        (crate::i18n::Language::Russian, KeyLegendLayout::RussianTypewriter) => {
+            "Машинопись: EN сверху"
+        }
+        (crate::i18n::Language::Russian, KeyLegendLayout::RussianTypewriterPrimary) => {
+            "Машинопись: RU сверху"
+        }
     }
 }
 
@@ -389,6 +401,8 @@ fn draw_key_legend_dropdown(
                 KeyLegendLayout::English,
                 KeyLegendLayout::Russian,
                 KeyLegendLayout::RussianPrimary,
+                KeyLegendLayout::RussianTypewriter,
+                KeyLegendLayout::RussianTypewriterPrimary,
             ] {
                 let selected = layout == *selected_layout;
                 let (option_rect, option_resp) =
@@ -1040,42 +1054,31 @@ impl EntropyApp {
             write_rotated_rect_svg(svg, rect, key.rotation, palette)?;
 
             let binding = layout.get_key_binding(layer_idx, key_idx);
-            let (label, dimmed) = if binding.is_no() {
-                (String::new(), false)
-            } else if binding.is_transparent() {
-                let fallback = (0..layer_idx)
+            let label_binding = if binding.is_transparent() {
+                (0..layer_idx)
                     .rev()
-                    .map(|fallback_layer| layout.get_key_binding(fallback_layer, key_idx))
-                    .find(|fallback| !fallback.is_no() && !fallback.is_transparent());
-                match fallback {
-                    Some(fallback_binding) => (
-                        export_key_binding_label_with_macro_names(
-                            fallback_binding,
-                            &layout.custom_keycodes,
-                            &self.layer_names,
-                            &self.keycode_picker.macro_names,
-                            &self.keycode_picker.tap_dance_names,
-                            self.app_settings.layout_image_export.key_legend_layout,
-                        ),
-                        true,
-                    ),
-                    None => (String::new(), false),
-                }
+                    .map(|l| layout.get_key_binding(l, key_idx))
+                    .find(|b| !b.is_no() && !b.is_transparent())
+                    .unwrap_or_default()
             } else {
-                (
-                    export_key_binding_label_with_macro_names(
-                        binding,
-                        &layout.custom_keycodes,
-                        &self.layer_names,
-                        &self.keycode_picker.macro_names,
-                        &self.keycode_picker.tap_dance_names,
-                        self.app_settings.layout_image_export.key_legend_layout,
-                    ),
-                    false,
+                binding
+            };
+            let dimmed = binding.is_transparent() && !label_binding.is_no();
+            let label = if label_binding.is_no() {
+                String::new()
+            } else {
+                export_key_binding_label_with_macro_names(
+                    label_binding,
+                    &layout.custom_keycodes,
+                    &self.layer_names,
+                    &self.keycode_picker.macro_names,
+                    &self.keycode_picker.tap_dance_names,
+                    self.app_settings.layout_image_export.key_legend_layout,
                 )
             };
             if !label.is_empty() {
                 let label = number_row_shifted_label(
+                    label_binding,
                     label,
                     self.app_settings.show_shifted_number_symbols,
                     self.app_settings.layout_image_export.key_legend_layout,
@@ -1223,42 +1226,31 @@ impl EntropyApp {
             );
 
             let binding = layout.get_key_binding(layer_idx, key_idx);
-            let (label, dimmed) = if binding.is_no() {
-                (String::new(), false)
-            } else if binding.is_transparent() {
-                let fallback = (0..layer_idx)
+            let label_binding = if binding.is_transparent() {
+                (0..layer_idx)
                     .rev()
-                    .map(|fallback_layer| layout.get_key_binding(fallback_layer, key_idx))
-                    .find(|fallback| !fallback.is_no() && !fallback.is_transparent());
-                match fallback {
-                    Some(fallback_binding) => (
-                        export_key_binding_label_with_macro_names(
-                            fallback_binding,
-                            &layout.custom_keycodes,
-                            &self.layer_names,
-                            &self.keycode_picker.macro_names,
-                            &self.keycode_picker.tap_dance_names,
-                            self.app_settings.layout_image_export.key_legend_layout,
-                        ),
-                        true,
-                    ),
-                    None => (String::new(), false),
-                }
+                    .map(|l| layout.get_key_binding(l, key_idx))
+                    .find(|b| !b.is_no() && !b.is_transparent())
+                    .unwrap_or_default()
             } else {
-                (
-                    export_key_binding_label_with_macro_names(
-                        binding,
-                        &layout.custom_keycodes,
-                        &self.layer_names,
-                        &self.keycode_picker.macro_names,
-                        &self.keycode_picker.tap_dance_names,
-                        self.app_settings.layout_image_export.key_legend_layout,
-                    ),
-                    false,
+                binding
+            };
+            let dimmed = binding.is_transparent() && !label_binding.is_no();
+            let label = if label_binding.is_no() {
+                String::new()
+            } else {
+                export_key_binding_label_with_macro_names(
+                    label_binding,
+                    &layout.custom_keycodes,
+                    &self.layer_names,
+                    &self.keycode_picker.macro_names,
+                    &self.keycode_picker.tap_dance_names,
+                    self.app_settings.layout_image_export.key_legend_layout,
                 )
             };
             if !label.is_empty() {
                 let label = number_row_shifted_label(
+                    label_binding,
                     label,
                     self.app_settings.show_shifted_number_symbols,
                     self.app_settings.layout_image_export.key_legend_layout,
@@ -2343,6 +2335,56 @@ fn blend_pixel(image: &mut RgbaImage, x: i32, y: i32, color: Rgba<u8>, coverage:
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typewriter_export_keeps_its_own_profile_and_inherited_bindings() {
+        let values: Vec<u16> = (0x001E..=0x0027)
+            .chain([0x002D, 0x002E, 0x0031, 0x0035, 0x0038, 0x0064])
+            .collect();
+        let positions: Vec<String> = (0..values.len()).map(|i| format!("0,{i}")).collect();
+        let mut layout = KeyboardLayout::from_vial_json(&serde_json::json!({
+            "name": "Typewriter legends", "matrix": {"rows": 1, "cols": values.len()},
+            "layouts": {"keymap": [positions]},
+        }))
+        .unwrap();
+        layout.layers = vec![
+            values.iter().map(|v| (*v).into()).collect(),
+            vec![1u16.into(); values.len()],
+        ];
+        let original = layout.layers.clone();
+        let mut app = EntropyApp::new_inert_for_test();
+        app.app_settings.key_legend_layout = KeyLegendLayout::Russian;
+        app.app_settings.layout_image_export.key_legend_layout =
+            KeyLegendLayout::RussianTypewriterPrimary;
+        let png = app.render_layout_image(&layout, &[0, 1]).unwrap();
+        let inherited = app.render_layout_image(&layout, &[1]).unwrap();
+        assert!(png.width() > 500 && png.height() > inherited.height());
+        assert!(app
+            .render_layout_svg(&layout, &[0, 1])
+            .unwrap()
+            .contains("№"));
+        assert!(app
+            .render_layout_pdf(&layout, &[0, 1])
+            .unwrap()
+            .starts_with(b"%PDF-"));
+        if let Some(path) = std::env::var_os("ENTROPY_LEGEND_PREVIEW") {
+            png.save(path).unwrap();
+        }
+        app.app_settings.layout_image_export.key_legend_layout = KeyLegendLayout::Russian;
+        let standard = app.render_layout_image(&layout, &[0, 1]).unwrap();
+        assert_ne!(png.as_raw(), standard.as_raw());
+        assert_eq!(app.app_settings.key_legend_layout, KeyLegendLayout::Russian);
+        assert_eq!(layout.layers, original);
+        for lang in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            assert_ne!(
+                export_key_legend_label(lang, KeyLegendLayout::RussianTypewriter),
+                export_key_legend_label(lang, KeyLegendLayout::RussianTypewriterPrimary)
+            );
+        }
+    }
 
     #[test]
     fn every_export_format_has_a_distinct_extension_and_filter() {

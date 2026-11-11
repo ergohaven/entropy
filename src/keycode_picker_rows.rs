@@ -504,6 +504,30 @@ mod tests {
     }
 
     #[test]
+    fn cached_number_row_updates_with_profile_order_and_shift_visibility() {
+        let mut picker = KeycodePicker::default();
+        let label = |picker: &mut KeycodePicker| {
+            picker
+                .cached_basic_grid_cells()
+                .iter()
+                .find(|cell| cell.grid.value == 0x001E)
+                .unwrap()
+                .row
+                .label
+                .clone()
+        };
+        assert_eq!(label(&mut picker), "!\n1");
+        picker.key_legend_layout = KeyLegendLayout::RussianTypewriter;
+        assert_eq!(label(&mut picker), "!  1\n1  №");
+        picker.key_legend_layout = picker.key_legend_layout.toggled_order();
+        assert_eq!(label(&mut picker), "1  !\n№  1");
+        picker.show_shifted_number_symbols = false;
+        assert_eq!(label(&mut picker), "№  1");
+        picker.key_legend_layout = KeyLegendLayout::Russian;
+        assert_eq!(label(&mut picker), "1");
+    }
+
+    #[test]
     fn every_visible_tab_renders_rows() {
         let picker = full_picker();
         for tab in picker.visible_vial_tabs() {

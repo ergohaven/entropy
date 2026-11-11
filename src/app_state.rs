@@ -294,6 +294,56 @@ mod app_settings_tests {
     use super::*;
 
     #[test]
+    fn typewriter_binding_labels_preserve_actions_and_custom_names() {
+        use rmk_types::{
+            action::{Action, KeyAction},
+            keycode::HidKeyCode,
+            modifier::ModifierCombination,
+        };
+        let native = KeyAction::TapHold(
+            Action::KeyWithModifier(HidKeyCode::Slash, ModifierCombination::LSHIFT),
+            Action::Modifier(ModifierCombination::LCTRL),
+            Default::default(),
+        );
+        let binding = crate::keyboard::KeyBinding::Rmk(native);
+        let before = serde_json::to_string(&binding).unwrap();
+        assert_eq!(
+            key_binding_label_with_macro_names(
+                binding,
+                &[],
+                &[],
+                &[],
+                &[],
+                KeyLegendLayout::RussianTypewriterPrimary
+            ),
+            "Ctrl\nЁ\n?"
+        );
+        assert_eq!(serde_json::to_string(&binding).unwrap(), before);
+        assert_eq!(
+            keycode_label_with_macro_names(
+                0x7700,
+                &[],
+                &[],
+                &["Copy".into()],
+                &[],
+                KeyLegendLayout::RussianTypewriter
+            ),
+            "M0\nCopy"
+        );
+        assert_eq!(
+            keycode_label_with_macro_names(
+                0x5221,
+                &[],
+                &["Base".into(), "Symbols".into()],
+                &[],
+                &[],
+                KeyLegendLayout::RussianTypewriter
+            ),
+            "MO(1)\nSymbols"
+        );
+    }
+
+    #[test]
     fn tap_dance_keycap_keeps_slot_label_and_tooltip_keeps_custom_name() {
         let names = &["t1".to_owned()];
         assert_eq!(

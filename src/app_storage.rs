@@ -1037,6 +1037,53 @@ mod tests {
     }
 
     #[test]
+    fn typewriter_settings_round_trip_and_export_inheritance() {
+        for layout in [
+            KeyLegendLayout::RussianTypewriter,
+            KeyLegendLayout::RussianTypewriterPrimary,
+        ] {
+            let mut settings = AppSettings {
+                key_legend_layout: layout,
+                dark_mode: true,
+                ..Default::default()
+            };
+            settings.layout_image_export.key_legend_layout = KeyLegendLayout::RussianPrimary;
+            let json = serde_json::to_string(&settings).unwrap();
+            let mut restored: AppSettings = serde_json::from_str(&json).unwrap();
+            apply_app_settings_migrations(&mut restored, Some(&json));
+            assert_eq!(restored.key_legend_layout, layout);
+            assert!(restored.dark_mode);
+            assert_eq!(
+                restored.layout_image_export.key_legend_layout,
+                KeyLegendLayout::RussianPrimary
+            );
+            let mut legacy = serde_json::to_value(&settings).unwrap();
+            legacy
+                .as_object_mut()
+                .unwrap()
+                .remove("layout_image_export");
+            let json = legacy.to_string();
+            let mut restored: AppSettings = serde_json::from_str(&json).unwrap();
+            apply_app_settings_migrations(&mut restored, Some(&json));
+            assert_eq!(restored.layout_image_export.key_legend_layout, layout);
+        }
+        for (json, expected) in [
+            ("{}", KeyLegendLayout::English),
+            (
+                r#"{"key_legend_layout":"russian"}"#,
+                KeyLegendLayout::Russian,
+            ),
+            (
+                r#"{"key_legend_layout":"russian_primary"}"#,
+                KeyLegendLayout::RussianPrimary,
+            ),
+        ] {
+            let settings: AppSettings = serde_json::from_str(json).unwrap();
+            assert_eq!(settings.key_legend_layout, expected);
+        }
+    }
+
+    #[test]
     fn app_settings_migrations_use_top_level_json_keys() {
         let mut settings = AppSettings {
             minimize_to_tray_on_close: true,

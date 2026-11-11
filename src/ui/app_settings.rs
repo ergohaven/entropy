@@ -245,8 +245,8 @@ impl EntropyApp {
                                     ui.set_min_width(metrics.settings_control_width());
                                     ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
                                     for key_legend_layout in KeyLegendLayout::ALL {
-                                        let selected =
-                                            key_legend_layout == selected_key_legend_layout;
+                                        let selected = key_legend_layout
+                                            == selected_key_legend_layout.family();
                                         let (option_rect, option_resp) = ui.allocate_exact_size(
                                             metrics.size(168.0, 28.0),
                                             Sense::click(),
@@ -285,7 +285,9 @@ impl EntropyApp {
                                             },
                                         );
                                         if option_resp.clicked() {
-                                            selected_key_legend_layout = key_legend_layout;
+                                            if !selected {
+                                                selected_key_legend_layout = key_legend_layout;
+                                            }
                                             egui::Popup::close_all(ui.ctx());
                                         }
                                     }

@@ -516,6 +516,7 @@ impl EntropyApp {
                     };
                     let label = inherited_key_label_or_marker(label);
                     let label = number_row_shifted_label(
+                        fallback_binding,
                         label,
                         self.app_settings.show_shifted_number_symbols,
                         self.app_settings.key_legend_layout,
@@ -533,6 +534,7 @@ impl EntropyApp {
             } else {
                 paint_layout_keycap(painter, draw_rect, key.rotation, bg, key_border_stroke);
                 let label = number_row_shifted_label(
+                    binding,
                     key_binding_label_with_macro_names(
                         binding,
                         &layout.custom_keycodes,

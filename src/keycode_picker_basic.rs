@@ -135,26 +135,17 @@ fn qwerty_picker_key_label(
     show_shifted_number_symbols: bool,
     layer_names: &[String],
 ) -> String {
-    if show_shifted_number_symbols {
-        if key_legend_layout == KeyLegendLayout::English {
-            match value {
-                0x0035 => return "~\n`".to_string(),
-                0x001E => return "!\n1".to_string(),
-                0x001F => return "@\n2".to_string(),
-                0x0020 => return "#\n3".to_string(),
-                0x0021 => return "$\n4".to_string(),
-                0x0022 => return "%\n5".to_string(),
-                0x0023 => return "^\n6".to_string(),
-                0x0024 => return "&\n7".to_string(),
-                0x0025 => return "*\n8".to_string(),
-                0x0026 => return "(\n9".to_string(),
-                0x0027 => return ")\n0".to_string(),
-                0x002D => return "_\n-".to_string(),
-                0x002E => return "+\n=".to_string(),
-                _ => {}
-            }
-        } else if let Some(label) = picker_shifted_number_label(value, key_legend_layout) {
-            return label;
+    if let Some(label) =
+        crate::keycode::number_row_legend(value, key_legend_layout, show_shifted_number_symbols)
+    {
+        return label;
+    }
+    if show_shifted_number_symbols && key_legend_layout == KeyLegendLayout::English {
+        match value {
+            0x0035 => return "~\n`".to_string(),
+            0x002D => return "_\n-".to_string(),
+            0x002E => return "+\n=".to_string(),
+            _ => {}
         }
     }
 

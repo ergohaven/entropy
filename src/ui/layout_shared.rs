@@ -638,48 +638,13 @@ pub(crate) fn draw_key_label_dimmed(
 }
 
 pub(crate) fn number_row_shifted_label(
+    binding: crate::keyboard::KeyBinding,
     label: String,
     enabled: bool,
     key_legend_layout: KeyLegendLayout,
 ) -> String {
-    if !enabled {
-        return label;
-    }
-
-    let Some((digit, english, russian)) = (match label.as_str() {
-        "1" => Some(("1", "!", "!")),
-        "2" => Some(("2", "@", "\"")),
-        "3" => Some(("3", "#", "№")),
-        "4" => Some(("4", "$", ";")),
-        "5" => Some(("5", "%", "%")),
-        "6" => Some(("6", "^", ":")),
-        "7" => Some(("7", "&", "?")),
-        "8" => Some(("8", "*", "*")),
-        "9" => Some(("9", "(", "(")),
-        "0" => Some(("0", ")", ")")),
-        _ => None,
-    }) else {
-        return label;
-    };
-
-    let shifted = match key_legend_layout {
-        KeyLegendLayout::English => english.to_string(),
-        KeyLegendLayout::Russian => {
-            if english == russian {
-                english.to_string()
-            } else {
-                format!("{}  {}", english, russian)
-            }
-        }
-        KeyLegendLayout::RussianPrimary => {
-            if english == russian {
-                russian.to_string()
-            } else {
-                format!("{}  {}", russian, english)
-            }
-        }
-    };
-    format!("{}\n{}", shifted, digit)
+    crate::keycode::number_row_legend(binding.vial_keycode(), key_legend_layout, enabled)
+        .unwrap_or(label)
 }
 
 pub(crate) fn draw_key_label(
@@ -705,6 +670,25 @@ pub(crate) fn draw_key_label(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn number_row_formatting_uses_binding_identity() {
+        let layout = KeyLegendLayout::RussianTypewriterPrimary;
+        assert_eq!(
+            number_row_shifted_label(0x001Eu16.into(), "№  1".into(), true, layout),
+            "1  !\n№  1"
+        );
+        for binding in [0x0059u16, 0x7700, 0x2104] {
+            assert_eq!(
+                number_row_shifted_label(binding.into(), "1".into(), true, layout),
+                "1"
+            );
+        }
+        assert_eq!(
+            number_row_shifted_label(0x001Eu16.into(), "№  1".into(), false, layout),
+            "№  1"
+        );
+    }
 
     fn physical_key(layout_condition: Option<LayoutCondition>) -> PhysicalKey {
         PhysicalKey {
