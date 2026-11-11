@@ -1,12 +1,14 @@
 use std::{
     env,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 const WINDOWS_ICON_PATH: &str = "assets/entropy.ico";
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    record_source_revision();
     println!("cargo:rerun-if-changed={WINDOWS_ICON_PATH}");
 
     // rmk-types takes its constants, the combo, morse and bulk sizes among
@@ -46,6 +48,49 @@ fn main() {
     res.compile().expect(
         "failed to embed Windows resources; refusing to build a Windows binary without an icon",
     );
+}
+
+fn git(args: &[&str]) -> Option<String> {
+    let output = Command::new("git").args(args).output().ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn record_source_revision() {
+    // Source archives can be built inside another repository. Never embed
+    // that enclosing repository's revision as Entropy's identity.
+    let source_root =
+        env::var_os("CARGO_MANIFEST_DIR").and_then(|p| PathBuf::from(p).canonicalize().ok());
+    let git_root =
+        git(&["rev-parse", "--show-toplevel"]).and_then(|p| PathBuf::from(p).canonicalize().ok());
+    if source_root.is_none() || source_root != git_root {
+        return;
+    }
+    // Watch both loose and packed refs, including linked worktrees. A commit
+    // must invalidate this metadata even when none of the Rust sources changed.
+    for name in [
+        "HEAD".to_owned(),
+        "packed-refs".to_owned(),
+        "refs/tags".to_owned(),
+    ]
+    .into_iter()
+    .chain(git(&["symbolic-ref", "-q", "HEAD"]))
+    {
+        if let Some(path) = git(&["rev-parse", "--git-path", &name]) {
+            println!("cargo:rerun-if-changed={path}");
+        }
+    }
+    if let Some(commit) = git(&["rev-parse", "HEAD"])
+        .filter(|s| s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        println!("cargo:rustc-env=ENTROPY_BUILD_COMMIT={commit}");
+        let release_tag = format!("v{}", env::var("CARGO_PKG_VERSION").unwrap_or_default());
+        let tagged = git(&["tag", "--points-at", "HEAD"])
+            .is_some_and(|tags| tags.lines().any(|tag| tag == release_tag));
+        println!("cargo:rustc-env=ENTROPY_BUILD_DEVELOPMENT={}", !tagged);
+    }
 }
 
 fn find_windres() -> Option<PathBuf> {

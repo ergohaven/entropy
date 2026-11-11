@@ -160,6 +160,18 @@ impl UpdateNotifications {
     }
 }
 
+fn app_key(development: bool) -> &'static str {
+    if development {
+        "app:rynk"
+    } else {
+        "app"
+    }
+}
+
+fn is_app_key(key: &str) -> bool {
+    matches!(key, "app" | "app:rynk")
+}
+
 fn firmware_key(target: &FirmwareReleaseTarget) -> String {
     let family = match target.family {
         FirmwareReleaseFamily::Rmk => "rmk",
@@ -200,8 +212,9 @@ fn notification_release_url(key: &str, version: &str) -> Option<String> {
 
 impl EntropyApp {
     fn notification_is_current(&self, notification: &Notification) -> bool {
-        if notification.key == "app" {
+        if is_app_key(&notification.key) {
             return self.app_settings.app_update_notifications
+                && notification.key == app_key(self.app_settings.development_updates)
                 && matches!(&self.update_check, UpdateCheckState::Ready(result)
                     if result.relation == VersionRelation::UpdateAvailable
                     && result.latest_version == notification.version);
@@ -216,7 +229,7 @@ impl EntropyApp {
     }
 
     fn notification_click_route(&self, key: &str, version: &str) -> Option<ClickRoute> {
-        if key == "app" {
+        if is_app_key(key) {
             return Some(ClickRoute::AboutEntropy);
         }
         if self
@@ -270,9 +283,9 @@ impl EntropyApp {
             // without retrying every frame or resetting the other notification category.
             self.update_notifications.attempted.retain(|(key, _)| {
                 if firmware {
-                    key == "app"
+                    is_app_key(key)
                 } else {
-                    key != "app"
+                    !is_app_key(key)
                 }
             });
         }
@@ -368,7 +381,7 @@ impl EntropyApp {
             if result.relation == VersionRelation::UpdateAvailable {
                 self.update_notifications.send(
                     self.app_settings.app_update_notifications,
-                    "app",
+                    app_key(self.app_settings.development_updates),
                     &result.latest_version,
                     || {
                         (
@@ -415,6 +428,41 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_tracks_keep_separate_delivery_history_and_reject_stale_authorization() {
+        let mut app = EntropyApp::new_inert_for_test();
+        app.app_settings.app_update_notifications = true;
+        app.update_check = UpdateCheckState::Ready(UpdateCheckResult {
+            latest_version: "rynk 12345678".into(),
+            release_url: String::new(),
+            platform_label: String::new(),
+            asset: UpdateAssetState::MissingForPlatform,
+            relation: VersionRelation::UpdateAvailable,
+        });
+        let notification = Notification {
+            key: app_key(true).into(),
+            version: "rynk 12345678".into(),
+            title: String::new(),
+            body: String::new(),
+        };
+        assert!(!app.notification_is_current(&notification));
+        app.app_settings.development_updates = true;
+        assert!(app.notification_is_current(&notification));
+        app.update_notifications.record_events(&[
+            Event::Delivered(app_key(true).into(), "rynk 12345678".into()),
+            Event::Delivered(app_key(false).into(), "v0.6.0".into()),
+        ]);
+        for (development, version) in [(true, "rynk 12345678"), (false, "v0.6.0")] {
+            assert!(!app
+                .update_notifications
+                .claim(true, app_key(development), version));
+            assert_eq!(
+                app.notification_click_route(app_key(development), version),
+                Some(ClickRoute::AboutEntropy)
+            );
+        }
+    }
 
     #[test]
     fn cold_launch_firmware_click_waits_for_initial_device_discovery() {
