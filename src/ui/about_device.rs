@@ -1133,7 +1133,7 @@ mod tests {
                 app.app_settings.language = lang;
                 app.app_settings.development_updates = development;
                 let ctx = egui::Context::default();
-                let output = ctx.run_ui(
+                let output = crate::app::discard_texture_deltas(ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -1142,7 +1142,7 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| app.draw_about_entropy_page(ui, ui.max_rect()),
-                );
+                ));
                 let texts: Vec<_> = output
                     .shapes
                     .iter()
