@@ -1112,7 +1112,7 @@ mod tests {
                 let mut app = EntropyApp::new(&cc);
                 app.app_settings.language = lang;
                 app.device_about_info = Some(info.clone());
-                let output = ctx.run(
+                let output = crate::app::discard_texture_deltas(ctx.run_pass(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -1121,11 +1121,13 @@ mod tests {
                         ..Default::default()
                     },
                     |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            app.draw_about_device_page(ui, ui.max_rect());
+                        ctx.root_ui(|ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
+                                app.draw_about_device_page(ui, ui.max_rect());
+                            })
                         });
                     },
-                );
+                ));
                 let texts = output
                     .shapes
                     .iter()
@@ -1144,12 +1146,13 @@ mod tests {
                 );
                 // Rendering must not rename storage/identity metadata.
                 assert_eq!(app.device_about_info.as_ref().unwrap().product, product);
-                assert!(app
-                    .device_about_info
-                    .as_ref()
-                    .unwrap()
-                    .firmware_update_target
-                    .is_none());
+                assert!(
+                    app.device_about_info
+                        .as_ref()
+                        .unwrap()
+                        .firmware_update_target
+                        .is_none()
+                );
             }
         }
     }

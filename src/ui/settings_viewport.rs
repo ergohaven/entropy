@@ -142,8 +142,8 @@ fn allocate_settings_list_viewport(
     let list_height = row_height * visible_rows as f32;
     let content_height = row_height * total_rows as f32;
     let max_offset = (content_height - list_height).max(0.0);
-    let offset_id = ui.id().with((id_salt, "smooth_offset"));
-    let target_id = ui.id().with((id_salt, "smooth_target"));
+    let offset_id = ui.scope_id().with((id_salt, "smooth_offset"));
+    let target_id = ui.scope_id().with((id_salt, "smooth_target"));
     let mut scroll_offset = ui
         .ctx()
         .data_mut(|d| d.get_persisted::<f32>(offset_id).unwrap_or(0.0))
@@ -163,7 +163,7 @@ fn allocate_settings_list_viewport(
     let scrollbar_resp = if max_offset > 0.0 {
         Some(ui.interact(
             track_rect.expand2(egui::vec2(metrics.value(5.0), 0.0)),
-            ui.id().with((id_salt, "scrollbar")),
+            ui.scope_id().with((id_salt, "scrollbar")),
             Sense::click_and_drag(),
         ))
     } else {
@@ -331,13 +331,14 @@ mod tests {
                         delta: egui::vec2(0.0, -200.0),
                         modifiers: egui::Modifiers::NONE,
                         phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Unknown,
                     },
                 ]
             } else {
                 vec![]
             };
             let mut rendered = Vec::new();
-            let _ = ctx.run_ui(
+            let _ = crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -372,7 +373,7 @@ mod tests {
                     }
                     first_row = list.first_visible_row;
                 },
-            );
+            ));
         }
         assert!(first_row > 0, "scrolling must reach later rows");
     }

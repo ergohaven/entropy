@@ -7,7 +7,7 @@ fn frame(
     ctx: &egui::Context,
     pointer: Option<egui::Pos2>,
 ) -> egui::FullOutput {
-    ctx.run_ui(
+    crate::app::discard_texture_deltas(ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -17,7 +17,7 @@ fn frame(
             ..Default::default()
         },
         |ui| app.draw_live_features_settings_page(ui, ui.max_rect()),
-    )
+    ))
 }
 fn selector(output: &egui::FullOutput) -> (egui::Rect, egui::Color32) {
     let pos = output
@@ -579,7 +579,7 @@ fn input_frame(
     ctx: &egui::Context,
     events: Vec<egui::Event>,
 ) -> egui::FullOutput {
-    ctx.run_ui(
+    crate::app::discard_texture_deltas(ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -589,7 +589,7 @@ fn input_frame(
             ..Default::default()
         },
         |ui| app.draw_live_features_settings_page(ui, ui.max_rect()),
-    )
+    ))
 }
 
 fn click(app: &mut EntropyApp, ctx: &egui::Context, pos: egui::Pos2) -> egui::FullOutput {

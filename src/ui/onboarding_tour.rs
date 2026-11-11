@@ -98,7 +98,7 @@ impl EntropyApp {
         let skip_label = crate::i18n::tr_catalog(lang, "onboarding_tour.skip").to_owned();
         let sample_hint = crate::i18n::tr_catalog(lang, "onboarding_tour.sample_hint").to_owned();
 
-        egui::Area::new(egui::Id::new("onboarding_tour_overlay"))
+        egui::Area::new(egui::Id::unique("onboarding_tour_overlay"))
             .order(egui::Order::Tooltip)
             .fixed_pos(ctx.content_rect().min)
             .show(ctx, |ui| {

@@ -66,7 +66,9 @@ impl EntropyApp {
                     .events
                     .push(egui::ViewportEvent::Close);
             }
-            let output = ctx.run_ui(input, |ui| self.tick_background(ui.ctx()));
+            let mut output = ctx.run_ui(input, |ui| self.tick_background(ui.ctx()));
+            // This loop has no renderer to apply texture changes.
+            output.textures_delta.clear();
             let needs_ui = !self.windows_window_hidden_to_tray
                 || self.app_settings.sticky_layout_window
                 || self.unlock_open
@@ -144,7 +146,9 @@ mod tests {
             .get_mut(&egui::ViewportId::ROOT)
             .unwrap()
             .minimized = Some(true);
-        let output = ctx.run_ui(input, |ui| app.tick_background(ui.ctx()));
+        let output = crate::app::discard_texture_deltas(
+            ctx.run_ui(input, |ui| app.tick_background(ui.ctx())),
+        );
         assert!(
             scans.try_recv().is_ok(),
             "tray startup must begin discovery"
@@ -167,7 +171,7 @@ mod tests {
         app.test_device_scan_requests = Some(requests);
         let mut decodes = 0;
         for _ in 0..2 {
-            let _ = ctx.run_ui(Default::default(), |ui| {
+            let _ = crate::app::discard_texture_deltas(ctx.run_ui(Default::default(), |ui| {
                 app.tick_background(ui.ctx());
                 drop(
                     crate::ui_textures::texture(ui.ctx(), "still-visible", 0, || {
@@ -176,7 +180,7 @@ mod tests {
                     })
                     .unwrap(),
                 );
-            });
+            }));
         }
         assert_eq!(
             decodes, 1,
@@ -210,20 +214,20 @@ mod tests {
     #[test]
     fn quit_waits_for_hid_drain_and_unlock_can_show_the_ui() {
         let ctx = egui::Context::default();
-        let canceled = ctx.run_ui(Default::default(), |ui| {
+        let canceled = crate::app::discard_texture_deltas(ctx.run_ui(Default::default(), |ui| {
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::CancelClose);
-        });
+        }));
         assert!(matches!(next_step(true, false, &canceled), Next::Wait(_)));
         assert_eq!(next_step(true, true, &canceled), Next::Show);
-        let finished = ctx.run_ui(Default::default(), |_| {});
+        let finished = crate::app::discard_texture_deltas(ctx.run_ui(Default::default(), |_| {}));
         assert_eq!(next_step(true, false, &finished), Next::Quit);
     }
 
     #[test]
     fn worker_timers_have_a_bounded_wait_without_busy_spinning() {
         let ctx = egui::Context::default();
-        let mut output = ctx.run_ui(Default::default(), |_| {});
+        let mut output = crate::app::discard_texture_deltas(ctx.run_ui(Default::default(), |_| {}));
         for (requested, expected) in [(0, 10), (40, 40), (10000, 250)] {
             output
                 .viewport_output

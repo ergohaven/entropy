@@ -231,7 +231,7 @@ impl EntropyApp {
         );
         let status_resp = ui.interact(
             status_rect,
-            ui.id().with("matrix_tester_status_reset"),
+            ui.scope_id().with("matrix_tester_status_reset"),
             egui::Sense::click(),
         );
         if status_resp.hovered() {

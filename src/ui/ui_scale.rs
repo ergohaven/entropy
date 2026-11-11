@@ -184,6 +184,7 @@ mod tests {
             delta: Vec2::new(0.0, delta_y),
             phase: TouchPhase::Move,
             modifiers,
+            source: egui::MouseWheelSource::Unknown,
         }
     }
 

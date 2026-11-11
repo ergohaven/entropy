@@ -4,7 +4,7 @@ impl EntropyApp {
     /// Monotonic app clock in seconds since startup. Independent of painted
     /// egui input time, so background scheduling keeps advancing while the
     /// window is hidden and only `run_logic` runs.
-    fn app_clock_now(&self) -> f64 {
+    pub(super) fn app_clock_now(&self) -> f64 {
         self.app_clock.elapsed().as_secs_f64()
     }
 

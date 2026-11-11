@@ -500,7 +500,8 @@ impl EntropyApp {
                     tooltip.as_deref(),
                     field_width,
                     |ui| {
-                        let edit_id = egui::Id::new(("module_setting_edit", group_idx, field.qsid));
+                        let edit_id =
+                            egui::Id::unique(("module_setting_edit", group_idx, field.qsid));
                         let current = raw_value.clamp(field.min, field.max);
                         let mut text = ui.ctx().data_mut(|d| {
                             d.get_temp::<String>(edit_id)
@@ -1975,12 +1976,13 @@ mod tests {
                                 delta: egui::vec2(-640.0, 0.0),
                                 modifiers: egui::Modifiers::NONE,
                                 phase: egui::TouchPhase::Move,
+                                source: egui::MouseWheelSource::Unknown,
                             },
                         ]
                     } else {
                         vec![]
                     };
-                    let output = ctx.run_ui(
+                    let output = crate::app::discard_texture_deltas(ctx.run_ui(
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(
                                 egui::Pos2::ZERO,
@@ -1993,11 +1995,15 @@ mod tests {
                             let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
                             app.draw_pointer_mode_settings_overview(ui, &table, metrics);
                         },
-                    );
+                    ));
                     for shape in &output.shapes {
                         let mut positions = Vec::new();
                         text_positions(&shape.shape, &table.headers, &mut positions);
-                        found.extend(positions.into_iter().filter(|(_, pos)| shape.clip_rect.contains(*pos)));
+                        found.extend(
+                            positions
+                                .into_iter()
+                                .filter(|(_, pos)| shape.clip_rect.contains(*pos)),
+                        );
                     }
                 }
                 for column in 0..table.headers.len() {

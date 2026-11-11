@@ -411,10 +411,21 @@ impl EntropyApp {
         layer: usize,
         name: String,
     ) -> bool {
-        let Some(device_key) = self.editing_layer_device_key.clone()
-            .or_else(|| self.application_layout_device_key()) else { return false; };
-        let Some(layout) = self.app_settings.application_layouts.get_mut(&device_key)
-            .and_then(|settings| settings.layouts.get_mut(layout_id)) else { return false; };
+        let Some(device_key) = self
+            .editing_layer_device_key
+            .clone()
+            .or_else(|| self.application_layout_device_key())
+        else {
+            return false;
+        };
+        let Some(layout) = self
+            .app_settings
+            .application_layouts
+            .get_mut(&device_key)
+            .and_then(|settings| settings.layouts.get_mut(layout_id))
+        else {
+            return false;
+        };
         let changed = layout.set_layer_name(layer, name.clone());
         if changed {
             save_app_settings(&self.app_settings);
@@ -424,13 +435,23 @@ impl EntropyApp {
             && layer < self.layer_count
             && self.firmware == FirmwareProtocol::Vial
             && self.connected_application_layout_device_key().as_ref() == Some(&device_key)
-            && self.editing_layer_generation.is_none_or(|g| g == self.connection_generation)
+            && self
+                .editing_layer_generation
+                .is_none_or(|g| g == self.connection_generation)
         {
-            if let Some(device) = self.selected_device.and_then(|i| self.device_manager.devices().get(i)) {
-                self.pending_layer_name_writes.push_back(super::vial_hid_task::LayerNameWrite {
-                    device: device.clone(), device_key, layout_id: layout_id.to_owned(),
-                    generation: self.connection_generation, layer, name,
-                });
+            if let Some(device) = self
+                .selected_device
+                .and_then(|i| self.device_manager.devices().get(i))
+            {
+                self.pending_layer_name_writes
+                    .push_back(super::vial_hid_task::LayerNameWrite {
+                        device: device.clone(),
+                        device_key,
+                        layout_id: layout_id.to_owned(),
+                        generation: self.connection_generation,
+                        layer,
+                        name,
+                    });
             }
         }
         changed
@@ -450,7 +471,9 @@ impl EntropyApp {
         self.editing_layer_layout_id = None;
         self.editing_layer_device_key = None;
         #[cfg(not(target_arch = "wasm32"))]
-        { self.editing_layer_generation = None; }
+        {
+            self.editing_layer_generation = None;
+        }
     }
 
     pub(super) fn application_control_for_key(
@@ -2688,10 +2711,20 @@ mod tests {
     fn ui_default_layer_rename_persists_to_firmware() {
         use crate::application_layouts::{DetectedApplication, DEFAULT_APPLICATION_LAYOUT_ID};
         let _storage = crate::app::app_storage::ScopedTempConfig::new();
-        for (mode, scenario) in [(1,"ok"), (2,"ok"), (0,"ok"), (0,"borrowed"),
-            (0,"switch_profile"), (0,"failed_layer"), (0,"set_error"),
-            (0,"get_error"), (0,"mismatch"), (0,"stale_device"),
-            (0,"draft_switch_device"), (0,"unicode")] {
+        for (mode, scenario) in [
+            (1, "ok"),
+            (2, "ok"),
+            (0, "ok"),
+            (0, "borrowed"),
+            (0, "switch_profile"),
+            (0, "failed_layer"),
+            (0, "set_error"),
+            (0, "get_error"),
+            (0, "mismatch"),
+            (0, "stale_device"),
+            (0, "draft_switch_device"),
+            (0, "unicode"),
+        ] {
             let ctx = egui::Context::default();
             let mut app = EntropyApp::new_inert_for_test();
             let mut device = m4cr0pad_v3_device();
@@ -2708,15 +2741,31 @@ mod tests {
             app.deferred_device_load = DeferredDeviceLoadState::complete(16);
             let key = app.application_layout_device_key().unwrap();
             let seed = EntropyApp::base_application_layers(app.layout.as_ref().unwrap());
-            let settings = app.app_settings.application_layouts.entry(key.clone()).or_default();
+            let settings = app
+                .app_settings
+                .application_layouts
+                .entry(key.clone())
+                .or_default();
             let other = settings.create_for_application(&DetectedApplication {
-                executable: "rename-control.exe".into(), ..Default::default()
+                executable: "rename-control.exe".into(),
+                ..Default::default()
             });
-            let profile = if mode == 1 { other.clone() } else { DEFAULT_APPLICATION_LAYOUT_ID.into() };
+            let profile = if mode == 1 {
+                other.clone()
+            } else {
+                DEFAULT_APPLICATION_LAYOUT_ID.into()
+            };
             settings.active_layout_id = profile.clone();
             settings.editor_layout_id = profile.clone();
-            for layout in settings.layouts.values_mut() { layout.seed_unset_keycodes(seed); }
-            let untouched = settings.layouts[if mode == 1 { DEFAULT_APPLICATION_LAYOUT_ID } else { &other }].clone();
+            for layout in settings.layouts.values_mut() {
+                layout.seed_unset_keycodes(seed);
+            }
+            let untouched = settings.layouts[if mode == 1 {
+                DEFAULT_APPLICATION_LAYOUT_ID
+            } else {
+                &other
+            }]
+            .clone();
             app.application_layout_editor_active = mode != 2;
             let (hid, packets) = crate::hid::HidDevice::test_device();
             let store = std::sync::Arc::new(std::sync::Mutex::new("Factory".to_owned()));
@@ -2725,131 +2774,261 @@ mod tests {
             let gate = std::sync::Mutex::new(gate);
             packets.respond_by(move |request| {
                 if request[..2] == [0xfe, 0x08] {
-                    gate.lock().unwrap().recv_timeout(std::time::Duration::from_secs(3)).unwrap();
-                    Some(Ok([0;32]))
+                    gate.lock()
+                        .unwrap()
+                        .recv_timeout(std::time::Duration::from_secs(3))
+                        .unwrap();
+                    Some(Ok([0; 32]))
                 } else if request[..2] == [0xfe, 0x0b] && request[2..4] == 200u16.to_le_bytes() {
-                    if scenario == "set_error" { return Some(Ok([0xff;32])); }
+                    if scenario == "set_error" {
+                        return Some(Ok([0xff; 32]));
+                    }
                     let end = request[4..].iter().position(|b| *b == 0).unwrap_or(28);
-                    *firmware.lock().unwrap() = String::from_utf8(request[4..4+end].to_vec()).unwrap().replace("%%","%");
-                    Some(Ok([0;32]))
+                    *firmware.lock().unwrap() = String::from_utf8(request[4..4 + end].to_vec())
+                        .unwrap()
+                        .replace("%%", "%");
+                    Some(Ok([0; 32]))
                 } else if request[..2] == [0xfe, 0x0a] && request[2..4] == 200u16.to_le_bytes() {
-                    if scenario == "get_error" { return Some(Ok([0xff;32])); }
-                    if scenario == "mismatch" { return Some(Ok([0;32])); }
+                    if scenario == "get_error" {
+                        return Some(Ok([0xff; 32]));
+                    }
+                    if scenario == "mismatch" {
+                        return Some(Ok([0; 32]));
+                    }
                     let name = firmware.lock().unwrap();
-                    let mut response = [0;32];
-                    response[1..1+name.len()].copy_from_slice(name.as_bytes());
+                    let mut response = [0; 32];
+                    response[1..1 + name.len()].copy_from_slice(name.as_bytes());
                     Some(Ok(response))
-                } else { None }
+                } else {
+                    None
+                }
             });
             app.hid_device = Some(hid.into());
             let frame = |app: &mut EntropyApp, events| {
-                let _ = ctx.run_ui(egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1100.0,800.0))),
-                    events, ..Default::default()
-                }, |ui| app.draw_layout_layer_switcher_and_hints(ui,0.0,0.0,52.0));
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1100.0, 800.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| app.draw_layout_layer_switcher_and_hints(ui, 0.0, 0.0, 52.0),
+                )
+                .drop_without_applying_deltas();
             };
-            let pos = egui::pos2(550.0,50.0);
+            let pos = egui::pos2(550.0, 50.0);
             frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
-            for pressed in [true,false] {
-                frame(&mut app, vec![egui::Event::PointerMoved(pos),egui::Event::PointerButton {
-                    pos,button:egui::PointerButton::Primary,pressed,modifiers:egui::Modifiers::NONE
-                }]);
+            for pressed in [true, false] {
+                frame(
+                    &mut app,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
             }
             frame(&mut app, vec![]);
-            assert_eq!(app.editing_layer,Some(0));
-            frame(&mut app,vec![egui::Event::Text("New".into())]);
+            assert_eq!(app.editing_layer, Some(0));
+            frame(&mut app, vec![egui::Event::Text("New".into())]);
             if scenario == "unicode" {
-                frame(&mut app,vec![egui::Event::Key { key:egui::Key::A,physical_key:None,pressed:true,repeat:false,
-                    modifiers:egui::Modifiers { command:true,ctrl:true,..Default::default() } }]);
-                frame(&mut app,vec![egui::Event::Text("Слой%Макро".into())]);
+                frame(
+                    &mut app,
+                    vec![egui::Event::Key {
+                        key: egui::Key::A,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers {
+                            command: true,
+                            ctrl: true,
+                            ..Default::default()
+                        },
+                    }],
+                );
+                frame(&mut app, vec![egui::Event::Text("Слой%Макро".into())]);
             }
             let proposed = app.editing_layer_text.clone();
-            let expected = if scenario == "unicode" { "Слой%Мак".to_owned() } else { proposed.clone() };
+            let expected = if scenario == "unicode" {
+                "Слой%Мак".to_owned()
+            } else {
+                proposed.clone()
+            };
             let (unrelated_hid, unrelated_packets) = crate::hid::HidDevice::test_device();
             let unrelated_key = "vial-0000000000000043";
-            let unrelated_settings = crate::application_layouts::DeviceApplicationLayouts::default();
+            let unrelated_settings =
+                crate::application_layouts::DeviceApplicationLayouts::default();
             if scenario == "draft_switch_device" {
-                app.app_settings.application_layouts.insert(unrelated_key.into(),unrelated_settings.clone());
+                app.app_settings
+                    .application_layouts
+                    .insert(unrelated_key.into(), unrelated_settings.clone());
                 app.current_keyboard_id = Some(0x43);
                 app.connection_generation += 1;
                 app.hid_device = Some(unrelated_hid.into());
             }
             if scenario == "borrowed" {
-                assert_eq!(app.start_vial_hid_operation(&ctx,super::super::vial_hid_task::VialHidOperation::Lock),
-                    super::super::vial_hid_task::VialHidTaskStart::Started);
+                assert_eq!(
+                    app.start_vial_hid_operation(
+                        &ctx,
+                        super::super::vial_hid_task::VialHidOperation::Lock
+                    ),
+                    super::super::vial_hid_task::VialHidTaskStart::Started
+                );
             }
-            frame(&mut app,vec![egui::Event::Key { key:egui::Key::Enter,physical_key:None,pressed:true,repeat:false,modifiers:egui::Modifiers::NONE }]);
+            frame(
+                &mut app,
+                vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
             assert!(app.editing_layer.is_none());
             if mode == 0 {
-                assert!(!packets.requests().iter().any(|p| p[..2]==[0xfe,0x0b]),"UI must not synchronously write HID");
+                assert!(
+                    !packets.requests().iter().any(|p| p[..2] == [0xfe, 0x0b]),
+                    "UI must not synchronously write HID"
+                );
             }
             if scenario == "failed_layer" {
-                app.deferred_device_load.set_layer_status(0, DeferredLoadStatus::Failed("synthetic cold-read failure".into()));
+                app.deferred_device_load.set_layer_status(
+                    0,
+                    DeferredLoadStatus::Failed("synthetic cold-read failure".into()),
+                );
             }
             if scenario == "switch_profile" {
                 app.activate_application_layout(&other);
             }
             if scenario == "stale_device" {
                 app.connection_generation += 1;
-                app.device_manager.replace_devices(vec![crate::device::Device {
-                    path: "unrelated-owner".into(), ..m4cr0pad_v3_device()
-                }]);
+                app.device_manager
+                    .replace_devices(vec![crate::device::Device {
+                        path: "unrelated-owner".into(),
+                        ..m4cr0pad_v3_device()
+                    }]);
             }
-            if mode == 0 && scenario != "draft_switch_device" { assert!(app.defer_exit_until_hid_write_returns(&ctx)); }
+            if mode == 0 && scenario != "draft_switch_device" {
+                assert!(app.defer_exit_until_hid_write_returns(&ctx));
+            }
             // Drain production workers only; no direct setting writer in the probe.
             app.poll_vial_hid_task(&ctx);
             if scenario == "borrowed" {
-                assert_eq!(app.pending_layer_name_writes.len(),1,"borrowed owner must retain rename");
-                assert!(!packets.requests().iter().any(|p| p[..2]==[0xfe,0x0b]));
+                assert_eq!(
+                    app.pending_layer_name_writes.len(),
+                    1,
+                    "borrowed owner must retain rename"
+                );
+                assert!(!packets.requests().iter().any(|p| p[..2] == [0xfe, 0x0b]));
                 app.application_layout_manual_override = Some((key.clone(), None));
                 app.last_device_scan_at = 1.0;
                 app.last_full_device_scan_at = 1.0;
-                app.tick_layout_import_lifecycle_for_test(&ctx,1.0);
-                assert_eq!(app.pending_layer_name_writes.len(),1);
+                app.tick_layout_import_lifecycle_for_test(&ctx, 1.0);
+                assert_eq!(app.pending_layer_name_writes.len(), 1);
                 release.send(()).unwrap();
             }
-            let deadline = std::time::Instant::now()+std::time::Duration::from_secs(2);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
             while app.vial_hid_task_active() {
                 app.poll_vial_hid_task(&ctx);
-                assert!(std::time::Instant::now()<deadline);
+                assert!(std::time::Instant::now() < deadline);
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
-            assert!(unrelated_packets.requests().is_empty(),"rename wrote an unrelated HID owner");
+            assert!(
+                unrelated_packets.requests().is_empty(),
+                "rename wrote an unrelated HID owner"
+            );
             if mode == 0 {
                 assert!(app.pending_layer_name_writes.is_empty());
                 app.finish_deferred_exit_after_hid_write(&ctx);
-                assert!(!app.exit_after_hid_write,"rename must drain before exit");
+                assert!(!app.exit_after_hid_write, "rename must drain before exit");
             }
             if mode != 2 {
                 let saved = crate::app::app_storage::load_app_settings();
-                assert_eq!(saved.application_layouts[&key].layouts[&profile].layer_names[0],expected);
-                assert_eq!(saved.application_layouts[&key].layouts[if mode==1 { DEFAULT_APPLICATION_LAYOUT_ID } else { &other }],untouched);
-                if scenario == "draft_switch_device" { assert_eq!(saved.application_layouts[unrelated_key],unrelated_settings); }
+                assert_eq!(
+                    saved.application_layouts[&key].layouts[&profile].layer_names[0],
+                    expected
+                );
+                assert_eq!(
+                    saved.application_layouts[&key].layouts[if mode == 1 {
+                        DEFAULT_APPLICATION_LAYOUT_ID
+                    } else {
+                        &other
+                    }],
+                    untouched
+                );
+                if scenario == "draft_switch_device" {
+                    assert_eq!(saved.application_layouts[unrelated_key], unrelated_settings);
+                }
             }
             if mode == 1 {
-                assert!(packets.requests().is_empty(),"non-Default must remain host-only");
-                assert_eq!(*store.lock().unwrap(),"Factory");
-            } else if matches!(scenario,"failed_layer"|"set_error"|"stale_device"|"draft_switch_device") {
-                assert_eq!(*store.lock().unwrap(),"Factory");
+                assert!(
+                    packets.requests().is_empty(),
+                    "non-Default must remain host-only"
+                );
+                assert_eq!(*store.lock().unwrap(), "Factory");
+            } else if matches!(
+                scenario,
+                "failed_layer" | "set_error" | "stale_device" | "draft_switch_device"
+            ) {
+                assert_eq!(*store.lock().unwrap(), "Factory");
                 if scenario != "set_error" {
-                    assert!(!packets.requests().iter().any(|p| p[..2]==[0xfe,0x0b]),"unsafe rename was admitted");
+                    assert!(
+                        !packets.requests().iter().any(|p| p[..2] == [0xfe, 0x0b]),
+                        "unsafe rename was admitted"
+                    );
                 }
             } else {
-                assert_eq!(*store.lock().unwrap(),expected,"UI rename left persistent firmware name unchanged (mode={mode})");
+                assert_eq!(
+                    *store.lock().unwrap(),
+                    expected,
+                    "UI rename left persistent firmware name unchanged (mode={mode})"
+                );
                 if mode == 0 {
-                    assert!(packets.requests().iter().any(|p| p[..2]==[0xfe,0x0a]),"Default requires confirmed firmware readback");
+                    assert!(
+                        packets.requests().iter().any(|p| p[..2] == [0xfe, 0x0a]),
+                        "Default requires confirmed firmware readback"
+                    );
                 }
             }
-            if matches!(scenario,"get_error"|"mismatch"|"set_error"|"failed_layer") {
-                assert!(app.status_msg.contains("Layer name not saved"),"{}",app.status_msg);
-                assert_ne!(app.layer_names[0],proposed,"unconfirmed name was published to firmware cache");
+            if matches!(
+                scenario,
+                "get_error" | "mismatch" | "set_error" | "failed_layer"
+            ) {
+                assert!(
+                    app.status_msg.contains("Layer name not saved"),
+                    "{}",
+                    app.status_msg
+                );
+                assert_ne!(
+                    app.layer_names[0], proposed,
+                    "unconfirmed name was published to firmware cache"
+                );
                 let before = packets.requests().len();
-                for _ in 0..3 { app.poll_vial_hid_task(&ctx); frame(&mut app,vec![]); }
-                assert_eq!(packets.requests().len(),before,"failure retried on repaint");
+                for _ in 0..3 {
+                    app.poll_vial_hid_task(&ctx);
+                    frame(&mut app, vec![]);
+                }
+                assert_eq!(
+                    packets.requests().len(),
+                    before,
+                    "failure retried on repaint"
+                );
             }
             drop(app); // synthetic nonvolatile store outlives all host state
-            if mode != 1 && !matches!(scenario,"failed_layer"|"set_error"|"stale_device"|"draft_switch_device") {
-                assert_eq!(*store.lock().unwrap(),expected);
+            if mode != 1
+                && !matches!(
+                    scenario,
+                    "failed_layer" | "set_error" | "stale_device" | "draft_switch_device"
+                )
+            {
+                assert_eq!(*store.lock().unwrap(), expected);
             }
         }
     }
@@ -2872,30 +3051,66 @@ mod tests {
             packets.respond_by(move |r| {
                 if r[..4] == [0xfe, 0x0b, 200, 0] {
                     let end = r[4..].iter().position(|b| *b == 0).unwrap_or(28);
-                    *firmware.lock().unwrap() = String::from_utf8(r[4..4+end].to_vec()).unwrap().replace("%%", "%");
+                    *firmware.lock().unwrap() = String::from_utf8(r[4..4 + end].to_vec())
+                        .unwrap()
+                        .replace("%%", "%");
                     Some(Ok([0; 32]))
                 } else if r[..4] == [0xfe, 0x0a, 200, 0] {
                     let name = firmware.lock().unwrap();
                     let mut response = [0; 32];
-                    response[1..1+name.len()].copy_from_slice(name.as_bytes());
+                    response[1..1 + name.len()].copy_from_slice(name.as_bytes());
                     Some(Ok(response))
-                } else { None }
+                } else {
+                    None
+                }
             });
             app.hid_device = Some(hid.into());
             name_review_rename(&mut app, &ctx, proposal);
             name_review_drain(&mut app, &ctx);
             assert_eq!(*store.lock().unwrap(), stored, "setter wire budget changed");
-            assert_eq!(app.layer_names[0], confirmed, "successful UI SET/GET was not confirmed: {}", app.status_msg);
+            assert_eq!(
+                app.layer_names[0], confirmed,
+                "successful UI SET/GET was not confirmed: {}",
+                app.status_msg
+            );
             assert_eq!(app.layout.as_ref().unwrap().layer_names[0], confirmed);
-            assert!(!app.selected_layer_names_uncertain(), "false uncertainty for {proposal}");
-            assert!(!app.status_msg.contains("Layer name not saved"), "{}", app.status_msg);
-            assert_eq!(crate::app::app_storage::load_layer_names("Macropad")[0], confirmed);
+            assert!(
+                !app.selected_layer_names_uncertain(),
+                "false uncertainty for {proposal}"
+            );
+            assert!(
+                !app.status_msg.contains("Layer name not saved"),
+                "{}",
+                app.status_msg
+            );
+            assert_eq!(
+                crate::app::app_storage::load_layer_names("Macropad")[0],
+                confirmed
+            );
             let before = packets.requests().len();
             name_review_frame(&mut app, &ctx, vec![]);
             app.poll_vial_hid_task(&ctx);
-            assert_eq!(packets.requests().len(), before, "repaint issued a new write");
-            assert_eq!(packets.requests().iter().filter(|r| r[..2] == [0xfe, 0x0b]).count(), 1);
-            assert_eq!(packets.requests().iter().filter(|r| r[..2] == [0xfe, 0x0a]).count(), 1);
+            assert_eq!(
+                packets.requests().len(),
+                before,
+                "repaint issued a new write"
+            );
+            assert_eq!(
+                packets
+                    .requests()
+                    .iter()
+                    .filter(|r| r[..2] == [0xfe, 0x0b])
+                    .count(),
+                1
+            );
+            assert_eq!(
+                packets
+                    .requests()
+                    .iter()
+                    .filter(|r| r[..2] == [0xfe, 0x0a])
+                    .count(),
+                1
+            );
         }
     }
 
@@ -2922,33 +3137,79 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn name_review_frame(app: &mut EntropyApp, ctx: &egui::Context, events: Vec<egui::Event>) {
-        let _ = ctx.run_ui(egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1100.0,800.0))),
-            events, ..Default::default()
-        }, |ui| app.draw_layout_layer_switcher_and_hints(ui,0.0,0.0,52.0));
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1100.0, 800.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| app.draw_layout_layer_switcher_and_hints(ui, 0.0, 0.0, 52.0),
+        )
+        .drop_without_applying_deltas();
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn name_review_rename(app: &mut EntropyApp, ctx: &egui::Context, name: &str) {
-        let pos = egui::pos2(550.0,50.0);
+        let pos = egui::pos2(550.0, 50.0);
         name_review_frame(app, ctx, vec![egui::Event::PointerMoved(pos)]);
-        for pressed in [true,false] {
-            name_review_frame(app, ctx, vec![egui::Event::PointerMoved(pos),egui::Event::PointerButton {
-                pos,button:egui::PointerButton::Primary,pressed,modifiers:egui::Modifiers::NONE
-            }]);
+        for pressed in [true, false] {
+            name_review_frame(
+                app,
+                ctx,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
         }
         name_review_frame(app, ctx, vec![]);
         assert_eq!(app.editing_layer, Some(app.selected_layer));
-        name_review_frame(app, ctx, vec![egui::Event::Key { key:egui::Key::A,physical_key:None,pressed:true,repeat:false,
-            modifiers:egui::Modifiers { command:true,ctrl:true,..Default::default() } }]);
+        name_review_frame(
+            app,
+            ctx,
+            vec![egui::Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers {
+                    command: true,
+                    ctrl: true,
+                    ..Default::default()
+                },
+            }],
+        );
         let replacement = if name.is_empty() {
-            egui::Event::Key { key: egui::Key::Backspace, physical_key: None, pressed: true,
-                repeat: false, modifiers: egui::Modifiers::NONE }
+            egui::Event::Key {
+                key: egui::Key::Backspace,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }
         } else {
             egui::Event::Text(name.into())
         };
         name_review_frame(app, ctx, vec![replacement]);
-        name_review_frame(app, ctx, vec![egui::Event::Key { key:egui::Key::Enter,physical_key:None,pressed:true,repeat:false,modifiers:egui::Modifiers::NONE }]);
+        name_review_frame(
+            app,
+            ctx,
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2962,14 +3223,19 @@ mod tests {
             let settings = app.app_settings.application_layouts.get_mut(&key).unwrap();
             let profile = if mode == 2 {
                 settings.create_for_application(&crate::application_layouts::DetectedApplication {
-                    executable: "clear-name.exe".into(), ..Default::default()
+                    executable: "clear-name.exe".into(),
+                    ..Default::default()
                 })
             } else {
                 crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID.to_owned()
             };
             settings.active_layout_id = profile.clone();
             settings.editor_layout_id = profile.clone();
-            settings.layouts.get_mut(&profile).unwrap().set_layer_name(0, "Old".into());
+            settings
+                .layouts
+                .get_mut(&profile)
+                .unwrap()
+                .set_layer_name(0, "Old".into());
             app.application_layout_editor_active = mode != 0;
             app.layer_names[0] = "Old".into();
             app.layout.as_mut().unwrap().layer_names[0] = "Old".into();
@@ -2986,7 +3252,9 @@ mod tests {
                     let mut response = [0; 32];
                     response[1..1 + name.len()].copy_from_slice(name.as_bytes());
                     Some(Ok(response))
-                } else { None }
+                } else {
+                    None
+                }
             });
             app.hid_device = Some(hid.into());
             name_review_rename(&mut app, &ctx, "");
@@ -2996,35 +3264,66 @@ mod tests {
                 assert_eq!(*store.lock().unwrap(), "Old");
                 assert!(!packets.requests().iter().any(|r| r[..2] == [0xfe, 0x0b]));
             } else {
-                assert_eq!(*store.lock().unwrap(), "", "mode {mode}: clear did not reach firmware");
+                assert_eq!(
+                    *store.lock().unwrap(),
+                    "",
+                    "mode {mode}: clear did not reach firmware"
+                );
                 assert_eq!(app.layer_names[0], "");
                 assert_eq!(crate::app::app_storage::load_layer_names("Macropad")[0], "");
             }
             if mode != 0 {
-                assert_eq!(app.app_settings.application_layouts[&key].layouts[&profile].layer_names[0], "");
-                assert_eq!(crate::app::app_storage::load_app_settings().application_layouts[&key].layouts[&profile].layer_names[0], "");
+                assert_eq!(
+                    app.app_settings.application_layouts[&key].layouts[&profile].layer_names[0],
+                    ""
+                );
+                assert_eq!(
+                    crate::app::app_storage::load_app_settings().application_layouts[&key].layouts
+                        [&profile]
+                        .layer_names[0],
+                    ""
+                );
             }
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                app.draw_layout_layer_switcher_and_hints(ui, 0.0, 0.0, 52.0);
-            });
-            assert!(output.shapes.iter().any(|shape| matches!(
-                &shape.shape, egui::Shape::Text(text) if text.galley.text() == "0"
-            )), "an unnamed layer must display its number");
+            let output =
+                crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
+                    app.draw_layout_layer_switcher_and_hints(ui, 0.0, 0.0, 52.0);
+                }));
+            assert!(
+                output.shapes.iter().any(|shape| matches!(
+                    &shape.shape, egui::Shape::Text(text) if text.galley.text() == "0"
+                )),
+                "an unnamed layer must display its number"
+            );
             // Clicking the number of an unnamed layer must still start editing.
             name_review_rename(&mut app, &ctx, "Restored");
             name_review_drain(&mut app, &ctx);
-            let names = if mode == 0 { app.layer_names.clone() } else { app.application_layout_editor_layer_names() };
+            let names = if mode == 0 {
+                app.layer_names.clone()
+            } else {
+                app.application_layout_editor_layer_names()
+            };
             assert_eq!(names[0], "Restored");
 
             let writes = packets.requests().len();
             app.editing_layer = Some(0);
             app.editing_layer_layout_id = (mode != 0).then(|| profile.clone());
             app.editing_layer_text.clear();
-            name_review_frame(&mut app, &ctx, vec![egui::Event::Key {
-                key: egui::Key::Escape, physical_key: None, pressed: true,
-                repeat: false, modifiers: egui::Modifiers::NONE,
-            }]);
-            let names = if mode == 0 { app.layer_names.clone() } else { app.application_layout_editor_layer_names() };
+            name_review_frame(
+                &mut app,
+                &ctx,
+                vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            let names = if mode == 0 {
+                app.layer_names.clone()
+            } else {
+                app.application_layout_editor_layer_names()
+            };
             assert_eq!(names[0], "Restored", "Escape must cancel clearing");
             assert_eq!(packets.requests().len(), writes);
         }
@@ -3037,10 +3336,16 @@ mod tests {
         let mut app = name_review_app();
         let key = app.application_layout_device_key().unwrap();
         app.editing_layer = Some(0);
-        app.editing_layer_layout_id = Some(crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID.into());
+        app.editing_layer_layout_id =
+            Some(crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID.into());
         app.editing_layer_text = "  ".into();
         app.commit_pending_application_layout_edits();
-        assert_eq!(app.app_settings.application_layouts[&key].layouts[crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID].layer_names[0], "");
+        assert_eq!(
+            app.app_settings.application_layouts[&key].layouts
+                [crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID]
+                .layer_names[0],
+            ""
+        );
         assert_eq!(app.editing_layer, None);
     }
 
@@ -3054,13 +3359,30 @@ mod tests {
         app.deferred_device_load = DeferredDeviceLoadState::staged(DeferredDeviceLoadContext {
             json: std::sync::Arc::new(serde_json::json!({})),
             supported_qmk_settings: std::sync::Arc::new(vec![201]),
-            definition_fingerprint: 7, layer_count:16, rows:1, cols:1, encoder_count:0,
-            macro_count:0, macro_memory_bytes:Some(0), tap_dance_count:0, combo_count:0,
-            key_override_count:0, alt_repeat_count:0, modules_supported:false, touchpad_supported:false,
-            bluetooth_supported:false, layer_leds_supported:false, rgb_supported:false, lighting_mode:None,
-            supports_rmk_native_key_actions:false, supports_universal_numero: false, supports_universal_symbols:false,
-            supports_universal_russian_letters:false, supports_rmk_native_combo_output:false,
-            supports_rmk_native_tap_dance_actions:false, supports_rmk_combo_layers:false,
+            definition_fingerprint: 7,
+            layer_count: 16,
+            rows: 1,
+            cols: 1,
+            encoder_count: 0,
+            macro_count: 0,
+            macro_memory_bytes: Some(0),
+            tap_dance_count: 0,
+            combo_count: 0,
+            key_override_count: 0,
+            alt_repeat_count: 0,
+            modules_supported: false,
+            touchpad_supported: false,
+            bluetooth_supported: false,
+            layer_leds_supported: false,
+            rgb_supported: false,
+            lighting_mode: None,
+            supports_rmk_native_key_actions: false,
+            supports_universal_numero: false,
+            supports_universal_symbols: false,
+            supports_universal_russian_letters: false,
+            supports_rmk_native_combo_output: false,
+            supports_rmk_native_tap_dance_actions: false,
+            supports_rmk_combo_layers: false,
         });
         let (hid, packets) = crate::hid::HidDevice::test_device();
         let (release, gate) = std::sync::mpsc::channel();
@@ -3069,46 +3391,72 @@ mod tests {
         let firmware = store.clone();
         packets.respond_by(move |request| {
             if request[0] == 0x12 {
-                gate.lock().unwrap().recv_timeout(std::time::Duration::from_secs(3)).unwrap();
-                Some(Ok([0;32]))
-            } else if request[..2] == [0xfe,0x0b] {
-                let end = request[4..].iter().position(|b| *b==0).unwrap_or(28);
-                *firmware.lock().unwrap() = String::from_utf8(request[4..4+end].to_vec()).unwrap();
-                Some(Ok([0;32]))
-            } else if request[..2] == [0xfe,0x0a] {
-                let name = firmware.lock().unwrap(); let mut response=[0;32];
-                response[1..1+name.len()].copy_from_slice(name.as_bytes()); Some(Ok(response))
-            } else { None }
+                gate.lock()
+                    .unwrap()
+                    .recv_timeout(std::time::Duration::from_secs(3))
+                    .unwrap();
+                Some(Ok([0; 32]))
+            } else if request[..2] == [0xfe, 0x0b] {
+                let end = request[4..].iter().position(|b| *b == 0).unwrap_or(28);
+                *firmware.lock().unwrap() =
+                    String::from_utf8(request[4..4 + end].to_vec()).unwrap();
+                Some(Ok([0; 32]))
+            } else if request[..2] == [0xfe, 0x0a] {
+                let name = firmware.lock().unwrap();
+                let mut response = [0; 32];
+                response[1..1 + name.len()].copy_from_slice(name.as_bytes());
+                Some(Ok(response))
+            } else {
+                None
+            }
         });
         app.hid_device = Some(hid.into());
         name_review_rename(&mut app, &ctx, "Cold");
         assert!(app.defer_exit_until_hid_write_returns(&ctx));
         app.poll_vial_hid_task(&ctx);
-        assert_eq!(app.pending_layer_name_writes.len(),1,"cold rename was discarded");
-        assert!(app.vial_hid_task_active(),"pending name must schedule its required cold read");
+        assert_eq!(
+            app.pending_layer_name_writes.len(),
+            1,
+            "cold rename was discarded"
+        );
+        assert!(
+            app.vial_hid_task_active(),
+            "pending name must schedule its required cold read"
+        );
         app.poll_vial_hid_task(&ctx);
-        assert_eq!(app.pending_layer_name_writes.len(),1,"Loading must retain rename");
+        assert_eq!(
+            app.pending_layer_name_writes.len(),
+            1,
+            "Loading must retain rename"
+        );
         app.finish_deferred_exit_after_hid_write(&ctx);
         assert!(app.exit_after_hid_write);
         release.send(()).unwrap();
-        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while app.hid_write_lifecycle_busy() {
-            app.tick_layout_import_lifecycle_for_test(&ctx,1.0);
-            assert!(std::time::Instant::now()<deadline,"cold name drain deadlocked: {}",app.status_msg);
+            app.tick_layout_import_lifecycle_for_test(&ctx, 1.0);
+            assert!(
+                std::time::Instant::now() < deadline,
+                "cold name drain deadlocked: {}",
+                app.status_msg
+            );
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         app.finish_deferred_exit_after_hid_write(&ctx);
         assert!(!app.exit_after_hid_write);
-        assert_eq!(*store.lock().unwrap(),"Cold");
-        assert_eq!(app.layer_names[1],"Cold");
-        assert!(packets.requests().iter().any(|r| r[..4]==[0xfe,0x0b,201,0]));
+        assert_eq!(*store.lock().unwrap(), "Cold");
+        assert_eq!(app.layer_names[1], "Cold");
+        assert!(packets
+            .requests()
+            .iter()
+            .any(|r| r[..4] == [0xfe, 0x0b, 201, 0]));
     }
     #[cfg(not(target_arch = "wasm32"))]
     fn name_review_drain(app: &mut EntropyApp, ctx: &egui::Context) {
-        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while app.hid_write_lifecycle_busy() {
             app.poll_vial_hid_task(ctx);
-            assert!(std::time::Instant::now()<deadline);
+            assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
@@ -3117,49 +3465,92 @@ mod tests {
     #[test]
     fn ui_unconfirmed_name_is_read_before_other_name_publication() {
         let _storage = crate::app::app_storage::ScopedTempConfig::new();
-        for mismatch in [false,true] {
-            let ctx=egui::Context::default(); let mut app=name_review_app();
-            let (hid,packets)=crate::hid::HidDevice::test_device();
-            let store=std::sync::Arc::new(std::sync::Mutex::new(vec!["Old".to_owned();16]));
-            let invalid=std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-            let firmware=store.clone(); let fail=invalid.clone();
+        for mismatch in [false, true] {
+            let ctx = egui::Context::default();
+            let mut app = name_review_app();
+            let (hid, packets) = crate::hid::HidDevice::test_device();
+            let store = std::sync::Arc::new(std::sync::Mutex::new(vec!["Old".to_owned(); 16]));
+            let invalid = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let firmware = store.clone();
+            let fail = invalid.clone();
             packets.respond_by(move |r| {
-                let layer=u16::from_le_bytes([r[2],r[3]]).wrapping_sub(200) as usize;
-                if layer>=16 {return None;}
-                if r[..2]==[0xfe,0x0b] {
-                    let end=r[4..].iter().position(|b| *b==0).unwrap_or(28);
-                    firmware.lock().unwrap()[layer]=String::from_utf8(r[4..4+end].to_vec()).unwrap();
-                    Some(Ok([0;32]))
-                } else if r[..2]==[0xfe,0x0a] {
+                let layer = u16::from_le_bytes([r[2], r[3]]).wrapping_sub(200) as usize;
+                if layer >= 16 {
+                    return None;
+                }
+                if r[..2] == [0xfe, 0x0b] {
+                    let end = r[4..].iter().position(|b| *b == 0).unwrap_or(28);
+                    firmware.lock().unwrap()[layer] =
+                        String::from_utf8(r[4..4 + end].to_vec()).unwrap();
+                    Some(Ok([0; 32]))
+                } else if r[..2] == [0xfe, 0x0a] {
                     if fail.load(std::sync::atomic::Ordering::SeqCst) {
-                        return Some(Ok(if mismatch {[0;32]} else {[0xff;32]}));
+                        return Some(Ok(if mismatch { [0; 32] } else { [0xff; 32] }));
                     }
-                    let store=firmware.lock().unwrap(); let mut response=[0;32];
-                    response[1..1+store[layer].len()].copy_from_slice(store[layer].as_bytes()); Some(Ok(response))
-                } else {None}
+                    let store = firmware.lock().unwrap();
+                    let mut response = [0; 32];
+                    response[1..1 + store[layer].len()].copy_from_slice(store[layer].as_bytes());
+                    Some(Ok(response))
+                } else {
+                    None
+                }
             });
-            app.hid_device=Some(hid.into()); app.layer_names[0]="Old".into();
-            app.layout.as_mut().unwrap().layer_names[0]="Old".into();
-            name_review_rename(&mut app,&ctx,"Changed"); name_review_drain(&mut app,&ctx);
-            assert_eq!(store.lock().unwrap()[0],"Changed");
-            let before=packets.requests().len();
-            for _ in 0..3 {app.poll_vial_hid_task(&ctx);name_review_frame(&mut app,&ctx,vec![]);}
-            assert_eq!(packets.requests().len(),before,"repaint retried an uncertain write");
-            invalid.store(false,std::sync::atomic::Ordering::SeqCst);
-            app.application_layout_editor_active=false; app.selected_layer=1;
-            name_review_rename(&mut app,&ctx,"Other");
-            assert_eq!(crate::app::app_storage::load_layer_names("Macropad")[0],"Changed",
-                "ordinary rename republished a stale firmware name");
-            assert_eq!(app.layout.as_ref().unwrap().layer_names[0],"Changed");
-            assert_eq!(packets.requests().iter().filter(|r|r[..4]==[0xfe,0x0b,200,0]).count(),1,
-                "read-only recovery must not retry SET");
-            let key=app.application_layout_device_key().unwrap();
-            assert_eq!(app.app_settings.application_layouts[&key].layouts[crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID].layer_names[0],"Changed");
+            app.hid_device = Some(hid.into());
+            app.layer_names[0] = "Old".into();
+            app.layout.as_mut().unwrap().layer_names[0] = "Old".into();
+            name_review_rename(&mut app, &ctx, "Changed");
+            name_review_drain(&mut app, &ctx);
+            assert_eq!(store.lock().unwrap()[0], "Changed");
+            let before = packets.requests().len();
+            for _ in 0..3 {
+                app.poll_vial_hid_task(&ctx);
+                name_review_frame(&mut app, &ctx, vec![]);
+            }
+            assert_eq!(
+                packets.requests().len(),
+                before,
+                "repaint retried an uncertain write"
+            );
+            invalid.store(false, std::sync::atomic::Ordering::SeqCst);
+            app.application_layout_editor_active = false;
+            app.selected_layer = 1;
+            name_review_rename(&mut app, &ctx, "Other");
+            assert_eq!(
+                crate::app::app_storage::load_layer_names("Macropad")[0],
+                "Changed",
+                "ordinary rename republished a stale firmware name"
+            );
+            assert_eq!(app.layout.as_ref().unwrap().layer_names[0], "Changed");
+            assert_eq!(
+                packets
+                    .requests()
+                    .iter()
+                    .filter(|r| r[..4] == [0xfe, 0x0b, 200, 0])
+                    .count(),
+                1,
+                "read-only recovery must not retry SET"
+            );
+            let key = app.application_layout_device_key().unwrap();
+            assert_eq!(
+                app.app_settings.application_layouts[&key].layouts
+                    [crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID]
+                    .layer_names[0],
+                "Changed"
+            );
             // Explicitly restoring the previously confirmed value still requires SET+GET.
-            app.application_layout_editor_active=true;app.selected_layer=0;
-            name_review_rename(&mut app,&ctx,"Old"); name_review_drain(&mut app,&ctx);
-            assert_eq!(store.lock().unwrap()[0],"Old");
-            assert_eq!(packets.requests().iter().filter(|r|r[..4]==[0xfe,0x0b,200,0]).count(),2);
+            app.application_layout_editor_active = true;
+            app.selected_layer = 0;
+            name_review_rename(&mut app, &ctx, "Old");
+            name_review_drain(&mut app, &ctx);
+            assert_eq!(store.lock().unwrap()[0], "Old");
+            assert_eq!(
+                packets
+                    .requests()
+                    .iter()
+                    .filter(|r| r[..4] == [0xfe, 0x0b, 200, 0])
+                    .count(),
+                2
+            );
         }
     }
 
@@ -3170,24 +3561,31 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = name_review_app();
         let (hid, packets) = crate::hid::HidDevice::test_device();
-        let store = std::sync::Arc::new(std::sync::Mutex::new(vec!["Old".to_owned();16]));
+        let store = std::sync::Arc::new(std::sync::Mutex::new(vec!["Old".to_owned(); 16]));
         let invalid = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
         let firmware = store.clone();
         let fail = invalid.clone();
         packets.respond_by(move |r| {
-            let layer = u16::from_le_bytes([r[2],r[3]]).wrapping_sub(200) as usize;
-            if layer >= 16 { return None; }
-            if r[..2] == [0xfe,0x0b] {
+            let layer = u16::from_le_bytes([r[2], r[3]]).wrapping_sub(200) as usize;
+            if layer >= 16 {
+                return None;
+            }
+            if r[..2] == [0xfe, 0x0b] {
                 let end = r[4..].iter().position(|b| *b == 0).unwrap_or(28);
-                firmware.lock().unwrap()[layer] = String::from_utf8(r[4..4+end].to_vec()).unwrap();
-                Some(Ok([0;32]))
-            } else if r[..2] == [0xfe,0x0a] {
-                if fail.load(std::sync::atomic::Ordering::SeqCst) { return Some(Ok([0xff;32])); }
+                firmware.lock().unwrap()[layer] =
+                    String::from_utf8(r[4..4 + end].to_vec()).unwrap();
+                Some(Ok([0; 32]))
+            } else if r[..2] == [0xfe, 0x0a] {
+                if fail.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Some(Ok([0xff; 32]));
+                }
                 let store = firmware.lock().unwrap();
-                let mut response = [0;32];
-                response[1..1+store[layer].len()].copy_from_slice(store[layer].as_bytes());
+                let mut response = [0; 32];
+                response[1..1 + store[layer].len()].copy_from_slice(store[layer].as_bytes());
                 Some(Ok(response))
-            } else { None }
+            } else {
+                None
+            }
         });
         app.hid_device = Some(hid.into());
         app.layer_names[0] = "Old".into();
@@ -3197,51 +3595,98 @@ mod tests {
         assert_eq!(store.lock().unwrap()[0], "Changed");
         assert!(app.selected_layer_names_uncertain());
         let key = app.application_layout_device_key().unwrap();
-        let draft = app.app_settings.application_layouts[&key].layouts[crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID].clone();
+        let draft = app.app_settings.application_layouts[&key].layouts
+            [crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID]
+            .clone();
         invalid.store(false, std::sync::atomic::Ordering::SeqCst);
         app.application_layout_editor_active = false;
         name_review_rename(&mut app, &ctx, "Other");
         assert_eq!(store.lock().unwrap()[0], "Other");
-        assert_eq!(app.layer_names[0], "Other", "recovery overwrote the explicit same-layer edit");
-        assert_eq!(crate::app::app_storage::load_layer_names("Macropad")[0], "Other");
+        assert_eq!(
+            app.layer_names[0], "Other",
+            "recovery overwrote the explicit same-layer edit"
+        );
+        assert_eq!(
+            crate::app::app_storage::load_layer_names("Macropad")[0],
+            "Other"
+        );
         assert!(!app.selected_layer_names_uncertain());
-        assert_eq!(app.app_settings.application_layouts[&key].layouts[crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID], draft,
-            "firmware recovery must preserve the host profile draft");
+        assert_eq!(
+            app.app_settings.application_layouts[&key].layouts
+                [crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID],
+            draft,
+            "firmware recovery must preserve the host profile draft"
+        );
         app.selected_layer = 1;
         name_review_rename(&mut app, &ctx, "Next");
         assert_eq!(store.lock().unwrap()[0], "Other");
         assert_eq!(app.layer_names[0], "Other");
-        assert_eq!(crate::app::app_storage::load_layer_names("Macropad")[0], "Other",
-            "later ordinary publication restored the recovered old name");
-        assert_eq!(packets.requests().iter().filter(|r| r[..4] == [0xfe,0x0b,200,0]).count(), 2,
-            "recovery must not add an automatic SET retry");
-        assert_eq!(crate::app::app_storage::load_app_settings().application_layouts[&key].layouts[crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID], draft);
+        assert_eq!(
+            crate::app::app_storage::load_layer_names("Macropad")[0],
+            "Other",
+            "later ordinary publication restored the recovered old name"
+        );
+        assert_eq!(
+            packets
+                .requests()
+                .iter()
+                .filter(|r| r[..4] == [0xfe, 0x0b, 200, 0])
+                .count(),
+            2,
+            "recovery must not add an automatic SET retry"
+        );
+        assert_eq!(
+            crate::app::app_storage::load_app_settings().application_layouts[&key].layouts
+                [crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID],
+            draft
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn ui_name_write_errors_use_selected_language() {
-        let _storage=crate::app::app_storage::ScopedTempConfig::new();
-        for (language,prefix,reason) in [
-            (crate::i18n::Language::Russian,"Имя слоя не сохранено", "данные слоя не готовы"),
-            (crate::i18n::Language::English,"Layer name not saved", "layer data is not ready"),
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        for (language, prefix, reason) in [
+            (
+                crate::i18n::Language::Russian,
+                "Имя слоя не сохранено",
+                "данные слоя не готовы",
+            ),
+            (
+                crate::i18n::Language::English,
+                "Layer name not saved",
+                "layer data is not ready",
+            ),
         ] {
-            let ctx=egui::Context::default(); let mut app=name_review_app();
-            app.app_settings.language=language;
-            let (hid,_)=crate::hid::HidDevice::test_device();app.hid_device=Some(hid.into());
-            name_review_rename(&mut app,&ctx,"Test");
-            app.deferred_device_load.set_layer_status(0,DeferredLoadStatus::Failed("read error".into()));
+            let ctx = egui::Context::default();
+            let mut app = name_review_app();
+            app.app_settings.language = language;
+            let (hid, _) = crate::hid::HidDevice::test_device();
+            app.hid_device = Some(hid.into());
+            name_review_rename(&mut app, &ctx, "Test");
+            app.deferred_device_load
+                .set_layer_status(0, DeferredLoadStatus::Failed("read error".into()));
             app.poll_vial_hid_task(&ctx);
-            assert_eq!(app.status_msg,format!("{prefix}: {reason}"));
-            for (en,ru) in [
-                ("device changed","устройство изменилось"),
-                ("device is busy","устройство занято"),
-                ("device is disconnected","устройство отключено"),
-                ("layer data is not ready","данные слоя не готовы"),
-                ("layer name readback mismatch","прочитанное имя слоя не совпадает"),
+            assert_eq!(app.status_msg, format!("{prefix}: {reason}"));
+            for (en, ru) in [
+                ("device changed", "устройство изменилось"),
+                ("device is busy", "устройство занято"),
+                ("device is disconnected", "устройство отключено"),
+                ("layer data is not ready", "данные слоя не готовы"),
+                (
+                    "layer name readback mismatch",
+                    "прочитанное имя слоя не совпадает",
+                ),
             ] {
-                let expected=if language==crate::i18n::Language::Russian {ru} else {en};
-                assert_eq!(super::super::vial_hid_task::layer_name_write_error(language,en),format!("{prefix}: {expected}"));
+                let expected = if language == crate::i18n::Language::Russian {
+                    ru
+                } else {
+                    en
+                };
+                assert_eq!(
+                    super::super::vial_hid_task::layer_name_write_error(language, en),
+                    format!("{prefix}: {expected}")
+                );
             }
         }
     }
@@ -3249,69 +3694,116 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn ui_uncertain_name_gui_export_rechecks_before_writing() {
-        let _storage=crate::app::app_storage::ScopedTempConfig::new();
-        let ctx=egui::Context::default(); let mut app=name_review_app();
-        let (hid,packets)=crate::hid::HidDevice::test_device();
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let ctx = egui::Context::default();
+        let mut app = name_review_app();
+        let (hid, packets) = crate::hid::HidDevice::test_device();
         packets.respond_by(|r| {
-            if r[..2]==[0xfe,0x0b] {Some(Ok([0;32]))}
-            else if r[..2]==[0xfe,0x0a] {Some(Ok([0xff;32]))} else {None}
+            if r[..2] == [0xfe, 0x0b] {
+                Some(Ok([0; 32]))
+            } else if r[..2] == [0xfe, 0x0a] {
+                Some(Ok([0xff; 32]))
+            } else {
+                None
+            }
         });
-        app.hid_device=Some(hid.into());
-        name_review_rename(&mut app,&ctx,"Draft");name_review_drain(&mut app,&ctx);
-        let before=packets.requests().iter().filter(|r|r[..2]==[0xfe,0x0a]).count();
-        let path=std::env::temp_dir().join(format!("name-export-{}.entlayout",std::process::id()));
-        std::fs::write(&path,b"preserve existing export").unwrap();
+        app.hid_device = Some(hid.into());
+        name_review_rename(&mut app, &ctx, "Draft");
+        name_review_drain(&mut app, &ctx);
+        let before = packets
+            .requests()
+            .iter()
+            .filter(|r| r[..2] == [0xfe, 0x0a])
+            .count();
+        let path =
+            std::env::temp_dir().join(format!("name-export-{}.entlayout", std::process::id()));
+        std::fs::write(&path, b"preserve existing export").unwrap();
         app.write_entlayout_export(&path);
-        assert!(packets.requests().iter().filter(|r|r[..2]==[0xfe,0x0a]).count()>before,
-            "GUI export consumed uncertainty without a fresh read");
-        assert_eq!(std::fs::read(&path).unwrap(),b"preserve existing export");
+        assert!(
+            packets
+                .requests()
+                .iter()
+                .filter(|r| r[..2] == [0xfe, 0x0a])
+                .count()
+                > before,
+            "GUI export consumed uncertainty without a fresh read"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"preserve existing export");
         assert!(app.entlayout_export_json().unwrap().is_err());
-        assert_eq!(packets.requests().iter().filter(|r|r[..2]==[0xfe,0x0b]).count(),1);
+        assert_eq!(
+            packets
+                .requests()
+                .iter()
+                .filter(|r| r[..2] == [0xfe, 0x0b])
+                .count(),
+            1
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn ui_successive_name_edits_keep_newer_draft_across_delayed_completion() {
-        let _storage=crate::app::app_storage::ScopedTempConfig::new();
-        for cancel_generation in [false,true] {
-            let ctx=egui::Context::default(); let mut app=name_review_app();
-            let (hid,packets)=crate::hid::HidDevice::test_device();
-            let store=std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-            let firmware=store.clone();
-            let (release,gate)=std::sync::mpsc::channel();let gate=std::sync::Mutex::new(Some(gate));
-            let (entered,waiting)=std::sync::mpsc::channel();
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        for cancel_generation in [false, true] {
+            let ctx = egui::Context::default();
+            let mut app = name_review_app();
+            let (hid, packets) = crate::hid::HidDevice::test_device();
+            let store = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+            let firmware = store.clone();
+            let (release, gate) = std::sync::mpsc::channel();
+            let gate = std::sync::Mutex::new(Some(gate));
+            let (entered, waiting) = std::sync::mpsc::channel();
             packets.respond_by(move |r| {
-                if r[..2]==[0xfe,0x0b] {
-                    let end=r[4..].iter().position(|b|*b==0).unwrap_or(28);
-                    *firmware.lock().unwrap()=String::from_utf8(r[4..4+end].to_vec()).unwrap();
-                    Some(Ok([0;32]))
-                } else if r[..2]==[0xfe,0x0a] {
-                    if let Some(gate)=gate.lock().unwrap().take() {
-                        entered.send(()).unwrap();gate.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+                if r[..2] == [0xfe, 0x0b] {
+                    let end = r[4..].iter().position(|b| *b == 0).unwrap_or(28);
+                    *firmware.lock().unwrap() = String::from_utf8(r[4..4 + end].to_vec()).unwrap();
+                    Some(Ok([0; 32]))
+                } else if r[..2] == [0xfe, 0x0a] {
+                    if let Some(gate) = gate.lock().unwrap().take() {
+                        entered.send(()).unwrap();
+                        gate.recv_timeout(std::time::Duration::from_secs(3))
+                            .unwrap();
                     }
-                    let name=firmware.lock().unwrap();let mut response=[0;32];
-                    response[1..1+name.len()].copy_from_slice(name.as_bytes());Some(Ok(response))
-                } else {None}
+                    let name = firmware.lock().unwrap();
+                    let mut response = [0; 32];
+                    response[1..1 + name.len()].copy_from_slice(name.as_bytes());
+                    Some(Ok(response))
+                } else {
+                    None
+                }
             });
-            app.hid_device=Some(hid.into());
-            name_review_rename(&mut app,&ctx,"First");app.poll_vial_hid_task(&ctx);
-            waiting.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
-            name_review_rename(&mut app,&ctx,"Second");
-            let key=app.application_layout_device_key().unwrap();
-            let (unrelated,unrelated_packets)=crate::hid::HidDevice::test_device();
+            app.hid_device = Some(hid.into());
+            name_review_rename(&mut app, &ctx, "First");
+            app.poll_vial_hid_task(&ctx);
+            waiting
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
+            name_review_rename(&mut app, &ctx, "Second");
+            let key = app.application_layout_device_key().unwrap();
+            let (unrelated, unrelated_packets) = crate::hid::HidDevice::test_device();
             if cancel_generation {
-                app.connection_generation+=1;
-                app.current_keyboard_id=Some(0x99);
-                app.hid_device=Some(unrelated.into());
+                app.connection_generation += 1;
+                app.current_keyboard_id = Some(0x99);
+                app.hid_device = Some(unrelated.into());
             }
-            release.send(()).unwrap();name_review_drain(&mut app,&ctx);
-            assert_eq!(app.app_settings.application_layouts[&key].layouts[crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID].layer_names[0],"Second");
+            release.send(()).unwrap();
+            name_review_drain(&mut app, &ctx);
+            assert_eq!(
+                app.app_settings.application_layouts[&key].layouts
+                    [crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID]
+                    .layer_names[0],
+                "Second"
+            );
             assert!(unrelated_packets.requests().is_empty());
             if cancel_generation {
-                assert_eq!(*store.lock().unwrap(),"First");
-                assert_ne!(app.layer_names[0],"First","stale completion published to new generation");
+                assert_eq!(*store.lock().unwrap(), "First");
+                assert_ne!(
+                    app.layer_names[0], "First",
+                    "stale completion published to new generation"
+                );
             } else {
-                assert_eq!(*store.lock().unwrap(),"Second");assert_eq!(app.layer_names[0],"Second");
+                assert_eq!(*store.lock().unwrap(), "Second");
+                assert_eq!(app.layer_names[0], "Second");
             }
         }
     }
@@ -3319,42 +3811,67 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn pending_cold_name_without_owner_terminates_visibly() {
-        let _storage=crate::app::app_storage::ScopedTempConfig::new();
-        let ctx=egui::Context::default();let mut app=name_review_app();
-        app.deferred_device_load.set_layer_status(0,DeferredLoadStatus::Loading);
-        app.rename_application_layout_layer(crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID,0,"Draft".into());
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let ctx = egui::Context::default();
+        let mut app = name_review_app();
+        app.deferred_device_load
+            .set_layer_status(0, DeferredLoadStatus::Loading);
+        app.rename_application_layout_layer(
+            crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID,
+            0,
+            "Draft".into(),
+        );
         assert!(app.defer_exit_until_hid_write_returns(&ctx));
         app.poll_vial_hid_task(&ctx);
-        assert!(app.pending_layer_name_writes.is_empty(),"orphaned loading state blocked exit forever");
+        assert!(
+            app.pending_layer_name_writes.is_empty(),
+            "orphaned loading state blocked exit forever"
+        );
         assert!(!app.status_msg.is_empty());
-        app.finish_deferred_exit_after_hid_write(&ctx);assert!(!app.exit_after_hid_write);
+        app.finish_deferred_exit_after_hid_write(&ctx);
+        assert!(!app.exit_after_hid_write);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn uncertainty_is_scoped_to_device_not_shared_model_uid() {
-        let _storage=crate::app::app_storage::ScopedTempConfig::new();
-        let ctx=egui::Context::default();let mut app=name_review_app();
-        for fail in [true,false] {
-            let (hid,packets)=crate::hid::HidDevice::test_device();
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let ctx = egui::Context::default();
+        let mut app = name_review_app();
+        for fail in [true, false] {
+            let (hid, packets) = crate::hid::HidDevice::test_device();
             packets.respond_by(move |r| {
-                if r[..2]==[0xfe,0x0b] {Some(Ok([0;32]))}
-                else if r[..2]==[0xfe,0x0a] {
-                    let mut response=[0;32];response[1..6].copy_from_slice(b"Draft");
-                    Some(Ok(if fail {[0xff;32]} else {response}))
-                } else {None}
+                if r[..2] == [0xfe, 0x0b] {
+                    Some(Ok([0; 32]))
+                } else if r[..2] == [0xfe, 0x0a] {
+                    let mut response = [0; 32];
+                    response[1..6].copy_from_slice(b"Draft");
+                    Some(Ok(if fail { [0xff; 32] } else { response }))
+                } else {
+                    None
+                }
             });
             if !fail {
-                let mut other=app.device_manager.devices()[0].clone();other.path="another-unit".into();
-                app.device_manager.replace_devices(vec![other]);app.connection_generation+=1;
+                let mut other = app.device_manager.devices()[0].clone();
+                other.path = "another-unit".into();
+                app.device_manager.replace_devices(vec![other]);
+                app.connection_generation += 1;
                 mark_application_layout_protocol_supported(&mut app);
             }
-            app.hid_device=Some(hid.into());
-            app.rename_application_layout_layer(crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID,0,"Draft".into());
-            name_review_drain(&mut app,&ctx);
+            app.hid_device = Some(hid.into());
+            app.rename_application_layout_layer(
+                crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID,
+                0,
+                "Draft".into(),
+            );
+            name_review_drain(&mut app, &ctx);
         }
-        assert_eq!(app.uncertain_layer_names.len(),1,"another unit's success discarded first unit's uncertainty");
-        assert_ne!(app.uncertain_layer_names[0].device.path,"another-unit");
+        assert_eq!(
+            app.uncertain_layer_names.len(),
+            1,
+            "another unit's success discarded first unit's uncertainty"
+        );
+        assert_ne!(app.uncertain_layer_names[0].device.path, "another-unit");
     }
 
     #[test]
@@ -3393,7 +3910,7 @@ mod tests {
             // Match the production state after explicitly selecting a profile.
             app.application_layout_manual_override = Some((key.clone(), Some(foreground.clone())));
             let frame = |app: &mut EntropyApp, events| {
-                let _ = ctx.run_ui(
+                ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -3403,7 +3920,8 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| app.draw_layout_layer_switcher_and_hints(ui, 0.0, 0.0, 52.0),
-                );
+                )
+                .drop_without_applying_deltas();
             };
             let pos = egui::pos2(550.0, 50.0);
             frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
@@ -3500,7 +4018,7 @@ mod tests {
                 app.application_layout_manual_override =
                     Some((key.clone(), Some(foreground.clone())));
                 let frame = |app: &mut EntropyApp, events| {
-                    let _ = ctx.run_ui(
+                    ctx.run_ui(
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(
                                 egui::Pos2::ZERO,
@@ -3510,7 +4028,8 @@ mod tests {
                             ..Default::default()
                         },
                         |ui| app.draw_layout_layer_switcher_and_hints(ui, 0.0, 0.0, 52.0),
-                    );
+                    )
+                    .drop_without_applying_deltas();
                 };
                 let pos = egui::pos2(550.0, 50.0);
                 frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
@@ -3617,7 +4136,7 @@ mod tests {
         app.application_layout_foreground = Some(foreground.clone());
         assert!(app.application_layout_manual_override.is_none());
         let frame = |app: &mut EntropyApp, events| {
-            let _ = ctx.run_ui(
+            ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -3627,7 +4146,8 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_layout_layer_switcher_and_hints(ui, 0.0, 0.0, 52.0),
-            );
+            )
+            .drop_without_applying_deltas();
         };
         let position = egui::pos2(550.0, 50.0);
         frame(&mut app, vec![egui::Event::PointerMoved(position)]);
