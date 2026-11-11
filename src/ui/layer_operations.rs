@@ -411,7 +411,7 @@ struct LayerWriteContext {
 #[cfg(not(target_arch = "wasm32"))]
 struct DefaultLayerWriteTarget {
     device_key: String,
-    before: [u16; crate::application_layouts::APPLICATION_LAYOUT_CONTROL_COUNT],
+    before: Vec<u16>,
     key_controls: Vec<Option<usize>>,
     encoder_controls: Vec<Option<usize>>,
 }
@@ -857,6 +857,8 @@ impl EntropyApp {
                     },
                 ))
                 .collect::<Vec<_>>();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.refresh_application_layout_edit_owners(&device_key);
         let Some(profile) = self
             .app_settings
             .application_layouts
@@ -865,7 +867,7 @@ impl EntropyApp {
         else {
             return true;
         };
-        let Some(old_keycodes) = profile.layers.get(layer).copied() else {
+        let Some(old_keycodes) = profile.layers.get(layer).cloned() else {
             return true;
         };
         let mut count = 0;
@@ -953,7 +955,7 @@ impl EntropyApp {
         let layout = self.layout.as_ref()?;
         Some(DefaultLayerWriteTarget {
             device_key,
-            before: *profile.layers.get(layer)?,
+            before: profile.layers.get(layer)?.clone(),
             key_controls: (0..layout.keys.len())
                 .map(|i| Self::application_control_for_key(layout, i))
                 .collect(),
@@ -1243,7 +1245,9 @@ impl EntropyApp {
         };
         let (sender, receiver) = std::sync::mpsc::channel();
         let layer_u8 = layer as u8;
+        let event_pause = hid_device.pause_application_event_polling();
         std::thread::spawn(move || {
+            let _event_pause = event_pause;
             #[cfg(target_os = "macos")]
             let _hid_lock = hid_device.macos_hid_operation_lock();
 
@@ -1648,8 +1652,8 @@ mod tests {
             .layouts
             .get_mut(crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID)
             .unwrap();
-        profile.layers[0] = [4; 15];
-        profile.layers[1] = [5; 15];
+        profile.layers[0] = vec![4; 15];
+        profile.layers[1] = vec![5; 15];
         for (i, _) in board.encoders.iter().enumerate() {
             let control = EntropyApp::application_control_for_encoder(&board, i).unwrap();
             profile.layers[0][control] = board.encoder_layers[0][i];
@@ -1823,7 +1827,15 @@ mod tests {
         let mut restored = app.application_layout_settings().unwrap().clone();
         let id = crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID;
         assert!(restored.layouts[id].revision > before.layouts[id].revision);
+        // Paste and explicit Undo author each changed native control. Undo
+        // restores its value, not the historical owner-intent counters.
+        let authored_changes = 2 * before.layouts[id].layers[0].iter()
+            .zip(&before.layouts[id].layers[1]).filter(|(a, b)| a != b).count() as u64;
+        assert_eq!(u64::from(restored.layouts[id].revision.wrapping_sub(before.layouts[id].revision)), authored_changes);
+        assert_eq!(restored.layouts[id].user_edit_revision,
+            before.layouts[id].user_edit_revision.wrapping_add(authored_changes));
         restored.layouts.get_mut(id).unwrap().revision = before.layouts[id].revision;
+        restored.layouts.get_mut(id).unwrap().user_edit_revision = before.layouts[id].user_edit_revision;
         assert_eq!(restored, before);
         assert_eq!(app.layout.as_ref().unwrap().get_keycode(1, 0), 5);
         assert_eq!(
@@ -1851,8 +1863,8 @@ mod tests {
                 });
                 assert!(settings.layouts.contains_key("other_app_2"));
                 for (index, profile) in settings.layouts.values_mut().enumerate() {
-                    profile.layers[0] = [40 + index as u16; 15];
-                    profile.layers[1] = [70 + index as u16; 15];
+                    profile.layers[0] = vec![40 + index as u16; 15];
+                    profile.layers[1] = vec![70 + index as u16; 15];
                 }
                 settings.active_layout_id = source.into();
                 settings.editor_layout_id = source.into();
@@ -1930,7 +1942,7 @@ mod tests {
         let (mut app, recorder, ctx) = macropad_fixture();
         let settings = app.application_layout_settings_mut().unwrap();
         let source = settings.layouts.get_mut("fixture_app_1").unwrap();
-        source.layers[0] = [42; 15];
+        source.layers[0] = vec![42; 15];
         let source = source.clone();
         settings.active_layout_id = "fixture_app_1".into();
         app.selected_layer = 0;
@@ -1958,7 +1970,7 @@ mod tests {
         let (mut app, recorder, ctx) = macropad_fixture();
         let settings = app.application_layout_settings_mut().unwrap();
         settings.active_layout_id = "fixture_app_1".into();
-        settings.layouts.get_mut("fixture_app_1").unwrap().layers[0] = [42; 15];
+        settings.layouts.get_mut("fixture_app_1").unwrap().layers[0] = vec![42; 15];
         app.selected_layer = 0;
         click_layer_menu(&mut app, &ctx, 3);
         let visible = app.application_layout_rendered_copy(app.layout.as_ref().unwrap());
@@ -2241,7 +2253,7 @@ mod tests {
             .layouts
             .get_mut(crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID)
             .unwrap();
-        profile.layers[1] = profile.layers[0];
+        profile.layers[1] = profile.layers[0].clone();
         let before = profile.clone();
         recorder.respond_by(|request| match request[0] {
             5 => Some(Ok(*request)),

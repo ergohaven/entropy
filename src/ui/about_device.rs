@@ -857,6 +857,7 @@ impl EntropyApp {
                     about_empty_title(lang),
                     Some(about_empty_detail(lang)),
                 );
+
             });
             return;
         };
@@ -878,6 +879,7 @@ impl EntropyApp {
                         .size(metrics.value(13.0))
                         .color(app_muted_text(dark)),
                 );
+
                 ui.add_space(metrics.value(24.0));
                 let bottom_reserve = if firmware_update_supported {
                     metrics.value(54.0)
@@ -1133,7 +1135,7 @@ mod tests {
                 app.app_settings.language = lang;
                 app.app_settings.development_updates = development;
                 let ctx = egui::Context::default();
-                let output = ctx.run_ui(
+                let output = crate::app::discard_texture_deltas(ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -1142,7 +1144,7 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| app.draw_about_entropy_page(ui, ui.max_rect()),
-                );
+                ));
                 let texts: Vec<_> = output
                     .shapes
                     .iter()

@@ -61,6 +61,22 @@ impl QmkSettingsSource for RynkSession {
 }
 
 impl DeviceSession {
+    pub(crate) fn pause_application_event_polling(&self) -> Option<crate::qmk_hid_host::ApplicationEventPollPause> {
+        self.as_vial().and_then(HidDevice::pause_application_event_polling)
+    }
+
+    pub(crate) fn shared_output(&self) -> Option<crate::hid::SharedHidOutput> {
+        self.as_vial().and_then(HidDevice::shared_output)
+    }
+
+    pub(crate) fn get_key_override(&self, idx: u8) -> Result<(u16,u16,u16,u8,u8,u8,u8)> {
+        self.require_vial()?.get_key_override(idx)
+    }
+
+    pub(crate) fn get_alt_repeat_key(&self, idx: u8) -> Result<(u16,u16,u8,u8)> {
+        self.require_vial()?.get_alt_repeat_key(idx)
+    }
+
     /// The Vial transport, for Vial-only loaders and features.
     pub(crate) fn as_vial(&self) -> Option<&HidDevice> {
         match self {

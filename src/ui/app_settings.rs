@@ -344,6 +344,10 @@ impl EntropyApp {
                             {
                                 self.tray_icon = None;
                             }
+                            #[cfg(target_os = "linux")]
+                            {
+                                self.linux_tray = None;
+                            }
                         }
                         save_app_settings(&self.app_settings);
                     }

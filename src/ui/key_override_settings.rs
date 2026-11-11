@@ -1192,6 +1192,7 @@ mod tests {
 
     #[test]
     fn rynk_fork_replacement_picker_saves_a_momentary_layer() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         use crate::rynk::session::testing::{board, link, Stored};
         use crate::rynk::session::RynkSession;
         use rmk_types_rynk::action::{Action, KeyAction};
@@ -1223,8 +1224,10 @@ mod tests {
 
             let mut harness = egui_kittest::Harness::builder()
                 .with_size(egui::vec2(1400.0, 1000.0))
-                .build_state(
-                    |ctx, app: &mut EntropyApp| {
+                .with_context_setup(crate::keycode_picker::setup_picker_test_fonts)
+                .build_ui_state(
+                    |ui, app: &mut EntropyApp| {
+                        let ctx = ui.ctx();
                         app.keycode_picker.show(
                             ctx,
                             crate::keycode_picker::DeferredPickerDataState::Ready,
@@ -1261,6 +1264,7 @@ mod tests {
 
     #[test]
     fn k04_vial_020_replacement_picker_writes_a_momentary_layer() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         for view in [
             crate::keycode_picker::PickerViewMode::List,
             crate::keycode_picker::PickerViewMode::Layout,
@@ -1297,8 +1301,10 @@ mod tests {
             app.open_key_override_picker(KeyOverridePickField::Replacement);
             let mut harness = egui_kittest::Harness::builder()
                 .with_size(egui::vec2(1400.0, 1000.0))
-                .build_state(
-                    |ctx, app: &mut EntropyApp| {
+                .with_context_setup(crate::keycode_picker::setup_picker_test_fonts)
+                .build_ui_state(
+                    |ui, app: &mut EntropyApp| {
+                        let ctx = ui.ctx();
                         app.keycode_picker.show(
                             ctx,
                             crate::keycode_picker::DeferredPickerDataState::Ready,
@@ -1326,6 +1332,7 @@ mod tests {
 
     #[test]
     fn vial_replacement_picker_does_not_offer_momentary_layers() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx);
         let mut app = EntropyApp::new(&creation_context);
@@ -1333,8 +1340,11 @@ mod tests {
         app.hid_device = Some(hid.into());
         app.keycode_picker.layer_count = 3;
         app.open_key_override_picker(KeyOverridePickField::Replacement);
-        let mut harness = egui_kittest::Harness::new_state(
-            |ctx, app: &mut EntropyApp| {
+        let mut harness = egui_kittest::Harness::builder()
+            .with_context_setup(crate::keycode_picker::setup_picker_test_fonts)
+            .build_ui_state(
+            |ui, app: &mut EntropyApp| {
+                        let ctx = ui.ctx();
                 app.keycode_picker.show(
                     ctx,
                     crate::keycode_picker::DeferredPickerDataState::Ready,

@@ -9,6 +9,13 @@ fn should_keep_vial_unlock_visible(unlock_open: bool, unlock_polling: bool) -> b
     unlock_open || unlock_polling
 }
 
+/// Closing asks whether to keep running when something needs Entropy in the
+/// background, or when a tray icon can bring the window back. Only Linux tells
+/// about the tray: elsewhere only Text Expander does, as before.
+fn close_to_tray_prompt_needed(text_expander_enabled: bool, tray_shows_icon: bool) -> bool {
+    text_expander_enabled || tray_shows_icon
+}
+
 #[cfg(target_os = "linux")]
 const LINUX_BACKGROUND_INPUT_GRACE_SECS: f64 = 1.0;
 
@@ -22,7 +29,53 @@ impl EntropyApp {
     #[cfg(target_os = "linux")]
     pub(crate) fn with_start_in_background(mut self) -> Self {
         self.linux_background_since = Some(0.0);
+        self.linux_start_hidden_to_tray_pending = true;
         self
+    }
+
+    /// `--minimized` starts in the tray, or minimized without a panel to show
+    /// the icon. On the first pass eframe has painted nothing yet, so a window
+    /// that goes to the tray never shows.
+    #[cfg(target_os = "linux")]
+    pub(super) fn handle_linux_start_hidden_to_tray(&mut self, ctx: &egui::Context) {
+        if std::mem::take(&mut self.linux_start_hidden_to_tray_pending) {
+            self.hide_window_to_linux_tray(ctx);
+        }
+    }
+
+    /// Hides the window to the tray, where the icon brings it back, and only
+    /// minimizes it where no panel shows the icon.
+    #[cfg(target_os = "linux")]
+    fn hide_window_to_linux_tray(&mut self, ctx: &egui::Context) {
+        if self.linux_tray.is_none() {
+            self.linux_tray = crate::linux_tray::LinuxTray::spawn(ctx, self.app_settings.language);
+        }
+        let online = self.linux_tray.as_ref().is_some_and(|tray| tray.online());
+        ctx.send_viewport_cmd(crate::linux_tray::background_command(online));
+        self.linux_hidden_to_tray = online;
+        self.linux_background_since = Some(ctx.input(|i| i.time));
+        self.linux_background_focus_left = false;
+    }
+
+    /// Keeps the window within reach of the tray: it comes back when the panel
+    /// that shows the icon goes away, and a window left minimized because no
+    /// panel was up yet, as at login, hides once one is.
+    #[cfg(target_os = "linux")]
+    pub(super) fn sync_linux_tray(&mut self, ctx: &egui::Context) {
+        let language = self.app_settings.language;
+        if let Some(tray) = self.linux_tray.as_mut() {
+            tray.set_language(language);
+        }
+        let online = self.linux_tray.as_ref().is_some_and(|tray| tray.online());
+        match crate::linux_tray::tray_sync(
+            self.linux_hidden_to_tray,
+            online,
+            self.linux_background_since.is_some(),
+        ) {
+            crate::linux_tray::TraySync::Restore => self.restore_from_tray(ctx),
+            crate::linux_tray::TraySync::Hide => self.hide_window_to_linux_tray(ctx),
+            crate::linux_tray::TraySync::Stay => {}
+        }
     }
 
     // Wayland compositors do not tell clients that a window is minimized, so
@@ -76,6 +129,9 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn defer_exit_until_hid_write_returns(&mut self, ctx: &egui::Context) -> bool {
+        // CloseRequested is handled before rendering the inline editor. Capture
+        // its draft before checking busy state so Default SET/GET drains too.
+        self.commit_pending_application_layout_edits();
         if !self.hid_write_lifecycle_busy() && !self.deferred_exit_has_pending_hid_writes() {
             return false;
         }
@@ -114,6 +170,12 @@ impl EntropyApp {
         self.fallback_entropy_display_presets_before_exit();
 
         if self.deferred_exit_has_pending_hid_writes() {
+            // Nothing writes it while the window is hidden: the edit waits for
+            // the window (an open picker, an unlock), so bring it back.
+            #[cfg(target_os = "linux")]
+            if self.linux_hidden_to_tray {
+                self.restore_from_tray(ctx);
+            }
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
             return;
         }
@@ -200,6 +262,7 @@ impl EntropyApp {
         #[cfg(target_os = "linux")]
         {
             self.linux_background_since = None;
+            self.linux_hidden_to_tray = false;
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -246,7 +309,14 @@ impl EntropyApp {
     }
 
     fn close_to_tray_prompt_needed(&self) -> bool {
-        self.app_settings.text_expander_enabled
+        #[cfg(target_os = "linux")]
+        let tray_shows_icon = self
+            .linux_tray
+            .as_ref()
+            .map_or_else(crate::linux_tray::host_running, |tray| tray.online());
+        #[cfg(not(target_os = "linux"))]
+        let tray_shows_icon = false;
+        close_to_tray_prompt_needed(self.app_settings.text_expander_enabled, tray_shows_icon)
     }
 
     pub(super) fn handle_close_to_tray(&mut self, ctx: &egui::Context) {
@@ -263,7 +333,7 @@ impl EntropyApp {
             return;
         }
 
-        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         if self.consume_tray_quit_request() {
             #[cfg(not(target_arch = "wasm32"))]
             if self.defer_exit_until_hid_write_returns(ctx) {
@@ -346,9 +416,7 @@ impl EntropyApp {
         }
         #[cfg(target_os = "linux")]
         {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-            self.linux_background_since = Some(ctx.input(|i| i.time));
-            self.linux_background_focus_left = false;
+            self.hide_window_to_linux_tray(ctx);
             self.status_msg = background_status.into();
             return;
         }
@@ -374,6 +442,10 @@ impl EntropyApp {
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             {
                 self.tray_icon = None;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                self.linux_tray = None;
             }
         }
         save_app_settings(&self.app_settings);
@@ -841,7 +913,7 @@ impl EntropyApp {
         ));
     }
 
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     fn consume_tray_quit_request(&mut self) -> bool {
         if !TRAY_QUIT_REQUESTED.swap(false, std::sync::atomic::Ordering::Relaxed) {
             return false;
@@ -851,7 +923,7 @@ impl EntropyApp {
         true
     }
 
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     pub(super) fn handle_tray_quit_request(&mut self, ctx: &egui::Context) {
         if should_keep_vial_unlock_visible(self.unlock_open, self.vial_unlock_polling)
             && TRAY_QUIT_REQUESTED.swap(false, std::sync::atomic::Ordering::Relaxed)
@@ -874,7 +946,7 @@ impl EntropyApp {
         }
     }
 
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     pub(super) fn handle_tray_restore_request(&mut self, ctx: &egui::Context) {
         if TRAY_RESTORE_REQUESTED.swap(false, std::sync::atomic::Ordering::Relaxed) {
             self.restore_from_tray(ctx);
@@ -1104,6 +1176,8 @@ fn text_expander_through_ibus(
 }
 
 #[cfg(target_os = "linux")]
+/// `input_method_backend` is `None` with Text Expander off: the prompt then
+/// only comes up because the tray can bring the window back.
 fn linux_close_to_tray_prompt_copy(
     lang: crate::i18n::Language,
     input_method_backend: Option<bool>,
@@ -1187,7 +1261,7 @@ mod tests {
         focused: bool,
         events: Vec<egui::Event>,
     ) {
-        ctx.run_ui(
+        crate::app::discard_texture_deltas(ctx.run_ui(
             egui::RawInput {
                 time: Some(time),
                 focused,
@@ -1195,20 +1269,20 @@ mod tests {
                 ..Default::default()
             },
             |ui| app.track_linux_background_window(ui.ctx()),
-        )
+        ))
         .drop_without_applying_deltas();
     }
 
     #[cfg(target_os = "linux")]
     fn minimize_at(app: &mut EntropyApp, ctx: &egui::Context, time: f64) {
-        ctx.run_ui(
+        crate::app::discard_texture_deltas(ctx.run_ui(
             egui::RawInput {
                 time: Some(time),
                 focused: true,
                 ..Default::default()
             },
             |ui| app.minimize_window_to_tray(ui.ctx()),
-        )
+        ))
         .drop_without_applying_deltas();
     }
 
@@ -1255,11 +1329,124 @@ mod tests {
         background_frame(&mut app, &ctx, 60.0, false, Vec::new());
         assert!(app.linux_background_since.is_some());
 
-        ctx.run_ui(egui::RawInput::default(), |ui| {
+        crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
             app.restore_from_tray(ui.ctx())
-        })
+        }))
         .drop_without_applying_deltas();
         assert!(app.linux_background_since.is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    fn root_commands(output: &egui::FullOutput) -> Vec<egui::ViewportCommand> {
+        // egui sends the theme itself on the first pass of a context.
+        output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map(|viewport| {
+                viewport
+                    .commands
+                    .iter()
+                    .filter(|command| !matches!(command, egui::ViewportCommand::SetTheme(_)))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_window_without_a_tray_only_minimizes() {
+        // Tests never start a panel: the window must stay within reach.
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        let output =
+            crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.minimize_window_to_tray(ui.ctx())
+            }));
+        assert_eq!(
+            root_commands(&output),
+            [egui::ViewportCommand::Minimized(true)]
+        );
+        assert!(!app.linux_hidden_to_tray);
+        assert!(app.linux_tray.is_none());
+        assert!(app.linux_background_since.is_some());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_minimized_launch_decides_on_the_first_pass() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test().with_start_in_background();
+        let mut frame = || {
+            root_commands(&crate::app::discard_texture_deltas(
+                ctx.run_ui(egui::RawInput::default(), |ui| {
+                    app.handle_linux_start_hidden_to_tray(ui.ctx())
+                }),
+            ))
+        };
+        // No panel in tests: minimized rather than out of reach, and only once.
+        assert_eq!(frame(), [egui::ViewportCommand::Minimized(true)]);
+        assert!(frame().is_empty());
+        assert!(!app.linux_start_hidden_to_tray_pending);
+        assert!(!app.linux_hidden_to_tray);
+        assert!(app.linux_background_since.is_some());
+    }
+
+    #[test]
+    fn close_asks_to_keep_running_where_the_tray_brings_the_window_back() {
+        assert!(close_to_tray_prompt_needed(true, false));
+        assert!(close_to_tray_prompt_needed(false, true));
+        assert!(close_to_tray_prompt_needed(true, true));
+        // Nothing runs in the background, and no icon to come back from.
+        assert!(!close_to_tray_prompt_needed(false, false));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn close_request() -> egui::RawInput {
+        let mut input = egui::RawInput::default();
+        input
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .expect("root viewport exists")
+            .events
+            .push(egui::ViewportEvent::Close);
+        input
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_close_without_a_tray_asks_only_for_text_expander() {
+        // Tests never see a panel, as a session without a tray.
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        app.app_settings.minimize_to_tray_on_close = false;
+        app.app_settings.close_to_tray_behavior = CloseToTrayBehavior::Ask;
+
+        let output = crate::app::discard_texture_deltas(
+            ctx.run_ui(close_request(), |ui| app.handle_close_to_tray(ui.ctx())),
+        );
+        assert!(!root_commands(&output).contains(&egui::ViewportCommand::CancelClose));
+        assert!(!app.close_to_tray_prompt_open);
+
+        app.app_settings.text_expander_enabled = true;
+        let output = crate::app::discard_texture_deltas(
+            ctx.run_ui(close_request(), |ui| app.handle_close_to_tray(ui.ctx())),
+        );
+        assert!(root_commands(&output).contains(&egui::ViewportCommand::CancelClose));
+        assert!(app.close_to_tray_prompt_open);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_close_prompt_for_the_tray_alone_leaves_text_expander_out() {
+        use crate::i18n::Language;
+
+        for lang in [Language::English, Language::Russian] {
+            let (_, tray_alone, ..) = linux_close_to_tray_prompt_copy(lang, None);
+            let (_, text_expander, ..) = linux_close_to_tray_prompt_copy(lang, Some(true));
+            assert!(!tray_alone.contains("Text Expander"));
+            assert!(text_expander.contains("Text Expander"));
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -1411,5 +1598,60 @@ mod tests {
                 .iter()
                 .all(|request| request[0] != 0x0D && request[0] != 0x0F)
         );
+    }
+
+    /// The connect could not read the memory size, so the write goes ahead
+    /// and learns it: 8 bytes, one short of the macro and its terminator.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn deferred_exit_does_not_wait_for_macros_their_write_found_over_memory() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid_device, recorder) = crate::hid::HidDevice::test_device();
+        recorder.respond_by(|request| {
+            (request[0] == 0x0D).then(|| {
+                let mut response = [0u8; 32];
+                response[..3].copy_from_slice(&[0x0D, 0, 8]);
+                Ok(response)
+            })
+        });
+        app.hid_device = Some(hid_device.into());
+        app.device_about_info = Some(DeviceAboutInfo::default());
+        app.keycode_picker.macro_texts = vec![vec![b'x'; 8]];
+        app.keycode_picker.mark_macros_dirty();
+        app.maybe_start_macro_write(&ctx);
+        assert!(
+            app.vial_hid_task_active(),
+            "an unknown size admits the write"
+        );
+        for _ in 0..100 {
+            app.poll_vial_hid_task(&ctx);
+            if !app.vial_hid_task_active() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(
+            !app.vial_hid_task_active(),
+            "the macro write did not finish"
+        );
+        app.exit_after_hid_write = true;
+
+        let output =
+            crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |_ui| {
+                app.finish_deferred_exit_after_hid_write(&ctx);
+            }));
+
+        assert!(output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .is_some_and(|viewport| viewport.commands.contains(&egui::ViewportCommand::Close)));
+        assert!(!app.exit_after_hid_write);
+        assert!(app.keycode_picker.macros_dirty, "the edit is kept");
+        assert_eq!(app.macro_memory_use(), Some((9, 8)));
+        let requests = recorder.requests();
+        assert_eq!(requests.len(), 1, "only the size was read");
+        assert_eq!(requests[0][0], 0x0D);
     }
 }

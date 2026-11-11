@@ -24,6 +24,7 @@ const SM62_PRODUCT_ID: u16 = 0x00B2;
 const DEFAULT_LAYOUT_CODES: [&str; 2] = ["en", "ru"];
 const LAYOUT_RESEND_INTERVAL: Duration = Duration::from_secs(10);
 const LAYOUT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const LAYOUT_FOLLOWED_POLL_INTERVAL: Duration = LAYOUT_RESEND_INTERVAL;
 // An idle bridge still wakes this often, which bounds how late the Linux
 // device-path check notices an unplugged keyboard. Tests use a long recheck
 // so every path that must reach a bridge early has to prove its own wake.
@@ -201,6 +202,49 @@ struct DesktopState {
     stopped: bool,
     // Bridges to wake when a lane they subscribed to stores news for them.
     listeners: Vec<([bool; 3], std::sync::Weak<BridgeWake>)>,
+    // The desktop announces every layout change (LayoutEvents): the layout
+    // lane polls rarely, samples when `layout_due` is set, and has its source
+    // drop what it read from the old list when `layout_list_stale` is.
+    layout_following: bool,
+    layout_due: bool,
+    layout_list_stale: bool,
+}
+
+/// Lets a desktop source tell the layout lane what the desktop announced.
+/// Holds the service weakly, so a stopped service ends whoever holds it.
+#[derive(Clone)]
+struct LayoutEvents {
+    shared: std::sync::Weak<DesktopShared>,
+}
+
+impl LayoutEvents {
+    /// The active layout may have changed; with `list_edited`, the list of
+    /// layouts did too. Returns false once the service is gone.
+    fn changed(&self, list_edited: bool) -> bool {
+        self.update(|state| {
+            state.layout_due = true;
+            state.layout_list_stale |= list_edited;
+        })
+    }
+
+    /// Whether every layout change is announced from now on, so that the
+    /// lane can stop polling for them. Returns false once the service is gone.
+    fn following(&self, following: bool) -> bool {
+        self.update(|state| state.layout_following = following)
+    }
+
+    fn update(&self, change: impl FnOnce(&mut DesktopState)) -> bool {
+        let Some(shared) = self.shared.upgrade() else {
+            return false;
+        };
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.stopped {
+            return false;
+        }
+        change(&mut state);
+        shared.wake.notify_all();
+        true
+    }
 }
 
 #[derive(Default)]
@@ -277,6 +321,12 @@ trait DesktopSource {
     fn volume(&mut self) -> Option<u8>;
     fn layout(&mut self) -> Option<u8>;
     fn media(&mut self) -> Option<MediaInfo>;
+    /// Starts following the layout changes the desktop announces. Called on
+    /// the layout lane before its first sample; a source that cannot follow
+    /// them is polled.
+    fn follow_layout(&mut self, _events: LayoutEvents) {}
+    /// The desktop's list of layouts changed: forget anything read from it.
+    fn layout_list_changed(&mut self) {}
 }
 
 struct NativeDesktopSource {
@@ -310,6 +360,22 @@ impl DesktopSource for NativeDesktopSource {
 
     fn media(&mut self) -> Option<MediaInfo> {
         current_media_info()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn follow_layout(&mut self, events: LayoutEvents) {
+        if let Err(error) = thread::Builder::new()
+            .name("layout-events".to_owned())
+            .spawn(move || follow_layout_signals(events))
+        {
+            log::warn!("layout signals unavailable, polling the layout instead: {error}");
+        }
+    }
+
+    fn layout_list_changed(&mut self) {
+        // Rebuild on the next sample instead of mapping onto the old list.
+        self.layout = None;
+        self.last_layout_attempt = Instant::now() - Duration::from_secs(60);
     }
 }
 
@@ -410,7 +476,21 @@ impl Drop for DesktopSubscription {
 }
 
 fn run_desktop_service(shared: Arc<DesktopShared>, mut source: impl DesktopSource, index: usize) {
-    let interval = [VOLUME_POLL_INTERVAL, LAYOUT_POLL_INTERVAL, MEDIA_POLL_INTERVAL][index];
+    let polled = [VOLUME_POLL_INTERVAL, LAYOUT_POLL_INTERVAL, MEDIA_POLL_INTERVAL][index];
+    // A followed layout is sampled when the desktop announces a change, and
+    // otherwise only now and then, in case an announcement went missing.
+    let interval = |state: &DesktopState| {
+        if index == 1 && state.layout_following {
+            LAYOUT_FOLLOWED_POLL_INTERVAL
+        } else {
+            polled
+        }
+    };
+    if index == 1 {
+        source.follow_layout(LayoutEvents {
+            shared: Arc::downgrade(&shared),
+        });
+    }
     let mut last_poll = Instant::now() - Duration::from_secs(60);
     let mut last_epoch = 0;
     loop {
@@ -420,8 +500,13 @@ fn run_desktop_service(shared: Arc<DesktopShared>, mut source: impl DesktopSourc
         }
         if state.stopped { return; }
         let epoch = state.epoch[index];
-        let due = last_epoch != epoch || last_poll.elapsed() >= interval;
+        let announced = index == 1 && std::mem::take(&mut state.layout_due);
+        let relist = index == 1 && std::mem::take(&mut state.layout_list_stale);
+        let due = announced || last_epoch != epoch || last_poll.elapsed() >= interval(&state);
         drop(state);
+        if relist {
+            source.layout_list_changed();
+        }
         if due {
             last_epoch = epoch;
             last_poll = Instant::now();
@@ -469,12 +554,13 @@ fn run_desktop_service(shared: Arc<DesktopShared>, mut source: impl DesktopSourc
         let state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.stopped { return; }
         // Sleep until the next sample is due, never closer than the old 20 ms
-        // pass. A re-enable that arrived during the query is due at once;
-        // demand changes and stop notify the condvar and end the wait early.
-        let due_in = if state.epoch[index] != last_epoch {
+        // pass. A re-enable or an announcement that arrived during the query
+        // is due at once; demand changes, announcements and stop notify the
+        // condvar and end the wait early.
+        let due_in = if state.epoch[index] != last_epoch || (index == 1 && state.layout_due) {
             Duration::ZERO
         } else {
-            interval.saturating_sub(last_poll.elapsed())
+            interval(&state).saturating_sub(last_poll.elapsed())
         }
         .max(Duration::from_millis(20));
         let _ = shared.wake.wait_timeout(state, due_in);
@@ -531,6 +617,8 @@ const VOLUME_POLL_INTERVAL: Duration = Duration::from_millis(250);
 mod bridge_wake_tests;
 #[cfg(test)]
 mod clock_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod layout_signal_tests;
 #[cfg(any(target_os = "macos", test))]
 mod macos_volume;
 #[cfg(target_os = "macos")]
@@ -933,7 +1021,16 @@ impl HostProtocol {
 #[derive(Default)]
 pub(crate) struct HostOutputOwner {
     generation: std::sync::atomic::AtomicU64,
+    event_poll_pauses: std::sync::atomic::AtomicUsize,
     active: Mutex<Option<HostOutputFootprint>>,
+}
+
+pub(crate) struct ApplicationEventPollPause(Arc<HostOutputOwner>);
+
+impl Drop for ApplicationEventPollPause {
+    fn drop(&mut self) {
+        self.0.event_poll_pauses.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -951,6 +1048,11 @@ pub(crate) struct HostOutputLease {
 }
 
 impl HostOutputOwner {
+    pub(crate) fn pause_application_events(self: &Arc<Self>) -> ApplicationEventPollPause {
+        self.event_poll_pauses.fetch_add(1, Ordering::AcqRel);
+        ApplicationEventPollPause(self.clone())
+    }
+
     /// Keep unsolicited host-data packets off the selected HID stream while a
     /// setting SET and its verified GET are in flight. The bridge already
     /// serializes output through this lock; settings use the proxy directly.
@@ -1021,6 +1123,13 @@ impl HostOutputLease {
         send(payload)
     }
 
+    pub(crate) fn try_request<T>(&self, request: impl FnOnce() -> anyhow::Result<T>) -> anyhow::Result<Option<T>> {
+        let Ok(_active) = self.owner.active.try_lock() else { return Ok(None); };
+        anyhow::ensure!(self.is_current(), "Host bridge output session superseded");
+        if self.owner.event_poll_pauses.load(Ordering::Acquire) != 0 { return Ok(None); }
+        request().map(Some)
+    }
+
     pub(crate) fn shutdown(
         &self,
         mut send: impl FnMut(&[u8]) -> anyhow::Result<()>,
@@ -1066,14 +1175,38 @@ struct ApplicationLayoutOwnerState {
     verified_key: Option<String>,
     snapshot_generation: u64,
     snapshot: crate::application_layouts::ApplicationLayoutSnapshot,
+    published_at: Instant,
+    library: Arc<Vec<crate::application_layouts::ApplicationLayoutSnapshot>>,
+    library_generation: u64,
+    resident_status: std::collections::BTreeMap<String, resident100::SyncStatus>,
+    resident_recoveries: std::collections::BTreeMap<u8,resident100::RecoveredRecord>,
+    resident_inventory_complete: bool,
+    // Connection-local schema2 evidence, never inferred from protocol 8.
+    resident_export_capability: Option<bool>,
 }
 
 impl Default for ApplicationLayoutOwnerState {
     fn default() -> Self {
         Self { output_order: Arc::new(Mutex::new(())), generation: 0, selected: false, discovered_key: None, verified_key: None,
             snapshot_generation: 0,
-            snapshot: crate::application_layouts::ApplicationLayoutSnapshot::inactive() }
+            snapshot: crate::application_layouts::ApplicationLayoutSnapshot::inactive(), published_at: Instant::now(),
+            library:Arc::new(Vec::new()),library_generation:0,resident_status:Default::default(),resident_recoveries:Default::default(),resident_inventory_complete:false,resident_export_capability:None }
     }
+}
+
+fn resident_readback_pending(state:&ApplicationLayoutOwnerState, snapshot:&crate::application_layouts::ApplicationLayoutSnapshot)->bool {
+    if !snapshot.active || snapshot.profile_id.as_deref()==Some("default") {return false;}
+    let Some(id)=snapshot.profile_id.as_ref() else{return true;};
+    let identity=snapshot.device_identity.unwrap_or_else(||wake_identity::digest(id));
+    if let Some(record)=state.resident_recoveries.values().find(|r|r.identity_crc[..20]==identity) {
+        if record.validation.is_some() || snapshot.resident_slot!=Some(record.slot) {return true;}
+        if snapshot.device_baseline_crc.as_ref().map(|c|c.as_slice())==Some(&record.identity_crc[20..]) {return false;}
+        // Low-level callers can present an exact known payload without an editor
+        // baseline. Admit only a byte-exact CRC hit, never a stale template STORE.
+        let legacy=ApplicationLayoutTransmission.packets(snapshot);
+        return !compact::full(&legacy).is_some_and(|raw|compact::crc32(&raw).to_le_bytes()==record.identity_crc[20..]);
+    }
+    !state.resident_inventory_complete
 }
 
 impl ApplicationLayoutOwnerState {
@@ -1084,10 +1217,67 @@ impl ApplicationLayoutOwnerState {
         self.verified_key = None;
         self.snapshot_generation = self.generation;
         self.snapshot = crate::application_layouts::ApplicationLayoutSnapshot::inactive();
+        self.published_at = Instant::now();
+        self.library=Arc::new(Vec::new());self.library_generation=self.library_generation.wrapping_add(1);self.resident_status.clear();self.resident_recoveries.clear();self.resident_inventory_complete=false;self.resident_export_capability=None;
     }
 }
 
 mod wake_identity;
+
+pub(crate) fn application_layout_identity_matches(id:&str, identity:&[u8])->bool {
+    wake_identity::digest(id).as_slice()==identity
+}
+
+pub(crate) fn application_layout_identity_digest(id: &str) -> [u8; 20] {
+    wake_identity::digest(id)
+}
+
+pub(crate) fn sm62_owner_library_key(model_key: &str, instance: &str) -> String {
+    let suffix: String = wake_identity::digest(instance).iter().map(|b| format!("{b:02x}")).collect();
+    format!("{model_key}-sm62-owner-{suffix}")
+}
+
+mod compact;
+mod resident;
+mod resident100;
+mod resident_full;
+mod device_profiles;
+pub(crate) use device_profiles::decoded_layout as decode_device_profile;
+pub(crate) use device_profiles::validate_portable_resident_profile;
+
+pub(crate) fn attach_device_profile(snapshot: &mut crate::application_layouts::ApplicationLayoutSnapshot,
+    layout: &crate::application_layouts::ApplicationLayout, raw: &[u8]) {
+    if raw.len()<64 {return;}
+    let mut identity_crc=[0;24];identity_crc[..20].copy_from_slice(&raw[43..63]);
+    identity_crc[20..].copy_from_slice(&compact::crc32(raw).to_le_bytes());
+    let record=resident100::RecoveredRecord{slot:snapshot.resident_slot.unwrap_or(0),identity_crc,raw:raw.to_vec(),validation:None};
+    let Ok(decoded)=device_profiles::decoded_layout(&record) else{return;};
+    snapshot.device_identity=Some(identity_crc[..20].try_into().unwrap());
+    snapshot.device_baseline_crc=Some(identity_crc[20..].try_into().unwrap());
+    if layout.name==decoded.name && layout.revision==decoded.revision && layout.layers==decoded.layers
+        && layout.layer_names==decoded.layer_names && layout.encoder_stacks==decoded.encoder_stacks {
+        snapshot.device_raw=Some(raw.to_vec());
+        let start=64+16*124;
+        snapshot.visuals=std::array::from_fn(|layer|raw[start+layer*62..start+(layer+1)*62].to_vec());
+    }
+}
+
+use resident_full::validate_recovered_full;
+pub(crate) use resident100::SyncStatus as ResidentSyncStatus;
+#[cfg(test)]
+mod compact_regressions;
+#[cfg(test)]
+mod resident_regressions;
+#[cfg(test)]
+mod resident100_tests;
+#[cfg(test)]
+mod production_c_tests;
+#[cfg(test)]
+mod capability_review_tests;
+#[cfg(test)]
+mod resident_export_capability_tests;
+#[cfg(test)]
+mod resident_stack_tests;
 
 pub(crate) mod rynk_bridge;
 pub(crate) use rynk_bridge::{RynkHostBridge, RynkHostOpen};
@@ -1098,16 +1288,28 @@ struct ApplicationLayoutTransmission;
 
 impl ApplicationLayoutTransmission {
     fn packets(&mut self, snapshot: &crate::application_layouts::ApplicationLayoutSnapshot) -> Vec<[u8; 32]> {
+        if snapshot.active {
+            if let Some(raw)=snapshot.device_raw.as_ref() {
+                if let Ok(packets)=device_profiles::legacy_packets(raw) { return packets; }
+            }
+        }
         let mut packets = snapshot.packets();
         if let Some(id) = &snapshot.profile_id {
             let commit = packets.last_mut().expect("snapshot has a commit");
             // Optional v2 extension. v1 consumers ignore it rather than comparing
             // an identity against their obsolete worker-local epoch namespace.
             commit[9..11].copy_from_slice(&[0x57, 2]);
-            commit[11..31].copy_from_slice(&wake_identity::digest(id));
+            commit[11..31].copy_from_slice(&snapshot.device_identity.unwrap_or_else(|| wake_identity::digest(id)));
         }
         packets
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_application_layout_transmission_packets(
+    snapshot: &crate::application_layouts::ApplicationLayoutSnapshot,
+) -> Vec<[u8; 32]> {
+    ApplicationLayoutTransmission.packets(snapshot)
 }
 
 fn write_application_layout_payload(
@@ -1131,7 +1333,14 @@ fn write_application_layout_payload(
     Ok(true)
 }
 
+fn next_owner_incarnation() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| value.checked_add(1))
+        .expect("HID owner incarnation exhausted")
+}
+
 pub struct QmkHidHostBridge {
+    incarnation: u64,
     device: crate::device::Device,
     mode: HostDataMode,
     protocol: HostProtocol,
@@ -1157,6 +1366,7 @@ impl QmkHidHostBridge {
         protocol: HostProtocol,
     ) -> Self {
         Self {
+            incarnation: next_owner_incarnation(),
             device,
             mode,
             protocol,
@@ -1297,6 +1507,7 @@ impl QmkHidHostBridge {
             })
             .expect("failed to spawn a host-data bridge");
         Self {
+            incarnation: next_owner_incarnation(),
             device,
             mode,
             protocol,
@@ -1337,14 +1548,20 @@ impl QmkHidHostBridge {
         }
         state.selected = false;
         state.verified_key = None;
+        state.resident_export_capability = None;
+        state.resident_inventory_complete = false;
+        state.resident_recoveries.clear();
         state.snapshot_generation = state.generation;
         state.snapshot = crate::application_layouts::ApplicationLayoutSnapshot::inactive();
     }
 
     /// Ephemeral evidence from the selected, identified owner, never settings.
     pub(crate) fn bind_selected_application_layout_device(&mut self, key: String) {
-        if !self.device.is_ergohaven_display_macropad() { return; }
+        if !self.device.application_layout_protocol_version().is_some() { return; }
         let mut state = self.application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        if state.verified_key.as_ref().is_some_and(|previous| previous != &key) {
+            state.revoke();
+        }
         state.discovered_key = Some(key.clone());
         state.verified_key = Some(key.clone());
         state.selected = true;
@@ -1359,7 +1576,7 @@ impl QmkHidHostBridge {
     }
 
     pub(crate) fn bind_application_layout_device(&mut self, key: String) {
-        if !self.device.is_ergohaven_display_macropad() { return; }
+        if !self.device.application_layout_protocol_version().is_some() { return; }
         if self.application_layout_device_key.as_ref() == Some(&key)
             && self.application_layout_publication_generation().is_some() { return; }
         // Registry refresh may carry an old UI routing label, but cannot grant
@@ -1370,12 +1587,33 @@ impl QmkHidHostBridge {
     }
 
     pub(crate) fn bind_verified_application_layout_device(&mut self, key: String, generation: u64) {
-        if !self.device.is_ergohaven_display_macropad() { return; }
+        if !self.device.application_layout_protocol_version().is_some() { return; }
         let mut state = self.application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner());
         if state.generation != generation || state.discovered_key.as_ref() != Some(&key) { return; }
         state.verified_key = Some(key.clone());
         self.application_layout_binding_generation = Some(generation);
         self.application_layout_device_key = Some(key);
+    }
+
+    pub(crate) fn application_layout_owner_incarnation(&self) -> u64 {
+        self.incarnation
+    }
+
+    pub(crate) fn confirms_resident_snapshot_for_generation(
+        &self,
+        snapshot: &crate::application_layouts::ApplicationLayoutSnapshot,
+        generation: u64,
+    ) -> bool {
+        let state = self.application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        if state.generation != generation || self.application_layout_binding_generation != Some(generation)
+            || state.verified_key.is_none() || state.verified_key.as_ref() != self.application_layout_device_key.as_ref() {
+            return false;
+        }
+        let (Some(identity), Some(raw)) = (&snapshot.device_identity, &snapshot.device_raw) else {
+            return false;
+        };
+        state.resident_recoveries.values().any(|record| record.validation.is_none()
+            && identity.as_slice() == &record.identity_crc[..20] && raw == &record.raw)
     }
 
     pub(crate) fn application_layout_publication_generation(&self) -> Option<u64> {
@@ -1393,9 +1631,99 @@ impl QmkHidHostBridge {
         if state.generation != generation || state.verified_key.is_none()
             || state.verified_key.as_ref() != self.application_layout_device_key.as_ref()
             || self.application_layout_binding_generation != Some(generation) { return false; }
+        let controls = if self.device.application_layout_protocol_version() == Some(8) {62} else {15};
+        if snapshot.active && (snapshot.layers.iter().any(|layer| layer.len() != controls)
+            || snapshot.visuals.iter().any(|layer| layer.len() != controls)
+            || (controls == 62 && snapshot.encoder_stacks.iter().any(|stack| !stack.is_empty() && !(2..=4).contains(&stack.len())))) {
+            state.snapshot_generation = generation;
+            state.snapshot = crate::application_layouts::ApplicationLayoutSnapshot::inactive();
+            return false;
+        }
+        let changed = state.snapshot_generation != generation || state.snapshot != snapshot;
         state.snapshot_generation = generation;
         state.snapshot = snapshot;
+        if changed { state.published_at = Instant::now(); }
+        // Publish first, then wake the existing owner. A focus change must not
+        // wait for the idle tick, and identical UI repaints must remain quiet.
+        drop(state);
+        if changed {
+            self.control.wake.wake();
+        }
         true
+    }
+
+    pub(crate) fn publish_resident_library_for_generation(&self, library: Vec<crate::application_layouts::ApplicationLayoutSnapshot>, generation: u64) -> bool {
+        let mut state=self.application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner());
+        if state.generation!=generation || state.verified_key.is_none()
+            || state.verified_key.as_ref()!=self.application_layout_device_key.as_ref()
+            || self.application_layout_binding_generation!=Some(generation) {return false;}
+        let mut ids=std::collections::BTreeSet::new();let mut slots=std::collections::BTreeSet::new();
+        if library.iter().any(|p|p.profile_id.as_ref().is_none_or(|id|id=="default"||!ids.insert(id.clone()))
+            || p.resident_slot.is_some_and(|slot|slot>=100||!slots.insert(slot))
+            || p.layers.iter().any(|l|l.len()!=62 || (p.active && p.device_identity.is_none() && l.contains(&0xffff)))
+            || p.visuals.iter().any(|l|l.len()!=62) || p.encoder_stacks.iter().any(|s|!s.is_empty() && !(2..=4).contains(&s.len()))) {return false;}
+        if *state.library!=library {
+            state.library=Arc::new(library);state.library_generation=state.library_generation.wrapping_add(1);
+            state.resident_status=state.library.iter().filter_map(|s|s.profile_id.clone().map(|id|(id,if s.resident_slot.is_some(){resident100::SyncStatus::Pending}else{resident100::SyncStatus::Overflow}))).collect();
+            drop(state);self.control.wake.wake();
+        }
+        true
+    }
+
+    pub(crate) fn resident_deletion_confirmed(&self,id:&str)->bool {
+        let s=self.application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner());
+        s.library.iter().any(|p|!p.active && p.profile_id.as_deref()==Some(id)) && s.resident_status.get(id)==Some(&resident100::SyncStatus::Synced)
+    }
+
+    pub(crate) fn retry_resident_sync(&self) {
+        let mut s=self.application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner());
+        s.library_generation=s.library_generation.wrapping_add(1);
+        for status in s.resident_status.values_mut(){if *status!=resident100::SyncStatus::Overflow{*status=resident100::SyncStatus::Pending;}}
+        drop(s);self.control.wake.wake();
+    }
+
+    pub(crate) fn resident_sync_status(&self,id:&str)->Option<resident100::SyncStatus> {
+        self.application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner()).resident_status.get(id).cloned()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_add_resident_recovery(&self) {
+        self.application_layout_snapshot.lock().unwrap().resident_recoveries.insert(99,resident100::RecoveredRecord{slot:99,identity_crc:[7;24],raw:vec![1,2,3],validation:Some("partial synthetic OS boundary".into())});
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_published_snapshot(&self)->crate::application_layouts::ApplicationLayoutSnapshot {
+        self.application_layout_snapshot.lock().unwrap().snapshot.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_published_library(&self)->Vec<crate::application_layouts::ApplicationLayoutSnapshot> {
+        self.application_layout_snapshot.lock().unwrap().library.as_ref().clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_set_valid_device_inventory(&self) {
+        let raw=include_bytes!("qmk_hid_host/resident_stack_max_full.bin").to_vec();
+        let mut identity_crc=[0;24];identity_crc[..20].copy_from_slice(&raw[43..63]);
+        identity_crc[20..].copy_from_slice(&compact::crc32(&raw).to_le_bytes());
+        validate_recovered_full(&raw,&identity_crc).unwrap();
+        self.application_layout_snapshot.lock().unwrap().resident_recoveries.insert(7,
+            resident100::RecoveredRecord{slot:7,identity_crc,raw,validation:None});
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_set_device_inventory_for_host_id(&self,id:&str) {
+        let mut raw=include_bytes!("qmk_hid_host/resident_stack_max_full.bin").to_vec();
+        raw[43..63].copy_from_slice(&wake_identity::digest(id));
+        let mut identity_crc=[0;24];identity_crc[..20].copy_from_slice(&raw[43..63]);
+        identity_crc[20..].copy_from_slice(&compact::crc32(&raw).to_le_bytes());
+        validate_recovered_full(&raw,&identity_crc).unwrap();
+        self.application_layout_snapshot.lock().unwrap().resident_recoveries.insert(7,
+            resident100::RecoveredRecord{slot:7,identity_crc,raw,validation:None});
+    }
+
+    pub(crate) fn resident_recoveries(&self)->Vec<resident100::RecoveredRecord> {
+        self.application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner()).resident_recoveries.values().cloned().collect()
     }
 
     pub(crate) fn set_application_layout_snapshot(
@@ -1417,7 +1745,7 @@ impl QmkHidHostBridge {
 
     pub(crate) fn set_selected_application_layout_support(&self, supported: bool) {
         self.application_layouts_enabled.store(
-            supported && self.device.is_ergohaven_display_macropad(),
+            supported && self.device.application_layout_protocol_version().is_some(),
             Ordering::Release,
         );
     }
@@ -1493,6 +1821,7 @@ impl QmkHidHostBridge {
         // Atomic revocation is independent of an unresponsive desktop query.
         // Never open/write HID, join, or spawn a join-waiter from UI/Drop.
         self.control.retire();
+        self.application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner()).revoke();
         self.layout_snapshot.store(u8::MAX, Ordering::Relaxed);
         self.thread.take();
     }
@@ -1501,6 +1830,64 @@ impl QmkHidHostBridge {
 impl Drop for QmkHidHostBridge {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+#[derive(Default)]
+struct ApplicationLayoutEventPoll {
+    acknowledged: u16,
+}
+
+impl ApplicationLayoutEventPoll {
+    fn poll(&mut self, device: &HostDataHid, owner: &Mutex<ApplicationLayoutOwnerState>,
+        snapshot: &crate::application_layouts::ApplicationLayoutSnapshot, generation: u64, version: u8) -> anyhow::Result<()> {
+        let ack=self.acknowledged.to_le_bytes();
+        let mut reply=None;
+        if !write_application_layout_payload(owner,snapshot,generation,&[0xe6,version,0xa5,ack[0],ack[1]],|p| {
+            reply=match device {
+                HostDataHid::Shared(output)=>output.poll_application_layout_event(p)?,
+                HostDataHid::Dedicated(hid)=>Some(hid.usb_send(p)?),
+            }; Ok(())
+        })? { return Ok(()); }
+        let Some(reply)=reply else { return Ok(()); };
+        let controls=if version==8 {62} else {15};
+        if reply[..3]!=[0xe6,version,0x5a] || reply[3]!=1
+            || reply[6]>=16 || usize::from(reply[7])>=controls { return Ok(()); }
+        let sequence=u16::from_le_bytes([reply[4],reply[5]]);
+        if sequence==0 || sequence==self.acknowledged { return Ok(()); }
+        if u32::from_le_bytes(reply[8..12].try_into().unwrap())!=snapshot.revision {
+            // A combo press can replay after a newer COMMIT. Discard its
+            // well-formed stale notification, without E8 or host execution, so
+            // it cannot pin the firmware FIFO ahead of current-profile events.
+            // Late replies from a revoked owner/lease must not advance ACK.
+            let state=owner.lock().unwrap_or_else(|e|e.into_inner());
+            let current_transport=match device {
+                HostDataHid::Shared(output)=>output.host_session_is_current(),
+                HostDataHid::Dedicated(_)=>true,
+            };
+            if state.generation==generation && state.snapshot_generation==generation
+                && &state.snapshot==snapshot && current_transport {
+                self.acknowledged=sequence;
+            }
+            return Ok(());
+        }
+        // These keycodes are executed natively by firmware. A press notification
+        // is NOT proof that the foreground application completed its shortcut.
+        // Acknowledge receipt and retain idle visuals rather than invent success
+        // or execute the shortcut a second time on the host.
+        let mut state=[0u8;9];state[..2].copy_from_slice(&[0xe8,version]);
+        state[2..6].copy_from_slice(&snapshot.revision.to_le_bytes());
+        state[6..8].copy_from_slice(&reply[6..8]);
+        let mut sent=false;
+        if write_application_layout_payload(owner,snapshot,generation,&state,|p| {
+            sent=match device {
+                HostDataHid::Shared(output)=>output.write_application_layout_event_state(p)?,
+                HostDataHid::Dedicated(hid)=>{hid.write_output_report(p)?;true},
+            }; Ok(())
+        })? && sent {
+            self.acknowledged=sequence;
+        }
+        Ok(())
     }
 }
 
@@ -1530,6 +1917,7 @@ fn run_bridge(
     let mut last_layout = None;
     let mut last_artist = String::new();
     let mut last_title = String::new();
+    let mut media_payload_pending = false;
     let mut last_time_poll = Instant::now() - Duration::from_secs(60);
     let mut last_volume_poll = Instant::now() - Duration::from_secs(60);
     let mut last_layout_poll = Instant::now() - Duration::from_secs(60);
@@ -1540,13 +1928,28 @@ fn run_bridge(
     let mut last_application_layout_resend_generation =
         application_layout_resend_generation.load(Ordering::SeqCst);
     let mut application_layout_transmission = ApplicationLayoutTransmission::default();
+    let mut compact_capability = None;
+    let mut capability_probe = resident100::CapabilityProbe::default();
+    let mut resident_capability = false;
+    let mut capability_owner_generation = None;
+    let mut compact_transaction = 0u32;
+    let mut resident_background=resident100::Background::default();
+    let mut resident_blocked:Option<(crate::application_layouts::ApplicationLayoutSnapshot,u64,u64)>=None;
     let mut last_application_layout_send = Instant::now() - Duration::from_secs(60);
+    let mut application_events = ApplicationLayoutEventPoll::default();
+    let mut event_generation = None;
+    let mut last_event_poll = Instant::now() - Duration::from_secs(60);
     let mut desktop_subscription = None;
     let mut consecutive_write_failures = 0u8;
     let mut first_write_failure_at: Option<Instant> = None;
 
     while !stop.load(Ordering::Relaxed) {
+        let mut application_probe_failed = false;
         if let Some((hid, selected_extended)) = control.take_selected_handoff() {
+            application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner()).resident_export_capability = None;
+            compact_capability = None;
+            capability_probe = resident100::CapabilityProbe::default();
+            resident_capability = false;
             // This worker now owns a dedicated transport. Never fall back to
             // the old selected connection's weak shared output after a later
             // write failure; reopen a fresh dedicated owner for this target.
@@ -1556,8 +1959,15 @@ fn run_bridge(
                 break;
             }
             application_layouts_enabled.store(
-                target.is_ergohaven_display_macropad()
-                    && hid.supports_application_layout_protocol(),
+                target.application_layout_protocol_version().is_some()
+                    && match hid.probe_application_layout_protocol_version(target.application_layout_protocol_version().unwrap()) {
+                        Ok(supported) => supported,
+                        Err(error) => {
+                            log::warn!("qmk-hid-host application capability unknown after transport error: {error:#}");
+                            application_probe_failed = true;
+                            false
+                        }
+                    },
                 Ordering::Release,
             );
             device = Some(HostDataHid::Dedicated(hid));
@@ -1609,6 +2019,10 @@ fn run_bridge(
                 })
                 .ok();
             if let Some(dev) = device.as_ref() {
+                application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner()).resident_export_capability = None;
+                compact_capability = None;
+                capability_probe = resident100::CapabilityProbe::default();
+                resident_capability = false;
                 first_write_failure_at = None;
                 consecutive_write_failures = 0;
                 if let HostDataHid::Dedicated(hid) = dev {
@@ -1617,28 +2031,31 @@ fn run_bridge(
                     application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner()).revoke();
                     // Query through this worker's exclusive owner, never the UI's selected handle.
                     let key = target
-                        .is_ergohaven_display_macropad()
+                        .application_layout_protocol_version().is_some()
                         .then(|| {
                             hid.get_keyboard_id().ok().and_then(|(version, uid)| {
                                 (version <= 6 && uid != 0 && uid != u64::MAX).then(|| {
                                     let key = format!("vial-{uid:016x}");
-                                    if target.is_m4cr0pad_v3() {
-                                        key
-                                    } else {
-                                        format!("{key}-m4cr0pad-v2")
-                                    }
+                                    target.application_layout_storage_key(key)
                                 })
                             })
                         })
                         .flatten();
                     application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner()).discovered_key = key;
                     application_layouts_enabled.store(
-                        target.is_ergohaven_display_macropad()
-                            && hid.supports_application_layout_protocol(),
+                        target.application_layout_protocol_version().is_some()
+                            && match hid.probe_application_layout_protocol_version(target.application_layout_protocol_version().unwrap()) {
+                        Ok(supported) => supported,
+                        Err(error) => {
+                            log::warn!("qmk-hid-host application capability unknown after transport error: {error:#}");
+                            application_probe_failed = true;
+                            false
+                        }
+                    },
                         Ordering::Release,
                     );
                 }
-                extended_protocol = mode.time && protocol.extended(dev);
+                extended_protocol = !application_probe_failed && mode.time && protocol.extended(dev);
                 reset_layout_sync_state(&mut last_layout, &mut last_layout_full_send);
                 last_application_layout = None;
                 log::info!(
@@ -1651,6 +2068,22 @@ fn run_bridge(
                     target.path,
                 );
             }
+        }
+
+        if application_probe_failed {
+            // Unknown is not unsupported. A failed request can retire the native
+            // proxy; drop it and rediscover through a new exclusive owner even
+            // when clock/media feedback is disabled (no later write can trigger
+            // the ordinary transport recovery). Never retry this stale stream.
+            device = None;
+            extended_protocol = false;
+            protocol.connection_lost();
+            last_open_attempt = Instant::now();
+            last_application_layout = None;
+            application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner()).revoke();
+            application_layouts_enabled.store(false, Ordering::Release);
+            layout_snapshot.store(u8::MAX, Ordering::Relaxed);
+            continue;
         }
 
         let Some(dev) = device.as_ref() else {
@@ -1684,6 +2117,8 @@ fn run_bridge(
         let mut write_failed = false;
         let mut write_attempted = false;
         let sm62 = target.is_ergohaven_sm62();
+        let compact_usb = sm62 && target.bus_type.eq_ignore_ascii_case("usb")
+            && !target.is_bluetooth_transport();
 
         if application_layouts_enabled.load(Ordering::Acquire) {
             let resend_generation = application_layout_resend_generation.load(Ordering::SeqCst);
@@ -1691,34 +2126,234 @@ fn run_bridge(
                 last_application_layout = None;
                 last_application_layout_resend_generation = resend_generation;
             }
-            let (application_layout, generation) = {
+            let (application_layout, generation, published_at) = {
                 let state = application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner());
-                (state.snapshot.clone(), state.snapshot_generation)
+                (state.snapshot.clone(), state.snapshot_generation, state.published_at)
             };
-            let snapshot_changed = last_application_layout.as_ref() != Some(&application_layout);
+            if capability_owner_generation != Some(generation) {
+                compact_capability = None;
+                resident_capability = false;
+                capability_probe = resident100::CapabilityProbe::default();
+                capability_owner_generation = Some(generation);
+                last_application_layout = None;
+            }
+            let mut wire_layout = application_layout.clone();
+            if target.application_layout_protocol_version() == Some(8) && !wire_layout.active {
+                for layer in &mut wire_layout.layers { layer.resize(62, crate::application_layouts::APPLICATION_LAYOUT_UNSET_KEYCODE); }
+                for visual in &mut wire_layout.visuals { visual.resize(62,0); }
+            }
+            // Protocol 8 firmware irreversibly releases an expired overlay.
+            // E6 reports events, not overlay liveness; E5 cannot reactivate it.
+            // A missed lease therefore needs BEGIN..COMMIT for the SAME desired
+            // snapshot, without changing its identity or extending firmware timeouts.
+            let overlay_lease = Duration::from_millis(2500);
+            let recoverable_overlay = sm62 && application_layout.active;
+            if recoverable_overlay && last_application_layout_send.elapsed() >= overlay_lease {
+                last_application_layout = None;
+            }
+            let library_generation=application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner()).library_generation;
+            let foreground_blocked=resident_blocked.as_ref().is_some_and(|(s,g,l)|s==&application_layout&&*g==generation&&*l==library_generation);
+            let awaiting_readback=resident_capability && resident_readback_pending(&application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner()),&application_layout);
+            let snapshot_changed = last_application_layout.as_ref() != Some(&application_layout) && !foreground_blocked && !awaiting_readback;
             if snapshot_changed {
+                // Successful writes do not acknowledge firmware staging. The
+                // settings owner may hold the per-packet lease after BEGIN;
+                // COMMIT then succeeds at I/O but cannot apply expired staging.
+                let transfer_started = Instant::now();
                 let mut sent = true;
-                for packet in application_layout_transmission.packets(&application_layout) {
+                let mut terminal_status=None;
+                let mut sent_reports = 0usize;
+                let mut first_write_us = None;
+                let legacy = application_layout_transmission.packets(&wire_layout);
+                let semantic_identity: [u8; 20] = legacy.last().unwrap()[11..31].try_into().unwrap();
+                if compact_usb && compact_capability.is_none() && capability_probe.admit(library_generation) {
+                    compact_transaction = resident100::next_transaction();
+                    let request = resident100::capability_query(compact_transaction);
+                    let mut answer = None;
                     match write_application_layout_payload(&application_layout_snapshot,
-                        &application_layout, generation, &packet, |p| write_payload_with_retry(dev, p, sm62)) {
-                        Ok(true) => { write_attempted = true; },
+                        &application_layout, generation, &request, |p| {
+                            answer = match dev {
+                                HostDataHid::Shared(output) => output.poll_application_layout_event(p)?,
+                                HostDataHid::Dedicated(hid) => Some(hid.usb_send(p)?),
+                            };
+                            Ok(())
+                        }) {
+                        Ok(true) => {
+                            if let Some(reply) = answer {
+                                let decision = device_profiles::resident_capability_reply(&request, &reply);
+                                resident_capability = decision == Some(true);
+                                if resident_capability {
+                                    compact_capability = Some(true);
+                                } else if decision == Some(false) {
+                                    let fallback = compact::query(resident100::next_transaction());
+                                    let mut old_reply = None;
+                                    let admitted = write_application_layout_payload(&application_layout_snapshot,
+                                        &application_layout,generation,&fallback,|p| {
+                                            old_reply=match dev {HostDataHid::Shared(o)=>o.poll_application_layout_event(p)?,HostDataHid::Dedicated(h)=>Some(h.usb_send(p)?)};Ok(())
+                                        });
+                                    match (admitted,old_reply) {
+                                        (Ok(true),Some(r))=>compact_capability=compact::capability(&fallback,&r),
+                                        _=>sent=false,
+                                    }
+                                } else { sent = false; }
+                                // A late reply cannot certify a successor owner.
+                                // Foreground selection is not capability identity;
+                                // no public proof setter is exposed.
+                                let mut state = application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner());
+                                if !stop.load(Ordering::Acquire) && state.generation == generation
+                                    && state.snapshot_generation == generation {
+                                    if resident_capability { state.resident_export_capability = Some(true); }
+                                    else if decision == Some(false) && compact_capability.is_some() {
+                                        state.resident_export_capability = Some(false);
+                                    }
+                                } else { sent = false; }
+                            }
+                            else { sent = false; }
+                        },
+                        Ok(false) => sent = false,
+                        // Optional capability read failure is not a write failure.
+                        Err(_) => { sent = false; },
+                    }
+                }
+                if compact_usb && compact_capability.is_none() {
+                    sent = false;
+                    let mut state = application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner());
+                    for status in state.resident_status.values_mut() {
+                        if *status != resident100::SyncStatus::Overflow {
+                            *status = resident100::SyncStatus::Error("Resident capability unknown; Retry sync to reprobe".into());
+                        }
+                    }
+                }
+                if resident_capability && resident_readback_pending(&application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner()),&application_layout) {
+                    sent=false;
+                }
+                compact_transaction = resident100::next_transaction();
+                let mut packets = if sm62 && (!wire_layout.active || wire_layout.profile_id.as_deref()==Some("default")) {
+                    let mut p=crate::application_layouts::ApplicationLayoutSnapshot::deactivate_packet();p[1]=8;vec![p]
+                } else if compact_usb && compact_capability == Some(true) {
+                    compact::encode(&legacy, compact_transaction).unwrap_or_else(|| legacy.clone())
+                } else { legacy };
+                // Only explicit application mappings0..99 may use schema2.
+                // Native Default uses EA; overflow and older firmware stream.
+                let resident_slot = wire_layout.resident_slot.filter(|slot| *slot < 100 && wire_layout.active && wire_layout.profile_id.as_deref()!=Some("default"))
+                    .filter(|_| compact_usb && resident_capability && packets[0][0] == 0xec);
+                if resident_slot.is_some() {packets[0][2]=2;}
+                let mut cache_hit = false;
+                if let Some(slot) = resident_slot.filter(|_| sent) {
+                    let request = resident100::request(0, slot, None,
+                        &semantic_identity, &packets[0][16..20]);
+                    match resident100::exchange(dev, &application_layout_snapshot, &application_layout,
+                        generation, stop, transfer_started, &request) {
+                        Ok(Some(status @ (0 | 1))) => cache_hit = status==0,
+                        Ok(Some(status)) => {sent=false;terminal_status=Some(status);},
+                        Ok(None) => sent = false,
+                        Err(_) => { sent = false; write_failed = true; }
+                    }
+                }
+                for packet in packets.iter().filter(|_| !cache_hit) {
+                    if !sent || stop.load(Ordering::Relaxed)
+                        || (recoverable_overlay && transfer_started.elapsed() >= overlay_lease) {
+                        sent = false; break;
+                    }
+                    match write_application_layout_payload(&application_layout_snapshot,
+                        &application_layout, generation, packet, |p| write_payload_with_retry(dev, p, sm62)) {
+                        Ok(true) => {
+                            write_attempted = true;
+                            sent_reports += 1;
+                            first_write_us.get_or_insert_with(|| transfer_started.elapsed().as_micros());
+                        },
                         Ok(false) => { sent = false; break; },
                         Err(_) => { sent = false; write_failed = true; break; },
                     }
                     thread::sleep(Duration::from_millis(1));
                 }
+                if let Some(slot) = resident_slot.filter(|_| sent) {
+                    // A miss is not applied/confirmed until STORE and SELECT
+                    // explicitly accept; I/O success of EE alone is insufficient.
+                    for command in if cache_hit { &[2u8][..] } else { &[5u8, 1, 0, 2][..] } {
+                        let token=matches!(*command,1|5).then_some(compact_transaction);
+                        let request = resident100::request(*command, slot, token,
+                            &semantic_identity, &packets[0][16..20]);
+                        match resident100::exchange(dev, &application_layout_snapshot, &application_layout,
+                            generation, stop, transfer_started, &request) {
+                            Ok(Some(0)) => { write_attempted = true; sent_reports += 1; }
+                            Ok(None) => { sent = false; break; }
+                            Ok(Some(status)) => {sent=false;if matches!(status,2|5..=8){terminal_status=Some(status);}else{write_failed=true;}break;},
+                            Err(_) => { sent = false; write_failed = true; break; }
+                        }
+                    }
+                }
+                if let Some(status)=terminal_status {
+                    resident_blocked=Some((application_layout.clone(),generation,library_generation));
+                    let mut s=application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner());
+                    if s.generation==generation && s.library_generation==library_generation && s.snapshot==application_layout {
+                        if let Some(id)=application_layout.profile_id.as_ref(){s.resident_status.insert(id.clone(),resident100::SyncStatus::Error(format!("Foreground resident status {status}; record preserved; Retry sync")));}
+                    }
+                }
                 if sent {
-                    last_application_layout = Some(application_layout);
+                    last_application_layout = if recoverable_overlay
+                        && transfer_started.elapsed() >= overlay_lease {
+                        None // retry a complete snapshot on the next healthy tick
+                    } else {
+                        Some(application_layout.clone())
+                    };
                     last_application_layout_send = Instant::now();
                 }
-            } else if last_application_layout_send.elapsed() >= Duration::from_secs(1) {
+                crate::connect_timing::event(&format!(
+                    "autolayer.transfer generation={generation} revision={} reports={sent_reports} queued_us={} first_write_us={} transfer_us={} io_complete={sent}",
+                    application_layout.revision,
+                    transfer_started.saturating_duration_since(published_at).as_micros(),
+                    first_write_us.unwrap_or(0), transfer_started.elapsed().as_micros()
+                ));
+            } else if last_application_layout.as_ref()==Some(&application_layout) && last_application_layout_send.elapsed() >= Duration::from_secs(1) {
                 match write_application_layout_payload(&application_layout_snapshot,
-                    &application_layout, generation, &application_layout.keepalive_packet(),
+                    &application_layout, generation, &wire_layout.keepalive_packet(),
                     |p| write_payload_with_retry(dev, p, sm62)) {
-                    Ok(true) => { write_attempted = true; last_application_layout_send = Instant::now(); },
+                    Ok(true) => {
+                        write_attempted = true;
+                        // The serialized settings owner can block inside this
+                        // write after the pre-write check. A successfully queued
+                        // late E5 still does not prove the overlay is alive.
+                        if recoverable_overlay && last_application_layout_send.elapsed() >= overlay_lease {
+                            last_application_layout = None;
+                        }
+                        last_application_layout_send = Instant::now();
+                    },
                     Ok(false) => continue,
                     Err(_) => write_failed = true,
                 }
+            }
+            if snapshot_changed || event_generation != Some(generation) {
+                application_events = ApplicationLayoutEventPoll::default();
+                event_generation = Some(generation);
+            }
+            if application_layout.active && !write_failed
+                && last_application_layout.as_ref() == Some(&application_layout)
+                && last_event_poll.elapsed() >= Duration::from_millis(40) {
+                last_event_poll = Instant::now();
+                if let Some(version) = target.application_layout_protocol_version() {
+                    // An optional poll failure cannot revoke an otherwise live
+                    // display session. Transport retirement is owned by HID.
+                    let poll_started = Instant::now();
+                    let result = application_events.poll(dev, &application_layout_snapshot,
+                        &application_layout, generation, version);
+                    if result.is_err() || poll_started.elapsed() >= Duration::from_millis(50) {
+                        crate::connect_timing::event(&format!(
+                            "autolayer.event_poll generation={generation} elapsed_us={} ok={}",
+                            poll_started.elapsed().as_micros(), result.is_ok()
+                        ));
+                    }
+                    if let Err(error) = result {
+                        log::debug!("application event poll failed: {error:#}");
+                    }
+                }
+            }
+            if compact_usb && compact_capability.is_some() && !resident_capability {
+                let mut s=application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner());
+                for status in s.resident_status.values_mut(){if *status!=resident100::SyncStatus::Overflow{*status=resident100::SyncStatus::Error("Firmware supports streaming only; resident100 unconfirmed".into());}}
+            }
+            if compact_usb && resident_capability && !write_failed && (resident_readback_pending(&application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner()),&application_layout) || last_application_layout.as_ref()==Some(&application_layout) || resident_blocked.as_ref().is_some_and(|(s,g,l)|s==&application_layout&&*g==generation&&*l==library_generation)) {
+                resident_background.tick(dev,&application_layout_snapshot,&application_layout,generation,stop,&mut compact_transaction);
             }
         }
 
@@ -1804,8 +2439,9 @@ fn run_bridge(
         if mode.media
             && snapshot
                 .media_sampled_at
-                .is_some_and(|at| at > last_media_poll)
+                .is_some_and(|at| media_payload_pending || at > last_media_poll)
         {
+            media_payload_pending = false;
             last_media_poll = snapshot.media_sampled_at.unwrap();
             let media = snapshot.media.unwrap_or_default();
             let artist = &media.artist;
@@ -1827,8 +2463,25 @@ fn run_bridge(
             }
             if full_resend || title != &last_title {
                 write_attempted = true;
-                last_title = title.clone();
-                write_failed |= write_text_payload(dev, DATA_MEDIA_TITLE, title, sm62).is_err();
+                match write_text_payload_while(dev, DATA_MEDIA_TITLE, title, sm62, || {
+                    if stop.load(Ordering::Acquire) { return false; }
+                    if write_failed || !application_layouts_enabled.load(Ordering::Acquire) { return true; }
+                    let state = application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner());
+                    last_application_layout.as_ref() == Some(&state.snapshot)
+                        && application_layout_resend_generation.load(Ordering::SeqCst)
+                            == last_application_layout_resend_generation
+                }) {
+                    Ok(true) => last_title = title.clone(),
+                    Ok(false) => {
+                        // Stop only between complete output reports. The next
+                        // ordinary pass sends the new profile first, then retries
+                        // this cached sample from chunk zero, even without a new
+                        // media poll. Never cache an incomplete title as sent.
+                        media_payload_pending = true;
+                        continue;
+                    }
+                    Err(_) => write_failed = true,
+                }
                 pause_between_packets();
             }
             if supports_sm62_media_progress(&target) {
@@ -1889,6 +2542,7 @@ fn run_bridge(
             first_write_failure_at = None;
         }
 
+        if resident_background.pending() {control.wake.wait(Duration::from_millis(5));continue;}
         control.wake.wait(bridge_idle_wait(
             Instant::now(),
             mode,
@@ -1907,8 +2561,9 @@ fn run_bridge(
     if send_shutdown.load(Ordering::Relaxed) {
         if let Some(device) = device.as_ref() {
             if application_layouts_enabled.load(Ordering::Acquire) {
-                let packet =
+                let mut packet =
                     crate::application_layouts::ApplicationLayoutSnapshot::deactivate_packet();
+                packet[1] = target.application_layout_protocol_version().unwrap_or(7);
                 let _ = write_payload(device, &packet);
             }
             send_shutdown_payloads(
@@ -2136,15 +2791,24 @@ fn sm62_title_payloads(value: &str) -> Vec<Vec<u8>> {
 }
 
 fn write_text_payload(device: &HostDataHid, data_type: u8, value: &str, sm62: bool) -> anyhow::Result<()> {
+    write_text_payload_while(device, data_type, value, sm62, || true).map(|_| ())
+}
+
+fn write_text_payload_while(
+    device: &HostDataHid, data_type: u8, value: &str, sm62: bool,
+    mut keep_going: impl FnMut() -> bool,
+) -> anyhow::Result<bool> {
     if sm62 && data_type == DATA_MEDIA_TITLE {
         let payloads = sm62_title_payloads(value);
         for (index, payload) in payloads.iter().enumerate() {
+            if !keep_going() { return Ok(false); }
             if index != 0 {
                 pause_between_packets();
+                if !keep_going() { return Ok(false); }
             }
             write_payload_with_retry(device, payload, sm62)?;
         }
-        return Ok(());
+        return Ok(true);
     }
     let mut payload = Vec::with_capacity(RAW_HID_PACKET_LEN);
     let mut bytes = value.as_bytes().to_vec();
@@ -2152,7 +2816,7 @@ fn write_text_payload(device: &HostDataHid, data_type: u8, value: &str, sm62: bo
     payload.push(data_type);
     payload.push(bytes.len() as u8);
     payload.extend(bytes);
-    write_payload_with_retry(device, &payload, sm62)
+    write_payload_with_retry(device, &payload, sm62).map(|_| true)
 }
 
 fn current_time_payload() -> (u8, u8) {
@@ -2480,6 +3144,9 @@ fn parse_microseconds(value: &str) -> Option<u32> {
         .ok()
 }
 
+#[cfg(test)]
+include!("host_lease_regression.rs");
+
 #[cfg(all(test, not(target_os = "windows")))]
 mod tests {
     use super::*;
@@ -2748,6 +3415,94 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    fn kde_layout_list(codes: &[&str], read_at: Instant) -> KdeLayoutList {
+        KdeLayoutList {
+            codes: codes.iter().map(|code| (*code).to_owned()).collect(),
+            read_at,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn kde_layouts(codes: &[&str]) -> Option<Vec<String>> {
+        Some(codes.iter().map(|code| (*code).to_owned()).collect())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn kde_layout_list_follows_a_reorder_in_the_running_session() {
+        let start = Instant::now();
+        let mut list = kde_layout_list(&["us", "ru"], start);
+
+        let fresh = start + KDE_LAYOUT_LIST_REFRESH / 2;
+        let unread = list.code_index(0, fresh, || panic!("a fresh list is not read again"));
+        assert_eq!(unread, Some(0));
+
+        // Same length, so the index alone cannot tell the order changed.
+        let due = start + KDE_LAYOUT_LIST_REFRESH;
+        let reordered = list.code_index(0, due, || kde_layouts(&["ru", "us"]));
+        assert_eq!(reordered, Some(1));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn kde_layout_list_is_read_at_once_for_an_index_past_its_end() {
+        let start = Instant::now();
+        let mut list = kde_layout_list(&["us"], start);
+
+        let added = list.code_index(1, start, || kde_layouts(&["us", "ru"]));
+        assert_eq!(added, Some(1));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn kde_layout_list_keeps_the_last_list_when_kde_does_not_answer() {
+        let start = Instant::now();
+        let mut list = kde_layout_list(&["us", "ru"], start);
+
+        let due = start + KDE_LAYOUT_LIST_REFRESH;
+        assert_eq!(list.code_index(1, due, || None), Some(1));
+        assert_eq!(list.code_index(1, due, || Some(Vec::new())), Some(1));
+        // The failed read counts as the refresh; the next one waits its turn.
+        let soon = due + KDE_LAYOUT_LIST_REFRESH / 2;
+        let unread = list.code_index(1, soon, || panic!("a failed read is not retried at once"));
+        assert_eq!(unread, Some(1));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn layout_bus_calls_give_up_on_a_peer_that_never_answers() {
+        let (client, server) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+        let guid = zbus::Guid::generate();
+        // A peer with no object server reads the call and never replies.
+        let server = thread::spawn(move || {
+            zbus::blocking::connection::Builder::async_io_unix_stream(server)
+                .server(guid)
+                .expect("server guid")
+                .p2p()
+                .build()
+        });
+        let timeout = Duration::from_millis(200);
+        let client = layout_bus(
+            Ok(zbus::blocking::connection::Builder::async_io_unix_stream(client).p2p()),
+            timeout,
+        )
+        .expect("client connection");
+        let _server = server
+            .join()
+            .expect("server thread")
+            .expect("server connection");
+
+        let started = Instant::now();
+        let reply = client.call_method(None::<&str>, "/", Some("org.example.Silent"), "Never", &());
+
+        assert!(
+            matches!(&reply, Err(zbus::Error::InputOutput(error)) if error.kind() == std::io::ErrorKind::TimedOut),
+            "expected a timeout, got {reply:?}"
+        );
+        assert!(started.elapsed() < timeout * 10);
+    }
+
+    #[cfg(target_os = "linux")]
     #[test]
     fn gnome_desktop_names_are_recognized_without_matching_other_desktops() {
         assert!(desktop_list_has_gnome("GNOME"));
@@ -2969,37 +3724,37 @@ impl LayoutTracker {
     }
 }
 
+/// Builds a layout tracker connection whose method calls give up after
+/// `timeout`. zbus applies no reply timeout of its own, so a wedged KWin or
+/// IBus daemon would otherwise park the layout lane for good.
+#[cfg(target_os = "linux")]
+fn layout_bus(
+    builder: zbus::Result<zbus::blocking::connection::Builder<'_>>,
+    timeout: Duration,
+) -> Option<zbus::blocking::Connection> {
+    builder.ok()?.method_timeout(timeout).build().ok()
+}
+
 #[cfg(target_os = "linux")]
 struct KdeLayoutTracker {
     connection: zbus::blocking::Connection,
-    layout_codes: Vec<String>,
+    layout_codes: KdeLayoutList,
 }
 
 #[cfg(target_os = "linux")]
 impl KdeLayoutTracker {
     fn new() -> Option<Self> {
-        let connection = zbus::blocking::Connection::session().ok()?;
-        let layout_codes = {
-            let proxy = zbus::blocking::Proxy::new(
-                &connection,
-                KDE_LAYOUT_DESTINATION,
-                KDE_LAYOUT_PATH,
-                KDE_LAYOUT_INTERFACE,
-            )
-            .ok()?;
-            proxy
-                .call::<_, _, Vec<(String, String, String)>>("getLayoutsList", &())
-                .ok()?
-                .into_iter()
-                .map(|(short_name, _, _)| short_name)
-                .collect::<Vec<_>>()
-        };
-        if layout_codes.is_empty() {
-            return None;
-        }
+        let connection = layout_bus(
+            zbus::blocking::connection::Builder::session(),
+            LAYOUT_DBUS_CALL_TIMEOUT,
+        )?;
+        let layout_codes = kde_layout_list(&connection).filter(|codes| !codes.is_empty())?;
         Some(Self {
             connection,
-            layout_codes,
+            layout_codes: KdeLayoutList {
+                codes: layout_codes,
+                read_at: Instant::now(),
+            },
         })
     }
 
@@ -3012,7 +3767,61 @@ impl KdeLayoutTracker {
         )
         .ok()?;
         let layout = proxy.call::<_, _, u32>("getLayout", &()).ok()?;
-        kde_layout_code_index(layout, &self.layout_codes)
+        let connection = &self.connection;
+        self.layout_codes
+            .code_index(layout, Instant::now(), || kde_layout_list(connection))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn kde_layout_list(connection: &zbus::blocking::Connection) -> Option<Vec<String>> {
+    let proxy = zbus::blocking::Proxy::new(
+        connection,
+        KDE_LAYOUT_DESTINATION,
+        KDE_LAYOUT_PATH,
+        KDE_LAYOUT_INTERFACE,
+    )
+    .ok()?;
+    let layouts = proxy
+        .call::<_, _, Vec<(String, String, String)>>("getLayoutsList", &())
+        .ok()?;
+    Some(
+        layouts
+            .into_iter()
+            .map(|(short_name, _, _)| short_name)
+            .collect(),
+    )
+}
+
+/// KDE's layout list as last read. `getLayout` answers with a position in it,
+/// and a running session adds, removes and reorders layouts without telling
+/// the tracker, so the list is read again rather than kept for good.
+#[cfg(target_os = "linux")]
+struct KdeLayoutList {
+    codes: Vec<String>,
+    read_at: Instant,
+}
+
+#[cfg(target_os = "linux")]
+impl KdeLayoutList {
+    fn code_index(
+        &mut self,
+        layout: u32,
+        now: Instant,
+        read: impl FnOnce() -> Option<Vec<String>>,
+    ) -> Option<u8> {
+        // An index past the end means the list grew: read it now rather than
+        // after the refresh interval.
+        let past_end = usize::try_from(layout).map_or(true, |index| index >= self.codes.len());
+        if past_end || now.duration_since(self.read_at) >= KDE_LAYOUT_LIST_REFRESH {
+            // Stamp the attempt: a list KDE cannot return right now keeps the
+            // last one and is asked for again at the next refresh.
+            self.read_at = now;
+            if let Some(codes) = read().filter(|codes| !codes.is_empty()) {
+                self.codes = codes;
+            }
+        }
+        kde_layout_code_index(layout, &self.codes)
     }
 }
 
@@ -3030,10 +3839,10 @@ struct IbusLayoutTracker {
 #[cfg(target_os = "linux")]
 impl IbusLayoutTracker {
     fn new() -> Option<Self> {
-        let connection = zbus::blocking::connection::Builder::ibus()
-            .ok()?
-            .build()
-            .ok()?;
+        let connection = layout_bus(
+            zbus::blocking::connection::Builder::ibus(),
+            LAYOUT_DBUS_CALL_TIMEOUT,
+        )?;
         Some(Self { connection })
     }
 
@@ -3116,6 +3925,214 @@ pub(crate) fn kde_desktop_session() -> bool {
                 .split(':')
                 .any(|desktop| desktop.eq_ignore_ascii_case("kde"))
         })
+}
+
+#[cfg(target_os = "linux")]
+const LAYOUT_SIGNALS_RETRY: Duration = Duration::from_secs(10);
+
+/// Follows KDE's and IBus's layout signals for the layout lane. Whenever they
+/// stop, for instance across a Plasma or IBus restart, the lane polls again
+/// until they are back. Ends with the service, or at once on a desktop that
+/// announces no layout changes.
+#[cfg(target_os = "linux")]
+fn follow_layout_signals(events: LayoutEvents) {
+    while kde_desktop_session() || gnome_desktop_session() {
+        futures_lite::future::block_on(async {
+            if let Some(streams) = layout_signal_streams().await {
+                watch_layout_signals(streams, &events).await;
+            }
+        });
+        if !events.following(false) {
+            return;
+        }
+        thread::sleep(LAYOUT_SIGNALS_RETRY);
+    }
+}
+
+/// The signals the layout lane follows.
+#[cfg(target_os = "linux")]
+struct LayoutSignalStreams {
+    kde: Option<zbus::MessageStream>,
+    ibus: Option<zbus::MessageStream>,
+    /// While no IBus runs: IBus taking its name on the session bus.
+    ibus_started: Option<zbus::MessageStream>,
+}
+
+/// What setting up IBus's engine signal found.
+#[cfg(target_os = "linux")]
+enum IbusSignal {
+    Subscribed(zbus::MessageStream),
+    /// No IBus runs, so it switches no engine until `started` says it runs.
+    Absent {
+        started: zbus::MessageStream,
+    },
+    /// IBus runs, or may run, but its engine signal could not be subscribed
+    /// to.
+    Unreached,
+}
+
+/// KDE's layout signals while KDE serves layouts, and IBus's engine signal
+/// while IBus runs; None unless together they announce every layout change.
+#[cfg(target_os = "linux")]
+async fn layout_signal_streams() -> Option<LayoutSignalStreams> {
+    let session = zbus::Connection::session().await.ok()?;
+    let ibus = async { zbus::connection::Builder::ibus()?.build().await };
+    layout_signal_streams_on(&session, ibus, gnome_desktop_session()).await
+}
+
+/// [`layout_signal_streams`] on `session`, with `ibus` connecting to IBus.
+#[cfg(target_os = "linux")]
+async fn layout_signal_streams_on(
+    session: &zbus::Connection,
+    ibus: impl std::future::Future<Output = zbus::Result<zbus::Connection>>,
+    gnome: bool,
+) -> Option<LayoutSignalStreams> {
+    let bus = zbus::fdo::DBusProxy::new(session).await.ok()?;
+    let kde_serves = bus
+        .name_has_owner(KDE_LAYOUT_DESTINATION.try_into().ok()?)
+        .await
+        .ok()?;
+    let kde = if kde_serves {
+        Some(layout_signal_stream(session, KDE_LAYOUT_INTERFACE, KDE_LAYOUT_PATH).await?)
+    } else {
+        None
+    };
+    // Watched before IBus is looked for, so that one starting in between is
+    // not missed.
+    let started = ibus_started_stream(session).await?;
+    // With no IBus daemon there is no engine switch to miss. With one, its
+    // switches count too: the Entropy engine takes precedence over KDE.
+    let ibus = match ibus.await {
+        Ok(ibus) => match layout_signal_stream(&ibus, IBUS_INTERFACE, IBUS_PATH).await {
+            Some(stream) => IbusSignal::Subscribed(stream),
+            None => IbusSignal::Unreached,
+        },
+        // `ibus address` also fails when the command cannot run or prints no
+        // address, so that alone does not mean IBus is absent. IBus owns its
+        // session bus name while it runs: one that already runs announces no
+        // start, and following KDE alone would miss its switches for good.
+        Err(zbus::Error::Address(_)) => {
+            match bus.name_has_owner(IBUS_DESTINATION.try_into().ok()?).await {
+                Ok(false) => IbusSignal::Absent { started },
+                _ => IbusSignal::Unreached,
+            }
+        }
+        Err(_) => IbusSignal::Unreached,
+    };
+    followed_layout_signals(kde, ibus, gnome)
+}
+
+/// The streams to follow, if together they announce every layout change.
+/// KDE announces its own switches; elsewhere only IBus does (GNOME). An IBus
+/// that runs unfollowed switches engines unannounced, so the lane must keep
+/// polling for it.
+#[cfg(target_os = "linux")]
+fn followed_layout_signals(
+    kde: Option<zbus::MessageStream>,
+    ibus: IbusSignal,
+    gnome: bool,
+) -> Option<LayoutSignalStreams> {
+    let (ibus, ibus_started) = match ibus {
+        IbusSignal::Subscribed(stream) => (Some(stream), None),
+        IbusSignal::Absent { started } => (None, Some(started)),
+        IbusSignal::Unreached => return None,
+    };
+    (kde.is_some() || (ibus.is_some() && gnome)).then_some(LayoutSignalStreams {
+        kde,
+        ibus,
+        ibus_started,
+    })
+}
+
+/// IBus taking its name on the session bus, as it does when it starts.
+#[cfg(target_os = "linux")]
+async fn ibus_started_stream(session: &zbus::Connection) -> Option<zbus::MessageStream> {
+    let rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .sender("org.freedesktop.DBus")
+        .ok()?
+        .interface("org.freedesktop.DBus")
+        .ok()?
+        .member("NameOwnerChanged")
+        .ok()?
+        .arg(0, IBUS_DESTINATION)
+        .ok()?
+        .build();
+    zbus::MessageStream::for_match_rule(rule, session, None)
+        .await
+        .ok()
+}
+
+#[cfg(target_os = "linux")]
+async fn layout_signal_stream(
+    connection: &zbus::Connection,
+    interface: &'static str,
+    path: &'static str,
+) -> Option<zbus::MessageStream> {
+    let rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .interface(interface)
+        .ok()?
+        .path(path)
+        .ok()?
+        .build();
+    zbus::MessageStream::for_match_rule(rule, connection, None)
+        .await
+        .ok()
+}
+
+/// Turns layout signals into lane events until a stream ends or fails, or
+/// IBus starts and its engine signal is to be followed too.
+#[cfg(target_os = "linux")]
+async fn watch_layout_signals(streams: LayoutSignalStreams, events: &LayoutEvents) {
+    use futures_lite::StreamExt as _;
+
+    let LayoutSignalStreams {
+        mut kde,
+        mut ibus,
+        mut ibus_started,
+    } = streams;
+    // Whatever changed while nobody listened is read again first.
+    if !events.following(true) || !events.changed(true) {
+        return;
+    }
+    loop {
+        let next = futures_lite::future::race(
+            futures_lite::future::race(
+                async {
+                    match kde.as_mut() {
+                        Some(kde) => kde.next().await.map(|message| (true, message)),
+                        None => std::future::pending().await,
+                    }
+                },
+                async {
+                    match ibus.as_mut() {
+                        Some(ibus) => ibus.next().await.map(|message| (false, message)),
+                        None => std::future::pending().await,
+                    }
+                },
+            ),
+            async {
+                match ibus_started.as_mut() {
+                    // Ends the watch: the next setup subscribes to IBus too.
+                    Some(started) => started.next().await.and(None),
+                    None => std::future::pending().await,
+                }
+            },
+        )
+        .await;
+        let Some((from_kde, Ok(message))) = next else {
+            return;
+        };
+        let list_edited = from_kde
+            && message
+                .header()
+                .member()
+                .is_some_and(|member| member.as_str() == "layoutListChanged");
+        if !events.changed(list_edited) {
+            return;
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -3644,6 +4661,11 @@ mod windows_platform {
         }
     }
 }
+
+#[cfg(test)]
+mod device_read_first_tests;
+#[cfg(test)]
+mod probe_recovery_tests;
 
 #[cfg(test)]
 mod host_protocol_tests {
@@ -4211,6 +5233,7 @@ pub(crate) fn test_bridge_holding_transport(
     });
     (
         QmkHidHostBridge {
+            incarnation: next_owner_incarnation(),
             device: crate::device::Device {
                 name: "stalled transport fixture".into(),
                 vendor_id: 0,
@@ -4465,12 +5488,39 @@ fn assert_gated_application_output_ui_progress(keepalive: bool) {
             release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         }
     });
-    let mut bridge = test_start_bridge(target, Default::default(), hid.shared_output(), None,
-        HostProtocol::Selected(false), || None);
+    // The worker acquires its endpoint only once the owner is bound, supported
+    // and published. None of those setters wakes it, so a worker that ran
+    // ahead of them would select the long test idle before sending anything.
+    let (open_tx, open_rx) = std::sync::mpsc::channel::<()>();
+    let mut open_gate = Some(open_rx);
+    let mut bridge = QmkHidHostBridge::start_with_sources(
+        target,
+        Default::default(),
+        hid.shared_output(),
+        HostProtocol::Selected(false),
+        || None,
+        move |target, shared| {
+            // A failed setup drops the sender, which releases the worker too.
+            if let Some(gate) = open_gate.take() {
+                let _ = gate.recv();
+            }
+            anyhow::ensure!(
+                shared.is_some(),
+                "test shared owner required; no hardware fallback"
+            );
+            open_host_data_hid(target, shared)
+        },
+    );
     bridge.bind_selected_application_layout_device("vial-0000000000000042".into());
     bridge.set_selected_application_layout_support(true);
     let generation = bridge.application_layout_publication_generation().unwrap();
     bridge.set_application_layout_snapshot(snapshot.clone());
+    assert_eq!(
+        bridge.control.wake.waits.load(Ordering::Relaxed),
+        0,
+        "worker waited before its fixture was set up"
+    );
+    open_tx.send(()).unwrap();
     entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     let (progress_tx, progress_rx) = std::sync::mpsc::channel();
     let ui = thread::spawn(move || {
@@ -4582,8 +5632,8 @@ fn late_profile_publication_after_worker_reopen_is_refused() {
     discover_tx.send(()).unwrap();
     tick_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     let worker = bridge.thread.take().unwrap();
-    bridge.stop();
-    worker.join().unwrap();
+    // Validate the replacement's live grant before retiring it. Production stop
+    // now revokes application grants so late event replies cannot publish E8.
     assert!(!late_publication, "publication accepted a revoked validation token");
     assert_eq!(bridge.test_application_layout_snapshot(),
         crate::application_layouts::ApplicationLayoutSnapshot::inactive(),
@@ -4608,6 +5658,9 @@ fn late_profile_publication_after_worker_reopen_is_refused() {
     assert_eq!(bridge.application_layout_publication_generation(), Some(current_generation));
     assert!(!bridge.has_selected_application_layout_binding());
     assert!(bridge.publish_application_layout_snapshot_for_generation(previous, current_generation));
+    bridge.stop();
+    worker.join().unwrap();
+    assert!(bridge.application_layout_publication_generation().is_none(),"stopped owner retained a live grant");
 }
 
 #[cfg(test)]
@@ -4620,6 +5673,8 @@ pub(crate) fn test_open_selected_owner(
 
 #[cfg(test)]
 mod review_regressions;
+#[cfg(test)]
+mod latency_regressions;
 
 #[cfg(test)]
 mod sm62_timeline_tests {

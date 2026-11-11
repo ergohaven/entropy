@@ -218,6 +218,7 @@ pub(crate) struct ReadOnlyHidSession {
 struct ReadOnlyHidLedger {
     refused: Vec<[u8; MSG_LEN]>,
     failed_reads: Vec<[u8; MSG_LEN]>,
+    closed: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -256,6 +257,9 @@ impl ReadOnlyHidSession {
         data: &[u8],
         send: impl FnOnce() -> Result<[u8; MSG_LEN]>,
     ) -> Result<[u8; MSG_LEN]> {
+        if self.ledger().closed {
+            bail!("The read-only HID session has ended");
+        }
         if !is_read_request(data) {
             return Err(self.refuse(data));
         }
@@ -274,6 +278,12 @@ impl ReadOnlyHidSession {
     /// Reads that reached the transport and failed there.
     pub(crate) fn failed_reads(&self) -> Vec<[u8; MSG_LEN]> {
         self.ledger().failed_reads.clone()
+    }
+
+    /// From now on every handle in this session fails before the transport,
+    /// so a worker left behind cannot reach a keyboard lent back to its owner.
+    pub(crate) fn close(&self) {
+        self.ledger().closed = true;
     }
 }
 
@@ -298,7 +308,9 @@ pub(crate) struct TestHidRecorder {
     responses: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<[u8; MSG_LEN]>>>,
     responder: std::sync::Arc<std::sync::Mutex<Option<TestHidResponder>>>,
     output_connected: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    retired: std::sync::Arc<std::sync::atomic::AtomicBool>,
     output_hook: std::sync::Arc<std::sync::Mutex<Option<Box<dyn FnMut(&[u8]) + Send>>>>,
+    bluetooth: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(test)]
@@ -324,9 +336,26 @@ impl TestHidRecorder {
         *self.responder.lock().unwrap() = Some(Box::new(responder));
     }
 
+    /// Makes the scripted keyboard a Bluetooth one, which connects staged.
+    pub(crate) fn set_bluetooth(&self) {
+        self.bluetooth
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
     pub(crate) fn disconnect_output(&self) {
         self.output_connected
             .store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Retires the scripted connection as a timed-out helper retires its
+    /// proxy: every later request fails, and the transport reports it.
+    pub(crate) fn retire_transport(&self) {
+        self.retired
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    fn is_retired(&self) -> bool {
+        self.retired.load(std::sync::atomic::Ordering::Acquire)
     }
 
     fn ensure_output_connected(&self) -> Result<()> {
@@ -368,12 +397,13 @@ enum HidBackend {
     Proxy(std::sync::Arc<HidProxy>),
     #[cfg(target_os = "linux")]
     LinuxBle(crate::linux_ble::LinuxBleDevice),
+    // Shared, so a read-only view talks to the same scripted keyboard.
     #[cfg(test)]
     Test {
         recorder: TestHidRecorder,
-        combo: std::sync::Mutex<([u16; 4], u16)>,
-        qmk_settings: std::sync::Mutex<std::collections::BTreeMap<u16, u16>>,
-        fault_after_requests: std::sync::Mutex<Option<(usize, TestHidFault)>>,
+        combo: std::sync::Arc<std::sync::Mutex<([u16; 4], u16)>>,
+        qmk_settings: std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<u16, u16>>>,
+        fault_after_requests: std::sync::Arc<std::sync::Mutex<Option<(usize, TestHidFault)>>>,
     },
 }
 
@@ -455,7 +485,9 @@ impl HidDevice {
             #[cfg(target_os = "linux")]
             HidBackend::LinuxBle(_) => true,
             #[cfg(test)]
-            HidBackend::Test { .. } => false,
+            HidBackend::Test { recorder, .. } => recorder
+                .bluetooth
+                .load(std::sync::atomic::Ordering::Acquire),
         }
     }
 
@@ -554,6 +586,43 @@ impl SharedHidOutput {
             return lease.write(data, |payload| self.write_output_report_unordered(payload));
         }
         self.write_output_report_unordered(data)
+    }
+
+    pub(crate) fn write_application_layout_event_state(&self, data: &[u8]) -> Result<bool> {
+        anyhow::ensure!(matches!(data, [0xe8, 7 | 8, _, _, _, _, _, _, 0..=3]), "Invalid execution state");
+        if let Some(lease)=self.host_lease.as_ref() {
+            lease.try_request(|| self.write_output_report_unordered(data)).map(|sent| sent.is_some())
+        } else { self.write_output_report_unordered(data).map(|_|true) }
+    }
+
+    /// Stage packets share the exact settings/unlock pause and serialized owner.
+    pub(crate) fn try_write_application_layout_stage(&self,data:&[u8])->Result<bool> {
+        anyhow::ensure!(matches!(data,[0xec,8,2,..]|[0xed|0xee,8,..] if data.len()==32),"Invalid stage output");
+        if let Some(lease)=self.host_lease.as_ref(){lease.try_request(||self.write_output_report_unordered(data)).map(|sent|sent.is_some())}
+        else{self.write_output_report_unordered(data).map(|_|true)}
+    }
+
+    /// Request/reply on the existing serialized owner, never a second HID open.
+    pub(crate) fn poll_application_layout_event(&self, data: &[u8]) -> Result<Option<[u8; MSG_LEN]>> {
+        anyhow::ensure!(matches!(data, [0xe6, 7 | 8, 0xa5, _, _]) ||
+            (data.len() == 32 && matches!(data[..4], [0xeb, 8, 0xa5, 1 | 2]) && data[8..].iter().all(|b| *b == 0)) ||
+            is_resident09_request(data) ||
+            matches!(data, [0xef, 8, 0..=2, 0..=2, ..] if data.len() == 32), "Invalid runtime query");
+        let request = || match &self.backend {
+            SharedHidOutputBackend::Proxy(proxy) => proxy.upgrade()
+                .context("Shared HID output owner is no longer available")?.usb_send(data),
+            #[cfg(test)]
+            SharedHidOutputBackend::Test(recorder) => {
+                let request=padded_request(data);
+                recorder.requests.lock().unwrap().push(request);
+                if let Some(responder)=recorder.responder.lock().unwrap().as_mut() {
+                    if let Some(reply)=responder(&request) { return reply.map_err(anyhow::Error::msg); }
+                }
+                Ok([0; MSG_LEN])
+            }
+        };
+        if let Some(lease)=self.host_lease.as_ref() { lease.try_request(request) }
+        else { request().map(Some) }
     }
 
     fn write_output_report_unordered(&self, data: &[u8]) -> Result<()> {
@@ -686,6 +755,8 @@ impl HidDevice {
             responder: Default::default(),
             output_hook: Default::default(),
             output_connected: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            retired: Default::default(),
+            bluetooth: Default::default(),
         };
         let device = Self {
             unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
@@ -693,9 +764,11 @@ impl HidDevice {
             read_only: None,
             backend: HidBackend::Test {
                 recorder: recorder.clone(),
-                combo: std::sync::Mutex::new(([0; 4], 0)),
-                qmk_settings: std::sync::Mutex::new(std::collections::BTreeMap::new()),
-                fault_after_requests: std::sync::Mutex::new(fault_after_requests),
+                combo: Default::default(),
+                qmk_settings: Default::default(),
+                fault_after_requests: std::sync::Arc::new(std::sync::Mutex::new(
+                    fault_after_requests,
+                )),
             },
         };
         (device, recorder)
@@ -708,6 +781,34 @@ impl HidDevice {
         let (mut device, recorder) = Self::test_device();
         device.read_only = Some(session);
         (device, recorder)
+    }
+
+    /// Another handle on this transport that goes through `session`, so it
+    /// can only read whatever asks: a running instance lends it to a console
+    /// export. `None` for a transport only its owner can use.
+    pub(crate) fn read_only_view(&self, session: ReadOnlyHidSession) -> Option<Self> {
+        let backend = match &self.backend {
+            HidBackend::Proxy(proxy) => HidBackend::Proxy(proxy.clone()),
+            #[cfg(test)]
+            HidBackend::Test {
+                recorder,
+                combo,
+                qmk_settings,
+                fault_after_requests,
+            } => HidBackend::Test {
+                recorder: recorder.clone(),
+                combo: combo.clone(),
+                qmk_settings: qmk_settings.clone(),
+                fault_after_requests: fault_after_requests.clone(),
+            },
+            _ => return None,
+        };
+        Some(Self {
+            backend,
+            unlock_confirmation_pending: std::sync::atomic::AtomicBool::new(false),
+            read_only: Some(session),
+            native_capabilities: std::sync::Mutex::new(*self.native_capabilities.lock().unwrap()),
+        })
     }
 
     #[cfg(test)]
@@ -723,6 +824,15 @@ impl HidDevice {
                 .context("Scripted pictogram upload requires a per-test backup directory");
         }
         Ok(None)
+    }
+
+    pub(crate) fn pause_application_event_polling(&self) -> Option<crate::qmk_hid_host::ApplicationEventPollPause> {
+        match &self.backend {
+            HidBackend::Proxy(proxy) => Some(proxy.host_output.pause_application_events()),
+            #[cfg(test)]
+            HidBackend::Test { recorder, .. } => Some(recorder.host_output.pause_application_events()),
+            _ => None,
+        }
     }
 
     pub fn open_fresh_for(device: &crate::device::Device) -> Result<Self> {
@@ -792,6 +902,8 @@ impl HidDevice {
     pub(crate) fn is_transport_available(&self) -> bool {
         match &self.backend {
             HidBackend::Proxy(proxy) => proxy.is_available(),
+            #[cfg(test)]
+            HidBackend::Test { recorder, .. } => !recorder.is_retired(),
             _ => true,
         }
     }
@@ -963,10 +1075,13 @@ impl HidDevice {
 
     /// Send exactly MSG_LEN bytes (with 0x00 report ID prepended), receive MSG_LEN bytes back.
     pub(crate) fn usb_send(&self, data: &[u8]) -> Result<[u8; MSG_LEN]> {
-        match &self.read_only {
+        let timing_started = std::time::Instant::now();
+        let result = match &self.read_only {
             Some(session) => session.send(data, || self.usb_send_traced(data)),
             None => self.usb_send_traced(data),
-        }
+        };
+        crate::connect_timing::request("hid.done",data,timing_started,result.is_ok());
+        result
     }
 
     fn usb_send_traced(&self, data: &[u8]) -> Result<[u8; MSG_LEN]> {
@@ -1029,6 +1144,9 @@ impl HidDevice {
                     .lock()
                     .unwrap_or_else(|error| error.into_inner())
                     .push(request);
+                if recorder.is_retired() {
+                    bail!("HID helper timed out or disconnected");
+                }
 
                 let fault = {
                     let mut pending = fault_after_requests
@@ -1223,14 +1341,19 @@ fn is_keymap_read_request(data: &[u8]) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn is_resident09_request(p: &[u8]) -> bool {
+    if !matches!(p,[0xef,9,0..=6,0..=99,..] if p.len()==32) {return false;}
+    match p[2] {
+        3 => p[8..].iter().all(|b|*b==0),
+        6 => (1..=20).contains(&p[10]) && p[11..].iter().all(|b|*b==0),
+        _ => true,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn is_application_layout_capability_probe(data: &[u8]) -> bool {
-    data.starts_with(&[
-        0xE6,
-        crate::application_layouts::APPLICATION_LAYOUT_PROTOCOL_VERSION,
-        0xA5,
-        0,
-        0,
-    ])
+    matches!(data, [0xE6, 7 | 8, 0xA5, 0, 0, rest @ ..] if rest.iter().all(|b| *b == 0))
+        || (data.len() == 32 && matches!(data[..4], [0xeb, 8, 0xa5, 1 | 2]) && data[8..].iter().all(|b| *b == 0))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1281,6 +1404,9 @@ fn usb_send_max_attempts(transport: HidTransport, data: &[u8]) -> usize {
             // A missing write ACK is an uncertain result, never permission to resend.
             (0xB0..=0xB7).contains(command)
                 || matches!(command, 0xC2 | 0xC3 | 0xC4 | 0xC7 | 0xC8 | 0xC9)
+                // Resident STORE/SELECT require explicit acknowledgement;
+                // uncertainty is recovered by a new QUERY, never blind replay.
+                || *command == 0xEF
                 || (0xD0..=0xD5).contains(command)
         })
     {
@@ -1358,6 +1484,10 @@ fn usb_send_local(
         );
     }
 
+    if data.first() == Some(&0xd7) {
+        ensure_hid_path_present(path)?;
+        return hid_fps::exchange_local(device, transport, write_framing, data);
+    }
     let mut write_buf = [0u8; MSG_LEN + 1];
     write_buf[1..1 + data.len()].copy_from_slice(data);
     let write_frame = local_hid_write_frame(&mut write_buf, write_framing);
@@ -1368,6 +1498,7 @@ fn usb_send_local(
 
     let mut last_error: Option<anyhow::Error> = None;
     for attempt in 0..max_retries {
+        crate::connect_timing::attempt(data,attempt,read_timeout_ms);
         ensure_hid_path_present(path)?;
 
         if attempt > 0 {
@@ -1466,6 +1597,10 @@ fn usb_send_local(
 
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("failed to communicate with the device")))
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "hid_fps.rs"]
+mod hid_fps;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn local_hid_write_frame(
@@ -1731,6 +1866,7 @@ fn read_response(
             last_error = Some(anyhow::anyhow!("HID timeout — device did not respond"));
             continue;
         }
+        crate::connect_timing::event(&format!("native.read bytes={bytes_read}"));
         let resp = match decode_hid_response(&read_buf, bytes_read, write_framing) {
             Ok(resp) => resp,
             Err(e) => {
@@ -1746,6 +1882,7 @@ fn read_response(
             return Ok(resp);
         }
 
+        crate::connect_timing::event("native.read rejected=command_mismatch");
         last_error = Some(anyhow::anyhow!(
             "HID stale or unrelated report for command {:02X}: {:02X?}",
             command.first().copied().unwrap_or(0),
@@ -1879,10 +2016,29 @@ fn response_matches_command(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
         | CMD_VIA_LIGHTING_SAVE
         | CMD_VIA_MACRO_SET_BUFFER => resp[0] == cmd,
         CMD_VIA_VIAL_PREFIX => response_matches_vial_command(command, resp),
-        0xE6 if is_application_layout_capability_probe(command) => {
+        0xEF => {
+            if is_resident09_request(command) {
+                return resp[..2]==command[..2] && resp[2]==command[2]|128
+                    && if command[2]==6 {resp[3..10]==command[3..10] && resp[10]<=command[10] && resp[11]<=8 && resp[12+usize::from(resp[10])..].iter().all(|b|*b==0)}
+                    else {resp[3]<=8 && resp[4..8]==command[4..8] && (command[2]==3 || resp[8..]==command[8..])};
+            }
+            matches!(command, [0xef, 8, 0..=2, 0..=2, ..] if command.len() == MSG_LEN)
+                && resp[..2] == command[..2]
+                && resp[2] == command[2] | 0x80 && resp[3] <= 1
+                && resp[4..] == command[4..]
+        }
+        0xE6 if matches!(command, [0xe6, 7 | 8, 0xa5, _, _, ..]) => {
             resp[0] == 0xE6
-                && resp[1] == crate::application_layouts::APPLICATION_LAYOUT_PROTOCOL_VERSION
+                && resp[1] == command[1]
                 && resp[2] == 0x5A
+        }
+        0xD7 => {
+            command.len() == MSG_LEN && command[..3] == [0xd7, 0x62, 3]
+                && resp[..4] == command[..4] && resp[4] == command[5]
+                && resp[5] == command[6]
+                && resp[6] >> 4 == if command[4] == 0 { 1 } else { 2 }
+                && (1..=2).contains(&(resp[6] & 15))
+                && resp[7] == command[3]
         }
         // Keep reading for this command within the original deadline when a
         // delayed response from another pictogram command arrives. Never resend.
@@ -2037,6 +2193,41 @@ fn macos_hid_open_not_permitted(error: &hidapi::HidError) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn resident_three_matcher_filters_late_packets_and_exact_request_echoes() {
+        let mut request = [0x42; 32];
+        request[..4].copy_from_slice(&[0xef, 8, 2, 2]);
+        let mut response = request;
+        response[2] |= 0x80;
+        response[3] = 1;
+        assert!(response_matches_command(&request, &response));
+        assert!(!response_matches_command(&request, &request), "unlock-denied echo is not an ACK");
+        response[3] = 0;
+        assert!(response_matches_command(&request, &response));
+        response[3] = 2;
+        assert!(!response_matches_command(&request, &response));
+        response[3] = 1;
+        for i in (0..3).chain(4..32) {
+            response[i] ^= 1;
+            assert!(!response_matches_command(&request, &response), "field {i}");
+            response[i] ^= 1;
+        }
+        for op in [0xeb, 0xe6, 0xee] {
+            response[0] = op;
+            assert!(!response_matches_command(&request, &response));
+        }
+    }
+
+    #[test]
+    fn resident_three_uncertain_commands_are_never_retransmitted() {
+        for command in 0..=2 {
+            let mut request = [0; 32];
+            request[..4].copy_from_slice(&[0xef, 8, command, 0]);
+            assert_eq!(usb_send_max_attempts(HidTransport::Usb, &request), 1);
+            assert!(usb_read_timeout_ms(HidTransport::Usb, &request) <= 500);
+        }
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn stale_input_monitoring_preflight_does_not_block_bluetooth_hid_open() {
@@ -2059,6 +2250,18 @@ mod tests {
         assert!(requested.get());
         assert!(opened.get());
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn sm62_fps_request_echo_is_not_a_diagnostic_response() {
+        let mut q = [0u8; MSG_LEN];
+        q[..8].copy_from_slice(&[0xd7, 0x62, 3, 1, 1, 23, 0, 0]);
+        assert!(!response_matches_command(&q, &q), "VIA echo accepted as FPS acknowledgement");
+        let mut r = [0u8; MSG_LEN];
+        r[..8].copy_from_slice(&[0xd7, 0x62, 3, 1, 23, 0, 0x21, 1]);
+        assert!(response_matches_command(&q, &r));
+        r[4] = 22;
+        assert!(!response_matches_command(&q, &r), "stale FPS sequence accepted");
     }
 
     #[cfg(target_os = "macos")]

@@ -511,7 +511,18 @@ fn draw_key_label_with_colors(
     let scale = keycap_label_text_scale(rect);
     let clip_rect = rect.shrink2(egui::vec2(4.0, 3.0) * scale);
     let available_width = clip_rect.width().max(1.0);
-    let clipped = painter.with_clip_rect(clip_rect);
+    // The glyphs rotate with the key, so their scissor must cover the rotated
+    // inner rectangle too. Keep fitting against the original local width.
+    let text_clip_rect = if rotation == 0.0 {
+        clip_rect
+    } else {
+        let center = rect.center().to_vec2();
+        clip_rect
+            .translate(-center)
+            .rotate_bb(egui::emath::Rot2::from_angle(rotation))
+            .translate(center)
+    };
+    let clipped = painter.with_clip_rect(text_clip_rect);
     let (top, bottom) = split_keycap_label(label);
     let (top_size, bottom_size) = key_label_font_sizes(label);
 

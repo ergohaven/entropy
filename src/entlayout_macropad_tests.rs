@@ -1,6 +1,74 @@
 //! Real layout/menu/file-dispatch code; only native picker and HID are replaced.
 //! Each test owns an isolated output root, including settings and auto-backups.
 
+impl super::EntropyApp {
+    pub(crate) fn test_unattended_resident_snapshot_available(&self) -> bool {
+        self.entlayout_snapshot().is_some()
+    }
+}
+
+// These historical complete-import fixtures model pre-schema2 firmware. Keep
+// their stateful resource replies, but explicitly reject optional resident
+// negotiation at the OS HID boundary instead of returning ambiguous zeros.
+// A case-specific reply/error always wins, including malformed capability tests.
+pub(super) trait LegacyResidentFixture {
+    fn respond_as_legacy(
+        &self,
+        responder: impl FnMut(&[u8; 32]) -> Option<Result<[u8; 32], String>> + Send + 'static,
+    );
+}
+impl LegacyResidentFixture for crate::hid::TestHidRecorder {
+    fn respond_as_legacy(
+        &self,
+        mut responder: impl FnMut(&[u8; 32]) -> Option<Result<[u8; 32], String>> + Send + 'static,
+    ) {
+        self.respond_by(move |p| {
+            responder(p).or_else(|| {
+                (p[..3] == [0xeb, 8, 0xa5] && matches!(p[3], 1 | 2)
+                    && p[8..].iter().all(|b| *b == 0)).then_some(Ok(*p))
+            })
+        });
+    }
+}
+
+
+include!("entlayout_review_fixes_tests.rs");
+
+fn drain_pending_layout_import(app: &mut EntropyApp, ctx: &egui::Context, now: f64) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.import_pending() || app.vial_hid_task_active() || app.gui_entlayout_preparation.is_some() {
+        assert!(std::time::Instant::now() < deadline, "import lifecycle stalled: {}", app.status_msg);
+        app.tick_layout_import_lifecycle_for_test(ctx, now);
+        std::thread::yield_now();
+    }
+}
+
+fn assert_imported_profile_content_and_authorship(
+    actual: &std::collections::BTreeMap<String, crate::application_layouts::ApplicationLayout>,
+    source: &std::collections::BTreeMap<String, crate::application_layouts::ApplicationLayout>,
+    previous: &std::collections::BTreeMap<String, crate::application_layouts::ApplicationLayout>,
+) {
+    let mut expected = source.clone();
+    for (id, profile) in &mut expected {
+        // Explicit imports create local intent, never copy file provenance.
+        profile.user_edit_revision = previous.get(id)
+            .map_or(0, |old| old.user_edit_revision).wrapping_add(1).max(1);
+    }
+    // Keep every binding, name, rule and other serialized field in the equality.
+    assert_eq!(actual, &expected);
+}
+
+#[test]
+fn complete_macropad_import_rejects_sm62_profile_width_before_hid() {
+    let _storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (app, packets, application) = fixture();
+    let mut bundle = app.entlayout_snapshot().unwrap();
+    bundle.application_layouts.as_mut().unwrap().get_mut(&application).unwrap().layers = vec![vec![4; 62];16];
+    let before = packets.requests().len();
+    assert!(app.validate_entlayout_file(&bundle).is_err(), "SM62 controls cannot enter a Macropad profile store");
+    assert_eq!(packets.requests().len(), before);
+}
+
 #[test]
 fn gui_export_recovers_uncertain_names_at_ready_entry() {
     gui_export_uncertain_names("ready", true);
@@ -49,7 +117,7 @@ fn gui_export_uncertain_names(mode: &str, recovered: bool) {
     let mut gate = Some(release_rx);
     let mut name = String::new();
     let held_opcode = if mode == "borrowed" { 0xfe } else { 0x12 };
-    recorder.respond_by(move |r| {
+    recorder.respond_as_legacy(move |r| {
         if (r[0] == held_opcode && (r[0] != 0xfe || r[1] == 0x08)) && gate.is_some() {
             entered_tx.send(()).unwrap();
             gate.take()
@@ -239,14 +307,10 @@ fn uncertain_layer_name_blocks_unchecked_snapshot_and_auto_backup() {
     let (mut app, recorder, _) = fixture();
     let ctx = egui::Context::default();
     app.deferred_device_load = DeferredDeviceLoadState::complete(16);
-    recorder.respond_by(|request| {
-        if request[..2] == [0xfe, 0x0b] {
-            Some(Ok([0; 32]))
-        } else if request[..2] == [0xfe, 0x0a] {
-            Some(Ok([0xff; 32]))
-        } else {
-            None
-        }
+    recorder.respond_as_legacy(|request| {
+        if request[..2] == [0xfe, 0x0b] { Some(Ok([0; 32])) }
+        else if request[..2] == [0xfe, 0x0a] { Some(Ok([0xff; 32])) }
+        else { None }
     });
     app.rename_application_layout_layer(
         crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID,
@@ -299,7 +363,7 @@ fn assert_layer_name_failure_rolls_back(fail_set: bool) {
     std::fs::write(&names_path, b"old sidecar").unwrap();
     app.supported_qmk_settings = vec![200];
     let mut keys = std::collections::BTreeMap::new();
-    recorder.respond_by(move |request| {
+    recorder.respond_as_legacy(move |request| {
         if request[0] == 0xfe
             && matches!(request[1], 0x0a | 0x0b)
             && request[2..4] == 200u16.to_le_bytes()
@@ -349,7 +413,7 @@ fn macropad_cold_json_export_discovers_and_reads_pictograms() {
     let mut responses = std::collections::VecDeque::from(
         crate::app::pictograms::test_pictogram_read_responses(&library),
     );
-    recorder.respond_by(move |request| {
+    recorder.respond_as_legacy(move |request| {
         matches!(request[0], 0xc0 | 0xca | 0xcb)
             .then(|| Ok(responses.pop_front().expect("unexpected pictogram request")))
     });
@@ -368,6 +432,7 @@ fn macropad_cold_json_export_discovers_and_reads_pictograms() {
 fn macropad_ordinary_import_retries_unconfirmed_capability_after_transport_recovers() {
     let storage = crate::app::app_storage::ScopedTempConfig::new();
     let (mut app, recorder, _) = fixture();
+    let previous_profiles = app.application_layout_settings().unwrap().layouts.clone();
     let bundle = app.entlayout_snapshot().unwrap();
     let input = storage.path().join("retry.entlayout");
     write_entlayout_file(&input, &bundle, app.app_settings.language).unwrap();
@@ -381,7 +446,7 @@ fn macropad_ordinary_import_retries_unconfirmed_capability_after_transport_recov
     let recovered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let transport = recovered.clone();
     let mut keys = std::collections::BTreeMap::new();
-    recorder.respond_by(move |request| {
+    recorder.respond_as_legacy(move |request| {
         let mut response = [0; 32];
         match request[0] {
             0xe6 => {
@@ -447,9 +512,10 @@ fn macropad_ordinary_import_retries_unconfirmed_capability_after_transport_recov
             .application_layout_probe_failed
     );
     assert!(app.application_layout_device_key().is_some());
-    assert_eq!(
-        app.application_layout_settings().unwrap().layouts,
-        bundle.application_layouts.unwrap()
+    assert_imported_profile_content_and_authorship(
+        &app.application_layout_settings().unwrap().layouts,
+        bundle.application_layouts.as_ref().unwrap(),
+        &previous_profiles,
     );
     assert!(recorder.requests().iter().any(|r| r[0] == 0x05));
 }
@@ -562,7 +628,7 @@ fn macropad_ordinary_import_retry_rejection_never_grants_capability() {
         let info = app.device_about_info.as_mut().unwrap();
         info.supports_application_layouts = false;
         info.application_layout_probe_failed = true;
-        recorder.respond_by(move |request| {
+        recorder.respond_as_legacy(move |request| {
             (request[0] == 0xe6).then(|| {
                 let mut response = [0; 32];
                 response[..3].copy_from_slice(&[
@@ -656,7 +722,7 @@ fn macropad_cold_export_explicit_unsupported_is_not_a_transport_error() {
         let storage = crate::app::app_storage::ScopedTempConfig::new();
         let (mut app, recorder, _) = fixture();
         app.display_settings.pictograms.supported = None;
-        recorder.respond_by(move |request| {
+        recorder.respond_as_legacy(move |request| {
             (request[0] == 0xc0).then(|| {
                 let mut response = [0; 32];
                 if format_rejection {
@@ -701,7 +767,7 @@ fn macropad_cold_query_and_read_errors_abort_export_and_import_without_publicati
         app.display_settings.pictograms.supported = None;
         let read_responses = crate::app::pictograms::test_pictogram_read_responses(&library);
         let mut responses = std::collections::VecDeque::from(read_responses.clone());
-        recorder.respond_by(move |request| {
+        recorder.respond_as_legacy(move |request| {
             if request[0] == failure {
                 return Some(Err("injected pictogram failure".into()));
             }
@@ -711,12 +777,12 @@ fn macropad_cold_query_and_read_errors_abort_export_and_import_without_publicati
         std::fs::write(&output, b"existing backup").unwrap();
         app.write_entlayout_export(&output);
         assert_eq!(std::fs::read(&output).unwrap(), b"existing backup");
-        assert!(app.status_msg.contains("failed"));
+        assert!(app.status_msg.contains("failed") || app.status_msg.contains("incomplete"), "{}", app.status_msg);
         assert_eq!(app.display_settings.pictograms.supported, None);
         assert!(!app.display_settings.pictograms.loaded);
         // Reset the stateful read sequence for an independent normal import.
         let mut responses = std::collections::VecDeque::from(read_responses);
-        recorder.respond_by(move |request| {
+        recorder.respond_as_legacy(move |request| {
             if request[0] == failure {
                 return Some(Err("injected pictogram failure".into()));
             }
@@ -786,7 +852,7 @@ fn legacy_layer_name_failure_remains_an_ordinary_firmware_issue() {
     bundle.application_layouts = None;
     bundle.pictograms = None;
     app.supported_qmk_settings = vec![200];
-    recorder.respond_by(|request| {
+    recorder.respond_as_legacy(|request| {
         (request[0] == 0xfe && request[1] == 0x0a && request[2] == 200)
             .then(|| Err("injected name read failure".into()))
     });
@@ -802,7 +868,7 @@ fn macropad_cold_query_status_error_retains_unknown_and_allows_read_retry() {
     let _storage = crate::app::app_storage::ScopedTempConfig::new();
     let (mut app, recorder, _) = fixture();
     app.display_settings.pictograms.supported = None;
-    recorder.respond_by(|request| {
+    recorder.respond_as_legacy(|request| {
         (request[0] == 0xc0).then(|| {
             let mut response = [0; 32];
             response[0] = 0xc0;
@@ -813,7 +879,7 @@ fn macropad_cold_query_status_error_retains_unknown_and_allows_read_retry() {
     assert!(app.entlayout_export_json().unwrap().is_err());
     assert_eq!(app.display_settings.pictograms.supported, None);
     assert!(!app.display_settings.pictograms.loaded);
-    recorder.respond_by(|_| None);
+    recorder.respond_as_legacy(|_| None);
     let library = PictogramLibrary::blank();
     recorder.respond_with(crate::app::pictograms::test_pictogram_read_responses(
         &library,
@@ -828,15 +894,125 @@ use crate::application_layouts::{
     DEFAULT_APPLICATION_LAYOUT_ID, DetectedApplication, DeviceApplicationLayouts,
 };
 
+#[test]
+fn host_resource_combo_accepted_set_failed_get_refuses_stale_export() {
+    exercise_failed_resource_export(0);
+}
+#[test]
+fn host_resource_tap_dance_accepted_set_failed_get_refuses_stale_export() {
+    exercise_failed_resource_export(1);
+}
+#[test]
+fn host_resource_key_override_accepted_set_failed_get_refuses_stale_export() {
+    exercise_failed_resource_export(2);
+}
+#[test]
+fn host_resource_alt_repeat_accepted_set_failed_get_refuses_stale_export() {
+    exercise_failed_resource_export(3);
+}
+fn exercise_failed_resource_export(kind: usize) {
+    let (get,set)=match kind {0=>(3,4),1=>(1,2),2=>(5,6),_=>(7,8)};
+    for sm62 in [false, true] {
+        let storage = crate::app::app_storage::ScopedTempConfig::new();
+        let (mut app, recorder, _) = fixture_for(sm62);
+        app.combo_entries = vec![ComboEntry::default()];
+        app.keycode_picker.tap_dance_entries = vec![Default::default()];
+        app.key_override_entries = vec![Default::default()];
+        app.alt_repeat_entries = vec![Default::default()];
+        let section=match kind {0=>DeferredLoadSection::Combos,1=>DeferredLoadSection::TapDance,2=>DeferredLoadSection::KeyOverrides,_=>DeferredLoadSection::AltRepeat};
+        let mut context=app.deferred_device_load.context.as_ref().map(|c|(**c).clone());
+        if context.is_none() {
+            context=Some(DeferredDeviceLoadContext { supports_universal_numero: false,
+                json:std::sync::Arc::new(serde_json::json!({})),supported_qmk_settings:Default::default(),
+                definition_fingerprint:42,layer_count:app.layer_count,rows:if sm62 {10}else{5},cols:if sm62 {7}else{3},
+                encoder_count:if sm62 {0}else{1},macro_count:0,macro_memory_bytes:Some(16),
+                combo_count:if kind==0 {1}else{0},tap_dance_count:if kind==1 {1}else{0},
+                key_override_count:if kind==2 {1}else{0},alt_repeat_count:if kind==3 {1}else{0},
+                modules_supported:false,touchpad_supported:false,bluetooth_supported:false,layer_leds_supported:false,rgb_supported:false,lighting_mode:None,
+                supports_rmk_native_key_actions:false,supports_universal_symbols:false,supports_universal_russian_letters:false,
+                supports_rmk_native_combo_output:false,supports_rmk_native_tap_dance_actions:false,supports_rmk_combo_layers:false,
+            });
+        }
+        app.deferred_device_load=DeferredDeviceLoadState::staged(context.unwrap());
+        for layer in 0..app.layer_count {app.deferred_device_load.set_layer_status(layer,DeferredLoadStatus::Loaded);}
+        app.deferred_device_load.set_section_status(section,DeferredLoadStatus::Loaded);
+        let mut bundle = app.entlayout_snapshot_with_profiles(None).unwrap();
+        bundle.data.keymap = app.layout.as_ref().unwrap().layers.iter()
+            .map(|layer| layer.iter().map(|binding| binding.vial_keycode()).collect()).collect();
+        bundle.data.encoder_keymap = app.layout.as_ref().unwrap().encoder_layers.clone();
+        let original=bundle.clone();
+        match kind {
+            0 => {bundle.data.combos.entries[0].keys=[4,5,0,0];bundle.data.combos.entries[0].output=6;}
+            1 => bundle.data.tap_dance.entries[0].on_tap=4,
+            2 => {bundle.data.key_overrides.entries[0].trigger=4;bundle.data.key_overrides.entries[0].replacement=5;}
+            _ => {bundle.data.alt_repeat.entries[0].keycode=4;bundle.data.alt_repeat.entries[0].alt_keycode=5;}
+        }
+        let physical = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let memory = physical.clone();
+        let broken=std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let failure=broken.clone();
+        recorder.respond_as_legacy(move |r| {
+            // Wire opcodes from hid_protocol.rs; production constants are private.
+            if r[0] == 0xfe && r[1] == 0x0d {
+                if r[2] == set {
+                    *memory.lock().unwrap()=r[4..].to_vec();
+                    return Some(Ok([0; 32]));
+                }
+                if r[2] == get {
+                    if failure.load(std::sync::atomic::Ordering::SeqCst) {
+                        return Some(Err("injected accepted SET then failed GET".into()));
+                    }
+                    let mut response=[0;32];response[1..29].copy_from_slice(&memory.lock().unwrap());
+                    return Some(Ok(response));
+                }
+            }
+            None
+        });
+        let before=serde_json::to_vec(&app.app_settings).unwrap();
+        let input = storage.path().join("changed.entlayout");
+        write_entlayout_file(&input, &bundle, app.app_settings.language).unwrap();
+        assert!(app.import_entlayout_from_path(&input).is_err());
+        assert!(physical.lock().unwrap().iter().any(|byte|*byte!=0),"SET not exercised kind={kind}");
+        assert_eq!(serde_json::to_vec(&app.app_settings).unwrap(),before);
+        assert!(!matches!(app.entlayout_export_json(), Some(Ok(_))), "accepted resource SET left stale export confirmed; sm62={sm62} kind={kind}");
+        let export=storage.path().join("recovered.entlayout");
+        broken.store(false,std::sync::atomic::Ordering::SeqCst);
+        crate::app::file_dialog::set_test_dialog_result(Some(export.clone()));
+        app.request_entlayout_export_after_full_load();
+        let ctx=egui::Context::default();
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(5);
+        while !export.exists() && std::time::Instant::now()<deadline {
+            app.tick_layout_import_lifecycle_for_test(&ctx,1.0);app.poll_file_dialog(&ctx);std::thread::yield_now();
+        }
+        assert!(export.exists(),"recovery stalled kind={kind}: {}",app.status_msg);
+        let recovered:EntLayoutFile=serde_json::from_slice(&std::fs::read(&export).unwrap()).unwrap();
+        match kind {
+            0=>assert_eq!(serde_json::to_value(&recovered.data.combos.entries).unwrap(),serde_json::to_value(&bundle.data.combos.entries).unwrap()),
+            1=>assert_eq!(serde_json::to_value(&recovered.data.tap_dance.entries).unwrap(),serde_json::to_value(&bundle.data.tap_dance.entries).unwrap()),
+            2=>assert_eq!(serde_json::to_value(&recovered.data.key_overrides.entries).unwrap(),serde_json::to_value(&bundle.data.key_overrides.entries).unwrap()),
+            _=>assert_eq!(serde_json::to_value(&recovered.data.alt_repeat.entries).unwrap(),serde_json::to_value(&bundle.data.alt_repeat.entries).unwrap()),
+        }
+        let writes=recorder.requests().iter().filter(|r|r[..3]==[0xfe,0x0d,set]).count();
+        write_entlayout_file(&input,&original,app.app_settings.language).unwrap();
+        app.import_entlayout_from_path(&input).unwrap();
+        assert!(recorder.requests().iter().filter(|r|r[..3]==[0xfe,0x0d,set]).count()>writes,"stale equality suppressed correction kind={kind}");
+        assert!(physical.lock().unwrap().iter().all(|byte|*byte==0));
+    }
+}
+
 fn fixture() -> (EntropyApp, crate::hid::TestHidRecorder, String) {
+    fixture_for(false)
+}
+
+fn fixture_for(sm62: bool) -> (EntropyApp, crate::hid::TestHidRecorder, String) {
     let mut app = EntropyApp::new_inert_for_test();
     // Most cases model firmware with explicitly unsupported custom icon storage.
     // Cold-connection regressions override this to None and script production reads.
     app.display_settings.pictograms.supported = Some(false);
     let device = Device {
-        name: "M4CR0Pad v3".into(),
+        name: if sm62 { "SM62" } else { "M4CR0Pad v3" }.into(),
         vendor_id: 0xE126,
-        product_id: 0x0042,
+        product_id: if sm62 { 0x00b2 } else { 0x0042 },
         manufacturer: "Ergohaven".into(),
         serial_number: "layout-test".into(),
         bus_type: "Usb".into(),
@@ -863,18 +1039,28 @@ fn fixture() -> (EntropyApp, crate::hid::TestHidRecorder, String) {
     other_direction.direction = 1 - other_direction.direction;
     other_direction.x += 1.0;
     layout.encoders.push(other_direction);
-    layout.layers = vec![vec![4.into(); layout.keys.len()]; 8];
-    layout.encoder_layers = vec![vec![5; layout.encoders.len()]; 8];
+    if sm62 {
+        let keys: Vec<String> = crate::application_layouts::SM62_APPLICATION_POSITIONS.iter()
+            .map(|(r,c)| format!("{r},{c}")).collect();
+        layout = KeyboardLayout::from_vial_json(&serde_json::json!({
+            "name":"SM62", "matrix":{"rows":10,"cols":7}, "layouts":{"keymap":[keys]}
+        })).unwrap();
+    }
+    let layers = if sm62 {16} else {8};
+    layout.layers = vec![vec![4.into(); layout.keys.len()]; layers];
+    layout.encoder_layers = vec![vec![5; layout.encoders.len()]; layers];
+    // This manually connected fixture declares a confirmed legacy QMK schema.
+    layout.live_features.qmk_settings_confirmed = true;
     app.layout = Some(layout);
-    app.layer_count = 8;
-    app.layer_names = (0..8).map(|i| format!("Firmware {i}")).collect();
+    app.layer_count = layers;
+    app.layer_names = (0..layers).map(|i| format!("Firmware {i}")).collect();
     app.keycode_picker.macro_texts.clear();
     app.vial_unlocked = Some(true);
     app.default_layout_device_reconciled = true;
     let (hid, recorder) = crate::hid::HidDevice::test_device();
     // Synthetic firmware memory, not a bypass of production writeback validation.
     let mut keys = std::collections::BTreeMap::new();
-    recorder.respond_by(move |request| match request[0] {
+    recorder.respond_as_legacy(move |request| match request[0] {
         0x05 => {
             keys.insert(
                 (request[1], request[2], request[3]),
@@ -895,6 +1081,7 @@ fn fixture() -> (EntropyApp, crate::hid::TestHidRecorder, String) {
     app.hid_device = Some(hid.into());
     let key = app.application_layout_device_key().unwrap();
     let mut settings = DeviceApplicationLayouts::default();
+    if sm62 { settings.layouts.get_mut(DEFAULT_APPLICATION_LAYOUT_ID).unwrap().layers = vec![vec![4;62];16]; }
     let application = settings.create_for_application(&DetectedApplication {
         executable: "entropy".into(),
         display_name: "Entropy".into(),
@@ -917,6 +1104,7 @@ fn fixture() -> (EntropyApp, crate::hid::TestHidRecorder, String) {
         .layer_names[0] = "My Default".into();
     app.app_settings.application_layouts.insert(key, settings);
     for id in [DEFAULT_APPLICATION_LAYOUT_ID, application.as_str()] {
+        if sm62 { continue; }
         app.application_layout_settings_mut()
             .unwrap()
             .layouts
@@ -942,10 +1130,322 @@ fn fixture() -> (EntropyApp, crate::hid::TestHidRecorder, String) {
 }
 
 #[test]
+fn sm62_complete_import_rejects_encoder_stacks_before_writes() {
+    let _storage=crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app,recorder,application)=fixture_for(true);
+    let mut bundle=app.entlayout_snapshot_with_profiles(None).unwrap();
+    bundle.application_layouts.as_mut().unwrap().get_mut(&application).unwrap().encoder_stacks[15]=vec![crate::application_layouts::EncoderStackAction {
+        name:"Not a physical SM62 key".into(),counter_clockwise:4,clockwise:5
+    };2];
+    assert!(app.validate_entlayout_file(&bundle).is_err());
+    assert!(recorder.requests().is_empty());
+}
+
+#[test]
+fn sm62_complete_backup_preserves_empty_custom_groups_only_for_its_device() {
+    let _storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app, recorder, _) = fixture_for(true);
+    let category = app.application_layout_settings_mut().unwrap().create_category("Пустая группа").unwrap();
+    app.app_settings.application_layouts.insert("unrelated-device".into(), Default::default());
+    app.app_settings.application_layouts.get_mut("unrelated-device").unwrap().create_category("Not bundled").unwrap();
+    let json = app.entlayout_export_json().unwrap().unwrap();
+    let bundle: EntLayoutFile = serde_json::from_str(&json).unwrap();
+    assert_eq!(bundle.application_categories.iter().find(|(id,_)|id == &category).map(|(_,n)|n.as_str()),Some("Пустая группа"));
+    assert!(!bundle.application_categories.iter().any(|(_,n)| n == "Not bundled"));
+    assert_eq!(recorder.requests().len(), 2);
+    assert!(recorder.requests().iter().all(|p| p[..3] == [0xeb, 8, 0xa5]));
+}
+
+#[test]
+fn sm62_old_td0_rejects_legacy_raw_td_references_before_backup_or_hid() {
+    let storage = crate::app::app_storage::ScopedTempConfig::new();
+    for place in 0..5 {
+        let (mut app, recorder, _) = fixture_for(true);
+        app.keycode_picker.tap_dance_entries.clear();
+        let mut bundle = app.entlayout_snapshot_with_profiles(None).unwrap();
+        bundle.version = 7;
+        bundle.application_layouts = None;
+        bundle.application_categories.clear();
+        match place {
+            0 => bundle.data.keymap[15][61] = 0x5700,
+            1 => bundle.data.combos.entries.push(EntComboEntry {keys:[4,5,0,0],output:0x5700,native_output:None,rynk_output:None,layer:None}),
+            2 => bundle.data.key_overrides.entries.push(EntKeyOverrideEntry {trigger:4,replacement:0x5700,layers:0xffff,trigger_mods:0,negative_mod_mask:0,suppressed_mods:0,options:0}),
+            3 => bundle.data.alt_repeat.entries.push(EntAltRepeatEntry {keycode:4,alt_keycode:0x5700,allowed_mods:0,options:0}),
+            4 => bundle.data.combos.entries.push(EntComboEntry {keys:[0x5700,5,0,0],output:4,native_output:None,rynk_output:None,layer:None}),
+            _ => unreachable!(),
+        }
+        let path=storage.path().join(format!("td-{place}.entlayout"));
+        write_entlayout_file(&path,&bundle,app.app_settings.language).unwrap();
+        let before=serde_json::to_value(&app.app_settings).unwrap();
+        assert!(app.import_entlayout_from_path(&path).is_err(),"TD0 accepted legacy reference at {place}");
+        assert!(recorder.requests().is_empty(),"validation must precede backup/HID");
+        assert_eq!(serde_json::to_value(&app.app_settings).unwrap(),before);
+        assert!(!storage.path().join("entropy/backups").exists());
+    }
+}
+
+#[test]
+fn sm62_complete_import_refuses_unrepresentable_portable_settings_before_any_write() {
+    let storage=crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app,recorder,_)=fixture_for(true);
+    let mut bundle=app.entlayout_snapshot_with_profiles(None).unwrap();
+    bundle.data.portable_settings.push(EntPortableSetting {
+        id:"touchpad_flags".into(),qsid:124,width:EntPortableSettingWidth::U8,
+        value:3,variants:vec![],module:None,
+    });
+    let path=storage.path().join("unsupported.entlayout");
+    write_entlayout_file(&path,&bundle,app.app_settings.language).unwrap();
+    let before=serde_json::to_value(&app.app_settings).unwrap();
+    assert!(app.import_entlayout_from_path(&path).is_err(),"complete SM62 import must not report success with skipped settings");
+    assert!(recorder.requests().is_empty());
+    assert_eq!(serde_json::to_value(&app.app_settings).unwrap(),before);
+    assert!(!storage.path().join("entropy/backups").exists());
+}
+
+#[test]
+fn sm62_full_macro_slots_capacity_and_changed_last_byte_verified_not_trimmed() {
+    // Stateful OS-HID boundary model, not firmware interoperability evidence.
+    // OLD has 6066 bytes; current has 5224. Never model current as 6066.
+    let storage=crate::app::app_storage::ScopedTempConfig::new();
+    for (capacity,body_len,fits) in [(6066usize,5957usize,true),(5224,5957,false),(5224,5115,true)] {
+        let (mut app,recorder,_)=fixture_for(true);
+        app.keycode_picker.macro_count=109;
+        app.keycode_picker.macro_texts=vec![vec![];109];
+        app.keycode_picker.macro_texts[108]=vec![b'a';body_len];
+        app.keycode_picker.macro_names=vec![String::new();109];
+        app.keycode_picker.macro_names[108]="Последний макрос".into();
+        app.application_layout_settings_mut().unwrap().provision_builtin_presets(None);
+        for profile in app.application_layout_settings_mut().unwrap().layouts.values_mut() { profile.set_keycode(15,61,0x776c); }
+        let bundle=app.entlayout_snapshot_with_profiles(None).unwrap();
+        app.keycode_picker.macro_texts=vec![vec![];109];
+        let memory=std::sync::Arc::new(std::sync::Mutex::new(vec![0xa5;capacity]));
+        let shared=memory.clone();
+        let mut keys=std::collections::BTreeMap::new();
+        recorder.respond_as_legacy(move |request| match request[0] {
+            0x0d => {let mut r=[0;32];r[1..3].copy_from_slice(&(capacity as u16).to_be_bytes());Some(Ok(r))},
+            0x0e|0x0f => {
+                let offset=u16::from_be_bytes([request[1],request[2]]) as usize;
+                let len=request[3] as usize;
+                assert!(offset+len<=capacity);
+                let mut memory=shared.lock().unwrap(); let mut r=[0;32];
+                if request[0]==0x0f {memory[offset..offset+len].copy_from_slice(&request[4..4+len]);}
+                else {r[4..4+len].copy_from_slice(&memory[offset..offset+len]);}
+                Some(Ok(r))
+            },
+            0x05 => {keys.insert((request[1],request[2],request[3]),[request[4],request[5]]);Some(Ok([0;32]))},
+            0x04 => {let mut r=[0;32];if let Some(v)=keys.get(&(request[1],request[2],request[3])) {r[4..6].copy_from_slice(v);}Some(Ok(r))},
+            _ => None,
+        });
+        let path=storage.path().join(format!("macros-{capacity}.entlayout"));
+        write_entlayout_file(&path,&bundle,app.app_settings.language).unwrap();
+        let before=serde_json::to_value(&app.app_settings).unwrap();
+        let result=app.import_entlayout_from_path(&path);
+        if fits {
+            result.unwrap();
+            assert_eq!(app.keycode_picker.macro_texts[108],vec![b'a';body_len]);
+            let bytes=memory.lock().unwrap();
+            assert_eq!(bytes[capacity-1],0,"last physical byte is uploaded separator, not stale 0xa5");
+            assert_eq!(bytes[capacity-2],b'a');
+            assert!(recorder.requests().iter().any(|r|r[0]==0x0f && u16::from_be_bytes([r[1],r[2]]) as usize +r[3] as usize == capacity));
+            assert!(recorder.requests().iter().any(|r|r[0]==0x0e && u16::from_be_bytes([r[1],r[2]]) as usize +r[3] as usize == capacity));
+            let key=app.application_layout_device_key().unwrap();
+            assert!(load_app_settings().application_layouts[&key].layouts.values().all(|p|p.layers[15][61]==0x776c));
+        } else {
+            assert!(result.unwrap_err().to_string().contains("capacity"));
+            assert!(recorder.requests().iter().all(|r|r[0]==0x0d),"capacity refusal precedes any write or backup");
+            assert_eq!(serde_json::to_value(&app.app_settings).unwrap(),before);
+            assert!(memory.lock().unwrap().iter().all(|v|*v==0xa5));
+        }
+    }
+}
+
+#[test]
+fn sm62_old_td0_rejects_current_td32_and_every_profile_last_key_without_publication() {
+    let storage=crate::app::app_storage::ScopedTempConfig::new();
+    let (mut source,_,_)=fixture_for(true);
+    source.application_layout_settings_mut().unwrap().provision_builtin_presets(None);
+    source.keycode_picker.tap_dance_entries=vec![Default::default();32];
+    let with_resources=source.entlayout_snapshot_with_profiles(None).unwrap();
+    let (mut target,recorder,_)=fixture_for(true);
+    target.keycode_picker.tap_dance_entries.clear();
+    let mut cases=vec![with_resources.clone()];
+    for id in with_resources.application_layouts.as_ref().unwrap().keys() {
+        let mut bundle=with_resources.clone();
+        bundle.data.tap_dance.entries.clear();
+        bundle.application_layouts.as_mut().unwrap().get_mut(id).unwrap().layers[15][61]=0x571f;
+        cases.push(bundle);
+    }
+    let before=serde_json::to_value(&target.app_settings).unwrap();
+    for (index,bundle) in cases.iter().enumerate() {
+        let path=storage.path().join(format!("unsupported-td-{index}.entlayout"));
+        write_entlayout_file(&path,bundle,target.app_settings.language).unwrap();
+        assert!(target.import_entlayout_from_path(&path).is_err(),"case {index}");
+        assert_eq!(serde_json::to_value(&target.app_settings).unwrap(),before);
+        assert!(recorder.requests().is_empty());
+        assert!(!storage.path().join("entropy/backups").exists());
+    }
+}
+
+#[test]
+fn sm62_legacy_import_rejects_all_slot_overflows_before_mutation() {
+    let storage=crate::app::app_storage::ScopedTempConfig::new();
+    for kind in 0..4 {
+        let (mut app,recorder,_)=fixture_for(true);
+        app.keycode_picker.macro_count=1;
+        app.combo_entries=vec![Default::default()];
+        app.key_override_entries=vec![Default::default()];
+        app.alt_repeat_entries=vec![Default::default()];
+        let mut bundle=app.entlayout_snapshot_with_profiles(None).unwrap();
+        bundle.version=7;bundle.application_layouts=None;bundle.application_categories.clear();
+        bundle.data.keymap[0][0]=44;
+        match kind {
+            0=>bundle.data.macros.bytecode_base64=vec![BASE64_STANDARD.encode(b"a");2],
+            1=>bundle.data.combos.entries=vec![EntComboEntry{keys:[4,5,0,0],output:6,native_output:None,rynk_output:None,layer:None};2],
+            2=>bundle.data.key_overrides.entries=vec![EntKeyOverrideEntry{trigger:4,replacement:5,layers:65535,trigger_mods:0,negative_mod_mask:0,suppressed_mods:0,options:0};2],
+            3=>bundle.data.alt_repeat.entries=vec![EntAltRepeatEntry{keycode:4,alt_keycode:5,allowed_mods:0,options:0};2],
+            _=>unreachable!(),
+        }
+        let path=storage.path().join(format!("overflow-{kind}.entlayout"));
+        write_entlayout_file(&path,&bundle,app.app_settings.language).unwrap();
+        let before=serde_json::to_value(&app.app_settings).unwrap();
+        assert!(app.import_entlayout_from_path(&path).is_err(),"slot overflow kind {kind} was trimmed");
+        assert!(recorder.requests().is_empty(),"pure slot validation must precede any HID");
+        assert_eq!(serde_json::to_value(&app.app_settings).unwrap(),before);
+        assert!(!storage.path().join("entropy/backups").exists());
+    }
+}
+
+#[test]
+fn sm62_legacy_macro_capacity_overflow_precedes_keymap_write_and_backup() {
+    let storage=crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app,recorder,_)=fixture_for(true);
+    app.keycode_picker.macro_count=109;
+    let mut bundle=app.entlayout_snapshot_with_profiles(None).unwrap();
+    bundle.version=7;bundle.application_layouts=None;bundle.application_categories.clear();
+    bundle.data.keymap[0][0]=44;
+    bundle.data.macros.bytecode_base64=vec![BASE64_STANDARD.encode(vec![b'a';5957])];
+    recorder.respond_as_legacy(|q|if q[0]==0x0d {let mut r=[0;32];r[1..3].copy_from_slice(&5224u16.to_be_bytes());Some(Ok(r))}else{None});
+    let path=storage.path().join("legacy6066.entlayout");
+    write_entlayout_file(&path,&bundle,app.app_settings.language).unwrap();
+    let before=serde_json::to_value(&app.app_settings).unwrap();
+    let error=app.import_entlayout_from_path(&path).expect_err("legacy OLD bytes must not partially reach current");
+    assert!(error.to_string().contains("capacity"),"{error:#}");
+    assert!(recorder.requests().iter().any(|r|r[0]==0x0d),"target capacity must actually be queried");
+    assert!(recorder.requests().iter().all(|r|r[0]==0x0d));
+    assert_eq!(serde_json::to_value(&app.app_settings).unwrap(),before);
+    assert!(!storage.path().join("entropy/backups").exists());
+}
+
+#[test]
+fn sm62_legacy_layout_preserves_global_text_expander() {
+    let storage=crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app,_,_)=fixture_for(true);
+    app.app_settings.text_expander_enabled=true;
+    app.app_settings.text_expander_app_blacklist="Global protected application".into();
+    app.app_settings.text_expansion_rules=vec![crate::text_expander::TextExpansionRule{enabled:true,trigger:";protected".into(),replacement:"Existing global rule".into()}];
+    app.app_settings.text_expander_rule_files=normalize_text_expander_rule_files(&["protected.json".into()]);
+    save_text_expansion_rules(&app.app_settings.text_expansion_rules);
+    let primary=std::fs::read(text_expander_rules_path()).unwrap();
+    let extra_path=text_expander_extra_rules_path("protected.json");
+    std::fs::create_dir_all(extra_path.parent().unwrap()).unwrap();
+    std::fs::write(&extra_path,b"[{\"enabled\":true,\"trigger\":\";existing\",\"replacement\":\"Protected extra file\"}]").unwrap();
+    let extra=std::fs::read(&extra_path).unwrap();
+    let before=serde_json::to_value(&app.app_settings).unwrap();
+    let mut bundle=app.entlayout_snapshot_with_profiles(None).unwrap();
+    bundle.version=7;bundle.application_layouts=None;bundle.application_categories.clear();
+    bundle.data.text_expander=EntTextExpanderData::default();
+    let path=storage.path().join("legacy-no-global.entlayout");
+    write_entlayout_file(&path,&bundle,app.app_settings.language).unwrap();
+    let report=app.import_entlayout_from_path(&path).unwrap();
+    assert!(!report.contains("Text Expander"),"SM62 report must not claim global settings were imported: {report}");
+    let after=serde_json::to_value(load_app_settings()).unwrap();
+    for (key,value) in before.as_object().unwrap() {
+        if key.starts_with("text_expander") || key=="text_expansion_rules" { assert_eq!(&after[key],value,"global {key} changed"); }
+    }
+    assert_eq!(std::fs::read(text_expander_rules_path()).unwrap(),primary);
+    assert_eq!(std::fs::read(extra_path).unwrap(),extra);
+}
+
+#[test]
+fn sm62_layer_specific_combo_refusal_precedes_changed_keymap_write() {
+    let storage=crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app,recorder,_)=fixture_for(true);
+    app.combo_entries=vec![ComboEntry{keys:[4,5,0,0],output:6.into(),layer:Some(0)}];
+    app.layout.as_mut().unwrap().layers[0][0]=44.into();
+    let bundle=app.entlayout_snapshot_with_profiles(None).unwrap();
+    app.layout.as_mut().unwrap().layers[0][0]=4.into();
+    let path=storage.path().join("layer-combo.entlayout");
+    write_entlayout_file(&path,&bundle,app.app_settings.language).unwrap();
+    assert!(app.import_entlayout_from_path(&path).is_err());
+    assert!(recorder.requests().is_empty(),"unsupported layer-specific Combo discovered after keymap writes");
+    assert!(!storage.path().join("entropy/backups").exists());
+}
+
+#[test]
+fn sm62_legacy_td32_checks_all_raw_and_native_action_dependencies_before_mutation() {
+    let storage=crate::app::app_storage::ScopedTempConfig::new();
+    for code in [0x77ff,0x7700,0x571f,0x521f] {
+        for field in 0..4 {
+            let (mut app,recorder,_)=fixture_for(true);
+            app.keycode_picker.macro_count=109;
+            app.keycode_picker.tap_dance_entries=vec![Default::default();32];
+            let mut bundle=app.entlayout_snapshot_with_profiles(None).unwrap();
+            bundle.version=7;bundle.application_layouts=None;bundle.application_categories.clear();
+            bundle.data.keymap[0][0]=44;
+            bundle.data.tap_dance.entries.truncate(1);
+            let entry=&mut bundle.data.tap_dance.entries[0];
+            match field {0=>entry.on_tap=code,1=>entry.on_hold=code,2=>entry.on_double_tap=code,3=>entry.on_tap_hold=code,_=>unreachable!()}
+            let path=storage.path().join("legacy-td-dependency.entlayout");
+            write_entlayout_file(&path,&bundle,app.app_settings.language).unwrap();
+            let error=app.import_entlayout_from_path(&path).expect_err("legacy TD action was silently skipped or bound to unrelated target data");
+            assert!(error.to_string().contains("Tap Dance dependency"),"code={code:#x} field={field}: {error:#}");
+            assert!(recorder.requests().is_empty());
+            assert!(!storage.path().join("entropy/backups").exists());
+        }
+    }
+    for field in 0..4 {
+        let (mut app,recorder,_)=fixture_for(true);
+        app.keycode_picker.tap_dance_entries=vec![Default::default();32];
+        let mut bundle=app.entlayout_snapshot_with_profiles(None).unwrap();
+        bundle.version=7;bundle.application_layouts=None;bundle.application_categories.clear();
+        let encoded=encode_native_binding(crate::keyboard::KeyBinding::VialTapHold {
+            tap:rmk_types::action::Action::TriggerMacro(255),
+            hold:rmk_types::action::Action::TriggerMacro(255),
+            profile:crate::keyboard::VialMorseProfile{raw:0,index:0},
+        }).unwrap();
+        let entry=&mut bundle.data.tap_dance.entries[0];
+        match field {0=>entry.native_on_tap=Some(encoded),1=>entry.native_on_hold=Some(encoded),2=>entry.native_on_double_tap=Some(encoded),3=>entry.native_on_tap_hold=Some(encoded),_=>unreachable!()}
+        let path=storage.path().join("legacy-native-td.entlayout");
+        write_entlayout_file(&path,&bundle,app.app_settings.language).unwrap();
+        assert!(app.import_entlayout_from_path(&path).is_err());
+        assert!(recorder.requests().is_empty());
+        assert!(!storage.path().join("entropy/backups").exists());
+    }
+}
+
+#[test]
+fn sm62_unified_export_discriminates_geometry_and_keeps_all_profiles() {
+    let _storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app, _, application) = fixture_for(true);
+    app.application_layout_settings_mut().unwrap().layouts.get_mut(&application).unwrap().set_keycode(15,61,5);
+    let json = app.entlayout_export_json().unwrap().unwrap();
+    let bundle: EntLayoutFile = serde_json::from_str(&json).unwrap();
+    assert_eq!(bundle.version,10, "SM62 must not masquerade as a v9 Macropad backup");
+    assert_eq!(bundle.keyboard.keys,62);
+    assert_eq!(bundle.application_layouts.as_ref().unwrap()[&application].layers[15][61],5);
+    assert!(bundle.application_layouts.as_ref().unwrap().values().all(|p| p.layers.iter().all(|l| l.len()==62)));
+    let (macropad, recorder, _) = fixture();
+    assert!(macropad.validate_entlayout_file(&bundle).is_err());
+    assert!(recorder.requests().is_empty());
+}
+
+#[test]
 fn macropad_unified_export_contains_every_profile_independent_of_selection() {
     let _storage = crate::app::app_storage::ScopedTempConfig::new();
     let (mut app, _, application) = fixture();
-    let expected = app.application_layout_settings().unwrap().layouts.clone();
+    let mut expected = app.application_layout_settings().unwrap().layouts.clone();
+    // Local owner intent is deliberately excluded from portable documents.
+    for profile in expected.values_mut() { profile.user_edit_revision = 0; }
     for selection in [DEFAULT_APPLICATION_LAYOUT_ID, application.as_str()] {
         app.application_layout_settings_mut()
             .unwrap()
@@ -1046,13 +1546,18 @@ fn macropad_unified_persistence_failure_keeps_memory_and_hid_untouched() {
 }
 
 #[test]
-fn macropad_unified_shared_macros_and_tap_dance_round_trip_every_profile() {
+fn macropad_unified_shared_macros_and_tap_dance_round_trip_every_profile() { shared_resources_round_trip_every_profile(false); }
+
+#[test]
+fn sm62_unified_shared_resources_and_categories_round_trip_every_control() { shared_resources_round_trip_every_profile(true); }
+
+fn shared_resources_round_trip_every_profile(sm62: bool) {
     let storage = crate::app::app_storage::ScopedTempConfig::new();
-    let (mut app, recorder, application) = fixture();
+    let (mut app, recorder, application) = fixture_for(sm62);
     let mut macro_memory = vec![0; 64];
     macro_memory[..11].copy_from_slice(b"macro body\0");
     let mut key_memory = std::collections::BTreeMap::new();
-    recorder.respond_by(move |request| {
+    recorder.respond_as_legacy(move |request| {
         let mut response = [0; 32];
         match request[0] {
             0x05 => {
@@ -1096,12 +1601,18 @@ fn macropad_unified_shared_macros_and_tap_dance_round_trip_every_profile() {
     {
         for (layer, codes) in profile.layers.iter_mut().enumerate() {
             codes[0] = 0x7700;
-            codes[14] = 0x5700;
+            codes[if sm62 {61} else {14}] = 0x5700;
             profile.layer_names[layer] = format!("Resource {layer}");
         }
-        profile.encoder_stacks[0][0].clockwise = 0x7700;
-        profile.encoder_stacks[0][1].counter_clockwise = 0x5700;
+        if !sm62 {
+            profile.encoder_stacks[0][0].clockwise = 0x7700;
+            profile.encoder_stacks[0][1].counter_clockwise = 0x5700;
+        }
     }
+    let category=app.application_layout_settings_mut().unwrap().create_category("Keyboard projects").unwrap();
+    app.application_layout_settings_mut().unwrap().set_layout_category_id(&application,&category);
+    app.app_settings.application_layouts.insert("other-device".into(),Default::default());
+    let unrelated=app.app_settings.application_layouts["other-device"].clone();
     let expected = app.application_layout_settings().unwrap().layouts.clone();
     let path = storage.path().join("resources.entlayout");
     app.write_entlayout_export(&path);
@@ -1109,11 +1620,16 @@ fn macropad_unified_shared_macros_and_tap_dance_round_trip_every_profile() {
         .unwrap()
         .layouts
         .remove(&application);
+    let previous_profiles = app.application_layout_settings().unwrap().layouts.clone();
     app.import_entlayout_from_path(&path).unwrap();
     let persisted: AppSettings =
         serde_json::from_slice(&std::fs::read(app_settings_path()).unwrap()).unwrap();
     let key = app.application_layout_device_key().unwrap();
-    assert_eq!(persisted.application_layouts[&key].layouts, expected);
+    assert_imported_profile_content_and_authorship(
+        &persisted.application_layouts[&key].layouts, &expected, &previous_profiles,
+    );
+    assert_eq!(persisted.application_layouts[&key].category_names[&category],"Keyboard projects");
+    assert_eq!(persisted.application_layouts["other-device"],unrelated);
     assert_eq!(app.keycode_picker.macro_texts, vec![b"macro body".to_vec()]);
 }
 
@@ -1309,6 +1825,12 @@ fn assert_pictogram_import_cache_recovery(failure: Option<&'static str>) {
     app.display_settings.pictograms.supported = Some(true);
     app.display_settings.pictograms.loaded = true;
     let mut bundle = app.entlayout_snapshot().unwrap();
+    // Isolate pictogram cache recovery: a differing host Default overlay must
+    // not introduce unrelated key/encoder mutations before the injected error.
+    // Partial keymap mutation has its own fail-closed export regression.
+    bundle.data.keymap = app.layout.as_ref().unwrap().layers.iter()
+        .map(|layer| layer.iter().map(|binding| binding.vial_keycode()).collect()).collect();
+    bundle.data.encoder_keymap = app.layout.as_ref().unwrap().encoder_layers.clone();
     bundle.pictograms = Some(
         (0..2)
             .map(|slot| EntLayoutPictogram {
@@ -1335,7 +1857,7 @@ fn assert_pictogram_import_cache_recovery(failure: Option<&'static str>) {
     let mut record = Vec::new();
     let mut reads = std::collections::VecDeque::new();
     let mut keys = std::collections::BTreeMap::new();
-    recorder.respond_by(move |request| {
+    recorder.respond_as_legacy(move |request| {
         let mut reply = [0; 32];
         reply[0] = request[0];
         match request[0] {
@@ -1687,6 +2209,50 @@ fn macropad_unified_unknown_custom_action_is_rejected_on_keys_and_encoder_stacks
         assert!(app.import_entlayout_from_path(&path).is_err());
         assert!(recorder.requests().is_empty());
         assert!(!storage.path().join("entropy/backups").exists());
+    }
+}
+
+#[test]
+fn application_import_rejects_foreign_geometry_without_persisting() {
+    for (target_sm62, offline) in [(false, false), (true, false), (false, true), (true, true)] {
+        let storage = crate::app::app_storage::ScopedTempConfig::new();
+        let (mut app, recorder, application) = fixture_for(target_sm62);
+        if offline {
+            app.app_settings.last_application_layout_device_key = app.application_layout_device_key();
+            app.selected_device = None;
+        }
+        let mut source = app.application_layout_settings().unwrap().layouts[&application].clone();
+        let foreign_width = if target_sm62 { 15 } else { 62 };
+        source.layers = vec![vec![4; foreign_width]; 16];
+        source.encoder_stacks.iter_mut().for_each(Vec::clear);
+        let path = storage.path().join("foreign.entlayout");
+        write_application_entlayout(&path, source, app.app_settings.language).unwrap();
+        let before = serde_json::to_vec(&app.app_settings).unwrap();
+        let destination = app_settings_path();
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        std::fs::write(&destination, &before).unwrap();
+        assert!(app.import_application_layout_from_path(&path, &application).is_err(),
+            "foreign profile width {foreign_width} accepted by target SM62={target_sm62}");
+        assert_eq!(std::fs::read(&destination).unwrap(), before);
+        assert_eq!(serde_json::to_vec(&app.app_settings).unwrap(), before);
+        assert!(recorder.requests().is_empty());
+    }
+}
+
+#[test]
+fn application_renderer_rejects_persisted_foreign_geometry() {
+    for target_sm62 in [false, true] {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let (app, _, application) = fixture_for(target_sm62);
+        let mut source = app.application_layout_settings().unwrap().layouts[&application].clone();
+        source.layers = vec![vec![42; if target_sm62 { 15 } else { 62 }]; 16];
+        let layout = app.layout.as_ref().unwrap();
+        let rendered = EntropyApp::application_layout_rendered_copy_for_profile(layout, Some(&source));
+        for layer in 0..layout.layers.len() {
+            for key in 0..layout.keys.len() {
+                assert_eq!(rendered.get_key_binding(layer, key), layout.get_key_binding(layer, key));
+            }
+        }
     }
 }
 
@@ -2138,10 +2704,59 @@ fn macropad_unified_import_cold_load_failure_can_retry_from_nondefault_menu() {
 }
 
 fn exercise_unified_menu_lifecycle(export: bool, nondefault: bool, failing_read: u8) {
+    exercise_unified_device_menu_lifecycle(export, nondefault, failing_read, false, false);
+}
+
+#[test]
+fn sm62_unified_menu_clicks_complete_picker_and_file_dispatch() {
+    let _storage = crate::app::app_storage::ScopedTempConfig::new();
+    for export in [true,false] {
+        for nondefault in [true,false] {
+            exercise_unified_device_menu_lifecycle(export, nondefault, 0, true, false);
+        }
+    }
+}
+
+#[test]
+fn sm62_unified_import_cold_keymap_and_macro_failures_retry_from_both_profiles() {
+    let _storage=crate::app::app_storage::ScopedTempConfig::new();
+    for read in [0x12,0x0e] { for nondefault in [false,true] {
+        exercise_unified_device_menu_lifecycle(false,nondefault,read,true,false);
+    }}
+}
+
+#[test]
+fn sm62_ordinary_picker_captures_exact_device_before_selection_changes() {
+    let _storage=crate::app::app_storage::ScopedTempConfig::new();
+    for export in [true,false] { exercise_unified_device_menu_lifecycle(export,true,0,true,true); }
+}
+
+fn exercise_unified_device_menu_lifecycle(export: bool, nondefault: bool, failing_read: u8, sm62: bool, switch_device: bool) {
     let cold_failure = failing_read != 0;
     let (entered_tx, entered_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
-    let (mut app, recorder, application) = fixture();
+    let (mut app, recorder, application) = fixture_for(sm62);
+    if sm62 {
+        // Resource-free control: an empty cache with a nonzero slot count is
+        // not a fully read device. Resource-bearing cases set their real count.
+        app.keycode_picker.macro_count=0;
+        app.keycode_picker.macro_names.clear();
+        app.keycode_picker.macro_descriptions.clear();
+        let settings=app.application_layout_settings_mut().unwrap();
+        settings.provision_builtin_presets(None);
+        let empty=settings.create_category("Пустая группа").unwrap();
+        let custom=settings.create_category("Мои проекты").unwrap();
+        settings.set_layout_category_id(&application,&custom);
+        settings.layouts.get_mut(&application).unwrap().name="Редактор — профиль".into();
+        assert!(!empty.is_empty());
+        assert_eq!(settings.layouts.len(),16,"Default + all 14 builtins + custom profile");
+        let options=app.application_layout_editor_options();
+        let groups=app.application_layout_editor_grouped_options(&options);
+        assert_eq!(groups.len(),7,"six nonempty builtin groups plus custom; empty category is not a header");
+        assert_eq!(groups.iter().map(|(_,p)|p.len()).sum::<usize>(),15);
+    }
+    // Match the eager USB connection constructor, not an empty default ledger.
+    app.deferred_device_load = DeferredDeviceLoadState::complete(app.layer_count);
     let selection = if nondefault {
         application.clone()
     } else {
@@ -2158,10 +2773,8 @@ fn exercise_unified_menu_lifecycle(export: bool, nondefault: bool, failing_read:
         .layouts
         .values_mut()
     {
-        profile.seed_unset_keycodes(
-            [[4; crate::application_layouts::APPLICATION_LAYOUT_CONTROL_COUNT];
-                crate::application_layouts::APPLICATION_LAYOUT_LAYER_COUNT],
-        );
+        profile.seed_unset_keycodes(std::array::from_fn(|_| vec![4; if sm62 {62} else {15}]));
+        if sm62 { profile.set_keycode(15,61,0x0009); }
     }
     if failing_read == 0x0e {
         app.keycode_picker.macro_count = 1;
@@ -2177,6 +2790,7 @@ fn exercise_unified_menu_lifecycle(export: bool, nondefault: bool, failing_read:
         }
     }
     let source = app.application_layout_settings().unwrap().layouts.clone();
+    let source_categories=app.application_layout_settings().unwrap().category_names.clone();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("clicked.entlayout");
     if !export {
@@ -2195,10 +2809,10 @@ fn exercise_unified_menu_lifecycle(export: bool, nondefault: bool, failing_read:
             json: std::sync::Arc::new(serde_json::json!({})),
             supported_qmk_settings: std::sync::Arc::new(vec![]),
             definition_fingerprint: 42,
-            layer_count: 8,
-            rows: 5,
-            cols: 3,
-            encoder_count: 1,
+            layer_count: if sm62 {16} else {8},
+            rows: if sm62 {10} else {5},
+            cols: if sm62 {7} else {3},
+            encoder_count: if sm62 {0} else {1},
             macro_count: if failing_read == 0x0e { 1 } else { 0 },
             macro_memory_bytes: Some(8),
             tap_dance_count: 0,
@@ -2223,7 +2837,7 @@ fn exercise_unified_menu_lifecycle(export: bool, nondefault: bool, failing_read:
         let mut keys = std::collections::BTreeMap::new();
         let mut macros = [0u8; 8];
         macros[..3].copy_from_slice(b"old");
-        recorder.respond_by(move |request| match request[0] {
+        recorder.respond_as_legacy(move |request| match request[0] {
             opcode if opcode == failing_read && fail_once => {
                 entered_tx.send(()).unwrap();
                 release_rx
@@ -2388,6 +3002,13 @@ fn exercise_unified_menu_lifecycle(export: bool, nondefault: bool, failing_read:
             std::thread::yield_now();
         }
     }
+    let portal_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.pending_file_dialog.is_none()
+        && (app.deferred_full_layout_action_pending() || app.gui_entlayout_preparation.is_some() || app.vial_hid_task_active()) {
+        assert!(std::time::Instant::now() < portal_deadline, "picker preparation stalled: {}", app.status_msg);
+        app.tick_layout_import_lifecycle_for_test(&ctx, 0.3);
+        std::thread::yield_now();
+    }
     let expected = if export {
         crate::app::file_dialog::FileDialogAction::ExportEntlayout
     } else {
@@ -2402,6 +3023,23 @@ fn exercise_unified_menu_lifecycle(export: bool, nondefault: bool, failing_read:
         app.entlayout_export_gaps(),
         app.status_msg
     );
+    if switch_device {
+        let before=serde_json::to_value(&app.app_settings).unwrap();
+        let bytes=std::fs::read(&path).ok();
+        let packet_cursor = recorder.requests().len();
+        let mut other=app.device_manager.devices()[0].clone();
+        other.serial_number="another-sm62".into(); other.path="other-sm62-endpoint".into();
+        app.device_manager.replace_devices(vec![other]);
+        // The target fence must not rely solely on a UI generation counter.
+        app.poll_file_dialog(&ctx);
+        assert!(app.status_msg.contains("changed"),"picker target was not captured: {}",app.status_msg);
+        app.tick_layout_import_lifecycle_for_test(&ctx,1.0);
+        assert_eq!(serde_json::to_value(&app.app_settings).unwrap(),before);
+        assert_eq!(std::fs::read(&path).ok(),bytes);
+        assert_eq!(recorder.requests().len(), packet_cursor, "stale target caused additional traffic");
+        assert!(!app.import_pending());
+        return;
+    }
     // Keep NONDEFAULT selected across completion and production lifecycle dispatch.
     app.application_layout_settings_mut()
         .unwrap()
@@ -2412,8 +3050,18 @@ fn exercise_unified_menu_lifecycle(export: bool, nondefault: bool, failing_read:
         assert!(app.import_pending());
         app.tick_layout_import_lifecycle_for_test(&ctx, 1.0);
         app.tick_layout_import_lifecycle_for_test(&ctx, 1.1);
+        drain_pending_layout_import(&mut app, &ctx, 1.2);
         assert!(!app.import_pending(), "{}", app.status_msg);
         assert!(app.import_report_open, "{}", app.status_msg);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !app.selected_layer_data_ready() && std::time::Instant::now() < deadline {
+            app.tick_layout_import_lifecycle_for_test(&ctx, 2.0);
+            std::thread::yield_now();
+        }
+        assert!(app.selected_layer_data_ready(),
+            "post-import layer remains blocked: {:?}, staged={}",
+            app.deferred_device_load.layer_status(app.selected_layer),
+            app.deferred_device_load.is_staged());
         let key = app.application_layout_device_key().unwrap();
         assert_eq!(
             load_app_settings().application_layouts[&key].layouts[&application].layers[0][0],
@@ -2426,10 +3074,14 @@ fn exercise_unified_menu_lifecycle(export: bool, nondefault: bool, failing_read:
         7
     );
     if export {
-        assert!(recorder.requests().is_empty());
+        if sm62 {
+            assert_eq!(recorder.requests().len(), 2);
+            assert!(recorder.requests().iter().all(|p| p[..3] == [0xeb, 8, 0xa5]));
+        } else { assert!(recorder.requests().is_empty()); }
     } else {
         let key = app.application_layout_device_key().unwrap();
         let restored = load_app_settings();
+        if sm62 { assert_eq!(restored.application_layouts[&key].category_names,source_categories); }
         if failing_read == 0x0e {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
             while app.hid_device.is_none() && std::time::Instant::now() < deadline {
@@ -2453,6 +3105,23 @@ fn exercise_unified_menu_lifecycle(export: bool, nondefault: bool, failing_read:
                     .unwrap()
                     .contains("Shared macro")
             );
+        }
+        if sm62 && failing_read == 0 {
+            app.app_settings=restored.clone();
+            let mut first: serde_json::Value=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let mut second: serde_json::Value=serde_json::from_str(&app.entlayout_export_json().unwrap().unwrap()).unwrap();
+            first.as_object_mut().unwrap().remove("created_at");
+            second.as_object_mut().unwrap().remove("created_at");
+            fn differences(a:&serde_json::Value,b:&serde_json::Value,path:String,out:&mut Vec<String>) {
+                if a==b {return;}
+                match (a,b) {
+                    (serde_json::Value::Object(x),serde_json::Value::Object(y)) => for key in x.keys().chain(y.keys()).collect::<std::collections::BTreeSet<_>>() { differences(&a[key],&b[key],format!("{path}/{key}"),out); },
+                    (serde_json::Value::Array(x),serde_json::Value::Array(y)) if x.len()==y.len() => for (i,(a,b)) in x.iter().zip(y).enumerate() {differences(a,b,format!("{path}/{i}"),out);},
+                    _ => out.push(format!("{path}: {a} != {b}")),
+                }
+            }
+            let mut diff=Vec::new(); differences(&first,&second,String::new(),&mut diff);
+            assert!(diff.is_empty(),"full payload after production settings reload and second export: {diff:#?}");
         }
         for (id, expected) in source {
             let actual = &restored.application_layouts[&key].layouts[&id];
@@ -3019,7 +3688,7 @@ fn reviewed_macro_capacity_counts_terminators_before_writes() {
     let (mut app, recorder, _) = fixture();
     app.keycode_picker.macro_count = 2;
     app.keycode_picker.macro_texts = vec![b"abc".to_vec(), b"de".to_vec()];
-    recorder.respond_by(|request| {
+    recorder.respond_as_legacy(|request| {
         if request[0] == 0x0d {
             let mut r = [0; 32];
             r[2] = 6;
@@ -3040,7 +3709,455 @@ fn reviewed_macro_capacity_counts_terminators_before_writes() {
 }
 
 #[test]
+fn sm62_eager_import_success_and_noop_finalize_readiness() {
+    for nondefault in [false, true] {
+        let storage = crate::app::app_storage::ScopedTempConfig::new();
+        let (mut app, recorder, application) = fixture_for(true);
+        app.deferred_device_load = DeferredDeviceLoadState::complete(app.layer_count);
+        let selected = if nondefault { application } else { DEFAULT_APPLICATION_LAYOUT_ID.into() };
+        app.application_layout_settings_mut().unwrap().editor_layout_id = selected.clone();
+        let mut bundle = app.entlayout_snapshot_with_profiles(None).unwrap();
+        bundle.data.keymap[0][0] = 42;
+        let mut keys = std::collections::BTreeMap::new();
+        recorder.respond_as_legacy(move |request| {
+            let mut response = [0; 32];
+            match request[0] {
+                0x05 => {
+                    keys.insert((request[1], request[2], request[3]), [request[4], request[5]]);
+                    Some(Ok(response))
+                }
+                0x04 => {
+                    response[4..6].copy_from_slice(keys.get(&(request[1], request[2], request[3])).unwrap());
+                    Some(Ok(response))
+                }
+                _ => None,
+            }
+        });
+        let path = storage.path().join("ready.entlayout");
+        write_entlayout_file(&path, &bundle, app.app_settings.language).unwrap();
+        app.import_entlayout_from_path(&path).unwrap();
+        assert!(app.selected_layer_data_ready(), "verified eager import left layer blocked");
+        assert!(app.deferred_device_load.all_layers_ready());
+        assert!(!app.deferred_device_load.has_unconfirmed_import_data());
+        let writes = recorder.requests().iter().filter(|r| r[0] == 0x05).count();
+        assert!(writes > 0);
+        app.import_entlayout_from_path(&path).unwrap();
+        assert_eq!(recorder.requests().iter().filter(|r| r[0] == 0x05).count(), writes);
+        assert!(app.selected_layer_data_ready());
+        assert_eq!(app.application_layout_settings().unwrap().editor_layout_id, selected);
+    }
+}
+
+#[test]
+fn sm62_eager_import_failed_get_and_mismatch_remain_fail_closed() {
+    for mismatch in [false, true] {
+        let storage = crate::app::app_storage::ScopedTempConfig::new();
+        let (mut app, recorder, _) = fixture_for(true);
+        app.deferred_device_load = DeferredDeviceLoadState::complete(app.layer_count);
+        let mut bundle = app.entlayout_snapshot_with_profiles(None).unwrap();
+        bundle.data.keymap[0][0] = 42;
+        recorder.respond_as_legacy(move |request| match request[0] {
+            0x05 => Some(Ok([0; 32])),
+            0x04 if mismatch => Some(Ok([0; 32])),
+            0x04 => Some(Err("injected accepted SET / failed GET".into())),
+            _ => None,
+        });
+        save_app_settings(&app.app_settings);
+        let before = std::fs::read(app_settings_path()).unwrap();
+        let profiles = serde_json::to_value(&app.app_settings).unwrap();
+        let path = storage.path().join("failed.entlayout");
+        write_entlayout_file(&path, &bundle, app.app_settings.language).unwrap();
+        assert!(app.import_entlayout_from_path(&path).is_err());
+        assert!(recorder.requests().iter().any(|r| r[0] == 0x05));
+        assert!(!app.selected_layer_data_ready());
+        assert!(app.deferred_device_load.import_layer_unconfirmed(0));
+        assert_eq!(std::fs::read(app_settings_path()).unwrap(), before);
+        assert_eq!(serde_json::to_value(&app.app_settings).unwrap(), profiles);
+        let export = storage.path().join("preserved.entlayout");
+        std::fs::write(&export, b"keep").unwrap();
+        app.write_entlayout_export(&export);
+        assert_eq!(std::fs::read(export).unwrap(), b"keep");
+    }
+}
+
+// Exercise the ordinary menu/picker/queued import, not a direct importer call.
+#[test]
+fn sm62_eager_failed_import_lifecycle_requires_reconnect_without_fake_retry() {
+    for macros in [false, true] {
+        for mismatch in [false, true] {
+            for nondefault in [false, true] {
+                let storage = crate::app::app_storage::ScopedTempConfig::new();
+                let (mut app, recorder, application) = fixture_for(true);
+                app.app_settings.language = crate::i18n::Language::English;
+                app.deferred_device_load = DeferredDeviceLoadState::complete(app.layer_count);
+                let selected = if nondefault { application } else { DEFAULT_APPLICATION_LAYOUT_ID.into() };
+                app.application_layout_settings_mut().unwrap().editor_layout_id = selected.clone();
+                if macros {
+                    app.keycode_picker.macro_count = 1;
+                    app.keycode_picker.macro_texts = vec![b"old".to_vec()];
+                }
+                let mut bundle = app.entlayout_snapshot_with_profiles(None).unwrap();
+                if macros { bundle.data.macros.bytecode_base64 = vec![BASE64_STANDARD.encode(b"new")]; }
+                else { bundle.data.keymap[0][0] = 42; }
+                let path = storage.path().join("failed-lifecycle.entlayout");
+                write_entlayout_file(&path, &bundle, app.app_settings.language).unwrap();
+                let accepted = std::sync::Arc::new(std::sync::Mutex::new((Vec::new(), Vec::new())));
+                let device_storage = accepted.clone();
+                recorder.respond_as_legacy(move |request| match request[0] {
+                    0x05 => {
+                        device_storage.lock().unwrap().0.extend_from_slice(&request[4..6]);
+                        Some(Ok([0; 32]))
+                    }
+                    0x0f => {
+                        let len = request[3] as usize;
+                        device_storage.lock().unwrap().1.extend_from_slice(&request[4..4+len]);
+                        Some(Ok([0; 32]))
+                    }
+                    0x04 | 0x0e if mismatch => Some(Ok([0; 32])),
+                    0x04 | 0x0e => Some(Err("injected accepted SET / failed GET".into())),
+                    0x0d => { let mut reply = [0;32]; reply[2] = 8; Some(Ok(reply)) },
+                    _ => None,
+                });
+                let ctx = egui::Context::default();
+                let draw_menu = |app: &mut EntropyApp, events| crate::app::discard_texture_deltas(ctx.run_ui(
+                    egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1100.0,900.0))), events, ..Default::default() },
+                    |ui| app.draw_layout_device_dropdown(ui, &ctx, crate::i18n::Language::English,
+                        Some(egui::Rect::from_min_size(egui::pos2(400.0,0.0),egui::vec2(80.0,30.0))), true,false,false)));
+                let click = |app: &mut EntropyApp, label: &str| {
+                    let _ = draw_menu(app, vec![]);
+                    let output = draw_menu(app, vec![]);
+                    let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == label => Some(text.pos + text.galley.size()*0.5),
+                        _ => None,
+                    }).unwrap_or_else(|| panic!("missing menu item {label}"));
+                    for pressed in [true,false] {
+                        let _ = draw_menu(app, vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton {
+                            pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE }]);
+                    }
+                };
+                // Initialize the production runtime/catalog before measuring import changes.
+                app.tick_layout_import_lifecycle_for_test(&ctx, 0.0);
+                app.application_layout_settings_mut().unwrap().editor_layout_id = selected.clone();
+                let _ = draw_menu(&mut app, vec![]);
+                let _ = draw_menu(&mut app, vec![]);
+                save_app_settings(&app.app_settings);
+                let persisted = std::fs::read(app_settings_path()).unwrap();
+                let profiles = app.application_layout_settings().unwrap().layouts.clone();
+                crate::app::file_dialog::set_test_dialog_result(Some(path));
+                click(&mut app, "Import layout");
+                assert!(app.pending_file_dialog.is_some());
+                app.poll_file_dialog(&ctx);
+                assert!(app.import_pending());
+                app.tick_layout_import_lifecycle_for_test(&ctx, 1.0);
+                app.tick_layout_import_lifecycle_for_test(&ctx, 1.1);
+                drain_pending_layout_import(&mut app, &ctx, 1.2);
+                assert!(!app.import_pending());
+                // Latest upstream exposes terminal import failures in a report,
+                // not status text alone. Retain that UI contract while continuing
+                // to exercise the uncertain-cache recovery gates after dismissal.
+                assert!(app.import_report_open);
+                assert_eq!(app.import_report_body, app.status_msg);
+                assert!(app.status_msg.contains("failed"), "{}", app.status_msg);
+                app.import_report_open = false;
+                let writes = recorder.requests().iter().filter(|r| matches!(r[0],0x05|0x0f)).count();
+                assert!(writes > 0, "must fail after an accepted SET");
+                let accepted_bytes = accepted.lock().unwrap().clone();
+                if macros {
+                    assert!(accepted_bytes.1.starts_with(b"new\0"), "macro SET was not accepted: {accepted_bytes:?}");
+                    assert!(app.deferred_device_load.import_section_unconfirmed(DeferredLoadSection::Macros));
+                    assert_eq!(app.keycode_picker.macro_texts, vec![b"old".to_vec()]);
+                } else {
+                    assert!(accepted_bytes.0.starts_with(&[0,42]), "key SET was not accepted: {accepted_bytes:?}");
+                    assert!(app.deferred_device_load.import_layer_unconfirmed(0));
+                }
+                assert!(app.deferred_device_load.has_unconfirmed_import_data());
+                assert_eq!(app.application_layout_settings().unwrap().layouts, profiles);
+                assert_eq!(std::fs::read(app_settings_path()).unwrap(), persisted);
+                // Ordinary repaint/ticks must terminate visibly, never fake readiness or retry SET.
+                for frame in 2..5 { app.tick_layout_import_lifecycle_for_test(&ctx, frame as f64); }
+                assert!(!app.selected_layer_data_ready(), "uncertain resource must not expose a stale editor");
+                for language in [crate::i18n::Language::English, crate::i18n::Language::Russian] {
+                    app.app_settings.language = language;
+                    let output = crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| app.draw_deferred_keyboard_overlay(ui)));
+                    let text = output.shapes.iter().filter_map(|s| match &s.shape {
+                        egui::Shape::Text(t) => Some(t.galley.text().to_string()), _ => None,
+                    }).collect::<Vec<_>>().join("\n");
+                    let instruction = if language == crate::i18n::Language::English { "Disconnect and reconnect" } else { "Отключите и снова подключите" };
+                    assert!(text.contains(instruction), "endless loading instead of actionable terminal error: {text}");
+                    assert!(!text.contains(crate::i18n::tr_catalog(language,"connection.loading_layer_data")));
+                    assert!(!text.contains(crate::i18n::tr_catalog(language,"connection.retry_device_data")), "no read context: Retry would be fake");
+                    app.settings_tab = if macros { SettingsTab::Macros } else { SettingsTab::LayoutImageExport };
+                    let output = crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
+                        assert!(app.draw_deferred_settings_gate(ui, ui.max_rect()));
+                    }));
+                    let settings_text = output.shapes.iter().filter_map(|s| match &s.shape {
+                        egui::Shape::Text(t) => Some(t.galley.text().to_string()), _ => None,
+                    }).collect::<Vec<_>>().join("\n");
+                    assert!(settings_text.contains(instruction), "settings also need a terminal error: {settings_text}");
+                    assert!(!settings_text.contains(crate::i18n::tr_catalog(language,"connection.retry_device_data")));
+                }
+                app.app_settings.language = crate::i18n::Language::English;
+                app.request_image_export_after_full_load();
+                assert!(!app.deferred_full_layout_action_pending());
+                // An already-admitted action must also terminate if uncertainty appears later.
+                app.deferred_full_layout_action = Some(DeferredFullLayoutAction::ExportEntlayout);
+                app.tick_layout_import_lifecycle_for_test(&ctx, 5.0);
+                assert!(!app.deferred_full_layout_action_pending());
+                for label in ["Export layout", "Import layout"] {
+                    click(&mut app, label);
+                    app.tick_layout_import_lifecycle_for_test(&ctx, 5.0);
+                    assert!(!app.deferred_full_layout_action_pending(), "new explicit action hangs with no read context");
+                    assert!(app.pending_file_dialog.is_none());
+                    assert!(!app.import_pending());
+                    assert!(app.status_msg.contains("Disconnect and reconnect"), "{}",app.status_msg);
+                }
+                let export = storage.path().join("preserve.entlayout");
+                std::fs::write(&export,b"keep").unwrap();
+                app.write_entlayout_export(&export);
+                assert_eq!(std::fs::read(export).unwrap(),b"keep");
+                assert_eq!(recorder.requests().iter().filter(|r| matches!(r[0],0x05|0x0f)).count(),writes);
+                assert!(app.deferred_device_load.has_unconfirmed_import_data());
+                assert_eq!(app.application_layout_settings().unwrap().editor_layout_id,selected);
+                assert_eq!(app.application_layout_settings().unwrap().layouts,profiles);
+                assert_eq!(std::fs::read(app_settings_path()).unwrap(),persisted);
+            }
+        }
+    }
+}
+
+#[test]
+fn sm62_eager_import_publication_confirms_only_affected_caches() {
+    let mut state = DeferredDeviceLoadState::complete(16);
+    state.set_layer_status(3, DeferredLoadStatus::Failed("unrelated failure".into()));
+    state.mark_import_layer_unconfirmed(0);
+    state.mark_import_section_unconfirmed(DeferredLoadSection::Macros);
+    state.confirm_import_publication();
+    assert_eq!(state.layer_status(0), DeferredLoadStatus::Loaded);
+    assert_eq!(state.section_status(DeferredLoadSection::Macros), DeferredLoadStatus::Loaded);
+    assert_eq!(state.layer_status(3), DeferredLoadStatus::Failed("unrelated failure".into()));
+    assert!(!state.has_unconfirmed_import_data());
+}
+
+#[test]
+fn host_p1_02_partial_keymap_import_refuses_stale_export() {
+    let storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app, recorder, _) = fixture_for(true);
+    app.deferred_device_load = DeferredDeviceLoadState::complete(app.layer_count);
+    let mut bundle = app.entlayout_snapshot_with_profiles(None).unwrap();
+    bundle.data.keymap[0][0] = 42;
+    recorder.respond_as_legacy(|request| {
+        matches!(request[0], 0x04 | 0x05).then_some(Ok([0; 32]))
+    });
+    let before = serde_json::to_vec(&app.app_settings).unwrap();
+    let path = storage.path().join("partial-keymap.entlayout");
+    write_entlayout_file(&path, &bundle, app.app_settings.language).unwrap();
+    assert!(app.import_entlayout_from_path(&path).is_err());
+    assert!(recorder.requests().iter().any(|request| request[0] == 0x05));
+    assert_eq!(serde_json::to_vec(&app.app_settings).unwrap(), before);
+    let export = storage.path().join("preserve.entlayout");
+    std::fs::write(&export, b"keep existing backup").unwrap();
+    app.write_entlayout_export(&export);
+    assert_eq!(std::fs::read(export).unwrap(), b"keep existing backup");
+    assert!(!app.deferred_full_layout_action_ready(DeferredFullLayoutAction::ExportEntlayout));
+}
+
+#[test]
+fn host_p1_02_accepted_macro_set_failed_get_export_recovery() {
+    for sm62 in [true, false] { exercise_uncertain_macro_import(sm62, 1, false); }
+}
+
+#[test]
+fn host_p1_02_macro_mismatch_corrective_equal_cache_import() {
+    for sm62 in [true, false] { exercise_uncertain_macro_import(sm62, 2, true); }
+}
+
+#[test]
+fn host_p1_02_macro_success_and_confirmed_equality_controls() {
+    for sm62 in [true, false] { exercise_uncertain_macro_import(sm62, 0, false); }
+}
+
+fn exercise_uncertain_macro_import(sm62: bool, fault: u8, corrective: bool) {
+    let storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app, recorder, _) = fixture_for(sm62);
+    app.keycode_picker.macro_count = 1;
+    app.keycode_picker.macro_texts = vec![b"old".to_vec()];
+    app.keycode_picker.macro_names = vec!["Keep draft metadata".into()];
+    app.deferred_device_load = DeferredDeviceLoadState::staged(DeferredDeviceLoadContext { supports_universal_numero: false,
+        json: std::sync::Arc::new(serde_json::json!({})),
+        supported_qmk_settings: std::sync::Arc::new(vec![]),
+        definition_fingerprint: 42, layer_count: app.layer_count,
+        rows: if sm62 {10} else {5}, cols: if sm62 {7} else {3},
+        encoder_count: if sm62 {0} else {1}, macro_count: 1,
+        macro_memory_bytes: Some(16), tap_dance_count: 0, combo_count: 0,
+        key_override_count: 0, alt_repeat_count: 0, modules_supported: false,
+        touchpad_supported: false, bluetooth_supported: false, layer_leds_supported: false,
+        rgb_supported: false, lighting_mode: None, supports_rmk_native_key_actions: false,
+        supports_universal_symbols: false, supports_universal_russian_letters: false,
+        supports_rmk_native_combo_output: false, supports_rmk_native_tap_dance_actions: false,
+        supports_rmk_combo_layers: false,
+    });
+    for layer in 0..app.layer_count {
+        app.deferred_device_load.set_layer_status(layer, DeferredLoadStatus::Loaded);
+    }
+    app.deferred_device_load.set_section_status(DeferredLoadSection::Macros, DeferredLoadStatus::Loaded);
+    let original = app.entlayout_snapshot_with_profiles(None).unwrap();
+    let mut bundle = original.clone();
+    // Avoid unrelated keymap changes: this case isolates the shared macro boundary.
+    bundle.data.keymap = app.layout.as_ref().unwrap().layers.iter()
+        .map(|l| l.iter().map(|b| b.vial_keycode()).collect()).collect();
+    bundle.data.encoder_keymap = app.layout.as_ref().unwrap().encoder_layers.clone();
+    bundle.data.macros.bytecode_base64 = vec![BASE64_STANDARD.encode(b"changed")];
+    let memory = std::sync::Arc::new(std::sync::Mutex::new(b"old\0\0\0\0\0\0\0\0\0\0\0\0\0".to_vec()));
+    let firmware = memory.clone();
+    let mut pending_fault = false;
+    let mut fault_used = false;
+    let mut keys = std::collections::BTreeMap::new();
+    recorder.respond_as_legacy(move |request| {
+        let mut response = [0; 32];
+        match request[0] {
+            0x05 => {
+                keys.insert((request[1], request[2], request[3]), [request[4], request[5]]);
+                Some(Ok(response))
+            }
+            0x04 => {
+                response[4..6].copy_from_slice(keys.get(&(request[1], request[2], request[3])).unwrap_or(&[0, 4]));
+                Some(Ok(response))
+            }
+            0x0d => { response[2] = 16; Some(Ok(response)) }
+            0x0f => {
+                let offset = u16::from_be_bytes([request[1], request[2]]) as usize;
+                let len = request[3] as usize;
+                firmware.lock().unwrap()[offset..offset+len].copy_from_slice(&request[4..4+len]);
+                pending_fault = !fault_used;
+                Some(Ok(response))
+            }
+            0x0e => {
+                if pending_fault && fault != 0 {
+                    pending_fault = false; fault_used = true;
+                    if fault == 1 { return Some(Err("injected accepted SET then GET failure".into())); }
+                    response[4] = b'x'; return Some(Ok(response));
+                }
+                let offset = u16::from_be_bytes([request[1], request[2]]) as usize;
+                let len = request[3] as usize;
+                response[4..4+len].copy_from_slice(&firmware.lock().unwrap()[offset..offset+len]);
+                Some(Ok(response))
+            }
+            _ => None,
+        }
+    });
+    save_app_settings(&app.app_settings);
+    let settings_bytes = std::fs::read(app_settings_path()).unwrap();
+    let settings = serde_json::to_value(&app.app_settings).unwrap();
+    let path = storage.path().join("uncertain.entlayout");
+    write_entlayout_file(&path, &bundle, app.app_settings.language).unwrap();
+    let result = app.import_entlayout_from_path(&path);
+    assert_eq!(&memory.lock().unwrap()[..8], b"changed\0");
+    let requests = recorder.requests();
+    assert_eq!(requests.iter().filter(|r| r[0] == 0x0f).count(), 1);
+    assert_eq!(requests.iter().filter(|r| r[0] == 0x0e).count(), 1, "no hidden read retries");
+    if fault == 0 {
+        result.unwrap();
+        // Existing successful import invalidates staged layers/resources; verify
+        // equality only against a freshly read confirmed macro cache below.
+    } else {
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains(if fault == 1 {"failed to read macro buffer"} else {"mismatch"}), "{error:#}");
+        assert_eq!(std::fs::read(app_settings_path()).unwrap(), settings_bytes);
+        assert_eq!(serde_json::to_value(&app.app_settings).unwrap(), settings);
+        assert_eq!(app.keycode_picker.macro_texts, vec![b"old".to_vec()]);
+        assert_eq!(app.keycode_picker.macro_names, vec!["Keep draft metadata"]);
+        let export = storage.path().join("must-not-export-stale.entlayout");
+        std::fs::write(&export, b"keep destination").unwrap();
+        // Explicit writers may recover by GET. The unattended snapshot must
+        // refuse stale bytes; exercise ordinary recovery through the queue below.
+        assert!(app.entlayout_snapshot().is_none(), "unconfirmed macro bytes entered a portable snapshot");
+        assert_eq!(std::fs::read(&export).unwrap(), b"keep destination", "ordinary export published stale confirmed macro bytes");
+        assert!(!app.deferred_full_layout_action_ready(DeferredFullLayoutAction::ExportEntlayout));
+        if corrective {
+            let mut correction = bundle.clone();
+            correction.data.macros = original.data.macros;
+            write_entlayout_file(&path, &correction, app.app_settings.language).unwrap();
+            app.import_entlayout_from_path(&path).unwrap();
+            assert_eq!(&memory.lock().unwrap()[..4], b"old\0", "stale equality suppressed corrective SET");
+        }
+    }
+    // Real ordinary export lifecycle must obtain a fresh physical GET, then
+    // export the physical bytes, without reconnect or manually repairing caches.
+    // The import invalidates layers too on success: healthy layer reads return 0.
+    let export = storage.path().join("recovered.entlayout");
+    crate::app::file_dialog::set_test_dialog_result(Some(export.clone()));
+    let before_gets = recorder.requests().iter().filter(|r| r[0] == 0x0e).count();
+    app.request_entlayout_export_after_full_load();
+    let ctx = egui::Context::default();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    while !export.exists() && std::time::Instant::now() < deadline {
+        app.tick_layout_import_lifecycle_for_test(&ctx, 1.0);
+        app.poll_file_dialog(&ctx);
+        std::thread::yield_now();
+    }
+    assert!(export.exists(), "ordinary recovery export stalled: {} {:?}", app.status_msg, app.entlayout_export_gaps());
+    let recovered: EntLayoutFile = serde_json::from_slice(&std::fs::read(export).unwrap()).unwrap();
+    let expected = if corrective {b"old".to_vec()} else {b"changed".to_vec()};
+    assert_eq!(entmacro_bytecode(&recovered.data.macros).unwrap(), vec![expected]);
+    assert!(recorder.requests().iter().filter(|r| r[0] == 0x0e).count() > before_gets);
+    // Confirmed equality is allowed to suppress a redundant mutation.
+    let writes = recorder.requests().iter().filter(|r| r[0] == 0x0f).count();
+    write_entlayout_file(&path, &recovered, app.app_settings.language).unwrap();
+    app.import_entlayout_from_path(&path).unwrap();
+    assert_eq!(recorder.requests().iter().filter(|r| r[0] == 0x0f).count(), writes);
+}
+
+#[test]
 fn reviewed_changed_macro_upload_requires_readback() {
+    changed_macro_upload_requires_readback(0);
+}
+
+#[test]
+fn dirty_or_attempted_editor_macro_draft_is_not_confirmed_equal_data() {
+    for draft_state in [1, 2] {
+        changed_macro_upload_requires_readback(draft_state);
+    }
+}
+
+#[test]
+fn public_macro_export_recovers_physical_bytes_or_preserves_destination() {
+    let storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app, recorder, _) = fixture();
+    app.keycode_picker.macro_count = 1;
+    app.keycode_picker.macro_texts = vec![b"stale".to_vec()];
+    app.deferred_device_load.set_section_status(DeferredLoadSection::Macros, DeferredLoadStatus::Failed("unconfirmed prior write".into()));
+    let healthy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reply_healthy = healthy.clone();
+    recorder.respond_as_legacy(move |request| {
+        let mut response = [0u8; 32];
+        match request[0] {
+            0x0d => response[2] = 16,
+            0x0e => {
+                if !reply_healthy.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Some(Err("injected recovery GET failure".into()));
+                }
+                let offset = u16::from_be_bytes([request[1], request[2]]) as usize;
+                let len = request[3] as usize;
+                let bytes = b"physical\0\0\0\0\0\0\0\0";
+                response[4..4+len].copy_from_slice(&bytes[offset..offset+len]);
+            }
+            _ => return None,
+        }
+        Some(Ok(response))
+    });
+    let destination = storage.path().join("public-macro-recovery.entlayout");
+    std::fs::write(&destination, b"keep destination").unwrap();
+    app.write_entlayout_export(&destination);
+    assert_eq!(std::fs::read(&destination).unwrap(), b"keep destination");
+    assert!(app.entlayout_snapshot().is_none());
+    healthy.store(true, std::sync::atomic::Ordering::SeqCst);
+    app.write_entlayout_export(&destination);
+    let exported: EntLayoutFile = serde_json::from_slice(&std::fs::read(destination).unwrap()).unwrap();
+    assert_eq!(entmacro_bytecode(&exported.data.macros).unwrap(), vec![b"physical".to_vec()]);
+    assert!(!recorder.requests().iter().any(|request| request[0] == 0x0f));
+}
+
+fn changed_macro_upload_requires_readback(draft_state: u8) {
     let storage = crate::app::app_storage::ScopedTempConfig::new();
     let (mut app, recorder, _) = fixture();
     app.keycode_picker.macro_count = 1;
@@ -3055,9 +4172,11 @@ fn reviewed_changed_macro_upload_requires_readback() {
         .iter()
         .map(|l| l.iter().map(|b| b.vial_keycode()).collect())
         .collect();
-    let memory = std::sync::Arc::new(std::sync::Mutex::new(vec![0u8; 64]));
+    let mut physical = vec![0u8; 64];
+    physical[..4].copy_from_slice(b"old\0");
+    let memory = std::sync::Arc::new(std::sync::Mutex::new(physical));
     let firmware = memory.clone();
-    recorder.respond_by(move |request| {
+    recorder.respond_as_legacy(move |request| {
         let mut response = [0; 32];
         match request[0] {
             0x0d => {
@@ -3083,6 +4202,16 @@ fn reviewed_changed_macro_upload_requires_readback() {
     });
     let path = storage.path().join("changed.entlayout");
     write_entlayout_file(&path, &bundle, app.app_settings.language).unwrap();
+    if draft_state != 0 {
+        app.keycode_picker.macro_texts = vec![b"changed".to_vec()];
+        app.deferred_device_load.set_section_status(DeferredLoadSection::Macros, DeferredLoadStatus::Loaded);
+        if draft_state == 1 {
+            app.keycode_picker.mark_macros_dirty();
+        } else {
+            app.keycode_picker.macros_dirty = false;
+            app.keycode_picker.macro_attempted_revision = Some(app.keycode_picker.macro_edit_revision);
+        }
+    }
     app.import_entlayout_from_path(&path).unwrap();
     assert_eq!(&memory.lock().unwrap()[..8], b"changed\0");
     assert!(recorder.requests().iter().any(|r| r[0] == 0x0f));
@@ -3090,6 +4219,8 @@ fn reviewed_changed_macro_upload_requires_readback() {
         recorder.requests().iter().any(|r| r[0] == 0x0e),
         "upload was never read back"
     );
+    let exported: EntLayoutFile = serde_json::from_str(&app.entlayout_export_json().unwrap().unwrap()).unwrap();
+    assert_eq!(entmacro_bytecode(&exported.data.macros).unwrap(), vec![b"changed".to_vec()]);
 }
 
 #[test]
@@ -3292,7 +4423,7 @@ fn reviewed_sidecars_rollback_on_hardware_failure() {
     let bundle = app.entlayout_snapshot().unwrap();
     let path = storage.path().join("failure.entlayout");
     write_entlayout_file(&path, &bundle, app.app_settings.language).unwrap();
-    recorder.respond_by(|request| {
+    recorder.respond_as_legacy(|request| {
         if request[0] == 0x05 {
             Some(Err("injected transfer failure".into()))
         } else {
@@ -3447,12 +4578,35 @@ fn ordinary_macro_restore(accept_write: bool) {
     // Keep an equal cache in the success case to model EEPROM reset after reflash.
     if !accept_write {
         app.keycode_picker.macro_texts = vec![b"old".to_vec()];
+    } else {
+        // Reflash/reset invalidates physical confirmation, even if an editor
+        // buffer still equals the imported file. Force the real GET boundary.
+        app.deferred_device_load = DeferredDeviceLoadState::complete(app.layer_count);
+        app.deferred_device_load.mark_import_section_unconfirmed(DeferredLoadSection::Macros);
     }
     let memory = std::sync::Arc::new(std::sync::Mutex::new(vec![0u8; 64]));
     let firmware = memory.clone();
-    recorder.respond_by(move |r| {
+    let mut keys = std::collections::BTreeMap::new();
+    let mut tap_dance = [0u8; 10];
+    recorder.respond_as_legacy(move |r| {
         let mut response = [0; 32];
         match r[0] {
+            0x05 => {
+                keys.insert((r[1], r[2], r[3]), [r[4], r[5]]);
+                Some(Ok(response))
+            }
+            0x04 => {
+                if let Some(code) = keys.get(&(r[1], r[2], r[3])) { response[4..6].copy_from_slice(code); }
+                Some(Ok(response))
+            }
+            0xfe if r[1] == 0x0d && r[2] == 0x02 => {
+                tap_dance.copy_from_slice(&r[4..14]);
+                Some(Ok(response))
+            }
+            0xfe if r[1] == 0x0d && r[2] == 0x01 => {
+                response[1..11].copy_from_slice(&tap_dance);
+                Some(Ok(response))
+            }
             0x0d => {
                 response[2] = 64;
                 Some(Ok(response))
@@ -3489,10 +4643,11 @@ fn ordinary_macro_restore(accept_write: bool) {
     app.finish_vial_unlock_poll(true, false, 0);
     app.tick_layout_import_lifecycle_for_test(&ctx, 1.2);
     app.tick_layout_import_lifecycle_for_test(&ctx, 1.3);
+    drain_pending_layout_import(&mut app, &ctx, 1.4);
     assert!(app.import_report_open);
     assert!(app.pending_entlayout_import_path.is_none());
     if accept_write {
-        assert_eq!(&memory.lock().unwrap()[..9], b"restored\0");
+        assert_eq!(&memory.lock().unwrap()[..9], b"restored\0", "{} / {}", app.status_msg, app.import_report_body);
         assert_eq!(
             app.keycode_picker.tap_dance_entries[0]
                 .on_tap
@@ -3560,7 +4715,7 @@ fn uncertain_macro_write_blocks_snapshot_until_read_only_recovery() {
         let fail = failing.clone();
         let memory = std::sync::Arc::new(std::sync::Mutex::new(vec![0u8; 64]));
         let firmware = memory.clone();
-        recorder.respond_by(move |r| {
+        recorder.respond_as_legacy(move |r| {
             let mut response = [0; 32];
             let offset = u16::from_be_bytes([r[1], r[2]]) as usize;
             let len = r[3] as usize;
@@ -3707,7 +4862,7 @@ fn gui_macro_confirmation(
     );
     let (entered_tx, entered_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
-    recorder.respond_by(move |r| {
+    recorder.respond_as_legacy(move |r| {
         let mut response = [0; 32];
         match r[0] {
             0xfe if r[1] == 0x08 => {

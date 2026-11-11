@@ -274,6 +274,7 @@ fn load_cached_qmk_settings(
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct LiveQmkHostCapabilities {
+    settings_confirmed: bool,
     extended_protocol: bool,
     legacy_lcd_clock: bool,
 }
@@ -281,6 +282,7 @@ struct LiveQmkHostCapabilities {
 #[cfg(not(target_arch = "wasm32"))]
 impl LiveQmkHostCapabilities {
     fn apply(self, layout: &mut KeyboardLayout) {
+        layout.live_features.qmk_settings_confirmed = self.settings_confirmed;
         layout.live_features.extended_host_protocol = self.extended_protocol;
         layout.live_features.time |= self.legacy_lcd_clock;
     }
@@ -295,6 +297,7 @@ fn current_qmk_settings(
     match query() {
         Ok(settings) => {
             let host = LiveQmkHostCapabilities {
+                settings_confirmed: true,
                 extended_protocol: crate::qmk_hid_host::supports_extended_host_protocol(&settings),
                 legacy_lcd_clock: !is_rmk_vial_definition(definition)
                     && crate::qmk_hid_host::supports_legacy_lcd_clock(definition, &settings),
@@ -578,6 +581,7 @@ impl EntropyApp {
         device_idx: usize,
         reconnect: Option<BluetoothReconnectState>,
     ) {
+        crate::connect_timing::event("selection.start");
         let previous_selected_device = self
             .selected_device
             .and_then(|index| self.device_manager.devices().get(index))
@@ -665,6 +669,7 @@ impl EntropyApp {
         self.selected_device = Some(device_idx);
         self.pending_device_connect = None;
         self.default_layout_device_reconciled = false;
+        self.confirmed_firmware_layer_names = 0;
         self.default_layout_pending_layers = 0;
         self.default_layout_sync_retry_after = None;
         self.pending_layout_undo = false;
@@ -775,12 +780,14 @@ impl EntropyApp {
                 .expect("test connect worker receiver");
             return;
         }
-        #[cfg(test)]
-        let test_hid = self.test_connect_hid.take();
         let language = self.app_settings.language;
+        let supplied_hid = self.connect_hid.take();
 
         std::thread::spawn(move || {
+            crate::connect_timing::event("worker.begin");
+            let timing_started = std::time::Instant::now();
             let progress = |message: &str| -> Result<(), String> {
+                crate::connect_timing::event(&format!("worker.stage elapsed_us={} stage={message}",timing_started.elapsed().as_micros()));
                 if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                     return Err("Connect cancelled".to_owned());
                 }
@@ -800,17 +807,17 @@ impl EntropyApp {
                     dev.vendor_id,
                     dev.product_id
                 );
-                #[cfg(test)]
-                let opened = match test_hid {
+                let opened = match supplied_hid {
                     Some(hid) => Ok(hid),
                     None => HidDevice::open_fresh_for(&dev),
                 };
-                #[cfg(not(test))]
-                let opened = HidDevice::open_fresh_for(&dev);
                 let dev_conn = opened.map_err(|e| format!("Open failed: {e:#}"))?;
                 let standby_animation_load = Self::device_uses_automatic_display_host_data(&dev)
                     .then(|| dev_conn.pause_standby_animation_for_load());
-                let staged_bluetooth_load = dev_conn.is_bluetooth_transport();
+                // Publish the first usable SM62 layer without reading the other
+                // fifteen layers and optional editor tables on the critical path.
+                // The existing staged ledger keeps them unconfirmed until loaded.
+                let staged_initial_load = dev_conn.is_bluetooth_transport() || dev.is_ergohaven_sm62();
 
                 progress("Reading VIA protocol version…")?;
                 log::info!("Getting protocol version…");
@@ -861,8 +868,8 @@ impl EntropyApp {
                     }
                 };
 
-                let application_layout_probe = if dev.is_ergohaven_display_macropad() {
-                    dev_conn.probe_application_layout_protocol()
+                let application_layout_probe = if let Some(version) = dev.application_layout_protocol_version() {
+                    dev_conn.probe_application_layout_protocol_version(version)
                 } else {
                     Ok(false)
                 };
@@ -935,7 +942,7 @@ impl EntropyApp {
                     .or_else(|| firmware_version_from_vial_json(&json));
                 let manufacturer = manufacturer_for_about(&dev.manufacturer, &json);
                 let supports_battery_halves = supports_battery_halves_from_vial_json(&json);
-                let battery_halves = if supports_battery_halves && !staged_bluetooth_load {
+                let battery_halves = if supports_battery_halves && !staged_initial_load {
                     progress("Reading split battery levels…")?;
                     match dev_conn.get_battery_halves() {
                         Ok(levels) => levels,
@@ -1067,7 +1074,7 @@ impl EntropyApp {
                     vec![vec![crate::keyboard::KeyBinding::default(); num_keys]; layer_count];
 
                 progress("Reading keymap…")?;
-                let initial_layer_count = if staged_bluetooth_load {
+                let initial_layer_count = if staged_initial_load {
                     1
                 } else {
                     layer_count
@@ -1087,8 +1094,8 @@ impl EntropyApp {
                         log::info!("Keymap loaded from buffer");
                     }
                     Err(e) => {
-                        if staged_bluetooth_load {
-                            return Err(format!("Initial Bluetooth layer read failed: {e:#}"));
+                        if staged_initial_load {
+                            return Err(format!("Initial staged layer read failed: {e:#}"));
                         }
                         log::warn!("get_keymap_buffer failed: {e}");
                         progress("Reading keymap (compatibility mode)…")?;
@@ -1182,7 +1189,7 @@ impl EntropyApp {
                     layer_count,
                 );
 
-                let layer_name_updates = (!staged_bluetooth_load)
+                let layer_name_updates = (!staged_initial_load)
                     .then(|| {
                         layer_name_sync_updates(
                             &layout.layer_names,
@@ -1249,7 +1256,7 @@ impl EntropyApp {
                         match dev_conn.get_macro_buffer_size() {
                             Ok(size) => {
                                 log::info!("Macro buffer size: {size}");
-                                let macro_texts = if staged_bluetooth_load {
+                                let macro_texts = if staged_initial_load {
                                     vec![Vec::new(); count as usize]
                                 } else {
                                     match dev_conn.get_macro_buffer(size, count) {
@@ -1301,7 +1308,7 @@ impl EntropyApp {
                 };
 
                 progress("Reading combos…")?;
-                let mut combo_entries = if staged_bluetooth_load {
+                let mut combo_entries = if staged_initial_load {
                     vec![ComboEntry::default(); combo_count as usize]
                 } else {
                     let count = combo_count;
@@ -1332,28 +1339,28 @@ impl EntropyApp {
                     entries
                 };
 
-                let behavior_settings = if staged_bluetooth_load {
+                let behavior_settings = if staged_initial_load {
                     BehaviorSettingsState::default()
                 } else {
                     progress("Reading QMK settings values…")?;
                     Self::read_behavior_settings(&supported_qmk_settings, &dev_conn)
                 };
 
-                let touchpad_settings = if staged_bluetooth_load {
+                let touchpad_settings = if staged_initial_load {
                     TouchpadSettingsState::default()
                 } else {
                     Self::read_touchpad_settings(&json, &supported_qmk_settings, &dev_conn)
                 };
 
                 progress("Reading Bluetooth settings…")?;
-                let bluetooth_settings = if staged_bluetooth_load {
+                let bluetooth_settings = if staged_initial_load {
                     BluetoothSettingsState::default()
                 } else {
                     Self::read_bluetooth_settings(&json, &supported_qmk_settings, &dev_conn)
                 };
 
                 progress("Reading module settings…")?;
-                let module_settings = if staged_bluetooth_load {
+                let module_settings = if staged_initial_load {
                     let mut settings =
                         Self::module_settings_from_definition(&json, &supported_qmk_settings);
                     Self::read_initial_module_values(&mut settings, &dev_conn);
@@ -1362,7 +1369,7 @@ impl EntropyApp {
                     Self::read_module_settings(&json, &supported_qmk_settings, &dev_conn)
                 };
 
-                let layer_led_settings = if staged_bluetooth_load {
+                let layer_led_settings = if staged_initial_load {
                     LayerLedSettingsState::default()
                 } else {
                     Self::read_layer_led_settings(
@@ -1373,7 +1380,7 @@ impl EntropyApp {
                     )
                 };
 
-                let rgb_settings = if staged_bluetooth_load {
+                let rgb_settings = if staged_initial_load {
                     RgbSettingsState::default()
                 } else if layer_led_settings.supported && layout.lighting_mode.is_none() {
                     // hpd3-style Ergohaven boards use QMK RGBLight internally only as a
@@ -1400,7 +1407,7 @@ impl EntropyApp {
                 };
 
                 progress("Reading tap dance entries…")?;
-                let mut tap_dance_entries = if staged_bluetooth_load {
+                let mut tap_dance_entries = if staged_initial_load {
                     vec![crate::keycode_picker::TapDanceEntry::default(); tap_dance_count as usize]
                 } else {
                     let count = tap_dance_count;
@@ -1426,7 +1433,7 @@ impl EntropyApp {
                     entries
                 };
 
-                if !staged_bluetooth_load
+                if !staged_initial_load
                     && (supports_rmk_native_combo_output || supports_rmk_native_tap_dance_actions)
                 {
                     let native_actions = dev_conn
@@ -1447,7 +1454,7 @@ impl EntropyApp {
                 }
 
                 progress("Reading key overrides…")?;
-                let key_override_entries = if staged_bluetooth_load {
+                let key_override_entries = if staged_initial_load {
                     vec![KeyOverrideEntry::default(); key_override_count as usize]
                 } else {
                     let count = key_override_count;
@@ -1483,7 +1490,7 @@ impl EntropyApp {
                     entries
                 };
 
-                let alt_repeat_entries = if staged_bluetooth_load {
+                let alt_repeat_entries = if staged_initial_load {
                     vec![AltRepeatKeyEntry::default(); reported_alt_repeat_count as usize]
                 } else {
                     let count = reported_alt_repeat_count;
@@ -1517,7 +1524,7 @@ impl EntropyApp {
                     &json,
                     rmk_native_capabilities.vial_macro_ext,
                 );
-                let deferred_load = if staged_bluetooth_load {
+                let deferred_load = if staged_initial_load {
                     let definition_fingerprint = vial_definition_fingerprint(&json)
                         .map_err(|error| format!("Layout fingerprint failed: {error}"))?;
                     let modules_supported = module_settings.supported;
@@ -1652,6 +1659,7 @@ impl EntropyApp {
                 })
             })();
 
+            crate::connect_timing::event(&format!("worker.done elapsed_us={} ok={}",timing_started.elapsed().as_micros(),result.is_ok()));
             let _ = tx.send(ConnectTaskMessage::Done(Box::new(result)));
         });
     }

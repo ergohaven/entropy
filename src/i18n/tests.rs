@@ -1,6 +1,28 @@
 use super::{catalog_lookup, catalog_lookup_owned, index_catalog};
 
 #[test]
+fn formatted_catalog_strings_turn_escapes_into_characters() {
+    use super::{Language, tr_catalog, tr_catalog_format};
+    for language in [Language::English, Language::Russian] {
+        let report = tr_catalog_format(
+            language,
+            "entsettings.import_complete_report",
+            &[
+                ("path", "dir/a.entsettings"),
+                ("backup", "dir/b.entsettings"),
+            ],
+        );
+        assert!(
+            report.contains("\n\n") && !report.contains("\\n"),
+            "{report}"
+        );
+        assert!(report.contains("dir/a.entsettings") && report.contains("dir/b.entsettings"));
+    }
+    // A plain lookup keeps the text as written: this hint shows the escape.
+    assert!(tr_catalog(Language::English, "text_expander.replacement_hint").contains("\\n"));
+}
+
+#[test]
 fn embedded_catalogs_have_unique_supported_keys_and_readable_values() {
     for text in [
         include_str!("../../i18n/en.toml"),

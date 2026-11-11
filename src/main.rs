@@ -2,6 +2,8 @@
 
 mod action_icons;
 mod app;
+#[cfg(any(target_os = "windows", all(test, not(target_arch = "wasm32"))))]
+mod backup_volume;
 #[cfg(not(target_arch = "wasm32"))]
 mod app_discovery;
 pub(crate) mod app_icon;
@@ -10,6 +12,7 @@ mod device;
 #[cfg(not(target_arch = "wasm32"))]
 mod device_session;
 mod diagnostics;
+mod connect_timing;
 mod firmware;
 mod firmware_builtin_icons;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -29,6 +32,8 @@ mod linux_ble;
 mod linux_setup;
 #[cfg(target_os = "linux")]
 mod linux_text_expander;
+#[cfg(target_os = "linux")]
+mod linux_tray;
 #[cfg(not(target_arch = "wasm32"))]
 mod pdf;
 mod popup_state;
@@ -294,10 +299,20 @@ fn initial_window_size() -> [f32; 2] {
 }
 
 fn main() -> eframe::Result<()> {
+    // The elevated helper must never initialize the ordinary app or HID stack.
+    #[cfg(target_os = "windows")]
+    if let Some(code) = backup_volume::run_helper_if_requested() {
+        std::process::exit(code);
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     if hid::run_hid_proxy_if_requested() {
         return Ok(());
     }
+
+    // Freeze missing storage ancestry before any startup helper can create it.
+    #[cfg(not(target_arch = "wasm32"))]
+    app::EntropyApp::initialize_import_backup_namespace();
 
     #[cfg(not(target_arch = "wasm32"))]
     let headless_export = match app::HeadlessExportRequest::from_args(std::env::args_os()) {
@@ -317,6 +332,11 @@ fn main() -> eframe::Result<()> {
     {
         if let Some(request) = headless_export {
             if single_instance_enabled() && !try_acquire_single_instance() {
+                // The running instance owns the keyboards; it exports for us.
+                #[cfg(unix)]
+                if let Some(code) = app::export_via_running_instance(&request) {
+                    std::process::exit(code);
+                }
                 log::error!(
                     "Another Entropy instance is running; close it or export from its Layout menu"
                 );
@@ -516,7 +536,8 @@ fn main() -> eframe::Result<()> {
             } else {
                 app
             };
-            #[cfg(not(target_os = "windows"))]
+            // Linux decides on the first pass: to the tray, or minimized.
+            #[cfg(not(any(target_os = "windows", target_os = "linux")))]
             if launch_minimized {
                 cc.egui_ctx
                     .send_viewport_cmd(egui::ViewportCommand::Minimized(true));

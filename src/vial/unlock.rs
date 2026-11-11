@@ -7,6 +7,8 @@ const VIAL_UNLOCK_PROGRESS_ANIMATION_TIME: f32 = 0.16;
 
 impl EntropyApp {
     pub(super) fn stop_vial_unlock_with_status(&mut self, status: impl Into<String>) {
+        #[cfg(not(target_arch = "wasm32"))]
+        { self.vial_unlock_event_pause = None; }
         self.status_msg = status.into();
         self.unlock_open = false;
         self.vial_unlock_session_started = false;
@@ -79,6 +81,15 @@ impl EntropyApp {
     }
 
     fn complete_vial_unlock(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.vial_unlock_event_pause = None;
+            // VIA gates application packets during the physical hold. A host
+            // write can succeed while firmware discards it and its overlay
+            // expires; KEEPALIVE cannot recreate that overlay. Rehydrate the
+            // current snapshot after confirmed completion, even if unchanged.
+            self.force_current_application_layout_resend();
+        }
         self.vial_unlocked = Some(true);
         self.status_msg = crate::i18n::tr_catalog(
             self.app_settings.language,
@@ -489,16 +500,16 @@ mod tests {
         app.unlock_open = true;
         app.pending_layout_indicator_open_after_unlock = true;
 
-        ctx.run_ui(egui::RawInput::default(), |ui| {
+        crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
             app.draw_vial_unlock_overlay(ui.ctx());
-        })
+        }))
         .drop_without_applying_deltas();
         assert!(app.unlock_open);
         assert!(!app.vial_unlock_session_started);
         assert!(app.vial_hid_task.is_none());
         assert!(recorder.requests().is_empty());
 
-        ctx.run_ui(
+        crate::app::discard_texture_deltas(ctx.run_ui(
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key: egui::Key::Escape,
@@ -510,7 +521,7 @@ mod tests {
                 ..Default::default()
             },
             |ui| app.draw_vial_unlock_overlay(ui.ctx()),
-        )
+        ))
         .drop_without_applying_deltas();
         assert!(!app.unlock_open);
         assert!(!app.pending_layout_indicator_open_after_unlock);

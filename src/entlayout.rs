@@ -10,10 +10,162 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "entlayout_backup.rs"]
+pub(super) mod backup_durability;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn preserve_local_default_metadata(
+    prepared: &mut crate::application_layouts::DeviceApplicationLayouts,
+    known: Option<&crate::application_layouts::DeviceApplicationLayouts>,
+    supported_qmk_settings: &[u16],
+    qmk_settings_confirmed: bool,
+) -> Result<()> {
+    anyhow::ensure!(qmk_settings_confirmed,
+        "QMK settings capability is unconfirmed; reconnect before complete export or import backup");
+    let Some(authored) = known.and_then(|settings| settings.layouts.get("default")) else { return Ok(()); };
+    let Some(default) = prepared.layouts.get_mut("default") else { return Ok(()); };
+    // Default's display name is host metadata, not a resident FULL name. Layer
+    // labels without a firmware QSID are likewise local metadata: preserve them
+    // rather than inventing a conflict with generated firmware fallback labels.
+    // Supported native labels still require the strict physical comparison.
+    default.name = authored.name.clone();
+    for (layer, label) in default.layer_names.iter_mut().enumerate() {
+        if !supported_qmk_settings.contains(&(200 + layer as u16)) {
+            if let Some(authored) = authored.layer_names.get(layer) { *label = authored.clone(); }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+pub(crate) struct ResidentPreparationSource {
+    bundle: EntLayoutFile,
+    defaults: crate::application_layouts::DeviceApplicationLayouts,
+    known: Option<crate::application_layouts::DeviceApplicationLayouts>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, PartialEq, Eq)]
+enum GuiEntlayoutPurpose {
+    Export,
+    ImportBackup(PathBuf),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct GuiEntlayoutPreparation {
+    purpose: GuiEntlayoutPurpose,
+    target: crate::device::Device,
+    generation: u64,
+    owner: Option<(u64, Option<u64>)>,
+    deadline: std::time::Instant,
+    source: Option<ResidentPreparationSource>,
+    document: Option<EntLayoutFile>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn prepare_gui_resident_document(
+    hid: &crate::device_session::DeviceSession,
+    source: ResidentPreparationSource,
+    deadline: std::time::Instant,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<String> {
+    let mut check = || {
+        anyhow::ensure!(!cancel.load(std::sync::atomic::Ordering::Acquire), "Resident preparation cancelled");
+        anyhow::ensure!(std::time::Instant::now() < deadline, "Resident preparation deadline exceeded");
+        Ok(())
+    };
+    check()?;
+    let hid = hid.require_vial()?;
+    let supported = hid.probe_resident_export_capability()
+        .context("Incomplete resident application catalog capability; export refused")?;
+    check()?;
+    let mut bundle = source.bundle;
+    if supported {
+        let records = hid.read_resident_export_catalog_checked(&mut check)
+            .context("Incomplete resident application catalog; export refused")?;
+        let mut settings = source.defaults;
+        let known = source.known.as_ref();
+        let mut identities = std::collections::BTreeSet::new();
+        for record in records {
+            anyhow::ensure!(identities.insert(record.identity_crc[..20].to_vec()), "Duplicate resident identity");
+            let mut profile = crate::qmk_hid_host::decode_device_profile(&record)?;
+            // Match forward digests only. A device digest cannot invent host
+            // matching rules, and stale cached payloads never replace a FULL.
+            if let Some(previous) = known.and_then(|s| s.layouts.values().find(|p| p.id != "default" &&
+                (crate::qmk_hid_host::application_layout_identity_matches(&p.id, &record.identity_crc[..20])
+                    || s.device_raw_profiles.get(&p.id).is_some_and(|raw| raw.get(43..63) == Some(&record.identity_crc[..20]))))) {
+                profile.id = previous.id.clone(); profile.executable = previous.executable.clone();
+                profile.application_identities = previous.application_identities.clone();
+                profile.title_contains = previous.title_contains.clone(); profile.category = previous.category;
+                profile.custom_category_id = previous.custom_category_id.clone();
+                profile.automatic_switching = previous.automatic_switching;
+            }
+            crate::qmk_hid_host::validate_portable_resident_profile(&record, &profile)
+                .context("Incomplete resident application catalog representation; export refused")?;
+            anyhow::ensure!(!settings.layouts.contains_key(&profile.id), "Resident export profile ID collision");
+            settings.resident_slots.insert(profile.id.clone(), record.slot);
+            settings.device_raw_profiles.insert(profile.id.clone(), record.raw);
+            settings.layouts.insert(profile.id.clone(), profile);
+        }
+        // Reading device-authoritative data does not authorize dropping local
+        // authoring data from a backup. Until the envelope can carry both sides
+        // of a conflict, refuse explicitly and leave the destination untouched.
+        if let Some(known) = known {
+            for (id, authored) in &known.layouts {
+                let Some(physical) = settings.layouts.get(id) else {
+                    // Nonresident author data is portable even though it is not
+                    // permission to STORE it. Preserve it alongside readback.
+                    settings.layouts.insert(id.clone(), authored.clone());
+                    continue;
+                };
+                let inherited_default = id == "default"
+                    && authored.layers.len() == physical.layers.len()
+                    && authored.layers.iter().zip(&physical.layers).all(|(a, p)|
+                        a.len() == p.len() && a.iter().zip(p).all(|(a, p)|
+                            *a == crate::application_layouts::APPLICATION_LAYOUT_UNSET_KEYCODE || a == p));
+                let same_layers = authored.layers == physical.layers || inherited_default;
+                anyhow::ensure!(same_layers
+                    && authored.layer_names == physical.layer_names
+                    && authored.encoder_stacks == physical.encoder_stacks
+                    && authored.name == physical.name,
+                    "Export would replace author data in profile {id}; backup refused (layers={}, names={}, stacks={}, display={})",
+                    same_layers, authored.layer_names == physical.layer_names,
+                    authored.encoder_stacks == physical.encoder_stacks, authored.name == physical.name);
+            }
+        }
+
+        bundle.application_categories = settings.category_names.into_iter().collect();
+        let mut profiles = settings.layouts;
+        for profile in profiles.values_mut() { profile.user_edit_revision = 0; }
+        bundle.application_layouts = Some(profiles);
+    } else {
+        // Correlated legacy support rejection only. Never fabricate inventory.
+        if let Some(known) = source.known {
+            bundle.application_categories = known.category_names.into_iter().collect();
+            let mut profiles = known.layouts;
+            for profile in profiles.values_mut() { profile.user_edit_revision = 0; }
+            bundle.application_layouts = Some(profiles);
+        }
+    }
+    check()?;
+    Ok(serde_json::to_string(&bundle)?)
+}
+
 const ENTLAYOUT_FORMAT: &str = "entropy.layout";
 const ENTLAYOUT_VERSION: u16 = 7;
 // Complete Macropad device documents add every host profile and matching data.
 const MACROPAD_ENTLAYOUT_VERSION: u16 = 9;
+const SM62_ENTLAYOUT_VERSION: u16 = 10;
+
+fn complete_entlayout_document(bundle: &EntLayoutFile) -> bool {
+    // Historical native-v2 files and custom SM62 complete backups both used
+    // version 10. The complete-profile payload distinguishes the two schemas;
+    // do not reinterpret native-v2 action files as incomplete SM62 backups.
+    bundle.version == MACROPAD_ENTLAYOUT_VERSION
+        || (bundle.version == SM62_ENTLAYOUT_VERSION && bundle.application_layouts.is_some())
+}
 
 fn entlayout_version_supported(version: u16) -> bool {
     (1..=ENTLAYOUT_VERSION).contains(&version)
@@ -358,6 +510,14 @@ fn plan_entlayout_portable_settings_import(
     target_settings: &[EntPortableSetting],
     unconfirmed_qsids: &[u16],
 ) -> EntPortableSettingsImportPlan {
+    plan_confirmed_entlayout_portable_settings_import(settings, target_settings, |setting| !unconfirmed_qsids.contains(&setting.qsid))
+}
+
+fn plan_confirmed_entlayout_portable_settings_import(
+    settings: &[EntPortableSetting],
+    target_settings: &[EntPortableSetting],
+    confirmed: impl Fn(&EntPortableSetting) -> bool,
+) -> EntPortableSettingsImportPlan {
     let mut compatible = Vec::new();
     let mut report = EntPortableSettingsImportReport::default();
     let mut seen = std::collections::BTreeSet::new();
@@ -416,10 +576,7 @@ fn plan_entlayout_portable_settings_import(
             && target_settings
                 .iter()
                 .any(|other| other.id == setting.id && other.qsid != setting.qsid);
-        if setting.value == target.value
-            && !has_linked_colors
-            && !unconfirmed_qsids.contains(&setting.qsid)
-        {
+        if setting.value == target.value && !has_linked_colors && confirmed(&setting) {
             // Already matching values are successful imports without another
             // flash write or BLE round trip.
             report.record_imported();
@@ -1190,8 +1347,158 @@ impl EntropyApp {
         Ok(())
     }
 
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn gui_entlayout_owner_matches(&self, request: &GuiEntlayoutPreparation) -> bool {
+        request.generation == self.connection_generation
+            && self.selected_device.and_then(|i| self.device_manager.devices().get(i))
+                .is_some_and(|d| d.path == request.target.path
+                    && d.instance_token == request.target.instance_token
+                    && d.permits_hid_target(&request.target))
+            && self.qmk_hid_hosts.get(&request.target.path)
+                .map(|b| (b.application_layout_owner_incarnation(), b.application_layout_publication_generation())) == request.owner
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn queue_gui_resident_export(&mut self) -> Result<()> {
+        if self.gui_entlayout_preparation.is_some() {
+            // The same menu action can be dispatched again while the resident
+            // worker or portal is pending. Coalesce it; never cancel the first
+            // captured request merely because its picker is not visible yet.
+            return Ok(());
+        }
+        let request = self.capture_gui_resident_preparation(GuiEntlayoutPurpose::Export)?;
+        self.gui_entlayout_preparation = Some(request);
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn capture_gui_resident_preparation(&mut self, purpose: GuiEntlayoutPurpose) -> Result<GuiEntlayoutPreparation> {
+        self.prepare_entlayout_pictograms()?;
+        let target = self.selected_device.and_then(|i| self.device_manager.devices().get(i)).cloned()
+            .context("No selected resident keyboard")?;
+        let layout = self.layout.as_ref().context("No keyboard layout")?;
+        let mut defaults = crate::application_layouts::DeviceApplicationLayouts::default();
+        let default = defaults.layouts.get_mut("default").unwrap();
+        default.layers = Self::base_application_layers(layout).to_vec();
+        for (target, source) in default.layer_names.iter_mut().zip(&self.layer_names) { *target = source.clone(); }
+        let known = self.application_layout_settings().cloned();
+        if let Some(known) = &known { defaults.category_names = known.category_names.clone(); }
+        preserve_local_default_metadata(&mut defaults, known.as_ref(), &self.supported_qmk_settings,
+            layout.live_features.qmk_settings_confirmed)?;
+        // Frozen request-local source only; no bridge inventory is asserted here.
+        let bundle = self.entlayout_snapshot_with_profiles(Some(&defaults))
+            .context("Unconfirmed layout data; export refused")?;
+        Ok(GuiEntlayoutPreparation {
+            purpose,
+            owner: self.qmk_hid_hosts.get(&target.path).map(|b|
+                (b.application_layout_owner_incarnation(), b.application_layout_publication_generation())),
+            target, generation: self.connection_generation,
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(20),
+            source: Some(ResidentPreparationSource { bundle, defaults, known }), document: None,
+        })
+    }
+
+    /// Called before the ordinary dispatcher removes its queued path. No
+    /// resident reads run on the UI thread; Busy retains the captured request.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn prepare_pending_entlayout_import_backup(&mut self, ctx: &egui::Context, path: &Path) -> Result<bool> {
+        if !self.selected_device.and_then(|i| self.device_manager.devices().get(i))
+            .is_some_and(|d| d.application_layout_protocol_version() == Some(8)) {
+            return Ok(true);
+        }
+        if let Some(request) = self.gui_entlayout_preparation.as_ref() {
+            anyhow::ensure!(request.purpose == GuiEntlayoutPurpose::ImportBackup(path.to_path_buf()), "Another layout operation is pending");
+            anyhow::ensure!(self.gui_entlayout_owner_matches(request), "Keyboard owner changed before import backup");
+            anyhow::ensure!(std::time::Instant::now() < request.deadline, "Import backup preparation expired");
+            if request.document.is_some() { return Ok(true); }
+        } else {
+            // Validate source structure/resources before any capability/backup
+            // probing. This does not consume one-shot loss consent.
+            let bundle = self.read_entlayout_import_source(path)?;
+            self.validate_entlayout_file_with_capability(&bundle, false)?;
+            if self.hid_write_task_active() { return Ok(false); }
+            self.confirm_import_macro_cache()?;
+            self.confirm_uncertain_layer_names()?;
+            let request = self.capture_gui_resident_preparation(GuiEntlayoutPurpose::ImportBackup(path.to_path_buf()))?;
+            self.gui_entlayout_preparation = Some(request);
+        }
+        self.maybe_start_gui_entlayout_preparation(ctx);
+        ctx.request_repaint_after(std::time::Duration::from_millis(25));
+        Ok(false)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn maybe_start_gui_entlayout_preparation(&mut self, ctx: &egui::Context) {
+        let Some(request) = self.gui_entlayout_preparation.as_ref() else { return; };
+        // Once the portal owns this document, retain it until dispatch/cancel.
+        // Invalidation here would let the legacy direct-writer path reread HID.
+        if request.document.is_some() { return; }
+        if !self.gui_entlayout_owner_matches(request)
+            || (request.document.is_none() && std::time::Instant::now() >= request.deadline) {
+            self.fail_gui_entlayout_preparation("Keyboard owner changed or preparation expired".into());
+            return;
+        }
+        if request.source.is_none() { return; }
+        let operation = super::vial_hid_task::VialHidOperation::ResidentExportPreparation {
+            source: request.source.as_ref().unwrap().clone(), deadline: request.deadline,
+        };
+        match self.start_vial_hid_operation(ctx, operation) {
+            super::vial_hid_task::VialHidTaskStart::Started => {
+                self.gui_entlayout_preparation.as_mut().unwrap().source = None;
+            }
+            super::vial_hid_task::VialHidTaskStart::Busy => ctx.request_repaint_after(std::time::Duration::from_millis(25)),
+            super::vial_hid_task::VialHidTaskStart::NoDevice =>
+                self.fail_gui_entlayout_preparation("Keyboard disconnected".into()),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn fail_gui_entlayout_preparation(&mut self, error: String) {
+        self.cancel_gui_resident_worker();
+        let import = self.gui_entlayout_preparation.take().is_some_and(|request|
+            matches!(request.purpose, GuiEntlayoutPurpose::ImportBackup(_)));
+        if import {
+            self.pending_entlayout_import_path = None;
+            self.import_progress_started_at = None;
+            self.report_import_failure("status_messages.layout_import_failed_title",
+                format!("Layout import backup incomplete: {error}"));
+        } else {
+            self.status_msg = format!("Layout export incomplete: {error}");
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn finish_gui_entlayout_preparation(&mut self, json: String) {
+        let result = (|| -> Result<EntLayoutFile> {
+            let request = self.gui_entlayout_preparation.as_ref().context("Layout request cancelled")?;
+            anyhow::ensure!(self.gui_entlayout_owner_matches(request), "Keyboard owner changed during resident export");
+            anyhow::ensure!(std::time::Instant::now() < request.deadline, "Resident preparation expired");
+            let bundle: EntLayoutFile = serde_json::from_str(&json)?;
+            self.validate_entlayout_file(&bundle)?;
+            Ok(bundle)
+        })();
+        match result {
+            Ok(bundle) => {
+                let file_name = format!("{}.entlayout", device_id_slug(&bundle.keyboard.name));
+                let request = self.gui_entlayout_preparation.as_mut().unwrap();
+                let export = request.purpose == GuiEntlayoutPurpose::Export;
+                request.document = Some(bundle);
+                if export {
+                    self.spawn_file_dialog(crate::app::file_dialog::FileDialogAction::ExportEntlayout,
+                        rfd::FileDialog::new().add_filter("Entropy layout", &["entlayout"]).set_file_name(&file_name), true);
+                }
+            }
+            Err(error) => self.fail_gui_entlayout_preparation(format!("{error:#}")),
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn export_entlayout_dialog(&mut self) {
+        if let Err(error) = self.require_complete_entlayout_lighting() {
+            self.status_msg = error.to_string();
+            return;
+        }
         // The safe snapshot gate also protects unattended backups. Explicit
         // export must recover names before that gate, not only after the picker.
         if self.selected_layer_names_uncertain() && self.hid_write_task_active() {
@@ -1207,7 +1514,18 @@ impl EntropyApp {
             self.status_msg = error.to_string();
             return;
         }
-        let Some(bundle) = self.entlayout_snapshot() else {
+        if self.selected_device.and_then(|i| self.device_manager.devices().get(i))
+            .is_some_and(|d| d.application_layout_protocol_version() == Some(8)) {
+            if let Err(error) = self.queue_gui_resident_export() {
+                self.fail_gui_entlayout_preparation(format!("{error:#}"));
+            }
+            return;
+        }
+        let bundle = match self.prepared_entlayout_snapshot() {
+            Ok(bundle) => bundle,
+            Err(error) => { self.status_msg = format!("Layout export incomplete: {error:#}"); return; }
+        };
+        let Some(bundle) = bundle else {
             self.status_msg = crate::i18n::tr_catalog(
                 self.app_settings.language,
                 "entlayout.connect_keyboard_before_exporting_layout",
@@ -1230,6 +1548,27 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn write_entlayout_export(&mut self, path: &Path) {
+        if let Err(error) = self.require_complete_entlayout_lighting() {
+            self.gui_entlayout_preparation = None;
+            self.status_msg = error.to_string();
+            return;
+        }
+        if let Some(mut request) = self.gui_entlayout_preparation.take() {
+            let result = (|| -> Result<()> {
+                anyhow::ensure!(request.purpose == GuiEntlayoutPurpose::Export, "Import backup cannot be used as an export document");
+                anyhow::ensure!(self.gui_entlayout_owner_matches(&request), "Keyboard owner changed before export write");
+                let bundle = request.document.take().context("Resident preparation incomplete")?;
+                // Validation happened before the portal. Do not replace the
+                // captured source with the current application/editor selection.
+                write_entlayout_file(path, &bundle, self.app_settings.language)
+            })();
+            self.status_msg = match result {
+                Ok(()) => format!("Exported layout: {}", path.display()),
+                Err(error) => format!("Layout export incomplete: {error:#}"),
+            };
+            return;
+        }
+
         if let Err(error) = self
             .confirm_entlayout_macros()
             .and_then(|()| self.confirm_uncertain_layer_names())
@@ -1237,12 +1576,11 @@ impl EntropyApp {
             self.status_msg = error.to_string();
             return;
         }
-        if let Err(error) = self.prepare_entlayout_pictograms() {
-            self.status_msg =
-                format!("Layout export failed while reading shared pictograms: {error}");
-            return;
-        }
-        let Some(bundle) = self.entlayout_snapshot() else {
+        let bundle = match self.prepared_entlayout_snapshot() {
+            Ok(bundle) => bundle,
+            Err(error) => { self.status_msg = format!("Layout export incomplete: {error:#}"); return; }
+        };
+        let Some(bundle) = bundle else {
             self.status_msg = crate::i18n::tr_catalog(
                 self.app_settings.language,
                 "entlayout.connect_keyboard_before_exporting_layout",
@@ -1273,6 +1611,10 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn import_entlayout_dialog(&mut self) {
+        if let Err(error) = self.require_complete_entlayout_lighting() {
+            self.status_msg = error.to_string();
+            return;
+        }
         self.spawn_file_dialog(
             crate::app::file_dialog::FileDialogAction::ImportEntlayout,
             rfd::FileDialog::new().add_filter("Entropy layout", &["entlayout"]),
@@ -1305,32 +1647,44 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    fn read_entlayout_import_source(&self, path: &Path) -> Result<EntLayoutFile> {
+        let lang = self.app_settings.language;
+        let data = std::fs::read_to_string(path).with_context(|| crate::i18n::tr_catalog_format(
+            lang, "entlayout.failed_to_read", &[("path", &path.display().to_string())]))?;
+        match read_entlayout_document(&data).context(crate::i18n::tr_catalog(lang, "entlayout.invalid_entlayout_json"))? {
+            EntLayoutDocument::Device(bundle) => Ok(bundle),
+            EntLayoutDocument::Application(_) => bail!(match lang {
+                crate::i18n::Language::Russian => "Файл содержит только одну раскладку приложения, а не полную резервную копию Macropad. Создайте полную копию через «Экспорт раскладки» в исходном приложении; данные не изменены.",
+                crate::i18n::Language::English => "This file contains a single application layout, not a complete Macropad backup. Create a complete backup using Export layout in the source application; no data was changed.",
+            }),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn import_entlayout_from_path(&mut self, path: &Path) -> Result<String> {
+        let result = self.import_entlayout_from_path_prepared(path);
+        // Consent, validation and lock failures must not leak a frozen document
+        // into a later attempt. A fresh attempt obtains a fresh physical backup.
+        if self.gui_entlayout_preparation.as_ref().is_some_and(|r|
+            matches!(&r.purpose, GuiEntlayoutPurpose::ImportBackup(p) if p == path)) {
+            self.gui_entlayout_preparation = None;
+        }
+        result
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn import_entlayout_from_path_prepared(&mut self, path: &Path) -> Result<String> {
         let lang = self.app_settings.language;
         // Consent covers one try of the file it was given for.
         let losses_accepted = self
             .entlayout_losses_accepted
             .take()
             .is_some_and(|accepted| accepted == path);
-        let data = std::fs::read_to_string(path).with_context(|| {
-            crate::i18n::tr_catalog_format(
-                lang,
-                "entlayout.failed_to_read",
-                &[("path", &path.display().to_string())],
-            )
-        })?;
-        let mut bundle = match read_entlayout_document(&data).context(
-            crate::i18n::tr_catalog(lang, "entlayout.invalid_entlayout_json"),
-        )? {
-            EntLayoutDocument::Device(bundle) => bundle,
-            EntLayoutDocument::Application(_) => bail!(match lang {
-                crate::i18n::Language::Russian => "Файл содержит только одну раскладку приложения, а не полную резервную копию Macropad. Создайте полную копию через «Экспорт раскладки» в исходном приложении; данные не изменены.",
-                crate::i18n::Language::English => "This file contains a single application layout, not a complete Macropad backup. Create a complete backup using Export layout in the source application; no data was changed.",
-            }),
-        };
+        let mut bundle = self.read_entlayout_import_source(path)?;
         // Reject malformed documents before even read-only preparation. Resolve
         // cold capability only after schema/resource validation, before backup.
         self.validate_entlayout_file_with_capability(&bundle, false)?;
+        self.confirm_import_macro_cache()?;
         if bundle.application_layouts.is_some() {
             self.prepare_entlayout_pictograms()?;
         }
@@ -1344,15 +1698,36 @@ impl EntropyApp {
                 crate::i18n::tr_catalog(lang, "connection.keyboard_locked_import_layout",)
             );
         }
-        let backup_path = self.write_entlayout_auto_backup()?;
+        self.require_complete_entlayout_lighting()?;
+        let backup = self.write_prepared_entlayout_import_backup(path)?;
         let (firmware_failures, mapping, portable_settings) = self.apply_entlayout(&bundle)?;
-        Ok(self.entlayout_import_report(
+        let report = self.entlayout_import_report(
             &bundle,
-            &backup_path,
+            &backup.path,
             &firmware_failures,
             &mapping,
             &portable_settings,
-        ))
+        );
+        // Windows namespace lease remains live through all actual import SETs.
+        drop(backup);
+        Ok(report)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn confirm_import_macro_cache(&mut self) -> Result<()> {
+        if !self.deferred_device_load.import_section_unconfirmed(DeferredLoadSection::Macros) {
+            return Ok(());
+        }
+        if self.keycode_picker.macros_dirty {
+            bail!("Unconfirmed device macros and unsaved macro draft; reload or save the draft before importing");
+        }
+        let hid = self.hid_device.as_ref().context("No active keyboard connection")?;
+        let size = hid.get_macro_buffer_size()?;
+        let count = self.keycode_picker.macro_count as u8;
+        let confirmed = hid.get_macro_buffer(size, count)?;
+        self.keycode_picker.macro_texts = crate::hid::HidDevice::parse_macros(&confirmed, count);
+        self.deferred_device_load.set_section_status(DeferredLoadSection::Macros, DeferredLoadStatus::Loaded);
+        Ok(())
     }
 
     /// Read the production library on a cold connection, independently of the
@@ -1365,7 +1740,7 @@ impl EntropyApp {
         let retry_probe = self
             .selected_device
             .and_then(|index| self.device_manager.devices().get(index))
-            .filter(|device| device.is_ergohaven_display_macropad())
+            .filter(|device| device.application_layout_protocol_version().is_some())
             .is_some_and(|device| {
                 self.device_about_info.as_ref().is_some_and(|info| {
                     info.application_layout_probe_failed
@@ -1380,7 +1755,7 @@ impl EntropyApp {
                 .as_ref()
                 .context("No active keyboard connection")?
                 .require_vial()?
-                .probe_application_layout_protocol()
+                .probe_application_layout_protocol_version(self.selected_device.and_then(|i| self.device_manager.devices().get(i)).and_then(|d| d.application_layout_protocol_version()).context("Unsupported application layout device")?)
                 .context("Application layout capability is unconfirmed; export refused")?;
             let info = self.device_about_info.as_mut().unwrap();
             info.supports_application_layouts = supported;
@@ -1430,17 +1805,26 @@ impl EntropyApp {
     /// dialog export would write it; `None` before a keyboard is connected.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn entlayout_export_json(&mut self) -> Option<Result<String>> {
+        self.entlayout_export_json_checked(&mut || Ok(()))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn entlayout_export_json_checked(
+        &mut self,
+        check: &mut dyn FnMut() -> Result<()>,
+    ) -> Option<Result<String>> {
         self.layout.as_ref()?;
-        if let Err(error) = self
-            .confirm_entlayout_macros()
+        if let Err(error) = check().and_then(|()| self
+            .confirm_entlayout_macros())
             .and_then(|()| self.confirm_uncertain_layer_names())
+            .and_then(|()| check())
         {
             return Some(Err(error));
         }
-        if let Err(error) = self.prepare_entlayout_pictograms() {
-            return Some(Err(error));
-        }
-        let bundle = self.entlayout_snapshot()?;
+        let bundle = match self.prepared_entlayout_snapshot_checked(check) {
+            Ok(bundle) => bundle?,
+            Err(error) => return Some(Err(error)),
+        };
         if let Err(error) = self.validate_entlayout_file(&bundle) {
             return Some(Err(error));
         }
@@ -1448,15 +1832,131 @@ impl EntropyApp {
             serde_json::to_string_pretty(&bundle).context(crate::i18n::tr_catalog(
                 self.app_settings.language,
                 "entlayout.failed_to_serialize",
-            )),
+            )).and_then(|json| { check()?; Ok(json) }),
         )
     }
 
+    /// Explicit GUI and JSON exports share physical, read-only preparation.
+    /// Keep adoption local to this document: export is not permission to persist
+    /// a model-wide library or start a host publisher on a cold connection.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn prepared_entlayout_snapshot(&mut self) -> Result<Option<EntLayoutFile>> {
+        self.prepared_entlayout_snapshot_checked(&mut || Ok(()))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn prepared_entlayout_snapshot_checked(
+        &mut self,
+        check: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<Option<EntLayoutFile>> {
+        check()?;
+        self.prepare_entlayout_pictograms()?;
+        check()?;
+        let sm62 = self.selected_device.and_then(|i| self.device_manager.devices().get(i))
+            .is_some_and(|d| d.application_layout_protocol_version() == Some(8));
+        if !sm62 { return Ok(self.entlayout_snapshot()); }
+        anyhow::ensure!(self.layout.as_ref().is_some_and(|layout| layout.live_features.qmk_settings_confirmed),
+            "QMK settings capability is unconfirmed; reconnect before complete export or import backup");
+        let generation = self.connection_generation;
+        let device = self.selected_device.and_then(|i| self.device_manager.devices().get(i)).cloned()
+            .context("Resident export has no selected keyboard")?;
+        let bridge_generation = self.qmk_hid_hosts.get(&device.path)
+            .map(|b| (b.application_layout_owner_incarnation(), b.application_layout_publication_generation()));
+        check()?;
+        let hid = self.hid_device.as_ref().context("Resident export keyboard is busy or disconnected")?
+            .require_vial()?;
+        let supported = hid.probe_resident_export_capability()
+            .context("Incomplete resident application catalog capability; export refused")?;
+        check()?;
+        if !supported {
+            // A correlated legacy handshake proves that there is no schema2
+            // inventory to read. Unknown/error never reaches this fallback.
+            return Ok(self.entlayout_snapshot_with_profiles(None));
+        }
+        let records = hid.read_resident_export_catalog_checked(check)
+            .context("Incomplete resident application catalog; export refused")?;
+        anyhow::ensure!(self.connection_generation == generation
+            && self.selected_device.and_then(|i| self.device_manager.devices().get(i)).is_some_and(|d| d.path == device.path)
+            && self.qmk_hid_hosts.get(&device.path).map(|b| (b.application_layout_owner_incarnation(), b.application_layout_publication_generation())) == bridge_generation,
+            "Keyboard owner changed during resident export");
+        let layout = self.layout.as_ref().context("No keyboard layout")?;
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        let default = settings.layouts.get_mut("default").unwrap();
+        default.layers = Self::base_application_layers(layout).to_vec();
+        for (target, source) in default.layer_names.iter_mut().zip(&self.layer_names) { *target = source.clone(); }
+        let known = self.application_layout_settings();
+        if let Some(known) = known { settings.category_names = known.category_names.clone(); }
+        preserve_local_default_metadata(&mut settings, known, &self.supported_qmk_settings,
+            layout.live_features.qmk_settings_confirmed)?;
+        let mut identities = std::collections::BTreeSet::new();
+        for record in records {
+            anyhow::ensure!(identities.insert(record.identity_crc[..20].to_vec()), "Duplicate resident identity");
+            let mut profile = crate::qmk_hid_host::decode_device_profile(&record)?;
+            // Match forward digests only. A device digest cannot invent host
+            // matching rules, and stale cached payloads never replace a FULL.
+            if let Some(previous) = known.and_then(|s| s.layouts.values().find(|p| p.id != "default" &&
+                (crate::qmk_hid_host::application_layout_identity_matches(&p.id, &record.identity_crc[..20])
+                    || s.device_raw_profiles.get(&p.id).is_some_and(|raw| raw.get(43..63) == Some(&record.identity_crc[..20]))))) {
+                profile.id = previous.id.clone(); profile.executable = previous.executable.clone();
+                profile.application_identities = previous.application_identities.clone();
+                profile.title_contains = previous.title_contains.clone(); profile.category = previous.category;
+                profile.custom_category_id = previous.custom_category_id.clone();
+                profile.automatic_switching = previous.automatic_switching;
+            }
+            crate::qmk_hid_host::validate_portable_resident_profile(&record, &profile)
+                .context("Incomplete resident application catalog representation; export refused")?;
+            anyhow::ensure!(!settings.layouts.contains_key(&profile.id), "Resident export profile ID collision");
+            settings.resident_slots.insert(profile.id.clone(), record.slot);
+            settings.device_raw_profiles.insert(profile.id.clone(), record.raw);
+            settings.layouts.insert(profile.id.clone(), profile);
+        }
+        // Reading device-authoritative data does not authorize dropping local
+        // authoring data from a backup. Until the envelope can carry both sides
+        // of a conflict, refuse explicitly and leave the destination untouched.
+        if let Some(known) = known {
+            for (id, authored) in &known.layouts {
+                let Some(physical) = settings.layouts.get(id) else {
+                    // Nonresident author data is portable even though it is not
+                    // permission to STORE it. Preserve it alongside readback.
+                    settings.layouts.insert(id.clone(), authored.clone());
+                    continue;
+                };
+                let inherited_default = id == "default"
+                    && authored.layers.len() == physical.layers.len()
+                    && authored.layers.iter().zip(&physical.layers).all(|(a, p)|
+                        a.len() == p.len() && a.iter().zip(p).all(|(a, p)|
+                            *a == crate::application_layouts::APPLICATION_LAYOUT_UNSET_KEYCODE || a == p));
+                let same_layers = authored.layers == physical.layers || inherited_default;
+                anyhow::ensure!(same_layers
+                    && authored.layer_names == physical.layer_names
+                    && authored.encoder_stacks == physical.encoder_stacks
+                    && authored.name == physical.name,
+                    "Export would replace author data in profile {id}; backup refused (layers={}, names={}, stacks={}, display={})",
+                    same_layers, authored.layer_names == physical.layer_names,
+                    authored.encoder_stacks == physical.encoder_stacks, authored.name == physical.name);
+            }
+        }
+        Ok(self.entlayout_snapshot_with_profiles(Some(&settings)))
+    }
+
     fn entlayout_snapshot(&self) -> Option<EntLayoutFile> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(device) = self.selected_device.and_then(|i| self.device_manager.devices().get(i))
+            .filter(|d| d.application_layout_protocol_version() == Some(8)) {
+            if !self.layout.as_ref()?.live_features.qmk_settings_confirmed { return None; }
+            let settings = self.application_layout_settings()?;
+            if !self.qmk_hid_hosts.get(&device.path)?.resident_export_inventory_confirmed(settings) { return None; }
+        }
+        self.entlayout_snapshot_with_profiles(None)
+    }
+
+    fn entlayout_snapshot_with_profiles(&self, prepared: Option<&crate::application_layouts::DeviceApplicationLayouts>) -> Option<EntLayoutFile> {
         // Even callers without a transport (including automatic backups) must
         // not serialize a last-known cache as confirmed after a failed SET/GET.
         #[cfg(not(target_arch = "wasm32"))]
-        if self.selected_layer_names_uncertain()
+        if !self.entlayout_lighting_complete()
+            || self.selected_layer_names_uncertain()
+            || self.deferred_device_load.has_unconfirmed_import_data()
             || (self.keycode_picker.macro_count > 0
                 && !self
                     .deferred_device_load
@@ -1474,14 +1974,15 @@ impl EntropyApp {
                 .layouts
                 .get_mut(crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID)
                 .unwrap();
+            if layout.keys.len() == 62 && layout.rows == 10 && layout.cols == 7 {
+                profile.layers = Self::base_application_layers(layout).to_vec();
+            }
             for (target, source) in profile.layer_names.iter_mut().zip(&self.layer_names) {
                 *target = source.clone();
             }
             settings
         });
-        let application_settings = self
-            .application_layout_settings()
-            .or(fresh_settings.as_ref());
+        let application_settings = prepared.or_else(|| self.application_layout_settings()).or(fresh_settings.as_ref());
         // The ordinary layout file is always Default, never the foreground
         // application's host overlay. Include local Default edits even while
         // their standalone firmware write is still pending.
@@ -1558,6 +2059,8 @@ impl EntropyApp {
             format: ENTLAYOUT_FORMAT.to_owned(),
             version: if has_rynk_actions {
                 crate::rynk::entlayout::RYNK_ENTLAYOUT_VERSION
+            } else if application_settings.is_some() && layout.keys.len() == 62 && layout.rows == 10 && layout.cols == 7 {
+                SM62_ENTLAYOUT_VERSION
             } else if application_settings.is_some() {
                 MACROPAD_ENTLAYOUT_VERSION
             } else {
@@ -1576,12 +2079,18 @@ impl EntropyApp {
                     settings
                         .category_names
                         .iter()
-                        .filter(|(id, _)| referenced.contains(*id))
+                        .filter(|(id, _)| (layout.keys.len() == 62 && layout.rows == 10 && layout.cols == 7) || referenced.contains(*id))
                         .map(|(id, name)| (id.clone(), name.clone()))
                         .collect()
                 })
                 .unwrap_or_default(),
-            application_layouts: application_settings.map(|settings| settings.layouts.clone()),
+            application_layouts: application_settings.map(|settings| {
+                let mut profiles = settings.layouts.clone();
+                // Local authorship is not portable content or permission for
+                // a future attachment. Keep repeated exports deterministic.
+                for profile in profiles.values_mut() { profile.user_edit_revision = 0; }
+                profiles
+            }),
             pictograms: application_settings.and_then(|_| {
                 let state = &self.display_settings.pictograms;
                 state.loaded.then(|| {
@@ -1771,6 +2280,53 @@ impl EntropyApp {
         }
     }
 
+    /// Explicit import only. Unattended backup below deliberately retains its
+    /// strict inventory guard; physical read-only proof is request-local.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn write_prepared_entlayout_import_backup(&mut self, source_path: &Path) -> Result<backup_durability::PublishedBackup> {
+        let resident = self.selected_device.and_then(|i| self.device_manager.devices().get(i))
+            .is_some_and(|d| d.application_layout_protocol_version() == Some(8));
+        if !resident {
+            return self.write_entlayout_auto_backup()
+                .map(backup_durability::PublishedBackup::from_legacy_backup);
+        }
+        let purpose = GuiEntlayoutPurpose::ImportBackup(source_path.to_path_buf());
+        if let Some(request) = self.gui_entlayout_preparation.as_ref() {
+            anyhow::ensure!(request.purpose == purpose, "Another layout operation is pending");
+        }
+        let mut request = if let Some(request) = self.gui_entlayout_preparation.take() {
+            request
+        } else {
+            // Historical direct callers are synchronous. Use the same bounded,
+            // read-only producer, never pretend runtime inventory completed.
+            self.confirm_uncertain_layer_names()?;
+            let mut request = self.capture_gui_resident_preparation(purpose)?;
+            let json = prepare_gui_resident_document(
+                self.hid_device.as_ref().context("No active keyboard connection")?,
+                request.source.take().context("Missing resident backup source")?,
+                request.deadline, &std::sync::atomic::AtomicBool::new(false))?;
+            request.document = Some(serde_json::from_str(&json)?);
+            request
+        };
+        anyhow::ensure!(self.gui_entlayout_owner_matches(&request), "Keyboard owner changed before import backup");
+        anyhow::ensure!(std::time::Instant::now() < request.deadline, "Import backup preparation expired");
+        let bundle = request.document.take().context("Import backup preparation incomplete")?;
+        self.validate_entlayout_file(&bundle)?;
+        let config_root = storage_config_dir().context("No backup storage directory")?;
+        let namespace = self.import_backup_namespace.as_ref()
+            .map_err(|error| anyhow::anyhow!("Prepare import backup namespace: {error}"))?;
+        anyhow::ensure!(namespace.matches_config_root(&config_root),
+            "Backup storage changed after initialization; restart before importing");
+        let path = backup_durability::publish_backup(
+            namespace,
+            &device_id_slug(&bundle.keyboard.name),
+            |file| serde_json::to_writer_pretty(file, &bundle).map_err(std::io::Error::other),
+        ).context("Create and durably publish import backup")?;
+        anyhow::ensure!(self.gui_entlayout_owner_matches(&request), "Keyboard owner changed before import SET");
+        anyhow::ensure!(std::time::Instant::now() < request.deadline, "Import backup preparation expired before SET");
+        Ok(path)
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn write_entlayout_auto_backup(&self) -> Result<PathBuf> {
         let bundle = self.entlayout_snapshot().context(crate::i18n::tr_catalog(
@@ -1814,7 +2370,7 @@ impl EntropyApp {
             );
         }
         if !entlayout_version_supported(bundle.version)
-            && bundle.version != MACROPAD_ENTLAYOUT_VERSION
+            && !complete_entlayout_document(&bundle)
         {
             bail!(
                 "{}",
@@ -1829,8 +2385,65 @@ impl EntropyApp {
             self.app_settings.language,
             "entlayout.connect_target_keyboard",
         ))?;
+        // OLD accepts raw uint16 SETs but deliberately has no TD engine.
+        // Legacy imports must not silently publish non-executable assignments.
+        let sm62_target = self.entlayout_target_is_sm62();
+        if sm62_target {
+            let limits = EntLayoutKeycodeImportLimits {
+                layer_count: self.layer_count.min(bundle.keyboard.layers),
+                macro_count: self.keycode_picker.macro_count.min(entmacro_count(&bundle.data.macros)),
+                tap_dance_count: self.keycode_picker.tap_dance_entries.len().min(bundle.data.tap_dance.entries.len()),
+            };
+            {
+                let plan=plan_entlayout_portable_settings_import(
+                    &bundle.data.portable_settings,&self.entlayout_portable_settings_snapshot(), &[]);
+                if plan.report.unsupported != 0 || plan.report.incompatible != 0 {
+                    bail!("Complete SM62 import cannot restore all portable settings: {} unsupported, {} incompatible",plan.report.unsupported,plan.report.incompatible);
+                }
+            }
+            if entmacro_count(&bundle.data.macros) > self.keycode_picker.macro_count
+                || bundle.data.combos.entries.len() > self.combo_entries.len()
+                || bundle.data.key_overrides.entries.len() > self.key_override_entries.len()
+                || bundle.data.alt_repeat.entries.len() > self.alt_repeat_entries.len() {
+                bail!("SM62 target has insufficient shared resource slots");
+            }
+            if !self.supports_rmk_combo_layers && bundle.data.combos.entries.iter().any(|entry|entry.layer.is_some()) {
+                bail!("SM62 target cannot restore layer-specific Combos");
+            }
+            if bundle.data.tap_dance.entries.len() > self.keycode_picker.tap_dance_entries.len() {
+                bail!("SM62 target cannot restore included Tap Dance resources");
+            }
+            for code in bundle.data.keymap.iter().flatten().chain(bundle.data.encoder_keymap.iter().flatten()) {
+                check_entlayout_keycode(*code,bundle,_layout,limits)
+                    .map_err(|_| anyhow::anyhow!("SM62 target cannot restore resource {code:#06x}"))?;
+            }
+            for entry in &bundle.data.tap_dance.entries {
+                check_enttap_dance_entry(entry,bundle,_layout,limits)
+                    .map_err(|_|anyhow::anyhow!("Unrestorable SM62 Tap Dance dependency"))?;
+            }
+            for entry in &bundle.data.combos.entries {
+                check_entcombo_entry(entry,bundle,_layout,limits)
+                    .map_err(|_|anyhow::anyhow!("Unrestorable SM62 Combo dependency"))?;
+            }
+            for entry in &bundle.data.key_overrides.entries {
+                check_entkey_override_entry(entry,bundle,_layout,limits)
+                    .map_err(|_|anyhow::anyhow!("Unrestorable SM62 key override dependency"))?;
+            }
+            for entry in &bundle.data.alt_repeat.entries {
+                check_entalt_repeat_entry(entry,bundle,_layout,limits)
+                    .map_err(|_|anyhow::anyhow!("Unrestorable SM62 Alt Repeat dependency"))?;
+            }
+            for encoded in bundle.data.native_keymap.iter().flatten().flatten()
+                .chain(bundle.data.combos.entries.iter().filter_map(|e|e.native_output.as_ref()))
+                .chain(bundle.data.tap_dance.entries.iter().flat_map(|entry|[
+                    entry.native_on_tap.as_ref(),entry.native_on_hold.as_ref(),
+                    entry.native_on_double_tap.as_ref(),entry.native_on_tap_hold.as_ref()
+                ]).flatten()) {
+                check_complete_native_action(encoded,bundle,_layout,limits)?;
+            }
+        }
         if let Some(pictograms) = &bundle.pictograms {
-            if bundle.version != MACROPAD_ENTLAYOUT_VERSION
+            if !complete_entlayout_document(&bundle)
                 || (require_confirmed && self.display_settings.pictograms.supported != Some(true))
             {
                 bail!("Pictogram import requires a confirmed supported target library");
@@ -1845,7 +2458,7 @@ impl EntropyApp {
                 }
             }
         }
-        if (bundle.version == MACROPAD_ENTLAYOUT_VERSION) != bundle.application_layouts.is_some() {
+        if (complete_entlayout_document(&bundle)) != bundle.application_layouts.is_some() {
             bail!("Invalid complete Macropad layout version/payload");
         }
         if let Some(profiles) = &bundle.application_layouts {
@@ -1873,6 +2486,19 @@ impl EntropyApp {
                 .source_layout
                 .as_ref()
                 .context("Complete Macropad layout requires source geometry")?;
+            let source_sm62 = bundle.keyboard.rows == 10 && bundle.keyboard.cols == 7
+                && geometry.keys.len() == 62 && geometry.encoders.is_empty()
+                && geometry.keys.iter().map(|k| (k.row,k.col)).collect::<std::collections::BTreeSet<_>>()
+                    == crate::application_layouts::SM62_APPLICATION_POSITIONS.into_iter().collect();
+            let target_sm62 = _layout.rows == 10 && _layout.cols == 7 && _layout.keys.len() == 62
+                && _layout.encoders.is_empty()
+                && self.selected_device.and_then(|i| self.device_manager.devices().get(i))
+                    .is_some_and(|d| d.application_layout_protocol_version() == Some(8));
+            if (bundle.version == SM62_ENTLAYOUT_VERSION) != source_sm62
+                || source_sm62 != target_sm62
+                || (source_sm62 && bundle.keyboard.layers != 16) {
+                bail!("Complete layout device geometry/version mismatch");
+            }
             if bundle.keyboard.keys != geometry.keys.len()
                 || bundle.keyboard.layers != bundle.data.keymap.len()
                 || geometry.encoders.len() != bundle.data.encoder_keymap.first().map_or(0, Vec::len)
@@ -2029,11 +2655,18 @@ impl EntropyApp {
                 }
             }
             for (id, profile) in profiles {
+                let source_controls = if bundle.keyboard.rows == 10 && bundle.keyboard.cols == 7
+                    && geometry.keys.len() == 62 && geometry.encoders.is_empty() { 62 } else { 15 };
+                let target_controls = if _layout.rows == 10 && _layout.cols == 7
+                    && _layout.keys.len() == 62 && _layout.encoders.is_empty() { 62 } else { 15 };
                 if id.is_empty()
                     || id != &profile.id
                     || profile.layers.len() != 16
+                    || source_controls != target_controls
+                    || profile.layers.iter().any(|layer| layer.len() != source_controls)
                     || profile.layer_names.len() != 16
                     || profile.encoder_stacks.len() != 16
+                    || (source_sm62 && profile.encoder_stacks.iter().any(|stack| !stack.is_empty()))
                     || profile
                         .encoder_stacks
                         .iter()
@@ -2191,7 +2824,7 @@ impl EntropyApp {
         // references before capability preparation or any other HID request.
         // Query target capacity only in the strict pass, after the read-only
         // capability retry has had a chance to confirm the matching Macropad.
-        if require_confirmed && bundle.application_layouts.is_some() {
+        if require_confirmed && (bundle.application_layouts.is_some() || sm62_target) {
             let macro_bytes = entmacro_bytecode(&bundle.data.macros)?;
             if !macro_bytes.is_empty() {
                 let size = self
@@ -2303,6 +2936,8 @@ impl EntropyApp {
             let key = self
                 .application_layout_device_key()
                 .context("Select a Macropad")?;
+            #[cfg(not(target_arch = "wasm32"))]
+            self.refresh_application_layout_edit_owners(&key);
             let mut settings = self.app_settings.clone();
             let target = settings.application_layouts.entry(key).or_default();
             let mut category_mapping = std::collections::BTreeMap::new();
@@ -2325,6 +2960,10 @@ impl EntropyApp {
             }
             for (id, source) in profiles {
                 let mut profile = source.clone();
+                // The file's provenance counter is not local authoring intent.
+                // Publish the staged delta only after every import gate succeeds.
+                profile.user_edit_revision = target.layouts.get(id)
+                    .map_or(0, |current| current.user_edit_revision).wrapping_add(1).max(1);
                 let source_category = source.custom_category_id.clone().unwrap_or_else(|| {
                     source
                         .category
@@ -2474,7 +3113,7 @@ impl EntropyApp {
                 *target = source.clone();
             }
             names.truncate(self.layer_count);
-            let failed = self.write_layer_names_to_firmware(&names);
+            let failed = self.write_complete_import_layer_names(&names);
             if !failed.is_empty() {
                 firmware_failures.push(format!("layer names (layers {failed:?})"));
             }
@@ -2501,6 +3140,9 @@ impl EntropyApp {
             &mapping,
             !firmware_failures.sections.contains(&"entlayout.macros"),
         )?;
+        if complete_entlayout_document(&bundle) && firmware_failures.is_empty() {
+            self.deferred_device_load.confirm_import_publication();
+        }
         if bundle
             .data
             .portable_settings
@@ -2563,6 +3205,13 @@ impl EntropyApp {
         }
 
         Ok((firmware_failures, mapping, portable_settings))
+    }
+
+    fn entlayout_target_is_sm62(&self) -> bool {
+        self.layout.as_ref().is_some_and(|layout|
+            layout.rows == 10 && layout.cols == 7 && layout.keys.len() == 62)
+            && self.selected_device.and_then(|i|self.device_manager.devices().get(i))
+                .is_some_and(|device|device.application_layout_protocol_version()==Some(8))
     }
 
     /// Whether the connected board is a Rynk one.
@@ -3072,7 +3721,7 @@ impl EntropyApp {
                     crate::i18n::Language::English => "Pictograms".into(),
                 });
             }
-        } else {
+        } else if !self.entlayout_target_is_sm62() {
             imported.push(tr("entlayout.text_expander"));
         }
         let mut skipped = Vec::new();
@@ -3286,6 +3935,7 @@ impl EntropyApp {
         mapping: &EntLayoutImportMapping,
     ) -> Result<(EntFirmwareFailures, EntPortableSettingsImportReport)> {
         let lang = self.app_settings.language;
+        let macro_write_in_flight = self.hid_write_task_active();
         let Some(hid) = &self.hid_device else {
             bail!(
                 "{}",
@@ -3329,13 +3979,16 @@ impl EntropyApp {
         let EntPortableSettingsImportPlan {
             compatible: portable_settings,
             report: mut portable_settings_report,
-        } = plan_entlayout_portable_settings_import(
+        } = plan_confirmed_entlayout_portable_settings_import(
             &bundle.data.portable_settings,
             &target_portable_settings,
-            &unconfirmed_qsids,
+            |setting| !unconfirmed_qsids.contains(&setting.qsid)
+                && !self.deferred_device_load.import_section_unconfirmed(setting.import_section()),
         );
         let mut verified_portable_settings = Vec::new();
         let mut failed_indication_settings = Vec::new();
+        let unconfirmed_layers: Vec<bool> = (0..self.layer_count)
+            .map(|layer| self.deferred_device_load.import_layer_unconfirmed(layer)).collect();
         let mut failed_layer_colors = std::collections::BTreeSet::new();
 
         if let Err(err) = (|| -> Result<()> {
@@ -3364,7 +4017,7 @@ impl EntropyApp {
                         }
                         None => map_entlayout_keycode(keycode, bundle, &layout, limits).into(),
                     };
-                    if layout
+                    if !unconfirmed_layers[target_layer_idx] && layout
                         .layers
                         .get(target_layer_idx)
                         .and_then(|layer| layer.get(target_key_idx))
@@ -3374,6 +4027,9 @@ impl EntropyApp {
                         continue;
                     }
                     let key = &layout.keys[target_key_idx];
+                    if complete_entlayout_document(&bundle) {
+                        self.deferred_device_load.mark_import_layer_unconfirmed(target_layer_idx);
+                    }
                     hid.set_key_binding(target_layer_idx as u8, key.row, key.col, binding)?;
                 }
             }
@@ -3409,7 +4065,7 @@ impl EntropyApp {
                         continue;
                     };
                     let keycode = map_entlayout_keycode(keycode, bundle, &layout, limits);
-                    if layout
+                    if !unconfirmed_layers[target_layer_idx] && layout
                         .encoder_layers
                         .get(target_layer_idx)
                         .and_then(|layer| layer.get(target_encoder_idx))
@@ -3419,6 +4075,9 @@ impl EntropyApp {
                         continue;
                     }
                     let encoder = &layout.encoders[target_encoder_idx];
+                    if complete_entlayout_document(&bundle) {
+                        self.deferred_device_load.mark_import_layer_unconfirmed(target_layer_idx);
+                    }
                     hid.set_encoder(
                         target_layer_idx as u8,
                         encoder.encoder_idx,
@@ -3464,6 +4123,12 @@ impl EntropyApp {
         }
 
         for setting in portable_settings {
+            if complete_entlayout_document(&bundle) && !setting.is_layer_led_color() {
+                // The peer may accept SET even when its acknowledgement or GET
+                // fails. Preserve drafts, but revoke their snapshot authority
+                // before touching hardware (also blocks stale equality skips).
+                self.deferred_device_load.mark_import_section_unconfirmed(setting.import_section());
+            }
             let result = write_entlayout_portable_setting(hid, &setting);
             match result {
                 Ok(()) => {
@@ -3562,6 +4227,17 @@ impl EntropyApp {
                 macro_texts.resize(self.keycode_picker.macro_count, Vec::new());
                 macro_texts.truncate(self.keycode_picker.macro_count);
 
+                // Equality is an optimization only for physically confirmed
+                // bytes. Failed/unknown readback must still perform a corrective
+                // SET even when the old editor cache equals the import.
+                if matches!(self.deferred_device_load.section_status(DeferredLoadSection::Macros), DeferredLoadStatus::Loaded)
+                    && !self.keycode_picker.macros_dirty
+                    && self.keycode_picker.macro_attempted_revision.is_none()
+                    && !macro_write_in_flight
+                    && self.keycode_picker.macro_texts == macro_texts
+                {
+                    return Ok(());
+                }
                 let size = hid.get_macro_buffer_size()?;
                 let buf = hid.encode_macros(&macro_texts, size)?;
                 // SET can fail after mutating a prefix, and GET can fail after
@@ -3570,6 +4246,9 @@ impl EntropyApp {
                     DeferredLoadSection::Macros,
                     DeferredLoadStatus::Failed("Macro write has not been confirmed".into()),
                 );
+                if complete_entlayout_document(&bundle) {
+                    self.deferred_device_load.mark_import_section_unconfirmed(DeferredLoadSection::Macros);
+                }
                 hid.set_macro_buffer(&buf)?;
                 let confirmed = hid.get_macro_buffer(size, self.keycode_picker.macro_count as u8)?;
                 if crate::hid::HidDevice::parse_macros(
@@ -3611,6 +4290,12 @@ impl EntropyApp {
                     bail!("target firmware does not support layer-specific Combos");
                 }
                 let current = &self.combo_entries[idx];
+                if complete_entlayout_document(bundle)
+                    && (current.keys != combo.keys || current.output != output
+                        || (supports_rmk_combo_layers && current.layer != combo.layer))
+                {
+                    self.deferred_device_load.mark_import_section_unconfirmed(DeferredLoadSection::Combos);
+                }
                 hid.set_combo_entry(
                     idx as u8,
                     &ComboEntry {
@@ -3679,6 +4364,9 @@ impl EntropyApp {
                 {
                     continue;
                 }
+                if complete_entlayout_document(&bundle) {
+                    self.deferred_device_load.mark_import_section_unconfirmed(DeferredLoadSection::TapDance);
+                }
                 hid.set_tap_dance_bindings(idx as u8, actions, td.tapping_term)?;
             }
             Ok(())
@@ -3709,6 +4397,9 @@ impl EntropyApp {
                 {
                     continue;
                 }
+                if complete_entlayout_document(&bundle) {
+                    self.deferred_device_load.mark_import_section_unconfirmed(DeferredLoadSection::KeyOverrides);
+                }
                 hid.set_key_override(
                     idx as u8,
                     ko.trigger,
@@ -3719,6 +4410,10 @@ impl EntropyApp {
                     ko.suppressed_mods,
                     ko.options,
                 )?;
+                if complete_entlayout_document(&bundle)
+                    && hid.get_key_override(idx as u8)? != (ko.trigger,ko.replacement,ko.layers,ko.trigger_mods,ko.negative_mod_mask,ko.suppressed_mods,ko.options) {
+                    bail!("Key Override readback mismatch");
+                }
             }
             Ok(())
         })() {
@@ -3745,6 +4440,9 @@ impl EntropyApp {
                 {
                     continue;
                 }
+                if complete_entlayout_document(&bundle) {
+                    self.deferred_device_load.mark_import_section_unconfirmed(DeferredLoadSection::AltRepeat);
+                }
                 hid.set_alt_repeat_key(
                     idx as u8,
                     ar.keycode,
@@ -3752,6 +4450,10 @@ impl EntropyApp {
                     ar.allowed_mods,
                     ar.options,
                 )?;
+                if complete_entlayout_document(&bundle)
+                    && hid.get_alt_repeat_key(idx as u8)? != (ar.keycode,ar.alt_keycode,ar.allowed_mods,ar.options) {
+                    bail!("Alt Repeat readback mismatch");
+                }
             }
             Ok(())
         })() {
@@ -3979,7 +4681,7 @@ impl EntropyApp {
             }
         }
 
-        if bundle.application_layouts.is_none() {
+        if bundle.application_layouts.is_none() && !self.entlayout_target_is_sm62() {
             self.app_settings.text_expander_enabled = bundle.data.text_expander.enabled;
             self.app_settings.text_expander_app_blacklist =
                 bundle.data.text_expander.app_blacklist.clone();
@@ -4000,6 +4702,10 @@ impl EntropyApp {
             self.text_expander_rules_signature =
                 text_expander_rules_signature(&self.app_settings.text_expander_rule_files);
             self.sync_text_expander_runtime();
+        } else if bundle.application_layouts.is_none() {
+            // Persist this device's Default/visibility changes, not bundled
+            // global Text Expander state from a historical layout document.
+            save_app_settings(&self.app_settings);
         }
 
         if self.current_device_is_likely_rmk() {
@@ -4532,7 +5238,7 @@ fn try_map_entlayout_keycode(
     layout: &KeyboardLayout,
     limits: EntLayoutKeycodeImportLimits,
 ) -> Option<u16> {
-    if bundle.version == MACROPAD_ENTLAYOUT_VERSION {
+    if complete_entlayout_document(&bundle) {
         return check_entlayout_keycode(keycode, bundle, layout, limits).ok();
     }
     let keycode = map_custom_keycode_by_name(keycode, bundle, layout).flatten()?;
@@ -4827,7 +5533,7 @@ fn check_custom_keycode_by_name(
         .iter()
         .find(|custom| custom.index == source_idx)
     else {
-        if bundle.version == MACROPAD_ENTLAYOUT_VERSION
+        if complete_entlayout_document(&bundle)
             && (0x7E00..=0x7EFF).contains(&keycode)
             && !matches!(keycode, 0x7E05 | 0x7E06)
         {
@@ -5117,6 +5823,10 @@ fn entlayout_hash(layout: &KeyboardLayout) -> String {
     format!("fnv1a64:{hash:016x}")
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "explicit_import_intent_tests.inc"]
+mod explicit_import_intent_tests;
+
 #[cfg(test)]
 #[path = "entlayout_macropad_tests.rs"]
 mod macropad_tests;
@@ -5144,6 +5854,458 @@ use rgb::EntLayoutRgb;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn phenom_app(color: u8) -> EntropyApp {
+        let catalog: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("../tests/fixtures/display-menu-catalog.json"))
+                .unwrap();
+        let definition = &catalog
+            .iter()
+            .find(|entry| entry["name"] == "QMK/keyboards/ergohaven/phenom/keymaps/v1/vial.json")
+            .unwrap()["definition"];
+        let mut app = EntropyApp::new_inert_for_test();
+        app.layout = Some(KeyboardLayout::from_vial_json(definition).unwrap());
+        app.layer_count = 4;
+        let key_count = app.layout.as_ref().unwrap().keys.len();
+        app.layout.as_mut().unwrap().layers = vec![vec![0u16.into(); key_count]; 4];
+        app.supported_qmk_settings = (300..=303).collect();
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        recorder.respond_by(move |request| {
+            (request[..2] == [0xfe, 0x0a]).then(|| {
+                let mut response = [0; 32];
+                response[1] = color;
+                Ok(response)
+            })
+        });
+        app.layer_led_settings = EntropyApp::read_layer_led_settings(
+            definition,
+            &app.supported_qmk_settings,
+            app.layer_count,
+            &hid,
+        );
+        app
+    }
+
+    #[test]
+    fn entlayout_phenom_layer_colors_survive_export_and_import() {
+        let source = phenom_app(16);
+        assert_eq!(source.layer_led_settings.layer_colors.len(), 4);
+        assert!(source
+            .layer_led_settings
+            .layer_colors
+            .iter()
+            .all(|s| s.value == 16));
+        let json = serde_json::to_string(&source.entlayout_snapshot().unwrap()).unwrap();
+        let bundle: EntLayoutFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            bundle.data.portable_settings.len(),
+            4,
+            "Phenom layer colors must be included in the exported layout"
+        );
+        let mut target = phenom_app(0);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        target.hid_device = Some(hid.into());
+        let (failures, _, report) = target.apply_entlayout(&bundle).unwrap();
+        assert!(failures.is_empty());
+        assert_eq!(report.imported, 4);
+        assert_eq!(target.layer_led_settings, source.layer_led_settings);
+        let writes = recorder
+            .requests()
+            .into_iter()
+            .filter(|r| r[..2] == [0xfe, 0x0b])
+            .map(|r| (u16::from_le_bytes([r[2], r[3]]), r[4]))
+            .collect::<Vec<_>>();
+        assert_eq!(writes, vec![(300, 16), (301, 16), (302, 16), (303, 16)]);
+    }
+
+    fn layer_color_definition(layer: usize, qsid: u16) -> serde_json::Value {
+        serde_json::json!({"settings": [{"name": "LEDs settings", "fields": [{
+            "type": "select", "title": format!("Layer {layer} color"),
+            "qsid": qsid, "variants": LAYER_LED_PALETTE
+        }]}]})
+    }
+
+    fn layer_color_app_from_definition(definition: &serde_json::Value, color: u8) -> EntropyApp {
+        let mut app = phenom_app(color);
+        app.supported_qmk_settings.push(400);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        recorder.respond_by(move |request| {
+            (request[..2] == [0xfe, 0x0a]).then(|| {
+                let mut response = [0; 32];
+                response[1] = color;
+                Ok(response)
+            })
+        });
+        app.layer_led_settings = EntropyApp::read_layer_led_settings(
+            definition,
+            &app.supported_qmk_settings,
+            app.layer_count,
+            &hid,
+        );
+        app
+    }
+
+    #[test]
+    fn entlayout_layer_colors_preserve_sparse_firmware_layer_identity() {
+        let source = layer_color_app_from_definition(&layer_color_definition(0, 300), 16);
+        let target = layer_color_app_from_definition(&layer_color_definition(1, 300), 0);
+        let source_settings = source.entlayout_portable_settings_snapshot();
+        let target_settings = target.entlayout_portable_settings_snapshot();
+        assert_eq!(target_settings[0].id, "layer_led_color:1");
+        let plan = plan_entlayout_portable_settings_import(&source_settings, &target_settings, &[]);
+        assert!(plan.compatible.is_empty());
+        assert_eq!(plan.report.incompatible, 1);
+        let sparse_source = layer_color_app_from_definition(&layer_color_definition(1, 300), 16);
+        let plan = plan_entlayout_portable_settings_import(
+            &sparse_source.entlayout_portable_settings_snapshot(),
+            &target_settings,
+            &[],
+        );
+        assert_eq!(plan.compatible.len(), 1);
+    }
+
+    #[test]
+    fn entlayout_layer_colors_reject_unverified_firmware_contracts() {
+        let source = phenom_app(16).entlayout_portable_settings_snapshot();
+        for linked in [false, true] {
+            for invalid in 0..7 {
+                let mut definition = layer_color_definition(0, 300);
+                let fields = definition["settings"][0]["fields"].as_array_mut().unwrap();
+                if linked {
+                    let mut alias = fields[0].clone();
+                    alias["qsid"] = serde_json::json!(400);
+                    fields.push(alias);
+                }
+                let field = fields.last_mut().unwrap();
+                match invalid {
+                    0 => field["variants"].as_array_mut().unwrap().swap(2, 16),
+                    1 => {
+                        field.as_object_mut().unwrap().remove("variants");
+                    }
+                    2 => field["width"] = serde_json::json!(2),
+                    3 => field["width"] = serde_json::json!(257),
+                    4 => field["type"] = serde_json::json!("integer"),
+                    5 => field["bit"] = serde_json::json!(0),
+                    _ => field["variants"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(serde_json::Value::Null),
+                }
+                let target = layer_color_app_from_definition(&definition, 0);
+                let target_settings = target.entlayout_portable_settings_snapshot();
+                assert!(
+                    target_settings.is_empty(),
+                    "linked={linked}, invalid={invalid}"
+                );
+                assert!(
+                    plan_entlayout_portable_settings_import(&source, &target_settings, &[])
+                        .compatible
+                        .is_empty()
+                );
+            }
+        }
+        let legacy = layer_color_app_from_definition(&serde_json::json!({}), 0);
+        assert!(legacy.entlayout_portable_settings_snapshot().is_empty());
+    }
+
+    #[test]
+    fn entlayout_layer_colors_reject_other_led_register_aliases() {
+        for title in ["LED brightness", "LED timeout", "BT profile 1 color"] {
+            let mut definition = layer_color_definition(0, 300);
+            let fields = definition["settings"][0]["fields"].as_array_mut().unwrap();
+            let mut other = fields[0].clone();
+            other["title"] = serde_json::json!(title);
+            fields.push(other);
+            let app = layer_color_app_from_definition(&definition, 16);
+            assert!(
+                app.entlayout_portable_settings_snapshot().is_empty(),
+                "{title}"
+            );
+        }
+    }
+
+    #[test]
+    fn entlayout_layer_colors_failed_verification_invalidates_stale_export() {
+        let bundle = phenom_app(16).entlayout_snapshot().unwrap();
+        let mut target = phenom_app(0);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        recorder.respond_by(|request| {
+            (request[..2] == [0xfe, 0x0a]).then(|| Err("GET failed after SET".to_owned()))
+        });
+        target.hid_device = Some(hid.into());
+        let (_, _, report) = target.apply_entlayout(&bundle).unwrap();
+        assert_eq!(report.failed, 4);
+        assert!(target.entlayout_portable_settings_snapshot().is_empty());
+    }
+
+    #[test]
+    fn entlayout_layer_colors_failed_verification_refreshes_before_restore() {
+        let bundle = phenom_app(16).entlayout_snapshot().unwrap();
+        let mut target = phenom_app(0);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        let reads = std::sync::atomic::AtomicUsize::new(0);
+        recorder.respond_by(move |request| {
+            (request[..2] == [0xfe, 0x0a]).then(|| {
+                if reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 4 {
+                    Err("verification failed after SET".to_owned())
+                } else {
+                    let mut response = [0; 32];
+                    response[1] = 16;
+                    Ok(response)
+                }
+            })
+        });
+        target.hid_device = Some(hid.into());
+        let (_, _, report) = target.apply_entlayout(&bundle).unwrap();
+        assert_eq!(report.failed, 4);
+        assert!(target
+            .entlayout_portable_settings_snapshot()
+            .iter()
+            .all(|s| s.value == 16));
+        let old = phenom_app(0).entlayout_snapshot().unwrap();
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        target.hid_device = Some(hid.into());
+        let (_, _, report) = target.apply_entlayout(&old).unwrap();
+        assert_eq!(report.imported, 4);
+        assert_eq!(
+            recorder
+                .requests()
+                .iter()
+                .filter(|r| r[..2] == [0xfe, 0x0b])
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn entlayout_layer_colors_skip_unloaded_unsupported_and_invalid_values() {
+        let mut app = phenom_app(16);
+        app.layer_led_settings.layer_colors[0].loaded = false;
+        app.supported_qmk_settings.retain(|qsid| *qsid != 301);
+        app.layer_led_settings.layer_colors[2].value = 255;
+        let settings = app.entlayout_portable_settings_snapshot();
+        assert_eq!(settings.len(), 1);
+        assert_eq!(settings[0].qsid, 303);
+    }
+
+    #[test]
+    fn entlayout_layer_colors_reject_mismatched_contracts_and_duplicates() {
+        let source = phenom_app(16)
+            .entlayout_portable_settings_snapshot()
+            .remove(0);
+        let target = phenom_app(0).entlayout_portable_settings_snapshot();
+        for (field, value) in [
+            ("id", serde_json::json!("layer_led_color:1")),
+            ("id", serde_json::json!("layer_led_color:256")),
+            ("width", serde_json::json!("u16")),
+            ("value", serde_json::json!(25)),
+            ("variants", serde_json::json!(["Off", "Blue"])),
+            ("module", serde_json::json!([])),
+        ] {
+            let mut json = serde_json::to_value(&source).unwrap();
+            json[field] = value;
+            let malformed = serde_json::from_value(json).unwrap();
+            let plan = plan_entlayout_portable_settings_import(&[malformed], &target, &[]);
+            assert!(plan.compatible.is_empty(), "{field}");
+            assert_eq!(plan.report.incompatible, 1, "{field}");
+        }
+        let plan = plan_entlayout_portable_settings_import(&[source.clone(), source], &target, &[]);
+        assert!(plan.compatible.is_empty());
+        assert_eq!(plan.report.incompatible, 2);
+    }
+
+    #[test]
+    fn entlayout_layer_colors_old_files_and_unsupported_targets_do_not_write() {
+        let source = phenom_app(16);
+        let mut bundle = source.entlayout_snapshot().unwrap();
+        let mut target = phenom_app(0);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        target.hid_device = Some(hid.into());
+        target.supported_qmk_settings.clear();
+        let (_, _, report) = target.apply_entlayout(&bundle).unwrap();
+        assert_eq!(report.unsupported, 4);
+        bundle.data.portable_settings.clear();
+        for version in 1..=7 {
+            bundle.version = version;
+            let (_, _, report) = target.apply_entlayout(&bundle).unwrap();
+            assert_eq!(report.total(), 0);
+        }
+        assert!(target
+            .layer_led_settings
+            .layer_colors
+            .iter()
+            .all(|s| s.value == 0));
+        assert!(!recorder.requests().iter().any(|r| r[..2] == [0xfe, 0x0b]));
+    }
+
+    #[test]
+    fn entlayout_layer_colors_failed_usb_readback_keeps_local_colors() {
+        let bundle = phenom_app(16).entlayout_snapshot().unwrap();
+        let mut target = phenom_app(0);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        recorder.respond_by(|request| (request[..2] == [0xfe, 0x0a]).then(|| Ok([0; 32])));
+        target.hid_device = Some(hid.into());
+        let (failures, _, report) = target.apply_entlayout(&bundle).unwrap();
+        assert_eq!(report.failed, 4);
+        assert!(!failures.is_empty());
+        assert!(target
+            .layer_led_settings
+            .layer_colors
+            .iter()
+            .all(|s| s.value == 0));
+    }
+
+    #[test]
+    fn entlayout_layer_colors_restore_linked_registers() {
+        let mut source = phenom_app(16);
+        source.supported_qmk_settings.push(400);
+        source.layer_led_settings.layer_colors[0]
+            .linked_qsids
+            .push(400);
+        let bundle = source.entlayout_snapshot().unwrap();
+        let mut target = phenom_app(0);
+        target.supported_qmk_settings.push(400);
+        target.layer_led_settings.layer_colors[0]
+            .linked_qsids
+            .push(400);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        target.hid_device = Some(hid.into());
+        let (failures, _, report) = target.apply_entlayout(&bundle).unwrap();
+        assert!(failures.is_empty());
+        assert_eq!(report.imported, 5);
+        assert_eq!(target.layer_led_settings, source.layer_led_settings);
+        assert!(recorder
+            .requests()
+            .iter()
+            .any(|r| r[..5] == [0xfe, 0x0b, 144, 1, 16]));
+    }
+
+    #[test]
+    fn entlayout_layer_colors_failed_reads_do_not_export_fallback_zeroes() {
+        for definition in [
+            serde_json::json!({}),
+            serde_json::json!({
+                "settings": [{"name": "LEDs settings", "fields": [
+                    {"type": "select", "title": "Layer 0 color", "qsid": 300}
+                ]}]
+            }),
+        ] {
+            let mut app = phenom_app(16);
+            let (hid, recorder) = crate::hid::HidDevice::test_device();
+            recorder.respond_by(|request| {
+                (request[..2] == [0xfe, 0x0a]).then(|| Err("read failed".to_owned()))
+            });
+            app.layer_led_settings = EntropyApp::read_layer_led_settings(
+                &definition,
+                &app.supported_qmk_settings,
+                app.layer_count,
+                &hid,
+            );
+            assert!(app.layer_led_settings.supported);
+            assert!(app.entlayout_portable_settings_snapshot().is_empty());
+        }
+    }
+
+    #[test]
+    fn entlayout_layer_colors_partial_linked_failure_can_be_retried() {
+        let mut source = phenom_app(16);
+        source.supported_qmk_settings.push(400);
+        source.layer_led_settings.layer_colors[0]
+            .linked_qsids
+            .push(400);
+        let bundle = source.entlayout_snapshot().unwrap();
+        let mut target = phenom_app(0);
+        target.supported_qmk_settings.push(400);
+        target.layer_led_settings.layer_colors[0]
+            .linked_qsids
+            .push(400);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        recorder.respond_by(|request| {
+            (request[..4] == [0xfe, 0x0b, 144, 1])
+                .then(|| Err("linked register SET failed".to_owned()))
+        });
+        target.hid_device = Some(hid.into());
+        let (_, _, report) = target.apply_entlayout(&bundle).unwrap();
+        assert_eq!(report.failed, 1);
+        assert_eq!(target.layer_led_settings.layer_colors[0].value, 16);
+        assert_eq!(target.entlayout_portable_settings_snapshot()[0].value, 16);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        target.hid_device = Some(hid.into());
+        let (failures, _, report) = target.apply_entlayout(&bundle).unwrap();
+        assert!(failures.is_empty());
+        assert_eq!(report.failed, 0);
+        assert!(recorder
+            .requests()
+            .iter()
+            .any(|r| r[..5] == [0xfe, 0x0b, 144, 1, 16]));
+    }
+
+    #[test]
+    fn entlayout_layer_colors_reconnect_repairs_linked_registers() {
+        let mut source = phenom_app(16);
+        source.supported_qmk_settings.push(400);
+        source.layer_led_settings.layer_colors[0]
+            .linked_qsids
+            .push(400);
+        let bundle = source.entlayout_snapshot().unwrap();
+        let mut target = phenom_app(0);
+        target.supported_qmk_settings.push(400);
+        let definition = serde_json::json!({
+            "settings": [{"name": "LEDs settings", "fields": [
+                {"type": "select", "title": "Layer 0 color", "qsid": 300, "variants": LAYER_LED_PALETTE},
+                {"type": "select", "title": "Layer 0 color", "qsid": 400, "variants": LAYER_LED_PALETTE}
+            ]}]
+        });
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        recorder.respond_by(|request| {
+            (request[..2] == [0xfe, 0x0a]).then(|| {
+                let mut response = [0; 32];
+                // Reconnect after only the primary register was written successfully.
+                response[1] = if request[2..4] == [44, 1] { 16 } else { 0 };
+                Ok(response)
+            })
+        });
+        target.layer_led_settings = EntropyApp::read_layer_led_settings(
+            &definition,
+            &target.supported_qmk_settings,
+            target.layer_count,
+            &hid,
+        );
+        assert_eq!(target.layer_led_settings.layer_colors[0].value, 16);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        target.hid_device = Some(hid.into());
+        let (failures, _, report) = target.apply_entlayout(&bundle).unwrap();
+        assert!(failures.is_empty());
+        assert_eq!(report.failed, 0);
+        assert!(recorder
+            .requests()
+            .iter()
+            .any(|r| r[..5] == [0xfe, 0x0b, 144, 1, 16]));
+    }
+
+    #[test]
+    fn entlayout_layer_colors_incomplete_or_conflicting_linked_group_is_rejected() {
+        let mut source = phenom_app(16);
+        source.supported_qmk_settings.push(400);
+        source.layer_led_settings.layer_colors[0]
+            .linked_qsids
+            .push(400);
+        let settings = source.entlayout_portable_settings_snapshot();
+        let mut target = source.entlayout_portable_settings_snapshot();
+        for setting in &mut target {
+            setting.value = 0;
+        }
+        for conflicting in [false, true] {
+            let mut malformed = settings.clone();
+            if conflicting {
+                malformed.iter_mut().find(|s| s.qsid == 400).unwrap().value = 2;
+            } else {
+                malformed.retain(|s| s.qsid != 400);
+            }
+            let plan = plan_entlayout_portable_settings_import(&malformed, &target, &[]);
+            assert!(plan.compatible.iter().all(|s| s.id != "layer_led_color:0"));
+        }
+    }
 
     #[test]
     fn entlayout_lighting_backup_includes_indication_and_rgb() {
@@ -5191,6 +6353,10 @@ mod tests {
         assert_eq!(json["data"]["rgb"]["effect"], 6);
     }
 
+    // Retain both parents' lighting controls in separate namespaces: the
+    // accepted controls use confirmed import ledgers, upstream adds QSID rules.
+    mod upstream_layer_color_controls {
+        use super::*;
     fn phenom_app(color: u8) -> EntropyApp {
         let catalog: Vec<serde_json::Value> =
             serde_json::from_str(include_str!("../tests/fixtures/display-menu-catalog.json"))
@@ -5665,6 +6831,8 @@ mod tests {
             let plan = plan_entlayout_portable_settings_import(&malformed, &target, &[]);
             assert!(plan.compatible.iter().all(|s| s.id != "layer_led_color:0"));
         }
+    }
+
     }
 
     #[test]

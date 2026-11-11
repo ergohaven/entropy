@@ -992,7 +992,7 @@ mod tests {
             app.keycode_picker.selected_tab = crate::keycode_picker::KeycodeTab::Modifiers;
 
             let mut harness = egui_kittest::Harness::builder()
-                .allow_missing_glyphs()
+                .with_context_setup(crate::keycode_picker::setup_picker_test_fonts)
                 .with_size(egui::vec2(1_400.0, 1_000.0))
                 .build_ui_state(
                     |ui, app: &mut EntropyApp| {

@@ -111,6 +111,53 @@ mod tests {
         }
     }
 
+    #[test]
+    fn denied_bluetooth_connect_keeps_picker_readable_and_usb_selection_reachable() {
+        let (mut app, ctx, requests) = connection_app();
+        let mut bt = connection_device("K04 BT");
+        bt.bus_type = "Bluetooth".into();
+        bt.path = "bluez-gatt:/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF/service0010".into();
+        let usb = connection_device("SM62 USB");
+        app.device_manager.replace_devices(vec![bt.clone(), usb.clone()]);
+        app.start_connect(0);
+        let (_, tx) = requests.try_recv().unwrap();
+        let error = "VIA protocol read failed: Bluetooth Vial request failed over all advertised write modes: request: Failed to write the BlueZ Vial request: org.bluez.Error.NotAuthorized: Operation Not Authorized; command: Failed to write the BlueZ Vial request: org.bluez.Error.NotAuthorized: Operation Not Authorized";
+        tx.send(ConnectTaskMessage::Done(Box::new(Err(error.into())))).unwrap();
+        app.poll_connect(&ctx);
+        assert!(app.selected_device.is_none(), "failed target hides the picker");
+        assert!(matches!(app.connect_state, ConnectState::SelectingDevice));
+        for _ in 0..3 {
+            app.apply_device_scan_result(vec![bt.clone(), usb.clone()]);
+            assert!(requests.try_recv().is_err(), "discovery retried denied device without a click");
+            assert!(app.status_msg.contains("NotAuthorized"), "discovery discarded failure details");
+        }
+        let frame = |app: &mut EntropyApp, events| {
+            crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                events,
+                ..Default::default()
+            }, |ui| { eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest()); }))
+        };
+        frame(&mut app, vec![]);
+        let output = frame(&mut app, vec![]);
+        let usb_pos = output.shapes.iter().find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.job.text.contains("SM62 USB") => Some(t.pos + t.galley.rect.center().to_vec2()),
+            _ => None,
+        }).expect("USB alternative is absent from actual application UI");
+        for s in &output.shapes {
+            if let egui::Shape::Text(t) = &s.shape {
+                if t.galley.job.text.contains("NotAuthorized") {
+                    assert!(t.galley.rows.len() > 1, "failure text is a single overflowing line");
+                    assert!(t.galley.size().x <= 520.0, "failure text escapes panel width");
+                }
+            }
+        }
+        frame(&mut app, vec![egui::Event::PointerMoved(usb_pos), egui::Event::PointerButton { pos: usb_pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }]);
+        frame(&mut app, vec![egui::Event::PointerButton { pos: usb_pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }]);
+        let (target, _) = requests.try_recv().expect("click did not launch USB connection");
+        assert_eq!(target.path, usb.path);
+    }
+
     fn connection_result(name: &str) -> ConnectResult {
         ConnectResult {
             device_name: name.to_owned(),
@@ -1227,6 +1274,7 @@ impl EntropyApp {
             }
         };
 
+        crate::connect_timing::event(&format!("ui.received_done ok={} obsolete={obsolete}",result.is_ok()));
         self.connect_state = ConnectState::Idle;
         ctx.request_repaint();
         if obsolete {
@@ -1417,6 +1465,9 @@ impl EntropyApp {
                     .unwrap_or_else(|| r.device_name.clone());
                 self.status_msg = format!("Connected: {connected_display_name}");
 
+                self.confirmed_firmware_layer_names = r.layer_names_from_firmware.iter().take(16)
+                    .enumerate().fold(0u16, |mask, (layer, confirmed)| mask | if *confirmed { 1u16 << layer } else { 0 });
+
                 // Load per-device layer names.
                 let device_name = r.device_name.clone();
                 let local_layer_names = load_saved_layer_names(&device_name);
@@ -1529,6 +1580,7 @@ impl EntropyApp {
                     }
                 }
 
+                crate::connect_timing::event("ui.connected_ready");
                 log::info!(
                     "Connected: {} ({} layers, {:?})",
                     connected_display_name,
@@ -1537,6 +1589,10 @@ impl EntropyApp {
                 );
             }
             Err(e) => {
+                if super::device_connection::connection_permission_denied(&e) {
+                    self.show_connection_failure(e);
+                    return;
+                }
                 if let Some(reconnect) = reconnect {
                     self.schedule_bluetooth_reconnect_retry(reconnect, &e);
                     return;
@@ -1575,8 +1631,8 @@ impl EntropyApp {
                     return;
                 }
 
-                self.status_msg = e;
-                log::error!("{}", connect_apply_error_log(&self.status_msg));
+                log::error!("{}", connect_apply_error_log(&e));
+                self.show_connection_failure(e);
             }
         }
     }

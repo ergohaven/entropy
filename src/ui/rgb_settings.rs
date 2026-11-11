@@ -331,6 +331,11 @@ impl EntropyApp {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn test_gui_set_rgb_brightness(&mut self, brightness: u8) {
+        self.set_rgb_brightness(brightness);
+    }
+
     fn set_rgb_brightness(&mut self, brightness: u8) {
         if !self.ensure_rgb_settings_loaded() {
             return;

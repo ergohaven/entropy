@@ -1,3 +1,7 @@
+// Standard compact settings trigger, capped only by actual available space.
+// Do not derive its width from the label/preview column's fractional width.
+fn sm62_dropdown_width(available: f32) -> f32 { 196.0_f32.min(available.max(1.0)) }
+
 // Shared editor only: the firmware retains its existing per-half fields.
 // Rendering mixed stored values must not normalize or queue writes.
 fn sm62_shared_toggle(
@@ -49,25 +53,15 @@ impl EntropyApp {
         let mut picked = None;
         let width = ui.available_width();
         let supported = self.display_settings.display_timeout_supported;
-        display_settings_row(
-            ui,
-            width,
-            54.0,
-            crate::i18n::tr_catalog(lang, "display_settings.display_timeout"),
-            true,
-            222.0,
-            |ui| {
-                ui.horizontal(|ui| {
+        display_settings_row(ui, width, 54.0,
+            crate::i18n::tr_catalog(lang, "display_settings.display_timeout"), true, 222.0, |ui| {
+                // Keep the field on the common right edge; reserve status space
+                // to its left rather than shifting the dropdown itself.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_enabled_ui(supported, |ui| {
                         let (_, choice) = crate::ui_style::modern_dropdown_select_sized(
-                            ui,
-                            ui.make_persistent_id("sm62_shared_display_timeout"),
-                            &labels,
-                            self.display_settings.display_timeout as usize,
-                            196.0,
-                            34.0,
-                            12.0,
-                        );
+                            ui, ui.make_persistent_id("sm62_shared_display_timeout"), &labels,
+                            self.display_settings.display_timeout as usize, sm62_dropdown_width(width), 34.0, 12.0);
                         picked = choice;
                     })
                     .response
@@ -160,83 +154,32 @@ fn sm62_shared_controls(
         }
     }
     let supported = hold.is_some();
-    let pair = hold.as_deref().copied().unwrap_or([200; 2]);
+    let pair = hold.as_deref().copied().unwrap_or([350;2]);
     let mixed = pair[0] != pair[1];
-    let mut value = pair[0];
-    let mut edited = false;
-    // A number typed in counts as an edit even when it equals the left value, which
-    // then goes to both: egui reports a change only when the value moves.
-    let typed = std::cell::Cell::new(false);
+    let options: Vec<u16> = (300..=1000).step_by(100).collect();
+    let labels: Vec<String> = options.iter().map(|n|format!("{n} {}",if russian {"мс"} else {"ms"})).collect();
+    let selected = if mixed {usize::MAX} else {options.iter().position(|value|*value==pair[0]).unwrap_or(usize::MAX)};
+    // Legacy values remain visible and untouched; they are not additional
+    // selectable options and painting never clamps either half.
+    let text = if mixed {if russian {"Различаются".to_owned()} else {"Mixed".to_owned()}}
+        else {format!("{} {}",pair[0],if russian {"мс"} else {"ms"})};
+    let mut picked = None;
     let width = ui.available_width();
-    display_settings_row(
-        ui,
-        width,
-        54.0,
-        if russian {
-            "Показывать раскладку в течение"
-        } else {
-            "Show layout for"
-        },
-        true,
-        196.0,
-        |ui| {
-            ui.add_enabled_ui(supported, |ui| {
-                let response = ui.add_sized(
-                    egui::vec2(196.0, 34.0),
-                    egui::DragValue::new(&mut value)
-                        .range(0..=10_000)
-                        .speed(1)
-                        .custom_formatter(move |n, _| {
-                            if mixed {
-                                if russian {
-                                    "Различаются".into()
-                                } else {
-                                    "Mixed".into()
-                                }
-                            } else {
-                                format!("{n:.0}")
-                            }
-                        })
-                        .custom_parser(|text| {
-                            let parsed = text
-                                .chars()
-                                .filter(|c| !c.is_whitespace())
-                                .collect::<String>()
-                                .parse()
-                                .ok();
-                            typed.set(typed.get() || parsed.is_some());
-                            parsed
-                        })
-                        .suffix(if mixed {
-                            ""
-                        } else if russian {
-                            " мс"
-                        } else {
-                            " ms"
-                        }),
-                );
-                edited = response.changed() || typed.get();
-                if mixed {
-                    response.on_hover_text(if russian {
-                        format!(
-                            "Левый: {} мс; правый: {} мс. Новое значение применяется к обоим.",
-                            pair[0], pair[1]
-                        )
-                    } else {
-                        format!(
-                            "Left: {} ms; right: {} ms. Editing applies to both.",
-                            pair[0], pair[1]
-                        )
-                    });
-                }
+    let control_width = sm62_dropdown_width(width);
+    display_settings_row(ui,width,54.0,
+        if russian { "Показывать раскладку в течение" } else { "Show layout for" },true,control_width,|ui| {
+            ui.add_enabled_ui(supported,|ui| {
+                let id=ui.make_persistent_id("sm62_shared_hold");
+                let response=crate::ui_style::modern_dropdown_button_sized(ui,id,&text,ui.visuals().text_color(),control_width,34.0,12.0);
+                #[cfg(test)]
+                ui.ctx().data_mut(|data|data.insert_temp(egui::Id::unique("sm62_hold_render_trigger"),response.rect));
+                picked=crate::ui_style::modern_dropdown_popup_options(ui,id,&response,&labels,selected,control_width,12.0);
+                if mixed {response.on_hover_text(if russian {
+                    format!("Левый: {} мс; правый: {} мс. Новое значение применяется к обоим.",pair[0],pair[1])
+                } else {format!("Left: {} ms; right: {} ms. Editing applies to both.",pair[0],pair[1])});}
             });
-        },
-    );
-    if edited {
-        if let Some(pair) = hold {
-            pair.fill(value);
-        }
-    }
+        });
+    if let Some(index)=picked {if let Some(pair)=hold {pair.fill(options[index]);}}
     if let Some(value) = sm62_shared_toggle(
         ui,
         if russian {

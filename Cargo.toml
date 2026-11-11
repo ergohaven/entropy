@@ -1,6 +1,6 @@
 [package]
 name = "ergohaven-entropy"
-version = "0.5.0-test.4"
+version = "0.5.0-test.25"
 edition = "2021"
 description = "Desktop app for configuring Vial-QMK and Vial-RMK programmable keyboards and input devices"
 authors = ["Ergohaven"]
@@ -73,7 +73,7 @@ hidapi = "2.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 tray-icon = "0.22"
-windows-sys = { version = "0.60", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Devices_HumanInterfaceDevice", "Win32_Storage_FileSystem", "Win32_Security", "Win32_Foundation", "Win32_Globalization", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.60", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Devices_HumanInterfaceDevice", "Win32_Storage_FileSystem", "Win32_Security", "Win32_Foundation", "Win32_Globalization", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Security_Cryptography", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_Com", "Win32_System_Registry", "Win32_System_WindowsProgramming"] }
 windows = { version = "0.56", features = ["Foundation", "Foundation_Collections", "Media_Control", "Win32_Media_Audio_Endpoints", "Win32_System_Com_StructuredStorage"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -93,6 +93,7 @@ async-channel = "2"
 dbus = { version = "0.9", features = ["vendored"] }
 hidapi = { version = "2.6", default-features = false, features = ["linux-native-basic-udev"] }
 kdotool = { version = "0.3", default-features = false }
+ksni = { version = "0.3.7", default-features = false, features = ["async-io", "blocking"] }
 libc = "0.2"
 x11-dl = "2"
 zbus = "5.19"
