@@ -390,7 +390,7 @@ mod tests {
             collect_text(&clipped_shape.shape, &mut text);
         }
 
-        assert!(text.iter().any(|value| value == "Charging indicator"));
+        assert!(text.iter().any(|value| value == "Power indicator"));
         assert!(!text.iter().any(|value| {
             value == crate::i18n::tr_catalog(Language::English, "bluetooth_settings.connect")
         }));

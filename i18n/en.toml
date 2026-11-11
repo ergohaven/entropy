@@ -1324,11 +1324,11 @@ layer_selected_automatically_while_the_touchpad_is_active = "Layer selected auto
 
 [bluetooth_settings]
 title = "Bluetooth Settings"
-description = "Charging indicator and Bluetooth profile LED colors"
+description = "Power indicator and Bluetooth profile LED colors"
 unavailable = "Bluetooth settings are not available on this firmware"
 connect = "Connect a device to Entropy to edit Bluetooth settings"
-charge_indicator = "Charging indicator"
-charge_indicator_tooltip = "Show yellow while charging and green from 95% on the connected half"
+charge_indicator = "Power indicator"
+charge_indicator_tooltip = "Show the firmware's power/battery indication. Colours depend on firmware: on recent K:04 firmware, cyan means USB power is present, not confirmed charging or a full battery."
 profile_color = "BT profile {profile} color"
 profile_color_tooltip = "LED color used when Bluetooth profile {profile} is active"
 

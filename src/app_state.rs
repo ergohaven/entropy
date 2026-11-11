@@ -1819,7 +1819,7 @@ pub(crate) struct BluetoothProfileColorSetting {
 /// RMK wireless settings exposed by the Bluetooth settings tab in Vial.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct BluetoothSettingsState {
-    /// Whether the halves show yellow/green battery charging status on their LEDs
+    /// Whether the halves show their firmware-defined power/battery indication
     pub(crate) charge_indicator: Option<BluetoothBooleanSetting>,
     /// Palette color index for each firmware-supported Bluetooth profile
     pub(crate) profile_colors: Vec<BluetoothProfileColorSetting>,

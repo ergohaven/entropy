@@ -1324,11 +1324,11 @@ layer_selected_automatically_while_the_touchpad_is_active = "Слой, выби�
 
 [bluetooth_settings]
 title = "Bluetooth-настройки"
-description = "Индикатор зарядки и цвета LED для Bluetooth-профилей"
+description = "Индикатор питания и цвета LED для Bluetooth-профилей"
 unavailable = "Bluetooth-настройки недоступны в этой прошивке"
 connect = "Подключите устройство к Entropy, чтобы менять Bluetooth-настройки"
-charge_indicator = "Индикатор зарядки"
-charge_indicator_tooltip = "Показывать жёлтый при зарядке и зелёный от 95% на подключённой половинке"
+charge_indicator = "Индикатор питания"
+charge_indicator_tooltip = "Показывать индикацию питания и батареи, заданную прошивкой. Цвета зависят от прошивки: в новых прошивках K:04 голубой означает наличие USB-питания, а не подтверждённую зарядку или полный заряд батареи."
 profile_color = "Цвет BT-профиля {profile}"
 profile_color_tooltip = "Цвет LED, когда активен Bluetooth-профиль {profile}"
 
