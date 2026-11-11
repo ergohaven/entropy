@@ -1886,12 +1886,13 @@ mod tests {
                                 delta: egui::vec2(-640.0, 0.0),
                                 modifiers: egui::Modifiers::NONE,
                                 phase: egui::TouchPhase::Move,
+                                source: egui::MouseWheelSource::Unknown,
                             },
                         ]
                     } else {
                         vec![]
                     };
-                    let output = ctx.run_ui(
+                    let output = discard_texture_deltas(ctx.run_ui(
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(
                                 egui::Pos2::ZERO,
@@ -1904,7 +1905,7 @@ mod tests {
                             let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
                             app.draw_pointer_mode_settings_overview(ui, &table, metrics);
                         },
-                    );
+                    ));
                     for shape in &output.shapes {
                         text_positions(&shape.shape, &table.headers, &mut found);
                     }
