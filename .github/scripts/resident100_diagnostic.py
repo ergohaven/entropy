@@ -10,7 +10,16 @@ import subprocess
 import time
 
 TEST = "qmk_hid_host::resident100_tests::resident100_library_publication_admits_all_100_and_syncs_without_select"
-COMMAND = ["cargo", "nextest", "run", "--locked", "--all-targets", "--test-threads", "4", "--no-fail-fast", "--success-output", "immediate", "--failure-output", "immediate", "-E", "test(=" + TEST + ")"]
+COMMAND = ["cargo", "nextest", "run", "--test-threads", "4", "--no-fail-fast", "--success-output", "immediate", "--failure-output", "immediate", "-E", "test(=" + TEST + ")"]
+
+
+def execution_command(metadata):
+    files = [metadata / "binaries-metadata.json", metadata / "cargo-metadata.json"]
+    for path in files:
+        if not path.is_file():
+            raise FileNotFoundError(f"Missing precompiled-test metadata: {path}")
+        json.loads(path.read_text())
+    return COMMAND + ["--binaries-metadata", str(files[0]), "--cargo-metadata", str(files[1])]
 
 
 def classify(text, code):
@@ -34,7 +43,9 @@ def classify(text, code):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--metadata", type=Path, required=True)
     args = parser.parse_args()
+    command = execution_command(args.metadata)
     args.output.mkdir(parents=True, exist_ok=True)
     def output(*command):
         return subprocess.check_output(command, text=True).strip()
@@ -45,7 +56,9 @@ def main():
         "tree": output("git", "rev-parse", "HEAD^{tree}"),
         "platform": platform.platform(), "machine": platform.machine(),
         "rustc": output("rustc", "--version"), "nextest": output("cargo", "nextest", "--version"),
-        "command": COMMAND, "test": TEST,
+        "command": command, "test": TEST,
+        "compilation_allowed": False,
+        "build_metadata_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in args.metadata.glob("*.json")},
         "run_id": os.environ.get("GITHUB_RUN_ID"), "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
         "source_sha256": {p: hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in sources},
         "diagnostics_enabled": bool(os.environ.get("ENTROPY_RESIDENT100_DIAGNOSTICS")),
@@ -56,7 +69,7 @@ def main():
     started = time.monotonic()
     log = args.output / "test.log"
     with log.open("w") as stream:
-        with subprocess.Popen(COMMAND, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True) as process:
+        with subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True) as process:
             try:
                 code = process.wait(timeout=240)
             except subprocess.TimeoutExpired:
@@ -67,7 +80,7 @@ def main():
                 receipt["timeout"] = True
     text = log.read_text()
     receipt.update(exit_code=code, seconds=time.monotonic() - started, status=classify(text, code))
-    receipt["metadata"] = [line for line in text.splitlines() if line.startswith("RESIDENT100_")]
+    receipt["metadata"] = [line.lstrip() for line in text.splitlines() if line.lstrip().startswith("RESIDENT100_")]
     destination.write_text(json.dumps(receipt, indent=2))
     print(text, end="")
     print("DIAGNOSTIC_RESULT", json.dumps({k: receipt[k] for k in ("status", "exit_code", "seconds", "head")}))

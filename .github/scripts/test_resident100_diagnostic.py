@@ -1,5 +1,8 @@
 import unittest
-from resident100_diagnostic import classify, COMMAND, TEST
+import json
+from pathlib import Path
+import tempfile
+from resident100_diagnostic import classify, COMMAND, TEST, execution_command
 
 
 class DiagnosticReceiptTests(unittest.TestCase):
@@ -21,11 +24,32 @@ class DiagnosticReceiptTests(unittest.TestCase):
         for text, code in (("", 0), (good + good, 0), (good.replace(TEST, "unrelated"), 0), (good, 124)):
             self.assertEqual(classify(text, code), "incomplete")
 
+    def test_timed_execution_cannot_request_compilation(self):
+        self.assertNotIn("--all-targets", COMMAND)
+        self.assertNotIn("--locked", COMMAND)
+
     def test_original_name_and_process_isolation_retained(self):
         self.assertEqual(COMMAND[-2:], ["-E", "test(=" + TEST + ")"])
         self.assertEqual(COMMAND[COMMAND.index("--test-threads") + 1], "4")
-        self.assertIn("--locked", COMMAND)
         self.assertNotIn("--retries", COMMAND)
+
+    def test_precompiled_metadata_required_for_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaises(FileNotFoundError):
+                execution_command(root)
+            for name in ("binaries-metadata.json", "cargo-metadata.json"):
+                (root / name).write_text(json.dumps({"fixture": name}))
+            command = execution_command(root)
+            self.assertEqual(command[-4:], ["--binaries-metadata", str(root / "binaries-metadata.json"), "--cargo-metadata", str(root / "cargo-metadata.json")])
+            self.assertNotIn("--all-targets", command)
+
+    def test_invalid_metadata_rejected_before_launch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "binaries-metadata.json").write_text("not json")
+            with self.assertRaises(json.JSONDecodeError):
+                execution_command(root)
 
 
 if __name__ == "__main__":
