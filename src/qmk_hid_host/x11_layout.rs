@@ -121,6 +121,17 @@ impl X11LayoutTracker {
             .then_some(state.group as usize)
     }
 
+    pub(super) fn keyboard_model(&self) -> Option<String> {
+        unsafe {
+            self.rules()
+                .ok()
+                .flatten()?
+                .get(1)
+                .filter(|model| !model.is_empty())
+                .cloned()
+        }
+    }
+
     unsafe fn rules(&self) -> Result<Option<Vec<String>>, DetectionFailure> {
         let atom = (self.xlib.XInternAtom)(self.display, c"_XKB_RULES_NAMES".as_ptr(), 1);
         if atom == 0 {
@@ -197,6 +208,9 @@ impl X11LayoutTracker {
                 {
                     return Default::default();
                 }
+                if mods & 128 != 0 && consumed & 128 == 0 {
+                    return Default::default();
+                }
                 super::linux_keymaps::keysym_glyph(symbol as u32)
             });
             glyphs.insert(hid, levels);
@@ -218,7 +232,7 @@ impl X11LayoutTracker {
         let map = std::sync::Arc::new(SystemKeymap {
             id: format!("x11:{}:{group}", self.symbols),
             name,
-            third_level_modifier: crate::key_legend_detection::ThirdLevelModifier::AltGr,
+            third_level_modifier: crate::key_legend_detection::ThirdLevelModifier::RightAlt,
             keys: glyphs,
         });
         self.cached.push((group, map.clone()));
@@ -353,6 +367,20 @@ mod tests {
                 (tracker.xlib.XSync)(tracker.display, 0);
             }
             let observation = tracker.current_layout();
+            assert_eq!(tracker.keyboard_model().as_deref(), Some("pc104"));
+            if layout == "us" && variant.is_empty() {
+                let NativeLayoutIdentity::Mapped(ref map) = observation.identity else {
+                    panic!("missing US map")
+                };
+                assert_eq!(map.legend(0x1404, false, true), None);
+                assert_eq!(map.legend(0x1604, false, true), None);
+            }
+            if layout == "fr" {
+                let NativeLayoutIdentity::Mapped(ref map) = observation.identity else {
+                    panic!("missing French map")
+                };
+                assert_eq!(map.legend(0x1408, false, true).as_deref(), Some("€"));
+            }
             assert_eq!(
                 match observation.identity {
                     NativeLayoutIdentity::Mapped(ref map) => map.keys[&30][0].text.clone(),
@@ -378,6 +406,7 @@ mod tests {
                     (tracker.xlib.XSync)(tracker.display, 0);
                 }
                 let observation = tracker.current_layout();
+                assert_eq!(tracker.keyboard_model(), None);
                 assert_eq!(observation.language, Some(1), "{observation:?}");
                 assert!(observation.identity.profile().is_ok());
             }

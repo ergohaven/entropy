@@ -3042,6 +3042,28 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn ibus_observations_retain_the_desktop_keyboard_model() {
+        use crate::key_legend_detection::NativeLayoutIdentity;
+        for (model, expected) in [("pc105", "²"), ("macintosh", "@")] {
+            let observation = map_ibus_observation(
+                None,
+                NativeLayoutIdentity::Ibus {
+                    engine: "xkb:fr::fra".into(),
+                    layout: "fr".into(),
+                    variant: None,
+                    options: None,
+                },
+                model,
+            );
+            let NativeLayoutIdentity::Mapped(map) = observation.identity else {
+                panic!("missing IBus mapping")
+            };
+            assert_eq!(map.keys[&53][0].text, expected);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn ibus_descriptor_retains_variants_and_options_without_authorizing_unverified_sources() {
         use crate::key_legend_detection::{DetectionFailure, NativeLayoutIdentity};
         for variant in ["", "typewriter", "phonetic"] {
@@ -3235,7 +3257,11 @@ impl LayoutTracker {
             .as_ref()
             .filter(|state| state.entropy && state.layout.is_some())
         {
-            return map_ibus_observation(state.layout, state.identity.clone());
+            return map_ibus_observation(
+                state.layout,
+                state.identity.clone(),
+                self.ibus_keyboard_model().as_deref().unwrap_or("pc105"),
+            );
         }
         let x11 = self.x11.as_mut().map(x11_layout::X11LayoutTracker::current_layout);
         let language = match self.native.as_mut() {
@@ -3264,7 +3290,28 @@ impl LayoutTracker {
         } else {
             NativeLayoutIdentity::Unavailable(DetectionFailure::VariantUnavailable)
         };
-        map_ibus_observation(language, identity)
+        let model = matches!(identity, NativeLayoutIdentity::Ibus { .. })
+            .then(|| self.ibus_keyboard_model())
+            .flatten();
+        map_ibus_observation(language, identity, model.as_deref().unwrap_or("pc105"))
+    }
+
+    fn ibus_keyboard_model(&self) -> Option<String> {
+        if matches!(self.native, Some(NativeLayoutTracker::Kde(_))) || kde_desktop_session() {
+            if let Some(config) = dirs::config_dir()
+                .and_then(|dir| std::fs::read_to_string(dir.join("kxkbrc")).ok())
+            {
+                if let Some(model) = parse_kde_keymap_config(&config)
+                    .get("Model")
+                    .filter(|model| !model.is_empty())
+                {
+                    return Some((*model).to_owned());
+                }
+            }
+        }
+        self.x11
+            .as_ref()
+            .and_then(x11_layout::X11LayoutTracker::keyboard_model)
     }
 }
 
@@ -3272,6 +3319,7 @@ impl LayoutTracker {
 fn map_ibus_observation(
     language: Option<u8>,
     identity: crate::key_legend_detection::NativeLayoutIdentity,
+    model: &str,
 ) -> LayoutObservation {
     use crate::key_legend_detection::{DetectionFailure, NativeLayoutIdentity};
     let identity = if let NativeLayoutIdentity::Ibus {
@@ -3298,7 +3346,7 @@ fn map_ibus_observation(
         linux_keymaps::load(
             &spec,
             engine,
-            "pc105",
+            model,
             options.as_deref().unwrap_or_default(),
         )
         .map(NativeLayoutIdentity::Mapped)

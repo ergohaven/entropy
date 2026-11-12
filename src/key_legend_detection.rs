@@ -32,12 +32,42 @@ impl KeyGlyph {
 /// Shift, AltGr/Option, and Shift+AltGr/Option. A saved selection includes the
 /// mapping so exports and manual selection also work after its source disappears.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(from = "SavedSystemKeymap")]
 pub struct SystemKeymap {
     pub id: String,
     pub name: String,
-    #[serde(default)]
     pub third_level_modifier: ThirdLevelModifier,
     pub keys: BTreeMap<u16, [KeyGlyph; 4]>,
+}
+
+#[derive(serde::Deserialize)]
+struct SavedSystemKeymap {
+    id: String,
+    name: String,
+    third_level_modifier: Option<ThirdLevelModifier>,
+    keys: BTreeMap<u16, [KeyGlyph; 4]>,
+}
+
+impl From<SavedSystemKeymap> for SystemKeymap {
+    fn from(saved: SavedSystemKeymap) -> Self {
+        // Older snapshots already identify their backend: Windows/XKB use
+        // prefixes, while macOS retains the unprefixed TIS source identifier.
+        let third_level_modifier = saved.third_level_modifier.unwrap_or_else(|| {
+            if saved.id.starts_with("windows:") {
+                ThirdLevelModifier::AltGr
+            } else if saved.id.starts_with("xkb:") || saved.id.starts_with("x11:") {
+                ThirdLevelModifier::RightAlt
+            } else {
+                ThirdLevelModifier::Option
+            }
+        });
+        Self {
+            id: saved.id,
+            name: saved.name,
+            keys: saved.keys,
+            third_level_modifier,
+        }
+    }
 }
 
 /// Persist the source's modifier semantics with its glyphs, including when a
@@ -49,6 +79,8 @@ pub struct SystemKeymap {
 pub enum ThirdLevelModifier {
     #[default]
     AltGr,
+    /// XKB does not imply Windows' Ctrl+Alt alias.
+    RightAlt,
     Option,
 }
 
@@ -83,6 +115,7 @@ impl SystemKeymap {
             let mods = value >> 8;
             let third_level = match self.third_level_modifier {
                 ThirdLevelModifier::AltGr => matches!(mods & !2, 0x14 | 0x05),
+                ThirdLevelModifier::RightAlt => mods & !2 == 0x14,
                 ThirdLevelModifier::Option => matches!(mods & !2, 0x04 | 0x14),
             };
             let shift = mods & 2 != 0;
@@ -414,12 +447,24 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("third_level_modifier");
-        assert_eq!(
-            serde_json::from_value::<SystemKeymap>(legacy)
-                .unwrap()
-                .third_level_modifier,
-            ThirdLevelModifier::AltGr
-        );
+        for (id, expected) in [
+            ("com.apple.keylayout.US", ThirdLevelModifier::Option),
+            ("org.example.custom", ThirdLevelModifier::Option),
+            ("windows:0000000004090409", ThirdLevelModifier::AltGr),
+            ("xkb:fr:", ThirdLevelModifier::RightAlt),
+            ("x11:pc+fr:0", ThirdLevelModifier::RightAlt),
+        ] {
+            legacy["id"] = id.into();
+            let restored = serde_json::from_value::<SystemKeymap>(legacy.clone()).unwrap();
+            assert_eq!(restored.third_level_modifier, expected);
+            assert_eq!(
+                restored.legend(0x0504, false, true).is_some(),
+                expected == ThirdLevelModifier::AltGr
+            );
+            let roundtrip: SystemKeymap =
+                serde_json::from_value(serde_json::to_value(&restored).unwrap()).unwrap();
+            assert_eq!(roundtrip, restored);
+        }
     }
     #[test]
     fn system_mapping_keeps_space_and_nonproducing_modifier_actions_visible() {

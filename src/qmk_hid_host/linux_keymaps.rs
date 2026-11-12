@@ -182,6 +182,9 @@ fn compile(id: &str, name: &str, model: &str, options: &str) -> Option<Arc<Syste
         let mod_index = api.function::<unsafe extern "C" fn(*mut c_void, *const c_char) -> u32>(
             b"xkb_keymap_mod_get_index\0",
         )?;
+        let consumed = api.function::<unsafe extern "C" fn(*mut c_void, u32) -> u32>(
+            b"xkb_state_key_get_consumed_mods\0",
+        )?;
         let context = context_new(0);
         if context.is_null() {
             return None;
@@ -218,6 +221,11 @@ fn compile(id: &str, name: &str, model: &str, options: &str) -> Option<Arc<Syste
             }
             let levels = [0, shift, altgr, shift | altgr].map(|mods| {
                 update(state, mods, 0, 0, 0, 0, 0);
+                // Preserve Right Alt in shortcut labels when this key's type
+                // does not use it to select a glyph (for example plain US).
+                if mods & altgr != 0 && consumed(state, code) & altgr == 0 {
+                    return KeyGlyph::default();
+                }
                 keysym_glyph(symbol(state, code))
             });
             keys.insert(hid, levels);
@@ -227,7 +235,7 @@ fn compile(id: &str, name: &str, model: &str, options: &str) -> Option<Arc<Syste
         Some(Arc::new(SystemKeymap {
             id: id.into(),
             name: name.into(),
-            third_level_modifier: crate::key_legend_detection::ThirdLevelModifier::AltGr,
+            third_level_modifier: crate::key_legend_detection::ThirdLevelModifier::RightAlt,
             keys,
         }))
     }
@@ -335,6 +343,27 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn xkb_right_alt_shortcuts_without_a_third_level_keep_their_modifiers() {
+        let map = load("xkb:us:", "US", "pc105", "").unwrap();
+        assert_eq!(map.legend(0x1404, false, true), None);
+        assert_eq!(map.legend(0x1604, false, true), None);
+    }
+
+    #[test]
+    fn xkb_control_alt_shortcuts_keep_their_modifiers() {
+        let map = load("xkb:fr:", "French", "pc105", "").unwrap();
+        assert_eq!(map.keys[&8][2].text, "€");
+        assert_eq!(map.legend(0x0508, false, true), None);
+        assert_eq!(map.legend(0x1408, false, true).as_deref(), Some("€"));
+        let layout = crate::keycode::KeyLegendLayout::System {
+            keymap: map,
+            english_first: false,
+        };
+        let label = crate::keycode::keycode_label_with_names_and_layout(0x0508, &[], &[], layout);
+        assert!(label.starts_with("Ctrl+Alt\n"), "{label}");
     }
 
     #[test]
