@@ -17,7 +17,19 @@ fn resident100_library_publication_admits_all_100_and_syncs_without_select() {
     let validator = Arc::new(Mutex::new(super::resident_regressions::Peer::default()));
     let v = validator.clone();
     rec.on_output(move |p| v.lock().unwrap().output(p));
+    let diagnostic = std::env::var_os("ENTROPY_RESIDENT100_DIAGNOSTICS").is_some();
+    let diagnostic_started = Instant::now();
     rec.respond_by(move |p| {
+        if diagnostic && p[..2] == [0xef, 9] {
+            let offset = u16::from_le_bytes([p[8], p[9]]);
+            if p[2] == 1 || (p[2] == 6 && p[3] < 3 && offset % 1000 == 0) {
+                eprintln!(
+                    "RESIDENT100_PACKET ms={} op={} slot={} read_offset={}",
+                    diagnostic_started.elapsed().as_millis(), p[2], p[3],
+                    if p[2] == 6 { offset } else { 0 }
+                );
+            }
+        }
         if p[0] == 0xeb {
             return Some(Ok(capability(p)));
         }
@@ -123,17 +135,41 @@ fn resident100_library_publication_admits_all_100_and_syncs_without_select() {
     settings.join().unwrap();
     // Each of 100 STOREs now includes bounded FULL READs before the next job.
     let deadline = Instant::now() + Duration::from_secs(150);
+    let mut diagnostic_next = Instant::now();
     while stored.lock().unwrap().len() < 100
         || ids
             .iter()
             .any(|id| bridge.resident_sync_status(id) != Some(resident100::SyncStatus::Synced))
     {
+        if diagnostic && Instant::now() >= diagnostic_next {
+            diagnostic_next = Instant::now() + Duration::from_secs(1);
+            let stored_count = stored.lock().unwrap().len();
+            let state = bridge.application_layout_snapshot.lock().unwrap();
+            let errors: Vec<_> = state.resident_status.values()
+                .filter(|status| matches!(status, resident100::SyncStatus::Error(_))).collect();
+            eprintln!(
+                "RESIDENT100_STATE ms={} stored={} statuses={} errors={errors:?} validated={} inventory_complete={} generation={} library_generation={} waits={}",
+                diagnostic_started.elapsed().as_millis(), stored_count,
+                state.resident_status.len(), state.resident_recoveries.values()
+                    .filter(|record| record.validation.is_none()).count(),
+                state.resident_inventory_complete, state.generation, state.library_generation,
+                bridge.control.wake.waits.load(Ordering::Relaxed)
+            );
+        }
         assert!(
             Instant::now() < deadline,
             "stored {} of 100",
             stored.lock().unwrap().len()
         );
         thread::sleep(Duration::from_millis(5));
+    }
+    if diagnostic {
+        let state = bridge.application_layout_snapshot.lock().unwrap();
+        eprintln!(
+            "RESIDENT100_COMPLETE ms={} validated={} inventory_complete={}",
+            diagnostic_started.elapsed().as_millis(), state.resident_recoveries.values()
+                .filter(|record| record.validation.is_none()).count(), state.resident_inventory_complete
+        );
     }
     bridge.stop();
     let ps = rec.requests();

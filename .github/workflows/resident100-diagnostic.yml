@@ -1,0 +1,41 @@
+name: Resident100 macOS Intel diagnostic
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  resident100:
+    name: Resident100 exact test (macOS Intel)
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: never
+      ENTROPY_RESIDENT100_DIAGNOSTICS: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install the observed failing-run Rust version
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.99.1'
+      - uses: swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.150
+      - name: Check the diagnostic result parser
+        run: python3 -m unittest discover -s .github/scripts -p test_resident100_diagnostic.py -v
+      - name: Compile the owning native test target
+        run: cargo nextest run --locked --all-targets --no-run
+      - name: Observe the original 100-profile test once
+        timeout-minutes: 5
+        run: python3 .github/scripts/resident100_diagnostic.py --output "$RUNNER_TEMP/resident100-diagnostic"
+      - name: Upload diagnostics even after an assertion
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: resident100-macos-intel-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/resident100-diagnostic/
+          if-no-files-found: warn

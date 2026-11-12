@@ -291,11 +291,28 @@ impl BridgeWake {
     fn wait(&self, timeout: Duration) -> bool {
         #[cfg(test)]
         self.waits.fetch_add(1, Ordering::Relaxed);
+        #[cfg(test)]
+        let diagnostic = {
+            static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            ENABLED
+                .get_or_init(|| std::env::var_os("ENTROPY_RESIDENT100_DIAGNOSTICS").is_some())
+                .then(|| (Instant::now(), self.waits.load(Ordering::Relaxed)))
+        };
         let pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
         let (mut pending, _) = self
             .signal
             .wait_timeout_while(pending, timeout, |pending| !*pending)
             .unwrap_or_else(|e| e.into_inner());
+        #[cfg(test)]
+        if let Some((started, sequence)) = diagnostic {
+            let elapsed = started.elapsed();
+            if sequence <= 12 || sequence % 1000 == 0 || elapsed > Duration::from_millis(50) {
+                eprintln!(
+                    "RESIDENT100_WAIT sequence={sequence} requested_us={} elapsed_us={} woke={}",
+                    timeout.as_micros(), elapsed.as_micros(), *pending
+                );
+            }
+        }
         std::mem::take(&mut *pending)
     }
 }
