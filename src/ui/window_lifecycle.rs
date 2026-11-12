@@ -868,10 +868,11 @@ impl EntropyApp {
                     ..
                 } => {
                     #[cfg(target_os = "macos")]
-                    let restore_state = MouseButtonState::Down;
+                    let restore = button_state == MouseButtonState::Down
+                        && macos_tray_event_is_double_click();
                     #[cfg(target_os = "windows")]
-                    let restore_state = MouseButtonState::Up;
-                    button_state == restore_state
+                    let restore = button_state == MouseButtonState::Up;
+                    restore
                 }
                 TrayIconEvent::DoubleClick {
                     button: MouseButton::Left,
@@ -997,7 +998,7 @@ impl EntropyApp {
         }
     }
 
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     pub(super) fn poll_tray_events(&mut self, ctx: &egui::Context) {
         use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
         while let Ok(event) = TrayIconEvent::receiver().try_recv() {
@@ -1050,6 +1051,28 @@ fn macos_ns_window_from_view(ns_view: *mut std::ffi::c_void) -> Option<usize> {
         }
         let window: *mut objc::runtime::Object = msg_send![ns_view, window];
         (!window.is_null()).then_some(window as usize)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_tray_event_is_double_click() -> bool {
+    const LEFT_MOUSE_DOWN: usize = 1;
+
+    unsafe {
+        let Some(app) = macos_shared_application() else {
+            return false;
+        };
+        // tray-icon calls the handler inside mouseDown:, before AppKit advances the event.
+        let event: *mut objc::runtime::Object = msg_send![app, currentEvent];
+        if event.is_null() {
+            return false;
+        }
+        let event_type: usize = msg_send![event, type];
+        if event_type != LEFT_MOUSE_DOWN {
+            return false;
+        }
+        let click_count: isize = msg_send![event, clickCount];
+        click_count == 2
     }
 }
 

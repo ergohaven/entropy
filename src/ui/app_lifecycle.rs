@@ -1819,7 +1819,7 @@ impl eframe::App for EntropyApp {
             #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             self.handle_tray_restore_request(ctx);
             self.handle_close_to_tray(ctx);
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            #[cfg(target_os = "windows")]
             self.poll_tray_events(ctx);
             crate::app::poll_update_check(&mut self.update_check);
             crate::app::poll_firmware_update_check(&mut self.firmware_update_check);
