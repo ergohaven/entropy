@@ -48,15 +48,37 @@ and firmware settings from one coherent interface.
 
 ### Key legends
 
-In application settings, use **Key legends** to select English, English + Russian,
-or English + Typewriter. The EN/RU order toggle works with both Russian profiles.
-The image export page has its own legend selection, saved independently.
+In application settings, **Legend mode → Manual** lets you select English,
+English + Russian, or English + Typewriter. **Follow system** matches an exact
+supported OS source and uses **Manual fallback** while detection is pending,
+unavailable, unsupported, or expired. Manual is the default. The active profile
+or fallback reason appears in settings; hover it to inspect the native identity.
+
+A matched English source displays English-only legends. Matched Russian sources
+use a separately saved EN/RU order; switching through English keeps that choice.
+The device menu's order control edits that automatic order only while a bilingual
+source is matched. Edit fallback legends in settings. Detection works without a
+connected keyboard and independently of firmware layout synchronization.
 
 Russian Typewriter uses the [Windows Russian (Typewriter) mapping](https://learn.microsoft.com/en-us/globalization/keyboards/kbdru1)
-on Windows, Linux, and macOS. This is a manual display choice: it changes keycap
-legends without changing key assignments or the system input layout. Automatic
-matching to OS layout variants is planned separately. The Shift-symbol option
-hides the extra number-row line while retaining Typewriter's direct symbols.
+on Windows, Linux, and macOS. Legend selection changes display only. It does not
+change key assignments, OS input sources, text output, or firmware EN/RU data.
+Image export (including headless export) has its own saved profile. The Shift-symbol
+option hides the extra number-row line while retaining Typewriter's direct symbols.
+
+Automatic detection has deliberately narrow coverage:
+
+| Platform/source | Matching boundary |
+| --- | --- |
+| Windows | Foreground-thread built-in US (`00000409`), Russian (`00000419`), and Russian Typewriter (`00010419`); custom or ambiguous HKLs fall back. Native Windows switching/focus acceptance remains unverified. |
+| macOS | Current TIS source, with actual direct/Shift glyph comparison qualified by keyboard type. Captured US ANSI (type 40) matches. Captured Russian PC, native Russian, and US ISO differ from the catalog and fall back. Live source notifications and hidden-window behavior still need native UI acceptance. |
+| Native X11, including KDE X11 | Compiled keymap and active group, cross-checked against available rules metadata. Xvfb/XKB 2.35.1 fixtures match `us`, `ru`, and `ru(typewriter)` on `pc104`; differing ISO positions, unknown components/options, or custom printable remaps fall back. Desktop-session acceptance remains unverified. |
+| GNOME/IBus | Descriptor layout, variant, and options are retained. Matching falls back until native tests establish that the global engine follows the actual selected source, including pass-through engines. |
+| KDE Wayland / other Wayland | Variant evidence is unavailable; use the manual fallback. XWayland is never used as compositor evidence. |
+
+OS per-application policies matter: focusing Entropy may select a different source.
+Detection never activates a source. Additional native mappings that differ from
+the static catalog require separate profiles.
 
 ## Platforms
 

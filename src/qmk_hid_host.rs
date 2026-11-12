@@ -599,6 +599,7 @@ fn run_desktop_service(shared: Arc<DesktopShared>, mut source: impl DesktopSourc
                     sample.media_sampled_at = Some(Instant::now());
                 }
             }
+            let mut legend_repaints = Vec::new();
             let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
             if state.stopped { return; }
             // Old in-flight queries cannot populate a re-enabled session.
@@ -611,12 +612,13 @@ fn run_desktop_service(shared: Arc<DesktopShared>, mut source: impl DesktopSourc
                     }
                     1 => {
                         let legend_news = state.snapshot.layout_sample.as_ref().map(|s| &s.observation)
-                            != sample.layout_sample.as_ref().map(|s| &s.observation);
+                            != sample.layout_sample.as_ref().map(|s| &s.observation)
+                            || state.snapshot.layout_sample.as_ref().is_some_and(|previous| {
+                                sample.layout_sample.as_ref().is_some_and(|next| next.sampled_at >= previous.valid_until)
+                            });
                         state.snapshot.layout_sample = sample.layout_sample;
                         if legend_news {
-                            for (_, ctx) in &state.legend_listeners {
-                                ctx.request_repaint();
-                            }
+                            legend_repaints = state.legend_listeners.iter().map(|(_, ctx)| ctx.clone()).collect();
                         }
                         std::mem::replace(&mut state.snapshot.layout, sample.layout)
                             != sample.layout
@@ -636,6 +638,8 @@ fn run_desktop_service(shared: Arc<DesktopShared>, mut source: impl DesktopSourc
                     }
                 }
             }
+            drop(state);
+            for ctx in legend_repaints { ctx.request_repaint(); }
         }
         let state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.stopped { return; }
@@ -2995,6 +2999,50 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ibus_descriptor_retains_variants_and_options_without_authorizing_unverified_sources() {
+        use crate::key_legend_detection::{DetectionFailure, NativeLayoutIdentity};
+        for variant in ["", "typewriter", "phonetic"] {
+            let engine: zbus::zvariant::OwnedValue = zbus::zvariant::StructureBuilder::new()
+                .add_field("IBusEngineDesc")
+                .add_field("")
+                .add_field("xkb:ru:typewriter:rus")
+                .add_field("Russian")
+                .add_field("Russian")
+                .add_field("ru")
+                .add_field("GPL")
+                .add_field("IBus")
+                .add_field("ibus-keyboard")
+                .add_field("ru")
+                .add_field(0u32)
+                .add_field("")
+                .add_field("")
+                .add_field("")
+                .add_field(variant)
+                .add_field("grp:alt_shift_toggle")
+                .build()
+                .unwrap()
+                .try_into()
+                .unwrap();
+            let state = ibus_engine_state(&engine).unwrap();
+            assert_eq!(state.layout, Some(1));
+            assert_eq!(
+                state.identity,
+                NativeLayoutIdentity::Ibus {
+                    engine: "xkb:ru:typewriter:rus".into(),
+                    layout: "ru".into(),
+                    variant: Some(variant.into()),
+                    options: Some("grp:alt_shift_toggle".into())
+                }
+            );
+            assert_eq!(
+                state.identity.profile(),
+                Err(DetectionFailure::VariantUnavailable)
+            );
+        }
+    }
+
     #[test]
     fn command_stdout_timeout_returns_successful_output() {
         let output =
@@ -3149,7 +3197,9 @@ impl LayoutTracker {
             Some(NativeLayoutTracker::X11) => x11.as_ref().and_then(|sample| sample.language),
             None => None,
         };
-        let identity = if native_x11_session() {
+        let identity = if let Some(state) = ibus_state.as_ref().filter(|state| state.entropy) {
+            state.identity.clone()
+        } else if native_x11_session() {
             x11.map(|sample| sample.identity).unwrap_or(NativeLayoutIdentity::Unavailable(DetectionFailure::Unavailable))
         } else if matches!(self.native, Some(NativeLayoutTracker::Ibus)) {
             ibus_state.map(|state| state.identity).unwrap_or(NativeLayoutIdentity::Unavailable(DetectionFailure::Unavailable))

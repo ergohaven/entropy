@@ -186,7 +186,10 @@ impl X11LayoutTracker {
                 {
                     return None;
                 }
-                pair[shift as usize] = keysym_char(symbol)?;
+                pair[shift as usize] = keysym_char(symbol).or_else(|| {
+                    log::debug!("X11 legend: unsupported keysym {symbol:#x} at HID {hid:#x}");
+                    None
+                })?;
             }
             glyphs.push((*hid, pair[0], pair[1]));
         }
@@ -201,9 +204,21 @@ impl X11LayoutTracker {
                 self.changed();
                 self.read_map().ok_or(DetectionFailure::Unavailable)?;
                 let group = self.group().ok_or(DetectionFailure::Unavailable)?;
+                // Firmware still accepts language-only hints, even when another
+                // symbols component makes the richer legend identity unsupported.
+                language = self.symbols.split('+').find_map(|component| {
+                    let (name, assigned) = match component.rsplit_once(':') {
+                        Some((name, number)) => {
+                            (name, number.parse::<usize>().ok()?.checked_sub(1)?)
+                        }
+                        None => (component, 0),
+                    };
+                    (assigned == group)
+                        .then(|| layout_code_index(name.split('(').next()?))
+                        .flatten()
+                });
                 let (layout, variant) =
                     xkb_group(&self.symbols, group).ok_or(DetectionFailure::Unsupported)?;
-                language = layout_code_index(&layout);
                 let rules = self.rules()?;
                 let options = rules.as_ref().map(|r| r[4].clone()).unwrap_or_default();
                 if let Some(rules) = &rules {
@@ -256,7 +271,7 @@ fn keysym_char(symbol: u64) -> Option<char> {
         0x01000000..=0x0110ffff => char::from_u32((symbol & 0x00ffffff) as u32),
         0x06a3 => Some('ё'),
         0x06b3 => Some('Ё'),
-        0x0ab0 => Some('№'),
+        0x06b0 => Some('№'),
         0x06c0..=0x06df => "юабцдефгхийклмнопярстужвьызшэщчъ"
             .chars()
             .nth((symbol - 0x06c0) as usize),
@@ -326,6 +341,7 @@ mod tests {
     #[test]
     #[ignore = "requires an isolated X11 test display and setxkbmap"]
     fn live_x11_mapping_changes_invalidate_cached_glyphs() {
+        let _ = env_logger::builder().is_test(true).try_init();
         assert_eq!(
             std::env::var("DISPLAY").unwrap(),
             std::env::var("ENTROPY_X11_TEST_DISPLAY").unwrap()
@@ -346,6 +362,10 @@ mod tests {
                 .status()
                 .unwrap()
                 .success());
+            unsafe {
+                (tracker.xlib.XkbLockGroup)(tracker.display, CORE, 0);
+                (tracker.xlib.XSync)(tracker.display, 0);
+            }
             let observation = tracker.current_layout();
             assert_eq!(
                 observation.identity.profile(),
@@ -353,5 +373,77 @@ mod tests {
                 "{observation:?}"
             );
         }
+        assert!(std::process::Command::new("setxkbmap")
+            .args([
+                "-model",
+                "pc104",
+                "-layout",
+                "us,ru,ru",
+                "-variant",
+                ",,typewriter",
+                "-option",
+                "grp:alt_shift_toggle"
+            ])
+            .status()
+            .unwrap()
+            .success());
+        for (group, family) in [
+            (2, crate::keycode::KeyLegendLayout::RussianTypewriter),
+            (0, crate::keycode::KeyLegendLayout::English),
+            (1, crate::keycode::KeyLegendLayout::Russian),
+        ] {
+            unsafe {
+                (tracker.xlib.XkbLockGroup)(tracker.display, CORE, group);
+                (tracker.xlib.XSync)(tracker.display, 0);
+            }
+            let observation = tracker.current_layout();
+            assert_eq!(
+                observation.identity.profile(),
+                Ok(family),
+                "{observation:?}"
+            );
+        }
+
+        assert!(std::process::Command::new("setxkbmap")
+            .args(["-model", "pc104", "-layout", "us", "-variant", "", "-option", ""])
+            .status()
+            .unwrap()
+            .success());
+        unsafe {
+            (tracker.xlib.XkbLockGroup)(tracker.display, CORE, 0);
+            (tracker.xlib.XSync)(tracker.display, 0);
+        }
+        assert_eq!(
+            tracker.current_layout().identity.profile(),
+            Ok(crate::keycode::KeyLegendLayout::English)
+        );
+        let display = std::env::var("DISPLAY").unwrap();
+        let output = std::process::Command::new("xkbcomp")
+            .args(["-xkb", &display, "-"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let mut map = String::from_utf8(output.stdout).unwrap();
+        let key = map.find("key <AE01>").unwrap();
+        let start = key + map[key..].find('[').unwrap() + 1;
+        let end = start + map[start..].find(']').unwrap();
+        map.replace_range(start..end, " a, b ");
+        use std::io::Write;
+        let mut compiler = std::process::Command::new("xkbcomp")
+            .args(["-w", "0", "-", &display])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        compiler
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(map.as_bytes())
+            .unwrap();
+        assert!(compiler.wait().unwrap().success());
+        assert_eq!(
+            tracker.current_layout().identity.profile(),
+            Err(DetectionFailure::Unsupported)
+        );
     }
 }

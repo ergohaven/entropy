@@ -89,3 +89,66 @@ fn dropping_legends_preserves_bridge_demand_and_removes_only_its_listener() {
     assert_eq!(state.listeners.len(), 1);
     assert!(state.snapshot.layout_sample.is_some());
 }
+
+#[test]
+fn repaint_callbacks_can_read_the_published_snapshot() {
+    let service = HostDataService::start(|| {
+        LegendDesktop(Arc::new(Mutex::new(NativeLayoutIdentity::Windows(
+            "00000419".into(),
+        ))))
+    });
+    let ctx = egui::Context::default();
+    let (sent, received) = std::sync::mpsc::channel();
+    let shared = Arc::downgrade(&service.owner.shared);
+    ctx.set_request_repaint_callback(move |_| {
+        if let Some(shared) = shared.upgrade() {
+            let state = shared.state.lock().unwrap();
+            let _ = sent.send(state.snapshot.layout_sample.is_some());
+        }
+    });
+    let _subscription = service.subscribe_legends(ctx);
+    assert!(received.recv_timeout(Duration::from_secs(5)).unwrap());
+}
+
+#[test]
+fn an_unchanged_identity_repaints_when_fresh_evidence_recovers_from_expiry() {
+    let service = HostDataService::start(|| {
+        LegendDesktop(Arc::new(Mutex::new(NativeLayoutIdentity::Windows(
+            "00000419".into(),
+        ))))
+    });
+    let ctx = egui::Context::default();
+    let repaints = Arc::new(AtomicU64::new(0));
+    ctx.set_request_repaint_callback({
+        let repaints = repaints.clone();
+        move |_| {
+            repaints.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+    let subscription = service.subscribe_legends(ctx.clone());
+    await_legend(&subscription, "00000419");
+    for _ in 0..3 {
+        let _ = crate::app::discard_texture_deltas(ctx.run_ui(Default::default(), |_| {}));
+    }
+    let before = repaints.load(Ordering::Relaxed);
+    {
+        let mut state = service.owner.shared.state.lock().unwrap();
+        // A fake expired deadline avoids waiting for the native query budget.
+        state.snapshot.layout_sample.as_mut().unwrap().valid_until = Instant::now();
+    }
+    let until = Instant::now() + Duration::from_secs(5);
+    while repaints.load(Ordering::Relaxed) == before {
+        assert!(
+            Instant::now() < until,
+            "fresh unchanged evidence did not repaint"
+        );
+        thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(
+        subscription
+            .snapshot()
+            .unwrap()
+            .profile(Instant::now(), false),
+        Ok(crate::keycode::KeyLegendLayout::Russian)
+    );
+}

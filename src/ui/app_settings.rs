@@ -927,6 +927,73 @@ fn total_app_settings_rows() -> usize {
     }
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod legend_settings_tests {
+    use super::*;
+
+    fn text(shape: &egui::epaint::Shape, output: &mut String) {
+        match shape {
+            egui::epaint::Shape::Text(shape) => {
+                output.push_str(&shape.galley.job.text);
+                output.push('\n');
+            }
+            egui::epaint::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    text(shape, output);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn automatic_legend_controls_render_without_a_device_in_both_locales() {
+        for lang in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            let mut app = EntropyApp::new_inert_for_test();
+            app.app_settings.language = lang;
+            app.app_settings.key_legend_mode =
+                crate::key_legend_detection::LegendMode::FollowSystem;
+            app.legend_detected = Ok(KeyLegendLayout::RussianTypewriterPrimary);
+            let ctx = egui::Context::default();
+            let output = crate::app::discard_texture_deltas(ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    let rect = ui.max_rect();
+                    app.draw_app_settings_page(ui, rect);
+                },
+            ));
+            let mut rendered = String::new();
+            for shape in output.shapes {
+                text(&shape.shape, &mut rendered);
+            }
+            for key in [
+                "ui.legend_mode",
+                "ui.legend_follow_system",
+                "ui.legend_fallback",
+                "ui.legend_active",
+                "ui.legend_order",
+            ] {
+                assert!(
+                    rendered.contains(crate::i18n::tr_catalog(lang, key)),
+                    "missing {key}: {rendered}"
+                );
+            }
+            assert!(app.selected_device.is_none());
+            assert!(app.legend_subscription.is_none());
+        }
+    }
+}
+
+
 fn app_settings_base_row_index(row_idx: usize) -> usize {
     #[cfg(target_os = "linux")]
     {
