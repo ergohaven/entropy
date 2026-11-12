@@ -110,14 +110,15 @@
 
             buildInputs = commonNativeDeps pkgs;
 
-            # Unit tests are pure (i18n catalogs, layout parsing, bundled script
-            # contents) — no keyboard, X server or network needed.
+            # Tests need installed XKB data and its native library, but no
+            # keyboard, X server or network.
             doCheck = true;
             # Runs the KWin script in tests.
             nativeCheckInputs = [ pkgs.nodejs ];
             # Sandboxed builders have a non-writable HOME. Keep all test outputs
             # local to this check, without disabling persistence tests.
             preCheck = ''
+              export LD_LIBRARY_PATH="${lib.makeLibraryPath (runtimeLibs pkgs)}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
               export HOME="$(mktemp -d)"
               export XDG_CONFIG_HOME="$HOME/.config"
               export XDG_DATA_HOME="$HOME/.local/share"

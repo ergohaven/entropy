@@ -3,6 +3,8 @@ use crate::key_legend_detection::{KeyGlyph, SystemKeymap, SystemLayoutDescriptor
 use std::{
     collections::BTreeMap,
     ffi::{c_char, c_void, CStr, CString},
+    os::unix::ffi::OsStrExt,
+    path::PathBuf,
     sync::{Arc, OnceLock},
 };
 
@@ -25,6 +27,35 @@ impl Xkb {
     }
     unsafe fn function<T: Copy>(&self, name: &[u8]) -> Option<T> {
         self.0.get::<T>(name).ok().map(|p| *p)
+    }
+
+    fn include_paths(&self) -> Option<Vec<PathBuf>> {
+        unsafe {
+            let context_new =
+                self.function::<unsafe extern "C" fn(u32) -> *mut c_void>(b"xkb_context_new\0")?;
+            let context_unref =
+                self.function::<unsafe extern "C" fn(*mut c_void)>(b"xkb_context_unref\0")?;
+            let count = self.function::<unsafe extern "C" fn(*mut c_void) -> u32>(
+                b"xkb_context_num_include_paths\0",
+            )?;
+            let path = self.function::<unsafe extern "C" fn(*mut c_void, u32) -> *const c_char>(
+                b"xkb_context_include_path_get\0",
+            )?;
+            let context = context_new(0);
+            if context.is_null() {
+                return None;
+            }
+            let paths = (0..count(context))
+                .filter_map(|i| {
+                    let path = path(context, i);
+                    (!path.is_null()).then(|| {
+                        PathBuf::from(std::ffi::OsStr::from_bytes(CStr::from_ptr(path).to_bytes()))
+                    })
+                })
+                .collect();
+            context_unref(context);
+            Some(paths)
+        }
     }
 }
 
@@ -202,14 +233,25 @@ pub(super) const EXTRA_KEYS: &[(u16, [u8; 4])] = &[
 ];
 
 pub(super) fn installed() -> Vec<SystemLayoutDescriptor> {
-    let source = [
-        "/usr/share/X11/xkb/rules/evdev.lst",
-        "/usr/share/X11/xkb/rules/base.lst",
-    ]
-    .into_iter()
-    .find_map(|p| std::fs::read_to_string(p).ok())
-    .unwrap_or_default();
-    parse_list(&source)
+    let Some(roots) = Xkb::get().and_then(Xkb::include_paths) else {
+        return Vec::new();
+    };
+    // Follow the same roots and precedence as keymap compilation, including
+    // distro-specific store paths and XKB_CONFIG_ROOT overrides.
+    let mut layouts = BTreeMap::new();
+    for root in roots {
+        let source = ["evdev.lst", "base.lst"]
+            .into_iter()
+            .find_map(|file| std::fs::read_to_string(root.join("rules").join(file)).ok());
+        if let Some(source) = source {
+            for layout in parse_list(&source) {
+                layouts.entry(layout.id.clone()).or_insert(layout);
+            }
+        }
+    }
+    let mut layouts: Vec<_> = layouts.into_values().collect();
+    layouts.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+    layouts
 }
 
 fn parse_list(source: &str) -> Vec<SystemLayoutDescriptor> {
@@ -255,6 +297,7 @@ mod tests {
     #[test]
     fn real_installed_layouts_supply_non_catalog_glyphs_and_modifier_levels() {
         let german = load("xkb:de:", "German", "").unwrap();
+        assert!(installed().iter().any(|layout| layout.id == "xkb:de:"));
         assert_eq!(german.keys[&28][0].text, "z");
         assert_eq!(german.keys[&20][2].text, "@");
         assert!(german.keys[&46][0].dead);
@@ -265,5 +308,40 @@ mod tests {
         assert_eq!(dvorak.keys[&20][0].text, "'");
         let typewriter = load("xkb:ru:typewriter", "Russian Typewriter", "").unwrap();
         assert_eq!(typewriter.keys[&30][0].text, "№");
+    }
+
+    #[test]
+    fn installed_layouts_follow_xkb_data_root() {
+        const CHILD: &str = "ENTROPY_TEST_XKB_DATA_ROOT";
+        if std::env::var_os(CHILD).is_some() {
+            assert!(installed()
+                .iter()
+                .any(|layout| layout.name == "Entropy alternate XKB root"));
+            return;
+        }
+        // A separate process isolates libxkbcommon's environment from parallel tests.
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("rules")).unwrap();
+        std::fs::write(
+            root.path().join("rules/evdev.lst"),
+            "! layout\n fr Entropy alternate XKB root\n",
+        )
+        .unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "qmk_hid_host::linux_keymaps::tests::installed_layouts_follow_xkb_data_root",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("XKB_CONFIG_ROOT", root.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
