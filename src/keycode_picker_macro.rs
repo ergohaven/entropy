@@ -236,6 +236,155 @@ fn limit_chars(value: &mut String, limit: usize) {
     }
 }
 
+/// Distinct characters the Text warning names before it folds the rest into a
+/// count, so a pasted paragraph of Cyrillic still fits under its step.
+const MACRO_TEXT_UNTYPABLE_SHOWN: usize = 5;
+
+/// Text steps are typed through the en-US ASCII table of QMK-Vial and RMK
+/// alike: printable ASCII plus Tab, Enter, Backspace, Escape and Delete. Any
+/// other character, UTF-8 bytes included, is typed as nothing.
+fn macro_text_char_is_typable(c: char) -> bool {
+    matches!(c, ' '..='~' | '\t' | '\n' | '\u{08}' | '\u{1B}' | '\u{7F}')
+}
+
+/// Plain-ASCII forms of the typography that editors and chat apps insert on
+/// their own. The firmware cannot type the originals, while the ASCII form is
+/// what the user meant; letters of other alphabets have no such form and stay.
+fn ascii_typography_replacement(c: char) -> Option<&'static str> {
+    Some(match c {
+        // ‘ ’ ‚ ‛ ′ ‹ ›
+        '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' | '\u{2032}' | '\u{2039}'
+        | '\u{203A}' => "'",
+        // “ ” „ ‟ « » ″
+        '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' | '\u{00AB}' | '\u{00BB}'
+        | '\u{2033}' => "\"",
+        // ‐ ‑ ‒ – — ― −
+        '\u{2010}'..='\u{2015}' | '\u{2212}' => "-",
+        '\u{2026}' => "...",
+        // No-break, fixed-width, thin, hair and ideographic spaces.
+        '\u{00A0}' | '\u{2000}'..='\u{200A}' | '\u{202F}' | '\u{205F}' | '\u{3000}' => " ",
+        _ => return None,
+    })
+}
+
+/// Returns the ASCII-normalized text and how many characters were replaced,
+/// or `None` when there is nothing to replace.
+fn normalize_macro_text_typography(text: &str) -> Option<(String, usize)> {
+    let mut replaced = 0;
+    let mut normalized = String::with_capacity(text.len());
+    for c in text.chars() {
+        match ascii_typography_replacement(c) {
+            Some(ascii) => {
+                normalized.push_str(ascii);
+                replaced += 1;
+            }
+            None => normalized.push(c),
+        }
+    }
+    (replaced > 0).then_some((normalized, replaced))
+}
+
+/// Where a character index of `original` lands after normalization: `…`
+/// becomes three characters, and a cursor left at its old index would split
+/// the replacement with the next keystroke.
+fn typography_normalized_char_index(original: &str, index: usize) -> usize {
+    original
+        .chars()
+        .take(index)
+        .map(|c| ascii_typography_replacement(c).map_or(1, str::len))
+        .sum()
+}
+
+fn move_text_cursor_past_typography(ctx: &egui::Context, id: egui::Id, original: &str) {
+    let Some(mut state) = egui::TextEdit::load_state(ctx, id) else {
+        return;
+    };
+    let Some(mut range) = state.cursor.char_range() else {
+        return;
+    };
+    range.primary.index =
+        typography_normalized_char_index(original, range.primary.index.into()).into();
+    range.secondary.index =
+        typography_normalized_char_index(original, range.secondary.index.into()).into();
+    state.cursor.set_char_range(Some(range));
+    egui::TextEdit::store_state(ctx, id, state);
+}
+
+/// Distinct untypable characters in order of first use, joined for display,
+/// and how many more distinct ones did not fit.
+fn macro_text_untypable_summary(text: &str) -> Option<(String, usize)> {
+    let mut distinct = Vec::new();
+    for c in text.chars().filter(|c| !macro_text_char_is_typable(*c)) {
+        if !distinct.contains(&c) {
+            distinct.push(c);
+        }
+    }
+    if distinct.is_empty() {
+        return None;
+    }
+    let shown = distinct
+        .iter()
+        .take(MACRO_TEXT_UNTYPABLE_SHOWN)
+        .map(|c| {
+            // An invisible character would leave a blank between the commas.
+            if c.is_control()
+                || c.is_whitespace()
+                || matches!(
+                    c,
+                    '\u{00AD}' | '\u{200B}'..='\u{200F}' | '\u{2060}'..='\u{2064}' | '\u{FEFF}'
+                )
+            {
+                format!("U+{:04X}", *c as u32)
+            } else {
+                c.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some((
+        shown,
+        distinct.len().saturating_sub(MACRO_TEXT_UNTYPABLE_SHOWN),
+    ))
+}
+
+fn macro_text_untypable_warning(language: crate::i18n::Language, text: &str) -> Option<String> {
+    let (chars, more) = macro_text_untypable_summary(text)?;
+    Some(if more == 0 {
+        crate::i18n::tr_catalog_format(
+            language,
+            "macro_editor.text_will_not_be_typed",
+            &[("chars", &chars)],
+        )
+    } else {
+        crate::i18n::tr_catalog_format(
+            language,
+            "macro_editor.text_will_not_be_typed_more",
+            &[("chars", &chars), ("count", &more.to_string())],
+        )
+    })
+}
+
+/// A settings list row after slot, name and description. A Text step the
+/// firmware cannot fully type gets a warning row right under it, so the row
+/// of a step is no longer a fixed offset from its index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MacroActionRow {
+    Action(usize),
+    UntypableText(usize),
+}
+
+fn macro_action_rows(actions: &[MacroAction]) -> Vec<MacroActionRow> {
+    let mut rows = Vec::with_capacity(actions.len());
+    for (idx, action) in actions.iter().enumerate() {
+        rows.push(MacroActionRow::Action(idx));
+        if matches!(action, MacroAction::Text(text) if !text.chars().all(macro_text_char_is_typable))
+        {
+            rows.push(MacroActionRow::UntypableText(idx));
+        }
+    }
+    rows
+}
+
 impl KeycodePicker {
     pub(super) fn assign_macro_slot(&mut self, slot: u8) {
         if (slot as usize) >= self.macro_count {
@@ -361,6 +510,7 @@ impl KeycodePicker {
         let mut move_up = None;
         let mut move_down = None;
         let mut command = None;
+        let mut ascii_replaced = 0;
 
         if let Some(notice) = self.macro_ext_keycodes_notice(language) {
             crate::ui_style::modal_hint(ui, notice);
@@ -390,8 +540,26 @@ impl KeycodePicker {
             ));
             ui.add_space(metrics.value(4.0));
         }
+        if self
+            .macro_text_ascii_replaced
+            .is_some_and(|(macro_idx, _)| macro_idx != n)
+        {
+            self.macro_text_ascii_replaced = None;
+        }
+        if let Some((_, replaced)) = self.macro_text_ascii_replaced {
+            crate::ui_style::modal_hint(
+                ui,
+                &crate::i18n::tr_catalog_format(
+                    language,
+                    "macro_editor.text_replaced_with_ascii",
+                    &[("count", &replaced.to_string())],
+                ),
+            );
+            ui.add_space(metrics.value(4.0));
+        }
 
-        let total_rows = macro_settings_total_rows(edited_actions.len());
+        let action_rows = macro_action_rows(&edited_actions);
+        let total_rows = macro_settings_total_rows(action_rows.len());
         crate::ui_style::modal_content(
             ui,
             crate::ui_style::ModalLayout::new(content_width).with_top_padding(metrics.value(4.0)),
@@ -528,7 +696,41 @@ impl KeycodePicker {
                                 );
                             }
                             action_row => {
-                                let action_idx = action_row - 3;
+                                let action_idx = match action_rows.get(action_row - 3) {
+                                    Some(&MacroActionRow::Action(idx)) => idx,
+                                    Some(&MacroActionRow::UntypableText(idx)) => {
+                                        let warning = match edited_actions.get(idx) {
+                                            Some(MacroAction::Text(text)) => {
+                                                macro_text_untypable_warning(language, text)
+                                            }
+                                            _ => None,
+                                        };
+                                        crate::ui_style::settings_list_row(
+                                            ui,
+                                            row_content_width,
+                                            row_height,
+                                            "",
+                                            false,
+                                            action_control_width,
+                                            |ui| {
+                                                if let Some(warning) = warning {
+                                                    ui.add(
+                                                        egui::Label::new(
+                                                            RichText::new(warning)
+                                                                .size(metrics.value(11.0))
+                                                                .color(Color32::from_rgb(
+                                                                    220, 92, 76,
+                                                                )),
+                                                        )
+                                                        .wrap(),
+                                                    );
+                                                }
+                                            },
+                                        );
+                                        continue;
+                                    }
+                                    None => edited_actions.len(),
+                                };
                                 if action_idx == edited_actions.len() {
                                     let mut added_action = None;
                                     crate::ui_style::settings_list_row_with_tooltip(
@@ -698,30 +900,51 @@ impl KeycodePicker {
                                         let editor_width = metrics.value(200.0);
                                         match action {
                                             MacroAction::Text(text) => {
-                                                crate::ui_style::modern_text_field_sized(
-                                                    ui,
-                                                    ui.make_persistent_id((
-                                                        "macro_text_action",
-                                                        grid_id,
-                                                        n,
-                                                        action_idx,
-                                                    )),
-                                                    text,
-                                                    editor_width,
-                                                    control_height,
-                                                    crate::i18n::tr_catalog(
-                                                        language,
-                                                        "macro_editor.type_text_here",
-                                                    ),
-                                                    // The keyboard's shared macro memory is
-                                                    // the only limit; see the memory line.
-                                                    usize::MAX,
-                                                    egui::Align::Min,
-                                                )
-                                                .on_hover_text(crate::i18n::tr_catalog(
-                                                    language,
-                                                    "macro_editor.characters_to_type_when_this_macro_runs",
+                                                let text_id = ui.make_persistent_id((
+                                                    "macro_text_action",
+                                                    grid_id,
+                                                    n,
+                                                    action_idx,
                                                 ));
+                                                let response =
+                                                    crate::ui_style::modern_text_field_sized(
+                                                        ui,
+                                                        text_id,
+                                                        text,
+                                                        editor_width,
+                                                        control_height,
+                                                        crate::i18n::tr_catalog(
+                                                            language,
+                                                            "macro_editor.type_text_here",
+                                                        ),
+                                                        // The keyboard's shared macro memory
+                                                        // is the only limit; see the memory line.
+                                                        usize::MAX,
+                                                        egui::Align::Min,
+                                                    )
+                                                    .on_hover_text(crate::i18n::tr_catalog(
+                                                        language,
+                                                        "macro_editor.characters_to_type_when_this_macro_runs",
+                                                    ));
+                                                // Only an edit rewrites a step, so
+                                                // text read from the keyboard stays
+                                                // as read until the user touches it.
+                                                if response.changed() {
+                                                    if let Some((normalized, replaced)) =
+                                                        normalize_macro_text_typography(text)
+                                                    {
+                                                        move_text_cursor_past_typography(
+                                                            ui.ctx(),
+                                                            text_id,
+                                                            text,
+                                                        );
+                                                        *text = normalized;
+                                                        ascii_replaced += replaced;
+                                                    }
+                                                    // The warning row and the notice
+                                                    // follow the edit on the next frame.
+                                                    ui.ctx().request_repaint();
+                                                }
                                             }
                                             MacroAction::Tap(keycode)
                                             | MacroAction::Down(keycode)
@@ -923,6 +1146,10 @@ impl KeycodePicker {
             }
         }
 
+        if ascii_replaced > 0 {
+            let previous = self.macro_text_ascii_replaced.map_or(0, |(_, count)| count);
+            self.macro_text_ascii_replaced = Some((n, previous + ascii_replaced));
+        }
         let actions_changed = edited_actions != original_actions;
         if actions_changed
             || edited_name != original_name
@@ -983,6 +1210,7 @@ impl KeycodePicker {
             _ => false,
         };
         if replaced_slot {
+            self.macro_text_ascii_replaced = None;
             self.macro_key_pick = None;
             self.macro_mod_key_pick = None;
         }
@@ -1211,6 +1439,7 @@ mod tests {
                                 delta: egui::vec2(0.0, -300.0),
                                 modifiers: egui::Modifiers::NONE,
                                 phase: egui::TouchPhase::Move,
+                                source: egui::MouseWheelSource::Unknown,
                             },
                         ],
                     );
@@ -1261,6 +1490,7 @@ mod tests {
                                 delta: egui::vec2(0.0, -300.0),
                                 modifiers: egui::Modifiers::NONE,
                                 phase: egui::TouchPhase::Move,
+                                source: egui::MouseWheelSource::Unknown,
                             },
                         ],
                     );
@@ -1417,13 +1647,13 @@ mod tests {
             events,
             ..Default::default()
         };
-        ctx.run_ui(input, |_ui| {
+        crate::app::discard_texture_deltas(ctx.run_ui(input, |_ui| {
             picker.show(
                 ctx,
                 DeferredPickerDataState::Ready,
                 DeferredPickerDataState::Ready,
             );
-        })
+        }))
     }
 
     fn macro_picker_shape_text_position(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
@@ -1657,6 +1887,8 @@ mod tests {
         }
     }
 
+
+
     #[test]
     fn macro_modifier_picker_mouse_selection_encodes_hyper_f16_for_each_action_kind() {
         for (action, expected, opcode) in [
@@ -1702,6 +1934,7 @@ mod tests {
                             delta: egui::vec2(0.0, -180.0),
                             modifiers: egui::Modifiers::NONE,
                             phase: egui::TouchPhase::Move,
+                            source: egui::MouseWheelSource::Unknown,
                         },
                     ],
                 );
@@ -1903,9 +2136,12 @@ mod tests {
             events,
             ..Default::default()
         };
-        std::convert::identity(ctx.run_ui(input, |ui| {
-            picker.show_macro_settings_editor(ui, 0, "macro_settings_test", None);
-        }))
+        std::convert::identity(crate::app::discard_texture_deltas(ctx.run_ui(
+            input,
+            |ui| {
+                picker.show_macro_settings_editor(ui, 0, "macro_settings_test", Some((0, 2048)));
+            },
+        )))
     }
 
     fn macro_clipboard_click(
@@ -1916,7 +2152,7 @@ mod tests {
         label: &str,
     ) {
         let mut frame = |events| {
-            std::convert::identity(ctx.run_ui(
+            std::convert::identity(crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1928,7 +2164,7 @@ mod tests {
                 |ui| {
                     picker.show_macro_settings_editor(ui, slot, "clipboard_test", memory);
                 },
-            ))
+            )))
         };
         let _ = frame(vec![]);
         let output = frame(vec![]);
@@ -2075,7 +2311,7 @@ mod tests {
             ctx: &egui::Context,
             events: Vec<egui::Event>,
         ) -> egui::FullOutput {
-            std::convert::identity(ctx.run_ui(
+            std::convert::identity(crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2087,7 +2323,7 @@ mod tests {
                 |ui| {
                     picker.show_macro_settings_editor(ui, 2, "metadata_test", None);
                 },
-            ))
+            )))
         }
         let ctx = egui::Context::default();
         let mut picker = KeycodePicker {
@@ -2204,7 +2440,7 @@ mod tests {
                     ..Default::default()
                 };
                 let mut render = || {
-                    std::convert::identity(ctx.run_ui(
+                    std::convert::identity(crate::app::discard_texture_deltas(ctx.run_ui(
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(
                                 egui::Pos2::ZERO,
@@ -2215,7 +2451,7 @@ mod tests {
                         |ui| {
                             picker.show_macro_settings_editor(ui, 0, "button_layout_test", None);
                         },
-                    ))
+                    )))
                 };
                 let _ = render();
                 let output = render();
@@ -2358,5 +2594,275 @@ mod tests {
             vec![MacroAction::Down(0xE0), MacroAction::Up(0xE0)]
         );
         assert_eq!(encode_macro_actions(&actions), raw_macro);
+    }
+    #[test]
+    fn macro_text_typable_matches_firmware_ascii_table() {
+        for c in [' ', 'a', '~', '\t', '\n', '\u{08}', '\u{1B}', '\u{7F}'] {
+            assert!(macro_text_char_is_typable(c), "{c:?}");
+        }
+        for c in [
+            '\u{00}', '\u{1F}', '\r', '\u{80}', '\u{A0}', 'ж', 'Ё', '—', '😀',
+        ] {
+            assert!(!macro_text_char_is_typable(c), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn macro_text_untypable_summary_lists_distinct_characters_then_count() {
+        assert_eq!(macro_text_untypable_summary("plain ASCII ~\t\n"), None);
+        assert_eq!(
+            macro_text_untypable_summary("ж-ж ё № ж"),
+            Some(("ж, ё, №".to_owned(), 0))
+        );
+        assert_eq!(
+            macro_text_untypable_summary("абвгдеёаб"),
+            Some(("а, б, в, г, д".to_owned(), 2))
+        );
+        assert_eq!(
+            macro_text_untypable_summary("a\u{00A0}b\u{200B}c\r"),
+            Some(("U+00A0, U+200B, U+000D".to_owned(), 0))
+        );
+    }
+
+    #[test]
+    fn macro_text_untypable_warning_names_characters_in_both_languages() {
+        use crate::i18n::Language;
+
+        assert_eq!(macro_text_untypable_warning(Language::English, "ok"), None);
+        assert_eq!(
+            macro_text_untypable_warning(Language::English, "№ 5 😀").as_deref(),
+            Some("These characters will not be typed: №, 😀")
+        );
+        assert_eq!(
+            macro_text_untypable_warning(Language::English, "привет").as_deref(),
+            Some("These characters will not be typed: п, р, и, в, е and 1 more")
+        );
+        assert_eq!(
+            macro_text_untypable_warning(Language::Russian, "привет").as_deref(),
+            Some("Эти символы макрос не введёт: п, р, и, в, е и ещё 1")
+        );
+    }
+
+    #[test]
+    fn macro_text_typography_has_an_ascii_form_for_each_listed_character() {
+        for (from, to) in [
+            ('‘', "'"),
+            ('’', "'"),
+            ('‚', "'"),
+            ('‛', "'"),
+            ('′', "'"),
+            ('‹', "'"),
+            ('›', "'"),
+            ('“', "\""),
+            ('”', "\""),
+            ('„', "\""),
+            ('‟', "\""),
+            ('«', "\""),
+            ('»', "\""),
+            ('″', "\""),
+            ('‐', "-"),
+            ('‑', "-"),
+            ('‒', "-"),
+            ('–', "-"),
+            ('—', "-"),
+            ('―', "-"),
+            ('−', "-"),
+            ('…', "..."),
+            ('\u{00A0}', " "),
+            ('\u{2007}', " "),
+            ('\u{2009}', " "),
+            ('\u{202F}', " "),
+            ('\u{3000}', " "),
+        ] {
+            assert_eq!(ascii_typography_replacement(from), Some(to), "{from:?}");
+            assert!(to.chars().all(macro_text_char_is_typable), "{from:?}");
+        }
+        for c in ['a', '"', 'ж', '№', '\u{200B}', '\u{00AD}', '😀'] {
+            assert_eq!(ascii_typography_replacement(c), None, "{c:?}");
+        }
+    }
+
+    #[test]
+    fn macro_text_typography_normalization_counts_replacements_and_skips_the_rest() {
+        assert_eq!(
+            normalize_macro_text_typography("«Hi» — it’s\u{00A0}done…"),
+            Some(("\"Hi\" - it's done...".to_owned(), 6))
+        );
+        assert_eq!(
+            normalize_macro_text_typography("привет — мир"),
+            Some(("привет - мир".to_owned(), 1))
+        );
+        assert_eq!(
+            normalize_macro_text_typography("plain \"ASCII\" - it's ..."),
+            None
+        );
+        assert_eq!(normalize_macro_text_typography("привет, мир"), None);
+        assert_eq!(normalize_macro_text_typography(""), None);
+    }
+
+    #[test]
+    fn macro_text_typography_moves_char_index_past_an_expanded_ellipsis() {
+        let original = "a…b—c";
+        let normalized = normalize_macro_text_typography(original).unwrap().0;
+        assert_eq!(normalized, "a...b-c");
+        for (index, expected) in [(0, 0), (1, 1), (2, 4), (3, 5), (5, 7)] {
+            assert_eq!(typography_normalized_char_index(original, index), expected);
+        }
+    }
+
+    #[test]
+    fn macro_editor_puts_a_warning_row_under_untypable_text_steps() {
+        let actions = [
+            MacroAction::Text("ok".into()),
+            MacroAction::Text("ок".into()),
+            MacroAction::Tap(0x04),
+            MacroAction::Text("tab\there".into()),
+        ];
+
+        assert_eq!(
+            macro_action_rows(&actions),
+            [
+                MacroActionRow::Action(0),
+                MacroActionRow::Action(1),
+                MacroActionRow::UntypableText(1),
+                MacroActionRow::Action(2),
+                MacroActionRow::Action(3),
+            ]
+        );
+    }
+
+    #[test]
+    fn macro_editor_warns_about_text_read_from_keyboard_without_rewriting_it() {
+        let ctx = egui::Context::default();
+        let text = "Привет — мир".to_owned();
+        let mut picker = KeycodePicker {
+            language: crate::i18n::Language::English,
+            macro_actions: vec![vec![MacroAction::Text(text.clone())]],
+            macro_texts: vec![text.as_bytes().to_vec()],
+            ..Default::default()
+        };
+
+        let _ = macro_settings_frame(&mut picker, &ctx, vec![]);
+        let output = macro_settings_frame(&mut picker, &ctx, vec![]);
+
+        assert!(macro_picker_text_position(
+            &output,
+            "These characters will not be typed: П, р, и, в, е and 3 more"
+        )
+        .is_some());
+        assert_eq!(picker.macro_actions[0], [MacroAction::Text(text.clone())]);
+        assert_eq!(picker.macro_texts[0], text.as_bytes());
+        assert!(picker.macro_text_ascii_replaced.is_none());
+        assert!(!picker.macros_dirty);
+    }
+
+    #[test]
+    fn macro_text_paste_replaces_typography_and_says_how_many_characters() {
+        let ctx = egui::Context::default();
+        let mut picker = KeycodePicker {
+            language: crate::i18n::Language::English,
+            macro_actions: vec![vec![MacroAction::Text(String::new())]],
+            ..Default::default()
+        };
+        let _ = macro_settings_frame(&mut picker, &ctx, vec![]);
+        let output = macro_settings_frame(&mut picker, &ctx, vec![]);
+        // The Text field ends right before the step's remove button.
+        let remove = macro_picker_text_position(&output, "×").expect("remove button");
+        let field = egui::pos2(remove.x - 100.0, remove.y);
+        for pressed in [true, false] {
+            let _ = macro_settings_frame(
+                &mut picker,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(field),
+                    egui::Event::PointerButton {
+                        pos: field,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+
+        let _ = macro_settings_frame(&mut picker, &ctx, vec![egui::Event::Paste("«Go»…".into())]);
+        assert_eq!(
+            picker.macro_actions[0],
+            [MacroAction::Text("\"Go\"...".into())]
+        );
+        assert_eq!(picker.macro_texts[0], b"\"Go\"...");
+        assert_eq!(picker.macro_text_ascii_replaced, Some((0, 3)));
+        assert!(picker.macros_dirty);
+
+        // The cursor follows the expanded ellipsis instead of landing in it.
+        let _ = macro_settings_frame(&mut picker, &ctx, vec![egui::Event::Text("!".into())]);
+        assert_eq!(
+            picker.macro_actions[0],
+            [MacroAction::Text("\"Go\"...!".into())]
+        );
+        assert_eq!(picker.macro_text_ascii_replaced, Some((0, 3)));
+        let output = macro_settings_frame(&mut picker, &ctx, vec![]);
+        assert!(macro_picker_text_position(
+            &output,
+            "Typographic characters replaced with ASCII: 3"
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn long_macro_text_paste_keeps_ascii_tail_and_normalized_cursor() {
+        let ctx = egui::Context::default();
+        let mut picker = KeycodePicker {
+            language: crate::i18n::Language::English,
+            macro_actions: vec![vec![MacroAction::Text(String::new())]],
+            ..Default::default()
+        };
+        let _ = macro_settings_frame(&mut picker, &ctx, vec![]);
+        let output = macro_settings_frame(&mut picker, &ctx, vec![]);
+        // The Text field ends right before the step's remove button.
+        let remove = macro_picker_text_position(&output, "×").expect("remove button");
+        let field = egui::pos2(remove.x - 100.0, remove.y);
+        for pressed in [true, false] {
+            let _ = macro_settings_frame(
+                &mut picker,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(field),
+                    egui::Event::PointerButton {
+                        pos: field,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+
+        let text = format!("{}«Go»…", "a".repeat(512));
+        let _ = macro_settings_frame(&mut picker, &ctx, vec![egui::Event::Paste(text)]);
+        assert_eq!(
+            picker.macro_actions[0],
+            [MacroAction::Text(format!("{}\"Go\"...", "a".repeat(512)))]
+        );
+        assert_eq!(
+            picker.macro_texts[0],
+            format!("{}\"Go\"...", "a".repeat(512)).as_bytes()
+        );
+        assert_eq!(picker.macro_text_ascii_replaced, Some((0, 3)));
+        assert!(picker.macros_dirty);
+
+        // The cursor follows the expanded ellipsis instead of landing in it.
+        let _ = macro_settings_frame(&mut picker, &ctx, vec![egui::Event::Text("!".into())]);
+        assert_eq!(
+            picker.macro_actions[0],
+            [MacroAction::Text(format!("{}\"Go\"...!", "a".repeat(512)))]
+        );
+        assert_eq!(picker.macro_text_ascii_replaced, Some((0, 3)));
+        let output = macro_settings_frame(&mut picker, &ctx, vec![]);
+        assert!(macro_picker_text_position(
+            &output,
+            "Typographic characters replaced with ASCII: 3"
+        )
+        .is_some());
     }
 }

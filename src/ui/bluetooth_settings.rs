@@ -249,23 +249,33 @@ impl EntropyApp {
 
     fn write_bluetooth_select_setting(&mut self, setting: &BluetoothSelectSetting, value: u16) {
         let value = value.min(setting.variants.len().saturating_sub(1) as u16);
-        if let Some(current) = self
-            .bluetooth_settings
-            .profile_colors
-            .iter_mut()
-            .find(|profile| profile.setting.qsid == setting.qsid)
-        {
-            current.setting.value = value;
-        }
-
         let Some(hid) = &self.hid_device else {
             return;
         };
+        if !setting.loaded {
+            let current = if setting.width > 1 {
+                hid.get_qmk_setting_u16(setting.qsid)
+            } else {
+                hid.get_qmk_setting_u8(setting.qsid).map(u16::from)
+            };
+            if current.is_err() {
+                self.status_msg = "Failed to reload Bluetooth color; reconnect the keyboard".into();
+                return;
+            }
+        }
         let result = if setting.width > 1 {
             hid.set_qmk_setting_u16(setting.qsid, value)
         } else {
             hid.set_qmk_setting_u8(setting.qsid, value.min(u8::MAX as u16) as u8)
         };
+        for p in &mut self.bluetooth_settings.profile_colors {
+            if p.setting.qsid == setting.qsid {
+                p.setting.loaded = result.is_ok();
+                if result.is_ok() {
+                    p.setting.value = value;
+                }
+            }
+        }
         if let Err(e) = result {
             self.status_msg = format!(
                 "Failed to save Bluetooth setting (qsid {}): {}",
@@ -372,9 +382,9 @@ mod tests {
             egui::Pos2::ZERO,
             egui::vec2(900.0, 700.0),
         ));
-        let output = ctx.run_ui(input, |ui| {
+        let output = crate::app::discard_texture_deltas(ctx.run_ui(input, |ui| {
             app.draw_bluetooth_settings_page(ui, ui.max_rect());
-        });
+        }));
         let mut text = Vec::new();
         for clipped_shape in &output.shapes {
             collect_text(&clipped_shape.shape, &mut text);

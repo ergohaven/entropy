@@ -1,7 +1,7 @@
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 pub(crate) static TRAY_QUIT_REQUESTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 pub(crate) static TRAY_RESTORE_REQUESTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -76,6 +76,11 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) application_layouts:
         std::collections::BTreeMap<String, crate::application_layouts::DeviceApplicationLayouts>,
+    /// Host rules only, scoped to the approved RP2040 USB-half hardware serial.
+    /// Never contains Default, bindings, deletion intents or active selection.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub(crate) sm62_host_rules: std::collections::BTreeMap<String,
+        std::collections::BTreeMap<String, crate::application_layouts::Sm62HostRule>>,
     /// Last Macropad application-layout profile opened by the user. Keeping
     /// this small identity lets Entropy continue resolving foreground apps and
     /// editing saved profiles while the USB device is temporarily offline.
@@ -94,6 +99,12 @@ pub(crate) struct AppSettings {
     pub(crate) launch_at_startup: bool,
     #[serde(default)]
     pub(crate) launch_minimized: bool,
+    #[serde(default)]
+    pub(crate) app_update_notifications: bool,
+    #[serde(default)]
+    pub(crate) development_updates: bool,
+    #[serde(default)]
+    pub(crate) firmware_update_notifications: bool,
     #[serde(default = "default_show_shifted_number_symbols")]
     pub(crate) show_shifted_number_symbols: bool,
     #[serde(default = "default_layer_hover_preview")]
@@ -260,6 +271,7 @@ impl Default for AppSettings {
             layout_element_visibility: std::collections::BTreeMap::new(),
             migrated_fixed_encoder_visibility: std::collections::BTreeSet::new(),
             application_layouts: std::collections::BTreeMap::new(),
+            sm62_host_rules: std::collections::BTreeMap::new(),
             last_application_layout_device_key: None,
             application_layout_bindings: Default::default(),
             last_application_layout_device_name: None,
@@ -267,6 +279,9 @@ impl Default for AppSettings {
             close_to_tray_behavior: CloseToTrayBehavior::Ask,
             launch_at_startup: false,
             launch_minimized: false,
+            app_update_notifications: false,
+            development_updates: false,
+            firmware_update_notifications: false,
             show_shifted_number_symbols: default_show_shifted_number_symbols(),
             layer_hover_preview: default_layer_hover_preview(),
             middle_click_assigns_transparent: false,
@@ -871,6 +886,9 @@ pub(crate) struct DeferredDeviceLoadState {
     pub(crate) context: Option<std::sync::Arc<DeferredDeviceLoadContext>>,
     section_statuses: std::collections::BTreeMap<DeferredLoadSection, DeferredLoadStatus>,
     layer_statuses: Vec<DeferredLoadStatus>,
+    // Failed full imports may have mutated firmware while preserving host drafts.
+    unconfirmed_import_sections: std::collections::BTreeSet<DeferredLoadSection>,
+    unconfirmed_import_layers: std::collections::BTreeSet<usize>,
     background_layer_progress: Option<BackgroundLayerProgress>,
     background_layer_resume_at: Option<std::time::Instant>,
 }
@@ -904,6 +922,8 @@ impl DeferredDeviceLoadState {
             context: Some(context),
             section_statuses,
             layer_statuses,
+            unconfirmed_import_sections: Default::default(),
+            unconfirmed_import_layers: Default::default(),
             background_layer_progress: None,
             background_layer_resume_at: Some(
                 std::time::Instant::now() + BACKGROUND_LAYER_INITIAL_IDLE,
@@ -919,6 +939,8 @@ impl DeferredDeviceLoadState {
                 .map(|section| (section, DeferredLoadStatus::Loaded))
                 .collect(),
             layer_statuses: vec![DeferredLoadStatus::Loaded; layer_count.max(1)],
+            unconfirmed_import_sections: Default::default(),
+            unconfirmed_import_layers: Default::default(),
             background_layer_progress: None,
             background_layer_resume_at: None,
         }
@@ -940,7 +962,53 @@ impl DeferredDeviceLoadState {
         section: DeferredLoadSection,
         status: DeferredLoadStatus,
     ) {
+        if matches!(status, DeferredLoadStatus::Loaded) {
+            self.unconfirmed_import_sections.remove(&section);
+        }
         self.section_statuses.insert(section, status);
+    }
+
+    pub(crate) fn mark_import_section_unconfirmed(&mut self, section: DeferredLoadSection) {
+        self.unconfirmed_import_sections.insert(section);
+        self.set_section_status(section, DeferredLoadStatus::NotLoaded);
+    }
+
+    pub(crate) fn import_section_unconfirmed(&self, section: DeferredLoadSection) -> bool {
+        self.unconfirmed_import_sections.contains(&section)
+    }
+
+    pub(crate) fn mark_import_layer_unconfirmed(&mut self, layer: usize) {
+        self.unconfirmed_import_layers.insert(layer);
+        if self.layer_statuses.len() <= layer {
+            self.layer_statuses.resize(layer + 1, DeferredLoadStatus::Loaded);
+        }
+        self.set_layer_status(layer, DeferredLoadStatus::NotLoaded);
+    }
+
+    pub(crate) fn import_layer_unconfirmed(&self, layer: usize) -> bool {
+        self.unconfirmed_import_layers.contains(&layer)
+    }
+
+    pub(crate) fn has_unconfirmed_import_data(&self) -> bool {
+        !self.unconfirmed_import_sections.is_empty() || !self.unconfirmed_import_layers.is_empty()
+    }
+
+    pub(crate) fn confirm_import_publication(&mut self) {
+        // Eager USB loads have no deferred context to repair invalidated caches.
+        // Only the fully verified, locally applied import may restore readiness.
+        // Staged loads intentionally reread these caches through their scheduler.
+        if !self.is_staged() {
+            for section in &self.unconfirmed_import_sections {
+                self.section_statuses.insert(*section, DeferredLoadStatus::Loaded);
+            }
+            for layer in &self.unconfirmed_import_layers {
+                if let Some(status) = self.layer_statuses.get_mut(*layer) {
+                    *status = DeferredLoadStatus::Loaded;
+                }
+            }
+        }
+        self.unconfirmed_import_sections.clear();
+        self.unconfirmed_import_layers.clear();
     }
 
     pub(crate) fn section_supported(&self, section: DeferredLoadSection) -> bool {
@@ -958,6 +1026,9 @@ impl DeferredDeviceLoadState {
     }
 
     pub(crate) fn set_layer_status(&mut self, layer: usize, status: DeferredLoadStatus) {
+        if matches!(status, DeferredLoadStatus::Loaded) {
+            self.unconfirmed_import_layers.remove(&layer);
+        }
         if !matches!(&status, DeferredLoadStatus::NotLoaded)
             && self
                 .background_layer_progress
@@ -1822,6 +1893,8 @@ impl TouchpadSettingsState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BluetoothSelectSetting {
+    pub(crate) loaded: bool,
+    pub(crate) portable: bool,
     pub(crate) qsid: u16,
     pub(crate) width: u8,
     pub(crate) value: u16,
@@ -2357,25 +2430,37 @@ pub(crate) struct BehaviorSettingsState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LayerLedColorSetting {
+    /// Firmware layer identity, present only for a verified U8 palette contract.
+    /// Legacy reads have no portable layer contract.
+    pub(crate) portable_layer: Option<usize>,
+    pub(crate) portable_profile: Option<usize>,
     pub(crate) qsid: u16,
     pub(crate) linked_qsids: Vec<u16>,
     pub(crate) value: u8,
+    /// False when the displayed fallback did not come from a successful read.
+    pub(crate) loaded: bool,
 }
 
 impl LayerLedColorSetting {
     pub(crate) fn new(qsid: u16, value: u8) -> Self {
         Self {
+            portable_layer: None,
+            portable_profile: None,
             qsid,
             linked_qsids: Vec::new(),
             value,
+            loaded: true,
         }
     }
 
     pub(crate) fn with_linked_qsids(qsid: u16, linked_qsids: Vec<u16>, value: u8) -> Self {
         Self {
+            portable_layer: None,
+            portable_profile: None,
             qsid,
             linked_qsids,
             value,
+            loaded: true,
         }
     }
 
@@ -2392,6 +2477,8 @@ pub(crate) enum LayerLedTimeoutUnit {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LayerLedNumericSetting {
+    pub(crate) min: u16,
+    pub(crate) loaded: bool,
     pub(crate) qsid: u16,
     pub(crate) width: u8,
     pub(crate) value: u16,
@@ -2422,10 +2509,12 @@ impl LayerLedSettingsState {
             .filter(|setting| setting.qsid == qsid)
         {
             setting.value = value.min(setting.max);
+            setting.loaded = true;
             return true;
         }
         if let Some(setting) = self.timeout.as_mut().filter(|setting| setting.qsid == qsid) {
             setting.value = value.min(setting.max);
+            setting.loaded = true;
             return true;
         }
 
@@ -2437,6 +2526,7 @@ impl LayerLedSettingsState {
         {
             if setting.qsid == qsid || setting.linked_qsids.contains(&qsid) {
                 setting.value = color;
+                setting.loaded = true;
                 return true;
             }
         }
@@ -2595,6 +2685,8 @@ pub(crate) enum RgbSupportKind {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RgbSettingsState {
+    /// Every exported channel came from a successful device read.
+    pub(crate) loaded: bool,
     pub(crate) supported: bool,
     pub(crate) kind: RgbSupportKind,
     pub(crate) effect: u16,
@@ -2710,9 +2802,8 @@ pub(crate) struct DisplaySettingsState {
     pub(crate) confirmed_clock_background_speed_percent: u16,
     pub(crate) clock_background_speed_write_due: Option<std::time::Instant>,
     pub(crate) clock_background_file_name: Option<String>,
-    pub(crate) clock_background_preview_rgba: Vec<u8>,
-    pub(crate) clock_background_preview_frames_rgba: Vec<Vec<u8>>,
-    pub(crate) clock_background_preview_delays_ms: Vec<u16>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) clock_background_preview: Option<standby_background::BackgroundPreview>,
     pub(crate) clock_background_preview_revision: u64,
     pub(crate) clock_background_dim_supported: bool,
     pub(crate) clock_background_dim: u8,
@@ -2754,8 +2845,8 @@ impl Default for DisplaySettingsState {
             confirmed_sm62_language_values: [1, 1],
             sm62_date_supported: false,
             sm62_hold_supported: false,
-            sm62_hold_ms: [200; 2],
-            confirmed_sm62_hold_ms: [200; 2],
+            sm62_hold_ms: [350; 2],
+            confirmed_sm62_hold_ms: [350; 2],
             sm62_date_values: [1, 1],
             confirmed_sm62_date_values: [1, 1],
             date_supported: false,
@@ -2813,9 +2904,8 @@ impl Default for DisplaySettingsState {
             confirmed_clock_background_speed_percent: 100,
             clock_background_speed_write_due: None,
             clock_background_file_name: None,
-            clock_background_preview_rgba: Vec::new(),
-            clock_background_preview_frames_rgba: Vec::new(),
-            clock_background_preview_delays_ms: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            clock_background_preview: None,
             clock_background_preview_revision: 0,
             clock_background_dim_supported: false,
             clock_background_dim: 30,
@@ -3149,8 +3239,8 @@ pub(crate) fn load_display_settings(
             confirmed_sm62_language_values: [1, 1],
             sm62_date_supported: false,
         sm62_hold_supported: false,
-        sm62_hold_ms: [200; 2],
-        confirmed_sm62_hold_ms: [200; 2],
+        sm62_hold_ms: [350; 2],
+        confirmed_sm62_hold_ms: [350; 2],
         sm62_date_values: [1, 1],
         confirmed_sm62_date_values: [1, 1],
         date_supported,
@@ -3210,9 +3300,8 @@ pub(crate) fn load_display_settings(
         confirmed_clock_background_speed_percent: clock_background_speed_percent,
         clock_background_speed_write_due: None,
         clock_background_file_name: None,
-        clock_background_preview_rgba: Vec::new(),
-        clock_background_preview_frames_rgba: Vec::new(),
-        clock_background_preview_delays_ms: Vec::new(),
+        #[cfg(not(target_arch = "wasm32"))]
+        clock_background_preview: None,
         clock_background_preview_revision: 0,
         clock_background_dim_supported,
         clock_background_dim,
@@ -3238,9 +3327,7 @@ pub(crate) fn load_display_settings(
     };
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(preview) = cached_background {
-        state.clock_background_preview_rgba = preview.preview_rgba;
-        state.clock_background_preview_frames_rgba = preview.preview_frames_rgba;
-        state.clock_background_preview_delays_ms = preview.preview_delays_ms;
+        state.clock_background_preview = Some(preview.preview);
         state.clock_background_file_name =
             (!preview.file_name.is_empty()).then_some(preview.file_name);
         state.clock_background_preview_revision = 1;
@@ -3265,13 +3352,14 @@ mod display_settings_load_tests {
     }
 
     #[test]
-    fn sm62_defaults_layout_hold_to_200ms_on_both_halves() {
+    fn sm62_defaults_layout_hold_to_350ms_on_both_halves() {
         let state = DisplaySettingsState::default();
-        assert_eq!(state.sm62_hold_ms, [200; 2]);
-        assert_eq!(state.confirmed_sm62_hold_ms, [200; 2]);
+        assert_eq!(state.sm62_hold_ms, [350; 2]);
+        assert_eq!(state.confirmed_sm62_hold_ms, [350; 2]);
         let (hid, _) = crate::hid::HidDevice::test_device();
         let state = load_display_settings(&hid, &(230..=239).collect::<Vec<_>>()).unwrap();
-        assert_eq!(state.sm62_hold_ms, [200; 2]);
+        assert_eq!(state.sm62_hold_ms, [350; 2]);
+        assert_eq!(state.confirmed_sm62_hold_ms, [350; 2]);
         assert!(!state.sm62_hold_supported);
     }
 
@@ -3470,10 +3558,14 @@ pub(crate) fn load_rgb_settings_for_mode(
         _ => return RgbSettingsState::default(),
     }
 
+    // A failed preferred-protocol read must not turn echoed fallback packets
+    // into confirmed backup values.
+    let mut probe_failed = false;
     for kind in candidates {
         match kind {
             RgbSupportKind::VialRgb => {
                 let Ok((version, max_brightness)) = dev_conn.get_vialrgb_info() else {
+                    probe_failed = true;
                     continue;
                 };
                 if version != 1 {
@@ -3481,14 +3573,17 @@ pub(crate) fn load_rgb_settings_for_mode(
                 }
                 let Ok((effect, speed, hue, saturation, brightness)) = dev_conn.get_vialrgb_mode()
                 else {
+                    probe_failed = true;
                     continue;
                 };
-                let mut supported_effects =
-                    dev_conn.get_vialrgb_supported_effects().unwrap_or_default();
+                let effects_result = dev_conn.get_vialrgb_supported_effects();
+                let loaded = effects_result.is_ok();
+                let mut supported_effects = effects_result.unwrap_or_default();
                 if !supported_effects.contains(&0) {
                     supported_effects.insert(0, 0);
                 }
                 let mut state = RgbSettingsState {
+                    loaded: loaded && !probe_failed,
                     supported: true,
                     kind,
                     effect,
@@ -3507,14 +3602,20 @@ pub(crate) fn load_rgb_settings_for_mode(
             }
             RgbSupportKind::QmkRgblight => {
                 let Ok(brightness) = dev_conn.get_qmk_rgblight_brightness() else {
+                    probe_failed = true;
                     continue;
                 };
                 let Ok(effect) = dev_conn.get_qmk_rgblight_effect() else {
+                    probe_failed = true;
                     continue;
                 };
-                let speed = dev_conn.get_qmk_rgblight_effect_speed().unwrap_or(0);
-                let (hue, saturation) = dev_conn.get_qmk_rgblight_color().unwrap_or((0, 0));
+                let speed_result = dev_conn.get_qmk_rgblight_effect_speed();
+                let color_result = dev_conn.get_qmk_rgblight_color();
+                let loaded = speed_result.is_ok() && color_result.is_ok();
+                let speed = speed_result.unwrap_or(0);
+                let (hue, saturation) = color_result.unwrap_or((0, 0));
                 let mut state = RgbSettingsState {
+                    loaded: loaded && !probe_failed,
                     supported: true,
                     kind,
                     effect: effect as u16,
@@ -3553,7 +3654,7 @@ pub(super) enum UndoAction {
         device_key: String,
         layout_id: String,
         layer: usize,
-        old_keycodes: [u16; crate::application_layouts::APPLICATION_LAYOUT_CONTROL_COUNT],
+        old_keycodes: Vec<u16>,
     },
     ApplicationLayoutControl {
         device_key: String,
@@ -5461,6 +5562,8 @@ pub(crate) const LAYOUT_TOP_RESERVED_H: f32 = 32.0_f32 + 4.0_f32 + 68.0_f32;
 pub(crate) const LAYOUT_BOTTOM_RESERVED_H: f32 = 76.0_f32;
 
 pub struct EntropyApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) import_backup_namespace: Result<entlayout::backup_durability::BackupNamespace, String>,
     pub(crate) device_manager: DeviceManager,
     pub(crate) selected_device: Option<usize>,
     pub(crate) selected_layer: usize,
@@ -5475,6 +5578,10 @@ pub struct EntropyApp {
     pub(crate) import_report_body: String,
     /// In-flight native file dialog running on a background thread so the UI
     /// thread never blocks on the (portal/D-Bus) picker. Only one at a time.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) pending_entlayout_dialog_target: Option<(crate::device::Device, Option<u64>)>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) gui_entlayout_preparation: Option<crate::app::entlayout::GuiEntlayoutPreparation>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) pending_file_dialog: Option<(
         super::file_dialog::FileDialogAction,
@@ -5561,10 +5668,13 @@ pub struct EntropyApp {
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) test_connect_requests:
         Option<mpsc::Sender<(Device, mpsc::Sender<ConnectTaskMessage>)>>,
-    /// Scripted HID handle for the next real connect worker, in place of
-    /// opening the device.
-    #[cfg(all(test, not(target_arch = "wasm32")))]
-    pub(crate) test_connect_hid: Option<crate::hid::HidDevice>,
+    /// An open transport the next connect uses in place of opening the
+    /// device: a scripted keyboard in tests, or the read-only view a running
+    /// instance lends to a console export.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) connect_hid: Option<crate::hid::HidDevice>,
+    #[cfg(all(test, target_os = "linux"))]
+    pub(super) test_device_scan_udev_access: Option<super::app_settings_ui::UdevAccess>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) device_scan_state: DeviceScanState,
     /// Persistent open HID device for real-time writes (Vial)
@@ -5590,6 +5700,8 @@ pub struct EntropyApp {
     /// Serialized live Vial read/control operation. Owns the HID handle while active.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) vial_hid_task: Option<VialHidTask>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) sm62_fps: Option<sm62_fps::Session>,
     /// Undo intent captured while a low-priority Bluetooth layer read owns the
     /// HID handle. It is started before another automatic layer read.
     #[cfg(not(target_arch = "wasm32"))]
@@ -5600,10 +5712,21 @@ pub struct EntropyApp {
     /// User action waiting for every staged Bluetooth layer to become complete.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) deferred_full_layout_action: Option<DeferredFullLayoutAction>,
+    /// Listens for `--export-layout` runs while this instance owns the keyboards.
+    #[cfg(unix)]
+    pub(super) console_export_server: Option<super::headless_export::ExportServer>,
+    #[cfg(unix)]
+    pub(super) pending_console_export: Option<super::headless_export::PendingConsoleExport>,
     pub(super) settings_write_queue: SettingsWriteQueueState,
     pub(super) settings_write_generation: u64,
     pub(super) qmk_settings_write_queue: QmkSettingsWriteQueue,
     pub(super) pending_device_connect: Option<DeviceIdentity>,
+    /// The board the user picked last: it is connected again when it comes
+    /// back, however many others are listed. Picking another replaces it.
+    pub(super) remembered_device: Option<DeviceIdentity>,
+    /// The remembered board's takeover while it waits in
+    /// `pending_device_connect`: it lapses with the memory.
+    pub(super) pending_takeover: Option<DeviceIdentity>,
     /// Built-in qmk-hid-host bridges for displays/presets that need host data
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) qmk_hid_hosts:
@@ -5627,8 +5750,22 @@ pub struct EntropyApp {
     pub(crate) gnome_integration_install_result:
         Option<Result<crate::app_discovery::GnomeIntegrationInstallReport, String>>,
     #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) foreground_repaint_subscription:
+        Option<crate::app_discovery::ForegroundRepaintSubscription>,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) application_layout_foreground:
         Option<crate::application_layouts::DetectedApplication>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) persisted_application_libraries: std::collections::HashMap<String,
+        application_layout_runtime::PersistedApplicationLibrary>,
+    /// Last observed authorship counters; restored disk counters are baselines,
+    /// never publication grants. Grants are ephemeral and owner-generation scoped.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) application_layout_observed_edits: std::collections::BTreeMap<(String, String), u64>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) application_layout_edit_owners: std::collections::BTreeMap<String, std::collections::BTreeSet<(String, u64, u64)>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) application_layout_owner_intents: std::collections::BTreeMap<(String, u64, u64), std::collections::BTreeSet<String>>,
     /// A layout selected from the main Layout page stays active until focus
     /// moves to a different application. Store both the device and foreground
     /// application captured at selection time so polling the same window
@@ -5700,6 +5837,7 @@ pub struct EntropyApp {
     pub(crate) jump_back_stack: Vec<usize>,
     pub(crate) dark_mode: bool,
     pub(crate) last_applied_theme: Option<(bool, AppAccentColor)>,
+    pub(crate) native_time_offset: f64,
     pub(crate) app_settings: AppSettings,
     /// Monotonic app clock, independent of painted egui input time. The
     /// text-expander save debounce and external rules-file reload schedule on
@@ -5730,6 +5868,12 @@ pub struct EntropyApp {
     pub(crate) linux_background_since: Option<f64>,
     #[cfg(target_os = "linux")]
     pub(crate) linux_background_focus_left: bool,
+    #[cfg(target_os = "linux")]
+    pub(crate) linux_tray: Option<crate::linux_tray::LinuxTray>,
+    #[cfg(target_os = "linux")]
+    pub(crate) linux_hidden_to_tray: bool,
+    #[cfg(target_os = "linux")]
+    pub(crate) linux_start_hidden_to_tray_pending: bool,
     pub(crate) close_to_tray_prompt_open: bool,
     pub(crate) close_to_tray_prompt_remember: bool,
     pub(crate) force_close_requested: bool,
@@ -5816,6 +5960,9 @@ pub struct EntropyApp {
     pub(crate) macro_auto_unlock_cancelled: bool,
     pub(crate) settings_tab: SettingsTab,
     pub(crate) layer_names: Vec<String>,
+    // Connection-local authority: names actually read from persistent firmware.
+    pub(crate) confirmed_firmware_layer_names: u16,
+    pub(crate) layer_names_from_firmware: Vec<bool>,
     pub(crate) editing_layer: Option<usize>, // layer being renamed
     pub(crate) editing_layer_text: String,
     pub(crate) editing_layer_focus_requested: bool,
@@ -5846,6 +5993,8 @@ pub struct EntropyApp {
     pub(crate) device_about_info: Option<DeviceAboutInfo>,
     pub(crate) update_check: UpdateCheckState,
     pub(crate) firmware_update_check: FirmwareUpdateCheckState,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) update_notifications: super::update_notifications::UpdateNotifications,
     pub(crate) tour_state: TourState,
     pub(crate) tour_target_rects: Vec<(TourTarget, egui::Rect)>,
     /// Vial unlock dialog open
@@ -5855,6 +6004,10 @@ pub struct EntropyApp {
     pub(crate) vial_unlock_keys: Vec<(u8, u8)>,
     /// An unlock-start task has been submitted; the HID command may already be in flight.
     pub(crate) vial_unlock_session_started: bool,
+    /// Owner-scoped pause covering the entire physical unlock, including gaps
+    /// between asynchronous START/POLL workers. QMK gates E6 until completion.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) vial_unlock_event_pause: Option<crate::qmk_hid_host::ApplicationEventPollPause>,
     pub(crate) vial_unlock_polling: bool,
     pub(crate) vial_unlock_counter: u8,
     pub(crate) vial_unlock_best: u8,

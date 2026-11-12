@@ -1,7 +1,14 @@
 use super::*;
+use anyhow::Context;
 use crate::app::typing_trainer_symbols::TypingTrainerCharacterStatsMap;
 
 const TYPING_TRAINER_SYMBOL_STATS_VERSION: u8 = 1;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+mod resident_save_regression {
+    use super::*;
+    include!("app_storage_resident_save_tests.inc");
+}
 
 #[cfg(test)]
 mod scoped_config_tests {
@@ -97,6 +104,18 @@ impl Drop for ScopedTempConfig {
             root.replace(self.previous.take());
         });
     }
+}
+
+/// The calling thread's test root, for a worker that keeps the test's
+/// isolated configuration with `adopt_test_config_root`.
+#[cfg(test)]
+pub(crate) fn test_config_root() -> Option<std::path::PathBuf> {
+    TEST_CONFIG_DIR.with(|root| root.borrow().clone())
+}
+
+#[cfg(test)]
+pub(super) fn adopt_test_config_root(root: Option<std::path::PathBuf>) {
+    TEST_CONFIG_DIR.with(|current| current.replace(root));
 }
 
 pub(super) fn storage_config_dir() -> Option<std::path::PathBuf> {
@@ -579,6 +598,14 @@ pub(super) fn load_app_settings() -> AppSettings {
             log::warn!("Pictogram migration failed: {error}");
         }
     }
+    // Resolve ancillary libraries before migration persistence: the external
+    // pictogram file is authoritative and must not be replaced by stale JSON.
+    #[cfg(not(target_arch = "wasm32"))]
+    if settings.application_layouts.values().any(|s|s.resident_mapping_version==0 && s.layouts.get("default").is_some_and(|p|p.layers[0].len()==62)) {
+        let original=settings.clone();
+        for layouts in settings.application_layouts.values_mut() {layouts.normalize();}
+        if let Err(e)=try_save_app_settings(&settings) {log::error!("Resident100 migration blocked: {e:#}");settings=original;}
+    }
     apply_app_settings_migrations(&mut settings, settings_data.as_deref());
     // Standby artwork now always uses the aspect-preserving fill algorithm.
     settings.standby_background_scale = StandbyBackgroundScale::Fill;
@@ -590,6 +617,63 @@ pub(super) fn load_app_settings() -> AppSettings {
 
 pub(super) fn save_app_settings(settings: &AppSettings) {
     #[cfg(not(target_arch = "wasm32"))]
+    {if let Err(e)=try_save_app_settings(settings){log::warn!("save_app_settings failed: {e:#}");}return;}
+    #[cfg(target_arch = "wasm32")]
+    match serde_json::to_string_pretty(settings) {
+        Ok(json)=>{if let Err(e)=std::fs::write(app_settings_path(),json){log::warn!("save_app_settings failed: {e}");}},
+        Err(e)=>log::warn!("save_app_settings serialize failed: {e}"),
+    }
+}
+
+#[cfg(test)]
+thread_local! { static SETTINGS_SERIALIZATION_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(super) fn take_settings_serialization_count()->usize {
+    SETTINGS_SERIALIZATION_COUNT.with(|n|n.replace(0))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn try_save_app_settings(settings: &AppSettings)->anyhow::Result<()> {
+    #[cfg(test)]
+    SETTINGS_SERIALIZATION_COUNT.with(|n|n.set(n.get()+1));
+    let path=app_settings_path();
+    let parent=path.parent().context("settings parent")?;
+    // A previous, inactive SM62 library must not leave the saved document in
+    // migration version zero and retrigger its backup on every profile change.
+    let canonical=if settings.application_layouts.values().any(|s|s.resident_mapping_version==0
+        && s.layouts.get("default").is_some_and(|p|p.layers.first().is_some_and(|l|l.len()==62))) {
+        let mut value=settings.clone();
+        for s in value.application_layouts.values_mut() {
+            if s.resident_mapping_version==0 && s.layouts.get("default").is_some_and(|p|p.layers.first().is_some_and(|l|l.len()==62)) {s.normalize();}
+        }
+        Some(value)
+    } else {None};
+    let settings=canonical.as_ref().unwrap_or(settings);
+    let bytes=serde_json::to_vec_pretty(settings)?;
+    let original=match std::fs::read(&path) {Ok(bytes)=>Some(bytes),Err(e) if e.kind()==std::io::ErrorKind::NotFound=>None,Err(e)=>return Err(e.into())};
+    if let Some(old_bytes)=original {
+        if old_bytes==bytes {
+            let pic=pictogram_library_path();if !pic.exists(){write_pictogram_file(&pic,&settings.saved_pictograms)?;}return Ok(());
+        }
+        let old:AppSettings=serde_json::from_slice(&old_bytes).context("refuse to overwrite invalid existing settings")?;
+        if old.application_layouts.values().any(|s|s.resident_mapping_version==0 && s.layouts.get("default").is_some_and(|p|p.layers[0].len()==62)) {
+            let mut backup=path.with_extension("resident100-backup.json");
+            if backup.exists() && std::fs::read(&backup)?!=old_bytes {
+                // Keep a valid earlier migration image intact. The intermediate
+                // version-zero document gets its own exact, no-clobber backup.
+                let previous=std::fs::read(&backup)?;
+                let _:AppSettings=serde_json::from_slice(&previous).context("existing migration backup is invalid; refusing replacement")?;
+                use std::hash::{Hash,Hasher};
+                let mut hash=std::collections::hash_map::DefaultHasher::new();old_bytes.hash(&mut hash);
+                backup=path.with_extension(format!("resident100-backup-{:016x}.json",hash.finish()));
+            }
+            if backup.exists() {anyhow::ensure!(std::fs::read(&backup)?==old_bytes,"existing migration backup does not match source");}
+            else {let mut tmp=tempfile::NamedTempFile::new_in(parent)?;std::io::Write::write_all(&mut tmp,&old_bytes)?;tmp.as_file().sync_all()?;tmp.persist_noclobber(&backup).map_err(|e|e.error)?;sync_settings_parent(parent)?;}
+        }
+    }
+    let mut tmp=tempfile::NamedTempFile::new_in(parent)?;std::io::Write::write_all(&mut tmp,&bytes)?;tmp.as_file().sync_all()?;
+    tmp.persist(&path).map_err(|e|e.error)?;sync_settings_parent(parent)?;
+    #[cfg(not(target_arch = "wasm32"))]
     {
         let path = pictogram_library_path();
         if !path.exists() || read_pictogram_file(&path).is_ok() {
@@ -598,14 +682,25 @@ pub(super) fn save_app_settings(settings: &AppSettings) {
             }
         }
     }
-    match serde_json::to_string_pretty(settings) {
-        Ok(json) => {
-            if let Err(e) = std::fs::write(app_settings_path(), json) {
-                log::warn!("save_app_settings failed: {e}");
-            }
-        }
-        Err(e) => log::warn!("save_app_settings serialize failed: {e}"),
-    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn sync_settings_parent(parent:&std::path::Path)->anyhow::Result<()> {
+    #[cfg(unix)] std::fs::File::open(parent)?.sync_all()?;
+    #[cfg(not(unix))] let _=parent;
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn preserve_resident_recovery(value:&serde_json::Value)->anyhow::Result<std::path::PathBuf> {
+    use std::hash::{Hash,Hasher};
+    let bytes=serde_json::to_vec_pretty(value)?;let mut hash=std::collections::hash_map::DefaultHasher::new();bytes.hash(&mut hash);
+    let dir=app_settings_path().with_file_name("resident100-recovery");std::fs::create_dir_all(&dir)?;
+    let path=dir.join(format!("{:016x}.json",hash.finish()));
+    if path.exists(){anyhow::ensure!(std::fs::read(&path)?==bytes,"recovery filename collision; refusing overwrite");return Ok(path);}
+    let mut tmp=tempfile::NamedTempFile::new_in(&dir)?;std::io::Write::write_all(&mut tmp,&bytes)?;tmp.as_file().sync_all()?;
+    tmp.persist_noclobber(&path).map_err(|e|e.error)?;sync_settings_parent(&dir)?;Ok(path)
 }
 
 pub(super) fn normalize_text_expander_app_name(raw: &str) -> Option<String> {
@@ -965,6 +1060,74 @@ pub(super) fn tap_dance_display_name(tap_dance_names: &[String], idx: usize) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resident100_migration_preserves_authoritative_external_pictograms() {
+        for stale_embedded in [false, true] {
+            let _scope = ScopedTempConfig::new();
+            let mut settings = AppSettings::default();
+            let mut layouts = crate::application_layouts::DeviceApplicationLayouts::default();
+            layouts.layouts.get_mut("default").unwrap().layers = vec![vec![42; 62]; 16];
+            layouts.resident_mapping_version = 0;
+            settings.application_layouts.insert("sm62".into(), layouts);
+            let icon = SavedPictogram {
+                origin: PictogramOrigin::Legacy,
+                name: "External authoritative artwork".into(),
+                color: [11, 22, 33],
+                bitmap: vec![0xA5; PICTOGRAM_BYTES],
+            };
+            if stale_embedded {
+                let mut stale = icon.clone();
+                stale.name = "Stale embedded artwork".into();
+                stale.bitmap.fill(0x81);
+                settings.saved_pictograms = vec![stale];
+            }
+            let original = serde_json::to_vec_pretty(&settings).unwrap();
+            std::fs::write(app_settings_path(), &original).unwrap();
+            let pictograms = pictogram_library_path();
+            write_pictogram_file(&pictograms, &[icon.clone()]).unwrap();
+            let external_bytes = std::fs::read(&pictograms).unwrap();
+            for _ in 0..2 {
+                let loaded = load_app_settings();
+                assert_eq!(loaded.saved_pictograms.len(), 1, "external-only artwork lost during migration");
+                assert_eq!(loaded.saved_pictograms[0].name, icon.name);
+                assert_eq!(loaded.saved_pictograms[0].bitmap, icon.bitmap);
+                assert_eq!(std::fs::read(&pictograms).unwrap(), external_bytes);
+                assert_eq!(loaded.application_layouts["sm62"].resident_mapping_version, 1);
+            }
+            assert_eq!(std::fs::read(app_settings_path().with_extension("resident100-backup.json")).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn resident100_settings_migration_backup_atomic_reload_and_backup_failure() {
+        let _scope=ScopedTempConfig::new();
+        let mut settings=AppSettings::default();
+        let mut layouts=crate::application_layouts::DeviceApplicationLayouts::default();
+        layouts.layouts.get_mut("default").unwrap().layers=vec![vec![42;62];16];
+        for i in 0..101 {layouts.create_for_application(&crate::application_layouts::DetectedApplication{executable:format!("persist-{i}"),..Default::default()});}
+        let mut value=serde_json::to_value(&layouts).unwrap();value.as_object_mut().unwrap().remove("resident_mapping_version");value.as_object_mut().unwrap().remove("resident_slots");
+        settings.application_layouts.insert("sm62".into(),serde_json::from_value(value).unwrap());
+        let path=app_settings_path();let original=serde_json::to_vec(&settings).unwrap();std::fs::write(&path,&original).unwrap();
+        let migrated=load_app_settings();
+        assert_eq!(migrated.application_layouts["sm62"].resident_slots.len(),100,"ordinary load must migrate all applications");
+        let backup=path.with_extension("resident100-backup.json");assert_eq!(std::fs::read(&backup).unwrap(),original);
+        assert_eq!(load_app_settings().application_layouts,migrated.application_layouts);
+        std::fs::remove_file(&backup).unwrap();std::fs::create_dir(&backup).unwrap();std::fs::write(&path,&original).unwrap();
+        let blocked=load_app_settings();assert_eq!(blocked.application_layouts["sm62"].resident_mapping_version,0);
+        save_app_settings(&migrated);assert_eq!(std::fs::read(&path).unwrap(),original,"backup failure must prevent destructive migration");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resident100_unreadable_existing_settings_refuses_atomic_replacement() {
+        use std::os::unix::fs::PermissionsExt;
+        let _scope=ScopedTempConfig::new();let settings=AppSettings::default();let path=app_settings_path();
+        let original=serde_json::to_vec(&settings).unwrap();std::fs::write(&path,&original).unwrap();
+        let original_mode=std::fs::metadata(&path).unwrap().permissions();std::fs::set_permissions(&path,std::fs::Permissions::from_mode(0)).unwrap();
+        let mut changed=settings;changed.application_layouts.insert("new".into(),Default::default());save_app_settings(&changed);
+        std::fs::set_permissions(&path,original_mode).unwrap();assert_eq!(std::fs::read(path).unwrap(),original,"read failure is not evidence that no old settings exist");
+    }
 
     fn temp_macro_metadata_path(test_name: &str) -> std::path::PathBuf {
         let nonce = std::time::SystemTime::now()

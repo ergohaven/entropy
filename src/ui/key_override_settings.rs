@@ -162,9 +162,18 @@ impl EntropyApp {
             KeyOverridePickField::Trigger => self
                 .keycode_picker
                 .open_key_override_trigger_picker(current_value),
-            KeyOverridePickField::Replacement => self
-                .keycode_picker
-                .open_regular_key_picker_with_mod_key(true),
+            KeyOverridePickField::Replacement => {
+                self.keycode_picker.open_key_override_replacement_picker(
+                    self.hid_device.as_ref().is_some_and(|device| {
+                        device.is_rynk()
+                            || self.device_about_info.as_ref().is_some_and(|info| {
+                                info.firmware_update_target.as_ref().is_some_and(|target| {
+                                    target.family == FirmwareReleaseFamily::Rmk
+                                })
+                            })
+                    }),
+                )
+            }
         }
     }
 
@@ -523,38 +532,46 @@ impl EntropyApp {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     for row_idx in list.first_visible_row..list.last_visible_row {
                         match row_idx {
-                                        0 => {
-                                            crate::ui_style::settings_list_row_with_tooltip(
+                            0 => {
+                                crate::ui_style::settings_list_row_with_tooltip(
+                                    ui,
+                                    row_content_width,
+                                    row_height,
+                                    crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "alt_repeat_editor.entry",
+                                    ),
+                                    true,
+                                    Some(crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "key_override_editor.select_key_override_slot",
+                                    )),
+                                    control_width,
+                                    |ui| {
+                                        let dropdown_id =
+                                            ui.make_persistent_id("key_override_entry_dropdown");
+                                        let dropdown_resp =
+                                            crate::ui_style::modern_dropdown_button_sized(
                                                 ui,
-                                                row_content_width,
-                                                row_height,
-                                                crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.entry"),
-                                                true,
-                                                Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.select_key_override_slot")),
+                                                dropdown_id,
+                                                selected_override_text.as_str(),
+                                                selected_override_text_color,
                                                 control_width,
-                                                |ui| {
-                                                    let dropdown_id = ui.make_persistent_id("key_override_entry_dropdown");
-                                                    let dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
-                                                        ui,
-                                                        dropdown_id,
-                                                        selected_override_text.as_str(),
-                                                        selected_override_text_color,
-                                                        control_width,
-                                                        control_height,
-                                                        control_font_size,
-                                                    );
-                                                    ui.style_mut().visuals.window_stroke =
-                                                        crate::ui_style::modal_outline_stroke(dark);
-                                                    ui.style_mut().visuals.window_fill = app_surface_fill(dark);
-                                                    crate::ui_style::popup_below_widget(
-                                                        ui,
-                                                        dropdown_id,
-                                                        &dropdown_resp,
-                                                        egui::PopupCloseBehavior::CloseOnClickOutside,
-                                                        |ui| {
-                                                            ui.set_min_width(control_width);
-                                                            ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
-                                                            egui::ScrollArea::vertical()
+                                                control_height,
+                                                control_font_size,
+                                            );
+                                        ui.style_mut().visuals.window_stroke =
+                                            crate::ui_style::modal_outline_stroke(dark);
+                                        ui.style_mut().visuals.window_fill = app_surface_fill(dark);
+                                        crate::ui_style::popup_below_widget(
+                                            ui,
+                                            dropdown_id,
+                                            &dropdown_resp,
+                                            egui::PopupCloseBehavior::CloseOnClickOutside,
+                                            |ui| {
+                                                ui.set_min_width(control_width);
+                                                ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
+                                                egui::ScrollArea::vertical()
                                                                 .id_salt("key_override_entry_dropdown_scroll")
                                                                  .max_height(142.0 * scale)
                                                                 .auto_shrink([false, true])
@@ -605,174 +622,471 @@ impl EntropyApp {
                                                                         }
                                                                     }
                                                                 });
-                                                        },
-                                                    );
-                                                },
-                                            );
-                                        }
-                                        1 => {
-                                            let mut name_changed = false;
-                                            crate::ui_style::settings_list_row_with_tooltip(
+                                            },
+                                        );
+                                    },
+                                );
+                            }
+                            1 => {
+                                let mut name_changed = false;
+                                crate::ui_style::settings_list_row_with_tooltip(
+                                    ui,
+                                    row_content_width,
+                                    row_height,
+                                    crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "alt_repeat_editor.name",
+                                    ),
+                                    true,
+                                    Some(crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "key_override_editor.local_name_for_this_key_override_slot",
+                                    )),
+                                    control_width,
+                                    |ui| {
+                                        if let Some(name) = self.key_override_names.get_mut(idx) {
+                                            let resp = crate::ui_style::modern_text_field_sized(
                                                 ui,
-                                                row_content_width,
-                                                row_height,
-                                                crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.name"),
-                                                true,
-                                                Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.local_name_for_this_key_override_slot")),
+                                                egui::Id::unique(("key_override_name", idx)),
+                                                name,
                                                 control_width,
-                                                |ui| {
-                                                    if let Some(name) = self.key_override_names.get_mut(idx) {
-                                                        let resp = crate::ui_style::modern_text_field_sized(
-                                                            ui,
-                                                            egui::Id::new(("key_override_name", idx)),
-                                                            name,
-                                                            control_width,
-                                                            32.0 * scale,
-                                                            crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.name"),
-                                                            12,
-                                                            egui::Align::Center,
-                                                        );
-                                                        name_changed = resp.changed();
-                                                        resp.clone().on_hover_text(crate::i18n::tr_catalog(self.app_settings.language, "alt_repeat_editor.stored_locally_in_entropy"));
-                                                    }
-                                                },
+                                                32.0 * scale,
+                                                crate::i18n::tr_catalog(
+                                                    self.app_settings.language,
+                                                    "alt_repeat_editor.name",
+                                                ),
+                                                12,
+                                                egui::Align::Center,
                                             );
-                                            if name_changed {
-                                                save_key_override_names(&self.key_override_names, &self.current_device_name);
-                                            }
+                                            name_changed = resp.changed();
+                                            resp.clone().on_hover_text(crate::i18n::tr_catalog(
+                                                self.app_settings.language,
+                                                "alt_repeat_editor.stored_locally_in_entropy",
+                                            ));
                                         }
-                                        2 => {
-                                            crate::ui_style::settings_list_row_with_tooltip(
-                                                ui,
-                                                row_content_width,
-                                                row_height,
-                                                crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.trigger"),
-                                                true,
-                                                Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.original_key_that_can_be_overridden")),
-                                                control_width,
-                                                |ui| {
-                                                    let resp = crate::ui_style::modern_button_with_font(ui, trigger_label.as_str(), Vec2::new(control_width, control_height), control_font_size, true);
-                                                    if resp.clicked() {
-                                                        self.open_key_override_picker(KeyOverridePickField::Trigger);
-                                                    }
-                                                    resp.on_hover_text(crate::i18n::tr_text(self.app_settings.language, &trigger_tip));
-                                                },
-                                            );
-                                        }
-                                        3 => {
-                                            crate::ui_style::settings_list_row_with_tooltip(
-                                                ui,
-                                                row_content_width,
-                                                row_height,
-                                                crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.replacement"),
-                                                true,
-                                                Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.keycode_sent_while_override_conditions_match")),
-                                                control_width,
-                                                |ui| {
-                                                    let resp = crate::ui_style::modern_button_with_font(ui, replacement_label.as_str(), Vec2::new(control_width, control_height), control_font_size, true);
-                                                    if resp.clicked() {
-                                                        self.open_key_override_picker(KeyOverridePickField::Replacement);
-                                                    }
-                                                    resp.on_hover_text(crate::i18n::tr_text(self.app_settings.language, &replacement_tip));
-                                                },
+                                    },
+                                );
+                                if name_changed {
+                                    save_key_override_names(
+                                        &self.key_override_names,
+                                        &self.current_device_name,
+                                    );
+                                }
+                            }
+                            2 => {
+                                crate::ui_style::settings_list_row_with_tooltip(
+                                    ui,
+                                    row_content_width,
+                                    row_height,
+                                    crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "key_override_editor.trigger",
+                                    ),
+                                    true,
+                                    Some(crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "key_override_editor.original_key_that_can_be_overridden",
+                                    )),
+                                    control_width,
+                                    |ui| {
+                                        let resp = crate::ui_style::modern_button_with_font(
+                                            ui,
+                                            trigger_label.as_str(),
+                                            Vec2::new(control_width, control_height),
+                                            control_font_size,
+                                            true,
+                                        );
+                                        if resp.clicked() {
+                                            self.open_key_override_picker(
+                                                KeyOverridePickField::Trigger,
                                             );
                                         }
-                                        4 => {
-                                            crate::ui_style::settings_list_row_with_tooltip(
-                                                ui,
-                                                row_content_width,
-                                                row_height,
-                                                crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.suppressed_mods"),
-                                                true,
-                                                Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.modifiers_hidden_while_the_replacement_is_active")),
-                                                control_width,
-                                                |ui| {
-                                                    let popup_id = ui.make_persistent_id(("ko_suppressed_mods_popup", idx));
-                                                    let summary = Self::key_override_mod_mask_summary(self.app_settings.language, edited.suppressed_mods);
-                                                    let resp = crate::ui_style::modern_button_with_font(ui, summary.as_str(), Vec2::new(control_width, control_height), control_font_size, true);
-                                                    if resp.clicked() { egui::Popup::toggle_id(ui.ctx(), popup_id); }
-                                                    ui.style_mut().visuals.window_stroke = crate::ui_style::modal_outline_stroke(dark);
-                                                    ui.style_mut().visuals.window_fill = app_surface_fill(dark);
-                                                    crate::ui_style::popup_below_widget(ui, popup_id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
-                                                        Self::draw_key_override_mod_mask_modern(ui, &mut edited.suppressed_mods, self.app_settings.language);
-                                                    });
-                                                },
+                                        resp.on_hover_text(crate::i18n::tr_text(
+                                            self.app_settings.language,
+                                            &trigger_tip,
+                                        ));
+                                    },
+                                );
+                            }
+                            3 => {
+                                crate::ui_style::settings_list_row_with_tooltip(
+                                    ui,
+                                    row_content_width,
+                                    row_height,
+                                    crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "key_override_editor.replacement",
+                                    ),
+                                    true,
+                                    Some(crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "key_override_editor.keycode_sent_while_override_conditions_match",
+                                    )),
+                                    control_width,
+                                    |ui| {
+                                        let resp = crate::ui_style::modern_button_with_font(
+                                            ui,
+                                            replacement_label.as_str(),
+                                            Vec2::new(control_width, control_height),
+                                            control_font_size,
+                                            true,
+                                        );
+                                        if resp.clicked() {
+                                            self.open_key_override_picker(
+                                                KeyOverridePickField::Replacement,
                                             );
                                         }
-                                        5 => {
-                                            crate::ui_style::settings_list_row_with_tooltip(
-                                                ui,
-                                                row_content_width,
-                                                row_height,
-                                                crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.trigger_mods"),
-                                                true,
-                                                Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.modifiers_required_for_this_override")),
-                                                control_width,
-                                                |ui| {
-                                                    let popup_id = ui.make_persistent_id(("ko_trigger_mods_popup", idx));
-                                                    let summary = Self::key_override_mod_mask_summary(self.app_settings.language, edited.trigger_mods);
-                                                    let resp = crate::ui_style::modern_button_with_font(ui, summary.as_str(), Vec2::new(control_width, control_height), control_font_size, true);
-                                                    if resp.clicked() { egui::Popup::toggle_id(ui.ctx(), popup_id); }
-                                                    ui.style_mut().visuals.window_stroke = crate::ui_style::modal_outline_stroke(dark);
-                                                    ui.style_mut().visuals.window_fill = app_surface_fill(dark);
-                                                    crate::ui_style::popup_below_widget(ui, popup_id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
-                                                        Self::draw_key_override_mod_mask_modern(ui, &mut edited.trigger_mods, self.app_settings.language);
-                                                    });
-                                                },
-                                            );
+                                        resp.on_hover_text(crate::i18n::tr_text(
+                                            self.app_settings.language,
+                                            &replacement_tip,
+                                        ));
+                                    },
+                                );
+                            }
+                            4 => {
+                                crate::ui_style::settings_list_row_with_tooltip(
+                                    ui,
+                                    row_content_width,
+                                    row_height,
+                                    crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "key_override_editor.suppressed_mods",
+                                    ),
+                                    true,
+                                    Some(crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "key_override_editor.modifiers_hidden_while_the_replacement_is_active",
+                                    )),
+                                    control_width,
+                                    |ui| {
+                                        let popup_id = ui
+                                            .make_persistent_id(("ko_suppressed_mods_popup", idx));
+                                        let summary = Self::key_override_mod_mask_summary(
+                                            self.app_settings.language,
+                                            edited.suppressed_mods,
+                                        );
+                                        let resp = crate::ui_style::modern_button_with_font(
+                                            ui,
+                                            summary.as_str(),
+                                            Vec2::new(control_width, control_height),
+                                            control_font_size,
+                                            true,
+                                        );
+                                        if resp.clicked() {
+                                            egui::Popup::toggle_id(ui.ctx(), popup_id);
                                         }
-                                        6 => {
-                                            crate::ui_style::settings_list_row_with_tooltip(
-                                                ui,
-                                                row_content_width,
-                                                row_height,
-                                                crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.negative_mods"),
-                                                true,
-                                                Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.modifiers_that_block_this_override")),
-                                                control_width,
-                                                |ui| {
-                                                    let popup_id = ui.make_persistent_id(("ko_negative_mods_popup", idx));
-                                                    let summary = Self::key_override_mod_mask_summary(self.app_settings.language, edited.negative_mod_mask);
-                                                    let resp = crate::ui_style::modern_button_with_font(ui, summary.as_str(), Vec2::new(control_width, control_height), control_font_size, true);
-                                                    if resp.clicked() { egui::Popup::toggle_id(ui.ctx(), popup_id); }
-                                                    ui.style_mut().visuals.window_stroke = crate::ui_style::modal_outline_stroke(dark);
-                                                    ui.style_mut().visuals.window_fill = app_surface_fill(dark);
-                                                    crate::ui_style::popup_below_widget(ui, popup_id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
-                                                        Self::draw_key_override_mod_mask_modern(ui, &mut edited.negative_mod_mask, self.app_settings.language);
-                                                    });
-                                                },
-                                            );
+                                        ui.style_mut().visuals.window_stroke =
+                                            crate::ui_style::modal_outline_stroke(dark);
+                                        ui.style_mut().visuals.window_fill = app_surface_fill(dark);
+                                        crate::ui_style::popup_below_widget(
+                                            ui,
+                                            popup_id,
+                                            &resp,
+                                            egui::PopupCloseBehavior::CloseOnClickOutside,
+                                            |ui| {
+                                                Self::draw_key_override_mod_mask_modern(
+                                                    ui,
+                                                    &mut edited.suppressed_mods,
+                                                    self.app_settings.language,
+                                                );
+                                            },
+                                        );
+                                    },
+                                );
+                            }
+                            5 => {
+                                crate::ui_style::settings_list_row_with_tooltip(
+                                    ui,
+                                    row_content_width,
+                                    row_height,
+                                    crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "key_override_editor.trigger_mods",
+                                    ),
+                                    true,
+                                    Some(crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "key_override_editor.modifiers_required_for_this_override",
+                                    )),
+                                    control_width,
+                                    |ui| {
+                                        let popup_id =
+                                            ui.make_persistent_id(("ko_trigger_mods_popup", idx));
+                                        let summary = Self::key_override_mod_mask_summary(
+                                            self.app_settings.language,
+                                            edited.trigger_mods,
+                                        );
+                                        let resp = crate::ui_style::modern_button_with_font(
+                                            ui,
+                                            summary.as_str(),
+                                            Vec2::new(control_width, control_height),
+                                            control_font_size,
+                                            true,
+                                        );
+                                        if resp.clicked() {
+                                            egui::Popup::toggle_id(ui.ctx(), popup_id);
                                         }
-                                        7 => {
-                                            crate::ui_style::settings_list_row_with_tooltip(
-                                                ui,
-                                                row_content_width,
-                                                row_height,
-                                                crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.enable_on_layers"),
-                                                true,
-                                                Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.layers_where_this_override_can_activate")),
-                                                control_width,
-                                                |ui| {
-                                                    let popup_id = ui.make_persistent_id(("ko_layers_popup", idx));
-                                                    let summary = Self::key_override_layers_summary(self.app_settings.language, edited.layers);
-                                                    let resp = crate::ui_style::modern_button_with_font(ui, summary.as_str(), Vec2::new(control_width, control_height), control_font_size, true);
-                                                    if resp.clicked() { egui::Popup::toggle_id(ui.ctx(), popup_id); }
-                                                    ui.style_mut().visuals.window_stroke = crate::ui_style::modal_outline_stroke(dark);
-                                                    ui.style_mut().visuals.window_fill = app_surface_fill(dark);
-                                                    crate::ui_style::popup_below_widget(ui, popup_id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
-                                                        Self::draw_key_override_layers_modern(ui, &mut edited.layers, self.app_settings.language);
-                                                    });
-                                                },
-                                            );
+                                        ui.style_mut().visuals.window_stroke =
+                                            crate::ui_style::modal_outline_stroke(dark);
+                                        ui.style_mut().visuals.window_fill = app_surface_fill(dark);
+                                        crate::ui_style::popup_below_widget(
+                                            ui,
+                                            popup_id,
+                                            &resp,
+                                            egui::PopupCloseBehavior::CloseOnClickOutside,
+                                            |ui| {
+                                                Self::draw_key_override_mod_mask_modern(
+                                                    ui,
+                                                    &mut edited.trigger_mods,
+                                                    self.app_settings.language,
+                                                );
+                                            },
+                                        );
+                                    },
+                                );
+                            }
+                            6 => {
+                                crate::ui_style::settings_list_row_with_tooltip(
+                                    ui,
+                                    row_content_width,
+                                    row_height,
+                                    crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "key_override_editor.negative_mods",
+                                    ),
+                                    true,
+                                    Some(crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "key_override_editor.modifiers_that_block_this_override",
+                                    )),
+                                    control_width,
+                                    |ui| {
+                                        let popup_id =
+                                            ui.make_persistent_id(("ko_negative_mods_popup", idx));
+                                        let summary = Self::key_override_mod_mask_summary(
+                                            self.app_settings.language,
+                                            edited.negative_mod_mask,
+                                        );
+                                        let resp = crate::ui_style::modern_button_with_font(
+                                            ui,
+                                            summary.as_str(),
+                                            Vec2::new(control_width, control_height),
+                                            control_font_size,
+                                            true,
+                                        );
+                                        if resp.clicked() {
+                                            egui::Popup::toggle_id(ui.ctx(), popup_id);
                                         }
-                                        8 => crate::ui_style::settings_list_row_with_tooltip(ui, row_content_width, row_height, crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.trigger_press"), true, Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.activate_when_the_trigger_key_is_pressed")), switch_width, |ui| { crate::ui_style::settings_switch_sized_stable(ui, ("key_override_settings", "trigger_press"), &mut edited.options.activation_trigger_down, switch_size); }),
-                                        9 => crate::ui_style::settings_list_row_with_tooltip(ui, row_content_width, row_height, crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.required_mod_press"), true, Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.activate_when_a_required_modifier_is_pressed")), switch_width, |ui| { crate::ui_style::settings_switch_sized_stable(ui, ("key_override_settings", "required_mod_press"), &mut edited.options.activation_required_mod_down, switch_size); }),
-                                        10 => crate::ui_style::settings_list_row_with_tooltip(ui, row_content_width, row_height, crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.blocked_mod_release"), true, Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.activate_when_a_blocking_modifier_is_released")), switch_width, |ui| { crate::ui_style::settings_switch_sized_stable(ui, ("key_override_settings", "blocked_mod_release"), &mut edited.options.activation_negative_mod_up, switch_size); }),
-                                        11 => crate::ui_style::settings_list_row_with_tooltip(ui, row_content_width, row_height, crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.any_one_mod"), true, Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.any_one_trigger_modifier_is_enough")), switch_width, |ui| { crate::ui_style::settings_switch_sized_stable(ui, ("key_override_settings", "any_one_mod"), &mut edited.options.one_mod, switch_size); }),
-                                        12 => crate::ui_style::settings_list_row_with_tooltip(ui, row_content_width, row_height, crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.no_re_send"), true, Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.do_not_resend_the_trigger_after_override_ends")), switch_width, |ui| { crate::ui_style::settings_switch_sized_stable(ui, ("key_override_settings", "no_re_send"), &mut edited.options.no_reregister_trigger, switch_size); }),
-                                        13 => crate::ui_style::settings_list_row_with_tooltip(ui, row_content_width, row_height, crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.stay_active"), true, Some(crate::i18n::tr_catalog(self.app_settings.language, "key_override_editor.stay_active_when_another_key_is_pressed")), switch_width, |ui| { crate::ui_style::settings_switch_sized_stable(ui, ("key_override_settings", "stay_active"), &mut edited.options.no_unregister_on_other_key_down, switch_size); }),
-                                        _ => {}
-                                    }
+                                        ui.style_mut().visuals.window_stroke =
+                                            crate::ui_style::modal_outline_stroke(dark);
+                                        ui.style_mut().visuals.window_fill = app_surface_fill(dark);
+                                        crate::ui_style::popup_below_widget(
+                                            ui,
+                                            popup_id,
+                                            &resp,
+                                            egui::PopupCloseBehavior::CloseOnClickOutside,
+                                            |ui| {
+                                                Self::draw_key_override_mod_mask_modern(
+                                                    ui,
+                                                    &mut edited.negative_mod_mask,
+                                                    self.app_settings.language,
+                                                );
+                                            },
+                                        );
+                                    },
+                                );
+                            }
+                            7 => {
+                                crate::ui_style::settings_list_row_with_tooltip(
+                                    ui,
+                                    row_content_width,
+                                    row_height,
+                                    crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "key_override_editor.enable_on_layers",
+                                    ),
+                                    true,
+                                    Some(crate::i18n::tr_catalog(
+                                        self.app_settings.language,
+                                        "key_override_editor.layers_where_this_override_can_activate",
+                                    )),
+                                    control_width,
+                                    |ui| {
+                                        let popup_id =
+                                            ui.make_persistent_id(("ko_layers_popup", idx));
+                                        let summary = Self::key_override_layers_summary(
+                                            self.app_settings.language,
+                                            edited.layers,
+                                        );
+                                        let resp = crate::ui_style::modern_button_with_font(
+                                            ui,
+                                            summary.as_str(),
+                                            Vec2::new(control_width, control_height),
+                                            control_font_size,
+                                            true,
+                                        );
+                                        if resp.clicked() {
+                                            egui::Popup::toggle_id(ui.ctx(), popup_id);
+                                        }
+                                        ui.style_mut().visuals.window_stroke =
+                                            crate::ui_style::modal_outline_stroke(dark);
+                                        ui.style_mut().visuals.window_fill = app_surface_fill(dark);
+                                        crate::ui_style::popup_below_widget(
+                                            ui,
+                                            popup_id,
+                                            &resp,
+                                            egui::PopupCloseBehavior::CloseOnClickOutside,
+                                            |ui| {
+                                                Self::draw_key_override_layers_modern(
+                                                    ui,
+                                                    &mut edited.layers,
+                                                    self.app_settings.language,
+                                                );
+                                            },
+                                        );
+                                    },
+                                );
+                            }
+                            8 => crate::ui_style::settings_list_row_with_tooltip(
+                                ui,
+                                row_content_width,
+                                row_height,
+                                crate::i18n::tr_catalog(
+                                    self.app_settings.language,
+                                    "key_override_editor.trigger_press",
+                                ),
+                                true,
+                                Some(crate::i18n::tr_catalog(
+                                    self.app_settings.language,
+                                    "key_override_editor.activate_when_the_trigger_key_is_pressed",
+                                )),
+                                switch_width,
+                                |ui| {
+                                    crate::ui_style::settings_switch_sized_stable(
+                                        ui,
+                                        ("key_override_settings", "trigger_press"),
+                                        &mut edited.options.activation_trigger_down,
+                                        switch_size,
+                                    );
+                                },
+                            ),
+                            9 => crate::ui_style::settings_list_row_with_tooltip(
+                                ui,
+                                row_content_width,
+                                row_height,
+                                crate::i18n::tr_catalog(
+                                    self.app_settings.language,
+                                    "key_override_editor.required_mod_press",
+                                ),
+                                true,
+                                Some(crate::i18n::tr_catalog(
+                                    self.app_settings.language,
+                                    "key_override_editor.activate_when_a_required_modifier_is_pressed",
+                                )),
+                                switch_width,
+                                |ui| {
+                                    crate::ui_style::settings_switch_sized_stable(
+                                        ui,
+                                        ("key_override_settings", "required_mod_press"),
+                                        &mut edited.options.activation_required_mod_down,
+                                        switch_size,
+                                    );
+                                },
+                            ),
+                            10 => crate::ui_style::settings_list_row_with_tooltip(
+                                ui,
+                                row_content_width,
+                                row_height,
+                                crate::i18n::tr_catalog(
+                                    self.app_settings.language,
+                                    "key_override_editor.blocked_mod_release",
+                                ),
+                                true,
+                                Some(crate::i18n::tr_catalog(
+                                    self.app_settings.language,
+                                    "key_override_editor.activate_when_a_blocking_modifier_is_released",
+                                )),
+                                switch_width,
+                                |ui| {
+                                    crate::ui_style::settings_switch_sized_stable(
+                                        ui,
+                                        ("key_override_settings", "blocked_mod_release"),
+                                        &mut edited.options.activation_negative_mod_up,
+                                        switch_size,
+                                    );
+                                },
+                            ),
+                            11 => crate::ui_style::settings_list_row_with_tooltip(
+                                ui,
+                                row_content_width,
+                                row_height,
+                                crate::i18n::tr_catalog(
+                                    self.app_settings.language,
+                                    "key_override_editor.any_one_mod",
+                                ),
+                                true,
+                                Some(crate::i18n::tr_catalog(
+                                    self.app_settings.language,
+                                    "key_override_editor.any_one_trigger_modifier_is_enough",
+                                )),
+                                switch_width,
+                                |ui| {
+                                    crate::ui_style::settings_switch_sized_stable(
+                                        ui,
+                                        ("key_override_settings", "any_one_mod"),
+                                        &mut edited.options.one_mod,
+                                        switch_size,
+                                    );
+                                },
+                            ),
+                            12 => crate::ui_style::settings_list_row_with_tooltip(
+                                ui,
+                                row_content_width,
+                                row_height,
+                                crate::i18n::tr_catalog(
+                                    self.app_settings.language,
+                                    "key_override_editor.no_re_send",
+                                ),
+                                true,
+                                Some(crate::i18n::tr_catalog(
+                                    self.app_settings.language,
+                                    "key_override_editor.do_not_resend_the_trigger_after_override_ends",
+                                )),
+                                switch_width,
+                                |ui| {
+                                    crate::ui_style::settings_switch_sized_stable(
+                                        ui,
+                                        ("key_override_settings", "no_re_send"),
+                                        &mut edited.options.no_reregister_trigger,
+                                        switch_size,
+                                    );
+                                },
+                            ),
+                            13 => crate::ui_style::settings_list_row_with_tooltip(
+                                ui,
+                                row_content_width,
+                                row_height,
+                                crate::i18n::tr_catalog(
+                                    self.app_settings.language,
+                                    "key_override_editor.stay_active",
+                                ),
+                                true,
+                                Some(crate::i18n::tr_catalog(
+                                    self.app_settings.language,
+                                    "key_override_editor.stay_active_when_another_key_is_pressed",
+                                )),
+                                switch_width,
+                                |ui| {
+                                    crate::ui_style::settings_switch_sized_stable(
+                                        ui,
+                                        ("key_override_settings", "stay_active"),
+                                        &mut edited.options.no_unregister_on_other_key_down,
+                                        switch_size,
+                                    );
+                                },
+                            ),
+                            _ => {}
+                        }
                     }
                 });
 
@@ -874,6 +1188,178 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    #[test]
+    fn rynk_fork_replacement_picker_saves_a_momentary_layer() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        use crate::rynk::session::testing::{board, link, Stored};
+        use crate::rynk::session::RynkSession;
+        use rmk_types_rynk::action::{Action, KeyAction};
+
+        for view in [
+            crate::keycode_picker::PickerViewMode::List,
+            crate::keycode_picker::PickerViewMode::Layout,
+        ] {
+            let ctx = egui::Context::default();
+            let creation_context = eframe::CreationContext::_new_kittest(ctx);
+            let mut app = EntropyApp::new(&creation_context);
+            let mut stored = Stored::new(1, 3, 3);
+            stored.capabilities.max_forks = 1;
+            stored.forks = vec![rmk_types_rynk::fork::Fork::default()];
+            let (board, stored) = board(stored);
+            let session = RynkSession::new(link(&format!("fork-layer-{view:?}"), &board));
+            app.hid_device = Some(session.into());
+            app.key_override_entries = vec![KeyOverrideEntry {
+                trigger: 0x5221,
+                layers: u16::MAX,
+                trigger_mods: 0x11,
+                suppressed_mods: 0x11,
+                options: KeyOverrideOptionsState::from_bits(0xAF),
+                ..Default::default()
+            }];
+            app.keycode_picker.layer_count = 3;
+            app.keycode_picker.popup_view_mode = view;
+            app.open_key_override_picker(KeyOverridePickField::Replacement);
+
+            let mut harness = egui_kittest::Harness::builder()
+                .allow_missing_glyphs()
+                .with_size(egui::vec2(1400.0, 1000.0))
+                .with_context_setup(crate::keycode_picker::setup_picker_test_fonts)
+                .build_ui_state(
+                    |ui, app: &mut EntropyApp| {
+                        let ctx = ui.ctx();
+                        app.keycode_picker.show(
+                            ctx,
+                            crate::keycode_picker::DeferredPickerDataState::Ready,
+                            crate::keycode_picker::DeferredPickerDataState::Ready,
+                        );
+                        app.apply_picker_results(ctx);
+                    },
+                    app,
+                );
+            harness.run();
+            harness.get_by_label("MO(2)").click();
+            harness.run();
+
+            assert_eq!(harness.state().key_override_entries[0].replacement, 0x5222);
+            let forks = harness
+                .state()
+                .hid_device
+                .as_ref()
+                .unwrap()
+                .as_rynk()
+                .unwrap()
+                .read_forks()
+                .unwrap();
+            assert_eq!(forks[0].trigger, KeyAction::Single(Action::LayerOn(1)));
+            assert_eq!(
+                forks[0].positive_output,
+                KeyAction::Single(Action::LayerOn(2))
+            );
+            assert!(forks[0].options.no_unregister_on_other_key_down());
+            assert_eq!(forks[0].suppressed_modifiers.into_bits(), 0x11);
+            assert_eq!(stored.lock().unwrap().forks[0], forks[0]);
+        }
+    }
+
+    #[test]
+    fn k04_vial_020_replacement_picker_writes_a_momentary_layer() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        for view in [
+            crate::keycode_picker::PickerViewMode::List,
+            crate::keycode_picker::PickerViewMode::Layout,
+        ] {
+            let ctx = egui::Context::default();
+            let creation_context = eframe::CreationContext::_new_kittest(ctx);
+            let mut app = EntropyApp::new(&creation_context);
+            let (hid, recorder) = crate::hid::HidDevice::test_device();
+            app.hid_device = Some(hid.into());
+            let target = crate::app::firmware_release_target(
+                0xE126,
+                0x0074,
+                Some("0.2.0"),
+                &serde_json::json!({}),
+                false,
+                false,
+            )
+            .expect("K04 0.2.0 must be identified as RMK");
+            assert_eq!(target.family, FirmwareReleaseFamily::Rmk);
+            app.device_about_info = Some(DeviceAboutInfo {
+                firmware_update_target: Some(target),
+                ..Default::default()
+            });
+            app.key_override_entries = vec![KeyOverrideEntry {
+                trigger: 0x5221,
+                layers: u16::MAX,
+                trigger_mods: 0x11,
+                suppressed_mods: 0x11,
+                options: KeyOverrideOptionsState::from_bits(0xAF),
+                ..Default::default()
+            }];
+            app.keycode_picker.layer_count = 3;
+            app.keycode_picker.popup_view_mode = view;
+            app.open_key_override_picker(KeyOverridePickField::Replacement);
+            let mut harness = egui_kittest::Harness::builder()
+                .allow_missing_glyphs()
+                .with_size(egui::vec2(1400.0, 1000.0))
+                .with_context_setup(crate::keycode_picker::setup_picker_test_fonts)
+                .build_ui_state(
+                    |ui, app: &mut EntropyApp| {
+                        let ctx = ui.ctx();
+                        app.keycode_picker.show(
+                            ctx,
+                            crate::keycode_picker::DeferredPickerDataState::Ready,
+                            crate::keycode_picker::DeferredPickerDataState::Ready,
+                        );
+                        app.apply_picker_results(ctx);
+                    },
+                    app,
+                );
+            harness.run();
+            harness.get_by_label("MO(2)").click();
+            harness.run();
+            assert_eq!(harness.state().key_override_entries[0].replacement, 0x5222);
+            let request = recorder
+                .requests()
+                .into_iter()
+                .find(|request| request[..4] == [0xFE, 0x0D, 0x06, 0])
+                .expect("layer override must reach the Vial transport");
+            assert_eq!(
+                &request[4..14],
+                &[0x21, 0x52, 0x22, 0x52, 0xFF, 0xFF, 0x11, 0, 0x11, 0xAF]
+            );
+        }
+    }
+
+    #[test]
+    fn vial_replacement_picker_does_not_offer_momentary_layers() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        let (hid, _) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid.into());
+        app.keycode_picker.layer_count = 3;
+        app.open_key_override_picker(KeyOverridePickField::Replacement);
+        let mut harness = egui_kittest::Harness::builder()
+            .allow_missing_glyphs()
+            .with_context_setup(crate::keycode_picker::setup_picker_test_fonts)
+            .build_ui_state(
+                |ui, app: &mut EntropyApp| {
+                    let ctx = ui.ctx();
+                    app.keycode_picker.show(
+                        ctx,
+                        crate::keycode_picker::DeferredPickerDataState::Ready,
+                        crate::keycode_picker::DeferredPickerDataState::Ready,
+                    );
+                },
+                app,
+            );
+        harness.run();
+        assert!(harness.query_by_label("MO(2)").is_none());
+        assert!(harness.state().keycode_picker.regular_key_pick);
+    }
 
     #[test]
     fn new_key_override_uses_vial_and_rmk_fork_defaults() {

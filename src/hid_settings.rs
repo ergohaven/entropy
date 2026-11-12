@@ -162,17 +162,14 @@ impl HidDevice {
 
     /// A missing transport reply is unknown, not an old firmware rejection.
     pub fn probe_application_layout_protocol(&self) -> Result<bool> {
-        // The zero acknowledgement cannot consume a real event: firmware event
-        // sequence numbers begin at one. This does not change the active layout.
-        let request = [
-            0xE6,
-            crate::application_layouts::APPLICATION_LAYOUT_PROTOCOL_VERSION,
-            0xA5,
-            0,
-            0,
-        ];
-        self.usb_send(&request)
-            .map(|response| application_layout_poll_supported(&response))
+        self.probe_application_layout_protocol_version(7)
+    }
+
+    pub fn probe_application_layout_protocol_version(&self, version: u8) -> Result<bool> {
+        anyhow::ensure!(matches!(version, 7 | 8), "Unsupported application layout protocol");
+        // Zero acknowledgement is read-only and never consumes an event.
+        self.usb_send(&[0xE6, version, 0xA5, 0, 0])
+            .map(|response| response[0] == 0xE6 && response[1] == version && response[2] == 0x5A)
     }
 
     pub fn get_firmware_version(&self) -> Result<Option<String>> {
@@ -569,6 +566,28 @@ mod tests {
         response[1..9].copy_from_slice("Слой".as_bytes());
 
         assert_eq!(decode_qmk_setting_string(&response, 201).unwrap(), "Слой");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn sm62_capability_never_falls_back_to_macropad_and_read_only_stays_exact() {
+        for (reply_version, transport_error) in [(8,false),(7,false),(9,false),(8,true)] {
+            let session=crate::hid::ReadOnlyHidSession::default();
+            let (hid,recorder)=HidDevice::test_read_only_device(session);
+            recorder.respond_by(move |r| {
+                if r[0]!=0xe6 {return None;}
+                if transport_error {return Some(Err("unavailable transport".into()));}
+                let mut reply=[0;32];reply[..3].copy_from_slice(&[0xe6,reply_version,0x5a]);Some(Ok(reply))
+            });
+            let result=hid.probe_application_layout_protocol_version(8);
+            if transport_error {assert!(result.is_err());} else {assert_eq!(result.unwrap(),reply_version==8);}
+            assert_eq!(recorder.requests().len(),1);
+            assert_eq!(&recorder.requests()[0][..5],&[0xe6,8,0xa5,0,0]);
+            for denied in [[0xe6,8,0xa5,1,0],[0xe6,8,0xa5,0,1],[0xe6,9,0xa5,0,0],[0xe5,8,0,0,0]] {
+                assert!(hid.usb_send(&denied).is_err());
+            }
+            assert_eq!(recorder.requests().len(),1,"denied write reached transport");
+        }
     }
 
     #[test]

@@ -1,6 +1,10 @@
 use super::application_layout_runtime::app_layout_text;
 use super::*;
 
+#[cfg(test)]
+#[path = "application_layout_games_tests.rs"]
+mod games_category_tests;
+
 #[derive(Debug, Clone, Copy)]
 struct ApplicationPickerGeometry {
     window_size: egui::Vec2,
@@ -86,11 +90,7 @@ fn automatic_application_layout_name(
     application: &crate::application_layouts::DetectedApplication,
     excluding_id: Option<&str>,
 ) -> String {
-    let base = if application.display_name.trim().is_empty() {
-        application.executable.trim()
-    } else {
-        application.display_name.trim()
-    };
+    let base = application.name();
     let base = if base.is_empty() { "Application" } else { base };
     if !settings.layout_name_exists(base, excluding_id) {
         return base.to_owned();
@@ -332,7 +332,7 @@ impl EntropyApp {
         crate::ui_style::centered_modal_window(
             ctx,
             app_layout_text(language, "Категории", "Categories"),
-            egui::Id::new("autolayer_categories_modal"),
+            egui::Id::unique("autolayer_categories_modal"),
             &mut open,
             metrics.size(380.0, 208.0),
         )
@@ -476,15 +476,10 @@ impl EntropyApp {
     }
 
     fn ensure_application_layout_settings(&mut self) {
-        let Some(key) = self.application_layout_device_key() else {
-            return;
-        };
         let installed_presets = crate::app_discovery::installed_builtin_presets();
-        let settings = self
-            .app_settings
-            .application_layouts
-            .entry(key)
-            .or_default();
+        // Use the same Default-derived geometry seed as ordinary editing.
+        // A settings-first visit must not provision the Macropad catalog on SM62.
+        let Some(settings) = self.application_layout_settings_mut() else { return; };
         let mut changed = settings.normalize();
         changed |= settings.provision_builtin_presets(installed_presets.as_ref().ok());
         if changed {
@@ -562,44 +557,46 @@ impl EntropyApp {
 
         if visible_rows.contains(&0) {
             crate::ui_style::settings_list_row_with_tooltip(
-            ui,
-            row_width,
-            row_height,
-            app_layout_text(language, "Включить", "Enable"),
-            true,
-            Some(app_layout_text(language,
-                "OFF: фокус окна не меняет ручной выбор. ON: действуют правила приложений",
-                "OFF: window focus does not change the manual selection. ON: application rules apply")),
-            metrics.value(46.0),
-            |ui| {
-                crate::ui_style::settings_switch_sized_stable(
-                    ui,
-                    "application_layout_master_automatic_switching",
-                    &mut automatic_switching_enabled,
-                    metrics.size(46.0, 24.0),
-                );
-            },
-        );
+                ui,
+                row_width,
+                row_height,
+                app_layout_text(language, "Включить", "Enable"),
+                true,
+                Some(app_layout_text(
+                    language,
+                    "OFF: фокус окна не меняет ручной выбор. ON: действуют правила приложений",
+                    "OFF: window focus does not change the manual selection. ON: application rules apply",
+                )),
+                metrics.value(46.0),
+                |ui| {
+                    crate::ui_style::settings_switch_sized_stable(
+                        ui,
+                        "application_layout_master_automatic_switching",
+                        &mut automatic_switching_enabled,
+                        metrics.size(46.0, 24.0),
+                    );
+                },
+            );
         }
         if visible_rows.contains(&1) {
             crate::ui_style::settings_list_row_with_tooltip(
-            ui,
-            row_width,
-            row_height,
-            app_layout_text(
-                language,
-                "Автоматически возвращаться к Default",
-                "Automatically return to Default",
-            ),
-            true,
-            Some(app_layout_text(
-                language,
-                "Общая настройка для всех раскладок. Приложения с включённым автопереключением активируют свои раскладки. Приложения с выключенным автопереключением сохраняют ручной выбор. Если включено, любое другое окно возвращает Default.",
-                "Global setting for all layouts. Applications with automatic switching enabled activate their layouts. Applications with it disabled preserve the manual selection. When enabled, any other window returns to Default.",
-            )),
-            metrics.value(46.0),
-            |ui| {
-                crate::ui_style::settings_switch_sized_stable(
+                ui,
+                row_width,
+                row_height,
+                app_layout_text(
+                    language,
+                    "Автоматически возвращаться к Default",
+                    "Automatically return to Default",
+                ),
+                true,
+                Some(app_layout_text(
+                    language,
+                    "Общая настройка для всех раскладок. Приложения с включённым автопереключением активируют свои раскладки. Приложения с выключенным автопереключением сохраняют ручной выбор. Если включено, любое другое окно возвращает Default.",
+                    "Global setting for all layouts. Applications with automatic switching enabled activate their layouts. Applications with it disabled preserve the manual selection. When enabled, any other window returns to Default.",
+                )),
+                metrics.value(46.0),
+                |ui| {
+                    crate::ui_style::settings_switch_sized_stable(
                     ui,
                     "application_layout_automatic_return_default",
                     &mut automatically_return_to_default,
@@ -610,8 +607,8 @@ impl EntropyApp {
                     "Если активному приложению не назначена включённая раскладка, Macropad автоматически возвращается к Default",
                     "When the active application has no enabled assigned layout, Macropad automatically returns to Default",
                 ));
-            },
-        );
+                },
+            );
         }
         let mut changed = false;
         if let Some(settings) = self.app_settings.application_layouts.get_mut(&device_key) {
@@ -1357,7 +1354,7 @@ impl EntropyApp {
         let search = self.application_picker_search.trim().to_ascii_lowercase();
         ctx.request_repaint_after(std::time::Duration::from_millis(500));
 
-        let picker_window_id = egui::Id::new("application_picker_v2");
+        let picker_window_id = egui::Id::unique("application_picker_v2");
         let window_center_x = ctx.content_rect().center().x;
         crate::ui_style::centered_modal_window(
             ctx,
@@ -1662,6 +1659,8 @@ impl EntropyApp {
         if self.application_picker_has_duplicate_rule() {
             return false;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.refresh_application_layout_edit_owners(&device_key);
         let settings = self
             .app_settings
             .application_layouts
@@ -1716,6 +1715,89 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    include!("explicit_picker_intent_tests.inc");
+
+    #[test]
+    fn resident100_final_settings_ui_preserves_overflow_without_internal_status() {
+        let _storage=crate::app::app_storage::ScopedTempConfig::new();let mut app=EntropyApp::new_inert_for_test();
+        app.app_settings.language=crate::i18n::Language::English;let key="resident100-ui".to_owned();
+        let mut s=crate::application_layouts::DeviceApplicationLayouts::default();s.layouts.get_mut("default").unwrap().layers=vec![vec![42;62];16];
+        for i in 0..101{s.create_for_application(&detected_application(&format!("gui-{i:03}"),"GUI"));}s.normalize();
+        let id=s.layouts.values().find(|p|p.id!="default"&&s.snapshot_for_layout(p).resident_slot.is_none()).unwrap().id.clone();s.editor_layout_id=id;
+        app.app_settings.application_layouts.insert(key.clone(),s);app.app_settings.last_application_layout_device_key=Some(key);
+        let ctx=egui::Context::default();let mut texts=Vec::new();
+        let out=crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1200.,900.))),..Default::default()},|ui|{
+            let metrics=crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());app.draw_application_layouts_editor(ui,metrics,0..100);
+        }));
+        fn visit(shape:&egui::Shape,texts:&mut Vec<String>){match shape{egui::Shape::Text(t)=>texts.push(t.galley.text().into()),egui::Shape::Vec(v)=>for s in v{visit(s,texts)},_=>{}}}
+        for s in &out.shapes{visit(&s.shape,&mut texts);}out.drop_without_applying_deltas();
+        assert!(!texts.iter().any(|s|s.contains("Overflow") || s.contains("Synced") || s.contains("native Default")),"internal status must not leak into final UI: {texts:?}");
+        let settings=app.application_layout_settings().unwrap();
+        assert_eq!(settings.layouts.len(),102,"UI cleanup must never drop overflow profiles");
+        assert!(settings.layouts.values().any(|p|p.id!="default" && settings.snapshot_for_layout(p).resident_slot.is_none()));
+    }
+
+    #[test]
+    fn resident_three_settings_first_provision_uses_sm62_geometry() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let mut app = EntropyApp::new_inert_for_test();
+        app.app_settings.last_application_layout_device_key = Some("resident-settings-first".into());
+        app.layout = Some(KeyboardLayout {
+            name: "SM62".into(), rows:10, cols:7,
+            keys: crate::application_layouts::SM62_APPLICATION_POSITIONS.iter().map(|&(row,col)| crate::keyboard::PhysicalKey {
+                row,col,x:0.0,y:0.0,w:1.0,h:1.0,label:String::new(),rotation:0.0,rotation_x:0.0,rotation_y:0.0,layout_condition:None,
+            }).collect(),
+            layers:vec![vec![crate::keyboard::KeyBinding::Vial(42);62];16],
+            encoders:Vec::new(),encoder_layers:Vec::new(),
+            layer_names:crate::application_layouts::default_layer_names(),
+            custom_keycodes:Vec::new(),layout_options:Vec::new(),live_features:Default::default(),supports_rgb:false,lighting_mode:None,firmware:FirmwareProtocol::Vial,
+        });
+        app.deferred_device_load = DeferredDeviceLoadState::complete(16);
+        app.ensure_application_layout_settings();
+        let settings=app.application_layout_settings().unwrap();
+        assert_eq!(settings.layouts.len(),1+crate::application_layouts::builtin_application_layout_presets().len(),"settings-first must expose the complete SM62 matching catalog");
+        assert!(settings.layouts.values().all(|layout|layout.layers==vec![vec![42;62];16]));
+    }
+
+    #[test]
+    fn resident_three_ordinary_picker_add_edit_persists_slot_and_unrelated_data() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let mut app = EntropyApp::new_inert_for_test();
+        let key = "resident-three-picker-sm62".to_owned();
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        settings.layouts.get_mut("default").unwrap().layers = vec![vec![42;62];16];
+        settings.provision_builtin_presets(None);
+        let occupied: std::collections::BTreeSet<_> = settings.layouts.values().filter_map(|layout|settings.snapshot_for_layout(layout).resident_slot).collect();
+        let expected_slot=(0..100).find(|slot|!occupied.contains(slot)).expect("builtin catalog must leave room for a custom profile");
+        app.app_settings.application_layouts.insert(key.clone(), settings);
+        app.app_settings.last_application_layout_device_key = Some(key.clone());
+        let unrelated = crate::application_layouts::DeviceApplicationLayouts::default();
+        app.app_settings.application_layouts.insert("other-model".into(), unrelated.clone());
+        app.open_application_picker(false);
+        app.select_application_picker_choice(detected_application("my-editor", "My Editor"));
+        assert!(app.apply_picker_selection(app.application_picker_selected.clone().unwrap()));
+        let settings = &app.app_settings.application_layouts[&key];
+        let id = settings.editor_layout_id.clone();
+        assert_eq!(settings.snapshot_for_layout(&settings.layouts[&id]).resident_slot, Some(expected_slot));
+        let reloaded = crate::app::app_storage::load_app_settings();
+        assert_eq!(&reloaded.application_layouts[&key], settings);
+        assert_eq!(reloaded.application_layouts["other-model"], unrelated);
+        app.open_application_picker(true);
+        let mut selected = detected_application("my-new-editor", "Renamed Editor");
+        selected.identities.push("editor-alias".into());
+        app.select_application_picker_choice(selected);
+        assert!(app.apply_picker_selection(app.application_picker_selected.clone().unwrap()));
+        let reloaded = crate::app::app_storage::load_app_settings();
+        let settings = &reloaded.application_layouts[&key];
+        let layout = &settings.layouts[&id];
+        assert_eq!(layout.executable, "my-new-editor");
+        assert!(layout.application_identities.iter().any(|id|crate::application_layouts::executables_match(id,"editor-alias")));
+        assert_eq!(settings.snapshot_for_layout(layout).resident_slot,Some(expected_slot));
+        assert_eq!(layout.layers,vec![vec![42;62];16]);
+        assert_eq!(reloaded.application_layouts["other-model"],unrelated);
+    }
 
     fn detected_application(
         executable: &str,
@@ -1789,7 +1871,7 @@ mod tests {
     fn status_value_text_reaches_settings_row_right_edge() {
         let ctx = egui::Context::default();
         let edge = std::cell::Cell::new(0.0);
-        let output = ctx.run_ui(
+        let output = crate::app::discard_texture_deltas(ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1812,7 +1894,7 @@ mod tests {
                     },
                 );
             },
-        );
+        ));
         let text_edge = output
             .shapes
             .iter()
@@ -1833,7 +1915,7 @@ mod tests {
     #[test]
     fn standard_page_width_fits_status_labels_and_description() {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(
+        crate::app::discard_texture_deltas(ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1873,7 +1955,8 @@ mod tests {
                     assert!(width + 4.0 <= row_width - 260.0, "{label}: width={width}");
                 }
             },
-        );
+        ))
+        .drop_without_applying_deltas();
     }
 
     #[test]
@@ -1904,7 +1987,7 @@ mod tests {
 
         let ctx = egui::Context::default();
         let frame = |app: &mut EntropyApp, events| {
-            ctx.run_ui(
+            crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1914,7 +1997,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_application_layouts_settings_page(ui, ui.max_rect()),
-            )
+            ))
         };
         let first = frame(&mut app, vec![]);
         let selector = first
@@ -2028,7 +2111,7 @@ mod tests {
         app.app_settings.last_application_layout_device_key = Some(device_key);
         let ctx = egui::Context::default();
         let frame = |app: &mut EntropyApp, events| {
-            ctx.run_ui(
+            crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2038,7 +2121,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_application_layouts_settings_page(ui, ui.max_rect()),
-            )
+            ))
         };
         let position = |output: &egui::FullOutput, label: &str| {
             output
@@ -2090,6 +2173,7 @@ mod tests {
                     delta: egui::vec2(0.0, -210.0),
                     modifiers: egui::Modifiers::NONE,
                     phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
                 },
             ],
         );
@@ -2117,7 +2201,7 @@ mod tests {
         app.app_settings.last_application_layout_device_key = Some(device_key);
         let ctx = egui::Context::default();
         let frame = |app: &mut EntropyApp, events| {
-            ctx.run_ui(
+            crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2127,7 +2211,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_application_layouts_settings_page(ui, ui.max_rect()),
-            )
+            ))
         };
         let output = frame(&mut app, vec![]);
         let name = output
@@ -2181,7 +2265,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut painted = Vec::new();
         for _ in 0..3 {
-            let output = ctx.run_ui(
+            let output = crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2190,7 +2274,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_application_picker_v2(ui.ctx()),
-            );
+            ));
             painted = output
                 .shapes
                 .iter()
@@ -2212,12 +2296,12 @@ mod tests {
         assert!(painted.iter().any(|text| text == "Other"), "{painted:?}");
         assert!(painted.iter().any(|text| text == "Save"), "{painted:?}");
         let window = ctx
-            .memory(|memory| memory.area_rect(egui::Id::new("application_picker_v2")))
+            .memory(|memory| memory.area_rect(egui::Id::unique("application_picker_v2")))
             .expect("Edit application window must be placed");
         assert!(window.bottom() <= 700.0, "window {window:?}");
         let mut small_output = None;
         for _ in 0..3 {
-            small_output = Some(ctx.run_ui(
+            small_output = Some(crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2226,7 +2310,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_application_picker_v2(ui.ctx()),
-            ));
+            )));
         }
         let small_output = small_output.unwrap();
         let save = small_output
@@ -2261,7 +2345,7 @@ mod tests {
         let frame = |app: &mut EntropyApp| {
             let mut output = None;
             for _ in 0..3 {
-                output = Some(ctx.run_ui(
+                output = Some(crate::app::discard_texture_deltas(ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -2270,10 +2354,10 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| app.draw_application_picker_v2(ui.ctx()),
-                ));
+                )));
             }
             let rect = ctx
-                .memory(|memory| memory.area_rect(egui::Id::new("application_picker_v2")))
+                .memory(|memory| memory.area_rect(egui::Id::unique("application_picker_v2")))
                 .expect("application picker remains open");
             let output = output.unwrap();
             let footer_y = output
@@ -2344,11 +2428,12 @@ mod tests {
             app.application_picker_name = "Unsaved name".to_owned();
             let ctx = egui::Context::default();
             for _ in 0..3 {
-                ctx.run_ui(egui::RawInput::default(), |ui| {
+                crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
                     app.draw_application_picker_v2(ui.ctx());
-                });
+                }))
+                .drop_without_applying_deltas();
             }
-            let _ = ctx.run_ui(
+            crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     events: vec![egui::Event::Key {
                         key: egui::Key::Escape,
@@ -2363,15 +2448,18 @@ mod tests {
                     app.draw_application_picker_v2(ui.ctx());
                     assert!(!ui.input(|input| input.key_pressed(egui::Key::Escape)));
                 },
-            );
+            ))
+            .drop_without_applying_deltas();
             assert!(!app.application_picker_open);
             assert!(app.application_picker_selected.is_none());
             assert!(app.application_picker_name.is_empty());
             let saved = &app.app_settings.application_layouts[&key];
-            assert!(!saved
-                .layouts
-                .values()
-                .any(|layout| layout.name == "Unsaved name"));
+            assert!(
+                !saved
+                    .layouts
+                    .values()
+                    .any(|layout| layout.name == "Unsaved name")
+            );
         }
     }
 
@@ -2386,7 +2474,7 @@ mod tests {
         );
         app.app_settings.last_application_layout_device_key = Some(key);
         let ctx = egui::Context::default();
-        let output = ctx.run_ui(
+        let output = crate::app::discard_texture_deltas(ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -2401,7 +2489,7 @@ mod tests {
                     0..app.application_layouts_editor_row_count(),
                 );
             },
-        );
+        ));
         let label_y = |label| {
             output
                 .shapes
@@ -2434,7 +2522,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut output = None;
         for _ in 0..3 {
-            output = Some(ctx.run_ui(
+            output = Some(crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2443,7 +2531,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_application_categories_modal(ui.ctx()),
-            ));
+            )));
         }
         let output = output.unwrap();
         for label in ["Categories", "Category", "Add", "Delete"] {
@@ -2459,7 +2547,7 @@ mod tests {
                 egui::Shape::Text(text) if text.galley.text() == redundant)));
         }
         let window = ctx
-            .memory(|memory| memory.area_rect(egui::Id::new("autolayer_categories_modal")))
+            .memory(|memory| memory.area_rect(egui::Id::unique("autolayer_categories_modal")))
             .expect("category manager window");
         assert!(
             window.left() >= 0.0 && window.right() <= 480.0,
@@ -2501,7 +2589,7 @@ mod tests {
             })
             .expect("Add button text");
         for pressed in [true, false] {
-            let _ = ctx.run_ui(
+            crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2519,14 +2607,16 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_application_categories_modal(ui.ctx()),
-            );
+            ))
+            .drop_without_applying_deltas();
         }
         assert_eq!(app.application_categories_selected_id, None);
         assert!(app.application_categories_name.is_empty());
         app.application_categories_name = "Projects".to_owned();
-        let create_output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            app.draw_application_categories_modal(ui.ctx());
-        });
+        let create_output =
+            crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.draw_application_categories_modal(ui.ctx());
+            }));
         assert!(create_output
             .shapes
             .iter()
@@ -2538,7 +2628,7 @@ mod tests {
             ((create_center.x + delete_center.x) / 2.0 - window.center().x).abs() < 2.0,
             "Create {create_center:?}, Delete {delete_center:?}, window {window:?}"
         );
-        let _ = ctx.run_ui(
+        crate::app::discard_texture_deltas(ctx.run_ui(
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key: egui::Key::Escape,
@@ -2550,7 +2640,8 @@ mod tests {
                 ..Default::default()
             },
             |ui| app.draw_application_categories_modal(ui.ctx()),
-        );
+        ))
+        .drop_without_applying_deltas();
         assert!(!app.application_categories_open);
     }
 
@@ -2569,7 +2660,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut output = None;
         for _ in 0..3 {
-            output = Some(ctx.run_ui(
+            output = Some(crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2578,7 +2669,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_application_picker_v2(ui.ctx()),
-            ));
+            )));
         }
         let output = output.unwrap();
         let painted = |label: &str| {
@@ -2598,14 +2689,14 @@ mod tests {
         let add = painted("Add").expect("Add must remain visible at 480×480");
         assert!(add.bottom() < 480.0, "Add {add:?}");
         let baseline_rect = ctx
-            .memory(|memory| memory.area_rect(egui::Id::new("application_picker_v2")))
+            .memory(|memory| memory.area_rect(egui::Id::unique("application_picker_v2")))
             .unwrap();
 
         app.select_application_picker_choice(detected_application("firefox", "Firefox"));
         app.application_picker_name = "Default".to_owned();
         let mut invalid = None;
         for _ in 0..3 {
-            invalid = Some(ctx.run_ui(
+            invalid = Some(crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2614,11 +2705,11 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.draw_application_picker_v2(ui.ctx()),
-            ));
+            )));
         }
         let invalid = invalid.unwrap();
         let invalid_rect = ctx
-            .memory(|memory| memory.area_rect(egui::Id::new("application_picker_v2")))
+            .memory(|memory| memory.area_rect(egui::Id::unique("application_picker_v2")))
             .unwrap();
         assert!((invalid_rect.top() - baseline_rect.top()).abs() <= 1.0);
         assert!((invalid_rect.bottom() - baseline_rect.bottom()).abs() <= 1.0);
@@ -2678,12 +2769,12 @@ mod tests {
         assert_eq!(new.category, Some(Category::Development));
         let groups =
             app.application_layout_editor_grouped_options(&app.application_layout_editor_options());
-        assert!(groups
-            .iter()
-            .any(|(category, entries)| category == Category::Development.id()
+        assert!(groups.iter().any(|(category, entries)| {
+            category == Category::Development.id()
                 && entries
                     .iter()
-                    .any(|(id, name)| id == &new.id && name == "Research")));
+                    .any(|(id, name)| id == &new.id && name == "Research")
+        }));
     }
 
     #[test]
@@ -2787,12 +2878,12 @@ mod tests {
         assert_eq!(settings.active_layout_id, "default");
         let groups =
             app.application_layout_editor_grouped_options(&app.application_layout_editor_options());
-        assert!(groups
-            .iter()
-            .any(|(category, entries)| category == Category::Browsers.id()
+        assert!(groups.iter().any(|(category, entries)| {
+            category == Category::Browsers.id()
                 && entries
                     .iter()
-                    .any(|(id, name)| id == &telegram && name == "Work chat")));
+                    .any(|(id, name)| id == &telegram && name == "Work chat")
+        }));
     }
 
     #[test]
@@ -2882,7 +2973,7 @@ mod tests {
     #[test]
     fn default_application_text_fits_beside_edit_in_russian() {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(
+        crate::app::discard_texture_deltas(ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -2934,7 +3025,8 @@ mod tests {
                     assert!((pair.trailing.right() - control_width).abs() < 0.01);
                 }
             },
-        );
+        ))
+        .drop_without_applying_deltas();
     }
 
     #[test]
@@ -3013,8 +3105,8 @@ mod tests {
                 egui::Pos2::ZERO,
                 egui::vec2(726.0, 620.0),
             ));
-            let _ = ctx.run_ui(input, |_ui| {
-                let id = egui::Id::new("application_picker_real_window_test");
+            crate::app::discard_texture_deltas(ctx.run_ui(input, |_ui| {
+                let id = egui::Id::unique("application_picker_real_window_test");
                 let response = crate::ui_style::centered_modal_window(
                     &ctx,
                     "Add application",
@@ -3043,11 +3135,14 @@ mod tests {
                     );
                 });
                 let _ = response;
-            });
+            }))
+            .drop_without_applying_deltas();
         }
 
         let window = ctx
-            .memory(|memory| memory.area_rect(egui::Id::new("application_picker_real_window_test")))
+            .memory(|memory| {
+                memory.area_rect(egui::Id::unique("application_picker_real_window_test"))
+            })
             .expect("modal window should render");
         let field = measured.get().expect("modal content should render");
         let left = field.left() - window.left();

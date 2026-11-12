@@ -108,8 +108,30 @@ pub(crate) fn allocate_adaptive_settings_list_viewport_capped(
     row_height: f32,
     max_visible_rows: usize,
 ) -> AdaptiveSettingsListViewport {
-    let viewport_width = metrics.settings_content_width();
-    let row_content_width = metrics.settings_row_content_width();
+    allocate_settings_list_viewport(
+        ui,
+        id_salt,
+        metrics,
+        total_rows,
+        bottom_reserve,
+        row_height,
+        max_visible_rows,
+        metrics.settings_content_width(),
+    )
+}
+
+fn allocate_settings_list_viewport(
+    ui: &mut egui::Ui,
+    id_salt: &'static str,
+    metrics: crate::ui_style::ResponsiveMetrics,
+    total_rows: usize,
+    bottom_reserve: f32,
+    row_height: f32,
+    max_visible_rows: usize,
+    viewport_width: f32,
+) -> AdaptiveSettingsListViewport {
+    let row_content_width =
+        viewport_width - (metrics.settings_content_width() - metrics.settings_row_content_width());
     let visible_rows = visible_settings_rows_for_height(
         ui.available_height(),
         total_rows,
@@ -120,8 +142,8 @@ pub(crate) fn allocate_adaptive_settings_list_viewport_capped(
     let list_height = row_height * visible_rows as f32;
     let content_height = row_height * total_rows as f32;
     let max_offset = (content_height - list_height).max(0.0);
-    let offset_id = ui.id().with((id_salt, "smooth_offset"));
-    let target_id = ui.id().with((id_salt, "smooth_target"));
+    let offset_id = ui.scope_id().with((id_salt, "smooth_offset"));
+    let target_id = ui.scope_id().with((id_salt, "smooth_target"));
     let mut scroll_offset = ui
         .ctx()
         .data_mut(|d| d.get_persisted::<f32>(offset_id).unwrap_or(0.0))
@@ -141,7 +163,7 @@ pub(crate) fn allocate_adaptive_settings_list_viewport_capped(
     let scrollbar_resp = if max_offset > 0.0 {
         Some(ui.interact(
             track_rect.expand2(egui::vec2(metrics.value(5.0), 0.0)),
-            ui.id().with((id_salt, "scrollbar")),
+            ui.scope_id().with((id_salt, "scrollbar")),
             Sense::click_and_drag(),
         ))
     } else {
@@ -234,9 +256,127 @@ pub(crate) fn allocate_adaptive_settings_list_viewport_capped(
     }
 }
 
+/// A wide settings grid shares the list's vertical row virtualization, gutter,
+/// scrollbar and tooltip policy. Horizontal scrolling stays inside the gutter.
+pub(crate) fn show_adaptive_settings_grid(
+    ui: &mut egui::Ui,
+    id_salt: &'static str,
+    metrics: crate::ui_style::ResponsiveMetrics,
+    total_rows: usize,
+    minimum_content_width: f32,
+    mut draw_row: impl FnMut(&mut egui::Ui, usize, f32, f32, bool),
+) -> AdaptiveSettingsListViewport {
+    let gutter = metrics.settings_content_width() - metrics.settings_row_content_width();
+    let width = ui.available_width().min(minimum_content_width + gutter);
+    let list = allocate_settings_list_viewport(
+        ui,
+        id_salt,
+        metrics,
+        total_rows,
+        0.0,
+        metrics.settings_row_height(),
+        usize::MAX,
+        width,
+    );
+    let content_viewport = egui::Rect::from_min_max(
+        list.viewport.min,
+        egui::pos2(
+            list.viewport.left() + list.row_content_width,
+            list.viewport.bottom(),
+        ),
+    );
+    crate::ui_style::allocate_ui_at_rect(ui, list.content_rect, |ui| {
+        ui.set_clip_rect(content_viewport.intersect(ui.clip_rect()));
+        ui.spacing_mut().item_spacing.y = 0.0;
+        egui::ScrollArea::horizontal()
+            .id_salt((id_salt, "columns"))
+            .show(ui, |ui| {
+                let width = minimum_content_width.max(list.row_content_width);
+                ui.set_min_width(width);
+                // Horizontal wheel gestures also suppress row tooltips.
+                let suppress =
+                    list.suppress_tooltips || ui.input(|i| i.smooth_scroll_delta.x.abs() > 0.0);
+                for row in list.first_visible_row..list.last_visible_row {
+                    draw_row(ui, row, width, list.row_height, suppress);
+                }
+            });
+    });
+    if list.has_scrollbar {
+        crate::ui_style::paint_floating_scrollbar_handle(
+            ui,
+            list.track_rect,
+            list.handle_height,
+            list.scroll_ratio,
+            list.track_hovered,
+        );
+    }
+    list
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_grid_retains_gutter_virtualization_and_tooltip_suppression() {
+        let ctx = egui::Context::default();
+        let mut first_row = 0;
+        for frame in 0..12 {
+            let scroll = frame > 0;
+            let events = if scroll {
+                vec![
+                    egui::Event::PointerMoved(egui::pos2(200.0, 120.0)),
+                    egui::Event::MouseWheel {
+                        source: egui::MouseWheelSource::Unknown,
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -200.0),
+                        modifiers: egui::Modifiers::NONE,
+                        phase: egui::TouchPhase::Move,
+                    },
+                ]
+            } else {
+                vec![]
+            };
+            let mut rendered = Vec::new();
+            let _ = crate::app::discard_texture_deltas(ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600.0, 300.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
+                    let list = show_adaptive_settings_grid(
+                        ui,
+                        "grid_test",
+                        metrics,
+                        100,
+                        1200.0,
+                        |ui, row, width, height, suppress| {
+                            rendered.push((row, suppress));
+                            ui.allocate_space(egui::vec2(width, height));
+                        },
+                    );
+                    assert!(list.has_scrollbar);
+                    assert!(
+                        (list.viewport.width() - list.row_content_width - metrics.value(18.0))
+                            .abs()
+                            < 0.01
+                    );
+                    assert!(rendered.len() < 10, "only visible rows should render");
+                    if scroll {
+                        assert!(list.scroll_offset > 0.0);
+                        assert!(rendered.iter().all(|(_, suppressed)| *suppressed));
+                    }
+                    first_row = list.first_visible_row;
+                },
+            ));
+        }
+        assert!(first_row > 0, "scrolling must reach later rows");
+    }
 
     #[test]
     fn settings_list_uses_all_rows_that_fit_large_windows() {

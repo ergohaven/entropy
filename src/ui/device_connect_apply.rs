@@ -1,21 +1,14 @@
 use super::*;
 
-fn is_default_layer_name(index: usize, name: &str) -> bool {
-    let trimmed = name.trim();
-    trimmed.is_empty()
-        || trimmed == index.to_string()
-        || (index == 0 && trimmed.eq_ignore_ascii_case("main"))
-        || trimmed.eq_ignore_ascii_case(&format!("layer {index}"))
-}
-
 /// Merge firmware-read layer names with locally saved ones.
 ///
 /// A name the firmware actually stored (`from_firmware[i]`) is authoritative,
 /// even when it looks like a default such as "Main". A locally saved name only
-/// fills a layer the firmware left as a generated descriptor placeholder, so
-/// provenance — not the string — decides. One real firmware name therefore no
-/// longer suppresses saved names for the other layers.
-fn resolve_layer_names(
+/// overrides names from the keyboard definition, including named factory
+/// defaults such as "Base" or "Fn". Provenance, rather than the text of a name,
+/// decides whether a locally saved rename can be restored. An empty name is an
+/// explicit unnamed layer; only a missing entry falls back to a definition name.
+pub(super) fn resolve_layer_names(
     firmware_names: &[String],
     from_firmware: &[bool],
     local_names: Option<&[String]>,
@@ -30,8 +23,7 @@ fn resolve_layer_names(
     if let Some(local) = local_names {
         for (idx, name) in local.iter().enumerate().take(layer_count) {
             let from_firmware = from_firmware.get(idx).copied().unwrap_or(false);
-            if !name.trim().is_empty() && !from_firmware && is_default_layer_name(idx, &names[idx])
-            {
+            if !from_firmware {
                 names[idx] = name.clone();
             }
         }
@@ -119,6 +111,53 @@ mod tests {
         }
     }
 
+    #[test]
+    fn denied_bluetooth_connect_keeps_picker_readable_and_usb_selection_reachable() {
+        let (mut app, ctx, requests) = connection_app();
+        let mut bt = connection_device("K04 BT");
+        bt.bus_type = "Bluetooth".into();
+        bt.path = "bluez-gatt:/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF/service0010".into();
+        let usb = connection_device("SM62 USB");
+        app.device_manager.replace_devices(vec![bt.clone(), usb.clone()]);
+        app.start_connect(0);
+        let (_, tx) = requests.try_recv().unwrap();
+        let error = "VIA protocol read failed: Bluetooth Vial request failed over all advertised write modes: request: Failed to write the BlueZ Vial request: org.bluez.Error.NotAuthorized: Operation Not Authorized; command: Failed to write the BlueZ Vial request: org.bluez.Error.NotAuthorized: Operation Not Authorized";
+        tx.send(ConnectTaskMessage::Done(Box::new(Err(error.into())))).unwrap();
+        app.poll_connect(&ctx);
+        assert!(app.selected_device.is_none(), "failed target hides the picker");
+        assert!(matches!(app.connect_state, ConnectState::SelectingDevice));
+        for _ in 0..3 {
+            app.apply_device_scan_result(vec![bt.clone(), usb.clone()]);
+            assert!(requests.try_recv().is_err(), "discovery retried denied device without a click");
+            assert!(app.status_msg.contains("NotAuthorized"), "discovery discarded failure details");
+        }
+        let frame = |app: &mut EntropyApp, events| {
+            crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                events,
+                ..Default::default()
+            }, |ui| { eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest()); }))
+        };
+        frame(&mut app, vec![]);
+        let output = frame(&mut app, vec![]);
+        let usb_pos = output.shapes.iter().find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.job.text.contains("SM62 USB") => Some(t.pos + t.galley.rect.center().to_vec2()),
+            _ => None,
+        }).expect("USB alternative is absent from actual application UI");
+        for s in &output.shapes {
+            if let egui::Shape::Text(t) = &s.shape {
+                if t.galley.job.text.contains("NotAuthorized") {
+                    assert!(t.galley.rows.len() > 1, "failure text is a single overflowing line");
+                    assert!(t.galley.size().x <= 520.0, "failure text escapes panel width");
+                }
+            }
+        }
+        frame(&mut app, vec![egui::Event::PointerMoved(usb_pos), egui::Event::PointerButton { pos: usb_pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }]);
+        frame(&mut app, vec![egui::Event::PointerButton { pos: usb_pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }]);
+        let (target, _) = requests.try_recv().expect("click did not launch USB connection");
+        assert_eq!(target.path, usb.path);
+    }
+
     fn connection_result(name: &str) -> ConnectResult {
         ConnectResult {
             device_name: name.to_owned(),
@@ -135,7 +174,8 @@ mod tests {
             macro_texts: Default::default(),
             supports_macro_ext_keycodes: Default::default(),
             supports_rmk_native_key_actions: Default::default(),
-            supports_universal_numero: false, supports_universal_symbols: Default::default(),
+            supports_universal_numero: false,
+            supports_universal_symbols: Default::default(),
             supports_universal_russian_letters: Default::default(),
             supports_rmk_native_combo_output: Default::default(),
             supports_rmk_native_tap_dance_actions: Default::default(),
@@ -266,7 +306,10 @@ mod tests {
         assert!(app.status_msg.starts_with("Connect failed:"));
         app.apply_device_scan_result(vec![sm62]);
         assert!(app.status_msg.contains("Display settings read failed"));
-        assert!(requests.try_recv().is_err(), "unexpected automatic reconnect");
+        assert!(
+            requests.try_recv().is_err(),
+            "unexpected automatic reconnect"
+        );
     }
 
     #[test]
@@ -611,7 +654,7 @@ mod tests {
             started_at: std::time::Instant::now(),
             generation: app.connection_generation,
             timeout_logged: false,
-        usb_only: false,
+            usb_only: false,
         };
         scan_tx
             .send(Ok(vec![connection_device("B"), connection_device("A")]))
@@ -653,7 +696,7 @@ mod tests {
             started_at: std::time::Instant::now(),
             generation: app.connection_generation,
             timeout_logged: false,
-        usb_only: false,
+            usb_only: false,
         };
         a_tx.send(ConnectTaskMessage::Done(Box::new(Ok(connection_result(
             "Wrong A",
@@ -865,6 +908,22 @@ mod tests {
     }
 
     #[test]
+    fn cleared_local_layer_name_overrides_definition_but_missing_name_does_not() {
+        assert_eq!(
+            resolve_layer_names(&s(&["Base", "Fn"]), &[false, false], Some(&s(&[""])), 2),
+            s(&["", "Fn"]),
+        );
+    }
+
+    #[test]
+    fn cleared_firmware_layer_name_overrides_stale_local_name() {
+        assert_eq!(
+            resolve_layer_names(&s(&[""]), &[true], Some(&s(&["Old"])), 1),
+            s(&[""]),
+        );
+    }
+
+    #[test]
     fn resolve_prefers_firmware_names_even_when_default_looking() {
         // Firmware stored "Main" for layer 0; a stale local name must not win.
         let names = resolve_layer_names(
@@ -885,8 +944,25 @@ mod tests {
             Some(&s(&["BASE", "LOWER", ""])),
             3,
         );
-        // Empty local name leaves the placeholder untouched.
-        assert_eq!(names, s(&["BASE", "LOWER", "2"]));
+        assert_eq!(names, s(&["BASE", "LOWER", ""]));
+    }
+
+    #[test]
+    fn resolve_restores_saved_names_over_named_definition_defaults() {
+        let definition = serde_json::json!({
+            "name": "Named layers",
+            "matrix": {"rows": 1, "cols": 1},
+            "layouts": {"keymap": [["0,0"]]},
+            "layer_names": ["Base", "Fn", "Symbols"]
+        });
+        let layout = crate::keyboard::KeyboardLayout::from_vial_json(&definition).unwrap();
+        let names = resolve_layer_names(
+            &layout.layer_names,
+            &[false, false, false],
+            Some(&s(&["Работа", "Навигация"])),
+            3,
+        );
+        assert_eq!(names, s(&["Работа", "Навигация", "Symbols"]));
     }
 
     #[test]
@@ -1032,12 +1108,23 @@ mod tests {
     }
 
     #[test]
-    fn sync_skips_matching_and_empty_names() {
+    fn cleared_imported_layer_name_is_written_to_firmware() {
+        let store = MockStore::new(&[200]).with_stored(200, "Old");
+        assert!(sync_layer_names_to_store(&store, &s(&[""]), 1).is_empty());
+        assert_eq!(store.writes.borrow().as_slice(), &[(200, String::new())]);
+        assert_eq!(store.stored.borrow()[&200], "");
+        store.writes.borrow_mut().clear();
+        assert!(sync_layer_names_to_store(&store, &s(&[""]), 1).is_empty());
+        assert!(store.writes.borrow().is_empty());
+    }
+
+    #[test]
+    fn sync_skips_matching_names_including_empty() {
         let store = MockStore::new(&[200, 201]).with_stored(201, "LOWER");
-        // Layer 0 empty (skipped, no read); layer 1 already matches (no write).
+        // Both already match, including the explicitly unnamed layer.
         let failed = sync_layer_names_to_store(&store, &s(&["", "LOWER"]), 2);
         assert!(failed.is_empty());
-        assert_eq!(store.reads.borrow().as_slice(), &[201]);
+        assert_eq!(store.reads.borrow().as_slice(), &[200, 201]);
         assert!(store.writes.borrow().is_empty());
     }
 
@@ -1117,9 +1204,8 @@ impl EntropyApp {
                 } else {
                     self.status_msg.clone()
                 };
-                let error = format!(
-                    "Connect timeout — RMK/Vial device did not finish loading while: {stage}"
-                );
+                let error =
+                    format!("Connect timeout — device did not finish loading while: {stage}");
                 log::warn!("{error}; retiring worker");
                 let reconnect = reconnect.clone();
                 let pending = self.pending_device_connect.take();
@@ -1188,6 +1274,7 @@ impl EntropyApp {
             }
         };
 
+        crate::connect_timing::event(&format!("ui.received_done ok={} obsolete={obsolete}",result.is_ok()));
         self.connect_state = ConnectState::Idle;
         ctx.request_repaint();
         if obsolete {
@@ -1379,9 +1466,13 @@ impl EntropyApp {
                     .unwrap_or_else(|| r.device_name.clone());
                 self.status_msg = format!("Connected: {connected_display_name}");
 
+                self.confirmed_firmware_layer_names = r.layer_names_from_firmware.iter().take(16)
+                    .enumerate().fold(0u16, |mask, (layer, confirmed)| mask | if *confirmed { 1u16 << layer } else { 0 });
+
                 // Load per-device layer names.
                 let device_name = r.device_name.clone();
                 let local_layer_names = load_saved_layer_names(&device_name);
+                self.layer_names_from_firmware = r.layer_names_from_firmware.clone();
                 self.layer_names = resolve_layer_names(
                     &r.layout.layer_names,
                     &r.layer_names_from_firmware,
@@ -1490,6 +1581,7 @@ impl EntropyApp {
                     }
                 }
 
+                crate::connect_timing::event("ui.connected_ready");
                 log::info!(
                     "Connected: {} ({} layers, {:?})",
                     connected_display_name,
@@ -1498,6 +1590,10 @@ impl EntropyApp {
                 );
             }
             Err(e) => {
+                if super::device_connection::connection_permission_denied(&e) {
+                    self.show_connection_failure(e);
+                    return;
+                }
                 if let Some(reconnect) = reconnect {
                     self.schedule_bluetooth_reconnect_retry(reconnect, &e);
                     return;
@@ -1536,8 +1632,8 @@ impl EntropyApp {
                     return;
                 }
 
-                self.status_msg = e;
-                log::error!("{}", connect_apply_error_log(&self.status_msg));
+                log::error!("{}", connect_apply_error_log(&e));
+                self.show_connection_failure(e);
             }
         }
     }
@@ -1618,9 +1714,6 @@ pub(super) fn sync_layer_names_to_store<S: LayerNameStore>(
     for (layer, name) in names.iter().enumerate().take(layer_count) {
         let qsid = 200 + layer as u16;
         let name = name.trim();
-        if name.is_empty() {
-            continue;
-        }
         if !store.is_supported(qsid) {
             // Firmware exposes no storage for this layer name; nothing to persist.
             continue;
@@ -1629,16 +1722,14 @@ pub(super) fn sync_layer_names_to_store<S: LayerNameStore>(
             Ok(current) if current == name => {}
             Ok(_) => {
                 if let Err(e) = store.set_string(qsid, name) {
-                    log::warn!(
-                        "Vial set_qmk_setting_string failed while syncing layer {layer}: {e}"
-                    );
+                    log::warn!("set_qmk_setting_string failed while syncing layer {layer}: {e}");
                     failed.push(layer);
                 }
             }
             Err(e) => {
                 // The id is advertised as supported, so a read error is a real
                 // transport failure, not missing storage — surface it.
-                log::warn!("Vial get_qmk_setting_string failed while syncing layer {layer}: {e}");
+                log::warn!("get_qmk_setting_string failed while syncing layer {layer}: {e}");
                 failed.push(layer);
             }
         }
@@ -1648,6 +1739,7 @@ pub(super) fn sync_layer_names_to_store<S: LayerNameStore>(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod qa_followup_reconnect {
+    use super::super::device_deferred_load::DeferredLoadPayload;
     use super::super::vial_hid_task::{VialHidOperation, VialHidTaskStart};
     use super::*;
 
@@ -1688,7 +1780,8 @@ mod qa_followup_reconnect {
             macro_texts: Default::default(),
             supports_macro_ext_keycodes: Default::default(),
             supports_rmk_native_key_actions: Default::default(),
-            supports_universal_numero: false, supports_universal_symbols: Default::default(),
+            supports_universal_numero: false,
+            supports_universal_symbols: Default::default(),
             supports_universal_russian_letters: Default::default(),
             supports_rmk_native_combo_output: Default::default(),
             supports_rmk_native_tap_dance_actions: Default::default(),
@@ -1784,47 +1877,135 @@ mod qa_followup_reconnect {
         assert!(matches!(app.connect_state, ConnectState::Idle));
     }
 
+    fn reconnect_layer_context() -> DeferredDeviceLoadContext {
+        DeferredDeviceLoadContext {
+            json: std::sync::Arc::new(serde_json::json!({})),
+            supported_qmk_settings: std::sync::Arc::new(vec![201]),
+            definition_fingerprint: 7,
+            layer_count: 2,
+            rows: 1,
+            cols: 1,
+            encoder_count: 0,
+            macro_count: 0,
+            macro_memory_bytes: Some(0),
+            tap_dance_count: 0,
+            combo_count: 0,
+            key_override_count: 0,
+            alt_repeat_count: 0,
+            modules_supported: false,
+            touchpad_supported: false,
+            bluetooth_supported: false,
+            layer_leds_supported: false,
+            rgb_supported: false,
+            lighting_mode: None,
+            supports_rmk_native_key_actions: false,
+            supports_universal_numero: false,
+            supports_universal_symbols: false,
+            supports_universal_russian_letters: false,
+            supports_rmk_native_combo_output: false,
+            supports_rmk_native_tap_dance_actions: false,
+            supports_rmk_combo_layers: false,
+        }
+    }
+
+    #[test]
+    fn staged_reconnect_preserves_confirmed_layer_name_provenance() {
+        for firmware_name in [Some("FirmwareCustom"), Some(""), None] {
+            let _storage = crate::app::app_storage::ScopedTempConfig::new();
+            let ctx = egui::Context::default();
+            let mut app = EntropyApp::new_inert_for_test();
+            let keyboard = device("a");
+            app.device_manager.replace_devices(vec![keyboard.clone()]);
+            app.selected_device = Some(0);
+            app.current_keyboard_id = Some(7);
+            let mut initial = result(&keyboard, 7);
+            initial.layout.layers.resize(2, vec![0u16.into()]);
+            initial.layout.layer_names = vec!["Zero".into(), "Definition".into()];
+            app.layer_names = initial.layout.layer_names.clone();
+            app.layout = Some(initial.layout);
+            app.deferred_device_load = DeferredDeviceLoadState::staged(reconnect_layer_context());
+            app.finish_deferred_device_load(DeferredLoadPayload::Layer {
+                layer: 1,
+                keymap: vec![0],
+                native_actions: vec![],
+                encoders: vec![],
+                firmware_name: firmware_name.map(str::to_owned),
+            });
+            save_layer_names(&["Zero".into(), "Old".into()], &keyboard.name);
+            let mut fresh = result(&keyboard, 7);
+            fresh.layer_count = 2;
+            fresh.layout.layers.resize(2, vec![0u16.into()]);
+            fresh.layout.layer_names = vec!["Zero".into(), "Definition".into()];
+            fresh.layer_names_from_firmware = vec![true, false];
+            fresh.deferred_load = DeferredDeviceLoadState::staged(reconnect_layer_context());
+            let reconnect = BluetoothReconnectState::new(keyboard.stable_identity(), keyboard.name);
+            complete(&mut app, &ctx, fresh, Some(reconnect));
+            assert_eq!(app.layer_names[1], firmware_name.unwrap_or("Old"));
+            assert_eq!(app.layer_names_from_firmware[1], firmware_name.is_some());
+            assert_eq!(
+                app.deferred_device_load.layer_status(1),
+                DeferredLoadStatus::Loaded
+            );
+        }
+    }
+
     #[test]
     fn uncertain_layer_name_is_not_reused_by_reconnect_snapshot() {
-        let _storage=crate::app::app_storage::ScopedTempConfig::new();
-        let ctx=egui::Context::default();
-        let (mut app,reconnect)=failed_upload(&ctx);
-        let context=DeferredDeviceLoadContext {
-            json:std::sync::Arc::new(serde_json::json!({})),
-            supported_qmk_settings:std::sync::Arc::new(vec![201]),
-            definition_fingerprint:7,layer_count:2,rows:1,cols:1,encoder_count:0,
-            macro_count:0,macro_memory_bytes:Some(0),tap_dance_count:0,combo_count:0,
-            key_override_count:0,alt_repeat_count:0,modules_supported:false,touchpad_supported:false,
-            bluetooth_supported:false,layer_leds_supported:false,rgb_supported:false,lighting_mode:None,
-            supports_rmk_native_key_actions:false,supports_universal_numero: false, supports_universal_symbols:false,
-            supports_universal_russian_letters:false,supports_rmk_native_combo_output:false,
-            supports_rmk_native_tap_dance_actions:false,supports_rmk_combo_layers:false,
-        };
-        app.deferred_device_load=DeferredDeviceLoadState::staged(context.clone());
-        app.deferred_device_load.set_layer_status(1,DeferredLoadStatus::Loaded);
-        app.layer_names=vec!["Zero".into(),"Stale".into()];
-        let (hid,packets)=crate::hid::HidDevice::test_device();
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let ctx = egui::Context::default();
+        let (mut app, reconnect) = failed_upload(&ctx);
+        let context = reconnect_layer_context();
+        app.deferred_device_load = DeferredDeviceLoadState::staged(context.clone());
+        app.deferred_device_load
+            .set_layer_status(1, DeferredLoadStatus::Loaded);
+        app.layer_names = vec!["Zero".into(), "Stale".into()];
+        let (hid, packets) = crate::hid::HidDevice::test_device();
         packets.respond_by(|r| {
-            if r[..2]==[0xfe,0x0b] {Some(Ok([0;32]))}
-            else if r[..2]==[0xfe,0x0a] {Some(Ok([0xff;32]))} else {None}
+            if r[..2] == [0xfe, 0x0b] {
+                Some(Ok([0; 32]))
+            } else if r[..2] == [0xfe, 0x0a] {
+                Some(Ok([0xff; 32]))
+            } else {
+                None
+            }
         });
-        app.hid_device=Some(hid.into());
-        let request=super::super::vial_hid_task::LayerNameWrite {
-            device:device("a"),device_key:"reconnect-name".into(),layout_id:"default".into(),
-            generation:app.connection_generation,layer:1,name:"Mutated".into(),
+        app.hid_device = Some(hid.into());
+        let request = super::super::vial_hid_task::LayerNameWrite {
+            device: device("a"),
+            device_key: "reconnect-name".into(),
+            layout_id: "default".into(),
+            generation: app.connection_generation,
+            layer: 1,
+            name: "Mutated".into(),
         };
-        assert_eq!(app.start_vial_hid_operation(&ctx,VialHidOperation::LayerNameWrite(request)),VialHidTaskStart::Started);
-        poll_upload(&mut app,&ctx);
-        let mut fresh=result(&device("a"),7);
-        fresh.layer_count=2;
-        fresh.layout.layers.resize(2,vec![0u16.into()]);
-        fresh.layout.layer_names=vec!["Zero".into(),"Fresh".into()];
-        fresh.deferred_load=DeferredDeviceLoadState::staged(context);
-        app.preserve_deferred_snapshot_on_reconnect(&mut fresh,&reconnect);
-        assert_eq!(fresh.layout.layer_names[1],"Fresh","reconnect reused uncertain name");
-        assert_eq!(fresh.deferred_load.layer_status(1),DeferredLoadStatus::NotLoaded,
-            "reconnect marked uncertainty confirmed without read-only reload");
-        assert_eq!(packets.requests().iter().filter(|r|r[..2]==[0xfe,0x0b]).count(),1);
+        assert_eq!(
+            app.start_vial_hid_operation(&ctx, VialHidOperation::LayerNameWrite(request)),
+            VialHidTaskStart::Started
+        );
+        poll_upload(&mut app, &ctx);
+        let mut fresh = result(&device("a"), 7);
+        fresh.layer_count = 2;
+        fresh.layout.layers.resize(2, vec![0u16.into()]);
+        fresh.layout.layer_names = vec!["Zero".into(), "Fresh".into()];
+        fresh.deferred_load = DeferredDeviceLoadState::staged(context);
+        app.preserve_deferred_snapshot_on_reconnect(&mut fresh, &reconnect);
+        assert_eq!(
+            fresh.layout.layer_names[1], "Fresh",
+            "reconnect reused uncertain name"
+        );
+        assert_eq!(
+            fresh.deferred_load.layer_status(1),
+            DeferredLoadStatus::NotLoaded,
+            "reconnect marked uncertainty confirmed without read-only reload"
+        );
+        assert_eq!(
+            packets
+                .requests()
+                .iter()
+                .filter(|r| r[..2] == [0xfe, 0x0b])
+                .count(),
+            1
+        );
     }
 
     #[test]

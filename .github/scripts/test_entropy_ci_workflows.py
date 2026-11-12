@@ -76,7 +76,7 @@ class EntropyCIContract(unittest.TestCase):
             'application_layouts::tests::catalog_revision_three_adds_third_layer_only_to_stock_profiles',
             'application_layouts::tests::changed_preset_command_loses_its_old_icon_and_visuals_are_transmitted',
             'qmk_hid_host::fresh_dedicated_owner_never_receives_previous_profile_snapshot',
-            'app::app_lifecycle::usb_hotplug_tests::usb_hotplug_does_not_poll_while_hidden_to_tray',
+            'app::app_lifecycle::usb_hotplug_tests::tray_hidden_startup_discovers_and_connects_without_restoring_window',
             'i18n::tests::embedded_catalogs_have_unique_supported_keys_and_readable_values',
             'i18n::tests::indexed_catalog_keeps_sections_and_quoted_values',
             'i18n::tests::indexed_catalog_preserves_borrowed_escapes_and_decodes_owned_strings',

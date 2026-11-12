@@ -138,7 +138,8 @@ impl Device {
             && other.vendor_id == ERGOHAVEN_VENDOR_ID
             && self.product_id != 0
             && other.product_id != 0
-            && self.is_ergohaven_display_macropad() != other.is_ergohaven_display_macropad()
+            && ((self.is_ergohaven_display_macropad() != other.is_ergohaven_display_macropad())
+                || (self.is_ergohaven_sm62() != other.is_ergohaven_sm62()))
         {
             return false;
         }
@@ -404,6 +405,51 @@ impl Device {
             && ERGOHAVEN_DISPLAY_MACROPAD_PRODUCT_IDS.contains(&self.product_id)
     }
 
+    pub(crate) fn application_layout_protocol_version(&self) -> Option<u8> {
+        if self.firmware != FirmwareProtocol::Vial { return None; }
+        if self.is_ergohaven_sm62() { Some(8) }
+        else if self.is_ergohaven_display_macropad() { Some(7) }
+        else { None }
+    }
+
+    pub(crate) fn sm62_host_rule_key(&self) -> Option<String> {
+        if !self.is_ergohaven_sm62() || self.firmware != FirmwareProtocol::Vial
+            || self.is_bluetooth_transport() {
+            return None;
+        }
+        // SM62 retains Vial GUI's magic prefix before the RP2040 hardware ID.
+        // Also accept the historical bare hardware format, with the same key.
+        // RP2040 firmware formats hardware_id_t as 32 hex digits:
+        // the flash's eight-byte unique ID followed by eight zero bytes.
+        // This is a half identity, NOT pair identity or HID authorization.
+        let serial = self.serial_number.trim().to_ascii_uppercase();
+        let serial = serial.strip_prefix("VIAL:F64C2B3C:").unwrap_or(&serial);
+        if serial.len() != 32 || !serial.bytes().all(|b| b.is_ascii_hexdigit())
+            || &serial[16..] != "0000000000000000"
+            || serial[..16].bytes().all(|b| b == b'0')
+            || serial[..16].bytes().all(|b| b == b'F') {
+            return None;
+        }
+        Some(format!("sm62-half-v1:{:04x}:{:04x}:{serial}", self.vendor_id, self.product_id))
+    }
+
+    pub(crate) fn application_layout_storage_key(&self, key: String) -> String {
+        if self.is_ergohaven_sm62() {
+            // SM62's Vial UID and factory serial identify a model, not a unit.
+            // Scope cached drafts to the actual OS enumeration. This is a cache
+            // namespace only, never permission to skip device readback.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                return crate::qmk_hid_host::sm62_owner_library_key(&key, &self.instance_token);
+            }
+            #[cfg(target_arch = "wasm32")]
+            { format!("{key}-sm62") }
+        }
+        else if self.is_ergohaven_display_macropad() && !self.is_m4cr0pad_v3() {
+            format!("{key}-m4cr0pad-v2")
+        } else { key }
+    }
+
     pub(crate) fn is_ergohaven_sm62(&self) -> bool {
         self.vendor_id == ERGOHAVEN_VENDOR_ID && self.product_id == SM62_PRODUCT_ID
     }
@@ -558,8 +604,8 @@ pub struct DeviceManager {
 }
 
 impl DeviceManager {
-    #[cfg(test)]
-    pub(crate) fn empty_for_test() -> Self {
+    /// No devices and no scan: the caller supplies them.
+    pub(crate) fn empty() -> Self {
         Self { devices: vec![] }
     }
 
@@ -772,6 +818,7 @@ fn drop_vial_twins_of_rynk_boards(devices: &mut Vec<Device>, rynk: &[Device]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("device_usb_identity_tests.rs");
 
     fn test_device(bus_type: &str, path: &str) -> Device {
         Device {

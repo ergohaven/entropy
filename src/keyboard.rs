@@ -212,6 +212,9 @@ pub struct LiveFeatures {
     // Runtime-only: never trust a definition/disk cache to authorize host commands.
     #[serde(skip)]
     pub extended_host_protocol: bool,
+    // A cached/failed QMK query cannot prove absence of firmware metadata.
+    #[serde(skip)]
+    pub qmk_settings_confirmed: bool,
     #[serde(default)]
     pub time: bool,
     #[serde(default)]
@@ -1084,14 +1087,17 @@ mod live_protocol_metadata_tests {
     fn host_protocol_permission_is_never_restored_from_serialized_metadata() {
         let metadata = LiveFeatures {
             extended_host_protocol: true,
+            qmk_settings_confirmed: true,
             time: true,
             ..Default::default()
         };
         let serialized = serde_json::to_string(&metadata).unwrap();
         assert!(!serialized.contains("extended_host_protocol"));
+        assert!(!serialized.contains("qmk_settings_confirmed"));
         let restored: LiveFeatures =
-            serde_json::from_str(r#"{"extended_host_protocol":true,"time":true}"#).unwrap();
+            serde_json::from_str(r#"{"extended_host_protocol":true,"qmk_settings_confirmed":true,"time":true}"#).unwrap();
         assert!(!restored.extended_host_protocol);
+        assert!(!restored.qmk_settings_confirmed);
         assert!(restored.time);
     }
 }

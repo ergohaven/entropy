@@ -151,6 +151,19 @@ jobs:
           scripts/test_linux_packages.sh
           desktop-file-validate packaging/linux/entropy.desktop
 
+      - name: Test background memory lifecycle
+        if: matrix.kind != 'linux'
+        run: |
+          cargo test --all-targets app::background_startup::tests -- --test-threads=1
+          cargo test --all-targets ui_textures::tests
+          cargo test --all-targets app::text_expander_emoji::texture_memory_tests
+          cargo test --all-targets app::display_preview::tests::startup_preview_reuses_one_texture_across_revisions -- --exact
+          cargo test --all-targets app::standby_background
+
+      - name: Test native resident backup publication
+        if: matrix.kind != 'linux'
+        run: cargo test --all-targets app::entlayout::backup_durability::tests -- --test-threads=1
+
       - name: Test layout indicator window policy
         if: matrix.kind != 'linux'
         run: cargo test --all-targets app::layout_indicator_window::tests
@@ -174,7 +187,7 @@ jobs:
           cargo test --all-targets application_layouts::tests::catalog_revision_three_adds_third_layer_only_to_stock_profiles -- --exact --test-threads=1
           cargo test --all-targets application_layouts::tests::changed_preset_command_loses_its_old_icon_and_visuals_are_transmitted -- --exact --test-threads=1
           cargo test --all-targets qmk_hid_host::fresh_dedicated_owner_never_receives_previous_profile_snapshot -- --exact --test-threads=1
-          cargo test --all-targets app::app_lifecycle::usb_hotplug_tests::usb_hotplug_does_not_poll_while_hidden_to_tray -- --exact --test-threads=1
+          cargo test --all-targets app::app_lifecycle::usb_hotplug_tests::tray_hidden_startup_discovers_and_connects_without_restoring_window -- --exact --test-threads=1
           cargo test --all-targets i18n::tests::embedded_catalogs_have_unique_supported_keys_and_readable_values -- --exact --test-threads=1
           cargo test --all-targets i18n::tests::indexed_catalog_keeps_sections_and_quoted_values -- --exact --test-threads=1
           cargo test --all-targets i18n::tests::indexed_catalog_preserves_borrowed_escapes_and_decodes_owned_strings -- --exact --test-threads=1

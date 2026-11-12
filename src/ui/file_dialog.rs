@@ -348,6 +348,10 @@ impl EntropyApp {
         if !can_start_file_dialog(self.pending_file_dialog.is_some()) {
             return;
         }
+        self.pending_entlayout_dialog_target = if matches!(action, FileDialogAction::ImportEntlayout | FileDialogAction::ExportEntlayout) {
+            self.selected_device.and_then(|i| self.device_manager.devices().get(i)).cloned()
+                .map(|device| (device,self.current_keyboard_id))
+        } else { None };
         // Parent the picker to the main window so it opens in front instead of
         // behind it. set_parent copies the raw handles into the Send dialog, so
         // the dialog can still run on the worker thread.
@@ -407,6 +411,8 @@ impl EntropyApp {
             }
             FileDialogPoll::Cancelled => {
                 self.pending_file_dialog = None;
+                self.pending_entlayout_dialog_target = None;
+                self.gui_entlayout_preparation = None;
                 self.recover_input_after_dialog(ctx);
             }
             FileDialogPoll::StaleDevice => {
@@ -414,6 +420,8 @@ impl EntropyApp {
                 // we could save device B's layout under device A's filename, or
                 // program B with A's data. Discard the result.
                 self.pending_file_dialog = None;
+                self.pending_entlayout_dialog_target = None;
+                self.gui_entlayout_preparation = None;
                 self.recover_input_after_dialog(ctx);
                 self.status_msg = crate::i18n::tr_catalog(
                     self.app_settings.language,
@@ -424,6 +432,16 @@ impl EntropyApp {
             FileDialogPoll::Dispatch(path) => {
                 self.pending_file_dialog = None;
                 self.recover_input_after_dialog(ctx);
+                if let Some((target, keyboard_id)) = self.pending_entlayout_dialog_target.take() {
+                    if keyboard_id != self.current_keyboard_id || !self.selected_device
+                        .and_then(|i| self.device_manager.devices().get(i))
+                        .is_some_and(|device| target.permits_hid_target(device)) {
+                        self.gui_entlayout_preparation = None;
+                        self.status_msg = crate::i18n::tr_catalog(self.app_settings.language,
+                            "status_messages.file_dialog_device_changed").into();
+                        return;
+                    }
+                }
                 self.handle_file_dialog_result(ctx, action, path);
             }
             FileDialogPoll::WorkerLost => {
@@ -432,6 +450,8 @@ impl EntropyApp {
                 // the same input recovery so a lost dialog can't wedge the UI.
                 log::error!("file dialog worker disconnected before returning a result");
                 self.pending_file_dialog = None;
+                self.pending_entlayout_dialog_target = None;
+                self.gui_entlayout_preparation = None;
                 self.status_msg = crate::i18n::tr_catalog(
                     self.app_settings.language,
                     "status_messages.file_dialog_worker_lost",

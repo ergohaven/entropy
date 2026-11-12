@@ -747,6 +747,25 @@ impl EntropyApp {
         old_value: u16,
         requested: u16,
     ) {
+        if self
+            .entlayout_unconfirmed_indication_qsids()
+            .contains(&qsid)
+        {
+            let readback = self.hid_device.as_ref().map(|hid| {
+                if width > 1 {
+                    hid.get_qmk_setting_u16(qsid)
+                } else {
+                    hid.get_qmk_setting_u8(qsid).map(u16::from)
+                }
+            });
+            match readback {
+                Some(Ok(value)) => self.reconcile_indication_setting(qsid, value),
+                _ => {
+                    self.status_msg = "Failed to reload LED setting; reconnect the keyboard".into();
+                    return;
+                }
+            }
+        }
         self.queue_settings_write(SettingsWriteRequest {
             id: 0,
             generation: self.settings_write_generation,
@@ -840,7 +859,9 @@ impl EntropyApp {
 
         let fallback = request.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
+        let event_pause = hid_device.pause_application_event_polling();
         std::thread::spawn(move || {
+            let _event_pause = event_pause;
             #[cfg(target_os = "macos")]
             let _hid_lock = hid_device.macos_hid_operation_lock();
 
@@ -909,6 +930,9 @@ impl EntropyApp {
                     return;
                 }
                 self.hid_device = None;
+                if matches!(task.request.target, SettingsWriteTarget::LayerLed { .. }) {
+                    self.invalidate_indication_setting(task.request.qsid);
+                }
                 let error = crate::i18n::tr_catalog(
                     self.app_settings.language,
                     "settings_write.worker_failed",
@@ -1012,6 +1036,11 @@ impl EntropyApp {
                 );
             }
             Err(error) => {
+                if matches!(request.target, SettingsWriteTarget::LayerLed { .. })
+                    && !matches!(&error, ModuleSettingWritebackError::ReadbackMismatch { .. })
+                {
+                    self.invalidate_indication_setting(request.qsid);
+                }
                 if request.target.is_touchpad() {
                     if let ModuleSettingWritebackError::ReadbackMismatch { actual, .. } = &error {
                         self.qmk_settings_write_queue
@@ -1286,6 +1315,8 @@ mod tests {
         let mut display_settings = DisplaySettingsState::default();
         let mut layer_led_settings = LayerLedSettingsState {
             brightness: Some(LayerLedNumericSetting {
+                min: 0,
+                loaded: true,
                 qsid: 316,
                 width: 2,
                 value: 32,
@@ -1859,5 +1890,108 @@ mod tests {
 
         assert_eq!(app.touchpad_settings.scroll_sens, 9);
         assert!(!app.qmk_settings_write_pending());
+    }
+
+    #[test]
+    fn review_layer_led_applied_set_lost_response_invalidates_and_refreshes() {
+        use std::sync::{
+            atomic::{AtomicU16, Ordering},
+            Arc,
+        };
+        let mut app = EntropyApp::new_inert_for_test();
+        app.layer_led_settings.supported = true;
+        app.supported_qmk_settings = vec![316];
+        app.layer_led_settings.brightness = Some(LayerLedNumericSetting {
+            min: 0,
+            loaded: true,
+            qsid: 316,
+            width: 2,
+            value: 32,
+            max: 255,
+            variants: vec![],
+        });
+        let actual = Arc::new(AtomicU16::new(32));
+        let device = actual.clone();
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        recorder.respond_by(move |r| {
+            if r[..2] == [0xfe, 0x0b] {
+                device.store(u16::from_le_bytes([r[4], r[5]]), Ordering::SeqCst);
+                return Some(Err("lost SET response".into()));
+            }
+            if r[..2] == [0xfe, 0x0a] {
+                let mut response = [0; 32];
+                response[1..3].copy_from_slice(&device.load(Ordering::SeqCst).to_le_bytes());
+                return Some(Ok(response));
+            }
+            None
+        });
+        app.hid_device = Some(hid.into());
+        app.queue_layer_led_setting_write("brightness".into(), 316, 2, 32, 128);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while app.settings_write_task.is_some() && std::time::Instant::now() < deadline {
+            app.poll_settings_write(&egui::Context::default());
+            std::thread::sleep(std::time::Duration::from_millis(3));
+        }
+        assert!(app.settings_write_task.is_none());
+        assert_eq!(actual.load(Ordering::SeqCst), 128);
+        assert!(!app.layer_led_settings.brightness.as_ref().unwrap().loaded);
+        assert!(app.entlayout_portable_settings_snapshot().is_empty());
+        let device = actual.clone();
+        recorder.respond_by(move |r| {
+            if r[..2] == [0xfe, 0x0b] {
+                device.store(u16::from_le_bytes([r[4], r[5]]), Ordering::SeqCst);
+                None
+            } else if r[..2] == [0xfe, 0x0a] {
+                let mut response = [0; 32];
+                response[1..3].copy_from_slice(&device.load(Ordering::SeqCst).to_le_bytes());
+                Some(Ok(response))
+            } else {
+                None
+            }
+        });
+        app.queue_layer_led_setting_write("brightness".into(), 316, 2, 32, 64);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while app.settings_write_task.is_some() && std::time::Instant::now() < deadline {
+            app.poll_settings_write(&egui::Context::default());
+            std::thread::sleep(std::time::Duration::from_millis(3));
+        }
+        assert!(app.layer_led_settings.brightness.as_ref().unwrap().loaded);
+        assert_eq!(
+            app.layer_led_settings.brightness.as_ref().unwrap().value,
+            64
+        );
+        let requests = recorder.requests();
+        let refresh = requests
+            .iter()
+            .position(|r| r[..2] == [0xfe, 0x0a])
+            .unwrap();
+        let second = requests
+            .iter()
+            .rposition(|r| r[..2] == [0xfe, 0x0b])
+            .unwrap();
+        assert!(refresh < second);
+        actual.store(100, Ordering::SeqCst);
+        let device = actual.clone();
+        recorder.respond_by(move |r| {
+            if r[..2] == [0xfe, 0x0a] {
+                let mut response = [0; 32];
+                response[1..3].copy_from_slice(&device.load(Ordering::SeqCst).to_le_bytes());
+                Some(Ok(response))
+            } else {
+                None
+            }
+        });
+        app.queue_layer_led_setting_write("brightness".into(), 316, 2, 64, 32);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while app.settings_write_task.is_some() && std::time::Instant::now() < deadline {
+            app.poll_settings_write(&egui::Context::default());
+            std::thread::sleep(std::time::Duration::from_millis(3));
+        }
+        assert!(app.settings_write_task.is_none());
+        assert!(app.layer_led_settings.brightness.as_ref().unwrap().loaded);
+        assert_eq!(
+            app.layer_led_settings.brightness.as_ref().unwrap().value,
+            100
+        );
     }
 }

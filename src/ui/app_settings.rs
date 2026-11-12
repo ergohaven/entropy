@@ -120,7 +120,7 @@ impl EntropyApp {
         for row_idx in row_range {
             #[cfg(target_os = "linux")]
             if row_idx == 5 {
-                self.draw_linux_vial_udev_rules_row(
+                self.draw_linux_device_udev_rules_row(
                     ui,
                     content_width,
                     row_height,
@@ -343,6 +343,10 @@ impl EntropyApp {
                             #[cfg(target_os = "windows")]
                             {
                                 self.tray_icon = None;
+                            }
+                            #[cfg(target_os = "linux")]
+                            {
+                                self.linux_tray = None;
                             }
                         }
                         save_app_settings(&self.app_settings);
@@ -663,13 +667,49 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
+                #[cfg(not(target_arch = "wasm32"))]
+                13 | 14 => {
+                    let firmware = row_idx == 14;
+                    let setting = if firmware {
+                        &mut self.app_settings.firmware_update_notifications
+                    } else {
+                        &mut self.app_settings.app_update_notifications
+                    };
+                    let before = *setting;
+                    let key = if firmware {
+                        "notifications.firmware_label"
+                    } else {
+                        "notifications.app_label"
+                    };
+                    crate::ui_style::settings_list_row_with_tooltip(
+                        ui,
+                        content_width,
+                        row_height,
+                        crate::i18n::tr_catalog(lang, key),
+                        true,
+                        tooltip(crate::i18n::tr_catalog(lang, "notifications.tooltip")),
+                        switch_width,
+                        |ui| {
+                            crate::ui_style::settings_switch_sized_stable(
+                                ui,
+                                key,
+                                setting,
+                                switch_size,
+                            );
+                        },
+                    );
+                    if *setting != before {
+                        self.authorize_notification_setting(firmware, before);
+                        save_app_settings(&self.app_settings);
+                    }
+                }
                 _ => {}
             }
         }
     }
 
     #[cfg(target_os = "linux")]
-    fn draw_linux_vial_udev_rules_row(
+    fn draw_linux_device_udev_rules_row(
         &mut self,
         ui: &mut egui::Ui,
         content_width: f32,
@@ -680,13 +720,13 @@ impl EntropyApp {
     ) {
         let lang = self.app_settings.language;
         let tooltip = (!suppress_tooltips)
-            .then_some(crate::i18n::tr_catalog(lang, "ui.vial_udev_rules_tooltip"));
+            .then_some(crate::i18n::tr_catalog(lang, "ui.device_udev_rules_tooltip"));
 
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
             content_width,
             row_height,
-            crate::i18n::tr_catalog(lang, "ui.vial_udev_rules_label"),
+            crate::i18n::tr_catalog(lang, "ui.device_udev_rules_label"),
             true,
             tooltip,
             metrics.settings_control_width(),
@@ -698,25 +738,25 @@ impl EntropyApp {
                     draw_app_settings_value(
                         ui,
                         metrics,
-                        crate::i18n::tr_catalog(lang, "ui.vial_udev_rules_installed"),
+                        crate::i18n::tr_catalog(lang, "ui.device_udev_rules_installed"),
                         app_muted_text(dark),
                     );
                 } else if crate::ui_style::modern_button(
                     ui,
-                    crate::i18n::tr_catalog(lang, "ui.install_vial_udev_rules"),
+                    crate::i18n::tr_catalog(lang, "ui.install_device_udev_rules"),
                     metrics.size(168.0, 34.0),
                     true,
                 )
                 .clicked()
                 {
-                    self.run_linux_vial_udev_rules_install();
+                    self.run_linux_device_udev_rules_install();
                 }
             },
         );
     }
 
     #[cfg(target_os = "linux")]
-    pub(super) fn run_linux_vial_udev_rules_install(&mut self) {
+    pub(super) fn run_linux_device_udev_rules_install(&mut self) {
         let script = "linux/udev/install-vial-rules.sh";
         let Some(script_path) = crate::linux_setup::setup_script_path(script) else {
             self.status_msg = format!("Could not find {script}; run it from the Entropy folder");
@@ -727,15 +767,15 @@ impl EntropyApp {
         self.status_msg = match output {
             Ok(output) if output.status.success() => crate::i18n::tr_catalog(
                 self.app_settings.language,
-                "ui.vial_udev_rules_installed_status",
+                "ui.device_udev_rules_installed_status",
             )
             .to_owned(),
             Ok(output) => {
                 let details = command_output_summary(&output.stderr, &output.stdout);
                 if details.is_empty() {
-                    format!("Vial udev rules install failed: {}", output.status)
+                    format!("Entropy device access rules install failed: {}", output.status)
                 } else {
-                    format!("Vial udev rules install failed: {details}")
+                    format!("Entropy device access rules install failed: {details}")
                 }
             }
             Err(err) => format!("Could not run {}: {err}", script_path.display()),
@@ -745,6 +785,13 @@ impl EntropyApp {
 
 fn total_app_settings_rows() -> usize {
     let rows = 13;
+    #[cfg(not(target_arch = "wasm32"))]
+    let rows = rows
+        + if super::update_notifications::SUPPORTED {
+            2
+        } else {
+            0
+        };
     #[cfg(target_os = "linux")]
     {
         rows + 1

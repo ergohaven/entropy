@@ -246,10 +246,10 @@ fn save_cached_vial_definition(
     match serde_json::to_vec(&cached) {
         Ok(bytes) => {
             if let Err(e) = std::fs::write(path, bytes) {
-                log::warn!("failed to write Vial definition cache: {e}");
+                log::warn!("failed to write keyboard definition cache: {e}");
             }
         }
-        Err(e) => log::warn!("failed to serialize Vial definition cache: {e}"),
+        Err(e) => log::warn!("failed to serialize keyboard definition cache: {e}"),
     }
 }
 
@@ -274,6 +274,7 @@ fn load_cached_qmk_settings(
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct LiveQmkHostCapabilities {
+    settings_confirmed: bool,
     extended_protocol: bool,
     legacy_lcd_clock: bool,
 }
@@ -281,6 +282,7 @@ struct LiveQmkHostCapabilities {
 #[cfg(not(target_arch = "wasm32"))]
 impl LiveQmkHostCapabilities {
     fn apply(self, layout: &mut KeyboardLayout) {
+        layout.live_features.qmk_settings_confirmed = self.settings_confirmed;
         layout.live_features.extended_host_protocol = self.extended_protocol;
         layout.live_features.time |= self.legacy_lcd_clock;
     }
@@ -295,6 +297,7 @@ fn current_qmk_settings(
     match query() {
         Ok(settings) => {
             let host = LiveQmkHostCapabilities {
+                settings_confirmed: true,
                 extended_protocol: crate::qmk_hid_host::supports_extended_host_protocol(&settings),
                 legacy_lcd_clock: !is_rmk_vial_definition(definition)
                     && crate::qmk_hid_host::supports_legacy_lcd_clock(definition, &settings),
@@ -344,21 +347,6 @@ fn canonical_layout_device_name(device: &crate::device::Device) -> &str {
     } else {
         device.name.as_str()
     }
-}
-
-fn is_default_layer_name(index: usize, name: &str) -> bool {
-    let trimmed = name.trim();
-    trimmed.is_empty()
-        || trimmed == index.to_string()
-        || (index == 0 && trimmed.eq_ignore_ascii_case("main"))
-        || trimmed.eq_ignore_ascii_case(&format!("layer {index}"))
-}
-
-pub(super) fn has_firmware_layer_names(names: &[String]) -> bool {
-    names
-        .iter()
-        .enumerate()
-        .any(|(index, name)| !is_default_layer_name(index, name))
 }
 
 #[test]
@@ -429,7 +417,7 @@ pub(super) fn layer_name_sync_updates(
 
             let current = current_names.get(layer)?.as_deref()?;
             let name = name.trim();
-            if name.is_empty() || current == name {
+            if current == name {
                 None
             } else {
                 Some((qsid, name.to_owned()))
@@ -593,6 +581,7 @@ impl EntropyApp {
         device_idx: usize,
         reconnect: Option<BluetoothReconnectState>,
     ) {
+        crate::connect_timing::event("selection.start");
         let previous_selected_device = self
             .selected_device
             .and_then(|index| self.device_manager.devices().get(index))
@@ -680,6 +669,7 @@ impl EntropyApp {
         self.selected_device = Some(device_idx);
         self.pending_device_connect = None;
         self.default_layout_device_reconciled = false;
+        self.confirmed_firmware_layer_names = 0;
         self.default_layout_pending_layers = 0;
         self.default_layout_sync_retry_after = None;
         self.pending_layout_undo = false;
@@ -790,12 +780,14 @@ impl EntropyApp {
                 .expect("test connect worker receiver");
             return;
         }
-        #[cfg(test)]
-        let test_hid = self.test_connect_hid.take();
         let language = self.app_settings.language;
+        let supplied_hid = self.connect_hid.take();
 
         std::thread::spawn(move || {
+            crate::connect_timing::event("worker.begin");
+            let timing_started = std::time::Instant::now();
             let progress = |message: &str| -> Result<(), String> {
+                crate::connect_timing::event(&format!("worker.stage elapsed_us={} stage={message}",timing_started.elapsed().as_micros()));
                 if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                     return Err("Connect cancelled".to_owned());
                 }
@@ -815,17 +807,17 @@ impl EntropyApp {
                     dev.vendor_id,
                     dev.product_id
                 );
-                #[cfg(test)]
-                let opened = match test_hid {
+                let opened = match supplied_hid {
                     Some(hid) => Ok(hid),
                     None => HidDevice::open_fresh_for(&dev),
                 };
-                #[cfg(not(test))]
-                let opened = HidDevice::open_fresh_for(&dev);
                 let dev_conn = opened.map_err(|e| format!("Open failed: {e:#}"))?;
                 let standby_animation_load = Self::device_uses_automatic_display_host_data(&dev)
                     .then(|| dev_conn.pause_standby_animation_for_load());
-                let staged_bluetooth_load = dev_conn.is_bluetooth_transport();
+                // Publish the first usable SM62 layer without reading the other
+                // fifteen layers and optional editor tables on the critical path.
+                // The existing staged ledger keeps them unconfirmed until loaded.
+                let staged_initial_load = dev_conn.is_bluetooth_transport() || dev.is_ergohaven_sm62();
 
                 progress("Reading VIA protocol version…")?;
                 log::info!("Getting protocol version…");
@@ -834,10 +826,10 @@ impl EntropyApp {
                     .map_err(|e| format!("VIA protocol read failed: {e:#}"))?;
                 log::info!("VIA protocol version: {via_protocol}");
 
-                progress("Reading Vial keyboard id…")?;
+                progress("Reading keyboard ID…")?;
                 let (vial_protocol, keyboard_id) = dev_conn
                     .get_keyboard_id()
-                    .map_err(|e| format!("Vial keyboard id read failed: {e:#}"))?;
+                    .map_err(|e| format!("Keyboard ID read failed: {e:#}"))?;
                 log::info!("Vial protocol: {vial_protocol}, keyboard id: {keyboard_id:016X}");
                 let cache_keys = device_cache_keys(&dev, keyboard_id);
                 let cache_key = &cache_keys[0];
@@ -853,7 +845,7 @@ impl EntropyApp {
                 let vial_unlock_status = match dev_conn.get_unlock_status() {
                     Ok(status) => Some(status),
                     Err(error) => {
-                        log::warn!("Vial unlock status read failed during connect: {error:#}");
+                        log::warn!("Keyboard unlock status read failed during connect: {error:#}");
                         None
                     }
                 };
@@ -876,8 +868,8 @@ impl EntropyApp {
                     }
                 };
 
-                let application_layout_probe = if dev.is_ergohaven_display_macropad() {
-                    dev_conn.probe_application_layout_protocol()
+                let application_layout_probe = if let Some(version) = dev.application_layout_protocol_version() {
+                    dev_conn.probe_application_layout_protocol_version(version)
                 } else {
                     Ok(false)
                 };
@@ -890,7 +882,7 @@ impl EntropyApp {
                         false
                     });
 
-                progress("Reading Vial layout definition…")?;
+                progress("Reading keyboard layout definition…")?;
                 log::info!("Getting layout JSON…");
                 let definition_size = dev_conn
                     .get_definition_size()
@@ -903,7 +895,7 @@ impl EntropyApp {
                     runtime_firmware_cache_token,
                 ) {
                     log::info!(
-                        "Loaded Vial definition from cache for keyboard id {keyboard_id:016X}, key {source_cache_key}, size {definition_size}"
+                        "Loaded keyboard definition from cache for keyboard id {keyboard_id:016X}, key {source_cache_key}, size {definition_size}"
                     );
                     if source_cache_key != *cache_key {
                         if let Some(runtime_firmware_version) = runtime_firmware_cache_token {
@@ -923,7 +915,7 @@ impl EntropyApp {
                             |completed, total| {
                                 if total > 0 {
                                     progress(&format!(
-                                        "Reading Vial layout definition… {completed}/{total}"
+                                        "Reading keyboard layout definition… {completed}/{total}"
                                     ))
                                     .map_err(anyhow::Error::msg)?;
                                 }
@@ -940,7 +932,7 @@ impl EntropyApp {
                         );
                     } else {
                         log::info!(
-                            "Runtime firmware version unavailable; Vial definition and QMK settings caches disabled"
+                            "Runtime firmware version unavailable; keyboard definition and QMK settings caches disabled"
                         );
                     }
                     json
@@ -950,7 +942,7 @@ impl EntropyApp {
                     .or_else(|| firmware_version_from_vial_json(&json));
                 let manufacturer = manufacturer_for_about(&dev.manufacturer, &json);
                 let supports_battery_halves = supports_battery_halves_from_vial_json(&json);
-                let battery_halves = if supports_battery_halves && !staged_bluetooth_load {
+                let battery_halves = if supports_battery_halves && !staged_initial_load {
                     progress("Reading split battery levels…")?;
                     match dev_conn.get_battery_halves() {
                         Ok(levels) => levels,
@@ -976,7 +968,7 @@ impl EntropyApp {
                         Ok(context) => Some(context),
                         Err(error) => {
                             log::warn!(
-                                "failed to fingerprint Vial definition; QMK settings cache disabled: {error}"
+                                "failed to fingerprint keyboard definition; QMK settings cache disabled: {error}"
                             );
                             None
                         }
@@ -1082,7 +1074,7 @@ impl EntropyApp {
                     vec![vec![crate::keyboard::KeyBinding::default(); num_keys]; layer_count];
 
                 progress("Reading keymap…")?;
-                let initial_layer_count = if staged_bluetooth_load {
+                let initial_layer_count = if staged_initial_load {
                     1
                 } else {
                     layer_count
@@ -1102,8 +1094,8 @@ impl EntropyApp {
                         log::info!("Keymap loaded from buffer");
                     }
                     Err(e) => {
-                        if staged_bluetooth_load {
-                            return Err(format!("Initial Bluetooth layer read failed: {e:#}"));
+                        if staged_initial_load {
+                            return Err(format!("Initial staged layer read failed: {e:#}"));
                         }
                         log::warn!("get_keymap_buffer failed: {e}");
                         progress("Reading keymap (compatibility mode)…")?;
@@ -1181,27 +1173,23 @@ impl EntropyApp {
                             })?
                         {
                             *current_firmware_name = Some(name.clone());
-                            if !name.is_empty() {
-                                layout.layer_names[layer] = name;
-                                layer_names_from_firmware[layer] = true;
-                            }
+                            // A successful empty read is an unnamed layer, not
+                            // absent storage: do not resurrect a stale local name.
+                            layout.layer_names[layer] = name;
+                            layer_names_from_firmware[layer] = true;
                         }
                     }
                 }
 
-                if staged_bluetooth_load || !has_firmware_layer_names(&layout.layer_names) {
-                    if let Some(local_layer_names) = load_saved_layer_names(&dev.name) {
-                        for (layer, name) in
-                            local_layer_names.into_iter().enumerate().take(layer_count)
-                        {
-                            if !layer_names_from_firmware[layer] && !name.trim().is_empty() {
-                                layout.layer_names[layer] = name;
-                            }
-                        }
-                    }
-                }
+                let local_layer_names = load_saved_layer_names(&dev.name);
+                layout.layer_names = super::device_connect_apply::resolve_layer_names(
+                    &layout.layer_names,
+                    &layer_names_from_firmware,
+                    local_layer_names.as_deref(),
+                    layer_count,
+                );
 
-                let layer_name_updates = (!staged_bluetooth_load)
+                let layer_name_updates = (!staged_initial_load)
                     .then(|| {
                         layer_name_sync_updates(
                             &layout.layer_names,
@@ -1215,13 +1203,13 @@ impl EntropyApp {
                     for (qsid, name) in layer_name_updates {
                         if let Err(e) = dev_conn.set_qmk_setting_string(qsid, &name) {
                             log::warn!(
-                                "Vial set_qmk_setting_string failed while syncing qsid {qsid}: {e}"
+                                "set_qmk_setting_string failed while syncing qsid {qsid}: {e}"
                             );
                         }
                     }
                 }
 
-                progress("Reading Vial-core extras…")?;
+                progress("Reading keyboard features…")?;
                 if !layout.encoders.is_empty() {
                     layout.encoder_layers = vec![vec![0u16; layout.encoders.len()]; layer_count];
                     let encoder_count = layout.encoder_count();
@@ -1268,7 +1256,7 @@ impl EntropyApp {
                         match dev_conn.get_macro_buffer_size() {
                             Ok(size) => {
                                 log::info!("Macro buffer size: {size}");
-                                let macro_texts = if staged_bluetooth_load {
+                                let macro_texts = if staged_initial_load {
                                     vec![Vec::new(); count as usize]
                                 } else {
                                     match dev_conn.get_macro_buffer(size, count) {
@@ -1321,7 +1309,7 @@ impl EntropyApp {
                 };
 
                 progress("Reading combos…")?;
-                let mut combo_entries = if staged_bluetooth_load {
+                let mut combo_entries = if staged_initial_load {
                     vec![ComboEntry::default(); combo_count as usize]
                 } else {
                     let count = combo_count;
@@ -1352,28 +1340,28 @@ impl EntropyApp {
                     entries
                 };
 
-                let behavior_settings = if staged_bluetooth_load {
+                let behavior_settings = if staged_initial_load {
                     BehaviorSettingsState::default()
                 } else {
                     progress("Reading QMK settings values…")?;
                     Self::read_behavior_settings(&supported_qmk_settings, &dev_conn)
                 };
 
-                let touchpad_settings = if staged_bluetooth_load {
+                let touchpad_settings = if staged_initial_load {
                     TouchpadSettingsState::default()
                 } else {
                     Self::read_touchpad_settings(&json, &supported_qmk_settings, &dev_conn)
                 };
 
                 progress("Reading Bluetooth settings…")?;
-                let bluetooth_settings = if staged_bluetooth_load {
+                let bluetooth_settings = if staged_initial_load {
                     BluetoothSettingsState::default()
                 } else {
                     Self::read_bluetooth_settings(&json, &supported_qmk_settings, &dev_conn)
                 };
 
                 progress("Reading module settings…")?;
-                let module_settings = if staged_bluetooth_load {
+                let module_settings = if staged_initial_load {
                     let mut settings =
                         Self::module_settings_from_definition(&json, &supported_qmk_settings);
                     Self::read_initial_module_values(&mut settings, &dev_conn);
@@ -1382,7 +1370,7 @@ impl EntropyApp {
                     Self::read_module_settings(&json, &supported_qmk_settings, &dev_conn)
                 };
 
-                let layer_led_settings = if staged_bluetooth_load {
+                let layer_led_settings = if staged_initial_load {
                     LayerLedSettingsState::default()
                 } else {
                     Self::read_layer_led_settings(
@@ -1393,7 +1381,7 @@ impl EntropyApp {
                     )
                 };
 
-                let rgb_settings = if staged_bluetooth_load {
+                let rgb_settings = if staged_initial_load {
                     RgbSettingsState::default()
                 } else if layer_led_settings.supported && layout.lighting_mode.is_none() {
                     // hpd3-style Ergohaven boards use QMK RGBLight internally only as a
@@ -1420,7 +1408,7 @@ impl EntropyApp {
                 };
 
                 progress("Reading tap dance entries…")?;
-                let mut tap_dance_entries = if staged_bluetooth_load {
+                let mut tap_dance_entries = if staged_initial_load {
                     vec![crate::keycode_picker::TapDanceEntry::default(); tap_dance_count as usize]
                 } else {
                     let count = tap_dance_count;
@@ -1446,7 +1434,7 @@ impl EntropyApp {
                     entries
                 };
 
-                if !staged_bluetooth_load
+                if !staged_initial_load
                     && (supports_rmk_native_combo_output || supports_rmk_native_tap_dance_actions)
                 {
                     let native_actions = dev_conn
@@ -1467,7 +1455,7 @@ impl EntropyApp {
                 }
 
                 progress("Reading key overrides…")?;
-                let key_override_entries = if staged_bluetooth_load {
+                let key_override_entries = if staged_initial_load {
                     vec![KeyOverrideEntry::default(); key_override_count as usize]
                 } else {
                     let count = key_override_count;
@@ -1503,7 +1491,7 @@ impl EntropyApp {
                     entries
                 };
 
-                let alt_repeat_entries = if staged_bluetooth_load {
+                let alt_repeat_entries = if staged_initial_load {
                     vec![AltRepeatKeyEntry::default(); reported_alt_repeat_count as usize]
                 } else {
                     let count = reported_alt_repeat_count;
@@ -1537,7 +1525,7 @@ impl EntropyApp {
                     &json,
                     rmk_native_capabilities.vial_macro_ext,
                 );
-                let deferred_load = if staged_bluetooth_load {
+                let deferred_load = if staged_initial_load {
                     let definition_fingerprint = vial_definition_fingerprint(&json)
                         .map_err(|error| format!("Layout fingerprint failed: {error}"))?;
                     let modules_supported = module_settings.supported;
@@ -1586,7 +1574,7 @@ impl EntropyApp {
                     || supports_rmk_native_tap_dance_actions
                     || supports_rmk_combo_layers;
                 let legacy_qube = layout.live_features.time && layout.live_features.media;
-                let firmware_update_target = crate::app::rmk_firmware_release_target(
+                let firmware_update_target = crate::app::firmware_release_target(
                     dev.vendor_id,
                     dev.product_id,
                     firmware_version.as_deref(),
@@ -1672,6 +1660,7 @@ impl EntropyApp {
                 })
             })();
 
+            crate::connect_timing::event(&format!("worker.done elapsed_us={} ok={}",timing_started.elapsed().as_micros(),result.is_ok()));
             let _ = tx.send(ConnectTaskMessage::Done(Box::new(result)));
         });
     }
@@ -1991,10 +1980,9 @@ mod tests {
 
     #[test]
     fn timeout_after_initial_keymap_read_keeps_rmk_capability_probe_optional() {
-        let (device, recorder) = crate::hid::HidDevice::test_device_with_fault_after_requests(Some((
-            1,
-            crate::hid::TestHidFault::Timeout,
-        )));
+        let (device, recorder) = crate::hid::HidDevice::test_device_with_fault_after_requests(
+            Some((1, crate::hid::TestHidFault::Timeout)),
+        );
 
         device.get_keymap_buffer(1, 1, 1).unwrap();
 
@@ -2036,6 +2024,16 @@ mod tests {
         let current = vec![None, None];
 
         assert!(layer_name_sync_updates(&names, &current, &[1, 2, 3]).is_empty());
+    }
+
+    #[test]
+    fn cleared_layer_name_sync_writes_empty_only_when_supported_and_read() {
+        let names = vec![String::new(); 3];
+        let current = vec![Some("Old".into()), None, Some("Old".into())];
+        assert_eq!(
+            layer_name_sync_updates(&names, &current, &[200, 201]),
+            vec![(200, String::new())]
+        );
     }
 
     #[test]

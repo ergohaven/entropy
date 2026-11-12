@@ -10,6 +10,7 @@ mod device;
 #[cfg(not(target_arch = "wasm32"))]
 mod device_session;
 mod diagnostics;
+mod connect_timing;
 mod firmware;
 mod firmware_builtin_icons;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -29,6 +30,8 @@ mod linux_ble;
 mod linux_setup;
 #[cfg(target_os = "linux")]
 mod linux_text_expander;
+#[cfg(target_os = "linux")]
+mod linux_tray;
 #[cfg(not(target_arch = "wasm32"))]
 mod pdf;
 mod popup_state;
@@ -39,6 +42,7 @@ mod rynk;
 mod smart_input;
 mod text_expander;
 mod ui_style;
+mod ui_textures;
 mod universal_symbols;
 mod vial_native;
 
@@ -298,6 +302,10 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // Freeze missing storage ancestry before any startup helper can create it.
+    #[cfg(not(target_arch = "wasm32"))]
+    app::EntropyApp::initialize_import_backup_namespace();
+
     #[cfg(not(target_arch = "wasm32"))]
     let headless_export = match app::HeadlessExportRequest::from_args(std::env::args_os()) {
         Ok(request) => request,
@@ -316,6 +324,11 @@ fn main() -> eframe::Result<()> {
     {
         if let Some(request) = headless_export {
             if single_instance_enabled() && !try_acquire_single_instance() {
+                // The running instance owns the keyboards; it exports for us.
+                #[cfg(unix)]
+                if let Some(code) = app::export_via_running_instance(&request) {
+                    std::process::exit(code);
+                }
                 log::error!(
                     "Another Entropy instance is running; close it or export from its Layout menu"
                 );
@@ -346,6 +359,26 @@ fn main() -> eframe::Result<()> {
 
     #[cfg(target_os = "macos")]
     hid::initialize_macos_hid_on_main_thread();
+    #[cfg(target_os = "macos")]
+    app::prepare_macos_update_notifications();
+
+    #[cfg(target_os = "windows")]
+    let (background_app, launch_minimized) = if launch_minimized {
+        let ctx = egui::Context::default();
+        let mut app = app::EntropyApp::new_with_context(&ctx);
+        // The layout indicator is itself a graphics window. Keep its existing
+        // startup behavior, including the hidden main window.
+        if app.app_settings.sticky_layout_window {
+            (Some(app), true)
+        } else {
+            if app.run_windowless_until_restore(&ctx) {
+                return Ok(());
+            }
+            (Some(app), false)
+        }
+    } else {
+        (None, false)
+    };
 
     let viewport = egui::ViewportBuilder::default()
         .with_title(APP_TITLE)
@@ -484,14 +517,19 @@ fn main() -> eframe::Result<()> {
                     .insert(egui::FontFamily::Name(family.into()), vec![font.to_owned()]);
             }
             cc.egui_ctx.set_fonts(fonts);
+            #[cfg(target_os = "windows")]
+            let app = background_app.unwrap_or_else(|| EntropyApp::new(cc));
+            #[cfg(not(target_os = "windows"))]
             let app = EntropyApp::new(cc);
+            cc.egui_ctx.set_zoom_factor(app.app_settings.ui_scale);
             #[cfg(target_os = "windows")]
             let app = if launch_minimized {
                 app.with_start_hidden_to_tray()
             } else {
                 app
             };
-            #[cfg(not(target_os = "windows"))]
+            // Linux decides on the first pass: to the tray, or minimized.
+            #[cfg(not(any(target_os = "windows", target_os = "linux")))]
             if launch_minimized {
                 cc.egui_ctx
                     .send_viewport_cmd(egui::ViewportCommand::Minimized(true));

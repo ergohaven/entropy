@@ -108,10 +108,14 @@ pub(crate) fn is_read_request(command: &[u8]) -> bool {
         ),
         // Pictogram QUERY/package/validity/slot reads never write storage.
         [0xC0 | 0xC1 | 0xCA | 0xCB, ..] => true,
+        [0xeb,8,0xa5,1|2,_,_,_,_,rest @ ..] if command.len()==32 && rest.iter().all(|b|*b==0)=>true,
+        [0xef,9,0|5,0..=99,..] if command.len()==32=>true,
+        [0xef,9,3,0..=99,_,_,_,_,rest @ ..] if command.len()==32 && rest.iter().all(|b|*b==0)=>true,
+        [0xef,9,6,0..=99,_,_,_,_,_,_,1..=20,rest @ ..] if command.len()==32 && rest.iter().all(|b|*b==0)=>true,
         // Capability poll with zero event acknowledgement cannot consume events.
         // Nonzero acknowledgements and all application-layout writes stay denied.
         [0xE6, version, 0xA5, 0, 0, rest @ ..]
-            if *version == crate::application_layouts::APPLICATION_LAYOUT_PROTOCOL_VERSION
+            if matches!(*version, 7 | 8)
                 && rest.iter().all(|byte| *byte == 0) =>
         {
             true
@@ -126,6 +130,9 @@ pub(crate) fn is_read_request(command: &[u8]) -> bool {
 /// the keymap buffer with its per-key fallback).
 pub(crate) fn entlayout_section_of_read(command: &[u8]) -> Option<&'static str> {
     match command {
+        [CMD_VIA_LIGHTING_GET_VALUE, QMK_RGBLIGHT_BRIGHTNESS..=QMK_RGBLIGHT_COLOR | VIALRGB_GET_INFO..=VIALRGB_GET_SUPPORTED, ..] => {
+            Some("Rgb")
+        }
         [CMD_VIA_GET_KEYCODE, ..] => Some("Keymap"),
         [CMD_VIA_GET_KEYBOARD_VALUE, VIA_LAYOUT_OPTIONS, ..] => Some("LayoutOptions"),
         [CMD_VIA_MACRO_GET_COUNT | CMD_VIA_MACRO_GET_BUFFER_SIZE | CMD_VIA_MACRO_GET_BUFFER, ..] => {

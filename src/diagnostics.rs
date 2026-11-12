@@ -195,6 +195,12 @@ pub(crate) fn active_log_path_display() -> String {
 }
 
 fn entropy_config_dir() -> std::path::PathBuf {
+    // UI diagnostic captures must share the calling test's isolated storage,
+    // not fall back to a global config directory during serial/parallel gates.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    if let Some(root) = crate::app::test_config_root() {
+        return root.join("entropy");
+    }
     dirs::config_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("entropy")

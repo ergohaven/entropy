@@ -199,8 +199,7 @@ pub fn allocate_ui_at_rect<R>(
     rect: egui::Rect,
     add_contents: impl FnOnce(&mut Ui) -> R,
 ) -> egui::InnerResponse<R> {
-    #[allow(deprecated)]
-    ui.allocate_ui_at_rect(rect, add_contents)
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), add_contents)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -337,7 +336,7 @@ pub fn modern_keycap_button(ui: &mut Ui, label: &str, size: Vec2, enabled: bool)
 #[allow(dead_code)]
 pub fn settings_segmented_control(
     ui: &mut Ui,
-    id_source: impl std::hash::Hash,
+    id_source: impl egui::AsIdSalt,
     labels: &[String],
     selected: usize,
     size: Vec2,
@@ -349,7 +348,7 @@ pub fn settings_segmented_control(
     let dark = ui.visuals().dark_mode;
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let segment_width = rect.width() / labels.len() as f32;
-    let base_id = ui.id().with(id_source);
+    let base_id = ui.scope_id().with(id_source);
     let mut picked = None;
 
     ui.painter().rect(
@@ -604,7 +603,7 @@ pub fn modern_text_preview_field_sized(
                 .font(FontId::proportional(12.5 * (height / 32.0).clamp(1.0, 1.3)))
                 .frame(egui::Frame::NONE)
                 .interactive(false)
-                .vertical_align(egui::Align::Center),
+                .align(egui::Align2::LEFT_CENTER),
         );
     });
     let response = ui.interact(field_rect, id.with("preview_click"), Sense::click());
@@ -708,8 +707,7 @@ fn modern_text_field_impl(
                 .char_limit(char_limit)
                 .frame(egui::Frame::NONE)
                 .interactive(interactive)
-                .horizontal_align(horizontal_align)
-                .vertical_align(egui::Align::Center),
+                .align(egui::Align2([horizontal_align, egui::Align::Center])),
         )
     })
     .inner;
@@ -747,8 +745,7 @@ pub fn modern_text_field_sized_with_layouter(
             .char_limit(char_limit)
             .frame(egui::Frame::NONE)
             .interactive(interactive)
-            .horizontal_align(horizontal_align)
-            .vertical_align(egui::Align::Center)
+            .align(egui::Align2([horizontal_align, egui::Align::Center]))
             .layouter(layouter)
             .show(ui)
     })
@@ -1380,11 +1377,7 @@ pub fn modal_window_frame(style: &egui::Style, dark: bool) -> egui::Frame {
 }
 
 pub fn modal_backdrop_alpha(dark: bool) -> u8 {
-    if dark {
-        96
-    } else {
-        48
-    }
+    if dark { 96 } else { 48 }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1414,19 +1407,23 @@ pub fn centered_modal_window<'a>(
     open: &'a mut bool,
     size: Vec2,
 ) -> egui::Window<'a> {
+    let style = ctx.global_style();
+    let frame = modal_window_frame(style.as_ref(), style.visuals.dark_mode);
+    // `size` is the most the content takes, and the window fits what it uses.
+    // egui sizes a window by its outer size, so add the frame and a title bar
+    // of one heading row inside the frame's margin.
+    let title_bar = frame.inner_margin.sum().y
+        + ctx.fonts_mut(|fonts| fonts.row_height(&egui::TextStyle::Heading.resolve(&style)));
     egui::Window::new(title)
         .id(id)
         .open(open)
         .collapsible(false)
-        .resizable(false)
         .movable(true)
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-        .fixed_size(size)
-        .frame(modal_window_frame(
-            ctx.global_style().as_ref(),
-            ctx.global_style().visuals.dark_mode,
-        ))
+        .auto_sized()
+        .max_size(size + frame.total_margin().sum() + Vec2::new(0.0, title_bar))
+        .frame(frame)
 }
 
 pub fn modal_content(ui: &mut Ui, layout: ModalLayout, add_contents: impl FnOnce(&mut Ui)) {
@@ -1527,13 +1524,22 @@ pub fn settings_list_row_with_tooltip(
     } else {
         muted_text(dark)
     };
-    ui.painter().text(
-        egui::pos2(row_rect.left() + 2.0, row_rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        egui::FontId::proportional(13.0 * label_scale),
-        label_color,
+    // Keep label ink inside its own column. Long localized labels can wrap
+    // over two lines, but must never paint beneath an interactive control.
+    let label_width = (content_width - control_width - 20.0).max(0.0);
+    let label_rect = egui::Rect::from_min_size(
+        egui::pos2(row_rect.left() + 2.0, row_rect.top()),
+        egui::vec2(label_width, row_height),
     );
+    if label_width > 0.0 && row_height > 0.0 {
+        let font = egui::FontId::proportional(13.0 * label_scale);
+        let mut job = egui::text::LayoutJob::simple(label.to_owned(), font.clone(), label_color, label_width);
+        job.wrap.max_rows = if row_height >= font.size * 2.6 { 2 } else { 1 };
+        let galley = ui.painter().layout_job(job);
+        let position = egui::pos2(label_rect.left(), row_rect.center().y - galley.size().y / 2.0);
+        ui.painter().with_clip_rect(ui.clip_rect().intersect(label_rect))
+            .galley(position, galley, label_color);
+    }
 
     if let Some(tooltip) = tooltip {
         let text_width = (label.chars().count() as f32 * 7.4 * label_scale + 8.0)
@@ -1547,7 +1553,7 @@ pub fn settings_list_row_with_tooltip(
         );
         let label_resp = ui.interact(
             label_rect,
-            ui.id().with(("settings_label", label)),
+            ui.scope_id().with(("settings_label", label)),
             egui::Sense::hover(),
         );
         if label_resp.hovered() {
@@ -1593,7 +1599,7 @@ pub fn settings_switch_sized(
 
 pub fn settings_switch_sized_stable(
     ui: &mut Ui,
-    id_source: impl std::hash::Hash,
+    id_source: impl egui::AsIdSalt,
     checked: &mut bool,
     desired_size: Vec2,
 ) -> egui::Response {
@@ -1602,7 +1608,7 @@ pub fn settings_switch_sized_stable(
 
 pub fn settings_switch_sized_stable_interactive(
     ui: &mut Ui,
-    id_source: impl std::hash::Hash,
+    id_source: impl egui::AsIdSalt,
     checked: &mut bool,
     desired_size: Vec2,
     interactive: bool,
@@ -1612,7 +1618,7 @@ pub fn settings_switch_sized_stable_interactive(
         checked,
         desired_size,
         interactive,
-        Some(ui.id().with(id_source)),
+        Some(ui.scope_id().with(id_source)),
     )
 }
 
@@ -1751,13 +1757,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn settings_row_long_labels_stay_out_of_controls_in_both_themes() {
+        for dark in [false,true] { for width in [386.0,560.0,900.0] {
+            for label in ["Показывать раскладку в течение", "Выключать дисплей через", "Long setting label that must not paint behind its control"] {
+                let ctx=egui::Context::default();ctx.set_visuals(if dark {egui::Visuals::dark()} else {egui::Visuals::light()});
+                let control=std::cell::Cell::new(egui::Rect::NOTHING);
+                let output=crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput {
+                    screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width+40.0,160.0))),..Default::default()
+                },|ui| {
+                    settings_list_row_with_tooltip(ui,width,54.0,label,true,None,222.0,|ui| {control.set(ui.max_rect());ui.label("control");});
+                }));
+                let painted=output.shapes.iter().find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.job.text==label => Some(egui::Rect::from_min_size(t.pos,t.galley.size()).intersect(s.clip_rect)),_=>None
+                }).expect("production label paint");
+                assert!(painted.right()<=control.get().left()-8.0,"label overlaps control: width={width} label={label} paint={painted:?} control={:?}",control.get());
+                assert!(painted.top()>=control.get().top() && painted.bottom()<=control.get().bottom(),"label escapes row vertically");
+            }
+        }}
+    }
+
+    #[test]
     fn long_rule_trigger_preview_is_click_only_and_clipped() {
         let ctx = egui::Context::default();
         let text = format!("shortcut\n{}", "suffix".repeat(40));
         let rect = std::cell::Cell::new(egui::Rect::NOTHING);
         let clicked = std::cell::Cell::new(false);
         let frame = |events| {
-            ctx.run_ui(
+            crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1769,7 +1795,7 @@ mod tests {
                 |ui| {
                     let response = modern_text_preview_field_sized(
                         ui,
-                        egui::Id::new("trigger-preview-test"),
+                        egui::Id::unique("trigger-preview-test"),
                         &text,
                         82.0,
                         32.0,
@@ -1778,14 +1804,16 @@ mod tests {
                     rect.set(response.rect);
                     clicked.set(response.clicked());
                 },
-            )
+            ))
         };
         let output = frame(Vec::new());
-        assert!(output
-            .shapes
-            .iter()
-            .filter(|shape| matches!(shape.shape, egui::Shape::Text(_)))
-            .all(|shape| shape.clip_rect.right() <= rect.get().right() + 0.1));
+        assert!(
+            output
+                .shapes
+                .iter()
+                .filter(|shape| matches!(shape.shape, egui::Shape::Text(_)))
+                .all(|shape| shape.clip_rect.right() <= rect.get().right() + 0.1)
+        );
         assert!(output.shapes.iter().any(|shape| {
             matches!(&shape.shape, egui::Shape::Text(text)
                 if text.galley.job.text.contains("shortcut suffix")
@@ -1823,7 +1851,7 @@ mod tests {
             let ctx = egui::Context::default();
             ctx.set_visuals(visuals);
             let mut text = "Text".to_owned();
-            let output = ctx.run_ui(
+            let output = crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1841,7 +1869,7 @@ mod tests {
                         480,
                     );
                 },
-            );
+            ));
             assert!(output.shapes.iter().any(|clipped| {
                 matches!(&clipped.shape, egui::Shape::Rect(rect)
                     if (rect.rect.width() - 420.0).abs() < 0.1
@@ -1858,7 +1886,7 @@ mod tests {
         events: Vec<egui::Event>,
     ) -> egui::Rect {
         let rect = std::cell::Cell::new(egui::Rect::NOTHING);
-        let _ = ctx.run_ui(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1877,7 +1905,8 @@ mod tests {
                 );
                 rect.set(response.rect);
             },
-        );
+        )
+        .drop_without_applying_deltas();
         rect.get()
     }
 

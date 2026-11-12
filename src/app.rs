@@ -3,8 +3,8 @@ use crate::firmware::FirmwareProtocol;
 
 use crate::keyboard::{KeyboardLayout, LayoutOption, PhysicalEncoder, PhysicalKey};
 use crate::keycode::{
-    key_label_font_sizes, keycode_label_with_names_and_layout, keycode_tooltip, KeyLegendLayout,
-    KeyOutputLayout,
+    KeyLegendLayout, KeyOutputLayout, key_label_font_sizes, keycode_label_with_names_and_layout,
+    keycode_tooltip,
 };
 use crate::keycode_picker::{DeferredPickerDataState, KeycodePicker, KeycodeTab};
 use egui::{Color32, FontId, RichText, Sense, Stroke, Vec2};
@@ -33,10 +33,10 @@ mod app_state;
 #[path = "pictogram_origin.rs"]
 mod pictogram_origin;
 pub use app_state::*;
-#[cfg(not(target_arch = "wasm32"))]
-use pictogram_origin::is_known_migrated_stock_pictogram;
 #[cfg(test)]
 use pictogram_origin::LEGACY_NAME_LOOKUPS;
+#[cfg(not(target_arch = "wasm32"))]
+use pictogram_origin::is_known_migrated_stock_pictogram;
 
 #[path = "app_init.rs"]
 mod app_init;
@@ -44,13 +44,20 @@ mod app_init;
 #[path = "app_storage.rs"]
 mod app_storage;
 use app_storage::*;
+#[cfg(test)]
+pub(crate) use app_storage::test_config_root;
 #[path = "app_update.rs"]
 mod app_update;
 use app_update::*;
 #[path = "app_repaint.rs"]
 mod app_repaint;
 #[cfg(not(target_arch = "wasm32"))]
+#[path = "update_notifications.rs"]
+mod update_notifications;
+#[cfg(not(target_arch = "wasm32"))]
 use app_repaint::*;
+#[cfg(target_os = "macos")]
+pub(crate) use update_notifications::prepare_macos_update_notifications;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "application_layout_portable.rs"]
 mod application_layout_portable;
@@ -59,9 +66,11 @@ mod entlayout;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "headless_export.rs"]
 mod headless_export;
+#[cfg(unix)]
+pub(crate) use headless_export::export_via_running_instance;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use headless_export::{
-    run_headless_export, HeadlessExportRequest, EXIT_INSTANCE_RUNNING, EXIT_USAGE,
+    EXIT_INSTANCE_RUNNING, EXIT_USAGE, HeadlessExportRequest, run_headless_export,
 };
 #[path = "entsettings.rs"]
 mod entsettings;
@@ -89,6 +98,9 @@ mod application_layout_runtime;
 mod application_layouts_settings_ui;
 #[path = "ui/auto_shift_settings.rs"]
 mod auto_shift_settings_ui;
+#[cfg(any(target_os = "windows", test))]
+#[path = "ui/background_startup.rs"]
+mod background_startup;
 #[path = "ui/bluetooth_settings.rs"]
 mod bluetooth_settings_ui;
 #[path = "ui/combo_write.rs"]
@@ -226,6 +238,9 @@ mod touchpad_settings_ui;
 mod typing_trainer_ui;
 #[path = "ui/ui_scale.rs"]
 mod ui_scale;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "ui/sm62_fps.rs"]
+mod sm62_fps;
 #[path = "ui/vial_hid_task.rs"]
 mod vial_hid_task;
 #[cfg(not(target_arch = "wasm32"))]
@@ -234,3 +249,11 @@ use vial_hid_task::VialHidTask;
 mod vial_unlock;
 #[path = "ui/window_lifecycle.rs"]
 mod window_lifecycle;
+
+/// egui checks in debug builds that the texture changes of every pass reach a
+/// painter. Tests that run passes on a bare `egui::Context` have no painter.
+#[cfg(test)]
+pub(crate) fn discard_texture_deltas(mut output: egui::FullOutput) -> egui::FullOutput {
+    output.textures_delta.clear();
+    output
+}

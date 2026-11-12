@@ -1,5 +1,10 @@
 use super::*;
 
+pub(super) fn connection_permission_denied(error: &str) -> bool {
+    ["org.bluez.Error.NotAuthorized", "org.bluez.Error.NotPermitted", "org.freedesktop.DBus.Error.AccessDenied"]
+        .iter().any(|name| error.contains(name))
+}
+
 fn select_keyboard_title(lang: crate::i18n::Language, has_error: bool) -> &'static str {
     match (lang, has_error) {
         (crate::i18n::Language::Russian, true) => "Не удалось открыть устройство",
@@ -39,6 +44,18 @@ fn device_selection_needs_scroll(device_count: usize) -> bool {
 }
 
 impl EntropyApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn show_connection_failure(&mut self, error: String) {
+        let name = self.selected_device
+            .and_then(|i| self.device_manager.devices().get(i))
+            .map(|d| d.display_name_with_transport(&d.name));
+        log::error!("Connection stopped for {:?}: {}", name, error);
+        self.selected_device = None;
+        self.clear_connected_keyboard_state(format!("Connect failed: {}\n{}", name.unwrap_or_default(), error));
+        // Discovery may update inventory, but another open requires an explicit click.
+        self.connect_state = ConnectState::SelectingDevice;
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn bluetooth_reconnect_active(&self) -> bool {
         matches!(
@@ -126,6 +143,8 @@ impl EntropyApp {
         self.selected_encoder = None;
         self.unlock_open = false;
         self.vial_unlock_session_started = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        { self.vial_unlock_event_pause = None; }
         self.vial_unlock_polling = false;
         self.vial_unlock_last_poll = None;
         self.pending_layout_indicator_open_after_unlock = false;
@@ -168,6 +187,10 @@ impl EntropyApp {
         state: BluetoothReconnectState,
         error: &str,
     ) {
+        if connection_permission_denied(error) {
+            self.show_connection_failure(error.to_owned());
+            return;
+        }
         log::debug!(
             "Bluetooth reconnect attempt failed for {}: {}",
             state.display_name,
@@ -232,6 +255,8 @@ impl EntropyApp {
         self.vial_unlocked = None;
         self.vial_unlock_keys.clear();
         self.vial_unlock_session_started = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        { self.vial_unlock_event_pause = None; }
         self.vial_unlock_polling = false;
         self.vial_unlock_last_poll = None;
         self.pending_layout_indicator_open_after_unlock = false;
@@ -291,11 +316,14 @@ impl EntropyApp {
             })
             .collect();
         let has_error = !self.status_msg.trim().is_empty();
-        let status_height = if has_error { 76.0 } else { 0.0 };
-        let panel_width = rect.width().min(520.0);
+        let panel_width = (rect.width() - 24.0).clamp(1.0, 520.0);
         let adaptive_list_width =
             adaptive_top_dropdown_width(ui, devices.iter().map(|(_, label)| label.as_str()), 220.0);
         let list_size = device_selection_list_size(panel_width, adaptive_list_width, devices.len());
+        // Reserve the device choices first; long errors scroll within the remainder.
+        let status_height = if has_error {
+            (rect.height() - 32.0 - 110.0 - list_size.y).clamp(40.0, 182.0)
+        } else { 0.0 };
         let panel_height = 110.0 + status_height + list_size.y;
         let max_panel_height = (rect.height() - 32.0).max(120.0);
         let panel_rect = egui::Rect::from_center_size(
@@ -327,16 +355,23 @@ impl EntropyApp {
 
                 if has_error {
                     ui.add_space(8.0);
-                    ui.add_sized(
-                        egui::vec2(panel_width.min(460.0), 68.0),
-                        egui::Label::new(
-                            RichText::new(crate::i18n::tr_text(lang, &self.status_msg))
-                                .size(12.0)
-                                .color(app_muted_text(dark)),
-                        )
-                        .wrap()
-                        .halign(egui::Align::Center),
-                    );
+                    egui::ScrollArea::vertical()
+                        .id_salt("device_connection_error")
+                        .max_height(status_height - 32.0)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.set_width((panel_width - 20.0).max(1.0));
+                            ui.add(egui::Label::new(
+                                RichText::new(crate::i18n::tr_text(lang, &self.status_msg))
+                                    .size(12.0)
+                                    .color(app_muted_text(dark)),
+                            ).wrap());
+                        });
+                    if ui.button(super::application_layout_runtime::app_layout_text(
+                        lang, "Копировать ошибку", "Copy error",
+                    )).clicked() {
+                        ui.ctx().copy_text(self.status_msg.clone());
+                    }
                 }
 
                 ui.add_space(14.0);
@@ -365,7 +400,7 @@ impl EntropyApp {
                     });
                     if let Some(idx) = selected_device {
                         self.main_menu_tab = MainMenuTab::Keyboard;
-                        self.start_connect(idx);
+                        self.connect_picked_device(idx);
                     }
                 });
             });
@@ -491,6 +526,49 @@ mod tests {
 
         assert!(app.selected_device.is_none());
         assert!(matches!(app.connect_state, ConnectState::SelectingDevice));
+    }
+
+    #[test]
+    fn authorization_failure_ends_reconnect_instead_of_scheduling_more_attempts() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&cc);
+        let device = bluetooth_device("/nonexistent/denied-bt");
+        app.device_manager.replace_devices(vec![device.clone()]);
+        app.selected_device = Some(0);
+        let state = BluetoothReconnectState::new(device.stable_identity(), device.name);
+        app.schedule_bluetooth_reconnect_retry(state, "org.bluez.Error.NotAuthorized: Operation Not Authorized");
+        assert!(matches!(app.connect_state, ConnectState::SelectingDevice));
+        assert!(app.selected_device.is_none());
+        assert!(app.status_msg.contains("NotAuthorized"));
+        assert!(!app.bluetooth_reconnect_active());
+    }
+
+    #[test]
+    fn long_failure_wraps_without_hiding_device_choices_on_small_windows() {
+        for lang in [crate::i18n::Language::Russian, crate::i18n::Language::English] {
+            for size in [egui::vec2(480.0, 360.0), egui::vec2(800.0, 600.0)] {
+                let ctx = egui::Context::default();
+                let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                let mut app = EntropyApp::new(&cc);
+                app.app_settings.language = lang;
+                app.device_manager.replace_devices(vec![bluetooth_device("/nonexistent/bt"), Device { name: "SM62 USB".into(), ..bluetooth_device("/nonexistent/usb") }]);
+                app.status_msg = format!("Connect failed: K04\n{}", "org.bluez.Error.NotAuthorized: Operation Not Authorized; ".repeat(20));
+                let mut output = None;
+                for _ in 0..3 {
+                    output = Some(crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() }, |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| { app.draw_device_selection_empty_state(ui, ui.max_rect()); });
+                    })));
+                }
+                let output = output.unwrap();
+                let error = output.shapes.iter().find_map(|s| match &s.shape { egui::Shape::Text(t) if t.galley.job.text.contains("NotAuthorized") => Some(t), _ => None }).expect("failure is absent");
+                assert!(error.galley.rows.len() > 1);
+                assert!(error.galley.size().x <= size.x - 24.0);
+                let choice = output.shapes.iter().find_map(|s| match &s.shape { egui::Shape::Text(t) if t.galley.job.text.contains("SM62 USB") => Some((s.clip_rect, t.pos + t.galley.rect.center().to_vec2())), _ => None }).expect("device choice is absent");
+                assert!(choice.0.contains(choice.1), "device choice clipped at {size:?}");
+                assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, size).contains(choice.1));
+            }
+        }
     }
 
     #[test]

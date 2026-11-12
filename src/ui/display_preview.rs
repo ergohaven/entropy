@@ -22,45 +22,42 @@ fn sm62_preview_mode(settings: &[u8], scene: u8) -> u8 {
     }
 }
 
-fn sm62_orbit_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
-    let id = egui::Id::new("sm62_orbit_firmware_frames");
-    if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
-        return Some(texture);
-    }
-    // Decoded from firmware anim_00..15 and flame_00..15 at 240x280.
-    let image = image::load_from_memory(include_bytes!("../../assets/sm62/orbit_frames.png"))
-        .ok()?.into_rgba8();
-    if image.dimensions() != (960, 1120) { return None; }
-    let color_image = egui::ColorImage::from_rgba_unmultiplied([960, 1120], image.as_raw());
-    let texture = ctx.load_texture("sm62-orbit-firmware-frames", color_image,
-        egui::TextureOptions::LINEAR);
-    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
-    Some(texture)
-}
+include!("sm62_orbit_preview.rs");
 
 include!("sm62_keymap_preview.rs");
 include!("sm62_clock_preview.rs");
 include!("sm62_player_preview.rs");
 
-fn paint_sm62_screen(ui: &egui::Ui, screen: egui::Rect, settings: &[u8], scene: u8, date_enabled: bool, side: usize, language: Option<&str>, stars_enabled: bool, screens_off: bool, clock_live: bool) {
+fn paint_sm62_screen(
+    ui: &egui::Ui,
+    screen: egui::Rect,
+    settings: &[u8],
+    scene: u8,
+    date_enabled: bool,
+    side: usize,
+    language: Option<&str>,
+    stars_enabled: bool,
+    screens_off: bool,
+    clock_live: bool,
+) {
     let painter = ui.painter();
     let scale = screen.width() / DISPLAY_WIDTH;
     let at = |x: f32, y: f32| screen.min + egui::vec2(x * scale, y * scale);
     let muted = Color32::from_rgb(131, 127, 118);
     painter.rect_filled(screen, display_corner_radius(screen.width()), Color32::from_rgb(7, 7, 5));
-    if screens_off { painter.rect_filled(screen, display_corner_radius(screen.width()), Color32::BLACK); return; }
     let mode = sm62_preview_mode(settings, scene);
+    let orbit = sm62_orbit_update(ui, side, mode == 2 && !screens_off && ui.is_rect_visible(screen), settings[0] == 2, screens_off || !ui.is_rect_visible(screen));
+    if screens_off { painter.rect_filled(screen, display_corner_radius(screen.width()), Color32::BLACK); return; }
+    // Advance only visible animated content, using egui's monotonic frame clock.
+    // Firmware orbit and starfield updates both use a 50 ms cadence.
+    let ticks = ui.input(|input| (input.time * 20.0).floor() as u64);
+    if ui.is_rect_visible(screen) && (mode == 2 || (stars_enabled && mode != 3)) {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+    }
     if mode == 2 {
-        if let Some(texture) = sm62_orbit_texture(ui.ctx()) {
-            // One representative firmware frame; this is a static preview.
-            let frame = 13;
-            let col = frame % 4;
-            let row = frame / 4;
-            let uv = egui::Rect::from_min_max(
-                egui::pos2(col as f32 / 4.0, row as f32 / 4.0),
-                egui::pos2((col + 1) as f32 / 4.0, (row + 1) as f32 / 4.0));
+        if let Some(texture) = orbit {
             painter.add(egui::epaint::RectShape::filled(screen, display_corner_radius(screen.width()), Color32::WHITE)
-                .with_texture(texture.id(), uv));
+                .with_texture(texture.id(), egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0,1.0))));
         }
         return;
     }
@@ -70,7 +67,7 @@ fn paint_sm62_screen(ui: &egui::Ui, screen: egui::Rect, settings: &[u8], scene: 
     }
     if stars_enabled {
     for i in 0..26 {
-        let x = ((i * 83 + 29) % 226 + 7) as f32;
+        let x = (((i * 83 + 29) % 226) as f32 - (ticks % 226) as f32 * (i % 3 + 1) as f32).rem_euclid(226.0) + 7.0;
         let y = ((i * 61 + 17) % 247 + 12) as f32;
         painter.circle_filled(at(x, y), (i % 3 + 1) as f32 * 0.55 * scale,
             muted.gamma_multiply(0.6));
@@ -82,30 +79,68 @@ fn paint_sm62_screen(ui: &egui::Ui, screen: egui::Rect, settings: &[u8], scene: 
     }
     paint_sm62_layer_header(ui, screen);
     if clock_live {
-        paint_sm62_clock_time(ui, screen, &chrono::Local::now().format("%H:%M").to_string());
+        paint_sm62_clock_time(
+            ui,
+            screen,
+            &chrono::Local::now().format("%H:%M").to_string(),
+        );
         if date_enabled {
             use chrono::Datelike;
             let now = chrono::Local::now();
-            paint_sm62_date(ui, screen, &format!("{:02}.{:02}.{:04}", now.day(), now.month(), now.year()));
+            paint_sm62_date(
+                ui,
+                screen,
+                &format!("{:02}.{:02}.{:04}", now.day(), now.month(), now.year()),
+            );
         }
-        ui.ctx().request_repaint_after(std::time::Duration::from_secs(30));
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs(30));
     } else {
         paint_sm62_clock_fallback(ui, screen);
     }
     paint_sm62_language(ui, screen, language);
 }
 
-pub(super) fn draw_sm62_preview(ui: &mut egui::Ui, settings: &[u8], scene: u8, date_enabled: bool, max_height: f32, side: usize, language: Option<&str>, stars_enabled: bool, screens_off: bool, clock_live: bool) {
+pub(super) fn draw_sm62_preview(
+    ui: &mut egui::Ui,
+    settings: &[u8],
+    scene: u8,
+    date_enabled: bool,
+    max_height: f32,
+    side: usize,
+    language: Option<&str>,
+    stars_enabled: bool,
+    screens_off: bool,
+    clock_live: bool,
+) {
     let size = fitted_display_size((ui.available_width() - 14.0).min(240.0), max_height - 14.0);
     let (outer, _) = ui.allocate_exact_size(size + egui::vec2(14.0, 14.0), Sense::hover());
     // Extend the display background through the former bezel without changing
     // the firmware-pixel content rectangle, outer dimensions or rounded outline.
-    ui.painter().rect(outer, display_corner_radius(size.x) + 7.0,
-        if screens_off { Color32::BLACK } else { Color32::from_rgb(7, 7, 5) },
+    ui.painter().rect(
+        outer,
+        display_corner_radius(size.x) + 7.0,
+        if screens_off {
+            Color32::BLACK
+        } else {
+            Color32::from_rgb(7, 7, 5)
+        },
         Stroke::new(1.0_f32, Color32::from_gray(75)),
-        egui::StrokeKind::Inside);
+        egui::StrokeKind::Inside,
+    );
     let screen = egui::Rect::from_center_size(outer.center(), size);
-    paint_sm62_screen(ui, screen, settings, scene, date_enabled, side, language, stars_enabled, screens_off, clock_live);
+    paint_sm62_screen(
+        ui,
+        screen,
+        settings,
+        scene,
+        date_enabled,
+        side,
+        language,
+        stars_enabled,
+        screens_off,
+        clock_live,
+    );
 }
 
 // Mirrors keyboards/ergohaven/macropad/screen_layout.c in 240×280 source pixels.
@@ -354,7 +389,13 @@ fn paint_layer_navigation_icon(
     paint_packed_key_bitmap(ui, center, size, color, bitmap);
 }
 
-fn paint_packed_key_bitmap(ui: &egui::Ui, center: egui::Pos2, size: f32, color: Color32, bitmap: &[u8]) {
+fn paint_packed_key_bitmap(
+    ui: &egui::Ui,
+    center: egui::Pos2,
+    size: f32,
+    color: Color32,
+    bitmap: &[u8],
+) {
     let pixel = size / 35.0;
     let origin = center - egui::vec2(size, size) * 0.5;
     let mut mesh = egui::epaint::Mesh::default();
@@ -382,7 +423,13 @@ fn paint_preview_key_icon(ui: &egui::Ui, rect: egui::Rect, icon: PreviewKeyIcon,
             } else {
                 *include_bytes!("../../assets/display-delete-right.bin")
             };
-            paint_packed_key_bitmap(ui, rect.center(), rect.height()*(35.0/42.0), color, &bitmap);
+            paint_packed_key_bitmap(
+                ui,
+                rect.center(),
+                rect.height() * (35.0 / 42.0),
+                color,
+                &bitmap,
+            );
         }
         PreviewKeyIcon::LayerPrevious | PreviewKeyIcon::LayerNext => {
             paint_layer_navigation_icon(
@@ -972,43 +1019,39 @@ impl EntropyApp {
     }
 
     fn standby_preview_texture(&self, ctx: &egui::Context) -> Option<egui::TextureHandle> {
-        let frames = &self.display_settings.clock_background_preview_frames_rgba;
-        let frame_index = if frames.is_empty() {
-            0
-        } else {
-            animation_frame_index(
-                &self.display_settings.clock_background_preview_delays_ms,
-                frames.len(),
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = ctx;
+            None
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let preview = self.display_settings.clock_background_preview.as_ref()?;
+            let frame_index = animation_frame_index(
+                &preview.delays_ms(),
+                preview.frame_count(),
                 (ctx.input(|input| input.time) * 1000.0).max(0.0) as u64,
                 self.display_settings.clock_background_speed_percent,
+            );
+            if preview.frame_count() > 1 {
+                ctx.request_repaint_after(std::time::Duration::from_millis(20));
+            }
+            crate::ui_textures::texture(
+                ctx,
+                "standby_background_preview",
+                (
+                    self.connection_generation,
+                    self.display_settings.clock_background_preview_revision,
+                    frame_index,
+                ),
+                || {
+                    Some(egui::ColorImage::from_rgba_unmultiplied(
+                        [240, 280],
+                        &preview.frame_rgba(frame_index)?,
+                    ))
+                },
             )
-        };
-        let rgba = frames
-            .get(frame_index)
-            .unwrap_or(&self.display_settings.clock_background_preview_rgba);
-        if rgba.len() != 240usize * 280usize * 4 {
-            return None;
         }
-        if frames.len() > 1 {
-            ctx.request_repaint_after(std::time::Duration::from_millis(20));
-        }
-        let id = egui::Id::new((
-            "standby_background_preview",
-            self.connection_generation,
-            self.display_settings.clock_background_preview_revision,
-            frame_index,
-        ));
-        if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
-            return Some(texture);
-        }
-        let image = egui::ColorImage::from_rgba_unmultiplied([240, 280], rgba);
-        let texture = ctx.load_texture(
-            format!("standby-background-preview-{frame_index}"),
-            image,
-            egui::TextureOptions::LINEAR,
-        );
-        ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
-        Some(texture)
     }
 
     fn startup_preview_texture(&self, ctx: &egui::Context) -> Option<egui::TextureHandle> {
@@ -1016,42 +1059,32 @@ impl EntropyApp {
         if rgba.len() != 240usize * 280usize * 4 {
             return None;
         }
-        let id = egui::Id::new((
+        crate::ui_textures::texture(
+            ctx,
             "startup_image_preview",
-            self.connection_generation,
-            self.display_settings.startup_image_preview_revision,
-        ));
-        if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
-            return Some(texture);
-        }
-        let image = egui::ColorImage::from_rgba_unmultiplied([240, 280], rgba);
-        let texture =
-            ctx.load_texture("startup-image-preview", image, egui::TextureOptions::LINEAR);
-        ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
-        Some(texture)
+            (
+                self.connection_generation,
+                self.display_settings.startup_image_preview_revision,
+            ),
+            || Some(egui::ColorImage::from_rgba_unmultiplied([240, 280], rgba)),
+        )
     }
 
     fn builtin_startup_logo_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
-        let id = egui::Id::new("m4cr0pad_builtin_startup_logo");
-        if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
-            return Some(texture);
-        }
-        let image = image::load_from_memory(include_bytes!(
-            "../../assets/ergohaven-macropad-startup-logo.png"
-        ))
-        .ok()?
-        .into_rgba8();
-        if image.dimensions() != (240, 72) {
-            return None;
-        }
-        let color_image = egui::ColorImage::from_rgba_unmultiplied([240, 72], image.as_raw());
-        let texture = ctx.load_texture(
-            "m4cr0pad-builtin-startup-logo",
-            color_image,
-            egui::TextureOptions::LINEAR,
-        );
-        ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
-        Some(texture)
+        crate::ui_textures::texture(ctx, "m4cr0pad_builtin_startup_logo", 0, || {
+            let image = image::load_from_memory(include_bytes!(
+                "../../assets/ergohaven-macropad-startup-logo.png"
+            ))
+            .ok()?
+            .into_rgba8();
+            if image.dimensions() != (240, 72) {
+                return None;
+            }
+            Some(egui::ColorImage::from_rgba_unmultiplied(
+                [240, 72],
+                image.as_raw(),
+            ))
+        })
     }
 
     fn paint_startup_display_preview(&self, ui: &mut egui::Ui, screen: egui::Rect) {
@@ -1151,7 +1184,7 @@ impl EntropyApp {
             let scroll_gap = 24.0 * scale;
             let cycle = name_galley.size().x + scroll_gap;
             let now = ui.ctx().input(|input| input.time.max(0.0));
-            let scroll_id = egui::Id::new((
+            let scroll_id = egui::Id::unique((
                 "display_preview_layer_scroll",
                 self.selected_layer,
                 layer_name,
@@ -1595,7 +1628,7 @@ impl EntropyApp {
 mod tests {
     #[test]
     fn backspace_delete_preview_uses_exact_distinct_native_bitmaps() {
-        let expected: [&[u8;154];2] = [
+        let expected: [&[u8; 154]; 2] = [
             include_bytes!("../../tools/artwork/backspace-delete/backspace-approved.bin"),
             include_bytes!("../../tools/artwork/backspace-delete/delete-right.bin"),
         ];
@@ -1603,9 +1636,9 @@ mod tests {
         for (code,bits) in [0x002A,0x004C].into_iter().zip(expected) {
             let icon=super::preview_key_icon(code).expect("Backspace/Delete must be native bitmap icons, not font captions");
             let ctx=egui::Context::default();
-            let output=ctx.run(egui::RawInput::default(),|ctx| {
-                egui::CentralPanel::default().show(ctx,|ui| super::paint_preview_key_icon(ui,rect,icon,egui::Color32::WHITE));
-            });
+            let output=crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(),|ctx| {
+                ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| super::paint_preview_key_icon(ui,rect,icon,egui::Color32::WHITE)));
+            }));
             let meshes:Vec<_>=output.shapes.iter().filter_map(|s| match &s.shape {egui::Shape::Mesh(m)=>Some(m),_=>None}).collect();
             assert_eq!(meshes.len(),1);
             let expected_positions:Vec<_>=(0..1225).filter(|i|bits[i/8]&(0x80>>(i%8))!=0)
@@ -1615,7 +1648,7 @@ mod tests {
                 assert_eq!(quad[0].pos,pos);
             }
         }
-        assert_ne!(expected[0],expected[1]);
+        assert_ne!(expected[0], expected[1]);
     }
 
     #[test]
@@ -1623,9 +1656,9 @@ mod tests {
         let ctx=egui::Context::default();
         let mut fonts=egui::FontDefinitions::default();
         fonts.families.insert(egui::FontFamily::Name("display_preview".into()),fonts.families[&egui::FontFamily::Proportional].clone()); ctx.set_fonts(fonts);
-        let output=ctx.run(egui::RawInput::default(),|ctx| {egui::CentralPanel::default().show(ctx,|ui| {
+        let output=crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(),|ctx| {ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| {
             super::draw_sm62_preview(ui,&[0,0,20,1,1],0,false,245.0,0,None,false,false,false);
-        });});
+        }));}));
         let meshes:Vec<_>=output.shapes.iter().filter_map(|s| if let egui::Shape::Mesh(m)=&s.shape {Some(m)} else {None}).collect();
         assert_eq!(meshes.len(),16,"11 actual Zen header glyphs plus original S M : 6 2, never SVG, local time or fabricated date");
         assert!(!output.shapes.iter().any(|s| matches!(&s.shape,egui::Shape::Text(_))),
@@ -1633,34 +1666,52 @@ mod tests {
         let outer=output.shapes.iter().find_map(|s| if let egui::Shape::Rect(r)=&s.shape { (r.stroke.color==egui::Color32::from_gray(75)).then_some(r.rect) } else {None}).unwrap();
         let screen=outer.shrink(7.0); let scale=screen.width()/240.0;
         // Shared Regular20 LAYER and Medium20 MAIN retain actual firmware bounds.
-        assert_eq!(meshes[0].calc_bounds(),screen_rect(screen,75.0,20.0,10.0,14.0));
-        assert_eq!(meshes[7].calc_bounds(),screen_rect(screen,97.0,53.0,13.0,14.0));
-        assert_ne!(meshes[0].texture_id,meshes[7].texture_id);
+        assert_eq!(
+            meshes[0].calc_bounds(),
+            screen_rect(screen, 75.0, 20.0, 10.0, 14.0)
+        );
+        assert_eq!(
+            meshes[7].calc_bounds(),
+            screen_rect(screen, 97.0, 53.0, 13.0, 14.0)
+        );
+        assert_ne!(meshes[0].texture_id, meshes[7].texture_id);
         // Independent golden glyph bounds from the accepted C/LVGL font metrics.
         // Keep the original fallback checks, excluding only the new bitmap header.
-        for (mesh,(x,y,w,h,slot)) in meshes[11..].iter().zip([(21.0,124.0,36.0,38.0,12),(63.0,125.0,49.0,36.0,11),(127.0,136.0,8.0,26.0,10),(145.0,124.0,36.0,38.0,6),(185.0,124.0,34.0,37.0,2)]) {
-            let rect=mesh.calc_bounds();
-            assert!((rect.min-screen.min-egui::vec2(x,y)*scale).length()<0.001);
-            assert!((rect.size()-egui::vec2(w,h)*scale).length()<0.001);
-            assert_eq!(mesh.vertices[0].uv,egui::pos2((slot%8*64) as f32/512.0,(slot/8*64) as f32/128.0));
+        for (mesh, (x, y, w, h, slot)) in meshes[11..].iter().zip([
+            (21.0, 124.0, 36.0, 38.0, 12),
+            (63.0, 125.0, 49.0, 36.0, 11),
+            (127.0, 136.0, 8.0, 26.0, 10),
+            (145.0, 124.0, 36.0, 38.0, 6),
+            (185.0, 124.0, 34.0, 37.0, 2),
+        ]) {
+            let rect = mesh.calc_bounds();
+            assert!((rect.min - screen.min - egui::vec2(x, y) * scale).length() < 0.001);
+            assert!((rect.size() - egui::vec2(w, h) * scale).length() < 0.001);
+            assert_eq!(
+                mesh.vertices[0].uv,
+                egui::pos2(
+                    (slot % 8 * 64) as f32 / 512.0,
+                    (slot / 8 * 64) as f32 / 128.0
+                )
+            );
         }
     }
 
     #[test]
     fn v8_ship_background_reaches_outer_edges_without_scaling_texture() {
         for (settings, scene, off, ship) in [
-            ([2,1,20,1,1],0,false,true),
-            ([0,1,20,1,1],1,false,true),
-            ([2,1,20,1,1],2,false,false),
-            ([2,1,20,1,1],0,true,false),
-            ([0,0,20,1,1],0,false,false),
+            ([2, 1, 20, 1, 1], 0, false, true),
+            ([0, 1, 20, 1, 1], 1, false, true),
+            ([2, 1, 20, 1, 1], 2, false, false),
+            ([2, 1, 20, 1, 1], 0, true, false),
+            ([0, 0, 20, 1, 1], 0, false, false),
         ] {
             let ctx=egui::Context::default();
             let mut fonts=egui::FontDefinitions::default();
             fonts.families.insert(egui::FontFamily::Name("display_preview".into()),fonts.families[&egui::FontFamily::Proportional].clone()); ctx.set_fonts(fonts);
-            let output=ctx.run(egui::RawInput::default(),|ctx| {egui::CentralPanel::default().show(ctx,|ui| {
+            let output=crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(),|ctx| {ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| {
                 super::draw_sm62_preview(ui,&settings,scene,false,245.0,0,None,false,off,false);
-            });});
+            }));}));
             let rects:Vec<_>=output.shapes.iter().filter_map(|s| if let egui::Shape::Rect(r)=&s.shape {Some(r)} else {None}).collect();
             let outer=rects.iter().find(|r| r.stroke.color==egui::Color32::from_gray(75)).unwrap();
             assert_eq!(outer.fill,if off {egui::Color32::BLACK} else {egui::Color32::from_rgb(7,7,5)},"approved edge fill follows the display background in every mode");
@@ -1669,7 +1720,7 @@ mod tests {
             if ship {
                 let texture=rects.iter().find(|r|r.brush.is_some()).unwrap();
                 assert_eq!(texture.rect,outer.rect.shrink(7.0),"ship asset rectangle/scale/position must not change");
-                assert_eq!(texture.brush.as_ref().unwrap().uv,egui::Rect::from_min_max(egui::pos2(0.25,0.75),egui::pos2(0.5,1.0)));
+                assert_eq!(texture.brush.as_ref().unwrap().uv,egui::Rect::from_min_max(egui::Pos2::ZERO,egui::pos2(1.0,1.0)),"the production compositor uses one 240x280 texture, not a full-scene atlas cell");
             }
         }
     }
@@ -1677,17 +1728,35 @@ mod tests {
     #[test]
     fn v7_ship_texture_is_clipped_to_rounded_panel() {
         let ctx=egui::Context::default();
-        let output=ctx.run(egui::RawInput::default(),|ctx| {
-            egui::CentralPanel::default().show(ctx,|ui| {
+        let output=crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(),|ctx| {
+            ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| {
                 super::draw_sm62_preview(ui,&[2,1,20,1,1],0,true,245.0,0,None,true,false,false);
-            });
-        });
+            }));
+        }));
         assert!(output.shapes.iter().any(|s| matches!(&s.shape,egui::Shape::Rect(r) if r.brush.is_some() && r.corner_radius.nw>0)),"ship image must be a rounded textured panel, not an unclipped rectangular mesh");
     }
 
     use image::GenericImageView;
 
     use super::*;
+
+    #[test]
+    fn startup_preview_reuses_one_texture_across_revisions() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        let before = ctx.tex_manager().read().num_allocated();
+        app.display_settings.startup_image_preview_rgba = vec![255; 240 * 280 * 4];
+        for revision in 0..20 {
+            app.connection_generation = revision;
+            app.display_settings.startup_image_preview_revision = revision;
+            drop(app.startup_preview_texture(&ctx).unwrap());
+        }
+        assert_eq!(
+            ctx.tex_manager().read().num_allocated(),
+            before + 1,
+            "obsolete preview revisions must release their textures"
+        );
+    }
 
     #[test]
     fn sm62_preview_reflects_each_configured_scene() {
@@ -1786,38 +1855,53 @@ mod tests {
     fn sm62_keymap_uses_firmware_curved_junctions_and_bitmap_legends() {
         let ctx = egui::Context::default();
         let mut fonts = egui::FontDefinitions::default();
-        fonts.families.insert(egui::FontFamily::Name("display_preview".into()),
-            fonts.families[&egui::FontFamily::Proportional].clone());
+        fonts.families.insert(
+            egui::FontFamily::Name("display_preview".into()),
+            fonts.families[&egui::FontFamily::Proportional].clone(),
+        );
         ctx.set_fonts(fonts);
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let output = crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
                 paint_sm62_screen(ui, egui::Rect::from_min_size(egui::Pos2::ZERO,
                     egui::vec2(240.0, 280.0)), &[3, 0, 20, 1, 1], 2, false, 0, Some("RU"), true, false,true);
-            });
-        });
+            }));
+        }));
         let images = output.shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::Mesh(_))).count();
         assert_eq!(images, 22, "nine Latin + nine Cyrillic glyphs + four firmware junctions");
         let rectangles: Vec<_> = output.shapes.iter().filter_map(|s| match &s.shape {
             egui::Shape::Rect(r) => Some(r), _ => None }).collect();
         let active = egui::Rect::from_min_size(egui::pos2(85.0, 105.0), egui::vec2(69.0, 69.0));
-        assert!(rectangles.iter().any(|r| r.rect == active && r.fill == Color32::from_rgb(242, 219, 149)));
-        let separators: Vec<_> = rectangles.iter().filter(|r| r.rect.width() == 2.0 || r.rect.height() == 2.0).collect();
+        assert!(rectangles
+            .iter()
+            .any(|r| r.rect == active && r.fill == Color32::from_rgb(242, 219, 149)));
+        let separators: Vec<_> = rectangles
+            .iter()
+            .filter(|r| r.rect.width() == 2.0 || r.rect.height() == 2.0)
+            .collect();
         assert_eq!(separators.len(), 12);
-        assert!(separators.iter().all(|r| r.fill == Color32::from_rgb(131, 127, 118)));
-        assert!(separators.iter().all(|r| r.rect.left() != 6.0 && r.rect.left() != 231.0 && r.rect.top() != 26.0 && r.rect.top() != 251.0));
+        assert!(separators
+            .iter()
+            .all(|r| r.fill == Color32::from_rgb(131, 127, 118)));
+        assert!(separators.iter().all(|r| r.rect.left() != 6.0
+            && r.rect.left() != 231.0
+            && r.rect.top() != 26.0
+            && r.rect.top() != 251.0));
     }
 
     #[test]
     fn sm62_clock_preview_uses_actual_unbounded_bitmaps_and_split_labels() {
         let ctx = egui::Context::default();
         let mut fonts = egui::FontDefinitions::default();
-        fonts.families.insert(egui::FontFamily::Name("display_preview".into()), fonts.families[&egui::FontFamily::Proportional].clone());
+        fonts.families.insert(
+            egui::FontFamily::Name("display_preview".into()),
+            fonts.families[&egui::FontFamily::Proportional].clone(),
+        );
         ctx.set_fonts(fonts);
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let output = crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
                 paint_sm62_screen(ui, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(240.0,280.0)), &[0,0,20,1,1],0,true,0,None,true,false,true);
-            });
-        });
+            }));
+        }));
         let images = output.shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::Mesh(_))).count();
         assert!(images >= 15, "actual 48px time and 16px date must use firmware glyphs; got {images}");
         assert!(!output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text.contains(':'))));
@@ -1829,15 +1913,17 @@ mod tests {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let _app = EntropyApp::new(&cc);
         let mut fonts = egui::FontDefinitions::default();
-        fonts.families.insert(egui::FontFamily::Name("display_preview".into()),
-            fonts.families[&egui::FontFamily::Proportional].clone());
+        fonts.families.insert(
+            egui::FontFamily::Name("display_preview".into()),
+            fonts.families[&egui::FontFamily::Proportional].clone(),
+        );
         ctx.set_fonts(fonts);
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let output = crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
                 paint_sm62_screen(ui, egui::Rect::from_min_size(egui::Pos2::ZERO,
                     egui::vec2(240.0, 280.0)), &[1, 0, 20, 1, 1], 0, false, 0, Some("RU"), true, false,true);
-            });
-        });
+            }));
+        }));
         let labels: Vec<_> = output.shapes.iter().filter_map(|shape| {
             if let egui::Shape::Text(text) = &shape.shape {
                 Some((text.galley.job.text.as_str(), text.pos.y + text.galley.size().y / 2.0))
@@ -1849,7 +1935,9 @@ mod tests {
         assert_eq!(meshes.len(), 38, "all non-space placeholder and language glyphs must be bitmap images");
         assert!(output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r)
             if r.rect == egui::Rect::from_min_size(egui::pos2(20.0, 121.0), egui::vec2(5.0, 17.0)))));
-        assert!(!labels.iter().any(|(label, _)| matches!(*label, "NO SIGNAL" | "Waiting for host")));
+        assert!(!labels
+            .iter()
+            .any(|(label, _)| matches!(*label, "NO SIGNAL" | "Waiting for host")));
     }
 
     #[test]
@@ -1874,14 +1962,14 @@ mod tests {
         app.layout = Some(single_key_layout(0x7700));
         for color in [[255, 255, 255], [19, 137, 220]] {
             app.display_settings.color = color;
-            let output = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let output = crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
+                ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
                     app.paint_main_display_preview(
                         ui,
                         egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(240.0, 280.0)),
                     );
-                });
-            });
+                }));
+            }));
             let icons: Vec<_> = output
                 .shapes
                 .iter()
@@ -1989,3 +2077,7 @@ mod tests {
 
 #[cfg(test)]
 include!("sm62_preview_edge_tests.rs");
+
+#[cfg(test)]
+#[path = "sm62_orbit_parity_tests.rs"]
+mod sm62_orbit_parity_tests;

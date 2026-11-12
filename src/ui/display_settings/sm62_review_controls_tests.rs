@@ -1,8 +1,8 @@
 use super::sm62_shared_write_tests::{click_shared, drain, frame, frame_events};
 use super::*;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 fn setup() -> (EntropyApp, egui::Context, crate::hid::TestHidRecorder) {
@@ -19,7 +19,7 @@ fn setup() -> (EntropyApp, egui::Context, crate::hid::TestHidRecorder) {
     let (hid, recorder) = crate::hid::HidDevice::test_device();
     // Initialize actual device storage, then read it through the production loader.
     for (qsid, value) in (230..=249).zip([
-        0, 0, 20, 0, 1, 0, 0, 20, 0, 1, 1, 1, 200, 200, 1, 1, 1, 1, 0, 0,
+        0, 0, 20, 0, 1, 0, 0, 20, 0, 1, 1, 1, 400, 400, 1, 1, 1, 1, 0, 0,
     ]) {
         if (242..=243).contains(&qsid) {
             hid.set_qmk_setting_u16(qsid, value).unwrap();
@@ -129,9 +129,13 @@ fn toggle_reversal(label: &str, qsids: [u16; 2], original: u8) {
             original,
             "explicit UI reversal must correct uncertain device qsid={qsid}"
         );
-        assert!(recorder.requests()[correction_start..]
-            .iter()
-            .any(|r| r[1] == 0x0B && u16::from_le_bytes([r[2], r[3]]) == qsid && r[4] == original));
+        assert!(
+            recorder.requests()[correction_start..]
+                .iter()
+                .any(|r| r[1] == 0x0B
+                    && u16::from_le_bytes([r[2], r[3]]) == qsid
+                    && r[4] == original)
+        );
         assert!(matches!(
             app.settings_write_status(qsid),
             Some(super::super::settings_write_queue::SettingsWriteStatus::Saved)
@@ -213,40 +217,8 @@ fn click_text(app: &mut EntropyApp, ctx: &egui::Context, text: &str) {
 }
 
 fn edit_hold(app: &mut EntropyApp, ctx: &egui::Context, old: u16, new: u16) {
-    let pos = text_position(app, ctx, &old.to_string());
-    click_at(app, ctx, pos);
-    click_at(app, ctx, pos);
-    let modifiers = egui::Modifiers {
-        ctrl: true,
-        command: true,
-        ..Default::default()
-    };
-    frame_events(
-        app,
-        ctx,
-        vec![
-            egui::Event::Key {
-                key: egui::Key::A,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers,
-            },
-            egui::Event::Text(new.to_string()),
-            egui::Event::Key {
-                key: egui::Key::Enter,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: Default::default(),
-            },
-        ],
-    );
-    frame(app, ctx);
-    assert_eq!(
-        app.display_settings.sm62_hold_ms, [new; 2],
-        "real numeric editor input"
-    );
+    super::sm62_duration_dropdown_tests::select_hold(app,ctx,&format!("{old} ms"),new);
+    assert_eq!(app.display_settings.sm62_hold_ms,[new;2],"real modern duration dropdown selection");
 }
 
 #[test]
@@ -255,9 +227,9 @@ fn review_hold_ui_reversal_corrects_unverified_set() {
     let (mut app, ctx, recorder) = setup();
     frame(&mut app, &ctx);
     let fail = fail_get(&recorder);
-    edit_hold(&mut app, &ctx, 200, 300);
+    edit_hold(&mut app, &ctx, 400, 500);
     drain(&mut app, &ctx);
-    assert_eq!(app.display_settings.confirmed_sm62_hold_ms, [200; 2]);
+    assert_eq!(app.display_settings.confirmed_sm62_hold_ms, [400; 2]);
     for qsid in [242, 243] {
         assert!(matches!(
             app.settings_write_status(qsid),
@@ -289,10 +261,10 @@ fn review_hold_ui_reversal_corrects_unverified_set() {
                 .unwrap()
                 .get_qmk_setting_u16(qsid)
                 .unwrap(),
-            300
+            500
         );
     }
-    edit_hold(&mut app, &ctx, 300, 200);
+    edit_hold(&mut app, &ctx, 500, 400);
     drain(&mut app, &ctx);
     for qsid in [242, 243] {
         assert_eq!(
@@ -301,7 +273,7 @@ fn review_hold_ui_reversal_corrects_unverified_set() {
                 .unwrap()
                 .get_qmk_setting_u16(qsid)
                 .unwrap(),
-            200,
+            400,
             "UI correction after unverified hold SET"
         );
         assert!(matches!(
@@ -381,7 +353,7 @@ fn layout_no_input(connected: bool, enabled: bool) {
     let before = app.display_settings.clone();
     let start = recorder.requests().len();
     for _ in 0..3 {
-        let _ = ctx.run(
+        ctx.run_pass(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -390,13 +362,16 @@ fn layout_no_input(connected: bool, enabled: bool) {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.add_enabled_ui(enabled, |ui| {
-                        app.draw_sm62_display_settings_page(ui, ui.max_rect())
-                    });
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.add_enabled_ui(enabled, |ui| {
+                            app.draw_sm62_display_settings_page(ui, ui.max_rect())
+                        });
+                    })
                 });
             },
-        );
+        )
+        .drop_without_applying_deltas();
     }
     drain(&mut app, &ctx);
     assert_eq!(
@@ -446,8 +421,10 @@ fn review_explicit_layout_mode_selection_couples_keypress_setting() {
                 .unwrap(),
             value
         );
-        assert!(recorder.requests()[start..]
-            .iter()
-            .any(|r| r[1] == 0x0B && u16::from_le_bytes([r[2], r[3]]) == qsid && r[4] == value));
+        assert!(
+            recorder.requests()[start..]
+                .iter()
+                .any(|r| r[1] == 0x0B && u16::from_le_bytes([r[2], r[3]]) == qsid && r[4] == value)
+        );
     }
 }

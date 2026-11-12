@@ -29,42 +29,131 @@ pub(super) fn layer_name_write_error(language: crate::i18n::Language, error: &st
     let reason = match error {
         "device changed" => app_layout_text(language, "устройство изменилось", "device changed"),
         "device is busy" => app_layout_text(language, "устройство занято", "device is busy"),
-        "device is disconnected" => app_layout_text(language, "устройство отключено", "device is disconnected"),
-        "layer data is not ready" => app_layout_text(language, "данные слоя не готовы", "layer data is not ready"),
-        "layer name readback mismatch" => app_layout_text(language, "прочитанное имя слоя не совпадает", "layer name readback mismatch"),
+        "device is disconnected" => {
+            app_layout_text(language, "устройство отключено", "device is disconnected")
+        }
+        "layer data is not ready" => {
+            app_layout_text(language, "данные слоя не готовы", "layer data is not ready")
+        }
+        "layer name readback mismatch" => app_layout_text(
+            language,
+            "прочитанное имя слоя не совпадает",
+            "layer name readback mismatch",
+        ),
         _ => error,
     };
-    format!("{}: {reason}", app_layout_text(language, "Имя слоя не сохранено", "Layer name not saved"))
+    format!(
+        "{}: {reason}",
+        app_layout_text(language, "Имя слоя не сохранено", "Layer name not saved")
+    )
 }
 
 impl EntropyApp {
+    // Complete imports are transactional only on the host. Keep captured-target
+    // uncertainty across earlier successful writes if a later layer fails, and
+    // never treat a SET acknowledgement as proof of stored bytes.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn write_complete_import_layer_names(&mut self, names: &[String]) -> Vec<usize> {
+        if self.firmware != FirmwareProtocol::Vial {
+            return Vec::new();
+        }
+        let Some(device) = self
+            .selected_device
+            .and_then(|i| self.device_manager.devices().get(i))
+            .cloned()
+        else {
+            return vec![0];
+        };
+        let Some(device_key) = self.application_layout_device_key() else {
+            return vec![0];
+        };
+        let generation = self.connection_generation;
+        let mut confirmed = Vec::new();
+        for (layer, name) in names.iter().enumerate().take(self.layer_count) {
+            let qsid = 200 + layer as u16;
+            if !self.supported_qmk_settings.contains(&qsid) {
+                continue;
+            }
+            let Some(hid) = self.hid_device.as_ref() else {
+                return vec![layer];
+            };
+            let expected = crate::hid::HidDevice::normalized_qmk_setting_string(name.trim());
+            let Ok(current) = hid.get_qmk_setting_string(qsid) else {
+                return vec![layer];
+            };
+            if current != expected {
+                self.uncertain_layer_names.push(LayerNameWrite {
+                    device: device.clone(),
+                    device_key: device_key.clone(),
+                    layout_id: crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID.into(),
+                    generation,
+                    layer,
+                    name: name.trim().into(),
+                });
+                if hid.set_qmk_setting_string(qsid, name.trim()).is_err()
+                    || !matches!(hid.get_qmk_setting_string(qsid), Ok(actual) if actual == expected)
+                {
+                    return vec![layer];
+                }
+            }
+            confirmed.push(layer);
+        }
+        self.uncertain_layer_names.retain(|r| {
+            !(r.device_key == device_key
+                && r.generation == generation
+                && r.device.path == device.path
+                && r.device.instance_token == device.instance_token
+                && confirmed.contains(&r.layer))
+        });
+        for layer in confirmed {
+            if layer < 16 {
+                self.confirmed_firmware_layer_names |= 1u16 << layer;
+            }
+        }
+        Vec::new()
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn queue_universal_geometry_write(&mut self, packed: u32) {
-        let Some(device) = self.selected_device.and_then(|i| self.device_manager.devices().get(i)).cloned() else {
+        let Some(device) = self
+            .selected_device
+            .and_then(|i| self.device_manager.devices().get(i))
+            .cloned()
+        else {
             return;
         };
         self.pending_universal_geometry = Some(UniversalGeometryWrite {
-            device, generation: self.connection_generation, packed,
+            device,
+            generation: self.connection_generation,
+            packed,
         });
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn maybe_start_universal_geometry_write(&mut self, ctx: &egui::Context) {
-        let Some(mut request) = self.pending_universal_geometry.clone() else { return; };
+        let Some(mut request) = self.pending_universal_geometry.clone() else {
+            return;
+        };
         if request.generation != self.connection_generation
-            || !self.selected_device.and_then(|i| self.device_manager.devices().get(i))
-                .is_some_and(|device| device.path == request.device.path
-                    && device.instance_token == request.device.instance_token
-                    && device.permits_hid_target(&request.device)) {
+            || !self
+                .selected_device
+                .and_then(|i| self.device_manager.devices().get(i))
+                .is_some_and(|device| {
+                    device.path == request.device.path
+                        && device.instance_token == request.device.instance_token
+                        && device.permits_hid_target(&request.device)
+                })
+        {
             self.pending_universal_geometry = None;
             return;
         }
         // Layout options share one packed word. Preserve later edits to other
         // fields while waiting for the owner; this is still the same session.
         request.packed = self.layout_options_value.unwrap_or(request.packed);
-        match self.start_vial_hid_operation(ctx, VialHidOperation::UniversalGeometryWrite(request)) {
+        match self.start_vial_hid_operation(ctx, VialHidOperation::UniversalGeometryWrite(request))
+        {
             VialHidTaskStart::Started => self.pending_universal_geometry = None,
-            VialHidTaskStart::Busy => {},
+            VialHidTaskStart::Busy => {}
             VialHidTaskStart::NoDevice => {
                 self.pending_universal_geometry = None;
                 self.status_msg = "Universal Symbols: device is disconnected".into();
@@ -75,10 +164,17 @@ impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn selected_layer_names_uncertain(&self) -> bool {
         let key = self.application_layout_device_key();
-        self.uncertain_layer_names.iter().any(|r| key.as_ref() == Some(&r.device_key)
-            && self.selected_device.and_then(|i| self.device_manager.devices().get(i))
-                .is_some_and(|d| d.path == r.device.path && d.instance_token == r.device.instance_token
-                    && d.permits_hid_target(&r.device)))
+        self.uncertain_layer_names.iter().any(|r| {
+            key.as_ref() == Some(&r.device_key)
+                && self
+                    .selected_device
+                    .and_then(|i| self.device_manager.devices().get(i))
+                    .is_some_and(|d| {
+                        d.path == r.device.path
+                            && d.instance_token == r.device.instance_token
+                            && d.permits_hid_target(&r.device)
+                    })
+        })
     }
 
     // Explicit consumers may recover uncertainty with GET only. Repaints never
@@ -86,13 +182,29 @@ impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn confirm_uncertain_layer_names(&mut self) -> anyhow::Result<()> {
         let key = self.application_layout_device_key();
-        let requests: Vec<_> = self.uncertain_layer_names.iter()
-            .filter(|r| key.as_ref() == Some(&r.device_key)
-                && self.selected_device.and_then(|i| self.device_manager.devices().get(i))
-                    .is_some_and(|d| d.path == r.device.path && d.instance_token == r.device.instance_token
-                        && d.permits_hid_target(&r.device))).cloned().collect();
-        if requests.is_empty() { return Ok(()); }
-        anyhow::ensure!(!self.hid_write_task_active(), layer_name_write_error(self.app_settings.language, "device is busy"));
+        let requests: Vec<_> = self
+            .uncertain_layer_names
+            .iter()
+            .filter(|r| {
+                key.as_ref() == Some(&r.device_key)
+                    && self
+                        .selected_device
+                        .and_then(|i| self.device_manager.devices().get(i))
+                        .is_some_and(|d| {
+                            d.path == r.device.path
+                                && d.instance_token == r.device.instance_token
+                                && d.permits_hid_target(&r.device)
+                        })
+            })
+            .cloned()
+            .collect();
+        if requests.is_empty() {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            !self.hid_write_task_active(),
+            layer_name_write_error(self.app_settings.language, "device is busy")
+        );
         for request in requests {
             anyhow::ensure!(self.selected_device.and_then(|i| self.device_manager.devices().get(i))
                 .is_some_and(|d| d.path == request.device.path
@@ -101,14 +213,18 @@ impl EntropyApp {
             let hid = self.hid_device.as_ref().ok_or_else(|| anyhow::anyhow!(layer_name_write_error(self.app_settings.language, "device is disconnected")))?;
             let actual = hid.get_qmk_setting_string(200 + request.layer as u16)
                 .map_err(|error| anyhow::anyhow!(layer_name_write_error(self.app_settings.language, &error.to_string())))?;
+            if request.layer < 16 { self.confirmed_firmware_layer_names |= 1u16 << request.layer; }
             if let Some(name) = self.layer_names.get_mut(request.layer) { *name = actual.clone(); }
             if let Some(name) = self.layout.as_mut().and_then(|l| l.layer_names.get_mut(request.layer)) {
                 *name = actual;
             }
-            self.uncertain_layer_names.retain(|r| r.device_key != request.device_key
-                || r.layer != request.layer || r.generation != request.generation
-                || r.device.path != request.device.path
-                || r.device.instance_token != request.device.instance_token);
+            self.uncertain_layer_names.retain(|r| {
+                r.device_key != request.device_key
+                    || r.layer != request.layer
+                    || r.generation != request.generation
+                    || r.device.path != request.device.path
+                    || r.device.instance_token != request.device.instance_token
+            });
         }
         self.keycode_picker.layer_names = self.layer_names.clone();
         Ok(())
@@ -119,17 +235,23 @@ impl EntropyApp {
         while let Some(request) = self.pending_layer_name_writes.front() {
             let target_matches = request.generation == self.connection_generation
                 && self.application_layout_device_key().as_ref() == Some(&request.device_key)
-                && self.selected_device.and_then(|i| self.device_manager.devices().get(i))
-                    .is_some_and(|device| device.path == request.device.path
-                        && device.instance_token == request.device.instance_token
-                        && device.permits_hid_target(&request.device));
+                && self
+                    .selected_device
+                    .and_then(|i| self.device_manager.devices().get(i))
+                    .is_some_and(|device| {
+                        device.path == request.device.path
+                            && device.instance_token == request.device.instance_token
+                            && device.permits_hid_target(&request.device)
+                    });
             if !target_matches {
-                self.status_msg = layer_name_write_error(self.app_settings.language, "device changed");
+                self.status_msg =
+                    layer_name_write_error(self.app_settings.language, "device changed");
                 self.pending_layer_name_writes.pop_front();
                 continue;
             }
             if self.hid_device.is_none() && !self.hid_write_task_owner_active() {
-                self.status_msg = layer_name_write_error(self.app_settings.language, "device is disconnected");
+                self.status_msg =
+                    layer_name_write_error(self.app_settings.language, "device is disconnected");
                 self.pending_layer_name_writes.pop_front();
                 continue;
             }
@@ -140,19 +262,32 @@ impl EntropyApp {
                     if let Some(context) = self.deferred_device_load.context.clone() {
                         let layer = request.layer;
                         let operation = VialHidOperation::Deferred(
-                            super::device_deferred_load::DeferredLoadRequest::Layer { layer, context });
-                        if self.start_vial_hid_operation(ctx, operation) == VialHidTaskStart::Started {
-                            self.deferred_device_load.set_layer_status(layer, DeferredLoadStatus::Loading);
+                            super::device_deferred_load::DeferredLoadRequest::Layer {
+                                layer,
+                                context,
+                            },
+                        );
+                        if self.start_vial_hid_operation(ctx, operation)
+                            == VialHidTaskStart::Started
+                        {
+                            self.deferred_device_load
+                                .set_layer_status(layer, DeferredLoadStatus::Loading);
                         }
                         break;
                     }
-                    self.status_msg = layer_name_write_error(self.app_settings.language, "layer data is not ready");
+                    self.status_msg = layer_name_write_error(
+                        self.app_settings.language,
+                        "layer data is not ready",
+                    );
                     self.pending_layer_name_writes.pop_front();
                     continue;
                 }
                 DeferredLoadStatus::Loading => break,
                 DeferredLoadStatus::Failed(_) => {
-                    self.status_msg = layer_name_write_error(self.app_settings.language, "layer data is not ready");
+                    self.status_msg = layer_name_write_error(
+                        self.app_settings.language,
+                        "layer data is not ready",
+                    );
                     self.pending_layer_name_writes.pop_front();
                     continue;
                 }
@@ -188,7 +323,9 @@ fn battery_refresh_delay(battery: Option<crate::hid::BatteryHalves>) -> std::tim
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 pub(super) enum VialHidOperation {
+    ResidentExportPreparation { source: super::entlayout::ResidentPreparationSource, deadline: std::time::Instant },
     UniversalGeometryWrite(UniversalGeometryWrite),
+    Sm62Fps { q: [u8;32], cancel: std::sync::Arc<std::sync::atomic::AtomicBool> },
     LayerNameWrite(LayerNameWrite),
     UnlockStart,
     UnlockPoll,
@@ -248,6 +385,15 @@ pub(super) enum VialHidOperation {
         slot: usize,
     },
     Deferred(super::device_deferred_load::DeferredLoadRequest),
+    /// `--export-layout` from the console: the standalone export's read-only
+    /// pipeline, run over this connection while it is lent.
+    #[cfg(unix)]
+    ConsoleExport {
+        device: crate::device::Device,
+        deadline: std::time::Instant,
+        /// The console request it answers.
+        request: u64,
+    },
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -267,7 +413,9 @@ impl VialHidOperation {
 
 #[cfg(not(target_arch = "wasm32"))]
 enum VialHidOutcome {
+    ResidentExportPrepared(String),
     UniversalGeometryWritten,
+    Sm62Fps([u8;32]),
     LayerNameWritten(String),
     UnlockStarted {
         unlocked: bool,
@@ -285,6 +433,12 @@ enum VialHidOutcome {
     EncoderWritten,
     /// What of the macros the board does not run, by macro.
     MacrosWritten(Vec<(usize, crate::rynk::macros::MacroLoss)>),
+    /// Nothing was written: the macros need more than the `capacity` the
+    /// keyboard reported to this write.
+    MacrosOverMemory {
+        capacity: u16,
+        error: String,
+    },
     BackgroundUploaded(crate::app::standby_background::BackgroundUploadResult),
     BackgroundCleared,
     BackgroundCancelled {
@@ -296,6 +450,8 @@ enum VialHidOutcome {
     PictogramsLoaded(crate::app::PictogramLibrary),
     PictogramsUploaded(crate::app::PictogramLibrary),
     Deferred(super::device_deferred_load::DeferredLoadPayload),
+    #[cfg(unix)]
+    ConsoleExported(super::headless_export::Reply),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -333,21 +489,32 @@ fn run_vial_hid_operation_with_progress(
     cancel: &std::sync::atomic::AtomicBool,
 ) -> anyhow::Result<VialHidOutcome> {
     match operation {
+        VialHidOperation::ResidentExportPreparation { source, deadline } => {
+            super::entlayout::prepare_gui_resident_document(hid, source, deadline, cancel)
+                .map(VialHidOutcome::ResidentExportPrepared)
+        }
         VialHidOperation::UniversalGeometryWrite(request) => {
             let hid = hid.require_vial()?;
             hid.set_layout_options(request.packed)?;
             let actual = hid.get_layout_options()?;
-            anyhow::ensure!(actual == request.packed,
-                "Universal Symbols readback mismatch: expected {}, got {}", request.packed, actual);
+            anyhow::ensure!(
+                actual == request.packed,
+                "Universal Symbols readback mismatch: expected {}, got {}",
+                request.packed,
+                actual
+            );
             Ok(VialHidOutcome::UniversalGeometryWritten)
+        }
+        VialHidOperation::Sm62Fps { q, cancel } => {
+            anyhow::ensure!(!cancel.load(std::sync::atomic::Ordering::Acquire), "FPS measurement cancelled");
+            hid.require_vial()?.usb_send(&q).map(VialHidOutcome::Sm62Fps)
         }
         VialHidOperation::LayerNameWrite(request) => {
             let qsid = 200 + request.layer as u16;
             hid.set_qmk_setting_string(qsid, &request.name)?;
             let actual = hid.get_qmk_setting_string(qsid)?;
             let expected = crate::hid::HidDevice::normalized_qmk_setting_string(&request.name);
-            anyhow::ensure!(actual == expected,
-                "layer name readback mismatch");
+            anyhow::ensure!(actual == expected, "layer name readback mismatch");
             Ok(VialHidOutcome::LayerNameWritten(actual))
         }
         VialHidOperation::UnlockStart => {
@@ -396,9 +563,18 @@ fn run_vial_hid_operation_with_progress(
             .map(|()| VialHidOutcome::EncoderWritten),
         VialHidOperation::MacroWrite { macros, .. } => {
             let size = hid.get_macro_buffer_size()?;
-            let buffer = hid.encode_macros(&macros, size)?;
-            hid.set_macro_buffer(&buffer)
-                .map(VialHidOutcome::MacrosWritten)
+            // The size read here may be the first the editor learns: an
+            // overflow comes back with it instead of as a failed write.
+            let buffer = match hid.encode_macros(&macros, size) {
+                Ok(buffer) => buffer,
+                Err(error) => {
+                    return Ok(VialHidOutcome::MacrosOverMemory {
+                        capacity: size,
+                        error: format!("{error:#}"),
+                    })
+                }
+            };
+            hid.set_macro_buffer(&buffer).map(VialHidOutcome::MacrosWritten)
         }
         VialHidOperation::BackgroundUpload {
             path,
@@ -449,6 +625,12 @@ fn run_vial_hid_operation_with_progress(
             super::device_deferred_load::run_deferred_load(hid.require_vial()?, &request)
                 .map(VialHidOutcome::Deferred)
         }
+        #[cfg(unix)]
+        VialHidOperation::ConsoleExport {
+            device, deadline, ..
+        } => Ok(VialHidOutcome::ConsoleExported(
+            super::headless_export::export_lent_keyboard(hid.require_vial()?, device, deadline, cancel),
+        )),
     }
 }
 
@@ -471,15 +653,19 @@ impl EntropyApp {
     // a disconnect. Never lend that readiness to another selected instance.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn universal_geometry_connection_ready(&self) -> bool {
-        self.hid_device.is_some() || self.vial_hid_task.as_ref().is_some_and(|task| {
-            task.generation == self.connection_generation
-                && task.target.as_ref().is_some_and(|target| {
-                    self.selected_device.and_then(|i| self.device_manager.devices().get(i))
-                        .is_some_and(|device| device.path == target.path
-                            && device.instance_token == target.instance_token
-                            && device.permits_hid_target(target))
-                })
-        })
+        self.hid_device.is_some()
+            || self.vial_hid_task.as_ref().is_some_and(|task| {
+                task.generation == self.connection_generation
+                    && task.target.as_ref().is_some_and(|target| {
+                        self.selected_device
+                            .and_then(|i| self.device_manager.devices().get(i))
+                            .is_some_and(|device| {
+                                device.path == target.path
+                                    && device.instance_token == target.instance_token
+                                    && device.permits_hid_target(target)
+                            })
+                    })
+            })
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -571,6 +757,18 @@ impl EntropyApp {
         }
     }
 
+    /// Stops a console export whose console has gone; the connection comes
+    /// back as soon as the export notices.
+    #[cfg(unix)]
+    pub(super) fn cancel_console_export(&self) {
+        if let Some(task) = &self.vial_hid_task {
+            if matches!(task.operation, VialHidOperation::ConsoleExport { .. }) {
+                task.cancel
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn standby_background_upload_progress(&self) -> Option<f32> {
         self.vial_hid_task.as_ref().and_then(|task| {
@@ -615,20 +813,36 @@ impl EntropyApp {
         ctx: &egui::Context,
         operation: VialHidOperation,
         run: impl FnOnce(
-                &crate::device_session::DeviceSession,
-                VialHidOperation,
-                &std::sync::atomic::AtomicU32,
-                &std::sync::atomic::AtomicBool,
-            ) -> anyhow::Result<VialHidOutcome>
-            + Send
-            + 'static,
+            &crate::device_session::DeviceSession,
+            VialHidOperation,
+            &std::sync::atomic::AtomicU32,
+            &std::sync::atomic::AtomicBool,
+        ) -> anyhow::Result<VialHidOutcome>
+        + Send
+        + 'static,
     ) -> VialHidTaskStart {
+        // Capture strict recovery intent before moving the serialized owner to
+        // the worker. Compatibility fallbacks cannot confirm uncertain data.
+        let operation = match operation {
+            VialHidOperation::Deferred(request) if
+                request.layer().is_some_and(|layer| self.deferred_device_load.import_layer_unconfirmed(layer))
+                || request.section().is_some_and(|section| self.deferred_device_load.import_section_unconfirmed(section)) => {
+                VialHidOperation::Deferred(super::device_deferred_load::DeferredLoadRequest::Recovery(Box::new(request)))
+            }
+            operation => operation,
+        };
         if self.vial_hid_task.is_some() || self.another_hid_owner_or_write_is_pending() {
             return VialHidTaskStart::Busy;
         }
         let Some(hid_device) = self.hid_device.take() else {
             return VialHidTaskStart::NoDevice;
         };
+
+        if matches!(operation, VialHidOperation::UnlockStart | VialHidOperation::UnlockPoll)
+            && self.vial_unlock_event_pause.is_none()
+        {
+            self.vial_unlock_event_pause = hid_device.pause_application_event_polling();
+        }
 
         if matches!(operation, VialHidOperation::PictogramLoad { .. }) {
             self.display_settings.pictograms.loading = true;
@@ -637,9 +851,12 @@ impl EntropyApp {
         // SET can mutate even when its acknowledgement or subsequent GET fails.
         // Invalidate before handing ownership to the worker, not on completion.
         if let VialHidOperation::LayerNameWrite(request) = &operation {
-            self.uncertain_layer_names.retain(|old| old.device_key != request.device_key
-                || old.layer != request.layer || old.device.path != request.device.path
-                || old.device.instance_token != request.device.instance_token);
+            self.uncertain_layer_names.retain(|old| {
+                old.device_key != request.device_key
+                    || old.layer != request.layer
+                    || old.device.path != request.device.path
+                    || old.device.instance_token != request.device.instance_token
+            });
             self.uncertain_layer_names.push(request.clone());
         }
         let generation = self.connection_generation;
@@ -660,7 +877,14 @@ impl EntropyApp {
                 "Display operation started: {label} generation={generation} target={target:?}"
             );
         }
+        #[cfg(test)]
+        let config_root = super::app_storage::test_config_root();
+        let event_pause = hid_device.pause_application_event_polling();
         std::thread::spawn(move || {
+            let _event_pause = event_pause;
+            // A console export runs a whole app here, which reads settings.
+            #[cfg(test)]
+            super::app_storage::adopt_test_config_root(config_root);
             let started = std::time::Instant::now();
             #[cfg(target_os = "macos")]
             let _hid_lock = hid_device.macos_hid_operation_lock();
@@ -671,11 +895,14 @@ impl EntropyApp {
                 &worker_progress,
                 &worker_cancel,
             );
-            let disconnected = outcome
-                .as_ref()
-                .err()
-                .map(crate::hid::is_disconnect_error)
-                .unwrap_or(false);
+            let disconnected = match &outcome {
+                Err(error) => crate::hid::is_disconnect_error(error),
+                // A lent export answers its console whatever became of the
+                // connection; whether the connection survived it is told here.
+                #[cfg(unix)]
+                Ok(VialHidOutcome::ConsoleExported(_)) => !hid_device.is_transport_available(),
+                Ok(_) => false,
+            };
             if let Some(label) = diagnostic_label {
                 match &outcome {
                     Ok(_) => log::debug!(
@@ -700,7 +927,10 @@ impl EntropyApp {
             repaint_ctx.request_repaint();
         });
         self.vial_hid_task = Some(VialHidTask {
-            target: self.selected_device.and_then(|i| self.device_manager.devices().get(i)).cloned(),
+            target: self
+                .selected_device
+                .and_then(|i| self.device_manager.devices().get(i))
+                .cloned(),
             receiver,
             operation: task_operation,
             generation,
@@ -809,7 +1039,17 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn cancel_gui_resident_worker(&self) {
+        if let Some(task) = &self.vial_hid_task {
+            if matches!(task.operation, VialHidOperation::ResidentExportPreparation { .. }) {
+                task.cancel.store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn poll_vial_hid_task(&mut self, ctx: &egui::Context) {
+        self.maybe_start_gui_entlayout_preparation(ctx);
         self.poll_vial_hid_task_with_settings_save(ctx, save_app_settings);
         self.maybe_start_layer_name_write(ctx);
         self.maybe_start_universal_geometry_write(ctx);
@@ -833,12 +1073,12 @@ impl EntropyApp {
                 let task = self
                     .vial_hid_task
                     .take()
-                    .expect("Vial HID task checked above");
+                    .expect("Keyboard HID task checked above");
                 if task.generation == self.connection_generation {
                     self.hid_device = None;
                     self.finish_vial_hid_error(
                         task.operation,
-                        "Vial HID worker stopped".to_owned(),
+                        "Keyboard HID worker stopped".to_owned(),
                         true,
                     );
                 }
@@ -850,30 +1090,50 @@ impl EntropyApp {
         // Never return a borrowed handle (or its completion) to a different
         // selected physical instance, even if selection changed before the
         // connection generation was advanced.
-        let target_matches = self.vial_hid_task.as_ref().and_then(|task| task.target.as_ref())
-            .is_none_or(|target| self.selected_device
-                .and_then(|i| self.device_manager.devices().get(i))
-                .is_some_and(|device| device.path == target.path
-                    && device.instance_token == target.instance_token
-                    && device.permits_hid_target(target)));
+        let target_matches = self
+            .vial_hid_task
+            .as_ref()
+            .and_then(|task| task.target.as_ref())
+            .is_none_or(|target| {
+                self.selected_device
+                    .and_then(|i| self.device_manager.devices().get(i))
+                    .is_some_and(|device| {
+                        device.path == target.path
+                            && device.instance_token == target.instance_token
+                            && device.permits_hid_target(target)
+                    })
+            });
         self.vial_hid_task = None;
         if result.generation != self.connection_generation || !target_matches {
+            if matches!(result.operation, VialHidOperation::ResidentExportPreparation { .. }) {
+                self.fail_gui_entlayout_preparation("Keyboard owner changed".into());
+            }
             return;
         }
 
         self.hid_device = result.hid_device;
         match result.outcome {
+            Ok(VialHidOutcome::ResidentExportPrepared(json)) => self.finish_gui_entlayout_preparation(json),
             // The UI already shows the latest choice. An older completion must
             // never replace a newer pending edit.
             Ok(VialHidOutcome::UniversalGeometryWritten) => {}
+            Ok(VialHidOutcome::Sm62Fps(reply)) => {
+                if let VialHidOperation::Sm62Fps { q, .. } = result.operation { self.finish_sm62_fps(q,Ok(reply)); }
+            }
             Ok(VialHidOutcome::LayerNameWritten(actual)) => {
                 if let VialHidOperation::LayerNameWrite(request) = result.operation {
-                    if !self.selected_device.and_then(|i| self.device_manager.devices().get(i))
-                        .is_some_and(|device| device.path == request.device.path
-                            && device.instance_token == request.device.instance_token
-                            && device.permits_hid_target(&request.device)) {
+                    if !self
+                        .selected_device
+                        .and_then(|i| self.device_manager.devices().get(i))
+                        .is_some_and(|device| {
+                            device.path == request.device.path
+                                && device.instance_token == request.device.instance_token
+                                && device.permits_hid_target(&request.device)
+                        })
+                    {
                         return;
                     }
+                    if request.layer < 16 { self.confirmed_firmware_layer_names |= 1u16 << request.layer; }
                     // Completion belongs to the captured Default, never the
                     // profile selected while HID was borrowed by this worker.
                     if let Some(name) = self.layer_names.get_mut(request.layer) {
@@ -884,16 +1144,22 @@ impl EntropyApp {
                             *name = actual.clone();
                         }
                     }
-                    self.uncertain_layer_names.retain(|old| old.device_key != request.device_key
-                        || old.layer != request.layer || old.generation != request.generation
-                        || old.device.path != request.device.path
-                        || old.device.instance_token != request.device.instance_token);
+                    self.uncertain_layer_names.retain(|old| {
+                        old.device_key != request.device_key
+                            || old.layer != request.layer
+                            || old.generation != request.generation
+                            || old.device.path != request.device.path
+                            || old.device.instance_token != request.device.instance_token
+                    });
                     if !self.selected_layer_names_uncertain() {
                         save_layer_names(&self.layer_names, &self.current_device_name);
                     }
-                    if let Some(profile) = self.app_settings.application_layouts
+                    if let Some(profile) = self
+                        .app_settings
+                        .application_layouts
                         .get_mut(&request.device_key)
-                        .and_then(|s| s.layouts.get_mut(&request.layout_id)) {
+                        .and_then(|s| s.layouts.get_mut(&request.layout_id))
+                    {
                         if profile.layer_names.get(request.layer) == Some(&request.name) {
                             profile.set_layer_name(request.layer, actual);
                             save_settings(&self.app_settings);
@@ -995,6 +1261,24 @@ impl EntropyApp {
                     self.import_report_open = true;
                 }
             }
+            Ok(VialHidOutcome::MacrosOverMemory { capacity, error }) => {
+                let VialHidOperation::MacroWrite { revision, .. } = &result.operation else {
+                    unreachable!("macro outcome must come from a macro write operation");
+                };
+                // With the memory known, the edit reads as over it: it stays
+                // to be shortened and no longer counts as a pending write.
+                if let Some(info) = self.device_about_info.as_mut() {
+                    info.macro_memory_bytes = Some(capacity);
+                }
+                self.keycode_picker.macros_dirty = true;
+                self.keycode_picker.macro_attempted_revision =
+                    (self.keycode_picker.macro_edit_revision == *revision).then_some(*revision);
+                self.status_msg = crate::i18n::tr_catalog_format(
+                    self.app_settings.language,
+                    "status_messages.macro_write_error",
+                    &[("error", &error)],
+                );
+            }
             Ok(VialHidOutcome::BackgroundUploaded(upload)) => {
                 self.app_settings.standby_background_source_path = Some(upload.source_path.clone());
                 save_settings(&self.app_settings);
@@ -1002,10 +1286,7 @@ impl EntropyApp {
                 self.display_settings.clock_background_frames = upload.frame_count;
                 self.display_settings.clock_background_bytes = upload.total_size;
                 self.display_settings.clock_background_file_name = Some(upload.file_name);
-                self.display_settings.clock_background_preview_rgba = upload.preview_rgba;
-                self.display_settings.clock_background_preview_frames_rgba =
-                    upload.preview_frames_rgba;
-                self.display_settings.clock_background_preview_delays_ms = upload.preview_delays_ms;
+                self.display_settings.clock_background_preview = Some(upload.preview);
                 self.display_settings.clock_background_preview_revision = self
                     .display_settings
                     .clock_background_preview_revision
@@ -1031,13 +1312,7 @@ impl EntropyApp {
                 self.display_settings.clock_background_frames = 0;
                 self.display_settings.clock_background_bytes = 0;
                 self.display_settings.clock_background_file_name = None;
-                self.display_settings.clock_background_preview_rgba.clear();
-                self.display_settings
-                    .clock_background_preview_frames_rgba
-                    .clear();
-                self.display_settings
-                    .clock_background_preview_delays_ms
-                    .clear();
+                self.display_settings.clock_background_preview = None;
                 self.display_settings.clock_background_preview_revision = self
                     .display_settings
                     .clock_background_preview_revision
@@ -1138,6 +1413,21 @@ impl EntropyApp {
                     self.deferred_device_load.mark_background_layer_finished();
                 }
                 self.finish_deferred_device_load(payload);
+            }
+            #[cfg(unix)]
+            Ok(VialHidOutcome::ConsoleExported(reply)) => {
+                if let VialHidOperation::ConsoleExport { request, .. } = result.operation {
+                    self.finish_console_export(request, reply);
+                }
+                if result.disconnected {
+                    // The export lost the connection it borrowed: recover it
+                    // as after any operation's disconnect.
+                    self.finish_vial_hid_error(
+                        result.operation,
+                        "HID device disconnected during a console export".to_owned(),
+                        true,
+                    );
+                }
             }
             Err(error) => {
                 self.finish_vial_hid_error(result.operation, error, result.disconnected);
@@ -1281,6 +1571,10 @@ impl EntropyApp {
         error: String,
         disconnected: bool,
     ) {
+        if matches!(&operation, VialHidOperation::ResidentExportPreparation { .. }) {
+            self.fail_gui_entlayout_preparation(error.clone());
+        }
+        if let VialHidOperation::Sm62Fps { q, .. } = &operation { self.finish_sm62_fps(*q,Err(error.clone())); }
         match &operation {
             VialHidOperation::PictogramLoad { .. } => {
                 self.display_settings.pictograms.loading = false;
@@ -1312,6 +1606,15 @@ impl EntropyApp {
                 pictograms.preserve_editor_on_load = true;
                 pictograms.library = PictogramLibrary::default();
                 pictograms.upload_due = None;
+            }
+            #[cfg(unix)]
+            VialHidOperation::ConsoleExport { request, .. } => {
+                self.finish_console_export(
+                    *request,
+                    super::headless_export::Reply::Failed {
+                        message: format!("The export stopped: {error}"),
+                    },
+                );
             }
             _ => {}
         }
@@ -1378,6 +1681,8 @@ impl EntropyApp {
             VialHidOperation::UniversalGeometryWrite(_) => {
                 self.status_msg = format!("Universal Symbols: {error}");
             }
+            VialHidOperation::ResidentExportPreparation { .. } => self.fail_gui_entlayout_preparation(error),
+            VialHidOperation::Sm62Fps { .. } => {}, // Session already recorded its terminal error above.
             VialHidOperation::UnlockStart => self.fail_vial_unlock_start(error),
             VialHidOperation::LayerNameWrite(_) => {
                 self.status_msg = layer_name_write_error(self.app_settings.language, &error);
@@ -1450,6 +1755,9 @@ impl EntropyApp {
                 }
                 self.fail_deferred_device_load(&request, error);
             }
+            // Answered before the disconnect handling.
+            #[cfg(unix)]
+            VialHidOperation::ConsoleExport { .. } => {}
         }
     }
 
@@ -1501,7 +1809,7 @@ mod repeat_lifecycle_tests {
         ctx: &egui::Context,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
-        ctx.run_ui(
+        crate::app::discard_texture_deltas(ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1511,7 +1819,7 @@ mod repeat_lifecycle_tests {
                 ..Default::default()
             },
             |ui| app.draw_display_settings_page(ui, ui.max_rect()),
-        )
+        ))
     }
 
     fn text_position(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
@@ -1634,14 +1942,15 @@ mod repeat_lifecycle_tests {
         assert!(!app.display_settings.pictograms.loaded);
         assert_eq!(app.display_settings.pictograms.source_levels, draft);
         assert_eq!(app.display_settings.pictograms.editor_name, "Unsaved draft");
-        assert!(app
-            .display_settings
-            .pictograms
-            .load_failure
-            .as_ref()
-            .unwrap()
-            .1
-            .contains("status 4"));
+        assert!(
+            app.display_settings
+                .pictograms
+                .load_failure
+                .as_ref()
+                .unwrap()
+                .1
+                .contains("status 4")
+        );
         // Merely navigating away and back is not a recovery attempt.
         tab(&mut app, &ctx, "Экран ожидания");
         tab(&mut app, &ctx, "Пиктограммы");
@@ -1908,7 +2217,8 @@ mod tests {
             rgb_supported: false,
             lighting_mode: None,
             supports_rmk_native_key_actions: false,
-            supports_universal_numero: false, supports_universal_symbols: false,
+            supports_universal_numero: false,
+            supports_universal_symbols: false,
             supports_universal_russian_letters: false,
             supports_rmk_native_combo_output: false,
             supports_rmk_native_tap_dance_actions: false,
@@ -1924,7 +2234,86 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        panic!("Vial HID task did not finish");
+        panic!("Keyboard HID task did not finish");
+    }
+
+    #[test]
+    fn unlock_session_suppresses_event_polls_between_workers_until_complete() {
+        let ctx=egui::Context::default();
+        let mut app=EntropyApp::new_inert_for_test();
+        let (hid,recorder)=crate::hid::HidDevice::test_device();
+        let shared=hid.shared_output().unwrap().for_host_bridge_with_sm62(
+            crate::qmk_hid_host::HostDataMode::default(),false,true);
+        let (other,_)=crate::hid::HidDevice::test_device();
+        let other_output=other.shared_output().unwrap().for_host_bridge_with_sm62(
+            crate::qmk_hid_host::HostDataMode::default(),false,true);
+        // Wire boundary: while a physical unlock is pending, real QMK VIA
+        // echoes/gates E6 instead of returning its expected 5A event header.
+        let state=std::sync::Arc::new(std::sync::Mutex::new((false,false,0u8)));
+        let firmware=state.clone();
+        recorder.respond_by(move |r| {
+            let mut s=firmware.lock().unwrap();let mut out=[0u8;32];
+            match r[..2] {
+                [0xfe,5]=>{out.fill(255);out[..4].copy_from_slice(&[s.0 as u8,s.1 as u8,0,0]);},
+                [0xfe,6]=>{s.1=true;},
+                [0xfe,7]=>{s.2+=1;if s.2==3{s.0=true;s.1=false;}out[..3].copy_from_slice(&[s.0 as u8,s.1 as u8,3-s.2]);},
+                [0xe6,8]=>{
+                    if s.1{return Some(Err("HID timeout: firmware gates E6 during unlock".into()));}
+                    out[..3].copy_from_slice(&[0xe6,8,0x5a]);
+                },
+                _=>return None,
+            }
+            Some(Ok(out))
+        });
+        app.hid_device=Some(hid.into());app.firmware=FirmwareProtocol::Vial;
+        app.layout=Some(single_key_layout(4));app.unlock_open=true;
+        assert_eq!(app.start_vial_unlock(&ctx),VialHidTaskStart::Started);
+        poll_until_vial_hid_idle(&mut app,&ctx);
+        assert!(app.vial_unlock_polling&&state.lock().unwrap().1);
+        for _ in 0..3 {
+            let event=shared.poll_application_layout_event(&[0xe6,8,0xa5,0,0]);
+            assert!(matches!(event,Ok(None)),"background event poll escaped between unlock workers: {event:?}");
+            assert!(!shared.write_application_layout_event_state(&[0xe8,8,0,0,0,0,0,0,0]).unwrap());
+            assert!(other_output.poll_application_layout_event(&[0xe6,8,0xa5,0,0]).unwrap().is_some(),"must not pause an unrelated keyboard");
+            assert_eq!(app.start_vial_unlock_poll(&ctx),VialHidTaskStart::Started);
+            poll_until_vial_hid_idle(&mut app,&ctx);
+        }
+        assert_eq!(app.vial_unlocked,Some(true));assert!(!app.unlock_open);
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(1);
+        loop {
+            if shared.poll_application_layout_event(&[0xe6,8,0xa5,0,0]).unwrap().is_some(){break;}
+            assert!(std::time::Instant::now()<deadline,"event polling did not resume after completion");
+            std::thread::yield_now();
+        }
+        assert_eq!(recorder.requests().iter().filter(|r|r[0]==0xe6).count(),1);
+        assert_eq!(recorder.requests().iter().filter(|r|r[..2]==[0xfe,6]).count(),1);
+    }
+
+    #[test]
+    fn unlock_session_pause_releases_on_failed_start_and_disconnect() {
+        for fail_start in [false,true] {
+            let ctx=egui::Context::default();let mut app=EntropyApp::new_inert_for_test();
+            let (hid,recorder)=crate::hid::HidDevice::test_device();
+            let shared=hid.shared_output().unwrap().for_host_bridge_with_sm62(crate::qmk_hid_host::HostDataMode::default(),false,true);
+            recorder.respond_by(move |r| {
+                if r[..2]==[0xfe,5] {let mut a=[255;32];a[..4].copy_from_slice(&[0,0,0,0]);return Some(Ok(a));}
+                if r[..2]==[0xfe,6]&&fail_start{return Some(Err("HID device disconnected".into()));}
+                None
+            });
+            app.hid_device=Some(hid.into());app.firmware=FirmwareProtocol::Vial;
+            app.layout=Some(single_key_layout(4));app.unlock_open=true;
+            assert_eq!(app.start_vial_unlock(&ctx),VialHidTaskStart::Started);
+            poll_until_vial_hid_idle(&mut app,&ctx);
+            if !fail_start {
+                assert!(shared.poll_application_layout_event(&[0xe6,8,0xa5,0,0]).unwrap().is_none());
+                app.clear_connected_keyboard_state("test disconnect");
+            }
+            assert!(app.vial_unlock_event_pause.is_none());
+            let deadline=std::time::Instant::now()+std::time::Duration::from_secs(1);
+            while shared.poll_application_layout_event(&[0xe6,8,0xa5,0,0]).unwrap().is_none() {
+                assert!(std::time::Instant::now()<deadline);std::thread::yield_now();
+            }
+        }
     }
 
     #[test]
@@ -1933,7 +2322,9 @@ mod tests {
         let (hid, recorder) = crate::hid::HidDevice::test_device();
         // Fixture begins after connection discovery: retain operation-only golden traffic.
         *hid.native_capabilities.lock().unwrap() = Some(crate::rmk_native::RmkNativeCapabilities {
-            version: 1, key_actions: true, ..Default::default()
+            version: 1,
+            key_actions: true,
+            ..Default::default()
         });
         let hid = crate::device_session::DeviceSession::from(hid);
         crate::golden_frames::fake_rmk_keyboard(&recorder);
@@ -2206,7 +2597,7 @@ mod tests {
         recorder.respond_with([stale_poll]);
 
         let error = hid.unlock_poll().unwrap_err();
-        assert!(format!("{error:#}").contains("failed to read Vial unlock status"));
+        assert!(format!("{error:#}").contains("failed to read keyboard unlock status"));
 
         let requests = recorder.requests();
         assert_eq!(requests.len(), 2);
@@ -2276,9 +2667,11 @@ mod tests {
         assert!(matches!(outcome, VialHidOutcome::Battery(_)));
         let requests = recorder.requests();
         assert_eq!(requests.len(), 5);
-        assert!(requests
-            .iter()
-            .all(|request| &request[..3] == [0x08, 0xE8, 0x01]));
+        assert!(
+            requests
+                .iter()
+                .all(|request| &request[..3] == [0x08, 0xE8, 0x01])
+        );
     }
 
     #[test]
@@ -2696,6 +3089,8 @@ mod tests {
         app.module_settings.set_value(134, 0);
         app.layer_led_settings = LayerLedSettingsState {
             brightness: Some(LayerLedNumericSetting {
+                min: 0,
+                loaded: true,
                 qsid: 316,
                 width: 2,
                 value: 32,

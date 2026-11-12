@@ -1,19 +1,19 @@
 use super::*;
 
 pub(super) fn device_dropdown_open_id() -> egui::Id {
-    egui::Id::new("device_dropdown_open")
+    egui::Id::unique("device_dropdown_open")
 }
 
 pub(super) fn device_layer_operations_submenu_open_id() -> egui::Id {
-    egui::Id::new("device_layer_operations_submenu_open")
+    egui::Id::unique("device_layer_operations_submenu_open")
 }
 
 pub(super) fn advanced_dropdown_open_id() -> egui::Id {
-    egui::Id::new("advanced_dropdown_open")
+    egui::Id::unique("advanced_dropdown_open")
 }
 
 pub(super) fn settings_dropdown_open_id() -> egui::Id {
-    egui::Id::new("settings_dropdown_open")
+    egui::Id::unique("settings_dropdown_open")
 }
 
 pub(super) fn top_dropdown_frame(dark: bool) -> egui::Frame {
@@ -102,7 +102,7 @@ pub(super) fn top_menu_dividers<const N: usize>(group_sizes: [usize; N]) -> [boo
 // Paint-only cursor: a divider, not a catalog group change, starts a new
 // visible block. The Ui id keeps submenu tints independent of their parent.
 fn top_menu_block_id(ui: &egui::Ui) -> egui::Id {
-    ui.id().with("top_menu_block_group")
+    ui.scope_id().with("top_menu_block_group")
 }
 
 fn top_menu_block_tint(ui: &egui::Ui, icon: TopMenuIcon, dark: bool) -> Color32 {
@@ -241,9 +241,7 @@ fn top_dropdown_item_with_accessory(
     let block_tint = icon.map(|icon| top_menu_block_tint(ui, icon, dark));
     // Rows are painted by hand, so assistive technology learns the role,
     // label, enabled state and selection from here.
-    resp.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, selected, label)
-    });
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, selected, label));
     let hovered = resp.hovered() && enabled;
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -451,10 +449,10 @@ mod tests {
         let mut rect = egui::Rect::NOTHING;
         // Two frames: an area sizes itself on its first one.
         for _ in 0..2 {
-            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
                 let popup = show_top_dropdown(
                     ui.ctx(),
-                    egui::Id::new(("test_dropdown", rows, dividers)),
+                    egui::Id::unique(("test_dropdown", rows, dividers)),
                     egui::Pos2::ZERO,
                     |ui| {
                         for row in 0..rows {
@@ -473,7 +471,8 @@ mod tests {
                     },
                 );
                 rect = popup.response.rect;
-            });
+            })
+            .drop_without_applying_deltas();
         }
         rect
     }
@@ -497,17 +496,18 @@ mod tests {
 
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            top_dropdown_icon_item(ui, 160.0, TopMenuIcon::Rgb, "Lighting", true, true);
-            top_dropdown_icon_item(
-                ui,
-                160.0,
-                TopMenuIcon::Lock,
-                "Unlock keyboard",
-                false,
-                false,
-            );
-        });
+        let output =
+            crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
+                top_dropdown_icon_item(ui, 160.0, TopMenuIcon::Rgb, "Lighting", true, true);
+                top_dropdown_icon_item(
+                    ui,
+                    160.0,
+                    TopMenuIcon::Lock,
+                    "Unlock keyboard",
+                    false,
+                    false,
+                );
+            }));
         let update = output
             .platform_output
             .accesskit_update
@@ -543,7 +543,7 @@ mod tests {
             } else {
                 egui::Visuals::light()
             });
-            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
                 // Selected/disabled opening rows still choose the block hue.
                 top_dropdown_icon_item(ui, 160.0, TopMenuIcon::Rgb, "RGB", true, true);
                 for icon in [
@@ -576,7 +576,8 @@ mod tests {
                     top_menu_block_tint(ui, TopMenuIcon::AboutEntropy, dark),
                     TopMenuGroup::Meta.tint(dark)
                 );
-            });
+            })
+            .drop_without_applying_deltas();
         }
     }
 
@@ -587,7 +588,7 @@ mod tests {
             top_menu_dividers([0, 0, 1, 2, 2]),
             [false, false, false, true, false]
         );
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_ui(egui::RawInput::default(), |ui| {
             top_dropdown_icon_item(ui, 160.0, TopMenuIcon::Magic, "Magic", true, false);
             top_dropdown_icon_item(ui, 160.0, TopMenuIcon::MatrixTester, "Matrix", true, false);
             assert_eq!(
@@ -599,17 +600,18 @@ mod tests {
                 top_menu_block_tint(ui, TopMenuIcon::AppSettings, false),
                 TopMenuGroup::Meta.tint(false)
             );
-        });
+        })
+        .drop_without_applying_deltas();
     }
 
     #[test]
     fn popup_resets_tint_between_frames() {
         let ctx = egui::Context::default();
         for first in [TopMenuIcon::Rgb, TopMenuIcon::TextExpander] {
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            ctx.run_pass(egui::RawInput::default(), |ctx| {
                 show_top_dropdown(
                     ctx,
-                    egui::Id::new("tint_popup"),
+                    egui::Id::unique("tint_popup"),
                     egui::pos2(8.0, 8.0),
                     |ui| {
                         top_dropdown_icon_item(ui, 160.0, first, "First", true, false);
@@ -619,7 +621,8 @@ mod tests {
                         );
                     },
                 );
-            });
+            })
+            .drop_without_applying_deltas();
         }
     }
 

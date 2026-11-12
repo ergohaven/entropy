@@ -59,7 +59,11 @@ impl EntropyApp {
         ui: &mut egui::Ui,
         metrics: crate::ui_style::ResponsiveMetrics,
     ) {
-        if self.layout.as_ref().is_none_or(|layout| layout.firmware != FirmwareProtocol::Vial) {
+        if self
+            .layout
+            .as_ref()
+            .is_none_or(|layout| layout.firmware != FirmwareProtocol::Vial)
+        {
             return;
         }
         let Some((index, option)) = self.layout.as_ref().and_then(|layout| {
@@ -468,9 +472,9 @@ mod tests {
             )),
             ..Default::default()
         };
-        let output = ctx.run_ui(input, |ui| {
+        let output = crate::app::discard_texture_deltas(ctx.run_ui(input, |ui| {
             app.draw_live_features_settings_page(ui, ui.max_rect());
-        });
+        }));
         let mut text = Vec::new();
         for clipped_shape in &output.shapes {
             collect_text(&clipped_shape.shape, &mut text);
@@ -485,8 +489,10 @@ mod tests {
         assert!(!text.iter().any(|value| value == "Layer and language"));
         assert!(!text.iter().any(|value| value == "Modifiers"));
         assert!(text.iter().any(|value| value == "required"));
-        assert!(!text
-            .iter()
-            .any(|value| value == "Live Features are not active for this device"));
+        assert!(
+            !text
+                .iter()
+                .any(|value| value == "Live Features are not active for this device")
+        );
     }
 }

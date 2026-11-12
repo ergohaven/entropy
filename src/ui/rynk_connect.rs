@@ -7,8 +7,7 @@
 //! the editors hold them. A USB board loads in full here; nothing is deferred.
 
 use super::device_connect_task::{
-    has_firmware_layer_names, layer_name_sync_updates, normalize_reported_layer_count,
-    use_device_name_for_unnamed_layout,
+    layer_name_sync_updates, normalize_reported_layer_count, use_device_name_for_unnamed_layout,
 };
 use super::*;
 use crate::rynk::client::{fnv1a, RynkClientError};
@@ -17,6 +16,10 @@ use crate::rynk::link::{PhysicalId, RynkLink};
 use crate::rynk::session::RynkSession;
 use crate::rynk::{dynamic, keycode};
 use rmk_types_rynk::protocol::rynk::ergohaven::caps;
+
+// Additive Ergohaven capability, not yet named by the pinned rmk-types-rynk.
+// It extends the existing caps bitfield without changing wire revision 2.
+const UNIVERSAL_NUMERO_CAP: u32 = 1 << 8;
 
 impl EntropyApp {
     pub(super) fn connect_rynk(
@@ -121,20 +124,16 @@ impl EntropyApp {
                 .get_qmk_setting_string(qsid)
                 .map_err(failed(language, "Layer name read"))?;
             *current = Some(name.clone());
-            if !name.is_empty() {
-                layout.layer_names[layer] = name;
-                layer_names_from_firmware[layer] = true;
-            }
+            layout.layer_names[layer] = name;
+            layer_names_from_firmware[layer] = true;
         }
-        if !has_firmware_layer_names(&layout.layer_names) {
-            if let Some(saved) = load_saved_layer_names(&dev.name) {
-                for (layer, name) in saved.into_iter().enumerate().take(layer_count) {
-                    if !layer_names_from_firmware[layer] && !name.trim().is_empty() {
-                        layout.layer_names[layer] = name;
-                    }
-                }
-            }
-        }
+        let saved = load_saved_layer_names(&dev.name);
+        layout.layer_names = super::device_connect_apply::resolve_layer_names(
+            &layout.layer_names,
+            &layer_names_from_firmware,
+            saved.as_deref(),
+            layer_count,
+        );
         let layer_name_updates = layer_name_sync_updates(
             &layout.layer_names,
             &current_firmware_layer_names,
@@ -341,7 +340,8 @@ impl EntropyApp {
             // 16-bit macro keycode; symbols and Russian letters are per board.
             supports_macro_ext_keycodes: true,
             supports_rmk_native_key_actions: true,
-            supports_universal_numero: false,
+            supports_universal_numero: takes(caps::UNIVERSAL_SYMBOLS)
+                && takes(UNIVERSAL_NUMERO_CAP),
             supports_universal_symbols: info.caps & caps::UNIVERSAL_SYMBOLS != 0,
             supports_universal_russian_letters: info.caps & caps::RUSSIAN_LETTERS != 0,
             supports_rmk_native_combo_output: true,
@@ -546,6 +546,23 @@ mod tests {
         EntropyApp::connect_rynk(&rynk_device(path), crate::i18n::Language::English, &|_| {
             Ok(())
         })
+    }
+
+    #[test]
+    fn universal_numero_requires_its_own_firmware_capability() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        for (path, caps, supported) in [
+            ("numero-legacy", caps::UNIVERSAL_SYMBOLS, false),
+            ("numero-new", caps::UNIVERSAL_SYMBOLS | (1 << 8), true),
+            ("numero-only", 1 << 8, false),
+        ] {
+            let mut stored = stored();
+            stored.caps = caps;
+            let (board, _) = board(stored);
+            let _held = link(path, &board);
+            let result = connect(path).unwrap();
+            assert_eq!(result.supports_universal_numero, supported, "{path}");
+        }
     }
 
     #[test]

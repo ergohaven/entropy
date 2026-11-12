@@ -137,6 +137,7 @@ enum PickerValuePolicy {
     #[default]
     Any,
     KeyOverrideTrigger,
+    RmkKeyOverrideReplacement,
 }
 
 pub struct KeycodePicker {
@@ -224,6 +225,7 @@ pub struct KeycodePicker {
     macro_clipboard: Option<MacroSnapshot>,
     /// Typographic characters replaced with ASCII while editing Text steps of
     /// this macro: (macro_idx, count). Shown so the rewrite is never silent.
+    macro_text_ascii_replaced: Option<(usize, usize)>,
     /// Macro key picker: (macro_idx, action_idx) being edited
     macro_key_pick: Option<(usize, usize)>,
     macro_mod_key_pick: Option<u16>,
@@ -237,6 +239,28 @@ pub struct KeycodePicker {
 
 fn tr_picker(language: crate::i18n::Language, key: &'static str) -> &'static str {
     crate::i18n::tr_catalog(language, key)
+}
+
+// Native startup installs these UI fonts in main.rs; isolated kittest
+// contexts do not pass through that startup closure. Keep glyph validation
+// strict and provide the same embedded UI font chain instead of allowing tofu.
+#[cfg(test)]
+pub(crate) fn setup_picker_test_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    for (name, bytes) in [
+        ("roboto", include_bytes!("../assets/Roboto-Regular.ttf").as_slice()),
+        ("dejavu", include_bytes!("../assets/DejaVuSans.ttf").as_slice()),
+        ("noto_symbols", include_bytes!("../assets/NotoSansSymbols2-Regular.ttf").as_slice()),
+        ("noto_emoji", include_bytes!("../assets/NotoEmoji-Regular.ttf").as_slice()),
+    ] {
+        fonts.font_data.insert(name.to_owned(), egui::FontData::from_static(bytes).into());
+    }
+    let prop = fonts.families.entry(egui::FontFamily::Proportional).or_default();
+    prop.insert(0, "roboto".to_owned());
+    prop.extend(["dejavu", "noto_symbols", "noto_emoji"].map(str::to_owned));
+    fonts.families.entry(egui::FontFamily::Monospace).or_default()
+        .extend(["dejavu", "noto_symbols", "noto_emoji"].map(str::to_owned));
+    ctx.set_fonts(fonts);
 }
 
 #[cfg(test)]
@@ -253,7 +277,9 @@ mod tests {
             vial_quantum_pending_mt: Some(0x4400),
             ..Default::default()
         };
-        let mut harness = egui_kittest::Harness::builder().build_ui_state(
+        let mut harness = egui_kittest::Harness::builder()
+            .with_context_setup(setup_picker_test_fonts)
+            .build_ui_state(
             |ui, picker: &mut KeycodePicker| {
                 picker.show(
                     ui.ctx(),
@@ -277,16 +303,18 @@ mod tests {
             ..Default::default()
         };
         picker.search.query = "tap dan".into();
-        let mut harness = egui_kittest::Harness::new_state(
-            |ctx, picker: &mut KeycodePicker| {
-                picker.show(
-                    ctx,
-                    DeferredPickerDataState::Ready,
-                    DeferredPickerDataState::Ready,
-                );
-            },
-            picker,
-        );
+        let mut harness = egui_kittest::Harness::builder()
+            .allow_missing_glyphs()
+            .build_ui_state(
+                |ui, picker: &mut KeycodePicker| {
+                    picker.show(
+                        ui.ctx(),
+                        DeferredPickerDataState::Ready,
+                        DeferredPickerDataState::Ready,
+                    );
+                },
+                picker,
+            );
         harness.run();
         assert!(harness.state().open, "picker should be showing before Esc");
 
@@ -309,16 +337,18 @@ mod tests {
             vial_quantum_pending_mod: Some(0x0100),
             ..Default::default()
         };
-        let mut harness = egui_kittest::Harness::new_state(
-            |ctx, picker: &mut KeycodePicker| {
-                picker.show(
-                    ctx,
-                    DeferredPickerDataState::Ready,
-                    DeferredPickerDataState::Ready,
-                );
-            },
-            picker,
-        );
+        let mut harness = egui_kittest::Harness::builder()
+            .allow_missing_glyphs()
+            .build_ui_state(
+                |ui, picker: &mut KeycodePicker| {
+                    picker.show(
+                        ui.ctx(),
+                        DeferredPickerDataState::Ready,
+                        DeferredPickerDataState::Ready,
+                    );
+                },
+                picker,
+            );
         harness.run();
         harness.key_press(egui::Key::Escape);
         harness.run();
@@ -342,10 +372,11 @@ mod tests {
     fn open_picker_harness(picker: KeycodePicker) -> egui_kittest::Harness<'static, KeycodePicker> {
         let mut harness = egui_kittest::Harness::builder()
             .with_size(egui::vec2(1_400.0, 1_000.0))
-            .build_state(
-                |ctx, picker: &mut KeycodePicker| {
+            .allow_missing_glyphs()
+            .build_ui_state(
+                |ui, picker: &mut KeycodePicker| {
                     picker.show(
-                        ctx,
+                        ui.ctx(),
                         DeferredPickerDataState::Ready,
                         DeferredPickerDataState::Ready,
                     );
@@ -789,13 +820,13 @@ mod tests {
                 egui::Pos2::ZERO,
                 egui::vec2(1_100.0, 800.0),
             ));
-            ctx.run_ui(input, |_ui| {
+            crate::app::discard_texture_deltas(ctx.run_ui(input, |_ui| {
                 picker.show(
                     &ctx,
                     DeferredPickerDataState::Ready,
                     DeferredPickerDataState::Ready,
                 );
-            })
+            }))
         };
         let _ = render();
         let output = render();
@@ -1028,7 +1059,7 @@ mod tests {
             };
             if escape {
                 let ctx = egui::Context::default();
-                let _ = ctx.run_ui(
+                let _ = crate::app::discard_texture_deltas(ctx.run_ui(
                     egui::RawInput {
                         events: vec![egui::Event::Key {
                             key: Key::Escape,
@@ -1040,7 +1071,7 @@ mod tests {
                         ..Default::default()
                     },
                     |_ui| picker.show_pending_picker(&ctx),
-                );
+                ));
             } else {
                 picker.close_from_backdrop();
             }
@@ -1411,6 +1442,7 @@ impl Default for KeycodePicker {
             macro_actions: vec![vec![]; 16],
             macro_undo_stack: Vec::new(),
             macro_clipboard: None,
+            macro_text_ascii_replaced: None,
             macro_key_pick: None,
             macro_mod_key_pick: None,
             advanced_slot_picker: None,
@@ -1468,7 +1500,7 @@ impl KeycodePicker {
 
     pub(crate) fn picker_value_supported(&self, value: u16) -> bool {
         match self.value_policy {
-            PickerValuePolicy::Any => true,
+            PickerValuePolicy::Any | PickerValuePolicy::RmkKeyOverrideReplacement => true,
             PickerValuePolicy::KeyOverrideTrigger => {
                 !matches!(value, 0x0000 | 0x0001 | 0x00E0..=0x00E7)
             }
@@ -1738,6 +1770,13 @@ impl KeycodePicker {
         self.advanced_slot_picker = None;
         self.rmk_native_key_actions_allowed_for_target = false;
         self.value_policy = PickerValuePolicy::Any;
+    }
+
+    pub(crate) fn open_key_override_replacement_picker(&mut self, allow_momentary_layers: bool) {
+        self.open_regular_key_picker_with_mod_key(true);
+        if allow_momentary_layers {
+            self.value_policy = PickerValuePolicy::RmkKeyOverrideReplacement;
+        }
     }
 
     pub(crate) fn open_full_key_picker(&mut self, selected_tab: KeycodeTab) {
@@ -2176,7 +2215,7 @@ impl KeycodePicker {
                     egui::TextEdit::singleline(&mut self.search.query)
                         .hint_text(tr_picker(self.language, "key_picker.search_hint"))
                         .font(egui::FontId::proportional(12.5))
-                        .vertical_align(egui::Align::Center)
+                        .align(egui::Align2::LEFT_CENTER)
                         .margin(egui::Margin {
                             left: 8,
                             right: 26,
@@ -2196,7 +2235,7 @@ impl KeycodePicker {
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .on_hover_text(clear_label);
                     clear_resp.widget_info(|| {
-                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, clear_label)
+                        egui::WidgetInfo::labeled(egui::Role::Button, true, clear_label)
                     });
                     paint_focus_ring(ui, &clear_resp, 4.0);
                     let color = if clear_resp.hovered() {
@@ -2224,7 +2263,7 @@ impl KeycodePicker {
 
             // Tab bar
             let visible_tabs = self.visible_vial_tabs();
-            let panel_id = ui.id().with("picker_tab_panel");
+            let panel_id = ui.scope_id().with("picker_tab_panel");
             let mut selected_tab_id = None;
             let tab_spacing = 6.0;
             let tab_bar_width: f32 = visible_tabs
@@ -2273,7 +2312,7 @@ impl KeycodePicker {
             let searching = self.search.is_active();
 
             let content_height = key_picker_main_content_height(picker_size);
-            ui.scope_builder(egui::UiBuilder::new().id(panel_id), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().scope_id(panel_id), |ui| {
                 ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
                     node.set_role(egui::accesskit::Role::TabPanel);
                     if let Some(tab_id) = selected_tab_id {
@@ -2437,6 +2476,17 @@ impl KeycodePicker {
                             self.finish_regular_key_pick(base | value);
                         }
                     } else {
+                        if self.value_policy == PickerValuePolicy::RmkKeyOverrideReplacement {
+                            let layers = self.layer_action_key_choices(MacroKeyPickKind::Down);
+                            if let Some(value) = show_grouped_popup_choice_buttons(
+                                ui,
+                                vec![("Layers", layers)],
+                                self.language,
+                            ) {
+                                self.finish_regular_key_pick(value);
+                                return;
+                            }
+                        }
                         match self.popup_view_mode {
                             PickerViewMode::Layout => {
                                 if let Some(value) =

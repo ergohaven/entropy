@@ -358,6 +358,9 @@ pub(super) fn linux_fixture_snapshot(case: u8) -> Result<Vec<Device>, String> {
     let hid = usb.join("1-1:1.0/0003:FFFF:FFFF.0001");
     let raw = root.join("hidraw0");
     fs::create_dir_all(&raw).unwrap(); fs::create_dir_all(&hid).unwrap();
+    // Match the validator's canonical sysfs identity, including when TMPDIR
+    // is an inherited /proc/self/fd directory inside the no-hardware sandbox.
+    let hid = fs::canonicalize(hid).unwrap();
     symlink(&hid, raw.join("device")).unwrap();
     fs::write(hid.join("uevent"), "HID_ID=0003:0000FFFF:0000FFFF\nHID_NAME=Fixture keyboard\nHID_UNIQ=\n").unwrap();
     fs::write(hid.join("report_descriptor"), [0x06, 0x60, 0xff, 0x09, 0x61, 0xa1, 0x01, 0xc0]).unwrap();

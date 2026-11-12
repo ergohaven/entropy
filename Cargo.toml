@@ -1,6 +1,6 @@
 [package]
 name = "ergohaven-entropy"
-version = "0.5.0-test.4"
+version = "0.5.0-test.25"
 edition = "2021"
 description = "Desktop app for configuring Vial-QMK and Vial-RMK programmable keyboards and input devices"
 authors = ["Ergohaven"]
@@ -32,8 +32,8 @@ path = "src/main.rs"
 winresource = "0.1"
 
 [dependencies]
-eframe = { version = "0.34.3", default-features = false, features = ["accesskit", "default_fonts", "glow", "persistence", "wayland", "web_screen_reader", "x11"] }
-egui = "0.34.3"
+eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "glow", "links", "persistence", "wayland", "web_screen_reader", "x11"] }
+egui = { version = "0.37.0", features = ["monochrome_emoji_fonts"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 emojis = "0.9"
@@ -73,7 +73,7 @@ hidapi = "2.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 tray-icon = "0.22"
-windows-sys = { version = "0.60", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Devices_HumanInterfaceDevice", "Win32_Storage_FileSystem", "Win32_Security", "Win32_Foundation", "Win32_Globalization", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.60", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Devices_HumanInterfaceDevice", "Win32_Storage_FileSystem", "Win32_Security", "Win32_Foundation", "Win32_Globalization", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Com"] }
 windows = { version = "0.56", features = ["Foundation", "Foundation_Collections", "Media_Control", "Win32_Media_Audio_Endpoints", "Win32_System_Com_StructuredStorage"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -81,6 +81,10 @@ windows = { version = "0.56", features = ["Foundation", "Foundation_Collections"
 # prevents hidapi from trying to seize the whole keyboard, which macOS rejects.
 hidapi = { version = "2.6", features = ["macos-shared-device"] }
 dispatch2 = "0.3.1"
+block2 = "0.6"
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-user-notifications = { version = "0.3.2", default-features = false, features = ["std", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationTrigger", "UNUserNotificationCenter"] }
 objc = "0.2"
 tray-icon = "0.22"
 
@@ -89,9 +93,10 @@ async-channel = "2"
 dbus = { version = "0.9", features = ["vendored"] }
 hidapi = { version = "2.6", default-features = false, features = ["linux-native-basic-udev"] }
 kdotool = { version = "0.3", default-features = false }
+ksni = { version = "0.3.7", default-features = false, features = ["async-io", "blocking"] }
 libc = "0.2"
 x11-dl = "2"
-zbus = "5.16"
+zbus = "5.19"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"
@@ -110,8 +115,8 @@ strip = true
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
 
 [dev-dependencies]
-egui_kittest = { version = "0.34", default-features = false }
+egui_kittest = { version = "0.37", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # Peer-to-peer connections let D-Bus tests run a peer without a session bus.
-zbus = { version = "5.16", features = ["p2p"] }
+zbus = { version = "5.19", features = ["p2p"] }

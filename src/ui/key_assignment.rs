@@ -999,29 +999,31 @@ mod tests {
             assert!(app.secondary_click_handled);
             assert!(app.keycode_picker.open);
             assert_eq!(app.keycode_picker.vial_quantum_pending_mt, Some(base));
-            let _ = ctx.run_ui(
-                egui::RawInput {
-                    // A second key in the same frame must not overwrite the first
-                    // result after the retargeting context has been consumed.
-                    events: [egui::Key::B, egui::Key::C]
-                        .into_iter()
-                        .map(|key| egui::Event::Key {
-                            key,
-                            physical_key: Some(key),
-                            pressed: true,
-                            repeat: false,
-                            modifiers: egui::Modifiers::NONE,
-                        })
-                        .collect(),
-                    ..Default::default()
-                },
-                |_ui| {
-                    app.keycode_picker.show(
-                        &ctx,
-                        crate::keycode_picker::DeferredPickerDataState::Ready,
-                        crate::keycode_picker::DeferredPickerDataState::Ready,
-                    );
-                },
+            let _ = crate::app::discard_texture_deltas(
+                ctx.run_ui(
+                    egui::RawInput {
+                        // A second key in the same frame must not overwrite the first
+                        // result after the retargeting context has been consumed.
+                        events: [egui::Key::B, egui::Key::C]
+                            .into_iter()
+                            .map(|key| egui::Event::Key {
+                                key,
+                                physical_key: Some(key),
+                                pressed: true,
+                                repeat: false,
+                                modifiers: egui::Modifiers::NONE,
+                            })
+                            .collect(),
+                        ..Default::default()
+                    },
+                    |_ui| {
+                        app.keycode_picker.show(
+                            &ctx,
+                            crate::keycode_picker::DeferredPickerDataState::Ready,
+                            crate::keycode_picker::DeferredPickerDataState::Ready,
+                        );
+                    },
+                ),
             );
             let tap = Action::KeyWithModifier(HidKeyCode::B, ModifierCombination::default());
             let expected = if version == 2 {

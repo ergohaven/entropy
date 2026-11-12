@@ -101,7 +101,7 @@ new stable identity.
 
 1. Download the build for your platform from GitHub Releases
 2. Connect a Vial-compatible device
-3. On Linux, install Vial udev rules if Entropy cannot open the device
+3. On Linux, install device access rules if Entropy cannot open the device
    and install the IBus backend if you want Text Expander on Linux
 4. Launch Entropy
 5. Select the device from the top-left device dropdown
@@ -121,9 +121,29 @@ entropy --export-layout - --device "K:04 (Qube)" > k04.entlayout
 The file is the same one **Layout → Export layout** writes. `--device` picks
 the keyboard when several are attached, by a part of its name, a hex `VID:PID`
 such as `e126:0071`, or its HID path; `--timeout` (seconds, default 60) bounds
-both the wait for a Bluetooth keyboard to be discovered and its loading. Close
-the Entropy window first: the export refuses to run next to another instance
-that owns the keyboard.
+both the wait for a Bluetooth keyboard to be discovered and its loading.
+
+When Entropy is already running, it owns the keyboard, so on Linux and macOS
+the export asks that instance for the layout over a socket private to the
+user. The running Entropy lends its connection to the same read-only export,
+even while its window is in the background; its own writes wait until the
+export is done. On Windows, close the Entropy window first.
+
+Device backups include compatible module settings, layer and Bluetooth profile
+colors, LED brightness and timeout, and QMK RGBLight or VialRGB lighting settings
+when successfully read from the keyboard. Import reports unsupported or
+incompatible settings; older backups leave settings they do not contain unchanged.
+Entropy application preferences use the separate `.entsettings` export.
+
+Before a resident-layout import changes the keyboard, Entropy writes and fully
+flushes a complete recovery backup, then publishes it without replacing an
+existing backup. Any reported creation, write, flush or publication error refuses
+the import. Unix also synchronizes the captured chain of newly created directory
+entries. Windows uses file-level flushes without elevation, UAC or a volume-wide
+flush; it does not guarantee that a newly created backup path survives sudden
+power loss or an OS crash. This limited Windows namespace risk is intentional;
+file-level success is not a claim of power-loss certification.
+
 
 The export is read-only: the HID transport refuses every command that would
 change the keyboard. It writes only a complete snapshot of one connection: if a
@@ -132,13 +152,13 @@ file destination is replaced atomically, so a failed run keeps the previous
 backup.
 
 Exit status: `0` exported, `1` export failed, `2` no or ambiguous keyboard,
-`3` another Entropy instance is running, `4` incomplete (the missing sections
+`3` another Entropy instance is running and did not answer, `4` incomplete (the missing sections
 are logged), `64` usage error.
 
 ## Linux Device Access
 
 Vial devices use hidraw access on Linux. If your device appears but cannot be opened,
-use the **Install Vial udev rules** action in Entropy settings, or install the
+use **Entropy device access → Install rules** in Entropy settings, or install the
 included udev rule manually from a source checkout:
 
 ```sh
@@ -172,7 +192,7 @@ A flake is included. Run without installing:
 nix run github:ergohaven/entropy
 ```
 
-The in-app setup actions cannot work on NixOS: **Install Vial udev rules**
+The in-app setup actions cannot work on NixOS: **Entropy device access → Install rules**
 writes to `/etc/udev/rules.d`, and IBus loads engines only from its own store
 path, so a copy under `~/.local/share` is never picked up. Use the NixOS module
 instead, which covers both declaratively:
