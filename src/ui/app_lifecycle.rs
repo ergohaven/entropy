@@ -569,7 +569,9 @@ impl EntropyApp {
         // Keep their unrelated watcher from replacing the operation's status
         // when an isolated test has no Text Expander rule files on disk.
         self.text_expander_rules_last_check_at = self.app_clock.elapsed().as_secs_f64() + 60.0;
-        self.update_native_background(ctx, now, false, true);
+        crate::app_discovery::with_test_application_discovery_or_default(|| {
+            self.update_native_background(ctx, now, false, true);
+        });
     }
 
     #[cfg(all(test, not(target_arch = "wasm32")))]

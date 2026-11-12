@@ -349,6 +349,14 @@ pub(crate) fn with_test_application_discovery<R>(snapshot: ApplicationDiscoveryS
     run()
 }
 
+// Synthetic lifecycle ticks may inherit an explicit foreground fixture, but must
+// never fall through to the real desktop when the fixture supplies none.
+#[cfg(test)]
+pub(crate) fn with_test_application_discovery_or_default<R>(run: impl FnOnce() -> R) -> R {
+    let snapshot = TEST_DISCOVERY_SNAPSHOT.with(|slot| slot.borrow().clone().unwrap_or_default());
+    with_test_application_discovery(snapshot, run)
+}
+
 pub(crate) fn application_discovery_snapshot() -> ApplicationDiscoverySnapshot {
     #[cfg(test)]
     if let Some(snapshot) = TEST_DISCOVERY_SNAPSHOT.with(|slot| slot.borrow().clone()) { return snapshot; }

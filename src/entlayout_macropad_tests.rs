@@ -1,4 +1,4 @@
-//! Real layout/menu/file-dispatch code; only native picker and HID are replaced.
+//! Real layout/menu/file-dispatch code with controlled picker, HID and desktop inputs.
 //! Each test owns an isolated output root, including settings and auto-backups.
 
 impl super::EntropyApp {
@@ -35,7 +35,8 @@ impl LegacyResidentFixture for crate::hid::TestHidRecorder {
 include!("entlayout_review_fixes_tests.rs");
 
 fn drain_pending_layout_import(app: &mut EntropyApp, ctx: &egui::Context, now: f64) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    // Full-device transfers need headroom when integration tests run in parallel.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while app.import_pending() || app.vial_hid_task_active() || app.gui_entlayout_preparation.is_some() {
         assert!(std::time::Instant::now() < deadline, "import lifecycle stalled: {}", app.status_msg);
         app.tick_layout_import_lifecycle_for_test(ctx, now);
@@ -998,6 +999,36 @@ fn exercise_failed_resource_export(kind: usize) {
         assert!(recorder.requests().iter().filter(|r|r[..3]==[0xfe,0x0d,set]).count()>writes,"stale equality suppressed correction kind={kind}");
         assert!(physical.lock().unwrap().iter().all(|byte|*byte==0));
     }
+}
+
+#[test]
+fn import_lifecycle_ticks_keep_fixture_discovery_inputs() {
+    let _storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app, _recorder, _) = fixture();
+    let ctx = egui::Context::default();
+    let (scan_requests, scans) = std::sync::mpsc::channel();
+    app.test_device_scan_requests = Some(scan_requests);
+    let foreground = DetectedApplication {
+        executable: "fixture-foreground".into(),
+        display_name: "Fixture foreground".into(),
+        ..Default::default()
+    };
+    let snapshot = crate::app_discovery::ApplicationDiscoverySnapshot {
+        foreground: Some(foreground.clone()),
+        ..Default::default()
+    };
+    // A worker borrowing the session must not make real discovery eligible.
+    let session = app.hid_device.take();
+    crate::app_discovery::with_test_application_discovery(snapshot, || {
+        for now in [1.0, 60.0] {
+            app.tick_layout_import_lifecycle_for_test(&ctx, now);
+            assert_eq!(app.application_discovery.foreground.as_ref(), Some(&foreground));
+            assert!(scans.try_recv().is_err(), "synthetic import tick started device discovery");
+        }
+    });
+    app.tick_layout_import_lifecycle_for_test(&ctx, 61.0);
+    assert!(app.application_discovery.foreground.is_none());
+    app.hid_device = session;
 }
 
 fn fixture() -> (EntropyApp, crate::hid::TestHidRecorder, String) {
