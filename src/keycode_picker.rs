@@ -1059,7 +1059,7 @@ mod tests {
             };
             if escape {
                 let ctx = egui::Context::default();
-                let _ = ctx.run_ui(
+                let _ = crate::app::discard_texture_deltas(ctx.run_ui(
                     egui::RawInput {
                         events: vec![egui::Event::Key {
                             key: Key::Escape,
@@ -1071,7 +1071,7 @@ mod tests {
                         ..Default::default()
                     },
                     |_ui| picker.show_pending_picker(&ctx),
-                );
+                ));
             } else {
                 picker.close_from_backdrop();
             }
