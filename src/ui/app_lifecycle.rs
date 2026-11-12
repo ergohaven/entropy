@@ -1805,6 +1805,8 @@ impl eframe::App for EntropyApp {
             self.handle_windows_start_hidden_to_tray(ctx);
             #[cfg(target_os = "macos")]
             self.cache_macos_ns_window(frame);
+            #[cfg(target_os = "macos")]
+            self.handle_macos_start_in_menu_bar(ctx);
             // Cache the winit window/display handles so native file dialogs can be
             // parented to the main window instead of opening behind it.
             self.cache_parent_window_handles(frame);
@@ -1819,9 +1821,6 @@ impl eframe::App for EntropyApp {
             self.handle_close_to_tray(ctx);
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             self.poll_tray_events(ctx);
-            #[cfg(target_os = "macos")]
-            self.handle_macos_dock_reopen(ctx);
-
             crate::app::poll_update_check(&mut self.update_check);
             crate::app::poll_firmware_update_check(&mut self.firmware_update_check);
             self.poll_update_notifications(ctx);

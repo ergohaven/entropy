@@ -5595,9 +5595,7 @@ pub struct EntropyApp {
     #[cfg(target_os = "macos")]
     pub(crate) macos_window_hidden_to_menu_bar: bool,
     #[cfg(target_os = "macos")]
-    pub(crate) macos_app_was_hidden: bool,
-    #[cfg(target_os = "macos")]
-    pub(crate) macos_hidden_to_menu_bar_at: Option<std::time::Instant>,
+    pub(crate) macos_start_in_menu_bar_pending: bool,
     #[cfg(target_os = "linux")]
     pub(crate) linux_background_since: Option<f64>,
     #[cfg(target_os = "linux")]

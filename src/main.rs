@@ -492,8 +492,13 @@ fn main() -> eframe::Result<()> {
             } else {
                 app
             };
-            // Linux decides on the first pass: to the tray, or minimized.
-            #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+            #[cfg(target_os = "macos")]
+            let app = if launch_minimized {
+                app.with_start_in_menu_bar()
+            } else {
+                app
+            };
+            #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
             if launch_minimized {
                 cc.egui_ctx
                     .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
