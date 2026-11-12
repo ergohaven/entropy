@@ -356,7 +356,9 @@ fn profile() -> ApplicationLayoutSnapshot {
 }
 
 pub(super) fn wait_for(recorder: &crate::hid::TestHidRecorder, predicate: impl Fn(&[[u8; 32]]) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // A restarted worker verifies the stored FULL record before SELECT. That
+    // takes hundreds of reads and can exceed five seconds on hosted runners.
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if predicate(&recorder.requests()) {
             return;
