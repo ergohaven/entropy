@@ -9,6 +9,7 @@ use std::thread::{self, JoinHandle};
 #[cfg(any(target_os = "windows", test))]
 use std::time::SystemTime;
 use std::time::{Duration, Instant};
+use crate::key_legend_detection::{LayoutObservation, LayoutSample};
 
 const RAW_HID_PACKET_LEN: usize = 32;
 const DATA_TIME: u8 = 0xAA;
@@ -188,6 +189,7 @@ pub fn media_snapshot() -> Option<(String, String)> {
 struct DesktopSnapshot {
     volume: Option<u8>,
     layout: Option<u8>,
+    layout_sample: Option<LayoutSample>,
     // None means no completed sample, Some(empty) means playback stopped.
     media: Option<MediaInfo>,
     media_query_ms: u128,
@@ -202,6 +204,8 @@ struct DesktopState {
     stopped: bool,
     // Bridges to wake when a lane they subscribed to stores news for them.
     listeners: Vec<([bool; 3], std::sync::Weak<BridgeWake>)>,
+    legend_listeners: Vec<(u64, egui::Context)>,
+    next_legend_listener: u64,
     // The desktop announces every layout change (LayoutEvents): the layout
     // lane polls rarely, samples when `layout_due` is set, and has its source
     // drop what it read from the old list when `layout_list_stale` is.
@@ -319,7 +323,7 @@ struct HostDataService {
 
 trait DesktopSource {
     fn volume(&mut self) -> Option<u8>;
-    fn layout(&mut self) -> Option<u8>;
+    fn layout(&mut self) -> LayoutObservation;
     fn media(&mut self) -> Option<MediaInfo>;
     /// Starts following the layout changes the desktop announces. Called on
     /// the layout lane before its first sample; a source that cannot follow
@@ -348,7 +352,7 @@ impl DesktopSource for NativeDesktopSource {
         current_volume_percent()
     }
 
-    fn layout(&mut self) -> Option<u8> {
+    fn layout(&mut self) -> LayoutObservation {
         if self.layout.is_none() && self.last_layout_attempt.elapsed() >= Duration::from_secs(2) {
             self.last_layout_attempt = Instant::now();
             self.layout = LayoutTracker::new();
@@ -356,6 +360,7 @@ impl DesktopSource for NativeDesktopSource {
         self.layout
             .as_mut()
             .and_then(LayoutTracker::current_layout_index)
+            .into()
     }
 
     fn media(&mut self) -> Option<MediaInfo> {
@@ -380,6 +385,23 @@ impl DesktopSource for NativeDesktopSource {
 }
 
 impl HostDataService {
+    fn shared() -> Self {
+        HOST_DATA_SERVICE.get_or_init(|| Self::start(NativeDesktopSource::new)).clone()
+    }
+
+    fn subscribe_legends(&self, ctx: egui::Context) -> LegendLayoutSubscription {
+        let mut state = self.owner.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.demand[1] == 0 {
+            state.epoch[1] = state.epoch[1].wrapping_add(1);
+        }
+        state.demand[1] += 1;
+        let id = state.next_legend_listener;
+        state.next_legend_listener = id.wrapping_add(1);
+        state.legend_listeners.push((id, ctx));
+        self.owner.shared.wake.notify_all();
+        LegendLayoutSubscription { service: self.clone(), id }
+    }
+
     fn start<S: DesktopSource + 'static>(source: impl Fn() -> S + Send + Sync + 'static) -> Self {
         let shared = Arc::new(DesktopShared::default());
         let source = Arc::new(source);
@@ -439,6 +461,53 @@ impl HostDataService {
     }
 }
 
+/// A layout-only consumer; owns no HID transport or firmware output lease.
+pub struct LegendLayoutSubscription {
+    service: HostDataService,
+    id: u64,
+}
+
+pub fn subscribe_legend_layout(ctx: egui::Context) -> LegendLayoutSubscription {
+    HostDataService::shared().subscribe_legends(ctx)
+}
+
+impl LegendLayoutSubscription {
+    pub fn snapshot(&self) -> Option<LayoutSample> {
+        self.service.snapshot().layout_sample
+    }
+}
+
+impl Drop for LegendLayoutSubscription {
+    fn drop(&mut self) {
+        let shared = &self.service.owner.shared;
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.legend_listeners.retain(|(id, _)| *id != self.id);
+        release_desktop_lanes(&mut state, [false, true, false]);
+        shared.wake.notify_all();
+    }
+}
+
+fn release_desktop_lanes(state: &mut DesktopState, enabled: [bool; 3]) {
+    for (index, enabled) in enabled.into_iter().enumerate() {
+        if enabled {
+            state.demand[index] -= 1;
+            if state.demand[index] == 0 {
+                match index {
+                    0 => state.snapshot.volume = None,
+                    1 => {
+                        state.snapshot.layout = None;
+                        state.snapshot.layout_sample = None;
+                    }
+                    _ => {
+                        state.snapshot.media = None;
+                        state.snapshot.media_sampled_at = None;
+                    }
+                }
+            }
+        }
+    }
+}
+
 struct DesktopSubscription {
     service: HostDataService,
     enabled: [bool; 3],
@@ -456,21 +525,7 @@ impl Drop for DesktopSubscription {
         {
             state.listeners.swap_remove(listener);
         }
-        for (index, enabled) in self.enabled.iter().enumerate() {
-            if *enabled {
-                state.demand[index] -= 1;
-                if state.demand[index] == 0 {
-                    match index {
-                        0 => state.snapshot.volume = None,
-                        1 => state.snapshot.layout = None,
-                        _ => {
-                            state.snapshot.media = None;
-                            state.snapshot.media_sampled_at = None;
-                        }
-                    }
-                }
-            }
-        }
+        release_desktop_lanes(&mut state, self.enabled);
         shared.wake.notify_all();
     }
 }
@@ -503,6 +558,7 @@ fn run_desktop_service(shared: Arc<DesktopShared>, mut source: impl DesktopSourc
         let announced = index == 1 && std::mem::take(&mut state.layout_due);
         let relist = index == 1 && std::mem::take(&mut state.layout_list_stale);
         let due = announced || last_epoch != epoch || last_poll.elapsed() >= interval(&state);
+        let sample_interval = interval(&state);
         drop(state);
         if relist {
             source.layout_list_changed();
@@ -514,7 +570,11 @@ fn run_desktop_service(shared: Arc<DesktopShared>, mut source: impl DesktopSourc
             let mut sample = DesktopSnapshot::default();
             match index {
                 0 => sample.volume = source.volume(),
-                1 => sample.layout = source.layout(),
+                1 => {
+                    let observation = source.layout();
+                    sample.layout = observation.language;
+                    sample.layout_sample = Some(LayoutSample::new(observation, Instant::now(), sample_interval));
+                }
                 _ => {
                     sample.media = Some(source.media().unwrap_or_default());
                     sample.media_query_ms = started.elapsed().as_millis();
@@ -532,6 +592,14 @@ fn run_desktop_service(shared: Arc<DesktopShared>, mut source: impl DesktopSourc
                             != sample.volume
                     }
                     1 => {
+                        let legend_news = state.snapshot.layout_sample.as_ref().map(|s| &s.observation)
+                            != sample.layout_sample.as_ref().map(|s| &s.observation);
+                        state.snapshot.layout_sample = sample.layout_sample;
+                        if legend_news {
+                            for (_, ctx) in &state.legend_listeners {
+                                ctx.request_repaint();
+                            }
+                        }
                         std::mem::replace(&mut state.snapshot.layout, sample.layout)
                             != sample.layout
                     }
@@ -577,7 +645,7 @@ impl<M: FnMut() -> Option<(String, String)>> DesktopSource for TestMediaSource<M
     fn volume(&mut self) -> Option<u8> {
         panic!("media-only fixture must not query real desktop volume")
     }
-    fn layout(&mut self) -> Option<u8> {
+    fn layout(&mut self) -> LayoutObservation {
         panic!("media-only fixture must not query real desktop layout")
     }
     fn media(&mut self) -> Option<MediaInfo> {
@@ -620,6 +688,8 @@ mod bridge_wake_tests;
 mod clock_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod layout_signal_tests;
+#[cfg(test)]
+mod legend_tests;
 #[cfg(any(target_os = "macos", test))]
 mod macos_volume;
 #[cfg(target_os = "macos")]
@@ -1272,9 +1342,7 @@ impl QmkHidHostBridge {
             mode,
             shared_output,
             protocol,
-            HOST_DATA_SERVICE
-                .get_or_init(|| HostDataService::start(NativeDesktopSource::new))
-                .clone(),
+            HostDataService::shared(),
             open_host_data_hid,
         )
     }
@@ -4720,7 +4788,7 @@ pub(crate) fn test_start_profile_handoff_bridge(
     struct EmptyDesktop;
     impl DesktopSource for EmptyDesktop {
         fn volume(&mut self) -> Option<u8> { None }
-        fn layout(&mut self) -> Option<u8> { None }
+        fn layout(&mut self) -> LayoutObservation { None.into() }
         fn media(&mut self) -> Option<MediaInfo> { None }
     }
     QmkHidHostBridge::start_with_desktop_service(

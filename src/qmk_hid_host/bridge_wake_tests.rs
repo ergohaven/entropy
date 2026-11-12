@@ -40,9 +40,9 @@ impl DesktopSource for CellDesktop {
         self.record_thread();
         None
     }
-    fn layout(&mut self) -> Option<u8> {
+    fn layout(&mut self) -> LayoutObservation {
         self.record_thread();
-        Some(self.layout.load(Ordering::Acquire)).filter(|layout| *layout != u8::MAX)
+        Some(self.layout.load(Ordering::Acquire)).filter(|layout| *layout != u8::MAX).into()
     }
     fn media(&mut self) -> Option<MediaInfo> {
         self.record_thread();

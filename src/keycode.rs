@@ -2394,6 +2394,15 @@ fn typewriter_glyphs(value: u16) -> Option<(char, char)> {
     Some(pair)
 }
 
+pub(crate) fn legend_printable_glyphs(value: u16, layout: KeyLegendLayout) -> Option<(char, char)> {
+    if layout.is_typewriter() {
+        typewriter_glyphs(value)
+    } else {
+        let (direct, shift) = printable_output_for_hid(value, layout.into())?;
+        Some((direct, shift?))
+    }
+}
+
 fn ordered_glyphs(english: char, russian: char, layout: KeyLegendLayout) -> String {
     if layout == KeyLegendLayout::English || english == russian {
         english.to_string()

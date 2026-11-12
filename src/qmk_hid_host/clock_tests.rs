@@ -246,9 +246,9 @@ impl DesktopSource for BlockedDesktopSource {
         self.query(0);
         Some(42)
     }
-    fn layout(&mut self) -> Option<u8> {
+    fn layout(&mut self) -> LayoutObservation {
         self.query(1);
-        Some(1)
+        Some(1).into()
     }
     fn media(&mut self) -> Option<MediaInfo> {
         self.query(2);
@@ -578,7 +578,7 @@ fn slow_desktop_query_cannot_stall_fresh_volume_on_real_bridge() {
     }
     impl DesktopSource for Source {
         fn volume(&mut self) -> Option<u8> { Some(self.value.load(Ordering::SeqCst)) }
-        fn layout(&mut self) -> Option<u8> { self.query(1); Some(1) }
+        fn layout(&mut self) -> LayoutObservation { self.query(1); Some(1).into() }
         fn media(&mut self) -> Option<MediaInfo> { self.query(2); Some(MediaInfo::default()) }
     }
     for blocked in [1, 2] {

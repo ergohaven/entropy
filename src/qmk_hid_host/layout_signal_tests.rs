@@ -43,9 +43,9 @@ impl DesktopSource for FollowedDesktop {
     fn volume(&mut self) -> Option<u8> {
         None
     }
-    fn layout(&mut self) -> Option<u8> {
+    fn layout(&mut self) -> LayoutObservation {
         self.calls.lock().unwrap().push("layout");
-        Some(0)
+        Some(0).into()
     }
     fn media(&mut self) -> Option<MediaInfo> {
         None
