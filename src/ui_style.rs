@@ -1323,6 +1323,69 @@ pub fn modern_toggle_pill(
     resp.on_hover_text(tooltip)
 }
 
+/// Scroll popup content using the same floating handle as settings pages.
+pub fn floating_vertical_scroll_area<R>(
+    ui: &mut Ui,
+    id: egui::Id,
+    max_height: f32,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> egui::scroll_area::ScrollAreaOutput<R> {
+    let metrics = ResponsiveMetrics::from_ctx(ui.ctx());
+    let offset_id = id.with("offset");
+    let pending = ui.data_mut(|data| data.remove_temp::<f32>(offset_id));
+    let area = egui::ScrollArea::vertical()
+        .id_salt(id)
+        .max_height(max_height)
+        .max_width((ui.available_width() - metrics.value(12.0)).max(1.0))
+        .auto_shrink([false, true])
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+    let output = match pending {
+        Some(offset) => area.vertical_scroll_offset(offset),
+        None => area,
+    }
+    .show(ui, add_contents);
+    let max_offset = (output.content_size.y - output.inner_rect.height()).max(0.0);
+    if max_offset > 0.5 {
+        let track = egui::Rect::from_min_max(
+            egui::pos2(
+                output.inner_rect.right() + metrics.value(6.0),
+                output.inner_rect.top(),
+            ),
+            egui::pos2(
+                output.inner_rect.right() + metrics.value(12.0),
+                output.inner_rect.bottom(),
+            ),
+        );
+        let height = (track.height() * output.inner_rect.height() / output.content_size.y)
+            .clamp(metrics.value(24.0).min(track.height()), track.height());
+        let response = ui.interact(track, id.with("track"), egui::Sense::click_and_drag());
+        let mut offset = output.state.clamped_offset().y;
+        if response.clicked() || response.dragged() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                offset = ((pos.y - track.top() - height / 2.0)
+                    / (track.height() - height).max(1.0))
+                .clamp(0.0, 1.0)
+                    * max_offset;
+            }
+        } else if response.hovered() {
+            offset =
+                (offset - ui.input(|input| input.smooth_scroll_delta.y)).clamp(0.0, max_offset);
+        }
+        if offset != output.state.clamped_offset().y {
+            ui.data_mut(|data| data.insert_temp(offset_id, offset));
+            ui.ctx().request_repaint();
+        }
+        paint_floating_scrollbar_handle(
+            ui,
+            track,
+            height,
+            offset / max_offset,
+            response.hovered() || response.dragged(),
+        );
+    }
+    output
+}
+
 pub fn paint_floating_scrollbar_handle(
     ui: &mut Ui,
     track_rect: egui::Rect,
@@ -1750,6 +1813,61 @@ fn settings_switch_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn floating_popup_scrollbar_reaches_the_last_row_and_clamps_after_filtering() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("popup-scroll-test");
+        let frame = |events, rows| {
+            let mut output = None;
+            crate::app::discard_texture_deltas(ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(300.0, 400.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    output = Some(floating_vertical_scroll_area(ui, id, 120.0, |ui| {
+                        for row in 0..rows {
+                            ui.label(format!("Layout {row}"));
+                        }
+                    }));
+                },
+            ));
+            output.unwrap()
+        };
+        let initial = frame(Vec::new(), 100);
+        let pos = egui::pos2(
+            initial.inner_rect.right() + 9.0,
+            initial.inner_rect.bottom() - 1.0,
+        );
+        for pressed in [true, false] {
+            frame(
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+                100,
+            );
+        }
+        let bottom = frame(Vec::new(), 100);
+        assert!(
+            (bottom.state.clamped_offset().y
+                - (bottom.content_size.y - bottom.inner_rect.height()))
+            .abs()
+                < 1.0
+        );
+        let filtered = frame(Vec::new(), 1);
+        assert_eq!(filtered.state.clamped_offset().y, 0.0);
+    }
 
     #[test]
     fn long_rule_trigger_preview_is_click_only_and_clipped() {

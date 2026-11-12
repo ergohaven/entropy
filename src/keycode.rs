@@ -2213,7 +2213,7 @@ pub fn keycode_label_with_names(
             0x12 => "RShift".into(),
             0x14 => "RAlt".into(),
             0x18 => format!("R{}", gui),
-            _ => "Mod".into(),
+            _ => modifier_label_from_bits(mods),
         };
         return compound_keycode_label(&mod_str, kc);
     }

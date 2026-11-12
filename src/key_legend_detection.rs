@@ -35,7 +35,21 @@ impl KeyGlyph {
 pub struct SystemKeymap {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub third_level_modifier: ThirdLevelModifier,
     pub keys: BTreeMap<u16, [KeyGlyph; 4]>,
+}
+
+/// Persist the source's modifier semantics with its glyphs, including when a
+/// saved layout is opened on a different operating system.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ThirdLevelModifier {
+    #[default]
+    AltGr,
+    Option,
 }
 
 impl SystemKeymap {
@@ -44,6 +58,7 @@ impl SystemKeymap {
         Arc::new(Self {
             id,
             name,
+            third_level_modifier: ThirdLevelModifier::AltGr,
             keys: glyphs
                 .iter()
                 .map(|(hid, base, shift)| {
@@ -66,14 +81,17 @@ impl SystemKeymap {
             (value, None)
         } else if (0x100..0x2000).contains(&value) {
             let mods = value >> 8;
-            let altgr = mods & 0x1d == 0x14 || mods & 0x0d == 0x05;
+            let third_level = match self.third_level_modifier {
+                ThirdLevelModifier::AltGr => matches!(mods & !2, 0x14 | 0x05),
+                ThirdLevelModifier::Option => matches!(mods & !2, 0x04 | 0x14),
+            };
             let shift = mods & 2 != 0;
-            if !altgr && mods & 0x0f & !2 != 0 {
+            if !third_level && mods & 0x0f & !2 != 0 {
                 return None;
             }
             (
                 value & 0xff,
-                Some(usize::from(shift) + if altgr { 2 } else { 0 }),
+                Some(usize::from(shift) + if third_level { 2 } else { 0 }),
             )
         } else {
             return None;
@@ -321,12 +339,106 @@ pub(crate) fn test_typewriter_layout(english_first: bool) -> KeyLegendLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn option_layout() -> KeyLegendLayout {
+        let mut map = SystemKeymap::from_glyphs(
+            "com.apple.keylayout.US".into(),
+            "US".into(),
+            &vec![(4, 'a', 'A')],
+        );
+        Arc::make_mut(&mut map).keys.get_mut(&4).unwrap()[2] = KeyGlyph::new("å".into(), false);
+        Arc::make_mut(&mut map).keys.get_mut(&4).unwrap()[3] = KeyGlyph::new("Å".into(), false);
+        Arc::make_mut(&mut map).third_level_modifier = ThirdLevelModifier::Option;
+        KeyLegendLayout::System {
+            keymap: map,
+            english_first: false,
+        }
+    }
+
+    #[test]
+    fn macos_left_and_right_option_select_the_same_glyph_level() {
+        for (value, expected) in [(0x0404, "å"), (0x1404, "å"), (0x0604, "Å"), (0x1604, "Å")] {
+            assert_eq!(
+                crate::keycode::keycode_label_with_names_and_layout(
+                    value,
+                    &[],
+                    &[],
+                    option_layout()
+                ),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn macos_control_option_keeps_the_shortcut_modifiers() {
+        for value in [0x0504, 0x1504, 0x0704, 0x1704] {
+            let label = crate::keycode::keycode_label_with_names_and_layout(
+                value,
+                &[],
+                &[],
+                option_layout(),
+            );
+            let original = crate::keycode::keycode_label(value);
+            assert_eq!(
+                label.split_once('\n').unwrap().0,
+                original.split_once('\n').unwrap().0
+            );
+            assert_ne!(label, "å");
+            assert_ne!(label, "Å");
+            if value & 0x0f00 == 0x0500 {
+                assert!(label.starts_with("Ctrl+Alt\n"), "{label}");
+            }
+        }
+    }
+
+    #[test]
+    fn altgr_and_option_semantics_survive_saved_layout_roundtrips() {
+        let KeyLegendLayout::System { keymap, .. } = option_layout() else {
+            unreachable!()
+        };
+        let mut map: SystemKeymap =
+            serde_json::from_value(serde_json::to_value(&*keymap).unwrap()).unwrap();
+        assert_eq!(map.legend(0x0404, false, true).as_deref(), Some("å"));
+        assert_eq!(map.legend(0x0504, false, true), None);
+        map.third_level_modifier = ThirdLevelModifier::AltGr;
+        assert_eq!(map.legend(0x0404, false, true), None);
+        for value in [0x1404, 0x0504] {
+            assert_eq!(map.legend(value, false, true).as_deref(), Some("å"));
+        }
+        for value in [0x1504, 0x0c04, 0x1c04] {
+            assert_eq!(map.legend(value, false, true), None);
+        }
+        let mut legacy = serde_json::to_value(&map).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("third_level_modifier");
+        assert_eq!(
+            serde_json::from_value::<SystemKeymap>(legacy)
+                .unwrap()
+                .third_level_modifier,
+            ThirdLevelModifier::AltGr
+        );
+    }
     #[test]
     fn system_mapping_keeps_space_and_nonproducing_modifier_actions_visible() {
-        let map = SystemKeymap::from_glyphs("xkb:us:".into(), "US".into(), &vec![(4, 'a', 'A'), (44, ' ', ' ')]);
-        let layout = KeyLegendLayout::System { keymap: map, english_first: false };
-        let label = |value, layout| crate::keycode::keycode_label_with_names_and_layout(value, &[], &[], layout);
-        assert_eq!(label(44, layout.clone()), label(44, KeyLegendLayout::English));
+        let map = SystemKeymap::from_glyphs(
+            "xkb:us:".into(),
+            "US".into(),
+            &vec![(4, 'a', 'A'), (44, ' ', ' ')],
+        );
+        let layout = KeyLegendLayout::System {
+            keymap: map,
+            english_first: false,
+        };
+        let label = |value, layout| {
+            crate::keycode::keycode_label_with_names_and_layout(value, &[], &[], layout)
+        };
+        assert_eq!(
+            label(44, layout.clone()),
+            label(44, KeyLegendLayout::English)
+        );
         let modifier = label(0x1404, layout);
         assert!(!modifier.trim().is_empty());
         assert!(modifier.contains('a'));

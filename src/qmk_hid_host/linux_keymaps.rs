@@ -108,9 +108,10 @@ pub(super) fn keysym_glyph(symbol: u32) -> KeyGlyph {
     }
 }
 
-pub(super) fn load(id: &str, name: &str, options: &str) -> Option<Arc<SystemKeymap>> {
+pub(super) fn load(id: &str, name: &str, model: &str, options: &str) -> Option<Arc<SystemKeymap>> {
     // The shared detector samples frequently; compile each unchanged source once.
     type Cached = (
+        String,
         String,
         String,
         String,
@@ -119,17 +120,23 @@ pub(super) fn load(id: &str, name: &str, options: &str) -> Option<Arc<SystemKeym
     );
     static CACHE: std::sync::Mutex<Option<Cached>> = std::sync::Mutex::new(None);
     let mut cached = CACHE.lock().ok()?;
-    if let Some((old_id, old_name, old_options, at, map)) = cached.as_ref() {
-        if (old_id.as_str(), old_name.as_str(), old_options.as_str()) == (id, name, options)
+    if let Some((old_id, old_name, old_model, old_options, at, map)) = cached.as_ref() {
+        if (
+            old_id.as_str(),
+            old_name.as_str(),
+            old_model.as_str(),
+            old_options.as_str(),
+        ) == (id, name, model, options)
             && at.elapsed() < std::time::Duration::from_secs(10)
         {
             return Some(map.clone());
         }
     }
-    let map = compile(id, name, options)?;
+    let map = compile(id, name, model, options)?;
     *cached = Some((
         id.into(),
         name.into(),
+        model.into(),
         options.into(),
         std::time::Instant::now(),
         map.clone(),
@@ -137,7 +144,7 @@ pub(super) fn load(id: &str, name: &str, options: &str) -> Option<Arc<SystemKeym
     Some(map)
 }
 
-fn compile(id: &str, name: &str, options: &str) -> Option<Arc<SystemKeymap>> {
+fn compile(id: &str, name: &str, model: &str, options: &str) -> Option<Arc<SystemKeymap>> {
     let spec = id.strip_prefix("xkb:")?;
     let (layout, variant) = spec.split_once(':').unwrap_or((spec, ""));
     if layout.is_empty() {
@@ -147,6 +154,7 @@ fn compile(id: &str, name: &str, options: &str) -> Option<Arc<SystemKeymap>> {
     let layout = CString::new(layout).ok()?;
     let variant = CString::new(variant).ok()?;
     let options = CString::new(options).ok()?;
+    let model = CString::new(model).ok()?;
     unsafe {
         let context_new =
             api.function::<unsafe extern "C" fn(u32) -> *mut c_void>(b"xkb_context_new\0")?;
@@ -180,7 +188,7 @@ fn compile(id: &str, name: &str, options: &str) -> Option<Arc<SystemKeymap>> {
         }
         let names = Names {
             rules: c"evdev".as_ptr(),
-            model: c"pc105".as_ptr(),
+            model: model.as_ptr(),
             layout: layout.as_ptr(),
             variant: variant.as_ptr(),
             options: options.as_ptr(),
@@ -219,6 +227,7 @@ fn compile(id: &str, name: &str, options: &str) -> Option<Arc<SystemKeymap>> {
         Some(Arc::new(SystemKeymap {
             id: id.into(),
             name: name.into(),
+            third_level_modifier: crate::key_legend_detection::ThirdLevelModifier::AltGr,
             keys,
         }))
     }
@@ -296,18 +305,36 @@ mod tests {
     }
     #[test]
     fn real_installed_layouts_supply_non_catalog_glyphs_and_modifier_levels() {
-        let german = load("xkb:de:", "German", "").unwrap();
+        let german = load("xkb:de:", "German", "pc105", "").unwrap();
         assert!(installed().iter().any(|layout| layout.id == "xkb:de:"));
         assert_eq!(german.keys[&28][0].text, "z");
         assert_eq!(german.keys[&20][2].text, "@");
         assert!(german.keys[&46][0].dead);
-        let french = load("xkb:fr:", "French", "").unwrap();
+        let french = load("xkb:fr:", "French", "pc105", "").unwrap();
         assert_eq!(french.keys[&4][0].text, "q");
         assert_eq!(french.keys[&30][0].text, "&");
-        let dvorak = load("xkb:us:dvorak", "Dvorak", "").unwrap();
+        let dvorak = load("xkb:us:dvorak", "Dvorak", "pc105", "").unwrap();
         assert_eq!(dvorak.keys[&20][0].text, "'");
-        let typewriter = load("xkb:ru:typewriter", "Russian Typewriter", "").unwrap();
+        let typewriter = load("xkb:ru:typewriter", "Russian Typewriter", "pc105", "").unwrap();
         assert_eq!(typewriter.keys[&30][0].text, "№");
+    }
+
+    #[test]
+    fn keyboard_model_changes_glyphs_and_invalidates_the_mapping_cache() {
+        for (model, expected) in [
+            ("pc105", ["²", "~"]),
+            ("macintosh", ["@", "#"]),
+            ("pc105", ["²", "~"]),
+        ] {
+            let map = load("xkb:fr:", "French", model, "").unwrap();
+            assert_eq!(
+                [
+                    map.keys[&53][0].text.as_str(),
+                    map.keys[&53][1].text.as_str()
+                ],
+                expected
+            );
+        }
     }
 
     #[test]

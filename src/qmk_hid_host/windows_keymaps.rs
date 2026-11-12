@@ -133,6 +133,7 @@ fn read_keymap(hkl: usize) -> Option<Arc<SystemKeymap>> {
     Some(Arc::new(SystemKeymap {
         id: source.id,
         name: source.name,
+        third_level_modifier: crate::key_legend_detection::ThirdLevelModifier::AltGr,
         keys,
     }))
 }

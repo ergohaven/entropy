@@ -3001,6 +3001,47 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn bundled_ibus_engines_supply_follow_mode_legends() {
+        for (suffix, descriptor_layout, language, glyph) in [
+            ("us", "us", 0, "a"),
+            ("ru", "ru", 1, "ф"),
+            ("ru", "default", 1, "ф"),
+        ] {
+            let engine: zbus::zvariant::OwnedValue = zbus::zvariant::StructureBuilder::new()
+                .add_field("IBusEngineDesc")
+                .add_field("")
+                .add_field(format!("entropy-universal-symbols-{suffix}"))
+                .add_field("Entropy")
+                .add_field("")
+                .add_field(suffix)
+                .add_field("GPL")
+                .add_field("Ergohaven")
+                .add_field("input-keyboard")
+                .add_field(descriptor_layout)
+                .build()
+                .unwrap()
+                .try_into()
+                .unwrap();
+            let mut tracker = LayoutTracker {
+                ibus: None,
+                native: None,
+                x11: None,
+            };
+            let observation = tracker.observe_layout(ibus_engine_state(&engine));
+            assert_eq!(observation.language, Some(language));
+            let profile = observation
+                .identity
+                .profile()
+                .expect("bundled engine must produce a follow-mode profile");
+            let crate::keycode::KeyLegendLayout::System { keymap, .. } = profile else {
+                panic!("missing system mapping")
+            };
+            assert_eq!(keymap.keys[&4][0].text, glyph);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn ibus_descriptor_retains_variants_and_options_without_authorizing_unverified_sources() {
         use crate::key_legend_detection::{DetectionFailure, NativeLayoutIdentity};
         for variant in ["", "typewriter", "phonetic"] {
@@ -3181,13 +3222,20 @@ impl LayoutTracker {
     }
 
     fn current_layout(&mut self) -> LayoutObservation {
-        use crate::key_legend_detection::{DetectionFailure, NativeLayoutIdentity};
         let ibus_state = self
             .ibus
             .as_mut()
             .and_then(IbusLayoutTracker::current_engine_state);
-        if let Some(state) = ibus_state.as_ref().filter(|state| state.entropy && state.layout.is_some()) {
-            return LayoutObservation { language: state.layout, identity: state.identity.clone() };
+        self.observe_layout(ibus_state)
+    }
+
+    fn observe_layout(&mut self, ibus_state: Option<IbusEngineState>) -> LayoutObservation {
+        use crate::key_legend_detection::{DetectionFailure, NativeLayoutIdentity};
+        if let Some(state) = ibus_state
+            .as_ref()
+            .filter(|state| state.entropy && state.layout.is_some())
+        {
+            return map_ibus_observation(state.layout, state.identity.clone());
         }
         let x11 = self.x11.as_mut().map(x11_layout::X11LayoutTracker::current_layout);
         let language = match self.native.as_mut() {
@@ -3201,17 +3249,66 @@ impl LayoutTracker {
         } else if native_x11_session() {
             x11.map(|sample| sample.identity).unwrap_or(NativeLayoutIdentity::Unavailable(DetectionFailure::Unavailable))
         } else if matches!(self.native, Some(NativeLayoutTracker::Ibus)) {
-            ibus_state.map(|state| state.identity).unwrap_or(NativeLayoutIdentity::Unavailable(DetectionFailure::Unavailable))
-        } else if let Some(NativeLayoutTracker::Kde(tracker))=self.native.as_mut() {
-            tracker.current_keymap().map(NativeLayoutIdentity::Mapped).unwrap_or(NativeLayoutIdentity::Unavailable(DetectionFailure::Unavailable))
-        } else { NativeLayoutIdentity::Unavailable(DetectionFailure::VariantUnavailable) };
-        let identity = if let NativeLayoutIdentity::Ibus { engine,layout,variant,options } = &identity {
-            let spec = format!("xkb:{layout}:{}",variant.as_deref().unwrap_or_default());
-            linux_keymaps::load(&spec,engine,options.as_deref().unwrap_or_default())
-                .map(NativeLayoutIdentity::Mapped).unwrap_or(NativeLayoutIdentity::Unavailable(DetectionFailure::Unavailable))
-        } else { identity };
-        LayoutObservation { language, identity }
+            ibus_state
+                .map(|state| state.identity)
+                .unwrap_or(NativeLayoutIdentity::Unavailable(
+                    DetectionFailure::Unavailable,
+                ))
+        } else if let Some(NativeLayoutTracker::Kde(tracker)) = self.native.as_mut() {
+            tracker
+                .current_keymap()
+                .map(NativeLayoutIdentity::Mapped)
+                .unwrap_or(NativeLayoutIdentity::Unavailable(
+                    DetectionFailure::Unavailable,
+                ))
+        } else {
+            NativeLayoutIdentity::Unavailable(DetectionFailure::VariantUnavailable)
+        };
+        map_ibus_observation(language, identity)
     }
+}
+
+#[cfg(target_os = "linux")]
+fn map_ibus_observation(
+    language: Option<u8>,
+    identity: crate::key_legend_detection::NativeLayoutIdentity,
+) -> LayoutObservation {
+    use crate::key_legend_detection::{DetectionFailure, NativeLayoutIdentity};
+    let identity = if let NativeLayoutIdentity::Ibus {
+        engine,
+        layout,
+        variant,
+        options,
+    } = &identity
+    {
+        // Older bundled engines describe their layout as "default". Their
+        // recognized engine suffix still identifies the actual US/RU map.
+        let layout = if (layout == "default" || layout.is_empty())
+            && engine.starts_with("entropy-universal-symbols-")
+        {
+            match language {
+                Some(0) => "us",
+                Some(1) => "ru",
+                _ => layout.as_str(),
+            }
+        } else {
+            layout.as_str()
+        };
+        let spec = format!("xkb:{layout}:{}", variant.as_deref().unwrap_or_default());
+        linux_keymaps::load(
+            &spec,
+            engine,
+            "pc105",
+            options.as_deref().unwrap_or_default(),
+        )
+        .map(NativeLayoutIdentity::Mapped)
+        .unwrap_or(NativeLayoutIdentity::Unavailable(
+            DetectionFailure::Unavailable,
+        ))
+    } else {
+        identity
+    };
+    LayoutObservation { language, identity }
 }
 
 /// Builds a layout tracker connection whose method calls give up after
@@ -3249,16 +3346,38 @@ impl KdeLayoutTracker {
     }
 
     fn current_keymap(&self) -> Option<Arc<crate::key_legend_detection::SystemKeymap>> {
-        let proxy=zbus::blocking::Proxy::new(&self.connection,KDE_LAYOUT_DESTINATION,KDE_LAYOUT_PATH,KDE_LAYOUT_INTERFACE).ok()?;
-        let index=proxy.call::<_,_,u32>("getLayout",&()).ok()? as usize;
-        let layouts=proxy.call::<_,_,Vec<(String,String,String)>>("getLayoutsList",&()).ok()?;
-        let config=std::fs::read_to_string(dirs::config_dir()?.join("kxkbrc")).ok()?;
-        let values=parse_kde_keymap_config(&config);
-        let layout=values.get("LayoutList")?.split(',').nth(index)?;
-        let variant=values.get("VariantList").and_then(|v|v.split(',').nth(index)).unwrap_or("");
-        let (short,_,name)=layouts.get(index)?;
-        if short!=layout || proxy.call::<_,_,u32>("getLayout",&()).ok()? as usize!=index { return None; }
-        linux_keymaps::load(&format!("xkb:{layout}:{variant}"),name,values.get("Options").copied().unwrap_or(""))
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            KDE_LAYOUT_DESTINATION,
+            KDE_LAYOUT_PATH,
+            KDE_LAYOUT_INTERFACE,
+        )
+        .ok()?;
+        let index = proxy.call::<_, _, u32>("getLayout", &()).ok()? as usize;
+        let layouts = proxy
+            .call::<_, _, Vec<(String, String, String)>>("getLayoutsList", &())
+            .ok()?;
+        let config = std::fs::read_to_string(dirs::config_dir()?.join("kxkbrc")).ok()?;
+        let values = parse_kde_keymap_config(&config);
+        let layout = values.get("LayoutList")?.split(',').nth(index)?;
+        let variant = values
+            .get("VariantList")
+            .and_then(|v| v.split(',').nth(index))
+            .unwrap_or("");
+        let (short, _, name) = layouts.get(index)?;
+        if short != layout || proxy.call::<_, _, u32>("getLayout", &()).ok()? as usize != index {
+            return None;
+        }
+        linux_keymaps::load(
+            &format!("xkb:{layout}:{variant}"),
+            name,
+            values
+                .get("Model")
+                .copied()
+                .filter(|model| !model.is_empty())
+                .unwrap_or("pc105"),
+            values.get("Options").copied().unwrap_or(""),
+        )
     }
 
     fn current_layout_index(&mut self) -> Option<u8> {
@@ -3694,7 +3813,7 @@ pub(crate) fn load_legend_layout(id: &str) -> Option<std::sync::Arc<crate::key_l
     #[cfg(target_os = "windows")] { windows_keymaps::load_layout(id) }
     #[cfg(target_os = "linux")] {
         let name = installed_legend_layouts().into_iter().find(|d|d.id==id).map(|d|d.name).unwrap_or_else(||id.into());
-        linux_keymaps::load(id,&name,"")
+        linux_keymaps::load(id,&name,"pc105","")
     }
     #[cfg(not(any(target_os = "macos",target_os = "windows",target_os = "linux")))] { let _=id; None }
 }

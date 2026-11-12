@@ -232,7 +232,12 @@ unsafe fn keymap(source: CFRef) -> Option<std::sync::Arc<SystemKeymap>> {
         }
         keys.insert(hid, levels);
     }
-    Some(std::sync::Arc::new(SystemKeymap { id, name, keys }))
+    Some(std::sync::Arc::new(SystemKeymap {
+        id,
+        name,
+        keys,
+        third_level_modifier: crate::key_legend_detection::ThirdLevelModifier::Option,
+    }))
 }
 
 pub(super) fn installed_layouts() -> Vec<SystemLayoutDescriptor> {

@@ -478,36 +478,75 @@ pub(super) fn draw_key_legend_dropdown(
                 data.get_temp::<String>(dropdown_id.with("search"))
                     .unwrap_or_default()
             });
-            ui.add(
-                egui::TextEdit::singleline(&mut query)
-                    .hint_text(crate::i18n::tr_catalog(lang, "ui.legend_search")),
+            crate::ui_style::modern_text_field_sized(
+                ui,
+                dropdown_id.with("search_input"),
+                &mut query,
+                ui.available_width(),
+                metrics.settings_control_height(),
+                crate::i18n::tr_catalog(lang, "ui.legend_search"),
+                128,
+                egui::Align::Min,
             );
             ui.ctx()
                 .data_mut(|data| data.insert_temp(dropdown_id.with("search"), query.clone()));
             let query = query.to_lowercase();
-            egui::ScrollArea::vertical().max_height(metrics.value(300.0)).show(ui,|ui| {
-            for fallback in [KeyLegendLayout::English,KeyLegendLayout::Russian,KeyLegendLayout::RussianPrimary] {
-                let title = export_key_legend_label(lang, fallback.clone());
-                if !query.is_empty() && !title.to_lowercase().contains(&query) { continue; }
-                if ui.selectable_label(*selected_layout==fallback,title).clicked() {
-                    *selected_layout=fallback;
-                    ui.ctx().data_mut(|data|data.remove::<bool>(dropdown_id.with("failed")));
-                    egui::Popup::close_all(ui.ctx());
-                }
-            }
-            ui.separator();
-            for entry in catalog.iter().filter(|entry|query.is_empty()||entry.name.to_lowercase().contains(&query)||entry.id.to_lowercase().contains(&query)) {
-                let selected = matches!(selected_layout,KeyLegendLayout::System{keymap,..} if keymap.id==entry.id);
-                if ui.selectable_label(selected,&entry.name).on_hover_text(&entry.id).clicked() {
-                    #[cfg(not(target_arch="wasm32"))]
-                    if let Some(keymap) = crate::qmk_hid_host::load_legend_layout(&entry.id) {
-                        *selected_layout=KeyLegendLayout::System{keymap,english_first:false};
-                        ui.ctx().data_mut(|data|data.remove::<bool>(dropdown_id.with("failed")));
-                        egui::Popup::close_all(ui.ctx());
-                    } else { ui.ctx().data_mut(|data|data.insert_temp(dropdown_id.with("failed"),true)); }
-                }
-            }
-        });
+            crate::ui_style::floating_vertical_scroll_area(
+                ui,
+                dropdown_id.with("layouts"),
+                metrics.value(300.0),
+                |ui| {
+                    for fallback in [
+                        KeyLegendLayout::English,
+                        KeyLegendLayout::Russian,
+                        KeyLegendLayout::RussianPrimary,
+                    ] {
+                        let title = export_key_legend_label(lang, fallback.clone());
+                        if !query.is_empty() && !title.to_lowercase().contains(&query) {
+                            continue;
+                        }
+                        if ui
+                            .selectable_label(*selected_layout == fallback, title)
+                            .clicked()
+                        {
+                            *selected_layout = fallback;
+                            ui.ctx()
+                                .data_mut(|data| data.remove::<bool>(dropdown_id.with("failed")));
+                            egui::Popup::close_all(ui.ctx());
+                        }
+                    }
+                    ui.separator();
+                    for entry in catalog.iter().filter(|entry| {
+                        query.is_empty()
+                            || entry.name.to_lowercase().contains(&query)
+                            || entry.id.to_lowercase().contains(&query)
+                    }) {
+                        let selected = matches!(selected_layout,KeyLegendLayout::System{keymap,..} if keymap.id==entry.id);
+                        if ui
+                            .selectable_label(selected, &entry.name)
+                            .on_hover_text(&entry.id)
+                            .clicked()
+                        {
+                            #[cfg(not(target_arch = "wasm32"))]
+                            if let Some(keymap) = crate::qmk_hid_host::load_legend_layout(&entry.id)
+                            {
+                                *selected_layout = KeyLegendLayout::System {
+                                    keymap,
+                                    english_first: false,
+                                };
+                                ui.ctx().data_mut(|data| {
+                                    data.remove::<bool>(dropdown_id.with("failed"))
+                                });
+                                egui::Popup::close_all(ui.ctx());
+                            } else {
+                                ui.ctx().data_mut(|data| {
+                                    data.insert_temp(dropdown_id.with("failed"), true)
+                                });
+                            }
+                        }
+                    }
+                },
+            );
             if ui
                 .ctx()
                 .data_mut(|data| data.get_temp::<bool>(dropdown_id.with("failed")))
@@ -2453,7 +2492,8 @@ mod tests {
         let mut layout = KeyboardLayout::from_vial_json(&serde_json::json!({
             "name": "Independent export", "matrix": {"rows": 1, "cols": 1},
             "layouts": {"keymap": [["0,0"]]},
-        })).unwrap();
+        }))
+        .unwrap();
         layout.layers = vec![vec![0x001Eu16.into()]];
         let mut app = EntropyApp::new_inert_for_test();
         app.app_settings.layout_image_export.key_legend_layout =
@@ -2463,7 +2503,10 @@ mod tests {
         app.app_settings.key_legend_mode = crate::key_legend_detection::LegendMode::FollowSystem;
         app.legend_detected = Ok(KeyLegendLayout::English);
         assert_eq!(app.key_legend_layout(), KeyLegendLayout::English);
-        assert_eq!(app.render_layout_image(&layout, &[0]).unwrap().as_raw(), before_png.as_raw());
+        assert_eq!(
+            app.render_layout_image(&layout, &[0]).unwrap().as_raw(),
+            before_png.as_raw()
+        );
         assert_eq!(app.render_layout_svg(&layout, &[0]).unwrap(), before_svg);
         assert!(app
             .render_layout_pdf(&layout, &[0])

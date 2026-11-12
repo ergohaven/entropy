@@ -9,6 +9,19 @@ use x11_dl::xlib;
 const CORE: u32 = 0x100;
 const CHANGES: u64 = 1 | 2 | (1 << 6); // new keyboard, map, names
 
+fn symbols_language(symbols: &str, group: usize) -> Option<u8> {
+    symbols.split('+').find_map(|component| {
+        let (name, index) = if let Some((name, index)) = component.rsplit_once(':') {
+            (name, index.parse::<usize>().ok()?.checked_sub(1)?)
+        } else {
+            (component, 0)
+        };
+        (index == group)
+            .then(|| layout_code_index(name.split('(').next()?))
+            .flatten()
+    })
+}
+
 pub(super) struct X11LayoutTracker {
     xlib: xlib::Xlib,
     display: *mut xlib::Display,
@@ -205,6 +218,7 @@ impl X11LayoutTracker {
         let map = std::sync::Arc::new(SystemKeymap {
             id: format!("x11:{}:{group}", self.symbols),
             name,
+            third_level_modifier: crate::key_legend_detection::ThirdLevelModifier::AltGr,
             keys: glyphs,
         });
         self.cached.push((group, map.clone()));
@@ -222,7 +236,8 @@ impl X11LayoutTracker {
                     .rules()
                     .ok()
                     .flatten()
-                    .and_then(|r| r[2].split(',').nth(group).and_then(layout_code_index));
+                    .and_then(|r| r[2].split(',').nth(group).and_then(layout_code_index))
+                    .or_else(|| symbols_language(&self.symbols, group));
                 let keymap = self.keymap(group).ok_or(DetectionFailure::Unavailable)?;
                 if self.group() != Some(group) || self.changed() {
                     return Err(DetectionFailure::Ambiguous);
@@ -298,6 +313,16 @@ pub(super) const PRINTABLE_KEYS: &[(u16, [u8; 4])] = &[
 mod tests {
     use super::*;
 
+    #[test]
+    fn compiled_symbols_retain_group_language_without_root_metadata() {
+        let symbols = "pc+us+ru:2+ru(typewriter):3+inet(evdev)+group(alt_shift_toggle)";
+        for (group, language) in [(0, Some(0)), (1, Some(1)), (2, Some(1)), (3, None)] {
+            assert_eq!(symbols_language(symbols, group), language);
+        }
+        assert_eq!(symbols_language("pc+ru+inet(evdev)", 0), Some(1));
+        assert_eq!(symbols_language("pc+fr+inet(evdev)", 0), None);
+    }
+
     // Run only on an isolated Xvfb server. This test changes that server's
     // keymap; normal tests and production detection never select a layout.
     #[test]
@@ -336,6 +361,26 @@ mod tests {
                 expected.to_string(),
                 "{observation:?}"
             );
+            if layout == "ru" && variant.is_empty() {
+                // The compiled server map remains authoritative if optional
+                // root metadata is unavailable.
+                unsafe {
+                    let atom = (tracker.xlib.XInternAtom)(
+                        tracker.display,
+                        c"_XKB_RULES_NAMES".as_ptr(),
+                        0,
+                    );
+                    (tracker.xlib.XDeleteProperty)(
+                        tracker.display,
+                        (tracker.xlib.XDefaultRootWindow)(tracker.display),
+                        atom,
+                    );
+                    (tracker.xlib.XSync)(tracker.display, 0);
+                }
+                let observation = tracker.current_layout();
+                assert_eq!(observation.language, Some(1), "{observation:?}");
+                assert!(observation.identity.profile().is_ok());
+            }
         }
         assert!(std::process::Command::new("setxkbmap")
             .args([
