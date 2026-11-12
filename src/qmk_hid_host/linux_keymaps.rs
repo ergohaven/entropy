@@ -303,6 +303,59 @@ fn parse_list(source: &str) -> Vec<SystemLayoutDescriptor> {
 }
 
 #[cfg(test)]
+pub(super) fn with_model_sensitive_test_data(test: &str, check: impl FnOnce()) {
+    const CHILD: &str = "ENTROPY_TEST_MODEL_XKB_DATA";
+    if let Some(completed) = std::env::var_os(CHILD) {
+        check();
+        std::fs::write(completed, "passed").unwrap();
+        return;
+    }
+    // Stock XKB releases differ in whether the macintosh model changes French
+    // symbols. Keep this counterexample stable while using the real compiler.
+    // A child process isolates its data root from all other native-layout tests.
+    let root = tempfile::tempdir().unwrap();
+    for (path, contents) in [
+        (
+            "rules/evdev",
+            "! model = keycodes\n * = entropy\n! model = types\n * = entropy\n! model = compat\n * = entropy\n! model = symbols\n macintosh = entropy(mac)\n * = entropy(pc)\n",
+        ),
+        (
+            "keycodes/entropy",
+            "default xkb_keycodes \"basic\" { minimum = 8; maximum = 255; <TLDE> = 49; };",
+        ),
+        (
+            "types/entropy",
+            "default xkb_types \"basic\" { type \"TWO_LEVEL\" { modifiers = Shift; map[None] = Level1; map[Shift] = Level2; }; };",
+        ),
+        (
+            "compat/entropy",
+            "default xkb_compatibility \"basic\" {};",
+        ),
+        (
+            "symbols/entropy",
+            "xkb_symbols \"pc\" { key <TLDE> { type = \"TWO_LEVEL\", [ twosuperior, asciitilde ] }; };\nxkb_symbols \"mac\" { key <TLDE> { type = \"TWO_LEVEL\", [ at, numbersign ] }; };",
+        ),
+    ] {
+        let path = root.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+    let completed = root.path().join("completed");
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--nocapture"])
+        .env(CHILD, &completed)
+        .env("XKB_CONFIG_ROOT", root.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success() && completed.exists(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
@@ -329,20 +382,25 @@ mod tests {
 
     #[test]
     fn keyboard_model_changes_glyphs_and_invalidates_the_mapping_cache() {
-        for (model, expected) in [
-            ("pc105", ["²", "~"]),
-            ("macintosh", ["@", "#"]),
-            ("pc105", ["²", "~"]),
-        ] {
-            let map = load("xkb:fr:", "French", model, "").unwrap();
-            assert_eq!(
-                [
-                    map.keys[&53][0].text.as_str(),
-                    map.keys[&53][1].text.as_str()
-                ],
-                expected
-            );
-        }
+        with_model_sensitive_test_data(
+            "qmk_hid_host::linux_keymaps::tests::keyboard_model_changes_glyphs_and_invalidates_the_mapping_cache",
+            || {
+                for (model, expected) in [
+                    ("pc105", ["²", "~"]),
+                    ("macintosh", ["@", "#"]),
+                    ("pc105", ["²", "~"]),
+                ] {
+                    let map = load("xkb:fr:", "French", model, "").unwrap();
+                    assert_eq!(
+                        [
+                            map.keys[&53][0].text.as_str(),
+                            map.keys[&53][1].text.as_str()
+                        ],
+                        expected
+                    );
+                }
+            },
+        );
     }
 
     #[test]

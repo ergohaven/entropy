@@ -3043,23 +3043,28 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn ibus_observations_retain_the_desktop_keyboard_model() {
-        use crate::key_legend_detection::NativeLayoutIdentity;
-        for (model, expected) in [("pc105", "²"), ("macintosh", "@")] {
-            let observation = map_ibus_observation(
-                None,
-                NativeLayoutIdentity::Ibus {
-                    engine: "xkb:fr::fra".into(),
-                    layout: "fr".into(),
-                    variant: None,
-                    options: None,
-                },
-                model,
-            );
-            let NativeLayoutIdentity::Mapped(map) = observation.identity else {
-                panic!("missing IBus mapping")
-            };
-            assert_eq!(map.keys[&53][0].text, expected);
-        }
+        linux_keymaps::with_model_sensitive_test_data(
+            "qmk_hid_host::tests::ibus_observations_retain_the_desktop_keyboard_model",
+            || {
+                use crate::key_legend_detection::NativeLayoutIdentity;
+                for (model, expected) in [("pc105", "²"), ("macintosh", "@")] {
+                    let observation = map_ibus_observation(
+                        None,
+                        NativeLayoutIdentity::Ibus {
+                            engine: "xkb:fr::fra".into(),
+                            layout: "fr".into(),
+                            variant: None,
+                            options: None,
+                        },
+                        model,
+                    );
+                    let NativeLayoutIdentity::Mapped(map) = observation.identity else {
+                        panic!("missing IBus mapping")
+                    };
+                    assert_eq!(map.keys[&53][0].text, expected);
+                }
+            },
+        );
     }
 
     #[cfg(target_os = "linux")]
