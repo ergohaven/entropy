@@ -576,6 +576,17 @@ impl Background {
         if stop.load(Ordering::Acquire) {
             return Ok(false);
         }
+        #[cfg(test)]
+        if std::env::var_os("ENTROPY_ARM_DIAGNOSTICS").is_some() {
+            let state = owner.lock().unwrap_or_else(|error| error.into_inner());
+            eprintln!(
+                "ARM_RESIDENT_ADMITTED op={} offset={} worker_generation={} epoch={:?} owner_generation={} library_generation={} snapshot_generation={} inventory_complete={} recovered={} reply_present={}",
+                p[2], if p[2] == 6 { u16::from_le_bytes([p[8], p[9]]) } else { 0 },
+                generation, self.epoch, state.generation, state.library_generation,
+                state.snapshot_generation, state.resident_inventory_complete,
+                state.resident_recoveries.len(), r.is_some()
+            );
+        }
         consume(r)?;
         Ok(true)
     }

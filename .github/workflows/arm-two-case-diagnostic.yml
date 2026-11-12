@@ -1,0 +1,44 @@
+name: ARM two-case diagnostic
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    name: Native stack and resident READ (macOS ARM)
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: never
+      ENTROPY_ARM_DIAGNOSTICS: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.99.1'
+      - uses: swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.150
+      - name: Verify diagnostic contracts
+        run: python3 -B -m unittest discover -s .github/scripts -p test_arm_two_case_diagnostic.py -v
+      - name: Prepare exact binaries and native debugger
+        run: |
+          mkdir -p "$RUNNER_TEMP/arm-build" "$RUNNER_TEMP/arm-diagnostic"
+          xcrun --find lldb
+          xcrun lldb --version > "$RUNNER_TEMP/arm-diagnostic/lldb-version.txt"
+          cargo nextest list --locked --all-targets --list-type binaries-only --message-format json > "$RUNNER_TEMP/arm-build/binaries-metadata.json"
+          cargo metadata --locked --format-version 1 --filter-platform aarch64-apple-darwin > "$RUNNER_TEMP/arm-build/cargo-metadata.json"
+      - name: Observe only the two original failing cases
+        timeout-minutes: 8
+        run: python3 -B .github/scripts/arm_two_case_diagnostic.py --metadata "$RUNNER_TEMP/arm-build" --output "$RUNNER_TEMP/arm-diagnostic"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: arm-two-case-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/arm-diagnostic/
+          if-no-files-found: warn

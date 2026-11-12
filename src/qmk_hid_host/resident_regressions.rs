@@ -584,7 +584,27 @@ fn rig(
     let (hid, recorder) = crate::hid::HidDevice::test_device();
     let output = peer.clone();
     recorder.on_output(move |p| output.lock().unwrap().output(p));
-    recorder.respond_by(move |p| peer.lock().unwrap().reply(p));
+    let diagnostic = std::env::var_os("ENTROPY_ARM_DIAGNOSTICS").is_some();
+    let diagnostic_started = Instant::now();
+    recorder.respond_by(move |p| {
+        let mut physical = peer.lock().unwrap();
+        let reply = physical.reply(p);
+        if diagnostic && p[..2] == [0xef, 9] {
+            let response = reply.as_ref().and_then(|result| result.as_ref().ok());
+            eprintln!(
+                "ARM_RESIDENT_REPLY ms={} op={} slot={} offset={} reply_present={} reply_error={} echoed_op={} echoed_offset={} count={} status={} stores={} selects={}",
+                diagnostic_started.elapsed().as_millis(), p[2], p[3],
+                if p[2] == 6 { u16::from_le_bytes([p[8], p[9]]) } else { 0 },
+                response.is_some(), matches!(reply.as_ref(), Some(Err(_))),
+                response.map_or(0, |r| r[2]),
+                response.filter(|_| p[2] == 6).map_or(0, |r| u16::from_le_bytes([r[8], r[9]])),
+                response.filter(|_| p[2] == 6).map_or(0, |r| r[10]),
+                response.map_or(0, |r| if p[2] == 6 { r[11] } else { r[3] }),
+                physical.stores, physical.selects
+            );
+        }
+        reply
+    });
     let (tx, rx) = std::sync::mpsc::channel();
     let mut gate = Some(rx);
     let mut bridge = QmkHidHostBridge::start_with_sources(
