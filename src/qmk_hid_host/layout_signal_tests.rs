@@ -15,6 +15,7 @@ const LAYOUT: HostDataMode = HostDataMode {
 struct FollowedDesktop {
     events: Arc<Mutex<Option<LayoutEvents>>>,
     calls: Arc<Mutex<Vec<&'static str>>>,
+    legend_requires_polling: bool,
 }
 
 impl FollowedDesktop {
@@ -40,6 +41,7 @@ impl FollowedDesktop {
 }
 
 impl DesktopSource for FollowedDesktop {
+    fn legend_requires_polling(&self) -> bool { self.legend_requires_polling }
     fn volume(&mut self) -> Option<u8> {
         None
     }
@@ -56,6 +58,17 @@ impl DesktopSource for FollowedDesktop {
     fn layout_list_changed(&mut self) {
         self.calls.lock().unwrap().push("relist");
     }
+}
+
+#[test]
+fn native_x11_legends_keep_polling_while_compositor_signals_are_followed() {
+    let desktop = FollowedDesktop { legend_requires_polling: true, ..Default::default() };
+    let service = HostDataService::start({ let desktop = desktop.clone(); move || desktop.clone() });
+    let _subscription = service.subscribe_legends(egui::Context::default());
+    desktop.await_calls(1);
+    desktop.events().following(true);
+    let calls = desktop.calls().len();
+    desktop.await_calls(calls + 3);
 }
 
 #[test]

@@ -331,6 +331,7 @@ trait DesktopSource {
     fn follow_layout(&mut self, _events: LayoutEvents) {}
     /// The desktop's list of layouts changed: forget anything read from it.
     fn layout_list_changed(&mut self) {}
+    fn legend_requires_polling(&self) -> bool { false }
 }
 
 struct NativeDesktopSource {
@@ -352,6 +353,12 @@ impl NativeDesktopSource {
 }
 
 impl DesktopSource for NativeDesktopSource {
+    fn legend_requires_polling(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        { native_x11_session() }
+        #[cfg(not(target_os = "linux"))]
+        { false }
+    }
     fn volume(&mut self) -> Option<u8> {
         current_volume_percent()
     }
@@ -543,8 +550,10 @@ fn run_desktop_service(shared: Arc<DesktopShared>, mut source: impl DesktopSourc
     let polled = [VOLUME_POLL_INTERVAL, LAYOUT_POLL_INTERVAL, MEDIA_POLL_INTERVAL][index];
     // A followed layout is sampled when the desktop announces a change, and
     // otherwise only now and then, in case an announcement went missing.
+    let legend_requires_polling = source.legend_requires_polling();
     let interval = |state: &DesktopState| {
-        if index == 1 && state.layout_following {
+        if index == 1 && state.layout_following
+            && !(legend_requires_polling && !state.legend_listeners.is_empty()) {
             LAYOUT_FOLLOWED_POLL_INTERVAL
         } else {
             polled
@@ -2952,6 +2961,7 @@ mod tests {
             Some(IbusEngineState {
                 entropy: false,
                 layout: Some(1),
+                identity: crate::key_legend_detection::NativeLayoutIdentity::Ibus { engine: "xkb:ru::rus".into(), layout: "ru".into(), variant: None, options: None },
             })
         );
     }
@@ -2980,6 +2990,7 @@ mod tests {
             Some(IbusEngineState {
                 entropy: true,
                 layout: Some(1),
+                identity: crate::key_legend_detection::NativeLayoutIdentity::Ibus { engine: "entropy-universal-symbols-ru".into(), layout: "default".into(), variant: None, options: None },
             })
         );
     }
@@ -3084,7 +3095,7 @@ mod tests {
 enum NativeLayoutTracker {
     Kde(KdeLayoutTracker),
     Ibus,
-    X11(X11LayoutTracker),
+    X11,
 }
 
 #[cfg(target_os = "linux")]
@@ -3095,12 +3106,14 @@ struct LayoutTracker {
     // the bridge is already running.
     ibus: Option<IbusLayoutTracker>,
     native: Option<NativeLayoutTracker>,
+    x11: Option<x11_layout::X11LayoutTracker>,
 }
 
 #[cfg(target_os = "linux")]
 impl LayoutTracker {
     fn new() -> Option<Self> {
         let mut ibus = IbusLayoutTracker::new();
+        let x11 = native_x11_session().then(x11_layout::X11LayoutTracker::new).flatten();
         let native = if let Some(tracker) = KdeLayoutTracker::new() {
             Some(NativeLayoutTracker::Kde(tracker))
         } else if gnome_desktop_session()
@@ -3114,33 +3127,34 @@ impl LayoutTracker {
         } else if std::env::var_os("WAYLAND_DISPLAY").is_some() {
             None
         } else {
-            X11LayoutTracker::new().map(NativeLayoutTracker::X11)
+            x11.as_ref().map(|_| NativeLayoutTracker::X11)
         };
 
-        (ibus.is_some() || native.is_some()).then_some(Self { ibus, native })
+        (ibus.is_some() || native.is_some()).then_some(Self { ibus, native, x11 })
     }
 
-    fn current_layout_index(&mut self) -> Option<u8> {
+    fn current_layout(&mut self) -> LayoutObservation {
+        use crate::key_legend_detection::{DetectionFailure, NativeLayoutIdentity};
         let ibus_state = self
             .ibus
             .as_mut()
             .and_then(IbusLayoutTracker::current_engine_state);
-        if let Some(layout) = ibus_state
-            .filter(|state| state.entropy)
-            .and_then(|state| state.layout)
-        {
-            return Some(layout);
+        if let Some(state) = ibus_state.as_ref().filter(|state| state.entropy && state.layout.is_some()) {
+            return LayoutObservation { language: state.layout, identity: state.identity.clone() };
         }
-
-        match self.native.as_mut()? {
-            NativeLayoutTracker::Kde(tracker) => tracker.current_layout_index(),
-            NativeLayoutTracker::Ibus => ibus_state.and_then(|state| state.layout),
-            NativeLayoutTracker::X11(tracker) => tracker.current_layout_index(),
-        }
-    }
-
-    fn current_layout(&mut self) -> LayoutObservation {
-        self.current_layout_index().into()
+        let x11 = self.x11.as_mut().map(x11_layout::X11LayoutTracker::current_layout);
+        let language = match self.native.as_mut() {
+            Some(NativeLayoutTracker::Kde(tracker)) => tracker.current_layout_index(),
+            Some(NativeLayoutTracker::Ibus) => ibus_state.as_ref().and_then(|state| state.layout),
+            Some(NativeLayoutTracker::X11) => x11.as_ref().and_then(|sample| sample.language),
+            None => None,
+        };
+        let identity = if native_x11_session() {
+            x11.map(|sample| sample.identity).unwrap_or(NativeLayoutIdentity::Unavailable(DetectionFailure::Unavailable))
+        } else if matches!(self.native, Some(NativeLayoutTracker::Ibus)) {
+            ibus_state.map(|state| state.identity).unwrap_or(NativeLayoutIdentity::Unavailable(DetectionFailure::Unavailable))
+        } else { NativeLayoutIdentity::Unavailable(DetectionFailure::VariantUnavailable) };
+        LayoutObservation { language, identity }
     }
 }
 
@@ -3282,10 +3296,11 @@ impl IbusLayoutTracker {
 }
 
 #[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct IbusEngineState {
     entropy: bool,
     layout: Option<u8>,
+    identity: crate::key_legend_detection::NativeLayoutIdentity,
 }
 
 #[cfg(target_os = "linux")]
@@ -3312,7 +3327,20 @@ fn ibus_engine_state(engine: &zbus::zvariant::OwnedValue) -> Option<IbusEngineSt
     Some(IbusEngineState {
         entropy,
         layout: descriptor_layout.or(name_layout),
+        identity: crate::key_legend_detection::NativeLayoutIdentity::Ibus {
+            engine: name.to_owned(),
+            layout: ibus_engine_field(engine, 9).unwrap_or_default().to_owned(),
+            variant: ibus_engine_field(engine, 14).map(str::to_owned),
+            options: ibus_engine_field(engine, 15).map(str::to_owned),
+        },
     })
+}
+
+#[cfg(target_os = "linux")]
+fn native_x11_session() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_none()
+        && std::env::var("XDG_SESSION_TYPE").map_or(true, |kind| kind == "x11")
+        && std::env::var_os("DISPLAY").is_some()
 }
 
 #[cfg(target_os = "linux")]
@@ -3556,99 +3584,7 @@ async fn watch_layout_signals(streams: LayoutSignalStreams, events: &LayoutEvent
 }
 
 #[cfg(target_os = "linux")]
-struct X11LayoutTracker {
-    xlib: x11_dl::xlib::Xlib,
-    display: *mut x11_dl::xlib::Display,
-    keyboard: x11_dl::xlib::XkbDescPtr,
-    symbols: Vec<String>,
-}
-
-#[cfg(target_os = "linux")]
-impl X11LayoutTracker {
-    fn new() -> Option<Self> {
-        unsafe {
-            let xlib = x11_dl::xlib::Xlib::open().ok()?;
-            let display = (xlib.XOpenDisplay)(std::ptr::null());
-            if display.is_null() {
-                return None;
-            }
-            let keyboard = (xlib.XkbAllocKeyboard)();
-            if keyboard.is_null() {
-                (xlib.XCloseDisplay)(display);
-                return None;
-            }
-            let Some(symbols) = linux_xkb_symbols(&xlib, display, keyboard) else {
-                (xlib.XkbFreeKeyboard)(keyboard, 0, 1);
-                (xlib.XCloseDisplay)(display);
-                return None;
-            };
-            Some(Self {
-                xlib,
-                display,
-                keyboard,
-                symbols,
-            })
-        }
-    }
-
-    fn current_layout_index(&mut self) -> Option<u8> {
-        const XKB_USE_CORE_KBD: u32 = 0x0100;
-
-        unsafe {
-            let mut state: x11_dl::xlib::XkbStateRec = std::mem::zeroed();
-            if (self.xlib.XkbGetState)(self.display, XKB_USE_CORE_KBD, &mut state) != 0 {
-                return None;
-            }
-            let group = state.group as usize;
-            let raw = self.symbols.get(group + 1)?;
-            let layout = raw.split([':', '(']).next().unwrap_or_default();
-            layout_code_index(layout)
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl Drop for X11LayoutTracker {
-    fn drop(&mut self) {
-        unsafe {
-            if !self.keyboard.is_null() {
-                (self.xlib.XkbFreeKeyboard)(self.keyboard, 0, 1);
-            }
-            if !self.display.is_null() {
-                (self.xlib.XCloseDisplay)(self.display);
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn linux_xkb_symbols(
-    xlib: &x11_dl::xlib::Xlib,
-    display: *mut x11_dl::xlib::Display,
-    keyboard: x11_dl::xlib::XkbDescPtr,
-) -> Option<Vec<String>> {
-    const XKB_SYMBOLS_NAME_MASK: u32 = 1 << 2;
-
-    unsafe {
-        if (xlib.XkbGetNames)(display, XKB_SYMBOLS_NAME_MASK, keyboard) != 0 {
-            return None;
-        }
-        let names = (*keyboard).names;
-        if names.is_null() {
-            return None;
-        }
-        let symbols_atom = (*names).symbols;
-        let symbols_ptr = (xlib.XGetAtomName)(display, symbols_atom);
-        if symbols_ptr.is_null() {
-            return None;
-        }
-        let symbols = std::ffi::CStr::from_ptr(symbols_ptr)
-            .to_string_lossy()
-            .into_owned();
-        (xlib.XFree)(symbols_ptr.cast());
-        Some(symbols.split('+').map(str::to_owned).collect())
-    }
-}
+mod x11_layout;
 
 #[cfg(target_os = "windows")]
 struct LayoutTracker {

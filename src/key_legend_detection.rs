@@ -80,6 +80,12 @@ pub enum NativeLayoutIdentity {
         options: String,
         glyphs: Glyphs,
     },
+    Ibus {
+        engine: String,
+        layout: String,
+        variant: Option<String>,
+        options: Option<String>,
+    },
     Unavailable(DetectionFailure),
 }
 
@@ -102,6 +108,15 @@ impl NativeLayoutIdentity {
                 variant.as_deref().unwrap_or("?")
             ),
             Self::Unavailable(_) => String::new(),
+            Self::Ibus {
+                engine,
+                layout,
+                variant,
+                ..
+            } => format!(
+                "IBus · {engine} · {layout}({})",
+                variant.as_deref().unwrap_or("?")
+            ),
         }
     }
 
@@ -137,7 +152,7 @@ impl NativeLayoutIdentity {
             } => {
                 // Options may remap printable physical positions. Until an
                 // option has independent evidence, use the manual fallback.
-                if !options.is_empty() {
+                if !xkb_options_supported(options) {
                     return Err(DetectionFailure::Unsupported);
                 }
                 let family = match (layout.as_str(), variant.as_deref()) {
@@ -149,6 +164,9 @@ impl NativeLayoutIdentity {
                 (family, glyphs)
             }
             Self::Unavailable(reason) => return Err(*reason),
+            // Global-engine metadata is retained, but GNOME pass-through
+            // engines have not been verified to follow the selected source.
+            Self::Ibus { .. } => return Err(DetectionFailure::VariantUnavailable),
         };
         if glyphs_match(glyphs, family) {
             Ok(family)
@@ -156,6 +174,58 @@ impl NativeLayoutIdentity {
             Err(DetectionFailure::Unsupported)
         }
     }
+}
+
+pub fn xkb_options_supported(options: &str) -> bool {
+    options
+        .split(',')
+        .filter(|option| !option.is_empty())
+        .all(|option| {
+            matches!(
+                option,
+                "grp:alt_shift_toggle"
+                    | "grp:ctrl_shift_toggle"
+                    | "grp:win_space_toggle"
+                    | "grp:menu_toggle"
+                    | "grp:caps_toggle"
+                    | "grp_led:scroll"
+                    | "grp_led:caps"
+            )
+        })
+}
+
+/// Components have explicit one-based group assignments; neutral components
+/// do not consume a group. Reject additions we cannot interpret.
+pub fn xkb_group(symbols: &str, group: usize) -> Option<(String, String)> {
+    let mut result = None;
+    for component in symbols.split('+') {
+        if component == "pc" || component.starts_with("inet(") || component.starts_with("group(") {
+            continue;
+        }
+        let (component, assigned) = match component.rsplit_once(':') {
+            Some((name, number)) => (name, number.parse::<usize>().ok()?.checked_sub(1)?),
+            None => (component, 0),
+        };
+        let (layout, variant) = if let Some((layout, variant)) = component.split_once('(') {
+            (layout, variant.strip_suffix(')')?)
+        } else {
+            (component, "")
+        };
+        if !matches!(layout, "us" | "ru") {
+            return None;
+        }
+        let variant = match (layout, variant) {
+            ("us", "basic") | ("ru", "winkeys") => "",
+            _ => variant,
+        };
+        if assigned == group {
+            if result.is_some() {
+                return None;
+            }
+            result = Some((layout.to_owned(), variant.to_owned()));
+        }
+    }
+    result
 }
 
 /// Every printable main-block position must be present; available ISO
@@ -227,6 +297,78 @@ impl LayoutSample {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xkb_groups_preserve_assignments_and_reject_ambiguous_components() {
+        let names = "pc+us+inet(evdev)+ru:2+group(alt_shift_toggle)+ru(typewriter):3";
+        assert_eq!(xkb_group(names, 0), Some(("us".into(), "".into())));
+        assert_eq!(xkb_group(names, 1), Some(("ru".into(), "".into())));
+        assert_eq!(
+            xkb_group(names, 2),
+            Some(("ru".into(), "typewriter".into()))
+        );
+        assert_eq!(
+            xkb_group("pc+ru(typewriter)+us:2", 0),
+            Some(("ru".into(), "typewriter".into()))
+        );
+        assert_eq!(xkb_group("pc+us+ru:2", 2), None);
+        assert_eq!(xkb_group("pc+us+ru:1", 0), None);
+        assert_eq!(xkb_group("pc+us+custom(mapping)", 0), None);
+        assert!(!xkb_options_supported(
+            "grp:alt_shift_toggle,shift:both_capslock"
+        ));
+        assert!(!xkb_options_supported("custom:printable"));
+        assert!(xkb_options_supported("grp:alt_shift_toggle,grp_led:scroll"));
+    }
+
+    #[test]
+    fn compiled_xkb_fixtures_match_ansi_profiles_but_reject_different_iso_positions() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("qmk_hid_host/xkb_layout_fixtures.json")).unwrap();
+        for sample in fixture["samples"].as_array().unwrap() {
+            let layout = sample["layout"].as_str().unwrap();
+            let variant = sample["variant"].as_str().unwrap();
+            let glyphs: Glyphs = sample["glyphs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| {
+                    (
+                        row[0].as_u64().unwrap() as u16,
+                        char::from_u32(row[1].as_u64().unwrap() as u32).unwrap(),
+                        char::from_u32(row[2].as_u64().unwrap() as u32).unwrap(),
+                    )
+                })
+                .collect();
+            let mut identity = NativeLayoutIdentity::Xkb {
+                backend: "fixture",
+                layout: layout.into(),
+                variant: Some(variant.into()),
+                options: String::new(),
+                glyphs,
+            };
+            let family = match (layout, variant) {
+                ("us", _) => KeyLegendLayout::English,
+                (_, "typewriter") => KeyLegendLayout::RussianTypewriter,
+                _ => KeyLegendLayout::Russian,
+            };
+            let expected = if sample["model"] == "pc104" {
+                Ok(family)
+            } else {
+                Err(DetectionFailure::Unsupported)
+            };
+            assert_eq!(
+                identity.profile(),
+                expected,
+                "{layout}({variant}) {}",
+                sample["model"]
+            );
+            if let NativeLayoutIdentity::Xkb { glyphs, .. } = &mut identity {
+                glyphs[0].1 = 'x';
+            }
+            assert_eq!(identity.profile(), Err(DetectionFailure::Unsupported));
+        }
+    }
 
     #[test]
     fn native_macos_fixtures_require_complete_equivalence_and_exact_source_ids() {
