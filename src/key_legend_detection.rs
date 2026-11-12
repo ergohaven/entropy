@@ -35,6 +35,36 @@ impl DetectionFailure {
 
 pub type Glyphs = Vec<(u16, char, char)>;
 
+/// Follows WinForms' HKL convention without activating a source. Special
+/// device identifiers must have exactly one registry match.
+pub fn windows_klid(hkl: usize, records: &[(String, u16)]) -> Result<String, DetectionFailure> {
+    if hkl == 0 {
+        return Err(DetectionFailure::Unavailable);
+    }
+    let device = ((hkl >> 16) & 0xffff) as u16;
+    let id = if device & 0xf000 == 0xf000 {
+        let mut matches = records.iter().filter(|(_, id)| *id == device & 0x0fff);
+        let first = matches.next().ok_or(DetectionFailure::Unavailable)?;
+        if matches.next().is_some() {
+            return Err(DetectionFailure::Ambiguous);
+        }
+        first.0.to_ascii_uppercase()
+    } else {
+        format!(
+            "{:08X}",
+            if device == 0 {
+                (hkl & 0xffff) as u16
+            } else {
+                device
+            }
+        )
+    };
+    match id.as_str() {
+        "00000409" | "00000419" | "00010419" => Ok(id),
+        _ => Err(DetectionFailure::Unsupported),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NativeLayoutIdentity {
     Windows(String),
@@ -197,6 +227,31 @@ impl LayoutSample {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_hkl_resolution_rejects_unknown_and_ambiguous_registry_records() {
+        // Synthetic values following WinForms' documented implementation
+        // precedent, not captured evidence from a native Windows run.
+        let records = vec![("00010419".to_owned(), 1)];
+        assert_eq!(windows_klid(0x04190419, &[]), Ok("00000419".into()));
+        assert_eq!(windows_klid(0xf0010419, &records), Ok("00010419".into()));
+        assert_eq!(windows_klid(0x04090409, &[]), Ok("00000409".into()));
+        assert_eq!(
+            windows_klid(0xf0010419, &[]),
+            Err(DetectionFailure::Unavailable)
+        );
+        let mut ambiguous = records;
+        ambiguous.push(("a0010419".into(), 1));
+        assert_eq!(
+            windows_klid(0xf0010419, &ambiguous),
+            Err(DetectionFailure::Ambiguous)
+        );
+        assert_eq!(
+            windows_klid(0x12340419, &[]),
+            Err(DetectionFailure::Unsupported)
+        );
+        assert_eq!(windows_klid(0, &[]), Err(DetectionFailure::Unavailable));
+    }
 
     #[test]
     fn exact_windows_variants_and_automatic_order_are_distinct() {

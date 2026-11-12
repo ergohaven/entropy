@@ -359,8 +359,8 @@ impl DesktopSource for NativeDesktopSource {
         }
         self.layout
             .as_mut()
-            .and_then(LayoutTracker::current_layout_index)
-            .into()
+            .map(LayoutTracker::current_layout)
+            .unwrap_or_else(|| None.into())
     }
 
     fn media(&mut self) -> Option<MediaInfo> {
@@ -3209,6 +3209,10 @@ impl LayoutTracker {
             NativeLayoutTracker::X11(tracker) => tracker.current_layout_index(),
         }
     }
+
+    fn current_layout(&mut self) -> LayoutObservation {
+        self.current_layout_index().into()
+    }
 }
 
 /// Builds a layout tracker connection whose method calls give up after
@@ -3718,16 +3722,19 @@ fn linux_xkb_symbols(
 }
 
 #[cfg(target_os = "windows")]
-struct LayoutTracker;
+struct LayoutTracker {
+    registry: Option<Vec<(String, u16)>>,
+    registry_read_at: Instant,
+}
 
 #[cfg(target_os = "windows")]
 impl LayoutTracker {
     fn new() -> Option<Self> {
-        Some(Self)
+        Some(Self { registry: None, registry_read_at: Instant::now() - Duration::from_secs(60) })
     }
 
-    fn current_layout_index(&mut self) -> Option<u8> {
-        windows_platform::layout_code().and_then(|code| layout_code_index(&code))
+    fn current_layout(&mut self) -> LayoutObservation {
+        windows_platform::layout_observation(&mut self.registry, &mut self.registry_read_at)
     }
 }
 
@@ -3740,8 +3747,8 @@ impl LayoutTracker {
         Some(Self)
     }
 
-    fn current_layout_index(&mut self) -> Option<u8> {
-        macos_layout_code().and_then(|code| layout_code_index(&code))
+    fn current_layout(&mut self) -> LayoutObservation {
+        macos_layout_code().and_then(|code| layout_code_index(&code)).into()
     }
 }
 
@@ -3754,8 +3761,8 @@ impl LayoutTracker {
         None
     }
 
-    fn current_layout_index(&mut self) -> Option<u8> {
-        None
+    fn current_layout(&mut self) -> LayoutObservation {
+        None.into()
     }
 }
 
@@ -4128,25 +4135,75 @@ mod windows_platform {
         ))
     }
 
-    pub fn layout_code() -> Option<String> {
+    fn keyboard_layout_registry() -> Option<Vec<(String, u16)>> {
+        use windows_sys::Win32::{Foundation::{ERROR_NO_MORE_ITEMS, ERROR_SUCCESS}, System::Registry::*};
+        struct Key(HKEY);
+        impl Drop for Key {
+            fn drop(&mut self) { unsafe { RegCloseKey(self.0); } }
+        }
+        fn wide(s: &str) -> Vec<u16> { s.encode_utf16().chain([0]).collect() }
         unsafe {
-            let focused_window = GetForegroundWindow();
-            let active_thread = GetWindowThreadProcessId(focused_window, std::ptr::null_mut());
-            let layout = GetKeyboardLayout(active_thread);
-            let locale_id = (layout as usize & 0xFFFF) as u32;
-            let mut buffer = [0u16; 9];
-            let len = GetLocaleInfoW(
-                locale_id,
-                LOCALE_SISO639LANGNAME,
-                buffer.as_mut_ptr(),
-                buffer.len() as i32,
-            );
-            if len <= 1 {
-                return None;
+            let mut root = std::ptr::null_mut();
+            if RegOpenKeyExW(HKEY_LOCAL_MACHINE, wide(r"SYSTEM\CurrentControlSet\Control\Keyboard Layouts").as_ptr(), 0, KEY_READ, &mut root) != ERROR_SUCCESS { return None; }
+            let root = Key(root);
+            let mut records = Vec::new();
+            for index in 0.. {
+                let mut name = [0u16; 256];
+                let mut length = name.len() as u32;
+                match RegEnumKeyExW(root.0, index, name.as_mut_ptr(), &mut length, std::ptr::null(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) {
+                    ERROR_NO_MORE_ITEMS => return Some(records),
+                    ERROR_SUCCESS => {},
+                    _ => return None,
+                }
+                let klid = String::from_utf16(&name[..length as usize]).ok()?;
+                if klid.len() != 8 || !klid.bytes().all(|c| c.is_ascii_hexdigit()) { continue; }
+                let mut subkey = std::ptr::null_mut();
+                if RegOpenKeyExW(root.0, wide(&klid).as_ptr(), 0, KEY_READ, &mut subkey) != ERROR_SUCCESS { return None; }
+                let subkey = Key(subkey);
+                let mut value = [0u16; 32];
+                let mut bytes = std::mem::size_of_val(&value) as u32;
+                let mut kind = 0;
+                let result = RegQueryValueExW(subkey.0, wide("Layout Id").as_ptr(), std::ptr::null(), &mut kind, value.as_mut_ptr().cast(), &mut bytes);
+                if result == ERROR_SUCCESS && kind == REG_SZ && bytes as usize <= std::mem::size_of_val(&value) && bytes % 2 == 0 {
+                    let value = String::from_utf16(&value[..bytes as usize / 2]).ok()?;
+                    if let Ok(id) = u16::from_str_radix(value.trim_end_matches('\0'), 16) { records.push((klid, id)); }
+                } else if result != windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND {
+                    return None;
+                }
             }
-            String::from_utf16(&buffer[..len as usize - 1]).ok()
+            None
         }
     }
+
+    pub fn layout_observation(registry: &mut Option<Vec<(String, u16)>>, read_at: &mut std::time::Instant) -> crate::key_legend_detection::LayoutObservation {
+        use crate::key_legend_detection::{DetectionFailure, LayoutObservation, NativeLayoutIdentity, windows_klid};
+        unsafe {
+            let window = GetForegroundWindow();
+            if window.is_null() { return None.into(); }
+            let thread = GetWindowThreadProcessId(window, std::ptr::null_mut());
+            if thread == 0 { return None.into(); }
+            let hkl = GetKeyboardLayout(thread);
+            if hkl.is_null() { return None.into(); }
+            let mut buffer = [0u16; 9];
+            let length = GetLocaleInfoW((hkl as usize & 0xffff) as u32, LOCALE_SISO639LANGNAME, buffer.as_mut_ptr(), buffer.len() as i32);
+            let language = (length > 1).then(|| String::from_utf16(&buffer[..length as usize - 1]).ok()).flatten()
+                .and_then(|code| super::layout_code_index(&code));
+            if (hkl as usize >> 16) & 0xf000 == 0xf000 && read_at.elapsed() >= Duration::from_secs(10) {
+                *registry = keyboard_layout_registry();
+                *read_at = std::time::Instant::now();
+            }
+            let identity = match windows_klid(hkl as usize, registry.as_deref().unwrap_or_default()) {
+                Ok(id) => NativeLayoutIdentity::Windows(id),
+                Err(reason) => NativeLayoutIdentity::Unavailable(reason),
+            };
+            let current = GetForegroundWindow();
+            if current != window || GetWindowThreadProcessId(current, std::ptr::null_mut()) != thread || GetKeyboardLayout(thread) != hkl {
+                return LayoutObservation { language: None, identity: NativeLayoutIdentity::Unavailable(DetectionFailure::Ambiguous) };
+            }
+            LayoutObservation { language, identity }
+        }
+    }
+
 }
 
 #[cfg(test)]
