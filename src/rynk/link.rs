@@ -606,26 +606,24 @@ mod tests {
     fn a_run_keeps_its_requests_together() {
         let (board, log, release, held) = gated_board();
         let link = RynkLink::acquire(id("run"), quick(), open(&board)).unwrap();
-        let blocker = {
-            let link = link.clone();
-            std::thread::spawn(move || link.request::<command::GetDefaultLayer>(()))
-        };
-        held.recv_timeout(Duration::from_secs(3)).unwrap();
-        link.post::<command::SetDefaultLayer>(0, 7).unwrap();
         let run = {
             let link = link.clone();
             std::thread::spawn(move || {
                 link.run(|client| {
+                    client.request::<command::GetDefaultLayer>(&())?;
                     let first = client.request::<command::GetCurrentLayer>(&())?;
                     let second = client.request::<command::GetCurrentLayer>(&())?;
                     Ok(first + second)
                 })
             })
         };
-        std::thread::sleep(Duration::from_millis(20));
+        // Queue the competing post while the run is inside its first request.
+        // This tests non-interleaving without assuming which queued job wins
+        // a scheduling race or whether the post has aged past POST_MAX_WAIT.
+        held.recv_timeout(Duration::from_secs(3)).unwrap();
+        link.post::<command::SetDefaultLayer>(0, 7).unwrap();
         release.send(()).unwrap();
         assert_eq!(run.join().unwrap().unwrap(), 6);
-        blocker.join().unwrap().unwrap();
         eventually("the post is sent", || commands(&log).len() == 4);
 
         assert_eq!(
