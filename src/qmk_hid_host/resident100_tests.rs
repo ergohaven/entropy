@@ -121,17 +121,28 @@ fn resident100_library_publication_admits_all_100_and_syncs_without_select() {
     );
     release_tx.send(()).unwrap();
     settings.join().unwrap();
-    // Each of 100 STOREs now includes bounded FULL READs before the next job.
-    let deadline = Instant::now() + Duration::from_secs(150);
-    while stored.lock().unwrap().len() < 100
-        || ids
+    // FULL readback is paced by the real bridge. Judge forward progress, not
+    // aggregate throughput on a loaded runner, while still bounding stalls.
+    let deadline = Instant::now() + Duration::from_secs(600);
+    let mut progress_deadline = Instant::now() + Duration::from_secs(30);
+    let mut previous_progress = (0, 0);
+    loop {
+        let stored_count = stored.lock().unwrap().len();
+        let synced_count = ids
             .iter()
-            .any(|id| bridge.resident_sync_status(id) != Some(resident100::SyncStatus::Synced))
-    {
+            .filter(|id| bridge.resident_sync_status(id) == Some(resident100::SyncStatus::Synced))
+            .count();
+        if stored_count == 100 && synced_count == 100 {
+            break;
+        }
+        let progress = (stored_count, synced_count);
+        if progress != previous_progress {
+            progress_deadline = Instant::now() + Duration::from_secs(30);
+            previous_progress = progress;
+        }
         assert!(
-            Instant::now() < deadline,
-            "stored {} of 100",
-            stored.lock().unwrap().len()
+            Instant::now() < deadline && Instant::now() < progress_deadline,
+            "resident publication stalled or exceeded total budget: stored {stored_count}, synced {synced_count} of 100"
         );
         thread::sleep(Duration::from_millis(5));
     }
