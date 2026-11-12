@@ -208,6 +208,7 @@ jobs:
         if: matrix.kind == 'macos'
         run: |
           cargo test --all-targets smart_input::tests::macos_ -- --test-threads=1 --nocapture
+          cargo test --all-targets app::text_expander_setup::macos_setup_tests:: -- --test-threads=1 --nocapture
 
       - name: Test native HID ownership and shared host output
         if: matrix.kind != 'linux'
