@@ -1855,8 +1855,10 @@ mod tests {
     fn settings_worker_fault_allows_deferred_exit(fault: crate::hid::TestHidFault) {
         let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
-        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EntropyApp::new(&creation_context);
+        // This fixture exercises write/exit ordering without native desktop
+        // services or device enumeration on a Rust test worker thread.
+        let mut app = EntropyApp::new_inert_for_test();
+        app.last_device_scan_at = f64::EPSILON;
         let (hid_device, recorder) =
             crate::hid::HidDevice::test_device_with_fault_after_requests(Some((2, fault)));
         app.hid_device = Some(hid_device.into());
