@@ -1,6 +1,14 @@
 use super::*;
 use crate::key_legend_detection::{LayoutObservation, NativeLayoutIdentity};
 
+fn native_identity(id: &str) -> NativeLayoutIdentity {
+    NativeLayoutIdentity::Mapped(crate::key_legend_detection::SystemKeymap::from_glyphs(
+        id.into(),
+        id.into(),
+        &vec![(4, 'a', 'A')],
+    ))
+}
+
 #[derive(Clone)]
 struct LegendDesktop(Arc<Mutex<NativeLayoutIdentity>>);
 
@@ -23,7 +31,7 @@ fn await_legend(subscription: &LegendLayoutSubscription, klid: &str) -> LayoutSa
     let until = Instant::now() + Duration::from_secs(5);
     loop {
         if let Some(sample) = subscription.snapshot() {
-            if sample.observation.identity == NativeLayoutIdentity::Windows(klid.to_owned()) {
+            if sample.observation.identity == native_identity(klid) {
                 return sample;
             }
         }
@@ -34,7 +42,7 @@ fn await_legend(subscription: &LegendLayoutSubscription, klid: &str) -> LayoutSa
 
 #[test]
 fn legends_start_without_a_bridge_and_publish_same_language_changes() {
-    let identity = Arc::new(Mutex::new(NativeLayoutIdentity::Windows("00000419".into())));
+    let identity = Arc::new(Mutex::new(native_identity("00000419")));
     let service = HostDataService::start({
         let identity = identity.clone();
         move || LegendDesktop(identity.clone())
@@ -50,7 +58,7 @@ fn legends_start_without_a_bridge_and_publish_same_language_changes() {
     let subscription = service.subscribe_legends(ctx);
     let first = await_legend(&subscription, "00000419");
     assert_eq!(service.snapshot().layout, Some(1));
-    *identity.lock().unwrap() = NativeLayoutIdentity::Windows("00010419".into());
+    *identity.lock().unwrap() = native_identity("00010419");
     let second = await_legend(&subscription, "00010419");
     assert!(second.sampled_at > first.sampled_at);
     assert_eq!(service.snapshot().layout, Some(1));
@@ -64,11 +72,8 @@ fn legends_start_without_a_bridge_and_publish_same_language_changes() {
 
 #[test]
 fn dropping_legends_preserves_bridge_demand_and_removes_only_its_listener() {
-    let service = HostDataService::start(|| {
-        LegendDesktop(Arc::new(Mutex::new(NativeLayoutIdentity::Windows(
-            "00000419".into(),
-        ))))
-    });
+    let service =
+        HostDataService::start(|| LegendDesktop(Arc::new(Mutex::new(native_identity("00000419")))));
     let bridge = Arc::new(BridgeWake::default());
     let _bridge_subscription = service.subscribe(
         HostDataMode {
@@ -92,11 +97,8 @@ fn dropping_legends_preserves_bridge_demand_and_removes_only_its_listener() {
 
 #[test]
 fn repaint_callbacks_can_read_the_published_snapshot() {
-    let service = HostDataService::start(|| {
-        LegendDesktop(Arc::new(Mutex::new(NativeLayoutIdentity::Windows(
-            "00000419".into(),
-        ))))
-    });
+    let service =
+        HostDataService::start(|| LegendDesktop(Arc::new(Mutex::new(native_identity("00000419")))));
     let ctx = egui::Context::default();
     let (sent, received) = std::sync::mpsc::channel();
     let shared = Arc::downgrade(&service.owner.shared);
@@ -112,11 +114,8 @@ fn repaint_callbacks_can_read_the_published_snapshot() {
 
 #[test]
 fn an_unchanged_identity_repaints_when_fresh_evidence_recovers_from_expiry() {
-    let service = HostDataService::start(|| {
-        LegendDesktop(Arc::new(Mutex::new(NativeLayoutIdentity::Windows(
-            "00000419".into(),
-        ))))
-    });
+    let service =
+        HostDataService::start(|| LegendDesktop(Arc::new(Mutex::new(native_identity("00000419")))));
     let ctx = egui::Context::default();
     let repaints = Arc::new(AtomicU64::new(0));
     ctx.set_request_repaint_callback({
@@ -149,6 +148,8 @@ fn an_unchanged_identity_repaints_when_fresh_evidence_recovers_from_expiry() {
             .snapshot()
             .unwrap()
             .profile(Instant::now(), false),
-        Ok(crate::keycode::KeyLegendLayout::Russian)
+        native_identity("00000419")
+            .profile()
+            .map(|layout| layout.toggled_order())
     );
 }

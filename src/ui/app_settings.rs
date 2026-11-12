@@ -73,11 +73,14 @@ impl EntropyApp {
                         },
                     );
                 } else if row == 3 {
-                    let text = match (self.app_settings.key_legend_mode, self.legend_detected) {
+                    let text = match (
+                        self.app_settings.key_legend_mode,
+                        self.legend_detected.clone(),
+                    ) {
                         (LegendMode::FollowSystem, Err(reason)) => {
-                            crate::i18n::tr_catalog(lang, reason.i18n_key())
+                            crate::i18n::tr_catalog(lang, reason.i18n_key()).to_owned()
                         }
-                        _ => crate::i18n::tr_catalog(lang, self.key_legend_layout().i18n_key()),
+                        _ => self.key_legend_layout().display_name(lang),
                     };
                     let identity = self
                         .legend_sample
@@ -86,7 +89,7 @@ impl EntropyApp {
                         .unwrap_or_default();
                     ui.add_sized(
                         [metrics.settings_control_width(), height],
-                        egui::Label::new(text).truncate(),
+                        egui::Label::new(&text).truncate(),
                     )
                     .on_hover_text(if identity.is_empty() {
                         text.to_owned()
@@ -96,7 +99,8 @@ impl EntropyApp {
                 } else {
                     let profile = self.key_legend_order_profile();
                     let text = profile
-                        .and_then(KeyLegendLayout::order_i18n_key)
+                        .as_ref()
+                        .and_then(|layout| layout.order_i18n_key())
                         .map(|key| crate::i18n::tr_catalog(lang, key))
                         .unwrap_or("—");
                     if crate::ui_style::modern_button(
@@ -336,7 +340,8 @@ impl EntropyApp {
                     }
                 }
                 1 => {
-                    let mut selected_key_legend_layout = self.app_settings.key_legend_layout;
+                    let mut selected_key_legend_layout =
+                        self.app_settings.key_legend_layout.clone();
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
                         content_width,
@@ -348,75 +353,12 @@ impl EntropyApp {
                         tooltip(crate::i18n::tr_catalog(lang, "ui.key_legends_tooltip")),
                         metrics.settings_control_width(),
                         |ui| {
-                            let dropdown_id = ui.make_persistent_id("app_key_legends_dropdown");
-                            let dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
+                            super::layout_image_export::draw_key_legend_dropdown(
                                 ui,
-                                dropdown_id,
-                                crate::i18n::tr_catalog(
-                                    lang,
-                                    selected_key_legend_layout.i18n_key(),
-                                ),
-                                ui.visuals().text_color(),
-                                metrics.settings_control_width(),
-                                metrics.settings_control_height(),
-                                metrics.settings_control_font_size(),
-                            );
-                            crate::ui_style::popup_below_widget(
-                                ui,
-                                dropdown_id,
-                                &dropdown_resp,
-                                egui::PopupCloseBehavior::CloseOnClickOutside,
-                                |ui| {
-                                    ui.set_min_width(metrics.settings_control_width());
-                                    ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
-                                    for key_legend_layout in KeyLegendLayout::ALL {
-                                        let selected = key_legend_layout
-                                            == selected_key_legend_layout.family();
-                                        let (option_rect, option_resp) = ui.allocate_exact_size(
-                                            metrics.size(168.0, 28.0),
-                                            Sense::click(),
-                                        );
-                                        if option_resp.hovered() {
-                                            ui.ctx()
-                                                .set_cursor_icon(egui::CursorIcon::PointingHand);
-                                        }
-                                        let option_fill = if selected {
-                                            if dark {
-                                                Color32::from_rgb(58, 58, 61)
-                                            } else {
-                                                Color32::from_rgb(236, 236, 238)
-                                            }
-                                        } else if option_resp.hovered() {
-                                            crate::ui_style::hover_fill(dark)
-                                        } else {
-                                            Color32::TRANSPARENT
-                                        };
-                                        ui.painter().rect_filled(option_rect, 7.0, option_fill);
-                                        ui.painter().text(
-                                            egui::pos2(
-                                                option_rect.left() + metrics.value(10.0),
-                                                option_rect.center().y,
-                                            ),
-                                            egui::Align2::LEFT_CENTER,
-                                            crate::i18n::tr_catalog(
-                                                lang,
-                                                key_legend_layout.i18n_key(),
-                                            ),
-                                            FontId::proportional(metrics.value(12.0)),
-                                            if selected {
-                                                ui.visuals().text_color()
-                                            } else {
-                                                app_muted_text(dark)
-                                            },
-                                        );
-                                        if option_resp.clicked() {
-                                            if !selected {
-                                                selected_key_legend_layout = key_legend_layout;
-                                            }
-                                            egui::Popup::close_all(ui.ctx());
-                                        }
-                                    }
-                                },
+                                metrics,
+                                dark,
+                                lang,
+                                &mut selected_key_legend_layout,
                             );
                         },
                     );
@@ -956,7 +898,7 @@ mod legend_settings_tests {
             app.app_settings.language = lang;
             app.app_settings.key_legend_mode =
                 crate::key_legend_detection::LegendMode::FollowSystem;
-            app.legend_detected = Ok(KeyLegendLayout::RussianTypewriterPrimary);
+            app.legend_detected = Ok(crate::key_legend_detection::test_typewriter_layout(false));
             let ctx = egui::Context::default();
             let output = crate::app::discard_texture_deltas(ctx.run_ui(
                 egui::RawInput {

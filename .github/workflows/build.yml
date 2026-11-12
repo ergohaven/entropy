@@ -155,6 +155,14 @@ jobs:
         if: matrix.kind != 'linux'
         run: cargo test --all-targets app::layout_indicator_window::tests
 
+      - name: Test system key legends
+        if: matrix.kind != 'linux'
+        run: cargo test --all-targets key_legend
+
+      - name: Test Windows layout translation
+        if: matrix.kind == 'windows'
+        run: cargo test --all-targets qmk_hid_host::windows_keymaps::tests
+
       - name: Test macOS HID workers
         if: matrix.kind == 'macos'
         run: |

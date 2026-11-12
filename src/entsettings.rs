@@ -424,14 +424,25 @@ mod tests {
     fn legacy_settings_bundle_migrates_legend_order_and_missing_export_block() {
         let bundle: EntSettingsFile = serde_json::from_value(serde_json::json!({
             "format": ENTSETTINGS_FORMAT, "version": 1, "created_by": "Entropy", "created_at": "",
-            "settings": { "key_legend_layout": "russian_typewriter_primary" },
-        })).unwrap();
-        assert_eq!(bundle.settings.key_legend_mode, crate::key_legend_detection::LegendMode::Manual);
-        assert!(bundle.settings.automatic_legend_russian_first);
-        assert_eq!(bundle.settings.layout_image_export.key_legend_layout, KeyLegendLayout::RussianTypewriterPrimary);
-        let restored: EntSettingsFile = serde_json::from_str(&serde_json::to_string(&bundle).unwrap()).unwrap();
-        assert_eq!(restored.settings.key_legend_layout, KeyLegendLayout::RussianTypewriterPrimary);
-        assert!(restored.settings.automatic_legend_russian_first);
+            "settings": { "key_legend_layout": "russian_primary" },
+        }))
+        .unwrap();
+        assert_eq!(
+            bundle.settings.key_legend_mode,
+            crate::key_legend_detection::LegendMode::Manual
+        );
+        assert!(bundle.settings.automatic_legend_system_first);
+        assert_eq!(
+            bundle.settings.layout_image_export.key_legend_layout,
+            KeyLegendLayout::RussianPrimary
+        );
+        let restored: EntSettingsFile =
+            serde_json::from_str(&serde_json::to_string(&bundle).unwrap()).unwrap();
+        assert_eq!(
+            restored.settings.key_legend_layout,
+            KeyLegendLayout::RussianPrimary
+        );
+        assert!(restored.settings.automatic_legend_system_first);
     }
 
     #[test]

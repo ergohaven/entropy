@@ -448,10 +448,10 @@ impl EntropyApp {
                     layer_names,
                     macro_names,
                     tap_dance_names,
-                    key_legend_layout,
+                    key_legend_layout.clone(),
                 ),
                 show_shifted_number_symbols,
-                key_legend_layout,
+                key_legend_layout.clone(),
             );
             draw_sticky_key_label(
                 &painter,
@@ -470,7 +470,7 @@ impl EntropyApp {
                 layer_names,
                 macro_names,
                 tap_dance_names,
-                key_legend_layout,
+                key_legend_layout.clone(),
             )
             .replace('\n', " ")
         };
@@ -681,7 +681,7 @@ impl EntropyApp {
                                     layer_names,
                                     macro_names,
                                     tap_dance_names,
-                                    key_legend_layout,
+                                    key_legend_layout.clone(),
                                 ),
                                 true,
                             )
@@ -696,7 +696,7 @@ impl EntropyApp {
                                 layer_names,
                                 macro_names,
                                 tap_dance_names,
-                                key_legend_layout,
+                                key_legend_layout.clone(),
                             ),
                             false,
                         )

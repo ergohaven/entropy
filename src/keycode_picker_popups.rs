@@ -270,8 +270,12 @@ pub(super) fn show_grouped_popup_key_buttons(
                     }
                 }
 
-                let label =
-                    popup_key_button_label(kc, layer_names, friendly_mods, key_legend_layout);
+                let label = popup_key_button_label(
+                    kc,
+                    layer_names,
+                    friendly_mods,
+                    key_legend_layout.clone(),
+                );
                 let size = popup_key_button_size(ui, &label);
                 let resp = picker_keycap_button(ui, &label, size, true, false);
                 if resp.clicked() {

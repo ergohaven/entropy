@@ -920,7 +920,7 @@ impl KeycodePicker {
                                                         *keycode,
                                                         &custom_pairs,
                                                         &self.layer_names,
-                                                        self.key_legend_layout,
+                                                        self.key_legend_layout.clone(),
                                                     );
                                                 let response =
                                                     crate::ui_style::modern_button_with_font(

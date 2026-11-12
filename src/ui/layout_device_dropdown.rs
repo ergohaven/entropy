@@ -99,7 +99,10 @@ impl EntropyApp {
                     .collect()
             };
             if show_key_legend_switcher {
-                if let Some(order_key) = self.key_legend_order_profile().and_then(KeyLegendLayout::order_i18n_key) {
+                if let Some(order_key) = self
+                    .key_legend_order_profile()
+                    .and_then(|layout| layout.order_i18n_key())
+                {
                     device_menu_labels.push(crate::i18n::tr_catalog(lang, order_key).to_owned());
                 }
             }
@@ -237,8 +240,9 @@ impl EntropyApp {
 
                     top_dropdown_divider(ui, dropdown_size.x - 16.0);
                     if show_key_legend_switcher {
-                        if let Some(order_key) =
-                            self.key_legend_order_profile().and_then(KeyLegendLayout::order_i18n_key)
+                        if let Some(order_key) = self
+                            .key_legend_order_profile()
+                            .and_then(|layout| layout.order_i18n_key())
                         {
                             let order_label = crate::i18n::tr_catalog(lang, order_key);
                             if top_dropdown_icon_item(

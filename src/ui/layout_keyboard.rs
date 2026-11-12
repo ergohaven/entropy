@@ -568,7 +568,7 @@ impl EntropyApp {
                 &encoder_layer_names,
                 &encoder_macro_names,
                 &encoder_tap_dance_names,
-                encoder_key_legend_layout,
+                encoder_key_legend_layout.clone(),
             )
             .replace('\n', " ")
         };

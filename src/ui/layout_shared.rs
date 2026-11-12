@@ -673,14 +673,14 @@ mod tests {
 
     #[test]
     fn number_row_formatting_uses_binding_identity() {
-        let layout = KeyLegendLayout::RussianTypewriterPrimary;
+        let layout = crate::key_legend_detection::test_typewriter_layout(false);
         assert_eq!(
-            number_row_shifted_label(0x001Eu16.into(), "№  1".into(), true, layout),
+            number_row_shifted_label(0x001Eu16.into(), "№  1".into(), true, layout.clone()),
             "1  !\n№  1"
         );
         for binding in [0x0059u16, 0x7700, 0x2104] {
             assert_eq!(
-                number_row_shifted_label(binding.into(), "1".into(), true, layout),
+                number_row_shifted_label(binding.into(), "1".into(), true, layout.clone()),
                 "1"
             );
         }

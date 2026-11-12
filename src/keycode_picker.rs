@@ -1651,7 +1651,7 @@ impl KeycodePicker {
                                         &self.layer_names,
                                         true,
                                         self.language,
-                                        self.key_legend_layout,
+                                        self.key_legend_layout.clone(),
                                     ) {
                                         self.set_macro_key_pick_value(macro_idx, action_idx, value);
                                     }
@@ -2071,7 +2071,7 @@ impl KeycodePicker {
                                     &self.layer_names,
                                     false,
                                     self.language,
-                                    self.key_legend_layout,
+                                    self.key_legend_layout.clone(),
                                 ) {
                                     self.finish_regular_key_pick(value);
                                 }

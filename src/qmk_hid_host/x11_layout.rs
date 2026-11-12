@@ -1,7 +1,7 @@
 //! Native X11 evidence. This connection belongs exclusively to the layout lane.
 use super::layout_code_index;
 use crate::key_legend_detection::{
-    xkb_group, DetectionFailure, Glyphs, LayoutObservation, NativeLayoutIdentity,
+    DetectionFailure, LayoutObservation, NativeLayoutIdentity, SystemKeymap,
 };
 use std::ffi::CStr;
 use x11_dl::xlib;
@@ -15,7 +15,7 @@ pub(super) struct X11LayoutTracker {
     keyboard: xlib::XkbDescPtr,
     event_type: i32,
     symbols: String,
-    cached: Vec<(usize, bool, Glyphs)>,
+    cached: Vec<(usize, std::sync::Arc<SystemKeymap>)>,
 }
 
 impl X11LayoutTracker {
@@ -157,44 +157,58 @@ impl X11LayoutTracker {
         result
     }
 
-    unsafe fn glyphs(&mut self, group: usize, iso: bool) -> Option<Glyphs> {
-        if let Some((_, _, glyphs)) = self
-            .cached
-            .iter()
-            .find(|(g, i, _)| *g == group && *i == iso)
-        {
-            return Some(glyphs.clone());
+    unsafe fn keymap(&mut self, group: usize) -> Option<std::sync::Arc<SystemKeymap>> {
+        if let Some((_, map)) = self.cached.iter().find(|(g, _)| *g == group) {
+            return Some(map.clone());
         }
         let keys = (*(*self.keyboard).names).keys;
-        let mut glyphs = Vec::new();
-        for (hid, name) in PRINTABLE_KEYS
+        let mut glyphs = std::collections::BTreeMap::new();
+        for &(hid, name) in PRINTABLE_KEYS
             .iter()
-            .chain(iso.then_some(&(100, *b"LSGT")).iter().copied())
+            .chain(super::linux_keymaps::EXTRA_KEYS)
         {
-            let keycode = ((*self.keyboard).min_key_code..=(*self.keyboard).max_key_code)
-                .find(|code| (*keys.add(*code as usize)).name.map(|c| c as u8) == *name)?;
-            let mut pair = ['\0'; 2];
-            for shift in 0..2 {
+            let Some(code) = ((*self.keyboard).min_key_code..=(*self.keyboard).max_key_code)
+                .find(|code| (*keys.add(*code as usize)).name.map(|c| c as u8) == name)
+            else {
+                continue;
+            };
+            let levels = [0, 1, 128, 129].map(|mods| {
                 let (mut consumed, mut symbol) = (0, 0);
                 if (self.xlib.XkbTranslateKeyCode)(
                     self.keyboard,
-                    keycode,
-                    ((group as u32) << 13) | shift,
+                    code,
+                    ((group as u32) << 13) | mods,
                     &mut consumed,
                     &mut symbol,
                 ) == 0
                 {
-                    return None;
+                    return Default::default();
                 }
-                pair[shift as usize] = keysym_char(symbol).or_else(|| {
-                    log::debug!("X11 legend: unsupported keysym {symbol:#x} at HID {hid:#x}");
-                    None
-                })?;
-            }
-            glyphs.push((*hid, pair[0], pair[1]));
+                super::linux_keymaps::keysym_glyph(symbol as u32)
+            });
+            glyphs.insert(hid, levels);
         }
-        self.cached.push((group, iso, glyphs.clone()));
-        Some(glyphs)
+        let name = self
+            .rules()
+            .ok()
+            .flatten()
+            .map(|r| {
+                let layout = r[2].split(',').nth(group).unwrap_or("?");
+                let variant = r[3].split(',').nth(group).unwrap_or("");
+                if variant.is_empty() {
+                    layout.to_owned()
+                } else {
+                    format!("{layout} ({variant})")
+                }
+            })
+            .unwrap_or_else(|| format!("X11 group {}", group + 1));
+        let map = std::sync::Arc::new(SystemKeymap {
+            id: format!("x11:{}:{group}", self.symbols),
+            name,
+            keys: glyphs,
+        });
+        self.cached.push((group, map.clone()));
+        Some(map)
     }
 
     pub(super) fn current_layout(&mut self) -> LayoutObservation {
@@ -204,51 +218,16 @@ impl X11LayoutTracker {
                 self.changed();
                 self.read_map().ok_or(DetectionFailure::Unavailable)?;
                 let group = self.group().ok_or(DetectionFailure::Unavailable)?;
-                // Firmware still accepts language-only hints, even when another
-                // symbols component makes the richer legend identity unsupported.
-                language = self.symbols.split('+').find_map(|component| {
-                    let (name, assigned) = match component.rsplit_once(':') {
-                        Some((name, number)) => {
-                            (name, number.parse::<usize>().ok()?.checked_sub(1)?)
-                        }
-                        None => (component, 0),
-                    };
-                    (assigned == group)
-                        .then(|| layout_code_index(name.split('(').next()?))
-                        .flatten()
-                });
-                let (layout, variant) =
-                    xkb_group(&self.symbols, group).ok_or(DetectionFailure::Unsupported)?;
-                let rules = self.rules()?;
-                let options = rules.as_ref().map(|r| r[4].clone()).unwrap_or_default();
-                if let Some(rules) = &rules {
-                    let rule_layout = rules[2]
-                        .split(',')
-                        .nth(group)
-                        .ok_or(DetectionFailure::Ambiguous)?;
-                    let rule_variant = rules[3].split(',').nth(group).unwrap_or("");
-                    if rule_layout != layout || rule_variant != variant {
-                        return Err(DetectionFailure::Ambiguous);
-                    }
-                }
-                // A declared ANSI model excludes LSGT. Otherwise require the
-                // represented ISO position too; do not guess physical geometry.
-                let iso = !rules
-                    .as_ref()
-                    .is_some_and(|r| matches!(r[1].as_str(), "pc101" | "pc104"));
-                let glyphs = self
-                    .glyphs(group, iso)
-                    .ok_or(DetectionFailure::Unsupported)?;
-                if self.group() != Some(group) || self.rules()? != rules || self.changed() {
+                language = self
+                    .rules()
+                    .ok()
+                    .flatten()
+                    .and_then(|r| r[2].split(',').nth(group).and_then(layout_code_index));
+                let keymap = self.keymap(group).ok_or(DetectionFailure::Unavailable)?;
+                if self.group() != Some(group) || self.changed() {
                     return Err(DetectionFailure::Ambiguous);
                 }
-                Ok(NativeLayoutIdentity::Xkb {
-                    backend: "X11",
-                    layout,
-                    variant: Some(variant),
-                    options,
-                    glyphs,
-                })
+                Ok(NativeLayoutIdentity::Mapped(keymap))
             })()
             .unwrap_or_else(NativeLayoutIdentity::Unavailable)
         };
@@ -265,24 +244,7 @@ impl Drop for X11LayoutTracker {
     }
 }
 
-fn keysym_char(symbol: u64) -> Option<char> {
-    match symbol {
-        0x20..=0x7e => char::from_u32(symbol as u32),
-        0x01000000..=0x0110ffff => char::from_u32((symbol & 0x00ffffff) as u32),
-        0x06a3 => Some('ё'),
-        0x06b3 => Some('Ё'),
-        0x06b0 => Some('№'),
-        0x06c0..=0x06df => "юабцдефгхийклмнопярстужвьызшэщчъ"
-            .chars()
-            .nth((symbol - 0x06c0) as usize),
-        0x06e0..=0x06ff => "ЮАБЦДЕФГХИЙКЛМНОПЯРСТУЖВЬЫЗШЭЩЧЪ"
-            .chars()
-            .nth((symbol - 0x06e0) as usize),
-        _ => None,
-    }
-}
-
-const PRINTABLE_KEYS: &[(u16, [u8; 4])] = &[
+pub(super) const PRINTABLE_KEYS: &[(u16, [u8; 4])] = &[
     (4, *b"AC01"),
     (5, *b"AB05"),
     (6, *b"AB03"),
@@ -348,14 +310,13 @@ mod tests {
         );
         let mut tracker = X11LayoutTracker::new().unwrap();
         for (layout, variant, expected) in [
-            ("us", "", crate::keycode::KeyLegendLayout::English),
-            ("ru", "", crate::keycode::KeyLegendLayout::Russian),
-            (
-                "ru",
-                "typewriter",
-                crate::keycode::KeyLegendLayout::RussianTypewriter,
-            ),
-            ("us", "", crate::keycode::KeyLegendLayout::English),
+            ("us", "", '1'),
+            ("ru", "", '1'),
+            ("ru", "typewriter", '№'),
+            ("fr", "", '&'),
+            ("de", "", '1'),
+            ("us", "dvorak", '1'),
+            ("us", "", '1'),
         ] {
             assert!(std::process::Command::new("setxkbmap")
                 .args(["-model", "pc104", "-layout", layout, "-variant", variant, "-option", ""])
@@ -368,8 +329,11 @@ mod tests {
             }
             let observation = tracker.current_layout();
             assert_eq!(
-                observation.identity.profile(),
-                Ok(expected),
+                match observation.identity {
+                    NativeLayoutIdentity::Mapped(ref map) => map.keys[&30][0].text.clone(),
+                    _ => String::new(),
+                },
+                expected.to_string(),
                 "{observation:?}"
             );
         }
@@ -387,19 +351,18 @@ mod tests {
             .status()
             .unwrap()
             .success());
-        for (group, family) in [
-            (2, crate::keycode::KeyLegendLayout::RussianTypewriter),
-            (0, crate::keycode::KeyLegendLayout::English),
-            (1, crate::keycode::KeyLegendLayout::Russian),
-        ] {
+        for (group, family) in [(2, '№'), (0, '1'), (1, '1')] {
             unsafe {
                 (tracker.xlib.XkbLockGroup)(tracker.display, CORE, group);
                 (tracker.xlib.XSync)(tracker.display, 0);
             }
             let observation = tracker.current_layout();
             assert_eq!(
-                observation.identity.profile(),
-                Ok(family),
+                match observation.identity {
+                    NativeLayoutIdentity::Mapped(ref map) => map.keys[&30][0].text.clone(),
+                    _ => String::new(),
+                },
+                family.to_string(),
                 "{observation:?}"
             );
         }
@@ -413,10 +376,10 @@ mod tests {
             (tracker.xlib.XkbLockGroup)(tracker.display, CORE, 0);
             (tracker.xlib.XSync)(tracker.display, 0);
         }
-        assert_eq!(
-            tracker.current_layout().identity.profile(),
-            Ok(crate::keycode::KeyLegendLayout::English)
-        );
+        let NativeLayoutIdentity::Mapped(map) = tracker.current_layout().identity else {
+            panic!("missing keymap")
+        };
+        assert_eq!(map.keys[&30][0].text, "1");
         let display = std::env::var("DISPLAY").unwrap();
         let output = std::process::Command::new("xkbcomp")
             .args(["-xkb", &display, "-"])
@@ -441,9 +404,10 @@ mod tests {
             .write_all(map.as_bytes())
             .unwrap();
         assert!(compiler.wait().unwrap().success());
-        assert_eq!(
-            tracker.current_layout().identity.profile(),
-            Err(DetectionFailure::Unsupported)
-        );
+        let NativeLayoutIdentity::Mapped(map) = tracker.current_layout().identity else {
+            panic!("missing changed keymap")
+        };
+        assert_eq!(map.keys[&30][0].text, "a");
+        assert_eq!(map.keys[&30][1].text, "b");
     }
 }

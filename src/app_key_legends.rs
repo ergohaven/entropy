@@ -5,10 +5,11 @@ use std::time::Instant;
 impl EntropyApp {
     pub(crate) fn key_legend_layout(&self) -> KeyLegendLayout {
         match self.app_settings.key_legend_mode {
-            LegendMode::Manual => self.app_settings.key_legend_layout,
+            LegendMode::Manual => self.app_settings.key_legend_layout.clone(),
             LegendMode::FollowSystem => self
                 .legend_detected
-                .unwrap_or(self.app_settings.key_legend_layout),
+                .clone()
+                .unwrap_or_else(|_| self.app_settings.key_legend_layout.clone()),
         }
     }
 
@@ -18,7 +19,7 @@ impl EntropyApp {
             .as_ref()
             .ok_or(DetectionFailure::Pending)
             .and_then(|sample| {
-                sample.profile(now, self.app_settings.automatic_legend_russian_first)
+                sample.profile(now, self.app_settings.automatic_legend_system_first)
             });
     }
 
@@ -51,8 +52,8 @@ impl EntropyApp {
 
     pub(crate) fn key_legend_order_profile(&self) -> Option<KeyLegendLayout> {
         let profile = match self.app_settings.key_legend_mode {
-            LegendMode::Manual => self.app_settings.key_legend_layout,
-            LegendMode::FollowSystem => self.legend_detected.ok()?,
+            LegendMode::Manual => self.app_settings.key_legend_layout.clone(),
+            LegendMode::FollowSystem => self.legend_detected.clone().ok()?,
         };
         profile.is_multilingual().then_some(profile)
     }
@@ -64,8 +65,8 @@ impl EntropyApp {
         match self.app_settings.key_legend_mode {
             LegendMode::Manual => self.app_settings.key_legend_layout = profile.toggled_order(),
             LegendMode::FollowSystem => {
-                self.app_settings.automatic_legend_russian_first =
-                    !self.app_settings.automatic_legend_russian_first;
+                self.app_settings.automatic_legend_system_first =
+                    !self.app_settings.automatic_legend_system_first;
                 self.resolve_key_legends(Instant::now());
             }
         }
@@ -76,74 +77,60 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::key_legend_detection::{LayoutObservation, NativeLayoutIdentity};
+    use crate::key_legend_detection::{
+        test_typewriter_layout, LayoutObservation, NativeLayoutIdentity,
+    };
     use std::time::Duration;
-
-    fn sample(id: &str, now: Instant) -> LayoutSample {
+    fn sample(profile: KeyLegendLayout, now: Instant) -> LayoutSample {
+        let KeyLegendLayout::System { keymap, .. } = profile else {
+            panic!()
+        };
         LayoutSample::new(
             LayoutObservation {
                 language: Some(1),
-                identity: NativeLayoutIdentity::Windows(id.into()),
+                identity: NativeLayoutIdentity::Mapped(keymap),
             },
             now,
             Duration::from_millis(100),
         )
     }
-
     #[test]
-    fn automatic_legends_restore_fallback_and_keep_order_separate() {
+    fn automatic_legends_restore_manual_mapping_and_keep_order_separate() {
         let mut app = EntropyApp::new_inert_for_test();
-        app.app_settings.key_legend_layout = KeyLegendLayout::RussianPrimary;
+        let manual = test_typewriter_layout(false);
+        app.app_settings.key_legend_layout = manual.clone();
         app.app_settings.key_legend_mode = LegendMode::FollowSystem;
         let now = Instant::now();
-        app.legend_sample = Some(sample("00010419", now));
+        app.legend_sample = Some(sample(manual.clone(), now));
         app.resolve_key_legends(now);
-        assert_eq!(app.key_legend_layout(), KeyLegendLayout::RussianTypewriter);
+        assert_eq!(app.key_legend_layout(), manual.toggled_order());
         assert!(app.toggle_key_legend_order());
-        assert_eq!(
-            app.key_legend_layout(),
-            KeyLegendLayout::RussianTypewriterPrimary
-        );
-        assert_eq!(
-            app.app_settings.key_legend_layout,
-            KeyLegendLayout::RussianPrimary
-        );
-        app.legend_sample = Some(sample("00000409", now));
-        app.resolve_key_legends(now);
-        assert_eq!(app.key_legend_layout(), KeyLegendLayout::English);
+        assert_eq!(app.key_legend_layout(), manual);
+        assert_eq!(app.app_settings.key_legend_layout, manual);
+        app.resolve_key_legends(now + Duration::from_secs(6));
+        assert_eq!(app.key_legend_layout(), manual);
         assert_eq!(app.key_legend_order_profile(), None);
         assert!(!app.toggle_key_legend_order());
-        app.legend_sample = Some(sample("custom", now));
-        app.resolve_key_legends(now);
-        assert_eq!(app.key_legend_layout(), KeyLegendLayout::RussianPrimary);
-        assert_eq!(app.key_legend_order_profile(), None);
-        assert!(!app.toggle_key_legend_order());
-        app.legend_sample = Some(sample("00010419", now));
-        app.resolve_key_legends(now);
-        assert_eq!(
-            app.key_legend_layout(),
-            KeyLegendLayout::RussianTypewriterPrimary
-        );
         app.app_settings.key_legend_mode = LegendMode::Manual;
-        assert_eq!(app.key_legend_layout(), KeyLegendLayout::RussianPrimary);
+        assert_eq!(app.key_legend_layout(), manual);
     }
-
     #[test]
-    fn pending_and_expired_samples_use_fallback_without_saving_detection() {
+    fn automatic_samples_do_not_replace_saved_manual_or_export_mappings() {
         let mut app = EntropyApp::new_inert_for_test();
-        app.app_settings.key_legend_layout = KeyLegendLayout::English;
         app.app_settings.key_legend_mode = LegendMode::FollowSystem;
         let before = serde_json::to_string(&app.app_settings).unwrap();
         let now = Instant::now();
         app.resolve_key_legends(now);
         assert_eq!(app.legend_detected, Err(DetectionFailure::Pending));
-        app.legend_sample = Some(sample("00000419", now));
+        app.legend_sample = Some(sample(test_typewriter_layout(false), now));
         app.resolve_key_legends(now);
-        assert_eq!(app.key_legend_layout(), KeyLegendLayout::Russian);
-        app.resolve_key_legends(now + Duration::from_secs(6));
-        assert_eq!(app.legend_detected, Err(DetectionFailure::Stale));
-        assert_eq!(app.key_legend_layout(), KeyLegendLayout::English);
+        assert!(matches!(
+            app.key_legend_layout(),
+            KeyLegendLayout::System { .. }
+        ));
         assert_eq!(serde_json::to_string(&app.app_settings).unwrap(), before);
+        app.resolve_key_legends(now + Duration::from_secs(6));
+        assert_eq!(app.key_legend_layout(), KeyLegendLayout::English);
         assert_eq!(
             app.app_settings.layout_image_export.key_legend_layout,
             KeyLegendLayout::English

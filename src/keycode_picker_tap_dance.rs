@@ -531,7 +531,7 @@ impl KeycodePicker {
             &self.layer_names,
             &self.macro_names,
             &self.tap_dance_names,
-            self.key_legend_layout,
+            self.key_legend_layout.clone(),
         )
     }
 

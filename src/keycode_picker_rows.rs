@@ -331,7 +331,7 @@ impl KeycodePicker {
                 value,
                 &[],
                 &self.layer_names,
-                self.key_legend_layout,
+                self.key_legend_layout.clone(),
             ),
             crate::i18n::tr_text(self.language, &self.picker_keycode_tooltip(value, &[])),
         )
@@ -517,7 +517,7 @@ mod tests {
                 .clone()
         };
         assert_eq!(label(&mut picker), "!\n1");
-        picker.key_legend_layout = KeyLegendLayout::RussianTypewriter;
+        picker.key_legend_layout = crate::key_legend_detection::test_typewriter_layout(true);
         assert_eq!(label(&mut picker), "!  1\n1  №");
         picker.key_legend_layout = picker.key_legend_layout.toggled_order();
         assert_eq!(label(&mut picker), "1  !\n№  1");

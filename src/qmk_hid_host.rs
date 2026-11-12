@@ -3038,7 +3038,7 @@ mod tests {
             );
             assert_eq!(
                 state.identity.profile(),
-                Err(DetectionFailure::VariantUnavailable)
+                Err(DetectionFailure::Unavailable)
             );
         }
     }
@@ -3168,7 +3168,6 @@ impl LayoutTracker {
             && ibus
                 .as_mut()
                 .and_then(IbusLayoutTracker::current_engine_state)
-                .and_then(|state| state.layout)
                 .is_some()
         {
             Some(NativeLayoutTracker::Ibus)
@@ -3203,7 +3202,14 @@ impl LayoutTracker {
             x11.map(|sample| sample.identity).unwrap_or(NativeLayoutIdentity::Unavailable(DetectionFailure::Unavailable))
         } else if matches!(self.native, Some(NativeLayoutTracker::Ibus)) {
             ibus_state.map(|state| state.identity).unwrap_or(NativeLayoutIdentity::Unavailable(DetectionFailure::Unavailable))
+        } else if let Some(NativeLayoutTracker::Kde(tracker))=self.native.as_mut() {
+            tracker.current_keymap().map(NativeLayoutIdentity::Mapped).unwrap_or(NativeLayoutIdentity::Unavailable(DetectionFailure::Unavailable))
         } else { NativeLayoutIdentity::Unavailable(DetectionFailure::VariantUnavailable) };
+        let identity = if let NativeLayoutIdentity::Ibus { engine,layout,variant,options } = &identity {
+            let spec = format!("xkb:{layout}:{}",variant.as_deref().unwrap_or_default());
+            linux_keymaps::load(&spec,engine,options.as_deref().unwrap_or_default())
+                .map(NativeLayoutIdentity::Mapped).unwrap_or(NativeLayoutIdentity::Unavailable(DetectionFailure::Unavailable))
+        } else { identity };
         LayoutObservation { language, identity }
     }
 }
@@ -3242,6 +3248,19 @@ impl KdeLayoutTracker {
         })
     }
 
+    fn current_keymap(&self) -> Option<Arc<crate::key_legend_detection::SystemKeymap>> {
+        let proxy=zbus::blocking::Proxy::new(&self.connection,KDE_LAYOUT_DESTINATION,KDE_LAYOUT_PATH,KDE_LAYOUT_INTERFACE).ok()?;
+        let index=proxy.call::<_,_,u32>("getLayout",&()).ok()? as usize;
+        let layouts=proxy.call::<_,_,Vec<(String,String,String)>>("getLayoutsList",&()).ok()?;
+        let config=std::fs::read_to_string(dirs::config_dir()?.join("kxkbrc")).ok()?;
+        let values=parse_kde_keymap_config(&config);
+        let layout=values.get("LayoutList")?.split(',').nth(index)?;
+        let variant=values.get("VariantList").and_then(|v|v.split(',').nth(index)).unwrap_or("");
+        let (short,_,name)=layouts.get(index)?;
+        if short!=layout || proxy.call::<_,_,u32>("getLayout",&()).ok()? as usize!=index { return None; }
+        linux_keymaps::load(&format!("xkb:{layout}:{variant}"),name,values.get("Options").copied().unwrap_or(""))
+    }
+
     fn current_layout_index(&mut self) -> Option<u8> {
         let proxy = zbus::blocking::Proxy::new(
             &self.connection,
@@ -3255,6 +3274,30 @@ impl KdeLayoutTracker {
         self.layout_codes
             .code_index(layout, Instant::now(), || kde_layout_list(connection))
     }
+}
+
+#[cfg(target_os = "linux")]
+fn parse_kde_keymap_config(source: &str) -> std::collections::BTreeMap<&str,&str> {
+    let mut in_layout=false;
+    let mut values=std::collections::BTreeMap::new();
+    for line in source.lines().map(str::trim) {
+        if line.starts_with('[') { in_layout=line=="[Layout]";continue; }
+        if in_layout && !line.starts_with('#') {
+            if let Some((key,value))=line.split_once('=') { values.insert(key.trim(),value.trim()); }
+        }
+    }
+    values
+}
+
+#[cfg(all(test, target_os = "linux"))]
+#[test]
+fn kde_keymap_config_preserves_empty_variant_slots_and_scopes_values() {
+    let values = parse_kde_keymap_config("[Other]\nLayoutList=us\n[Layout]\nLayoutList=de,ru,fr\nVariantList=,typewriter,oss\nOptions=grp:alt_shift_toggle,compose:ralt\n# Model=ignored\nModel=pc105\n[Other]\nVariantList=ignored\n");
+    assert_eq!(values["LayoutList"].split(',').nth(1), Some("ru"));
+    assert_eq!(values["VariantList"].split(',').nth(0), Some(""));
+    assert_eq!(values["VariantList"].split(',').nth(1), Some("typewriter"));
+    assert_eq!(values["Options"], "grp:alt_shift_toggle,compose:ralt");
+    assert_eq!(values["Model"], "pc105");
 }
 
 #[cfg(target_os = "linux")]
@@ -3636,21 +3679,34 @@ async fn watch_layout_signals(streams: LayoutSignalStreams, events: &LayoutEvent
 #[cfg(target_os = "linux")]
 mod x11_layout;
 
-#[cfg(target_os = "windows")]
-struct LayoutTracker {
-    registry: Option<Vec<(String, u16)>>,
-    registry_read_at: Instant,
+#[cfg(target_os = "linux")]
+mod linux_keymaps;
+
+pub(crate) fn installed_legend_layouts() -> Vec<crate::key_legend_detection::SystemLayoutDescriptor> {
+    #[cfg(target_os = "macos")] { macos_layout::installed_layouts() }
+    #[cfg(target_os = "windows")] { windows_keymaps::installed_layouts() }
+    #[cfg(target_os = "linux")] { linux_keymaps::installed() }
+    #[cfg(not(any(target_os = "macos",target_os = "windows",target_os = "linux")))] { Vec::new() }
+}
+
+pub(crate) fn load_legend_layout(id: &str) -> Option<std::sync::Arc<crate::key_legend_detection::SystemKeymap>> {
+    #[cfg(target_os = "macos")] { macos_layout::load_layout(id) }
+    #[cfg(target_os = "windows")] { windows_keymaps::load_layout(id) }
+    #[cfg(target_os = "linux")] {
+        let name = installed_legend_layouts().into_iter().find(|d|d.id==id).map(|d|d.name).unwrap_or_else(||id.into());
+        linux_keymaps::load(id,&name,"")
+    }
+    #[cfg(not(any(target_os = "macos",target_os = "windows",target_os = "linux")))] { let _=id; None }
 }
 
 #[cfg(target_os = "windows")]
+mod windows_keymaps;
+#[cfg(target_os = "windows")]
+struct LayoutTracker(windows_keymaps::Tracker);
+#[cfg(target_os = "windows")]
 impl LayoutTracker {
-    fn new() -> Option<Self> {
-        Some(Self { registry: None, registry_read_at: Instant::now() - Duration::from_secs(60) })
-    }
-
-    fn current_layout(&mut self) -> LayoutObservation {
-        windows_platform::layout_observation(&mut self.registry, &mut self.registry_read_at)
-    }
+    fn new() -> Option<Self> { Some(Self(windows_keymaps::Tracker::new())) }
+    fn current_layout(&mut self) -> LayoutObservation { self.0.current_layout() }
 }
 
 #[cfg(target_os = "macos")]
@@ -3868,13 +3924,6 @@ mod windows_platform {
             },
         },
     };
-    use windows_sys::Win32::{
-        Globalization::{GetLocaleInfoW, LOCALE_SISO639LANGNAME},
-        UI::{
-            Input::KeyboardAndMouse::GetKeyboardLayout,
-            WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId},
-        },
-    };
 
     type SessionSample = (
         super::MediaInfo,
@@ -4050,7 +4099,7 @@ mod windows_platform {
         ))
     }
 
-    fn keyboard_layout_registry() -> Option<Vec<(String, u16)>> {
+    pub(super) fn keyboard_layout_registry() -> Option<Vec<(String, u16)>> {
         use windows_sys::Win32::{Foundation::{ERROR_NO_MORE_ITEMS, ERROR_SUCCESS}, System::Registry::*};
         struct Key(HKEY);
         impl Drop for Key {
@@ -4090,34 +4139,6 @@ mod windows_platform {
         }
     }
 
-    pub fn layout_observation(registry: &mut Option<Vec<(String, u16)>>, read_at: &mut std::time::Instant) -> crate::key_legend_detection::LayoutObservation {
-        use crate::key_legend_detection::{DetectionFailure, LayoutObservation, NativeLayoutIdentity, windows_klid};
-        unsafe {
-            let window = GetForegroundWindow();
-            if window.is_null() { return None.into(); }
-            let thread = GetWindowThreadProcessId(window, std::ptr::null_mut());
-            if thread == 0 { return None.into(); }
-            let hkl = GetKeyboardLayout(thread);
-            if hkl.is_null() { return None.into(); }
-            let mut buffer = [0u16; 9];
-            let length = GetLocaleInfoW((hkl as usize & 0xffff) as u32, LOCALE_SISO639LANGNAME, buffer.as_mut_ptr(), buffer.len() as i32);
-            let language = (length > 1).then(|| String::from_utf16(&buffer[..length as usize - 1]).ok()).flatten()
-                .and_then(|code| super::layout_code_index(&code));
-            if (hkl as usize >> 16) & 0xf000 == 0xf000 && read_at.elapsed() >= Duration::from_secs(10) {
-                *registry = keyboard_layout_registry();
-                *read_at = std::time::Instant::now();
-            }
-            let identity = match windows_klid(hkl as usize, registry.as_deref().unwrap_or_default()) {
-                Ok(id) => NativeLayoutIdentity::Windows(id),
-                Err(reason) => NativeLayoutIdentity::Unavailable(reason),
-            };
-            let current = GetForegroundWindow();
-            if current != window || GetWindowThreadProcessId(current, std::ptr::null_mut()) != thread || GetKeyboardLayout(thread) != hkl {
-                return LayoutObservation { language: None, identity: NativeLayoutIdentity::Unavailable(DetectionFailure::Ambiguous) };
-            }
-            LayoutObservation { language, identity }
-        }
-    }
 
 }
 

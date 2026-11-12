@@ -888,7 +888,7 @@ impl EntropyApp {
                             &layer_names,
                             &macro_names,
                             &tap_dance_names,
-                            key_legend_layout,
+                            key_legend_layout.clone(),
                             show_shifted_number_symbols,
                             layout_options_value,
                             &encoder_visibility,

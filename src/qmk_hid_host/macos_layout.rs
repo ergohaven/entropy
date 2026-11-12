@@ -2,7 +2,8 @@
 //! crosses back to the shared desktop lane.
 use super::{layout_code_index, LayoutEvents};
 use crate::key_legend_detection::{
-    DetectionFailure, Glyphs, LayoutObservation, NativeLayoutIdentity,
+    DetectionFailure, KeyGlyph, LayoutObservation, NativeLayoutIdentity, SystemKeymap,
+    SystemLayoutDescriptor,
 };
 use std::ffi::c_void;
 
@@ -12,10 +13,13 @@ type NotificationCallback = unsafe extern "C" fn(CFRef, *mut c_void, CFRef, CFRe
 #[link(name = "Carbon", kind = "framework")]
 extern "C" {
     static kTISPropertyInputSourceID: CFRef;
+    static kTISPropertyLocalizedName: CFRef;
     static kTISPropertyInputSourceLanguages: CFRef;
     static kTISPropertyUnicodeKeyLayoutData: CFRef;
     static kTISNotifySelectedKeyboardInputSourceChanged: CFRef;
     fn TISCopyCurrentKeyboardInputSource() -> CFRef;
+    fn TISCopyCurrentKeyboardLayoutInputSource() -> CFRef;
+    fn TISCreateInputSourceList(properties: CFRef, all_installed: bool) -> CFRef;
     fn TISGetInputSourceProperty(source: CFRef, key: CFRef) -> CFRef;
     fn LMGetKbdType() -> u8;
     fn KBGetLayoutType(keyboard_type: i16) -> u32;
@@ -132,7 +136,38 @@ const KEYS: [(u16, u16); 47] = [
     (56, 44),
 ];
 
-unsafe fn glyphs(data: CFRef, keyboard_type: u32) -> Option<Glyphs> {
+fn physical_key_code(key: u16, iso: bool) -> u16 {
+    // UCKeyTranslate reverses grave and the extra ISO position; SDL's Cocoa
+    // UpdateKeymap applies the same physical-position correction.
+    // https://github.com/libsdl-org/SDL/blob/main/src/video/cocoa/SDL_cocoakeyboard.m
+    if iso && matches!(key, 10 | 50) {
+        60 - key
+    } else {
+        key
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn key_legend_iso_positions_match_native_translation_contract() {
+    assert_eq!(physical_key_code(50, true), 10);
+    assert_eq!(physical_key_code(10, true), 50);
+    assert_eq!(physical_key_code(50, false), 50);
+    assert_eq!(physical_key_code(10, false), 10);
+    assert_eq!(physical_key_code(42, true), 42);
+}
+
+unsafe fn keymap(source: CFRef) -> Option<std::sync::Arc<SystemKeymap>> {
+    let id = string(
+        TISGetInputSourceProperty(source, kTISPropertyInputSourceID),
+        4096,
+    )?;
+    let name = string(
+        TISGetInputSourceProperty(source, kTISPropertyLocalizedName),
+        4096,
+    )
+    .unwrap_or_else(|| id.clone());
+    let data = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData);
     if data.is_null() {
         return None;
     }
@@ -140,21 +175,44 @@ unsafe fn glyphs(data: CFRef, keyboard_type: u32) -> Option<Glyphs> {
     if bytes.is_null() {
         return None;
     }
+    let keyboard_type = LMGetKbdType() as u32;
     let iso = KBGetLayoutType(keyboard_type as i16) == u32::from_be_bytes(*b"ISO ");
-    KEYS.iter()
-        .copied()
-        .chain(iso.then_some((0x64, 10)))
-        .map(|(hid, key)| {
-            let mut pair = ['\0'; 2];
-            for (shift, ch) in pair.iter_mut().enumerate() {
-                let mut dead = 0;
-                let mut length = 0;
-                let mut output = [0u16; 4];
+    let mut keys = std::collections::BTreeMap::new();
+    for (hid, key) in KEYS.iter().copied().chain(iso.then_some((100, 10))).chain([
+        (50, 42),
+        (44, 49),
+        (135, 94),
+        (137, 93),
+    ]) {
+        let key = physical_key_code(key, iso);
+        let mut levels: [KeyGlyph; 4] = Default::default();
+        for (level, modifiers) in [0, 2, 8, 10].into_iter().enumerate() {
+            let mut dead = 0;
+            let mut length = 0;
+            let mut output = [0u16; 16];
+            if UCKeyTranslate(
+                bytes.cast(),
+                key,
+                0,
+                modifiers,
+                keyboard_type,
+                0,
+                &mut dead,
+                output.len(),
+                &mut length,
+                output.as_mut_ptr(),
+            ) != 0
+            {
+                continue;
+            }
+            let is_dead = dead != 0;
+            if is_dead {
+                dead = 0;
                 if UCKeyTranslate(
                     bytes.cast(),
                     key,
-                    0,
-                    if shift == 0 { 0 } else { 2 },
+                    3,
+                    modifiers,
                     keyboard_type,
                     1,
                     &mut dead,
@@ -162,16 +220,69 @@ unsafe fn glyphs(data: CFRef, keyboard_type: u32) -> Option<Glyphs> {
                     &mut length,
                     output.as_mut_ptr(),
                 ) != 0
-                    || length != 1
-                    || dead != 0
                 {
+                    continue;
+                }
+            }
+            if length <= output.len() {
+                if let Ok(text) = String::from_utf16(&output[..length]) {
+                    levels[level] = KeyGlyph::new(text, is_dead);
+                }
+            }
+        }
+        keys.insert(hid, levels);
+    }
+    Some(std::sync::Arc::new(SystemKeymap { id, name, keys }))
+}
+
+pub(super) fn installed_layouts() -> Vec<SystemLayoutDescriptor> {
+    dispatch2::run_on_main(|_| unsafe {
+        let sources = TISCreateInputSourceList(std::ptr::null(), true);
+        if sources.is_null() {
+            return Vec::new();
+        }
+        let sources = Source(sources);
+        (0..CFArrayGetCount(sources.0))
+            .filter_map(|i| {
+                let source = CFArrayGetValueAtIndex(sources.0, i);
+                if TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData).is_null() {
                     return None;
                 }
-                *ch = char::from_u32(output[0] as u32)?;
-            }
-            Some((hid, pair[0], pair[1]))
+                let id = string(
+                    TISGetInputSourceProperty(source, kTISPropertyInputSourceID),
+                    4096,
+                )?;
+                let name = string(
+                    TISGetInputSourceProperty(source, kTISPropertyLocalizedName),
+                    4096,
+                )
+                .unwrap_or_else(|| id.clone());
+                Some(SystemLayoutDescriptor { id, name })
+            })
+            .collect()
+    })
+}
+
+pub(super) fn load_layout(id: &str) -> Option<std::sync::Arc<SystemKeymap>> {
+    let id = id.to_owned();
+    dispatch2::run_on_main(move |_| unsafe {
+        let sources = TISCreateInputSourceList(std::ptr::null(), true);
+        if sources.is_null() {
+            return None;
+        }
+        let sources = Source(sources);
+        (0..CFArrayGetCount(sources.0)).find_map(|i| {
+            let source = CFArrayGetValueAtIndex(sources.0, i);
+            (string(
+                TISGetInputSourceProperty(source, kTISPropertyInputSourceID),
+                4096,
+            )
+            .as_deref()
+                == Some(&id))
+            .then(|| keymap(source))
+            .flatten()
         })
-        .collect()
+    })
 }
 
 pub(super) fn current_layout() -> LayoutObservation {
@@ -187,21 +298,20 @@ pub(super) fn current_layout() -> LayoutObservation {
         } else {
             None
         };
-        let keyboard_type = LMGetKbdType() as u32;
-        let id = string(
-            TISGetInputSourceProperty(source.0, kTISPropertyInputSourceID),
-            4096,
-        );
-        let data = TISGetInputSourceProperty(source.0, kTISPropertyUnicodeKeyLayoutData);
-        let identity = match (id, glyphs(data, keyboard_type)) {
-            (Some(source_id), Some(glyphs)) => NativeLayoutIdentity::Mac {
-                source_id,
-                keyboard_type,
-                glyphs,
-            },
-            _ => NativeLayoutIdentity::Unavailable(DetectionFailure::Unsupported),
-        };
-        LayoutObservation { language, identity }
+        let mapping = keymap(source.0).or_else(|| {
+            let layout_source = TISCopyCurrentKeyboardLayoutInputSource();
+            if layout_source.is_null() {
+                return None;
+            }
+            let layout_source = Source(layout_source);
+            keymap(layout_source.0)
+        });
+        LayoutObservation {
+            language,
+            identity: mapping.map(NativeLayoutIdentity::Mapped).unwrap_or(
+                NativeLayoutIdentity::Unavailable(DetectionFailure::Unavailable),
+            ),
+        }
     })
 }
 

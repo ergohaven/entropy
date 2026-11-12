@@ -131,7 +131,7 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) key_legend_mode: crate::key_legend_detection::LegendMode,
     #[serde(default)]
-    pub(crate) automatic_legend_russian_first: bool,
+    pub(crate) automatic_legend_system_first: bool,
     #[serde(default)]
     pub(crate) layout_image_export: LayoutImageExportState,
     #[serde(default)]
@@ -275,7 +275,7 @@ impl Default for AppSettings {
             show_made_by_signature: default_show_made_by_signature(),
             key_legend_layout: KeyLegendLayout::default(),
             key_legend_mode: crate::key_legend_detection::LegendMode::Manual,
-            automatic_legend_russian_first: false,
+            automatic_legend_system_first: false,
             layout_image_export: LayoutImageExportState::default(),
             standby_background_scale: StandbyBackgroundScale::default(),
             standby_background_source_path: None,
@@ -320,7 +320,7 @@ mod app_settings_tests {
                 &[],
                 &[],
                 &[],
-                KeyLegendLayout::RussianTypewriterPrimary
+                crate::key_legend_detection::test_typewriter_layout(false)
             ),
             "Ctrl\nЁ\n?"
         );
@@ -332,7 +332,7 @@ mod app_settings_tests {
                 &[],
                 &["Copy".into()],
                 &[],
-                KeyLegendLayout::RussianTypewriter
+                crate::key_legend_detection::test_typewriter_layout(true)
             ),
             "M0\nCopy"
         );
@@ -343,7 +343,7 @@ mod app_settings_tests {
                 &["Base".into(), "Symbols".into()],
                 &[],
                 &[],
-                KeyLegendLayout::RussianTypewriter
+                crate::key_legend_detection::test_typewriter_layout(true)
             ),
             "MO(1)\nSymbols"
         );

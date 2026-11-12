@@ -1,6 +1,152 @@
-//! Resolves native keyboard evidence to the existing static legend catalog.
+//! Owned system keyboard mappings and freshness of native layout observations.
 use crate::keycode::KeyLegendLayout;
 use std::time::{Duration, Instant};
+use std::{collections::BTreeMap, sync::Arc};
+
+/// A single key's output, including spacing labels for dead keys. Empty text
+/// means this modifier level does not produce a printable character.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct KeyGlyph {
+    pub text: String,
+    pub dead: bool,
+}
+
+impl KeyGlyph {
+    pub fn new(text: String, dead: bool) -> Self {
+        Self {
+            text: text.chars().filter(|c| !c.is_control()).collect(),
+            dead,
+        }
+    }
+
+    pub fn label(&self) -> String {
+        if self.dead && !self.text.is_empty() {
+            format!("◌{}", self.text)
+        } else {
+            self.text.clone()
+        }
+    }
+}
+
+/// Owned OS data, indexed by USB HID physical position. Levels are direct,
+/// Shift, AltGr/Option, and Shift+AltGr/Option. A saved selection includes the
+/// mapping so exports and manual selection also work after its source disappears.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct SystemKeymap {
+    pub id: String,
+    pub name: String,
+    pub keys: BTreeMap<u16, [KeyGlyph; 4]>,
+}
+
+impl SystemKeymap {
+    #[cfg(test)]
+    pub fn from_glyphs(id: String, name: String, glyphs: &Glyphs) -> Arc<Self> {
+        Arc::new(Self {
+            id,
+            name,
+            keys: glyphs
+                .iter()
+                .map(|(hid, base, shift)| {
+                    (
+                        *hid,
+                        [
+                            KeyGlyph::new(base.to_string(), false),
+                            KeyGlyph::new(shift.to_string(), false),
+                            KeyGlyph::default(),
+                            KeyGlyph::default(),
+                        ],
+                    )
+                })
+                .collect(),
+        })
+    }
+
+    pub fn legend(&self, value: u16, english_first: bool, shifted: bool) -> Option<String> {
+        let (hid, level) = if value < 0x100 {
+            (value, None)
+        } else if (0x100..0x2000).contains(&value) {
+            let mods = value >> 8;
+            let altgr = mods & 0x1d == 0x14 || mods & 0x0d == 0x05;
+            let shift = mods & 2 != 0;
+            if !altgr && mods & 0x0f & !2 != 0 {
+                return None;
+            }
+            (
+                value & 0xff,
+                Some(usize::from(shift) + if altgr { 2 } else { 0 }),
+            )
+        } else {
+            return None;
+        };
+        if hid == 44 {
+            return None;
+        }
+        let keys = self.keys.get(&hid)?;
+        let english =
+            crate::keycode::printable_output_for_hid(hid, crate::keycode::KeyOutputLayout::English);
+        let pair = |selected: String, us: String| {
+            if selected.is_empty() {
+                us
+            } else if us.is_empty() || selected == us {
+                selected
+            } else if english_first {
+                format!("{us}  {selected}")
+            } else {
+                format!("{selected}  {us}")
+            }
+        };
+        if let Some(level) = level {
+            let selected = keys[level].label();
+            if selected.is_empty() {
+                return None;
+            }
+            if level == 1 {
+                let us = english
+                    .and_then(|(_, c)| c)
+                    .map(|c| c.to_string())
+                    .unwrap_or_default();
+                if !us.is_empty() && !selected.is_empty() && us != selected {
+                    return Some(if english_first {
+                        format!("{us}\n{selected}")
+                    } else {
+                        format!("{selected}\n{us}")
+                    });
+                }
+            }
+            return Some(selected);
+        }
+        let base = pair(
+            keys[0].label(),
+            english.map(|(c, _)| c.to_string()).unwrap_or_default(),
+        );
+        let upper = pair(
+            keys[1].label(),
+            english
+                .and_then(|(_, c)| c)
+                .map(|c| c.to_string())
+                .unwrap_or_default(),
+        );
+        let mut bottom = base;
+        let mut top = upper;
+        if !keys[2].text.is_empty() && keys[2] != keys[0] {
+            bottom.push_str(&format!(" · {}", keys[2].label()));
+        }
+        if !keys[3].text.is_empty() && keys[3] != keys[1] {
+            top.push_str(&format!(" · {}", keys[3].label()));
+        }
+        if shifted && top != bottom && !top.is_empty() {
+            Some(format!("{top}\n{bottom}"))
+        } else {
+            Some(bottom)
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SystemLayoutDescriptor {
+    pub id: String,
+    pub name: String,
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -14,7 +160,6 @@ pub enum LegendMode {
 pub enum DetectionFailure {
     Pending,
     Unavailable,
-    Unsupported,
     Ambiguous,
     Stale,
     VariantUnavailable,
@@ -25,7 +170,6 @@ impl DetectionFailure {
         match self {
             Self::Pending => "ui.legend_pending",
             Self::Unavailable => "ui.legend_unavailable",
-            Self::Unsupported => "ui.legend_unsupported",
             Self::Ambiguous => "ui.legend_ambiguous",
             Self::Stale => "ui.legend_stale",
             Self::VariantUnavailable => "ui.legend_variant_unavailable",
@@ -33,6 +177,7 @@ impl DetectionFailure {
     }
 }
 
+#[cfg(test)]
 pub type Glyphs = Vec<(u16, char, char)>;
 
 /// Follows WinForms' HKL convention without activating a source. Special
@@ -59,27 +204,12 @@ pub fn windows_klid(hkl: usize, records: &[(String, u16)]) -> Result<String, Det
             }
         )
     };
-    match id.as_str() {
-        "00000409" | "00000419" | "00010419" => Ok(id),
-        _ => Err(DetectionFailure::Unsupported),
-    }
+    Ok(id)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NativeLayoutIdentity {
-    Windows(String),
-    Mac {
-        source_id: String,
-        keyboard_type: u32,
-        glyphs: Glyphs,
-    },
-    Xkb {
-        backend: &'static str,
-        layout: String,
-        variant: Option<String>,
-        options: String,
-        glyphs: Glyphs,
-    },
+    Mapped(Arc<SystemKeymap>),
     Ibus {
         engine: String,
         layout: String,
@@ -88,162 +218,24 @@ pub enum NativeLayoutIdentity {
     },
     Unavailable(DetectionFailure),
 }
-
 impl NativeLayoutIdentity {
     pub fn description(&self) -> String {
         match self {
-            Self::Windows(id) => format!("Windows · {id}"),
-            Self::Mac {
-                source_id,
-                keyboard_type,
-                ..
-            } => format!("macOS · {source_id} · {keyboard_type}"),
-            Self::Xkb {
-                backend,
-                layout,
-                variant,
-                ..
-            } => format!(
-                "{backend} · {layout}({})",
-                variant.as_deref().unwrap_or("?")
-            ),
+            Self::Mapped(map) => map.name.clone(),
+            Self::Ibus { engine, .. } => format!("IBus · {engine}"),
             Self::Unavailable(_) => String::new(),
-            Self::Ibus {
-                engine,
-                layout,
-                variant,
-                ..
-            } => format!(
-                "IBus · {engine} · {layout}({})",
-                variant.as_deref().unwrap_or("?")
-            ),
         }
     }
-
     pub fn profile(&self) -> Result<KeyLegendLayout, DetectionFailure> {
-        use KeyLegendLayout::{English, Russian, RussianTypewriter};
-        let (family, glyphs) = match self {
-            // Built-in identities only. See Microsoft's kbdus/kbdru/kbdru1
-            // mapping references; native resolution must reject custom HKLs.
-            Self::Windows(id) => {
-                return match id.as_str() {
-                    "00000409" => Ok(English),
-                    "00000419" => Ok(Russian),
-                    "00010419" => Ok(RussianTypewriter),
-                    _ => Err(DetectionFailure::Unsupported),
-                }
-            }
-            Self::Mac {
-                source_id, glyphs, ..
-            } => {
-                let family = match source_id.as_str() {
-                    "com.apple.keylayout.US" => English,
-                    "com.apple.keylayout.RussianWin" => Russian,
-                    _ => return Err(DetectionFailure::Unsupported),
-                };
-                (family, glyphs)
-            }
-            Self::Xkb {
-                layout,
-                variant,
-                options,
-                glyphs,
-                ..
-            } => {
-                // Options may remap printable physical positions. Until an
-                // option has independent evidence, use the manual fallback.
-                if !xkb_options_supported(options) {
-                    return Err(DetectionFailure::Unsupported);
-                }
-                let family = match (layout.as_str(), variant.as_deref()) {
-                    ("us", Some("")) => English,
-                    ("ru", Some("")) => Russian,
-                    ("ru", Some("typewriter")) => RussianTypewriter,
-                    _ => return Err(DetectionFailure::Unsupported),
-                };
-                (family, glyphs)
-            }
-            Self::Unavailable(reason) => return Err(*reason),
-            // Global-engine metadata is retained, but GNOME pass-through
-            // engines have not been verified to follow the selected source.
-            Self::Ibus { .. } => return Err(DetectionFailure::VariantUnavailable),
-        };
-        if glyphs_match(glyphs, family) {
-            Ok(family)
-        } else {
-            Err(DetectionFailure::Unsupported)
+        match self {
+            Self::Mapped(keymap) => Ok(KeyLegendLayout::System {
+                keymap: keymap.clone(),
+                english_first: false,
+            }),
+            Self::Unavailable(reason) => Err(*reason),
+            Self::Ibus { .. } => Err(DetectionFailure::Unavailable),
         }
     }
-}
-
-pub fn xkb_options_supported(options: &str) -> bool {
-    options
-        .split(',')
-        .filter(|option| !option.is_empty())
-        .all(|option| {
-            matches!(
-                option,
-                "grp:alt_shift_toggle"
-                    | "grp:ctrl_shift_toggle"
-                    | "grp:win_space_toggle"
-                    | "grp:menu_toggle"
-                    | "grp:caps_toggle"
-                    | "grp_led:scroll"
-                    | "grp_led:caps"
-            )
-        })
-}
-
-/// Components have explicit one-based group assignments; neutral components
-/// do not consume a group. Reject additions we cannot interpret.
-pub fn xkb_group(symbols: &str, group: usize) -> Option<(String, String)> {
-    let mut result = None;
-    for component in symbols.split('+') {
-        if component == "pc" || component.starts_with("inet(") || component.starts_with("group(") {
-            continue;
-        }
-        let (component, assigned) = match component.rsplit_once(':') {
-            Some((name, number)) => (name, number.parse::<usize>().ok()?.checked_sub(1)?),
-            None => (component, 0),
-        };
-        let (layout, variant) = if let Some((layout, variant)) = component.split_once('(') {
-            (layout, variant.strip_suffix(')')?)
-        } else {
-            (component, "")
-        };
-        if !matches!(layout, "us" | "ru") {
-            return None;
-        }
-        let variant = match (layout, variant) {
-            ("us", "basic") | ("ru", "winkeys") => "",
-            _ => variant,
-        };
-        if assigned == group {
-            if result.is_some() {
-                return None;
-            }
-            result = Some((layout.to_owned(), variant.to_owned()));
-        }
-    }
-    result
-}
-
-/// Every printable main-block position must be present; available ISO
-/// positions must agree too. Never match from a number-row spot check.
-pub fn glyphs_match(glyphs: &[(u16, char, char)], profile: KeyLegendLayout) -> bool {
-    (4..=0x38)
-        .filter(|hid| !matches!(hid, 0x28..=0x2c | 0x32))
-        .all(|hid| {
-            glyphs
-                .iter()
-                .find(|(key, _, _)| *key == hid)
-                .is_some_and(|(_, direct, shift)| {
-                    crate::keycode::legend_printable_glyphs(hid, profile) == Some((*direct, *shift))
-                })
-        })
-        && glyphs.iter().all(|(hid, direct, shift)| {
-            crate::keycode::legend_printable_glyphs(*hid, profile) == Some((*direct, *shift))
-        })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -280,13 +272,13 @@ impl LayoutSample {
     pub fn profile(
         &self,
         now: Instant,
-        russian_first: bool,
+        system_first: bool,
     ) -> Result<KeyLegendLayout, DetectionFailure> {
         if now >= self.valid_until {
             return Err(DetectionFailure::Stale);
         }
         let family = self.observation.identity.profile()?;
-        Ok(if russian_first {
+        Ok(if !system_first {
             family.toggled_order()
         } else {
             family
@@ -295,188 +287,124 @@ impl LayoutSample {
 }
 
 #[cfg(test)]
+pub(crate) fn test_typewriter_layout(english_first: bool) -> KeyLegendLayout {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("qmk_hid_host/xkb_layout_fixtures.json")).unwrap();
+    let sample = fixture["samples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["layout"] == "ru" && s["variant"] == "typewriter" && s["model"] == "pc105")
+        .unwrap();
+    let glyphs = sample["glyphs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| {
+            (
+                g[0].as_u64().unwrap() as u16,
+                char::from_u32(g[1].as_u64().unwrap() as u32).unwrap(),
+                char::from_u32(g[2].as_u64().unwrap() as u32).unwrap(),
+            )
+        })
+        .collect();
+    KeyLegendLayout::System {
+        keymap: SystemKeymap::from_glyphs(
+            "xkb:ru:typewriter".into(),
+            "Russian Typewriter".into(),
+            &glyphs,
+        ),
+        english_first,
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn xkb_groups_preserve_assignments_and_reject_ambiguous_components() {
-        let names = "pc+us+inet(evdev)+ru:2+group(alt_shift_toggle)+ru(typewriter):3";
-        assert_eq!(xkb_group(names, 0), Some(("us".into(), "".into())));
-        assert_eq!(xkb_group(names, 1), Some(("ru".into(), "".into())));
-        assert_eq!(
-            xkb_group(names, 2),
-            Some(("ru".into(), "typewriter".into()))
-        );
-        assert_eq!(
-            xkb_group("pc+ru(typewriter)+us:2", 0),
-            Some(("ru".into(), "typewriter".into()))
-        );
-        assert_eq!(xkb_group("pc+us+ru:2", 2), None);
-        assert_eq!(xkb_group("pc+us+ru:1", 0), None);
-        assert_eq!(xkb_group("pc+us+custom(mapping)", 0), None);
-        assert!(!xkb_options_supported(
-            "grp:alt_shift_toggle,shift:both_capslock"
+    fn system_mapping_keeps_space_and_nonproducing_modifier_actions_visible() {
+        let map = SystemKeymap::from_glyphs("xkb:us:".into(), "US".into(), &vec![(4, 'a', 'A'), (44, ' ', ' ')]);
+        let layout = KeyLegendLayout::System { keymap: map, english_first: false };
+        let label = |value, layout| crate::keycode::keycode_label_with_names_and_layout(value, &[], &[], layout);
+        assert_eq!(label(44, layout.clone()), label(44, KeyLegendLayout::English));
+        let modifier = label(0x1404, layout);
+        assert!(!modifier.trim().is_empty());
+        assert!(modifier.contains('a'));
+        assert!(modifier.contains("Alt"));
+    }
+    #[test]
+    fn system_keymaps_are_not_restricted_to_a_language_catalog() {
+        let identity = NativeLayoutIdentity::Mapped(SystemKeymap::from_glyphs(
+            "com.apple.keylayout.French".into(),
+            "French".into(),
+            &vec![(4, 'q', 'Q'), (20, 'a', 'A'), (30, '&', '1')],
         ));
-        assert!(!xkb_options_supported("custom:printable"));
-        assert!(xkb_options_supported("grp:alt_shift_toggle,grp_led:scroll"));
+        let profile = identity.profile().unwrap();
+        let text = crate::keycode::keycode_label_with_names_and_layout(4, &[], &[], profile);
+        assert!(text.contains('q'));
+        assert!(text.contains('Q'));
     }
-
     #[test]
-    fn compiled_xkb_fixtures_match_ansi_profiles_but_reject_different_iso_positions() {
-        let fixture: serde_json::Value =
-            serde_json::from_str(include_str!("qmk_hid_host/xkb_layout_fixtures.json")).unwrap();
-        for sample in fixture["samples"].as_array().unwrap() {
-            let layout = sample["layout"].as_str().unwrap();
-            let variant = sample["variant"].as_str().unwrap();
-            let glyphs: Glyphs = sample["glyphs"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|row| {
-                    (
-                        row[0].as_u64().unwrap() as u16,
-                        char::from_u32(row[1].as_u64().unwrap() as u32).unwrap(),
-                        char::from_u32(row[2].as_u64().unwrap() as u32).unwrap(),
-                    )
-                })
-                .collect();
-            let mut identity = NativeLayoutIdentity::Xkb {
-                backend: "fixture",
-                layout: layout.into(),
-                variant: Some(variant.into()),
-                options: String::new(),
-                glyphs,
-            };
-            let family = match (layout, variant) {
-                ("us", _) => KeyLegendLayout::English,
-                (_, "typewriter") => KeyLegendLayout::RussianTypewriter,
-                _ => KeyLegendLayout::Russian,
-            };
-            let expected = if sample["model"] == "pc104" {
-                Ok(family)
-            } else {
-                Err(DetectionFailure::Unsupported)
-            };
-            assert_eq!(
-                identity.profile(),
-                expected,
-                "{layout}({variant}) {}",
-                sample["model"]
-            );
-            if let NativeLayoutIdentity::Xkb { glyphs, .. } = &mut identity {
-                glyphs[0].1 = 'x';
-            }
-            assert_eq!(identity.profile(), Err(DetectionFailure::Unsupported));
-        }
-    }
-
-    #[test]
-    fn native_macos_fixtures_require_complete_equivalence_and_exact_source_ids() {
-        let fixture: serde_json::Value =
-            serde_json::from_str(include_str!("qmk_hid_host/macos_layout_fixtures.json")).unwrap();
-        for sample in fixture["samples"].as_array().unwrap() {
-            let id = sample["source_id"].as_str().unwrap();
-            let keyboard_type = sample["keyboard_type"].as_u64().unwrap() as u32;
-            let glyphs: Glyphs = sample["glyphs"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|row| {
-                    (
-                        row[0].as_u64().unwrap() as u16,
-                        char::from_u32(row[1].as_u64().unwrap() as u32).unwrap(),
-                        char::from_u32(row[2].as_u64().unwrap() as u32).unwrap(),
-                    )
-                })
-                .collect();
-            let identity = NativeLayoutIdentity::Mac {
-                source_id: id.into(),
-                keyboard_type,
-                glyphs: glyphs.clone(),
-            };
-            if id == "com.apple.keylayout.US" && keyboard_type == 40 {
-                assert_eq!(identity.profile(), Ok(KeyLegendLayout::English));
-            }
-            if id != "com.apple.keylayout.US" || keyboard_type != 40 {
-                assert_eq!(identity.profile(), Err(DetectionFailure::Unsupported));
-            }
-            let custom = NativeLayoutIdentity::Mac {
-                source_id: "custom.Russian".into(),
-                keyboard_type,
-                glyphs,
-            };
-            assert_eq!(custom.profile(), Err(DetectionFailure::Unsupported));
-        }
-    }
-
-    #[test]
-    fn windows_hkl_resolution_rejects_unknown_and_ambiguous_registry_records() {
-        // Synthetic values following WinForms' documented implementation
-        // precedent, not captured evidence from a native Windows run.
-        let records = vec![("00010419".to_owned(), 1)];
-        assert_eq!(windows_klid(0x04190419, &[]), Ok("00000419".into()));
-        assert_eq!(windows_klid(0xf0010419, &records), Ok("00010419".into()));
-        assert_eq!(windows_klid(0x04090409, &[]), Ok("00000409".into()));
+    fn translated_glyphs_and_dead_keys_survive_serialization_and_modifier_labels() {
+        let mut map = (*SystemKeymap::from_glyphs(
+            "xkb:de:".into(),
+            "German".into(),
+            &vec![(20, 'q', 'Q'), (46, '´', '`')],
+        ))
+        .clone();
+        map.keys.get_mut(&20).unwrap()[2] = KeyGlyph::new("@".into(), false);
+        map.keys.get_mut(&46).unwrap()[0].dead = true;
+        let profile = KeyLegendLayout::System {
+            keymap: Arc::new(map),
+            english_first: false,
+        };
+        let restored: KeyLegendLayout =
+            serde_json::from_str(&serde_json::to_string(&profile).unwrap()).unwrap();
+        assert_eq!(profile, restored);
         assert_eq!(
-            windows_klid(0xf0010419, &[]),
-            Err(DetectionFailure::Unavailable)
+            crate::keycode::keycode_label_with_names_and_layout(0x1414, &[], &[], restored.clone()),
+            "@"
         );
-        let mut ambiguous = records;
-        ambiguous.push(("a0010419".into(), 1));
-        assert_eq!(
-            windows_klid(0xf0010419, &ambiguous),
-            Err(DetectionFailure::Ambiguous)
+        assert!(
+            crate::keycode::keycode_label_with_names_and_layout(46, &[], &[], restored)
+                .contains("◌´")
         );
-        assert_eq!(
-            windows_klid(0x12340419, &[]),
-            Err(DetectionFailure::Unsupported)
-        );
-        assert_eq!(windows_klid(0, &[]), Err(DetectionFailure::Unavailable));
     }
-
     #[test]
-    fn exact_windows_variants_and_automatic_order_are_distinct() {
+    fn samples_expire_and_layout_order_does_not_change_the_keymap() {
+        let layout = test_typewriter_layout(false);
+        let KeyLegendLayout::System { keymap, .. } = layout.clone() else {
+            panic!()
+        };
         let now = Instant::now();
         let sample = LayoutSample::new(
             LayoutObservation {
                 language: Some(1),
-                identity: NativeLayoutIdentity::Windows("00010419".into()),
+                identity: NativeLayoutIdentity::Mapped(keymap),
             },
             now,
             Duration::from_millis(100),
         );
-        assert_eq!(
-            sample.profile(now, true),
-            Ok(KeyLegendLayout::RussianTypewriterPrimary)
-        );
+        assert_eq!(sample.profile(now, true), Ok(layout.clone()));
+        assert_eq!(sample.profile(now, false), Ok(layout.toggled_order()));
         assert_eq!(
             sample.profile(now + Duration::from_secs(6), false),
             Err(DetectionFailure::Stale)
         );
-        assert_eq!(
-            NativeLayoutIdentity::Windows("custom-ru".into()).profile(),
-            Err(DetectionFailure::Unsupported)
-        );
     }
-
     #[test]
-    fn deadlines_expire_without_worker_progress_and_unchanged_queries_renew_them() {
-        for interval in [Duration::from_millis(100), Duration::from_secs(10)] {
-            let now = Instant::now();
-            let observation = LayoutObservation {
-                language: Some(0),
-                identity: NativeLayoutIdentity::Windows("00000409".into()),
-            };
-            let first = LayoutSample::new(observation.clone(), now, interval);
-            assert_eq!(
-                first.profile(first.valid_until, false),
-                Err(DetectionFailure::Stale)
-            );
-            let renewed = LayoutSample::new(observation, now + interval, interval);
-            assert_eq!(
-                renewed.profile(first.valid_until, true),
-                Ok(KeyLegendLayout::English)
-            );
-        }
+    fn windows_klids_accept_other_languages_and_still_reject_ambiguous_ids() {
+        assert_eq!(windows_klid(0x04070407, &[]), Ok("00000407".into()));
+        assert_eq!(
+            windows_klid(0xf0010419, &[("00010419".into(), 1)]),
+            Ok("00010419".into())
+        );
+        assert_eq!(
+            windows_klid(
+                0xf0010419,
+                &[("00010419".into(), 1), ("00020419".into(), 1)]
+            ),
+            Err(DetectionFailure::Ambiguous)
+        );
     }
 }

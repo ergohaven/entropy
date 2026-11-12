@@ -7,6 +7,69 @@ use image::{Rgba, RgbaImage};
 #[cfg(not(target_arch = "wasm32"))]
 use std::fmt::Write as _;
 
+/// Raster exports use the same installed-font fallback principle as egui.
+/// Cache resolved faces per export; most labels stay in the bundled font.
+#[cfg(not(target_arch = "wasm32"))]
+struct ExportFonts {
+    bundled: FontArc,
+    fallback: std::cell::RefCell<std::collections::HashMap<char, FontArc>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ExportFonts {
+    fn new() -> Self {
+        Self {
+            bundled: FontArc::try_from_slice(include_bytes!("../../assets/DejaVuSans.ttf"))
+                .expect("bundled export font"),
+            fallback: Default::default(),
+        }
+    }
+
+    fn for_char(&self, ch: char) -> FontArc {
+        if self.bundled.glyph_id(ch).0 != 0 {
+            return self.bundled.clone();
+        }
+        if let Some(face) = self.fallback.borrow().get(&ch) {
+            return face.clone();
+        }
+        let existing = self
+            .fallback
+            .borrow()
+            .values()
+            .find(|face| face.glyph_id(ch).0 != 0)
+            .cloned();
+        if let Some(face) = existing {
+            self.fallback.borrow_mut().insert(ch, face.clone());
+            return face;
+        }
+        static DATABASE: std::sync::OnceLock<fontdb::Database> = std::sync::OnceLock::new();
+        let database = DATABASE.get_or_init(|| {
+            let mut database = fontdb::Database::new();
+            database.load_system_fonts();
+            database
+        });
+        let face = database
+            .faces()
+            .find_map(|info| {
+                database
+                    .with_face_data(info.id, |bytes, index| {
+                        let face =
+                            ab_glyph::FontRef::try_from_slice_and_index(bytes, index).ok()?;
+                        if face.glyph_id(ch).0 == 0 {
+                            return None;
+                        }
+                        ab_glyph::FontVec::try_from_vec_and_index(bytes.to_vec(), index)
+                            .ok()
+                            .map(FontArc::new)
+                    })
+                    .flatten()
+            })
+            .unwrap_or_else(|| self.bundled.clone());
+        self.fallback.borrow_mut().insert(ch, face.clone());
+        face
+    }
+}
+
 const EXPORT_LAYOUT_UNIT: f32 = 74.0;
 const EXPORT_KEY_PADDING: f32 = 3.5;
 const EXPORT_MARGIN: f32 = 48.0;
@@ -129,7 +192,10 @@ fn export_theme_label(lang: crate::i18n::Language, theme: LayoutImageExportTheme
 fn export_key_legend_label(
     lang: crate::i18n::Language,
     key_legend_layout: KeyLegendLayout,
-) -> &'static str {
+) -> String {
+    if matches!(&key_legend_layout, KeyLegendLayout::System { .. }) {
+        return key_legend_layout.display_name(lang);
+    }
     match (lang, key_legend_layout) {
         (crate::i18n::Language::Russian, KeyLegendLayout::English) => "English",
         (crate::i18n::Language::English, KeyLegendLayout::English) => "English",
@@ -137,19 +203,9 @@ fn export_key_legend_label(
         (crate::i18n::Language::English, KeyLegendLayout::Russian) => "Russian: EN first",
         (crate::i18n::Language::Russian, KeyLegendLayout::RussianPrimary) => "Русская: RU сверху",
         (crate::i18n::Language::English, KeyLegendLayout::RussianPrimary) => "Russian: RU first",
-        (crate::i18n::Language::English, KeyLegendLayout::RussianTypewriter) => {
-            "Typewriter: EN first"
-        }
-        (crate::i18n::Language::English, KeyLegendLayout::RussianTypewriterPrimary) => {
-            "Typewriter: RU first"
-        }
-        (crate::i18n::Language::Russian, KeyLegendLayout::RussianTypewriter) => {
-            "Машинопись: EN сверху"
-        }
-        (crate::i18n::Language::Russian, KeyLegendLayout::RussianTypewriterPrimary) => {
-            "Машинопись: RU сверху"
-        }
+        (_, KeyLegendLayout::System { .. }) => unreachable!(),
     }
+    .to_owned()
 }
 
 fn layer_export_label(
@@ -372,18 +428,18 @@ fn draw_theme_dropdown(
     );
 }
 
-fn draw_key_legend_dropdown(
+pub(super) fn draw_key_legend_dropdown(
     ui: &mut egui::Ui,
     metrics: crate::ui_style::ResponsiveMetrics,
-    dark: bool,
+    _dark: bool,
     lang: crate::i18n::Language,
     selected_layout: &mut KeyLegendLayout,
 ) {
-    let dropdown_id = ui.make_persistent_id("layout_image_export_legends_dropdown");
-    let dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
+    let dropdown_id = ui.make_persistent_id("system_key_legends_dropdown");
+    let response = crate::ui_style::modern_dropdown_button_sized(
         ui,
         dropdown_id,
-        export_key_legend_label(lang, *selected_layout),
+        &selected_layout.display_name(lang),
         ui.visuals().text_color(),
         metrics.settings_control_width(),
         metrics.settings_control_height(),
@@ -392,63 +448,80 @@ fn draw_key_legend_dropdown(
     crate::ui_style::popup_below_widget(
         ui,
         dropdown_id,
-        &dropdown_resp,
+        &response,
         egui::PopupCloseBehavior::CloseOnClickOutside,
         |ui| {
-            ui.set_min_width(metrics.settings_control_width());
-            ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
-            for layout in [
-                KeyLegendLayout::English,
-                KeyLegendLayout::Russian,
-                KeyLegendLayout::RussianPrimary,
-                KeyLegendLayout::RussianTypewriter,
-                KeyLegendLayout::RussianTypewriterPrimary,
-            ] {
-                let selected = layout == *selected_layout;
-                let (option_rect, option_resp) =
-                    ui.allocate_exact_size(metrics.size(168.0, 28.0), Sense::click());
-                if option_resp.hovered() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                }
-                let option_fill = if selected {
-                    if dark {
-                        Color32::from_rgb(58, 58, 61)
-                    } else {
-                        Color32::from_rgb(236, 236, 238)
-                    }
-                } else if option_resp.hovered() {
-                    crate::ui_style::hover_fill(dark)
-                } else {
-                    Color32::TRANSPARENT
-                };
-                ui.painter().rect_filled(option_rect, 7.0, option_fill);
-                ui.painter().text(
-                    egui::pos2(
-                        option_rect.left() + metrics.value(10.0),
-                        option_rect.center().y,
-                    ),
-                    egui::Align2::LEFT_CENTER,
-                    export_key_legend_label(lang, layout),
-                    FontId::proportional(metrics.value(12.0)),
-                    if selected {
-                        ui.visuals().text_color()
-                    } else {
-                        app_muted_text(dark)
-                    },
-                );
-                if option_resp.clicked() {
-                    *selected_layout = layout;
+            let catalog_id = egui::Id::new("installed_legend_layout_catalog");
+            type Catalog = (
+                std::time::Instant,
+                Vec<crate::key_legend_detection::SystemLayoutDescriptor>,
+            );
+            let cached = ui
+                .ctx()
+                .data_mut(|data| data.get_temp::<Catalog>(catalog_id));
+            let catalog = if let Some((_, list)) =
+                cached.filter(|(at, _)| at.elapsed() < std::time::Duration::from_secs(10))
+            {
+                list
+            } else {
+                #[cfg(not(target_arch = "wasm32"))]
+                let mut list = crate::qmk_hid_host::installed_legend_layouts();
+                #[cfg(target_arch = "wasm32")]
+                let mut list = Vec::new();
+                list.sort_by_cached_key(|entry| entry.name.to_lowercase());
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(catalog_id, (std::time::Instant::now(), list.clone()))
+                });
+                list
+            };
+            let mut query = ui.ctx().data_mut(|data| {
+                data.get_temp::<String>(dropdown_id.with("search"))
+                    .unwrap_or_default()
+            });
+            ui.add(
+                egui::TextEdit::singleline(&mut query)
+                    .hint_text(crate::i18n::tr_catalog(lang, "ui.legend_search")),
+            );
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(dropdown_id.with("search"), query.clone()));
+            let query = query.to_lowercase();
+            egui::ScrollArea::vertical().max_height(metrics.value(300.0)).show(ui,|ui| {
+            for fallback in [KeyLegendLayout::English,KeyLegendLayout::Russian,KeyLegendLayout::RussianPrimary] {
+                let title = export_key_legend_label(lang, fallback.clone());
+                if !query.is_empty() && !title.to_lowercase().contains(&query) { continue; }
+                if ui.selectable_label(*selected_layout==fallback,title).clicked() {
+                    *selected_layout=fallback;
+                    ui.ctx().data_mut(|data|data.remove::<bool>(dropdown_id.with("failed")));
                     egui::Popup::close_all(ui.ctx());
                 }
+            }
+            ui.separator();
+            for entry in catalog.iter().filter(|entry|query.is_empty()||entry.name.to_lowercase().contains(&query)||entry.id.to_lowercase().contains(&query)) {
+                let selected = matches!(selected_layout,KeyLegendLayout::System{keymap,..} if keymap.id==entry.id);
+                if ui.selectable_label(selected,&entry.name).on_hover_text(&entry.id).clicked() {
+                    #[cfg(not(target_arch="wasm32"))]
+                    if let Some(keymap) = crate::qmk_hid_host::load_legend_layout(&entry.id) {
+                        *selected_layout=KeyLegendLayout::System{keymap,english_first:false};
+                        ui.ctx().data_mut(|data|data.remove::<bool>(dropdown_id.with("failed")));
+                        egui::Popup::close_all(ui.ctx());
+                    } else { ui.ctx().data_mut(|data|data.insert_temp(dropdown_id.with("failed"),true)); }
+                }
+            }
+        });
+            if ui
+                .ctx()
+                .data_mut(|data| data.get_temp::<bool>(dropdown_id.with("failed")))
+                .unwrap_or(false)
+            {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    crate::i18n::tr_catalog(lang, "ui.legend_unavailable"),
+                );
             }
         },
     );
 }
 
-/// File extension and picker filter label for a layout-image export format.
-/// Shared by the picker (spawn) and the writer so every format — PNG, SVG, and
-/// PDF — goes through the same async worker dialog and cannot silently diverge.
-#[cfg(not(target_arch = "wasm32"))]
 fn layout_image_export_descriptor(format: LayoutImageExportFormat) -> (&'static str, &'static str) {
     match format {
         LayoutImageExportFormat::Png => ("png", "PNG image"),
@@ -645,8 +718,12 @@ impl EntropyApp {
                     }
                 }
                 2 => {
-                    let before = self.app_settings.layout_image_export.key_legend_layout;
-                    let mut key_legend_layout = before;
+                    let before = self
+                        .app_settings
+                        .layout_image_export
+                        .key_legend_layout
+                        .clone();
+                    let mut key_legend_layout = before.clone();
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
                         content_width,
@@ -963,8 +1040,7 @@ impl EntropyApp {
         layout: &KeyboardLayout,
         selected_layers: &[usize],
     ) -> anyhow::Result<String> {
-        let font = FontArc::try_from_slice(include_bytes!("../../assets/DejaVuSans.ttf"))
-            .map_err(|_| anyhow::anyhow!("failed to load export font"))?;
+        let font = ExportFonts::new();
         let visible = self.export_visible_elements(layout);
         let geometry = self.export_layout_geometry(layout, selected_layers, &visible)?;
         let palette = geometry.palette;
@@ -1019,7 +1095,7 @@ impl EntropyApp {
     fn write_export_layer_svg(
         &self,
         svg: &mut String,
-        font: &FontArc,
+        font: &ExportFonts,
         layout: &KeyboardLayout,
         bounds: egui::Rect,
         layer_idx: usize,
@@ -1073,7 +1149,10 @@ impl EntropyApp {
                     &self.layer_names,
                     &self.keycode_picker.macro_names,
                     &self.keycode_picker.tap_dance_names,
-                    self.app_settings.layout_image_export.key_legend_layout,
+                    self.app_settings
+                        .layout_image_export
+                        .key_legend_layout
+                        .clone(),
                 )
             };
             if !label.is_empty() {
@@ -1081,7 +1160,10 @@ impl EntropyApp {
                     label_binding,
                     label,
                     self.app_settings.show_shifted_number_symbols,
-                    self.app_settings.layout_image_export.key_legend_layout,
+                    self.app_settings
+                        .layout_image_export
+                        .key_legend_layout
+                        .clone(),
                 );
                 write_key_label_svg(
                     svg,
@@ -1108,8 +1190,7 @@ impl EntropyApp {
         layout: &KeyboardLayout,
         selected_layers: &[usize],
     ) -> anyhow::Result<RgbaImage> {
-        let font = FontArc::try_from_slice(include_bytes!("../../assets/DejaVuSans.ttf"))
-            .map_err(|_| anyhow::anyhow!("failed to load export font"))?;
+        let font = ExportFonts::new();
         let visible = self.export_visible_elements(layout);
         let geometry = self.export_layout_geometry(layout, selected_layers, &visible)?;
         let palette = geometry.palette;
@@ -1182,7 +1263,7 @@ impl EntropyApp {
     fn draw_export_layer(
         &self,
         image: &mut RgbaImage,
-        font: &FontArc,
+        font: &ExportFonts,
         layout: &KeyboardLayout,
         bounds: egui::Rect,
         layer_idx: usize,
@@ -1245,7 +1326,10 @@ impl EntropyApp {
                     &self.layer_names,
                     &self.keycode_picker.macro_names,
                     &self.keycode_picker.tap_dance_names,
-                    self.app_settings.layout_image_export.key_legend_layout,
+                    self.app_settings
+                        .layout_image_export
+                        .key_legend_layout
+                        .clone(),
                 )
             };
             if !label.is_empty() {
@@ -1253,7 +1337,10 @@ impl EntropyApp {
                     label_binding,
                     label,
                     self.app_settings.show_shifted_number_symbols,
-                    self.app_settings.layout_image_export.key_legend_layout,
+                    self.app_settings
+                        .layout_image_export
+                        .key_legend_layout
+                        .clone(),
                 );
                 draw_key_label_export(
                     image,
@@ -1567,7 +1654,10 @@ fn export_encoder_press_label(
             &app.layer_names,
             &app.keycode_picker.macro_names,
             &app.keycode_picker.tap_dance_names,
-            app.app_settings.layout_image_export.key_legend_layout,
+            app.app_settings
+                .layout_image_export
+                .key_legend_layout
+                .clone(),
         )
         .replace('\n', " "),
         dimmed,
@@ -1597,7 +1687,7 @@ fn encoder_press_dividers(
 #[cfg(not(target_arch = "wasm32"))]
 fn draw_encoder_export(
     image: &mut RgbaImage,
-    font: &FontArc,
+    font: &ExportFonts,
     layout: &KeyboardLayout,
     layer_idx: usize,
     group: &ExportEncoderGroup,
@@ -1646,7 +1736,10 @@ fn draw_encoder_export(
             &app.layer_names,
             &app.keycode_picker.macro_names,
             &app.keycode_picker.tap_dance_names,
-            app.app_settings.layout_image_export.key_legend_layout,
+            app.app_settings
+                .layout_image_export
+                .key_legend_layout
+                .clone(),
         )
         .replace('\n', " ")
     };
@@ -1771,7 +1864,7 @@ fn write_rotated_rect_svg(
 #[cfg(not(target_arch = "wasm32"))]
 fn write_encoder_svg(
     svg: &mut String,
-    font: &FontArc,
+    font: &ExportFonts,
     layout: &KeyboardLayout,
     layer_idx: usize,
     group: &ExportEncoderGroup,
@@ -1820,7 +1913,10 @@ fn write_encoder_svg(
             &app.layer_names,
             &app.keycode_picker.macro_names,
             &app.keycode_picker.tap_dance_names,
-            app.app_settings.layout_image_export.key_legend_layout,
+            app.app_settings
+                .layout_image_export
+                .key_legend_layout
+                .clone(),
         )
         .replace('\n', " ")
     };
@@ -1914,7 +2010,7 @@ fn write_encoder_svg(
 #[cfg(not(target_arch = "wasm32"))]
 fn write_key_label_svg(
     svg: &mut String,
-    font: &FontArc,
+    font: &ExportFonts,
     rect: egui::Rect,
     rotation: f32,
     label: &str,
@@ -2047,7 +2143,7 @@ fn escape_xml_text(text: &str) -> String {
 #[cfg(not(target_arch = "wasm32"))]
 fn draw_key_label_export(
     image: &mut RgbaImage,
-    font: &FontArc,
+    font: &ExportFonts,
     rect: egui::Rect,
     rotation: f32,
     label: &str,
@@ -2132,7 +2228,7 @@ fn draw_key_label_export(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn fit_text_size(
-    font: &FontArc,
+    font: &ExportFonts,
     text: &str,
     base_size: f32,
     available_width: f32,
@@ -2147,17 +2243,19 @@ fn fit_text_size(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn measure_text(font: &FontArc, text: &str, size: f32) -> f32 {
-    let scaled = font.as_scaled(size);
+fn measure_text(font: &ExportFonts, text: &str, size: f32) -> f32 {
     text.chars()
-        .map(|ch| scaled.h_advance(font.glyph_id(ch)))
+        .map(|ch| {
+            let face = font.for_char(ch);
+            face.as_scaled(size).h_advance(face.glyph_id(ch))
+        })
         .sum()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn draw_text_centered_rotated(
     image: &mut RgbaImage,
-    font: &FontArc,
+    font: &ExportFonts,
     text: &str,
     center_x: f32,
     center_y: f32,
@@ -2168,17 +2266,17 @@ fn draw_text_centered_rotated(
     if text.trim().is_empty() {
         return;
     }
-    let scaled = font.as_scaled(size);
     let width = measure_text(font, text, size);
     let mut cursor_x = center_x - width * 0.5;
     let baseline_y = center_y + size * 0.36;
     let cos = rotation.cos();
     let sin = rotation.sin();
     for ch in text.chars() {
-        let glyph_id = font.glyph_id(ch);
-        let advance = scaled.h_advance(glyph_id);
+        let face = font.for_char(ch);
+        let glyph_id = face.glyph_id(ch);
+        let advance = face.as_scaled(size).h_advance(glyph_id);
         let glyph = glyph_id.with_scale_and_position(size, point(cursor_x, baseline_y));
-        if let Some(outlined) = font.outline_glyph(glyph) {
+        if let Some(outlined) = face.outline_glyph(glyph) {
             let bounds = outlined.px_bounds();
             outlined.draw(|x, y, coverage| {
                 let src_x = bounds.min.x + x as f32;
@@ -2336,6 +2434,20 @@ fn blend_pixel(image: &mut RgbaImage, x: i32, y: i32, color: Rgba<u8>, coverage:
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn installed_script_fonts_supply_raster_export_glyphs() {
+        let fonts = ExportFonts::new();
+        for ch in ['あ', 'ก'] {
+            assert_eq!(fonts.bundled.glyph_id(ch).0, 0);
+            let face = fonts.for_char(ch);
+            assert_ne!(face.glyph_id(ch).0, 0, "missing system fallback for {ch}");
+            assert!(face
+                .outline_glyph(face.glyph_id(ch).with_scale(24.0))
+                .is_some());
+        }
+    }
+
     #[test]
     fn automatic_editor_profile_cannot_change_explicit_export_glyphs() {
         let mut layout = KeyboardLayout::from_vial_json(&serde_json::json!({
@@ -2344,7 +2456,8 @@ mod tests {
         })).unwrap();
         layout.layers = vec![vec![0x001Eu16.into()]];
         let mut app = EntropyApp::new_inert_for_test();
-        app.app_settings.layout_image_export.key_legend_layout = KeyLegendLayout::RussianTypewriter;
+        app.app_settings.layout_image_export.key_legend_layout =
+            crate::key_legend_detection::test_typewriter_layout(true);
         let before_png = app.render_layout_image(&layout, &[0]).unwrap();
         let before_svg = app.render_layout_svg(&layout, &[0]).unwrap();
         app.app_settings.key_legend_mode = crate::key_legend_detection::LegendMode::FollowSystem;
@@ -2352,7 +2465,10 @@ mod tests {
         assert_eq!(app.key_legend_layout(), KeyLegendLayout::English);
         assert_eq!(app.render_layout_image(&layout, &[0]).unwrap().as_raw(), before_png.as_raw());
         assert_eq!(app.render_layout_svg(&layout, &[0]).unwrap(), before_svg);
-        assert!(app.render_layout_pdf(&layout, &[0]).unwrap().starts_with(b"%PDF-"));
+        assert!(app
+            .render_layout_pdf(&layout, &[0])
+            .unwrap()
+            .starts_with(b"%PDF-"));
         assert!(before_svg.contains('№'));
     }
 
@@ -2375,7 +2491,7 @@ mod tests {
         let mut app = EntropyApp::new_inert_for_test();
         app.app_settings.key_legend_layout = KeyLegendLayout::Russian;
         app.app_settings.layout_image_export.key_legend_layout =
-            KeyLegendLayout::RussianTypewriterPrimary;
+            crate::key_legend_detection::test_typewriter_layout(false);
         let png = app.render_layout_image(&layout, &[0, 1]).unwrap();
         let inherited = app.render_layout_image(&layout, &[1]).unwrap();
         assert!(png.width() > 500 && png.height() > inherited.height());
@@ -2400,8 +2516,14 @@ mod tests {
             crate::i18n::Language::Russian,
         ] {
             assert_ne!(
-                export_key_legend_label(lang, KeyLegendLayout::RussianTypewriter),
-                export_key_legend_label(lang, KeyLegendLayout::RussianTypewriterPrimary)
+                export_key_legend_label(
+                    lang,
+                    crate::key_legend_detection::test_typewriter_layout(true)
+                ),
+                export_key_legend_label(
+                    lang,
+                    crate::key_legend_detection::test_typewriter_layout(false)
+                )
             );
         }
     }

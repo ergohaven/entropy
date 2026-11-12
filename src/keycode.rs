@@ -24,7 +24,7 @@ pub fn gui_mod_name() -> &'static str {
     gui_name_for_target_os(std::env::consts::OS)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum KeyLegendLayout {
@@ -32,60 +32,86 @@ pub enum KeyLegendLayout {
     English,
     Russian,
     RussianPrimary,
-    RussianTypewriter,
-    RussianTypewriterPrimary,
+    System {
+        keymap: std::sync::Arc<crate::key_legend_detection::SystemKeymap>,
+        english_first: bool,
+    },
 }
 
 impl KeyLegendLayout {
-    pub const ALL: [KeyLegendLayout; 3] = [Self::English, Self::Russian, Self::RussianTypewriter];
-
-    pub fn family(self) -> Self {
+    pub fn family(&self) -> Self {
         match self {
             Self::RussianPrimary => Self::Russian,
-            Self::RussianTypewriterPrimary => Self::RussianTypewriter,
-            other => other,
+            Self::System { keymap, .. } => Self::System {
+                keymap: keymap.clone(),
+                english_first: false,
+            },
+            other => other.clone(),
         }
     }
 
-    fn russian_primary(self) -> bool {
-        matches!(self, Self::RussianPrimary | Self::RussianTypewriterPrimary)
+    fn russian_primary(&self) -> bool {
+        matches!(self, Self::RussianPrimary)
     }
 
-    fn is_typewriter(self) -> bool {
-        self.family() == Self::RussianTypewriter
-    }
-
-    pub fn i18n_key(self) -> &'static str {
+    pub fn i18n_key(&self) -> &'static str {
         match self {
             KeyLegendLayout::English => "ui.key_legends_english",
             KeyLegendLayout::Russian | KeyLegendLayout::RussianPrimary => "ui.key_legends_russian",
-            Self::RussianTypewriter | Self::RussianTypewriterPrimary => "ui.key_legends_typewriter",
+            Self::System { .. } => "ui.key_legends_system",
         }
     }
 
-    pub fn is_multilingual(self) -> bool {
+    pub fn display_name(&self, lang: crate::i18n::Language) -> String {
+        match self {
+            Self::System {
+                keymap,
+                english_first,
+            } => format!(
+                "{} · {}",
+                keymap.name,
+                crate::i18n::tr_catalog(
+                    lang,
+                    if *english_first {
+                        "ui.legend_us_first"
+                    } else {
+                        "ui.legend_system_first"
+                    }
+                )
+            ),
+            _ => crate::i18n::tr_catalog(lang, self.i18n_key()).to_owned(),
+        }
+    }
+
+    pub fn is_multilingual(&self) -> bool {
         !matches!(self, KeyLegendLayout::English)
     }
 
-    pub fn order_i18n_key(self) -> Option<&'static str> {
+    pub fn order_i18n_key(&self) -> Option<&'static str> {
         match self {
+            Self::System { english_first, .. } => Some(if *english_first {
+                "ui.legend_us_first"
+            } else {
+                "ui.legend_system_first"
+            }),
             KeyLegendLayout::English => None,
-            KeyLegendLayout::Russian | Self::RussianTypewriter => {
-                Some("main_menu.key_legends_english_first")
-            }
-            KeyLegendLayout::RussianPrimary | Self::RussianTypewriterPrimary => {
-                Some("main_menu.key_legends_russian_first")
-            }
+            KeyLegendLayout::Russian => Some("main_menu.key_legends_english_first"),
+            KeyLegendLayout::RussianPrimary => Some("main_menu.key_legends_russian_first"),
         }
     }
 
-    pub fn toggled_order(self) -> Self {
+    pub fn toggled_order(&self) -> Self {
         match self {
+            Self::System {
+                keymap,
+                english_first,
+            } => Self::System {
+                keymap: keymap.clone(),
+                english_first: !english_first,
+            },
             KeyLegendLayout::English => KeyLegendLayout::English,
             KeyLegendLayout::Russian => KeyLegendLayout::RussianPrimary,
             KeyLegendLayout::RussianPrimary => KeyLegendLayout::Russian,
-            Self::RussianTypewriter => Self::RussianTypewriterPrimary,
-            Self::RussianTypewriterPrimary => Self::RussianTypewriter,
         }
     }
 }
@@ -2241,13 +2267,27 @@ fn apply_key_legend_layout(
     label: String,
     key_legend_layout: KeyLegendLayout,
 ) -> String {
-    match key_legend_layout {
+    match &key_legend_layout {
+        KeyLegendLayout::System {
+            keymap,
+            english_first,
+        } => {
+            if let Some(mapped) = keymap.legend(value, *english_first, true) {
+                return mapped;
+            }
+            if (0x0100..0x5000).contains(&value) {
+                if let (Some((prefix, _)), Some(mapped)) = (
+                    label.split_once('\n'),
+                    keymap.legend(value & 0xff, *english_first, true),
+                ) {
+                    return format!("{prefix}\n{mapped}");
+                }
+            }
+            label
+        }
         KeyLegendLayout::English => label,
         KeyLegendLayout::Russian => russian_key_legend(value, false).unwrap_or(label),
         KeyLegendLayout::RussianPrimary => russian_key_legend(value, true).unwrap_or(label),
-        KeyLegendLayout::RussianTypewriter | KeyLegendLayout::RussianTypewriterPrimary => {
-            typewriter_key_legend(value, key_legend_layout).unwrap_or(label)
-        }
     }
 }
 
@@ -2365,44 +2405,6 @@ fn russian_key_legend(value: u16, russian_primary: bool) -> Option<String> {
     }
 }
 
-// Main-block legends from Microsoft's Russian (Typewriter), KLID 00010419:
-// https://learn.microsoft.com/en-us/globalization/keyboards/kbdru1.html
-// This is display data; host text output continues to use KeyOutputLayout.
-fn typewriter_glyphs(value: u16) -> Option<(char, char)> {
-    let pair = match value {
-        0x001E => ('№', '1'),
-        0x001F => ('-', '2'),
-        0x0020 => ('/', '3'),
-        0x0021 => ('"', '4'),
-        0x0022 => (':', '5'),
-        0x0023 => (',', '6'),
-        0x0024 => ('.', '7'),
-        0x0025 => ('_', '8'),
-        0x0026 => ('?', '9'),
-        0x0027 => ('%', '0'),
-        0x002D => ('!', '='),
-        0x002E => (';', '\\'),
-        0x0031 | 0x0032 | 0x0064 => (')', '('),
-        0x0035 => ('|', '+'),
-        0x0038 => ('ё', 'Ё'),
-        0x0004..=0x001D | 0x002F | 0x0030 | 0x0033 | 0x0034 | 0x0036 | 0x0037 => {
-            let (direct, shifted) = printable_output_for_hid(value, KeyOutputLayout::Russian)?;
-            (direct, shifted?)
-        }
-        _ => return None,
-    };
-    Some(pair)
-}
-
-pub(crate) fn legend_printable_glyphs(value: u16, layout: KeyLegendLayout) -> Option<(char, char)> {
-    if layout.is_typewriter() {
-        typewriter_glyphs(value)
-    } else {
-        let (direct, shift) = printable_output_for_hid(value, layout.into())?;
-        Some((direct, shift?))
-    }
-}
-
 fn ordered_glyphs(english: char, russian: char, layout: KeyLegendLayout) -> String {
     if layout == KeyLegendLayout::English || english == russian {
         english.to_string()
@@ -2416,17 +2418,22 @@ fn ordered_glyphs(english: char, russian: char, layout: KeyLegendLayout) -> Stri
 /// Number-row legends by HID identity, shared by the picker and device views.
 /// The extra Shift line is optional; Typewriter's direct symbols always remain.
 pub fn number_row_legend(value: u16, layout: KeyLegendLayout, shifted: bool) -> Option<String> {
+    if let KeyLegendLayout::System {
+        keymap,
+        english_first,
+    } = &layout
+    {
+        return (0x001E..=0x0027)
+            .contains(&value)
+            .then(|| keymap.legend(value, *english_first, shifted))
+            .flatten();
+    }
     if !(0x001E..=0x0027).contains(&value) {
         return None;
     }
     let (english, english_shift) = printable_output_for_hid(value, KeyOutputLayout::English)?;
-    let (russian, russian_shift) = if layout.is_typewriter() {
-        let (direct, shift) = typewriter_glyphs(value)?;
-        (direct, Some(shift))
-    } else {
-        printable_output_for_hid(value, KeyOutputLayout::Russian)?
-    };
-    let direct = ordered_glyphs(english, russian, layout);
+    let (russian, russian_shift) = printable_output_for_hid(value, KeyOutputLayout::Russian)?;
+    let direct = ordered_glyphs(english, russian, layout.clone());
     if shifted {
         Some(format!(
             "{}\n{direct}",
@@ -2435,36 +2442,6 @@ pub fn number_row_legend(value: u16, layout: KeyLegendLayout, shifted: bool) -> 
     } else {
         Some(direct)
     }
-}
-
-fn typewriter_key_legend(value: u16, layout: KeyLegendLayout) -> Option<String> {
-    if let Some(base) = shift_wrapped_base_keycode(value) {
-        let (_, english) = printable_output_for_hid(base, KeyOutputLayout::English)?;
-        let (_, russian) = typewriter_glyphs(base)?;
-        return Some(shifted_symbol_legend(
-            &english?.to_string(),
-            &russian.to_string(),
-            layout.russian_primary(),
-        ));
-    }
-    if let Some(label) = number_row_legend(value, layout, false) {
-        return Some(label);
-    }
-    let (english, english_shift) = printable_output_for_hid(value, KeyOutputLayout::English)?;
-    let (russian, russian_shift) = typewriter_glyphs(value)?;
-    let russian = russian.to_uppercase().next()?;
-    if english.is_alphabetic() {
-        return Some(shifted_symbol_legend(
-            &english.to_ascii_uppercase().to_string(),
-            &russian.to_string(),
-            layout.russian_primary(),
-        ));
-    }
-    Some(format!(
-        "{}\n{}",
-        ordered_glyphs(english_shift?, russian_shift, layout),
-        ordered_glyphs(english, russian, layout)
-    ))
 }
 
 /// Keyboard layout selected in the operating system, i.e. what the host
@@ -2483,11 +2460,8 @@ pub enum KeyOutputLayout {
 impl From<KeyLegendLayout> for KeyOutputLayout {
     fn from(legend: KeyLegendLayout) -> Self {
         match legend {
-            KeyLegendLayout::English => Self::English,
-            KeyLegendLayout::Russian
-            | KeyLegendLayout::RussianPrimary
-            | KeyLegendLayout::RussianTypewriter
-            | KeyLegendLayout::RussianTypewriterPrimary => Self::Russian,
+            KeyLegendLayout::System { .. } | KeyLegendLayout::English => Self::English,
+            KeyLegendLayout::Russian | KeyLegendLayout::RussianPrimary => Self::Russian,
         }
     }
 }
@@ -2528,7 +2502,10 @@ fn tap_base_keycode(value: u16) -> u16 {
     value
 }
 
-fn printable_output_for_hid(keycode: u16, layout: KeyOutputLayout) -> Option<(char, Option<char>)> {
+pub(crate) fn printable_output_for_hid(
+    keycode: u16,
+    layout: KeyOutputLayout,
+) -> Option<(char, Option<char>)> {
     if let Some(index) = keycode.checked_sub(0x0004).filter(|index| *index < 26) {
         let letter = match layout {
             KeyOutputLayout::English => char::from(b'a' + index as u8),
@@ -3024,43 +3001,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn typewriter_glyph_fixtures_cover_letters_and_punctuation() {
-        for (i, ru) in "фисвуапршолдьтщзйкыегмцчня".chars().enumerate() {
-            assert_eq!(
-                typewriter_glyphs(4 + i as u16),
-                Some((ru, ru.to_uppercase().next().unwrap()))
-            );
-        }
-        for (value, direct, shifted) in [
-            (0x002D, '!', '='),
-            (0x002E, ';', '\\'),
-            (0x002F, 'х', 'Х'),
-            (0x0030, 'ъ', 'Ъ'),
-            (0x0031, ')', '('),
-            (0x0032, ')', '('),
-            (0x0033, 'ж', 'Ж'),
-            (0x0034, 'э', 'Э'),
-            (0x0035, '|', '+'),
-            (0x0036, 'б', 'Б'),
-            (0x0037, 'ю', 'Ю'),
-            (0x0038, 'ё', 'Ё'),
-            (0x0064, ')', '('),
-        ] {
-            assert_eq!(
-                typewriter_glyphs(value),
-                Some((direct, shifted)),
-                "{value:04x}"
-            );
-        }
-        for value in [0, 1, 0x28, 0x59, 0x7E00] {
-            assert_eq!(
-                typewriter_key_legend(value, KeyLegendLayout::RussianTypewriter),
-                None
-            );
-        }
-    }
-
-    #[test]
     fn number_row_profiles_keep_direct_glyphs_when_shift_line_is_hidden() {
         for (value, en, ru, en_shift, ru_shift) in [
             (0x1E, '1', '№', '!', '1'),
@@ -3076,18 +3016,18 @@ mod tests {
         ] {
             for (layout, direct, shift) in [
                 (
-                    KeyLegendLayout::RussianTypewriter,
+                    crate::key_legend_detection::test_typewriter_layout(true),
                     format!("{en}  {ru}"),
                     format!("{en_shift}  {ru_shift}"),
                 ),
                 (
-                    KeyLegendLayout::RussianTypewriterPrimary,
+                    crate::key_legend_detection::test_typewriter_layout(false),
                     format!("{ru}  {en}"),
                     format!("{ru_shift}  {en_shift}"),
                 ),
             ] {
                 assert_eq!(
-                    number_row_legend(value, layout, false),
+                    number_row_legend(value, layout.clone(), false),
                     Some(direct.clone())
                 );
                 assert_eq!(
@@ -3113,72 +3053,18 @@ mod tests {
             Some("!\n1")
         );
         assert_eq!(
-            number_row_legend(0x59, KeyLegendLayout::RussianTypewriter, true),
+            number_row_legend(
+                0x59,
+                crate::key_legend_detection::test_typewriter_layout(true),
+                true
+            ),
             None
         );
     }
 
     #[test]
-    fn typewriter_legends_follow_the_windows_main_block() {
-        let layout: KeyLegendLayout =
-            serde_json::from_str("\"russian_typewriter_primary\"").unwrap();
-        // Independent fixtures from Microsoft's Russian (Typewriter), KLID 00010419.
-        for (value, direct, shifted) in [
-            (0x001E, "№  1", "1\n!"),
-            (0x001F, "-  2", "2\n@"),
-            (0x0020, "/  3", "3\n#"),
-            (0x0021, "\"  4", "4\n$"),
-            (0x0022, ":  5", "5\n%"),
-            (0x0023, ",  6", "6\n^"),
-            (0x0024, ".  7", "7\n&"),
-            (0x0025, "_  8", "8\n*"),
-            (0x0026, "?  9", "9\n("),
-            (0x0027, "%  0", "0\n)"),
-        ] {
-            assert_eq!(
-                keycode_label_with_names_and_layout(value, &[], &[], layout),
-                direct
-            );
-            assert_eq!(
-                keycode_label_with_names_and_layout(value | 0x0200, &[], &[], layout),
-                shifted
-            );
-            assert_eq!(
-                keycode_label_with_names_and_layout(value | 0x1200, &[], &[], layout),
-                shifted
-            );
-        }
-        for (value, expected) in [
-            (0x002D, "=  _\n!  -"),
-            (0x002E, "\\  +\n;  ="),
-            (0x0031, "(  |\n)  \\"),
-            (0x0032, "(  ~\n)  #"),
-            (0x0035, "+  ~\n|  `"),
-            (0x0064, "(  |\n)  \\"),
-            (0x0038, "Ё  ?\nЁ  /"),
-        ] {
-            assert_eq!(
-                keycode_label_with_names_and_layout(value, &[], &[], layout),
-                expected,
-                "{value:04x}"
-            );
-        }
-        assert_eq!(
-            keycode_label_with_names_and_layout(0x0004, &[], &[], layout),
-            "Ф\nA"
-        );
-        assert_eq!(KeyOutputLayout::from(layout), KeyOutputLayout::Russian);
-    }
-
-    #[test]
     fn legend_profiles_preserve_serialized_names_and_order() {
-        for name in [
-            "english",
-            "russian",
-            "russian_primary",
-            "russian_typewriter",
-            "russian_typewriter_primary",
-        ] {
+        for name in ["english", "russian", "russian_primary"] {
             let json = format!("\"{name}\"");
             let layout: KeyLegendLayout = serde_json::from_str(&json).unwrap();
             assert_eq!(serde_json::to_string(&layout).unwrap(), json);

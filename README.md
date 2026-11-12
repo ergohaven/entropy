@@ -48,37 +48,40 @@ and firmware settings from one coherent interface.
 
 ### Key legends
 
-In application settings, **Legend mode → Manual** lets you select English,
-English + Russian, or English + Typewriter. **Follow system** matches an exact
-supported OS source and uses **Manual fallback** while detection is pending,
-unavailable, unsupported, or expired. Manual is the default. The active profile
-or fallback reason appears in settings; hover it to inspect the native identity.
+In application settings, **Legend mode → Manual** lets you search and select a
+keyboard layout installed on the computer. **Follow system** reads the active
+layout. Both use the OS mapping at physical USB key positions, including Shift,
+AltGr/Option, and dead-key legends (marked with `◌`). Russian Typewriter, French
+AZERTY, German QWERTZ, Dvorak, and other standard layouts use the same mechanism;
+there is no per-language allowlist.
 
-A matched English source displays English-only legends. Matched Russian sources
-use a separately saved EN/RU order; switching through English keeps that choice.
-The device menu's order control edits that automatic order only while a bilingual
-source is matched. Edit fallback legends in settings. Detection works without a
-connected keyboard and independently of firmware layout synchronization.
+Manual is the default. The built-in English and Russian legends remain available
+as fallbacks. When automatic detection is pending, unavailable, or expired,
+Entropy displays the saved manual selection and explains the reason in settings.
+The order control chooses whether US or selected-layout legends appear first.
+Automatic mode saves that preference independently of the manual selection.
 
-Russian Typewriter uses the [Windows Russian (Typewriter) mapping](https://learn.microsoft.com/en-us/globalization/keyboards/kbdru1)
-on Windows, Linux, and macOS. Legend selection changes display only. It does not
-change key assignments, OS input sources, text output, or firmware EN/RU data.
-Image export (including headless export) has its own saved profile. The Shift-symbol
-option hides the extra number-row line while retaining Typewriter's direct symbols.
-
-Automatic detection has deliberately narrow coverage:
-
-| Platform/source | Matching boundary |
+| Platform | Available sources |
 | --- | --- |
-| Windows | Foreground-thread built-in US (`00000409`), Russian (`00000419`), and Russian Typewriter (`00010419`); custom or ambiguous HKLs fall back. Native Windows switching/focus acceptance remains unverified. |
-| macOS | Current TIS source, with actual direct/Shift glyph comparison qualified by keyboard type. Captured US ANSI (type 40) matches. Captured Russian PC, native Russian, and US ISO differ from the catalog and fall back. Live source notifications and hidden-window behavior still need native UI acceptance. |
-| Native X11, including KDE X11 | Compiled keymap and active group, cross-checked against available rules metadata. Xvfb/XKB 2.35.1 fixtures match `us`, `ru`, and `ru(typewriter)` on `pc104`; differing ISO positions, unknown components/options, or custom printable remaps fall back. Desktop-session acceptance remains unverified. |
-| GNOME/IBus | Descriptor layout, variant, and options are retained. Matching falls back until native tests establish that the global engine follows the actual selected source, including pass-through engines. |
-| KDE Wayland / other Wayland | Variant evidence is unavailable; use the manual fallback. XWayland is never used as compositor evidence. |
+| Windows | Loaded Windows keyboard layouts; automatic mode reads the foreground application's thread layout. |
+| macOS | Installed TIS keyboard layouts; automatic mode reads the current input source's Unicode layout, or its underlying keyboard layout for an input method. |
+| Linux X11 | Installed XKB layouts and variants for manual selection; automatic mode reads the compiled server keymap and active group, including custom remaps. |
+| GNOME/IBus | Automatic mode compiles the active engine's XKB layout, variant, and options. Input methods without a standard XKB description use the manual fallback. |
+| KDE Wayland | Automatic mode combines KDE's active layout with its configured XKB layout, variant, and options. |
+| Other Wayland sessions | Manual selection from installed XKB layouts; automatic mode uses the manual fallback when the compositor does not expose its active keymap. XWayland is not used as compositor evidence. |
 
-OS per-application policies matter: focusing Entropy may select a different source.
-Detection never activates a source. Additional native mappings that differ from
-the static catalog require separate profiles.
+Legend selection changes display only: it does not activate an OS layout, change
+key assignments, typed output, or firmware EN/RU synchronization. OS per-application
+input-source policies still apply when focusing Entropy. Input-method composition
+and candidate text are outside keyboard-layout legends.
+
+Image export (including headless export) has its own saved selection. Manual and
+export selections include a mapping snapshot, so they remain usable if the source
+is removed or settings move to another OS. Re-select an installed source to refresh
+that snapshot. UI and raster exports use installed fonts for glyphs missing from
+the bundled font; the corresponding script font must be installed. SVG keeps
+Unicode text for the viewer's font fallback. The Shift-symbol option hides the
+extra number-row line while retaining the layout's direct symbols.
 
 ## Platforms
 
