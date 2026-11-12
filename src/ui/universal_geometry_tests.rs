@@ -51,15 +51,15 @@ fn texts(shape: &egui::Shape, out: &mut Vec<String>) {
 }
 
 #[test]
-fn universal_geometry_does_not_take_over_rynk_layout_options_or_live_ui() {
+fn universal_geometry_rynk_appears_in_live_integrations() {
     let ctx = egui::Context::default();
     let mut app = app_with_geometry(&ctx);
     app.layout.as_mut().unwrap().firmware = FirmwareProtocol::Rynk;
     let layout = app.layout.as_ref().unwrap();
     assert_eq!(
         app.user_layout_option_indices(layout),
-        vec![0],
-        "Vial-only geometry relocation hid an existing Rynk option"
+        Vec::<usize>::new(),
+        "geometry belongs with Universal Symbols on both protocols"
     );
     let output = crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |ui| {
         app.draw_live_features_settings_page(ui, ui.max_rect());
@@ -69,7 +69,7 @@ fn universal_geometry_does_not_take_over_rynk_layout_options_or_live_ui() {
         texts(&shape.shape, &mut rendered);
     }
     assert!(
-        !rendered.iter().any(|s| s == "Universal Symbols"),
+        rendered.iter().any(|s| s == "Universal Symbols"),
         "{rendered:?}"
     );
 }
@@ -134,23 +134,26 @@ fn universal_geometry_follows_layout_sync_even_when_sync_disabled() {
 }
 
 #[test]
-fn universal_geometry_keeps_live_menu_available_for_vial_without_host_data() {
-    let ctx = egui::Context::default();
-    let mut app = app_with_geometry(&ctx);
-    app.device_manager
-        .replace_devices(vec![crate::device::Device {
-            name: "Test".into(),
-            vendor_id: 0x1209,
-            product_id: 0x2327,
-            manufacturer: "Entropy".into(),
-            serial_number: "test".into(),
-            bus_type: "Usb".into(),
-            path: "geometry-test".into(),
-            instance_token: String::new(),
-            firmware: FirmwareProtocol::Vial,
-        }]);
-    app.selected_device = Some(0);
-    assert!(app.live_features_available_for_selected_device());
+fn universal_geometry_keeps_live_menu_available_for_both_protocols_without_host_data() {
+    for protocol in [FirmwareProtocol::Vial, FirmwareProtocol::Rynk] {
+        let ctx = egui::Context::default();
+        let mut app = app_with_geometry(&ctx);
+        app.layout.as_mut().unwrap().firmware = protocol;
+        app.device_manager
+            .replace_devices(vec![crate::device::Device {
+                name: "Test".into(),
+                vendor_id: 0x1209,
+                product_id: 0x2327,
+                manufacturer: "Entropy".into(),
+                serial_number: "test".into(),
+                bus_type: "Usb".into(),
+                path: "geometry-test".into(),
+                instance_token: String::new(),
+                firmware: protocol,
+            }]);
+        app.selected_device = Some(0);
+        assert!(app.live_features_available_for_selected_device());
+    }
 }
 
 #[test]
