@@ -272,6 +272,7 @@ impl EntropyApp {
         // As RMK's Vial connect reported them: caps word on, no layer lock or
         // alt repeat; Repeat is there when its keycode maps.
         let vial_features = VialFeatureSupport {
+            universal_macros: false,
             caps_word: true,
             layer_lock: false,
             persistent_default_layer: true,

@@ -759,6 +759,7 @@ set_as_permanent_base_layer = "Сделать постоянным базовы�
 hold_activate_layer_tap_keycode_set_key_via_right_click_afterwards = "Hold активирует слой, tap отправляет keycode; сначала выберите слой, потом tap-клавишу"
 hold_actions_are_limited_to_left_right_modifiers_and_layers = "Hold-действия могут использовать обычные клавиши, shortcuts, мышь/медиа, пользовательские коды клавиш, модификаторы и слои"
 tap_then_hold_actions_are_limited_to_left_right_modifiers_and_layers = "Tap-then-hold действия могут использовать обычные клавиши, shortcuts, мышь/медиа, пользовательские коды клавиш, модификаторы и слои"
+hold_macro_runs_on_release = "Макрос выбранного удержания выполнится при отпускании клавиши."
 left_control = "Левый Control"
 right_control = "Правый Control"
 left_shift = "Левый Shift"

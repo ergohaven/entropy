@@ -398,7 +398,7 @@ impl KeycodePicker {
     pub(super) fn show_macro_slot_grid(
         &mut self,
         ui: &mut egui::Ui,
-        selected_macro: u8,
+        selected_macro: Option<u8>,
         grid_id: &'static str,
     ) -> Option<u8> {
         let slot_count = self.macro_count.min(u8::MAX as usize + 1);
@@ -425,7 +425,7 @@ impl KeycodePicker {
                         .show(ui, |ui| {
                             for i in 0..slot_count {
                                 let i = i as u8;
-                                let is_active = i == selected_macro;
+                                let is_active = Some(i) == selected_macro;
                                 let has_content = self.macro_has_content(i as usize);
                                 let display_name = self.macro_display_name(i as usize);
                                 let description = self.macro_description(i as usize);
@@ -949,13 +949,22 @@ impl KeycodePicker {
                                             MacroAction::Tap(keycode)
                                             | MacroAction::Down(keycode)
                                             | MacroAction::Up(keycode) => {
-                                                let button_label =
-                                                    keycode_label_with_names_and_layout(
-                                                        *keycode,
-                                                        &custom_pairs,
-                                                        &self.layer_names,
-                                                        self.key_legend_layout,
-                                                    );
+                                                let button_label = (self.supports_universal_macros
+                                                    && *keycode & 0xFF00 == 0x7E00)
+                                                    .then(|| {
+                                                        crate::universal_symbols::label_for_user_id(
+                                                            *keycode as u8,
+                                                        )
+                                                    })
+                                                    .flatten()
+                                                    .unwrap_or_else(|| {
+                                                        keycode_label_with_names_and_layout(
+                                                            *keycode,
+                                                            &custom_pairs,
+                                                            &self.layer_names,
+                                                            self.key_legend_layout,
+                                                        )
+                                                    });
                                                 let response =
                                                     crate::ui_style::modern_button_with_font(
                                                         ui,
@@ -1384,7 +1393,7 @@ impl KeycodePicker {
             .color(Color32::from_gray(150)),
         );
         ui.add_space(4.0);
-        if let Some(picked) = self.show_macro_slot_grid(ui, selected, "macro_grid_picker") {
+        if let Some(picked) = self.show_macro_slot_grid(ui, Some(selected), "macro_grid_picker") {
             self.assign_macro_slot(picked);
         }
     }
@@ -1393,6 +1402,237 @@ impl KeycodePicker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn macro_tap_hold_slots_are_selectable_in_both_views() {
+        use rmk_types::action::{Action, KeyAction};
+        use rmk_types::modifier::ModifierCombination;
+        for view in [PickerViewMode::Layout, PickerViewMode::List] {
+            for (base, hold) in [
+                (0x3100, Action::Modifier(ModifierCombination::RCTRL)),
+                (0x4300, Action::LayerOn(3)),
+            ] {
+                let ctx = egui::Context::default();
+                let mut picker = KeycodePicker {
+                    open: true,
+                    popup_view_mode: view,
+                    supports_rmk_native_key_actions: true,
+                    rmk_native_key_actions_allowed_for_target: true,
+                    vial_quantum_pending_mt: Some(base),
+                    macro_count: 8,
+                    ..Default::default()
+                };
+                let _ = macro_picker_frame(&mut picker, &ctx, vec![]);
+                let mut output = macro_picker_frame(&mut picker, &ctx, vec![]);
+                let mut pos = macro_picker_text_position(&output, "M5");
+                for _ in 0..16 {
+                    if pos.is_some() {
+                        break;
+                    }
+                    output = macro_picker_frame(
+                        &mut picker,
+                        &ctx,
+                        vec![
+                            egui::Event::PointerMoved(egui::pos2(550.0, 550.0)),
+                            egui::Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Point,
+                                delta: egui::vec2(0.0, -300.0),
+                                modifiers: egui::Modifiers::NONE,
+                                phase: egui::TouchPhase::Move,
+                                source: egui::MouseWheelSource::Unknown,
+                            },
+                        ],
+                    );
+                    pos = macro_picker_text_position(&output, "M5");
+                }
+                macro_picker_click(&mut picker, &ctx, pos.expect("tap macro choice"));
+                assert_eq!(
+                    picker.result,
+                    Some(
+                        KeyAction::TapHold(Action::TriggerMacro(5), hold, Default::default())
+                            .into()
+                    )
+                );
+                assert!(!picker.open);
+                assert!(picker.vial_quantum_pending_mt.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn tap_dance_hold_macros_are_selectable_in_both_views() {
+        for view in [PickerViewMode::Layout, PickerViewMode::List] {
+            for field in [1, 3] {
+                let ctx = egui::Context::default();
+                let mut picker = KeycodePicker {
+                    popup_view_mode: view,
+                    supports_rmk_native_key_actions: true,
+                    supports_rmk_native_tap_dance_actions: true,
+                    td_key_pick: Some((0, field)),
+                    tap_dance_entries: vec![TapDanceEntry::default()],
+                    macro_count: 1,
+                    ..Default::default()
+                };
+                let _ = macro_picker_frame(&mut picker, &ctx, vec![]);
+                let mut output = macro_picker_frame(&mut picker, &ctx, vec![]);
+                let mut pos = macro_picker_text_position(&output, "M0");
+                for _ in 0..16 {
+                    if pos.is_some() {
+                        break;
+                    }
+                    output = macro_picker_frame(
+                        &mut picker,
+                        &ctx,
+                        vec![
+                            egui::Event::PointerMoved(egui::pos2(550.0, 550.0)),
+                            egui::Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Point,
+                                delta: egui::vec2(0.0, -300.0),
+                                modifiers: egui::Modifiers::NONE,
+                                phase: egui::TouchPhase::Move,
+                                source: egui::MouseWheelSource::Unknown,
+                            },
+                        ],
+                    );
+                    pos = macro_picker_text_position(&output, "M0");
+                }
+                macro_picker_click(&mut picker, &ctx, pos.expect("hold macro choice"));
+                let entry = &picker.tap_dance_entries[0];
+                assert_eq!(
+                    if field == 1 {
+                        entry.on_hold
+                    } else {
+                        entry.on_tap_hold
+                    },
+                    0x7700.into()
+                );
+                assert!(picker.tap_dance_dirty);
+                assert!(picker.td_key_pick.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn native_universal_macro_choices_select_and_round_trip_in_both_views() {
+        for view in [PickerViewMode::Layout, PickerViewMode::List] {
+            let ctx = egui::Context::default();
+            let mut picker = KeycodePicker {
+                popup_view_mode: view,
+                supports_universal_macros: true,
+                supports_universal_symbols: true,
+                supports_universal_russian_letters: true,
+                macro_key_pick: Some((0, 0)),
+                macro_actions: vec![vec![MacroAction::Tap(4)]],
+                ..Default::default()
+            };
+            let _ = macro_picker_frame(&mut picker, &ctx, vec![]);
+            let output = macro_picker_frame(&mut picker, &ctx, vec![]);
+            let pos = macro_picker_text_position(&output, "EN").expect("native EN macro choice");
+            macro_picker_click(&mut picker, &ctx, pos);
+            assert_eq!(picker.macro_actions[0], [MacroAction::Tap(0x7E82)]);
+            assert_eq!(picker.macro_texts[0], [1, 5, 0x82, 0x7E]);
+            assert_eq!(
+                decode_macro_actions(&picker.macro_texts[0]),
+                picker.macro_actions[0]
+            );
+            assert!(picker.macros_dirty);
+            assert!(picker.macro_key_pick.is_none());
+        }
+    }
+
+    #[test]
+    fn universal_macro_actions_are_only_offered_as_taps() {
+        for view in [PickerViewMode::Layout, PickerViewMode::List] {
+            for action in [MacroAction::Down(4), MacroAction::Up(4)] {
+                let ctx = egui::Context::default();
+                let mut picker = KeycodePicker {
+                    popup_view_mode: view,
+                    supports_universal_macros: true,
+                    supports_universal_symbols: true,
+                    macro_key_pick: Some((0, 0)),
+                    macro_actions: vec![vec![action.clone()]],
+                    ..Default::default()
+                };
+                let _ = macro_picker_frame(&mut picker, &ctx, vec![]);
+                let output = macro_picker_frame(&mut picker, &ctx, vec![]);
+                assert!(macro_picker_text_position(&output, "EN").is_none());
+                picker.set_macro_key_pick_value(0, 0, 0x7E82);
+                assert_eq!(picker.macro_actions[0], [action]);
+                assert_eq!(picker.macro_key_pick, Some((0, 0)));
+                assert!(!picker.macros_dirty);
+            }
+        }
+    }
+
+    #[test]
+    fn native_universal_macro_choices_require_firmware_capability() {
+        let mut picker = KeycodePicker {
+            supports_universal_symbols: true,
+            macro_actions: vec![vec![MacroAction::Tap(4)]],
+            ..Default::default()
+        };
+        assert!(picker
+            .macro_universal_key_choices(MacroKeyPickKind::Tap)
+            .is_empty());
+        picker.set_macro_key_pick_value(0, 0, 0x7E82);
+        assert_eq!(picker.macro_actions[0], [MacroAction::Tap(4)]);
+        picker.supports_universal_macros = true;
+        let choices = picker.macro_universal_key_choices(MacroKeyPickKind::Tap);
+        assert!(choices.iter().any(|(value, _, _)| *value == 0x7E82));
+        assert!(!choices.iter().any(|(value, _, _)| *value == 0x7EB0));
+        picker.set_macro_key_pick_value(0, 0, 0x7EB0);
+        assert_eq!(picker.macro_actions[0], [MacroAction::Tap(4)]);
+        picker.supports_macro_ext_keycodes = false;
+        assert!(picker
+            .macro_universal_key_choices(MacroKeyPickKind::Tap)
+            .is_empty());
+    }
+
+    #[test]
+    fn numero_is_not_a_supported_macro_choice_even_with_keymap_capability() {
+        for numero in [false, true] {
+            let picker = KeycodePicker {
+                supports_universal_numero: numero,
+                supports_universal_macros: true,
+                supports_universal_symbols: true,
+                supports_universal_russian_letters: true,
+                ..Default::default()
+            };
+            let choices = picker.macro_universal_key_choices(MacroKeyPickKind::Tap);
+            assert!(!choices.iter().any(|(value, _, _)| *value == 0x7EB4));
+            for supported in [0x7E82, 0x7E90, 0x7EB3] {
+                assert!(choices.iter().any(|(value, _, _)| *value == supported));
+            }
+        }
+    }
+
+    #[test]
+    fn numero_macro_assignment_is_rejected_without_changing_existing_bytes() {
+        for numero in [false, true] {
+            for action in [
+                MacroAction::Tap(4),
+                MacroAction::Down(4),
+                MacroAction::Up(4),
+            ] {
+                let mut picker = KeycodePicker {
+                    supports_universal_numero: numero,
+                    supports_universal_macros: true,
+                    supports_universal_symbols: true,
+                    supports_universal_russian_letters: true,
+                    macro_actions: vec![vec![action.clone()]],
+                    macro_key_pick: Some((0, 0)),
+                    ..Default::default()
+                };
+                picker.encode_macro(0);
+                let bytes = picker.macro_texts.clone();
+                picker.set_macro_key_pick_value(0, 0, 0x7EB4);
+                assert_eq!(picker.macro_actions[0], [action]);
+                assert_eq!(picker.macro_texts, bytes);
+                assert_eq!(picker.macro_key_pick, Some((0, 0)));
+                assert!(!picker.macros_dirty);
+            }
+        }
+    }
 
     fn macro_picker_frame(
         picker: &mut KeycodePicker,

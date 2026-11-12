@@ -1300,6 +1300,7 @@ impl EntropyApp {
                     (0, 0, 0, 0, 0)
                 };
                 let vial_features = VialFeatureSupport {
+                    universal_macros: rmk_native_capabilities.universal_macros,
                     caps_word: dynamic_feature_bits & (1 << 0) != 0,
                     layer_lock: dynamic_feature_bits & (1 << 1) != 0,
                     persistent_default_layer: vial_protocol >= 5,

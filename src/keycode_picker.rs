@@ -164,6 +164,7 @@ pub struct KeycodePicker {
     pub supports_layer_lock: bool,
     pub supports_persistent_default_layer: bool,
     pub supports_macro_ext_keycodes: bool,
+    pub supports_universal_macros: bool,
     pub supports_rmk_native_key_actions: bool,
     pub supports_universal_numero: bool,
     pub supports_universal_symbols: bool,
@@ -182,6 +183,8 @@ pub struct KeycodePicker {
     // Pending key selection for Mod+Key and Mod-Tap actions
     pub vial_quantum_pending_mod: Option<u16>,
     pub vial_quantum_pending_mt: Option<u16>,
+    /// Original native hold and timing while retargeting only its tap action.
+    pub(crate) native_tap_hold_retarget: Option<crate::keyboard::KeyBinding>,
     pub vial_layer_pending: Option<u16>,
     pub regular_key_pick: bool,
     pub regular_key_pick_allow_mod_key: bool,
@@ -875,6 +878,72 @@ mod tests {
     }
 
     #[test]
+    fn macros_can_be_tap_actions_without_truncating_the_slot() {
+        use rmk_types::action::{Action, KeyAction};
+        use rmk_types::modifier::ModifierCombination;
+        for (base, hold) in [
+            (0x3100, Action::Modifier(ModifierCombination::RCTRL)),
+            (0x4300, Action::LayerOn(3)),
+        ] {
+            let mut picker = KeycodePicker {
+                supports_rmk_native_key_actions: true,
+                rmk_native_key_actions_allowed_for_target: true,
+                ..Default::default()
+            };
+            picker.finish_quantum_pending_key(base, 0x7705, true);
+            let action = KeyAction::TapHold(Action::TriggerMacro(5), hold, Default::default());
+            assert_eq!(picker.result, Some(action.into()));
+            assert_eq!(
+                crate::rmk_native::rmk_macro_tap_hold_parts(action),
+                Some((0x7705, base))
+            );
+            picker.select_tab_for_binding(action.into());
+            assert_eq!(picker.selected_tab, KeycodeTab::Modifiers);
+        }
+    }
+
+    #[test]
+    fn macro_tap_hold_requires_native_support_for_the_target() {
+        for (supported, allowed) in [(false, false), (true, false), (false, true)] {
+            let mut picker = KeycodePicker {
+                open: true,
+                vial_quantum_pending_mt: Some(0x2100),
+                supports_rmk_native_key_actions: supported,
+                rmk_native_key_actions_allowed_for_target: allowed,
+                ..Default::default()
+            };
+            picker.finish_quantum_pending_key(0x2100, 0x7705, true);
+            assert!(picker.result.is_none());
+            assert!(picker.open);
+            assert_eq!(picker.vial_quantum_pending_mt, Some(0x2100));
+        }
+    }
+
+    #[test]
+    fn retargeting_macro_layer_tap_to_a_shifted_key_keeps_the_layer() {
+        use rmk_types::action::{Action, KeyAction};
+        use rmk_types::keycode::HidKeyCode;
+        use rmk_types::modifier::ModifierCombination;
+        let mut picker = KeycodePicker {
+            supports_rmk_native_key_actions: true,
+            rmk_native_key_actions_allowed_for_target: true,
+            ..Default::default()
+        };
+        picker.finish_quantum_pending_key(0x4300, 0x0222, true);
+        assert_eq!(
+            picker.result,
+            Some(
+                KeyAction::TapHold(
+                    Action::KeyWithModifier(HidKeyCode::from(0x22), ModifierCombination::LSHIFT),
+                    Action::LayerOn(3),
+                    Default::default(),
+                )
+                .into()
+            )
+        );
+    }
+
+    #[test]
     fn shifted_mod_tap_uses_lossless_rmk_action_when_supported() {
         use rmk_types::action::{Action, KeyAction};
         use rmk_types::keycode::HidKeyCode;
@@ -930,6 +999,101 @@ mod tests {
         );
 
         assert_eq!(picker.selected_tab, KeycodeTab::Modifiers);
+    }
+
+    #[test]
+    fn native_tap_hold_retarget_preserves_profile_for_macro_and_shifted_taps() {
+        use crate::keyboard::{KeyBinding, VialMorseProfile};
+        use rmk_types::action::Action;
+        use rmk_types::keycode::HidKeyCode;
+        use rmk_types::modifier::ModifierCombination;
+        let hold = Action::LayerOn(3);
+        let profile = VialMorseProfile {
+            raw: (1u64 << 45) | 180,
+            index: 7,
+        };
+        for (value, tap) in [
+            (0x7706, Action::TriggerMacro(6)),
+            (
+                0x0222,
+                Action::KeyWithModifier(HidKeyCode::from(0x22), ModifierCombination::LSHIFT),
+            ),
+        ] {
+            let mut picker = KeycodePicker {
+                supports_rmk_native_key_actions: true,
+                rmk_native_key_actions_allowed_for_target: true,
+                vial_quantum_pending_mt: Some(0x4300),
+                native_tap_hold_retarget: Some(KeyBinding::VialTapHold {
+                    tap: Action::TriggerMacro(5),
+                    hold,
+                    profile,
+                }),
+                ..Default::default()
+            };
+            picker.finish_quantum_pending_key(0x4300, value, true);
+            assert_eq!(
+                picker.result,
+                Some(KeyBinding::VialTapHold { tap, hold, profile })
+            );
+            assert!(picker.native_tap_hold_retarget.is_none());
+        }
+    }
+
+    #[test]
+    fn cancelled_native_tap_hold_retarget_does_not_leak_into_a_new_binding() {
+        use crate::keyboard::{KeyBinding, VialMorseProfile};
+        use rmk_types::action::{Action, KeyAction};
+        for escape in [false, true] {
+            let mut picker = KeycodePicker {
+                open: true,
+                vial_quantum_pending_mt: Some(0x4300),
+                native_tap_hold_retarget: Some(KeyBinding::VialTapHold {
+                    tap: Action::TriggerMacro(5),
+                    hold: Action::LayerOn(3),
+                    profile: VialMorseProfile {
+                        raw: (1u64 << 45) | 180,
+                        index: 7,
+                    },
+                }),
+                ..Default::default()
+            };
+            if escape {
+                let ctx = egui::Context::default();
+                let _ = ctx.run_ui(
+                    egui::RawInput {
+                        events: vec![egui::Event::Key {
+                            key: Key::Escape,
+                            physical_key: Some(Key::Escape),
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                        ..Default::default()
+                    },
+                    |_ui| picker.show_pending_picker(&ctx),
+                );
+            } else {
+                picker.close_from_backdrop();
+            }
+            assert!(picker.native_tap_hold_retarget.is_none());
+            assert!(picker.result.is_none());
+            picker.open_full_key_picker(KeycodeTab::Modifiers);
+            picker.supports_rmk_native_key_actions = true;
+            picker.rmk_native_key_actions_allowed_for_target = true;
+            picker.vial_quantum_pending_mt = Some(0x4200);
+            picker.finish_quantum_pending_key(0x4200, 0x7706, true);
+            assert_eq!(
+                picker.result,
+                Some(
+                    KeyAction::TapHold(
+                        Action::TriggerMacro(6),
+                        Action::LayerOn(2),
+                        Default::default(),
+                    )
+                    .into()
+                )
+            );
+        }
     }
 
     #[test]
@@ -1240,6 +1404,7 @@ impl Default for KeycodePicker {
             supports_layer_lock: true,
             supports_persistent_default_layer: true,
             supports_macro_ext_keycodes: true,
+            supports_universal_macros: false,
             supports_rmk_native_key_actions: false,
             supports_universal_numero: false,
             supports_universal_symbols: false,
@@ -1255,6 +1420,7 @@ impl Default for KeycodePicker {
             layer_has_content: vec![true; 16],
             vial_quantum_pending_mod: None,
             vial_quantum_pending_mt: None,
+            native_tap_hold_retarget: None,
             vial_layer_pending: None,
             regular_key_pick: false,
             regular_key_pick_allow_mod_key: false,
@@ -1373,6 +1539,20 @@ impl KeycodePicker {
         } else {
             value
         };
+        // Numero's ordinary-key capability does not extend the macro codec.
+        if value == 0x7EB4 {
+            return;
+        }
+        if matches!(value, 0x7E80..=0x7E84 | 0x7E90..=0x7EB3)
+            && (!self.supports_universal_macros
+                || !self.supports_universal_symbols
+                || self.macro_key_pick_kind(macro_idx, action_idx) != Some(MacroKeyPickKind::Tap))
+        {
+            return;
+        }
+        if matches!(value, 0x7EB0..=0x7EB3) && !self.supports_universal_russian_letters {
+            return;
+        }
         if !self.supports_macro_ext_keycodes && value >= 0x0100 {
             return;
         }
@@ -1392,6 +1572,45 @@ impl KeycodePicker {
         self.macro_key_pick = None;
         self.macro_mod_key_pick = None;
         self.advanced_slot_picker = None;
+    }
+
+    fn macro_universal_key_choices(&self, kind: MacroKeyPickKind) -> Vec<(u16, String, String)> {
+        if kind != MacroKeyPickKind::Tap
+            || !self.supports_universal_macros
+            || !self.supports_universal_symbols
+            || !self.supports_macro_ext_keycodes
+        {
+            return Vec::new();
+        }
+        crate::universal_symbols::CONTROLS
+            .iter()
+            .map(|item| item.user_id)
+            .chain(
+                crate::universal_symbols::SYMBOLS
+                    .iter()
+                    .map(|item| item.user_id),
+            )
+            .chain(
+                crate::universal_symbols::RUSSIAN_LETTERS
+                    .iter()
+                    .filter(|_| self.supports_universal_russian_letters)
+                    .map(|item| item.user_id),
+            )
+            // Match the firmware macro aliases, independently of keymap support.
+            .filter(|id| matches!(id, 0x80..=0x84 | 0x90..=0xB3))
+            .map(|id| {
+                let label = crate::universal_symbols::label_for_user_id(id).unwrap();
+                let tooltip = crate::universal_symbols::tooltip(
+                    crate::universal_symbols::binding(id).rmk_action().unwrap(),
+                )
+                .unwrap();
+                (
+                    0x7E00 | u16::from(id),
+                    label,
+                    crate::i18n::tr_text(self.language, &tooltip),
+                )
+            })
+            .collect()
     }
 
     fn macro_layer_key_choices(&self, kind: MacroKeyPickKind) -> Vec<(u16, String, String)> {
@@ -1455,32 +1674,55 @@ impl KeycodePicker {
     }
 
     fn finish_quantum_pending_key(&mut self, base: u16, key_value: u16, is_mt: bool) {
-        let binding = if is_mt
-            && (0x0100..0x2000).contains(&key_value)
+        let is_macro = (0x7700..=0x77FF).contains(&key_value);
+        let native_tap_hold = is_mt
             && self.supports_rmk_native_key_actions
-            && self.rmk_native_key_actions_allowed_for_target
+            && self.rmk_native_key_actions_allowed_for_target;
+        if is_mt && (is_macro || self.native_tap_hold_retarget.is_some()) && !native_tap_hold {
+            return;
+        }
+        let binding = if native_tap_hold
+            && (self.native_tap_hold_retarget.is_some()
+                || is_macro
+                || (0x0100..0x2000).contains(&key_value))
         {
+            use crate::keyboard::KeyBinding;
             use rmk_types::action::{Action, KeyAction};
             use rmk_types::keycode::HidKeyCode;
             use rmk_types::modifier::ModifierCombination;
-
-            KeyAction::TapHold(
+            let tap = if is_macro {
+                Action::TriggerMacro((key_value - 0x7700) as u8)
+            } else {
                 Action::KeyWithModifier(
                     HidKeyCode::from((key_value & 0x00FF) as u8),
                     ModifierCombination::from_packed_bits((key_value >> 8) as u8),
-                ),
-                Action::Modifier(ModifierCombination::from_packed_bits(
-                    ((base >> 8) & 0x1F) as u8,
-                )),
-                Default::default(),
-            )
-            .into()
+                )
+            };
+            match self.native_tap_hold_retarget {
+                Some(KeyBinding::VialTapHold { hold, profile, .. }) => {
+                    KeyBinding::VialTapHold { tap, hold, profile }
+                }
+                Some(KeyBinding::Rmk(KeyAction::TapHold(_, hold, profile))) => {
+                    KeyAction::TapHold(tap, hold, profile).into()
+                }
+                _ => {
+                    let hold = if base & 0xF000 == 0x4000 {
+                        Action::LayerOn(((base >> 8) & 0x0F) as u8)
+                    } else {
+                        Action::Modifier(ModifierCombination::from_packed_bits(
+                            ((base >> 8) & 0x1F) as u8,
+                        ))
+                    };
+                    KeyAction::TapHold(tap, hold, Default::default()).into()
+                }
+            }
         } else {
             crate::keyboard::KeyBinding::Vial(base | key_value)
         };
         self.result = Some(binding);
         self.vial_quantum_pending_mod = None;
         self.vial_quantum_pending_mt = None;
+        self.native_tap_hold_retarget = None;
         self.open = false;
     }
 
@@ -1503,6 +1745,7 @@ impl KeycodePicker {
         self.regular_mod_key_pick = None;
         self.vial_quantum_pending_mod = None;
         self.vial_quantum_pending_mt = None;
+        self.native_tap_hold_retarget = None;
         self.vial_layer_pending = None;
         self.advanced_slot_picker = None;
         self.macro_key_pick = None;
@@ -1522,6 +1765,7 @@ impl KeycodePicker {
         self.search.reset();
         self.vial_quantum_pending_mod = None;
         self.vial_quantum_pending_mt = None;
+        self.native_tap_hold_retarget = None;
         self.vial_layer_pending = None;
         self.advanced_slot_picker = None;
         self.rmk_native_key_actions_allowed_for_target = false;
@@ -1544,6 +1788,7 @@ impl KeycodePicker {
         self.search.reset();
         self.vial_quantum_pending_mod = None;
         self.vial_quantum_pending_mt = None;
+        self.native_tap_hold_retarget = None;
         self.vial_layer_pending = None;
         self.rmk_native_key_actions_allowed_for_target = false;
         self.value_policy = PickerValuePolicy::Any;
@@ -1768,6 +2013,10 @@ impl KeycodePicker {
                     .macro_key_pick_kind(macro_idx, action_idx)
                     .map(|kind| self.macro_layer_key_choices(kind))
                     .unwrap_or_default();
+                let universal_choices = self
+                    .macro_key_pick_kind(macro_idx, action_idx)
+                    .map(|kind| self.macro_universal_key_choices(kind))
+                    .unwrap_or_default();
                 let supports_macro_ext_keycodes = self.supports_macro_ext_keycodes;
                 let key_choices: Vec<&'static crate::keycode::Keycode> = KEYCODES
                     .iter()
@@ -1783,6 +2032,24 @@ impl KeycodePicker {
                     .max_height(key_picker_popup_scroll_height(popup_size))
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        if self.macro_key_pick.is_some()
+                            && pending_mod_key.is_none()
+                            && !universal_choices.is_empty()
+                        {
+                            if let Some(value) = show_grouped_popup_choice_buttons(
+                                ui,
+                                vec![(
+                                    tr_picker(
+                                        self.language,
+                                        "key_picker.section_universal_symbols",
+                                    ),
+                                    universal_choices,
+                                )],
+                                self.language,
+                            ) {
+                                self.set_macro_key_pick_value(macro_idx, action_idx, value);
+                            }
+                        }
                         if self.macro_key_pick.is_some()
                             && pending_mod_key.is_none()
                             && supports_macro_ext_keycodes
@@ -2034,6 +2301,7 @@ impl KeycodePicker {
                         self.search.reset();
                         self.vial_quantum_pending_mod = None;
                         self.vial_quantum_pending_mt = None;
+                        self.native_tap_hold_retarget = None;
                         self.vial_layer_pending = None;
                     }
                 }
@@ -2448,6 +2716,7 @@ impl KeycodePicker {
                     if *key == egui::Key::Escape {
                         self.vial_quantum_pending_mod = None;
                         self.vial_quantum_pending_mt = None;
+                        self.native_tap_hold_retarget = None;
                         self.open = false;
                         return;
                     }
@@ -2457,6 +2726,11 @@ impl KeycodePicker {
                             if self.pending_quantum_key_supported(keycode, is_mt) {
                                 if let Some(base) = pending {
                                     self.finish_quantum_pending_key(base, qmk, is_mt);
+                                    if self.vial_quantum_pending_mod.is_none()
+                                        && self.vial_quantum_pending_mt.is_none()
+                                    {
+                                        return;
+                                    }
                                 }
                             }
                         }
@@ -2464,6 +2738,10 @@ impl KeycodePicker {
                 }
             }
         });
+
+        if self.vial_quantum_pending_mod.is_none() && self.vial_quantum_pending_mt.is_none() {
+            return;
+        }
 
         if let Some(base) = pending {
             let title_key = if is_mt {
@@ -2559,11 +2837,28 @@ impl KeycodePicker {
                         {
                             self.finish_quantum_pending_key(base, value, is_mt);
                         }
+                        if is_mt
+                            && self.supports_macro
+                            && self.supports_rmk_native_key_actions
+                            && self.rmk_native_key_actions_allowed_for_target
+                        {
+                            ui.label(tr_picker(self.language, "macro_editor.title"));
+                            if let Some(slot) =
+                                self.show_macro_slot_grid(ui, None, "tap_hold_macros")
+                            {
+                                self.finish_quantum_pending_key(
+                                    base,
+                                    0x7700 + u16::from(slot),
+                                    true,
+                                );
+                            }
+                        }
                     });
             });
             if !still_open {
                 self.vial_quantum_pending_mod = None;
                 self.vial_quantum_pending_mt = None;
+                self.native_tap_hold_retarget = None;
                 self.open = false;
             }
         }
