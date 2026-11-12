@@ -448,8 +448,20 @@ fn parse_app_settings_fields(
     })
 }
 
-fn apply_app_settings_migrations(settings: &mut AppSettings, settings_data: Option<&str>) {
+pub(super) fn apply_app_settings_migrations(
+    settings: &mut AppSettings,
+    settings_data: Option<&str>,
+) {
     let settings_fields = parse_app_settings_fields(settings_data);
+    if !settings_fields
+        .as_ref()
+        .is_some_and(|fields| fields.contains_key("automatic_legend_russian_first"))
+    {
+        settings.automatic_legend_russian_first = matches!(
+            settings.key_legend_layout,
+            KeyLegendLayout::RussianPrimary | KeyLegendLayout::RussianTypewriterPrimary
+        );
+    }
     let has_close_behavior = settings_fields
         .as_ref()
         .is_some_and(|fields| fields.contains_key("close_to_tray_behavior"));
@@ -467,6 +479,37 @@ fn apply_app_settings_migrations(settings: &mut AppSettings, settings_data: Opti
     }
 }
 
+#[cfg(test)]
+mod automatic_legend_settings_tests {
+    use super::*;
+    use crate::key_legend_detection::LegendMode;
+
+    #[test]
+    fn legacy_legend_settings_stay_manual_and_seed_automatic_order_only_once() {
+        for (layout, russian_first) in [
+            (KeyLegendLayout::English, false),
+            (KeyLegendLayout::Russian, false),
+            (KeyLegendLayout::RussianPrimary, true),
+            (KeyLegendLayout::RussianTypewriterPrimary, true),
+        ] {
+            let legacy = serde_json::json!({ "key_legend_layout": layout }).to_string();
+            let mut restored: AppSettings = serde_json::from_str(&legacy).unwrap();
+            apply_app_settings_migrations(&mut restored, Some(&legacy));
+            assert_eq!(restored.key_legend_mode, LegendMode::Manual);
+            assert_eq!(restored.automatic_legend_russian_first, russian_first);
+            assert_eq!(restored.layout_image_export.key_legend_layout, layout);
+            restored.key_legend_mode = LegendMode::FollowSystem;
+            restored.automatic_legend_russian_first = !russian_first;
+            let saved = serde_json::to_string(&restored).unwrap();
+            let mut reloaded: AppSettings = serde_json::from_str(&saved).unwrap();
+            apply_app_settings_migrations(&mut reloaded, Some(&saved));
+            assert_eq!(reloaded.key_legend_mode, LegendMode::FollowSystem);
+            assert_eq!(reloaded.automatic_legend_russian_first, !russian_first);
+            assert_eq!(reloaded.key_legend_layout, layout);
+            assert_eq!(reloaded.layout_image_export.key_legend_layout, layout);
+        }
+    }
+}
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PictogramFile {

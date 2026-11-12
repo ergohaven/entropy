@@ -129,6 +129,10 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) key_legend_layout: KeyLegendLayout,
     #[serde(default)]
+    pub(crate) key_legend_mode: crate::key_legend_detection::LegendMode,
+    #[serde(default)]
+    pub(crate) automatic_legend_russian_first: bool,
+    #[serde(default)]
     pub(crate) layout_image_export: LayoutImageExportState,
     #[serde(default)]
     pub(crate) standby_background_scale: StandbyBackgroundScale,
@@ -270,6 +274,8 @@ impl Default for AppSettings {
             encoder_hover_enlarge: default_encoder_hover_enlarge(),
             show_made_by_signature: default_show_made_by_signature(),
             key_legend_layout: KeyLegendLayout::default(),
+            key_legend_mode: crate::key_legend_detection::LegendMode::Manual,
+            automatic_legend_russian_first: false,
             layout_image_export: LayoutImageExportState::default(),
             standby_background_scale: StandbyBackgroundScale::default(),
             standby_background_source_path: None,
@@ -5402,6 +5408,10 @@ pub(crate) const LAYOUT_TOP_RESERVED_H: f32 = 32.0_f32 + 4.0_f32 + 68.0_f32;
 pub(crate) const LAYOUT_BOTTOM_RESERVED_H: f32 = 76.0_f32;
 
 pub struct EntropyApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) legend_subscription: Option<crate::qmk_hid_host::LegendLayoutSubscription>,
+    pub(crate) legend_sample: Option<crate::key_legend_detection::LayoutSample>,
+    pub(crate) legend_detected: Result<KeyLegendLayout, crate::key_legend_detection::DetectionFailure>,
     pub(crate) device_manager: DeviceManager,
     pub(crate) selected_device: Option<usize>,
     pub(crate) selected_layer: usize,

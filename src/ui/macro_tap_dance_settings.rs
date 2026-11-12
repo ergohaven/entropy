@@ -15,7 +15,7 @@ impl EntropyApp {
     pub(super) fn draw_macro_settings_page(&mut self, ui: &mut egui::Ui, content_rect: egui::Rect) {
         let lang = self.app_settings.language;
         self.keycode_picker.language = lang;
-        self.keycode_picker.key_legend_layout = self.app_settings.key_legend_layout;
+        self.keycode_picker.key_legend_layout = self.key_legend_layout();
         self.draw_advanced_action_editor_page(
             ui,
             content_rect,
@@ -42,7 +42,7 @@ impl EntropyApp {
     ) {
         let lang = self.app_settings.language;
         self.keycode_picker.language = lang;
-        self.keycode_picker.key_legend_layout = self.app_settings.key_legend_layout;
+        self.keycode_picker.key_legend_layout = self.key_legend_layout();
         self.draw_advanced_action_editor_page(
             ui,
             content_rect,

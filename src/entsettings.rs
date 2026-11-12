@@ -12,6 +12,7 @@ struct EntSettingsFile {
     version: u16,
     created_by: String,
     created_at: String,
+    #[serde(deserialize_with = "deserialize_app_settings")]
     settings: AppSettings,
     #[serde(default)]
     text_expander_extra_files: Vec<EntSettingsTextExpanderRuleFile>,
@@ -23,6 +24,15 @@ struct EntSettingsTextExpanderRuleFile {
     rules: Vec<crate::text_expander::TextExpansionRule>,
 }
 
+fn deserialize_app_settings<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<AppSettings, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let raw = value.to_string();
+    let mut settings = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+    apply_app_settings_migrations(&mut settings, Some(&raw));
+    Ok(settings)
+}
 #[cfg(not(target_arch = "wasm32"))]
 struct EntSettingsStoragePaths {
     app_settings: PathBuf,
@@ -215,6 +225,7 @@ impl EntropyApp {
 
         write_entsettings_files(&writes, language)?;
         self.app_settings = settings;
+        self.update_key_legends(ctx);
         crate::ui_style::set_accent(self.app_settings.accent_color.color());
         ctx.set_zoom_factor(self.app_settings.ui_scale);
         self.sticky_layout_last_size = None;
@@ -407,6 +418,20 @@ mod tests {
         ));
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn legacy_settings_bundle_migrates_legend_order_and_missing_export_block() {
+        let bundle: EntSettingsFile = serde_json::from_value(serde_json::json!({
+            "format": ENTSETTINGS_FORMAT, "version": 1, "created_by": "Entropy", "created_at": "",
+            "settings": { "key_legend_layout": "russian_typewriter_primary" },
+        })).unwrap();
+        assert_eq!(bundle.settings.key_legend_mode, crate::key_legend_detection::LegendMode::Manual);
+        assert!(bundle.settings.automatic_legend_russian_first);
+        assert_eq!(bundle.settings.layout_image_export.key_legend_layout, KeyLegendLayout::RussianTypewriterPrimary);
+        let restored: EntSettingsFile = serde_json::from_str(&serde_json::to_string(&bundle).unwrap()).unwrap();
+        assert_eq!(restored.settings.key_legend_layout, KeyLegendLayout::RussianTypewriterPrimary);
+        assert!(restored.settings.automatic_legend_russian_first);
     }
 
     #[test]

@@ -2337,6 +2337,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn automatic_editor_profile_cannot_change_explicit_export_glyphs() {
+        let mut layout = KeyboardLayout::from_vial_json(&serde_json::json!({
+            "name": "Independent export", "matrix": {"rows": 1, "cols": 1},
+            "layouts": {"keymap": [["0,0"]]},
+        })).unwrap();
+        layout.layers = vec![vec![0x001Eu16.into()]];
+        let mut app = EntropyApp::new_inert_for_test();
+        app.app_settings.layout_image_export.key_legend_layout = KeyLegendLayout::RussianTypewriter;
+        let before_png = app.render_layout_image(&layout, &[0]).unwrap();
+        let before_svg = app.render_layout_svg(&layout, &[0]).unwrap();
+        app.app_settings.key_legend_mode = crate::key_legend_detection::LegendMode::FollowSystem;
+        app.legend_detected = Ok(KeyLegendLayout::English);
+        assert_eq!(app.key_legend_layout(), KeyLegendLayout::English);
+        assert_eq!(app.render_layout_image(&layout, &[0]).unwrap().as_raw(), before_png.as_raw());
+        assert_eq!(app.render_layout_svg(&layout, &[0]).unwrap(), before_svg);
+        assert!(app.render_layout_pdf(&layout, &[0]).unwrap().starts_with(b"%PDF-"));
+        assert!(before_svg.contains('№'));
+    }
+
+    #[test]
     fn typewriter_export_keeps_its_own_profile_and_inherited_bindings() {
         let values: Vec<u16> = (0x001E..=0x0027)
             .chain([0x002D, 0x002E, 0x0031, 0x0035, 0x0038, 0x0064])

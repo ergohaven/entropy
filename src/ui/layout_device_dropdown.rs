@@ -71,7 +71,7 @@ impl EntropyApp {
                 .data(|d| d.get_temp::<bool>(dropdown_id))
                 .unwrap_or(false);
             let device_count = self.device_manager.devices().len();
-            let show_key_legend_switcher = self.app_settings.key_legend_layout.is_multilingual();
+            let show_key_legend_switcher = self.key_legend_order_profile().is_some();
             // Rows in drawing order: the device list (or its placeholder) |
             // key legend order, layer operations, show/hide keys | import, export, image
             // (native builds only) | layout indicator, about device.
@@ -99,7 +99,7 @@ impl EntropyApp {
                     .collect()
             };
             if show_key_legend_switcher {
-                if let Some(order_key) = self.app_settings.key_legend_layout.order_i18n_key() {
+                if let Some(order_key) = self.key_legend_order_profile().and_then(KeyLegendLayout::order_i18n_key) {
                     device_menu_labels.push(crate::i18n::tr_catalog(lang, order_key).to_owned());
                 }
             }
@@ -238,7 +238,7 @@ impl EntropyApp {
                     top_dropdown_divider(ui, dropdown_size.x - 16.0);
                     if show_key_legend_switcher {
                         if let Some(order_key) =
-                            self.app_settings.key_legend_layout.order_i18n_key()
+                            self.key_legend_order_profile().and_then(KeyLegendLayout::order_i18n_key)
                         {
                             let order_label = crate::i18n::tr_catalog(lang, order_key);
                             if top_dropdown_icon_item(
@@ -251,8 +251,7 @@ impl EntropyApp {
                             )
                             .clicked()
                             {
-                                self.app_settings.key_legend_layout =
-                                    self.app_settings.key_legend_layout.toggled_order();
+                                self.toggle_key_legend_order();
                                 save_app_settings(&self.app_settings);
                                 ctx.request_repaint();
                             }

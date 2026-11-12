@@ -41,6 +41,9 @@ use pictogram_origin::LEGACY_NAME_LOOKUPS;
 #[path = "app_init.rs"]
 mod app_init;
 
+#[path = "app_key_legends.rs"]
+mod app_key_legends;
+
 #[path = "app_storage.rs"]
 mod app_storage;
 use app_storage::*;

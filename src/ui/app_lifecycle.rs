@@ -1797,6 +1797,7 @@ impl eframe::App for EntropyApp {
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.update_key_legends(ctx);
         #[cfg(not(target_arch = "wasm32"))]
         {
             #[cfg(target_os = "windows")]
@@ -2376,7 +2377,7 @@ impl eframe::App for EntropyApp {
 
         if !self.unlock_open && !self.vial_unlock_polling {
             self.keycode_picker.language = self.app_settings.language;
-            self.keycode_picker.key_legend_layout = self.app_settings.key_legend_layout;
+            self.keycode_picker.key_legend_layout = self.key_legend_layout();
             self.keycode_picker.show_shifted_number_symbols =
                 self.app_settings.show_shifted_number_symbols;
             let macro_data_state = self.picker_macro_data_state();

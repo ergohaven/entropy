@@ -524,7 +524,7 @@ impl EntropyApp {
                                     &self.layer_names,
                                     &self.keycode_picker.macro_names,
                                     &self.keycode_picker.tap_dance_names,
-                                    self.app_settings.key_legend_layout,
+                                    self.key_legend_layout(),
                                 )
                             };
                             let hover_label = button_label.replace('\n', " ");
@@ -578,7 +578,7 @@ impl EntropyApp {
                                 &self.layer_names,
                                 &self.keycode_picker.macro_names,
                                 &self.keycode_picker.tap_dance_names,
-                                self.app_settings.key_legend_layout,
+                                self.key_legend_layout(),
                             )
                         };
                         let hover_label = button_label.replace('\n', " ");

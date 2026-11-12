@@ -106,6 +106,10 @@ impl EntropyApp {
 
         Self {
             #[cfg(not(target_arch = "wasm32"))]
+            legend_subscription: None,
+            legend_sample: None,
+            legend_detected: Err(crate::key_legend_detection::DetectionFailure::Pending),
+            #[cfg(not(target_arch = "wasm32"))]
             hid_device: None,
             #[cfg(not(target_arch = "wasm32"))]
             shared_hid_output: None,

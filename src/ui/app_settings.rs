@@ -1,6 +1,124 @@
 use super::*;
 
 impl EntropyApp {
+    fn draw_legend_detection_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        row: usize,
+        width: f32,
+        height: f32,
+        metrics: crate::ui_style::ResponsiveMetrics,
+        suppress_tooltips: bool,
+    ) {
+        use crate::key_legend_detection::LegendMode;
+        let lang = self.app_settings.language;
+        let label = match row {
+            1 => "ui.legend_mode",
+            3 => "ui.legend_active",
+            _ => "ui.legend_order",
+        };
+        let help = crate::i18n::tr_catalog(lang, "ui.legend_detection_help");
+        let mut changed = false;
+        crate::ui_style::settings_list_row_with_tooltip(
+            ui,
+            width,
+            height,
+            crate::i18n::tr_catalog(lang, label),
+            true,
+            (!suppress_tooltips).then_some(help),
+            metrics.settings_control_width(),
+            |ui| {
+                if row == 1 {
+                    let id = ui.make_persistent_id("legend_mode");
+                    let mode = self.app_settings.key_legend_mode;
+                    let title = crate::i18n::tr_catalog(
+                        lang,
+                        if mode == LegendMode::Manual {
+                            "ui.legend_manual"
+                        } else {
+                            "ui.legend_follow_system"
+                        },
+                    );
+                    let response = crate::ui_style::modern_dropdown_button_sized(
+                        ui,
+                        id,
+                        title,
+                        ui.visuals().text_color(),
+                        metrics.settings_control_width(),
+                        metrics.settings_control_height(),
+                        metrics.settings_control_font_size(),
+                    );
+                    crate::ui_style::popup_below_widget(
+                        ui,
+                        id,
+                        &response,
+                        egui::PopupCloseBehavior::CloseOnClickOutside,
+                        |ui| {
+                            for (value, key) in [
+                                (LegendMode::Manual, "ui.legend_manual"),
+                                (LegendMode::FollowSystem, "ui.legend_follow_system"),
+                            ] {
+                                if ui
+                                    .selectable_label(
+                                        mode == value,
+                                        crate::i18n::tr_catalog(lang, key),
+                                    )
+                                    .clicked()
+                                {
+                                    changed = mode != value;
+                                    self.app_settings.key_legend_mode = value;
+                                    egui::Popup::close_all(ui.ctx());
+                                }
+                            }
+                        },
+                    );
+                } else if row == 3 {
+                    let text = match (self.app_settings.key_legend_mode, self.legend_detected) {
+                        (LegendMode::FollowSystem, Err(reason)) => {
+                            crate::i18n::tr_catalog(lang, reason.i18n_key())
+                        }
+                        _ => crate::i18n::tr_catalog(lang, self.key_legend_layout().i18n_key()),
+                    };
+                    let identity = self
+                        .legend_sample
+                        .as_ref()
+                        .map(|s| s.observation.identity.description())
+                        .unwrap_or_default();
+                    ui.add_sized(
+                        [metrics.settings_control_width(), height],
+                        egui::Label::new(text).truncate(),
+                    )
+                    .on_hover_text(if identity.is_empty() {
+                        text.to_owned()
+                    } else {
+                        format!("{text}\n{identity}")
+                    });
+                } else {
+                    let profile = self.key_legend_order_profile();
+                    let text = profile
+                        .and_then(KeyLegendLayout::order_i18n_key)
+                        .map(|key| crate::i18n::tr_catalog(lang, key))
+                        .unwrap_or("—");
+                    if crate::ui_style::modern_button(
+                        ui,
+                        text,
+                        metrics.size(metrics.settings_control_width(), 28.0),
+                        profile.is_some(),
+                    )
+                    .clicked()
+                    {
+                        changed = self.toggle_key_legend_order();
+                    }
+                }
+            },
+        );
+        if changed {
+            self.update_key_legends(ui.ctx());
+            save_app_settings(&self.app_settings);
+            ui.ctx().request_repaint();
+        }
+    }
+
     pub(super) fn draw_app_settings_page(&mut self, ui: &mut egui::Ui, content_rect: egui::Rect) {
         use crate::i18n::Key as TrKey;
 
@@ -118,6 +236,11 @@ impl EntropyApp {
         let tooltip = |text: &'static str| (!suppress_tooltips).then_some(text);
 
         for row_idx in row_range {
+            if matches!(row_idx, 1 | 3 | 4) {
+                self.draw_legend_detection_row(ui, row_idx, content_width, row_height, metrics, suppress_tooltips);
+                continue;
+            }
+            let row_idx = match row_idx { 0 => 0, 2 => 1, _ => row_idx - 3 };
             #[cfg(target_os = "linux")]
             if row_idx == 5 {
                 self.draw_linux_device_udev_rules_row(
@@ -218,7 +341,9 @@ impl EntropyApp {
                         ui,
                         content_width,
                         row_height,
-                        crate::i18n::tr_catalog(lang, "ui.key_legends_label"),
+                        crate::i18n::tr_catalog(lang, if self.app_settings.key_legend_mode == crate::key_legend_detection::LegendMode::FollowSystem {
+                            "ui.legend_fallback"
+                        } else { "ui.key_legends_label" }),
                         true,
                         tooltip(crate::i18n::tr_catalog(lang, "ui.key_legends_tooltip")),
                         metrics.settings_control_width(),
@@ -297,6 +422,7 @@ impl EntropyApp {
                     );
                     if selected_key_legend_layout != self.app_settings.key_legend_layout {
                         self.app_settings.key_legend_layout = selected_key_legend_layout;
+                        self.update_key_legends(ui.ctx());
                         save_app_settings(&self.app_settings);
                     }
                 }
@@ -783,7 +909,7 @@ impl EntropyApp {
 }
 
 fn total_app_settings_rows() -> usize {
-    let rows = 13;
+    let rows = 16;
     #[cfg(not(target_arch = "wasm32"))]
     let rows = rows
         + if super::update_notifications::SUPPORTED {
