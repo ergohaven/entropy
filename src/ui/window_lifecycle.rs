@@ -857,37 +857,52 @@ impl EntropyApp {
         let ctx_for_handler = ctx.clone();
         #[cfg(target_os = "windows")]
         let hwnd_for_handler = self.windows_hwnd;
+        #[cfg(target_os = "macos")]
+        let ns_window = self.macos_ns_window;
         tray_icon::TrayIconEvent::set_event_handler(Some(move |event| {
             use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
-            match event {
+            let restore = match event {
                 TrayIconEvent::Click {
                     button: MouseButton::Left,
-                    button_state: MouseButtonState::Up,
-                    ..
-                }
-                | TrayIconEvent::DoubleClick {
-                    button: MouseButton::Left,
+                    button_state,
                     ..
                 } => {
-                    TRAY_RESTORE_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
+                    #[cfg(target_os = "macos")]
+                    let restore_state = MouseButtonState::Down;
                     #[cfg(target_os = "windows")]
-                    if let Some(hwnd) = hwnd_for_handler {
-                        unsafe {
-                            use windows_sys::Win32::UI::WindowsAndMessaging::{
-                                SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
-                            };
-                            let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
-                            ShowWindow(hwnd, SW_SHOW);
-                            ShowWindow(hwnd, SW_RESTORE);
-                            SetForegroundWindow(hwnd);
-                        }
-                    }
-                    ctx_for_handler.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                    ctx_for_handler.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                    ctx_for_handler.send_viewport_cmd(egui::ViewportCommand::Focus);
-                    ctx_for_handler.request_repaint();
+                    let restore_state = MouseButtonState::Up;
+                    button_state == restore_state
                 }
-                _ => {}
+                TrayIconEvent::DoubleClick {
+                    button: MouseButton::Left,
+                    ..
+                } => true,
+                _ => false,
+            };
+            if !restore {
+                return;
+            }
+
+            #[cfg(target_os = "macos")]
+            request_macos_tray_restore(&ctx_for_handler, ns_window);
+            #[cfg(target_os = "windows")]
+            {
+                TRAY_RESTORE_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
+                if let Some(hwnd) = hwnd_for_handler {
+                    unsafe {
+                        use windows_sys::Win32::UI::WindowsAndMessaging::{
+                            SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
+                        };
+                        let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
+                        ShowWindow(hwnd, SW_SHOW);
+                        ShowWindow(hwnd, SW_RESTORE);
+                        SetForegroundWindow(hwnd);
+                    }
+                }
+                ctx_for_handler.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx_for_handler.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx_for_handler.send_viewport_cmd(egui::ViewportCommand::Focus);
+                ctx_for_handler.request_repaint();
             }
         }));
         let ctx_for_menu = ctx.clone();
@@ -895,6 +910,11 @@ impl EntropyApp {
         let hwnd_for_menu = self.windows_hwnd;
         tray_icon::menu::MenuEvent::set_event_handler(Some(
             move |event: tray_icon::menu::MenuEvent| {
+                #[cfg(target_os = "macos")]
+                if event.id == "entropy_tray_open" {
+                    request_macos_tray_restore(&ctx_for_menu, ns_window);
+                    return;
+                }
                 if event.id == "entropy_tray_quit" {
                     TRAY_QUIT_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
                     #[cfg(target_os = "windows")]
@@ -906,6 +926,18 @@ impl EntropyApp {
             },
         ));
         let tray_menu = tray_icon::menu::Menu::new();
+        #[cfg(target_os = "macos")]
+        {
+            let open_item = tray_icon::menu::MenuItem::with_id(
+                "entropy_tray_open",
+                crate::i18n::tr_catalog(self.app_settings.language, "tray.open"),
+                true,
+                None,
+            );
+            if let Err(e) = tray_menu.append(&open_item) {
+                log::warn!("failed to add the Open Entropy tray menu item: {e}");
+            }
+        }
         let quit_item =
             tray_icon::menu::MenuItem::with_id("entropy_tray_quit", "Quit Entropy", true, None);
         if let Err(e) = tray_menu.append(&quit_item) {
@@ -1022,14 +1054,30 @@ fn macos_ns_window_from_view(ns_view: *mut std::ffi::c_void) -> Option<usize> {
 }
 
 #[cfg(target_os = "macos")]
+fn request_macos_tray_restore(ctx: &egui::Context, ns_window: Option<usize>) {
+    let ctx = ctx.clone();
+    dispatch2::DispatchQueue::main().exec_async(move || {
+        // AppKit can show the window even when winit has no redraw scheduled.
+        restore_macos_app_window(ns_window, true);
+        TRAY_RESTORE_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
+        ctx.request_repaint();
+    });
+}
+
+#[cfg(target_os = "macos")]
 fn restore_macos_app_window(ns_window: Option<usize>, was_hidden_to_menu_bar: bool) {
-    if was_hidden_to_menu_bar && !set_macos_activation_policy(MACOS_ACTIVATION_POLICY_REGULAR) {
-        log::warn!("failed to restore Entropy to the macOS Dock");
-    }
     unsafe {
         let Some(app) = macos_shared_application() else {
             return;
         };
+        if was_hidden_to_menu_bar {
+            let policy: isize = msg_send![app, activationPolicy];
+            if policy != MACOS_ACTIVATION_POLICY_REGULAR
+                && !set_macos_activation_policy(MACOS_ACTIVATION_POLICY_REGULAR)
+            {
+                log::warn!("failed to restore Entropy to the macOS Dock");
+            }
+        }
         let nil: *mut objc::runtime::Object = std::ptr::null_mut();
         let _: () = msg_send![app, unhide: nil];
         let _: () = msg_send![app, activateIgnoringOtherApps: objc::runtime::YES];
