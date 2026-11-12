@@ -336,6 +336,8 @@ trait DesktopSource {
 struct NativeDesktopSource {
     layout: Option<LayoutTracker>,
     last_layout_attempt: Instant,
+    #[cfg(target_os = "macos")]
+    layout_observer: Option<macos_layout::Observer>,
 }
 
 impl NativeDesktopSource {
@@ -343,6 +345,8 @@ impl NativeDesktopSource {
         Self {
             layout: None,
             last_layout_attempt: Instant::now() - Duration::from_secs(60),
+            #[cfg(target_os = "macos")]
+            layout_observer: None,
         }
     }
 }
@@ -365,6 +369,11 @@ impl DesktopSource for NativeDesktopSource {
 
     fn media(&mut self) -> Option<MediaInfo> {
         current_media_info()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn follow_layout(&mut self, events: LayoutEvents) {
+        self.layout_observer = macos_layout::Observer::new(events);
     }
 
     #[cfg(target_os = "linux")]
@@ -690,6 +699,8 @@ mod clock_tests;
 mod layout_signal_tests;
 #[cfg(test)]
 mod legend_tests;
+#[cfg(target_os = "macos")]
+mod macos_layout;
 #[cfg(any(target_os = "macos", test))]
 mod macos_volume;
 #[cfg(target_os = "macos")]
@@ -2456,88 +2467,6 @@ return mediaArtist & tab & mediaTitle & tab & mediaPosition & tab & mediaDuratio
     macos_automation_stdout(&["-e", script]).and_then(|out| split_media_line(&out))
 }
 
-#[cfg(target_os = "macos")]
-fn macos_layout_code() -> Option<String> {
-    // Carbon's Text Input Source APIs assert that they run on the main queue
-    // on current macOS releases. The host bridge itself stays on its worker;
-    // only the short system query crosses to the UI-owned queue.
-    dispatch2::run_on_main(|_| macos_layout_code_on_main_thread())
-}
-
-#[cfg(target_os = "macos")]
-fn macos_layout_code_on_main_thread() -> Option<String> {
-    use std::ffi::c_void;
-
-    type CFArrayRef = *const c_void;
-    type CFIndex = isize;
-    type CFStringRef = *const c_void;
-    type TISInputSourceRef = *const c_void;
-
-    const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
-
-    #[link(name = "Carbon", kind = "framework")]
-    extern "C" {
-        static kTISPropertyInputSourceLanguages: CFStringRef;
-        fn TISCopyCurrentKeyboardInputSource() -> TISInputSourceRef;
-        fn TISGetInputSourceProperty(
-            input_source: TISInputSourceRef,
-            property_key: CFStringRef,
-        ) -> *const c_void;
-    }
-
-    #[link(name = "CoreFoundation", kind = "framework")]
-    extern "C" {
-        fn CFArrayGetCount(array: CFArrayRef) -> CFIndex;
-        fn CFArrayGetValueAtIndex(array: CFArrayRef, index: CFIndex) -> *const c_void;
-        fn CFStringGetCString(
-            the_string: CFStringRef,
-            buffer: *mut i8,
-            buffer_size: CFIndex,
-            encoding: u32,
-        ) -> bool;
-        fn CFRelease(cf: *const c_void);
-    }
-
-    unsafe fn cf_string_to_string(value: CFStringRef) -> Option<String> {
-        if value.is_null() {
-            return None;
-        }
-        let mut buffer = [0i8; 64];
-        if !CFStringGetCString(
-            value,
-            buffer.as_mut_ptr(),
-            buffer.len() as isize,
-            K_CF_STRING_ENCODING_UTF8,
-        ) {
-            return None;
-        }
-        Some(
-            std::ffi::CStr::from_ptr(buffer.as_ptr())
-                .to_string_lossy()
-                .into_owned(),
-        )
-    }
-
-    unsafe {
-        let source = TISCopyCurrentKeyboardInputSource();
-        if source.is_null() {
-            return None;
-        }
-
-        let languages =
-            TISGetInputSourceProperty(source, kTISPropertyInputSourceLanguages) as CFArrayRef;
-        let code = if languages.is_null() || CFArrayGetCount(languages) <= 0 {
-            None
-        } else {
-            let value = CFArrayGetValueAtIndex(languages, 0) as CFStringRef;
-            cf_string_to_string(value)
-        };
-
-        CFRelease(source);
-        code
-    }
-}
-
 #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 fn current_media_info() -> Option<MediaInfo> {
     None
@@ -3748,7 +3677,7 @@ impl LayoutTracker {
     }
 
     fn current_layout(&mut self) -> LayoutObservation {
-        macos_layout_code().and_then(|code| layout_code_index(&code)).into()
+        macos_layout::current_layout()
     }
 }
 

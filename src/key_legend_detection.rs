@@ -229,6 +229,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_macos_fixtures_require_complete_equivalence_and_exact_source_ids() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("qmk_hid_host/macos_layout_fixtures.json")).unwrap();
+        for sample in fixture["samples"].as_array().unwrap() {
+            let id = sample["source_id"].as_str().unwrap();
+            let keyboard_type = sample["keyboard_type"].as_u64().unwrap() as u32;
+            let glyphs: Glyphs = sample["glyphs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| {
+                    (
+                        row[0].as_u64().unwrap() as u16,
+                        char::from_u32(row[1].as_u64().unwrap() as u32).unwrap(),
+                        char::from_u32(row[2].as_u64().unwrap() as u32).unwrap(),
+                    )
+                })
+                .collect();
+            let identity = NativeLayoutIdentity::Mac {
+                source_id: id.into(),
+                keyboard_type,
+                glyphs: glyphs.clone(),
+            };
+            if id == "com.apple.keylayout.US" && keyboard_type == 40 {
+                assert_eq!(identity.profile(), Ok(KeyLegendLayout::English));
+            }
+            if id != "com.apple.keylayout.US" || keyboard_type != 40 {
+                assert_eq!(identity.profile(), Err(DetectionFailure::Unsupported));
+            }
+            let custom = NativeLayoutIdentity::Mac {
+                source_id: "custom.Russian".into(),
+                keyboard_type,
+                glyphs,
+            };
+            assert_eq!(custom.profile(), Err(DetectionFailure::Unsupported));
+        }
+    }
+
+    #[test]
     fn windows_hkl_resolution_rejects_unknown_and_ambiguous_registry_records() {
         // Synthetic values following WinForms' documented implementation
         // precedent, not captured evidence from a native Windows run.
