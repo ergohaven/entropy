@@ -388,6 +388,68 @@ mod tests {
     }
 
     #[test]
+    fn search_hint_is_fully_visible_in_each_language() {
+        fn hint_shape<'a>(
+            shape: &'a egui::Shape,
+            hint: &str,
+        ) -> Option<&'a egui::epaint::TextShape> {
+            match shape {
+                egui::Shape::Text(text) if text.galley.job.text == hint => Some(text),
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| hint_shape(shape, hint)),
+                _ => None,
+            }
+        }
+
+        for language in crate::i18n::Language::ALL {
+            for width in [900.0, 1_400.0] {
+                for pixels_per_point in [1.0, 2.0] {
+                    let ctx = egui::Context::default();
+                    setup_picker_test_fonts(&ctx);
+                    ctx.set_pixels_per_point(pixels_per_point);
+                    let mut picker = KeycodePicker {
+                        language,
+                        ..english_picker()
+                    };
+                    let mut output = egui::FullOutput::default();
+                    for _ in 0..3 {
+                        output = crate::app::discard_texture_deltas(ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(width, 900.0),
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                picker.show(
+                                    ui.ctx(),
+                                    DeferredPickerDataState::Ready,
+                                    DeferredPickerDataState::Ready,
+                                );
+                            },
+                        ));
+                    }
+                    let hint = tr_picker(language, "key_picker.search_hint");
+                    let text = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| hint_shape(&shape.shape, hint))
+                        .expect("the empty picker search must paint its hint");
+                    assert!(
+                        !text.galley.elided,
+                        "{language:?} search hint must fit without an ellipsis at width {width}, scale {pixels_per_point}: {hint}"
+                    );
+                    assert_eq!(
+                        text.galley.rows.len(),
+                        1,
+                        "search hint must stay single-line"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn tabs_expose_names_and_selected_state_to_assistive_tech() {
         use egui::accesskit::Role;
         use egui_kittest::kittest::{NodeT, Queryable};
