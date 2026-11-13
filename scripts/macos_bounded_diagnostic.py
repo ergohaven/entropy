@@ -9,9 +9,11 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import time
 
 BASE = '2f875db3534fed9f461efde3d980e1917c131087'
+DIAGNOSTIC_PARENT = 'ead646d8a458eea5da38bdfeab39d85e9f0caf30'
 BRANCH = 'refs/heads/ci/macos-diagnostic-2f875db-20261114'
 CASES = (
     'app::app_lifecycle::tests::settings_disconnect_allows_deferred_exit_after_completed_combo',
@@ -87,7 +89,25 @@ def terminal_results(text):
                 completions=rows)
 
 
-def main():
+def verify_history(root, expected_source):
+    def git(*args):
+        return subprocess.check_output(['git', *args], cwd=root, text=True,
+                                       stderr=subprocess.PIPE).strip()
+    if git('rev-parse', 'HEAD') != expected_source:
+        raise ValueError('Unexpected diagnostic source')
+    try:
+        parent = git('rev-parse', '--verify', 'HEAD^')
+        failing_base = git('rev-parse', '--verify', 'HEAD^^')
+    except subprocess.CalledProcessError as error:
+        raise ValueError('Diagnostic history unavailable; checkout requires depth 3') from error
+    if parent != DIAGNOSTIC_PARENT or failing_base != BASE:
+        raise ValueError('Unexpected diagnostic parent or original failing base')
+    if git('diff', 'HEAD'):
+        raise ValueError('Tracked source differs from the pinned diagnostic commit')
+    return parent
+
+
+def preflight():
     root = Path.cwd()
     evidence = root / 'diagnostic-evidence'
     evidence.mkdir(exist_ok=True)
@@ -98,16 +118,21 @@ def main():
     arch = platform.machine()
     assert arch == os.environ['EXPECTED_ARCH']
     assert os.environ['EXPECTED_RUNNER'] == {'arm64': 'macos-15', 'x86_64': 'macos-15-intel'}[arch]
-    source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-    assert source == os.environ['GITHUB_SHA']
-    assert subprocess.check_output(['git', 'rev-parse', 'HEAD^'], text=True).strip() == BASE
-    assert not subprocess.check_output(['git', 'diff', 'HEAD'])
-    receipt: dict = dict(source=source, parent=BASE, arch=arch,
+    source = os.environ['GITHUB_SHA']
+    parent = verify_history(root, source)
+    receipt: dict = dict(source=source, parent=parent, failing_base=BASE, arch=arch,
                    expected_runner=os.environ['EXPECTED_RUNNER'],
                    run_id=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                    actor=os.environ['GITHUB_ACTOR'], cases=CASES, filter=FILTER,
                    subset_not_full_historical_load=True, product_acceptance=False,
                    owner_sha256={name: sha256(root / name) for name in OWNERS})
+    (evidence / 'preflight.json').write_text(json.dumps(receipt, indent=2))
+    return evidence, receipt
+
+
+def main():
+    root = Path.cwd()
+    evidence, receipt = preflight()
     record = evidence / 'receipt.json'
     record.write_text(json.dumps(receipt, indent=2))
     reuse = ['--binaries-metadata', str(evidence / 'binaries-metadata.json'),
@@ -205,4 +230,10 @@ def main():
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    if sys.argv[1:] == ['--preflight']:
+        _, source_receipt = preflight()
+        print(json.dumps(source_receipt, indent=2))
+    elif not sys.argv[1:]:
+        raise SystemExit(main())
+    else:
+        raise SystemExit('Usage: macos_bounded_diagnostic.py [--preflight]')

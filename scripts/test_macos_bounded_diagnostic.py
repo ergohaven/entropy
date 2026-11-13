@@ -1,7 +1,9 @@
 import copy
 import importlib.util
 import json
+import os
 from pathlib import Path
+from unittest import mock
 import subprocess
 import sys
 import tempfile
@@ -17,6 +19,36 @@ class DiagnosticContracts(unittest.TestCase):
     def listing(self, names=D.CASES):
         return {'rust-suites': {'entropy': {'testcases': {
             name: {'filter-match': {'status': 'matches'}} for name in names}}}}
+
+    def test_checkout_history_and_preflight_precede_compilation(self):
+        workflow = Path(__file__).parents[1] / '.github/workflows/build.yml'
+        text = workflow.read_text()
+        self.assertIn('fetch-depth: 3', text)
+        self.assertLess(text.index('scripts/macos_bounded_diagnostic.py --preflight'),
+                        text.index('dtolnay/rust-toolchain@stable'))
+        self.assertLess(text.index('scripts/test_macos_bounded_diagnostic.py -v'),
+                        text.index('dtolnay/rust-toolchain@stable'))
+
+    def test_history_pins_source_parent_and_original_base_separately(self):
+        with mock.patch.object(D.subprocess, 'check_output', side_effect=[
+                'source\n', D.DIAGNOSTIC_PARENT + '\n', D.BASE + '\n', '']):
+            self.assertEqual(D.verify_history(Path.cwd(), 'source'), D.DIAGNOSTIC_PARENT)
+        for values in [('wrong-source',), ('source', 'wrong-parent', D.BASE),
+                       ('source', D.DIAGNOSTIC_PARENT, 'wrong-base'),
+                       ('source', D.DIAGNOSTIC_PARENT, D.BASE, 'dirty')]:
+            with mock.patch.object(D.subprocess, 'check_output', side_effect=values):
+                with self.assertRaises(ValueError):
+                    D.verify_history(Path.cwd(), 'source')
+
+    def test_real_shallow_git_rejects_before_source_acceptance(self):
+        root = Path(__file__).parents[1]
+        head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+        with tempfile.TemporaryDirectory() as directory:
+            shallow = Path(directory) / 'shallow-control'
+            shallow.write_text(head + '\n')
+            with mock.patch.dict(os.environ, {'GIT_SHALLOW_FILE': str(shallow)}):
+                with self.assertRaisesRegex(ValueError, 'history unavailable'):
+                    D.verify_history(root, head)
 
     def test_exact_selection(self):
         self.assertEqual(D.selected_names(json.dumps(self.listing())), sorted(D.CASES))
