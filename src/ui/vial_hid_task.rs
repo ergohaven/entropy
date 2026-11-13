@@ -2227,12 +2227,23 @@ mod tests {
     }
 
     fn poll_until_vial_hid_idle(app: &mut EntropyApp, ctx: &egui::Context) {
-        for _ in 0..100 {
+        let diagnostic = std::env::var_os("ENTROPY_MACOS_DIAGNOSTIC").is_some();
+        let started = std::time::Instant::now();
+        if diagnostic {
+            eprintln!("MACDIAG wait_start generation={} active={}", app.connection_generation, app.vial_hid_task_active());
+        }
+        for iteration in 0..100 {
             app.poll_vial_hid_task(ctx);
             if !app.vial_hid_task_active() {
+                if diagnostic {
+                    eprintln!("MACDIAG wait_done elapsed_us={} iteration={} generation={}", started.elapsed().as_micros(), iteration, app.connection_generation);
+                }
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        if diagnostic {
+            eprintln!("MACDIAG wait_exhausted elapsed_us={} generation={} active={}", started.elapsed().as_micros(), app.connection_generation, app.vial_hid_task_active());
         }
         panic!("Keyboard HID task did not finish");
     }
@@ -3185,7 +3196,14 @@ mod tests {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
-        let (hid, _recorder) = crate::hid::HidDevice::test_device();
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        if std::env::var_os("ENTROPY_MACOS_DIAGNOSTIC").is_some() {
+            let started = std::time::Instant::now();
+            recorder.respond_by(move |request| {
+                eprintln!("MACDIAG request elapsed_us={} opcode={:#04x}", started.elapsed().as_micros(), request[0]);
+                None
+            });
+        }
         app.hid_device = Some(hid.into());
         app.layout = Some(single_key_layout(0x0004));
 
