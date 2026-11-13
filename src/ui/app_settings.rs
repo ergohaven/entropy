@@ -1,6 +1,90 @@
 use super::*;
 
 impl EntropyApp {
+    fn draw_startup_device_setting(
+        &mut self,
+        ui: &mut egui::Ui,
+        width: f32,
+        height: f32,
+        metrics: crate::ui_style::ResponsiveMetrics,
+    ) {
+        let lang = self.app_settings.language;
+        let automatic = crate::i18n::tr_catalog(lang, "ui.startup_device_automatic");
+        let mut preference = self.app_settings.preferred_startup_device.clone();
+        crate::ui_style::settings_list_row_with_tooltip(
+            ui,
+            width,
+            height,
+            crate::i18n::tr_catalog(lang, "ui.startup_device_label"),
+            true,
+            Some(crate::i18n::tr_catalog(lang, "ui.startup_device_tooltip")),
+            metrics.settings_control_width(),
+            |ui| {
+                let id = ui.make_persistent_id("startup_device_dropdown");
+                let response = crate::ui_style::modern_dropdown_button_sized(
+                    ui,
+                    id,
+                    preference.as_ref().map_or(automatic, |p| p.name.as_str()),
+                    ui.visuals().text_color(),
+                    metrics.settings_control_width(),
+                    metrics.settings_control_height(),
+                    metrics.settings_control_font_size(),
+                );
+                crate::ui_style::popup_below_widget(
+                    ui,
+                    id,
+                    &response,
+                    egui::PopupCloseBehavior::CloseOnClickOutside,
+                    |ui| {
+                        ui.set_max_width(metrics.settings_control_width());
+                        if ui
+                            .selectable_label(preference.is_none(), automatic)
+                            .clicked()
+                        {
+                            preference = None;
+                            ui.close();
+                        }
+                        for device in self.device_manager.devices() {
+                            let candidate = StartupDevicePreference::from_device(device);
+                            let unique = self
+                                .device_manager
+                                .devices()
+                                .iter()
+                                .filter(|d| candidate.identity.matches(d))
+                                .count()
+                                == 1;
+                            if ui
+                                .add_enabled(
+                                    unique,
+                                    egui::Button::selectable(
+                                        preference.as_ref() == Some(&candidate),
+                                        &candidate.name,
+                                    ),
+                                )
+                                .on_disabled_hover_text(crate::i18n::tr_catalog(
+                                    lang,
+                                    "ui.startup_device_ambiguous",
+                                ))
+                                .on_hover_text(format!(
+                                    "{:04x}:{:04x} {}",
+                                    device.vendor_id, device.product_id, device.serial_number
+                                ))
+                                .clicked()
+                            {
+                                preference = Some(candidate);
+                                ui.close();
+                            }
+                        }
+                    },
+                );
+            },
+        );
+        if preference != self.app_settings.preferred_startup_device {
+            self.app_settings.preferred_startup_device = preference;
+            save_app_settings(&self.app_settings);
+        }
+    }
+
     pub(super) fn draw_app_settings_page(&mut self, ui: &mut egui::Ui, content_rect: egui::Rect) {
         use crate::i18n::Key as TrKey;
 
@@ -132,6 +216,11 @@ impl EntropyApp {
             }
 
             let row_idx = app_settings_base_row_index(row_idx);
+            if row_idx == 5 {
+                self.draw_startup_device_setting(ui, content_width, row_height, metrics);
+                continue;
+            }
+            let row_idx = if row_idx > 5 { row_idx - 1 } else { row_idx };
             match row_idx {
                 0 => {
                     let mut selected_language = self.app_settings.language;
@@ -784,7 +873,7 @@ impl EntropyApp {
 }
 
 fn total_app_settings_rows() -> usize {
-    let rows = 13;
+    let rows = 14;
     #[cfg(not(target_arch = "wasm32"))]
     let rows = rows
         + if super::update_notifications::SUPPORTED {
@@ -973,5 +1062,118 @@ SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="e126", ATTR{seria
                 rynk: true
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod startup_device_ui_tests {
+    use super::*;
+
+    fn frame(
+        app: &mut EntropyApp,
+        ctx: &egui::Context,
+        width: f32,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 1400.0));
+        crate::app::discard_texture_deltas(ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(rect),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                app.draw_app_settings_page(ui, rect);
+            },
+        ))
+    }
+
+    fn position(output: &egui::FullOutput, text: &str) -> egui::Pos2 {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(t) if t.galley.text() == text => {
+                    let p = t.pos + t.galley.size() / 2.0;
+                    shape.clip_rect.contains(p).then_some(p)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing visible text: {text}"))
+    }
+
+    fn click(app: &mut EntropyApp, ctx: &egui::Context, width: f32, p: egui::Pos2) {
+        frame(
+            app,
+            ctx,
+            width,
+            vec![
+                egui::Event::PointerMoved(p),
+                egui::Event::PointerButton {
+                    pos: p,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+                egui::Event::PointerButton {
+                    pos: p,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+        frame(app, ctx, width, vec![]);
+    }
+
+    #[test]
+    fn startup_device_dropdown_saves_and_clears_preference_in_both_languages() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        for language in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            for width in [800.0, 1200.0] {
+                let ctx = egui::Context::default();
+                let mut app = EntropyApp::new_inert_for_test();
+                app.app_settings.language = language;
+                let device = Device {
+                    name: "Phenom Mini".into(),
+                    vendor_id: 0xe126,
+                    product_id: 0x71,
+                    manufacturer: "Test".into(),
+                    serial_number: "123".into(),
+                    bus_type: "Usb".into(),
+                    path: "/test/phenom".into(),
+                    instance_token: String::new(),
+                    firmware: FirmwareProtocol::Vial,
+                };
+                let preference = StartupDevicePreference::from_device(&device);
+                app.device_manager.replace_devices(vec![device]);
+                let automatic = crate::i18n::tr_catalog(language, "ui.startup_device_automatic");
+                frame(&mut app, &ctx, width, vec![]);
+                let output = frame(&mut app, &ctx, width, vec![]);
+                position(
+                    &output,
+                    crate::i18n::tr_catalog(language, "ui.startup_device_label"),
+                );
+                click(&mut app, &ctx, width, position(&output, automatic));
+                let output = frame(&mut app, &ctx, width, vec![]);
+                click(&mut app, &ctx, width, position(&output, &preference.name));
+                assert_eq!(
+                    load_app_settings().preferred_startup_device,
+                    Some(preference.clone())
+                );
+                assert!(
+                    app.startup_device.is_none(),
+                    "settings apply on the next launch"
+                );
+                let output = frame(&mut app, &ctx, width, vec![]);
+                click(&mut app, &ctx, width, position(&output, &preference.name));
+                let output = frame(&mut app, &ctx, width, vec![]);
+                click(&mut app, &ctx, width, position(&output, automatic));
+                assert!(load_app_settings().preferred_startup_device.is_none());
+            }
+        }
     }
 }

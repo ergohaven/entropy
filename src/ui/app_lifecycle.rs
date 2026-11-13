@@ -2307,10 +2307,11 @@ impl eframe::App for EntropyApp {
                     return;
                 }
                 #[cfg(target_os = "linux")]
-                if super::device_scan::udev_rule_missing(
-                    self.device_manager.devices(),
-                    super::app_settings_ui::linux_udev_access(),
-                ) {
+                if {
+                    let access = super::app_settings_ui::linux_udev_access();
+                    super::device_scan::udev_rule_missing(self.device_manager.devices(), access)
+                        || self.startup_target_needs_udev(access)
+                } {
                     let empty_rect = egui::Rect::from_center_size(
                         rect.center(),
                         egui::vec2(rect.width().min(520.0), 210.0),
