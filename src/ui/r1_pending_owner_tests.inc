@@ -2,7 +2,7 @@
 fn r1_pending_edit_before_owner_replacement_does_not_authorize_successor() {
     let _storage=crate::app::app_storage::ScopedTempConfig::new();
     for edit in [false,true] {
-        let mut app=name_review_device_app(true);
+        let mut app=name_review_cached_sm62_app();
         app.update_application_layout_runtime_with(Default::default());
         let path=r1_attach_inert_owner(&mut app);
         app.update_application_layout_runtime_with(Default::default());

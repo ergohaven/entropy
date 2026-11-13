@@ -1,7 +1,7 @@
 #[test]
 fn r1_first_owner_layer_rename_is_explicit_without_accessor_prewarm() {
     let _storage=crate::app::app_storage::ScopedTempConfig::new();
-    let mut app=name_review_device_app(true);
+    let mut app=name_review_cached_sm62_app();
     app.update_application_layout_runtime_with(Default::default());
     let path=r1_attach_inert_owner(&mut app);
     let id=app.application_layout_settings().unwrap().layouts.values()

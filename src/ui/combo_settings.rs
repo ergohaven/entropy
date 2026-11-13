@@ -962,26 +962,11 @@ mod tests {
         use egui::accesskit::Role;
         use egui_kittest::kittest::Queryable;
 
-        for (button, expected, caption, selected_label) in [
-            (egui::PointerButton::Primary, 0x042D, "Alt/key", "LAlt/key"),
-            (
-                egui::PointerButton::Secondary,
-                0x142D,
-                "Alt/key",
-                "RAlt/key",
-            ),
-            (
-                egui::PointerButton::Primary,
-                0x242D,
-                "Hold Alt/key",
-                "Hold LAlt/key",
-            ),
-            (
-                egui::PointerButton::Secondary,
-                0x342D,
-                "Hold Alt/key",
-                "Hold RAlt/key",
-            ),
+        for (button, expected, caption) in [
+            (egui::PointerButton::Primary, 0x042D, "Alt/key"),
+            (egui::PointerButton::Secondary, 0x142D, "Alt/key"),
+            (egui::PointerButton::Primary, 0x242D, "Hold Alt/key"),
+            (egui::PointerButton::Secondary, 0x342D, "Hold Alt/key"),
         ] {
             let ctx = egui::Context::default();
             let creation_context = eframe::CreationContext::_new_kittest(ctx);
@@ -1021,11 +1006,8 @@ mod tests {
             } else {
                 "key_picker.pick_modifier_combo_title"
             };
-            let title = format!(
-                "{}: {selected_label}",
-                crate::i18n::tr_catalog(crate::i18n::Language::English, title_key),
-            );
-            harness.get_by_label(&title);
+            let title = crate::i18n::tr_catalog(crate::i18n::Language::English, title_key);
+            harness.get_by_label(title);
 
             harness.get_by_role_and_label(Role::Button, "_ -").click();
             harness.run();

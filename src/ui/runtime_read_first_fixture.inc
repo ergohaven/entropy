@@ -74,6 +74,23 @@ fn runtime_fixture_hid_identity(
     (hid,rec,pending)
 }
 
+// An ambiguous saved host profile is not an automatically provisioned preset.
+// Keep zero authorship so publication tests still require a new explicit action.
+fn name_review_cached_sm62_app() -> EntropyApp {
+    let mut app = name_review_device_app(true);
+    let settings = app.application_layout_settings_mut().unwrap();
+    let preset = crate::application_layouts::builtin_application_layout_presets()
+        .into_iter()
+        .find(|preset| preset.id == "firefox")
+        .unwrap();
+    let id = settings.create_from_preset(&preset);
+    let profile = settings.layouts.get_mut(&id).unwrap();
+    profile.user_edit_revision = 0;
+    profile.automatic_switching = false;
+    settings.editor_layout_id = "default".into();
+    app
+}
+
 // Encode device-owned records with the production snapshot encoder. The known
 // built-in menu ID is only matching metadata; each owner returns its own FULL.
 fn runtime_fixture_builtin_record(preset: &str, name: &str, code: u16) -> (String, Vec<u8>) {
@@ -82,7 +99,14 @@ fn runtime_fixture_builtin_record(preset: &str, name: &str, code: u16) -> (Strin
 fn runtime_fixture_builtin_record_at_slot(preset: &str, name: &str, code: u16, slot: u8) -> (String, Vec<u8>) {
     let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
     settings.layouts.get_mut("default").unwrap().layers = vec![vec![4;62];16];
-    settings.provision_builtin_presets(None);
+    // Preserve historical catalog-derived IDs in these device-record fixtures.
+    // Production no longer creates the host placeholders automatically.
+    for preset in crate::application_layouts::builtin_application_layout_presets() {
+        let id = settings.create_from_preset(&preset);
+        let profile = settings.layouts.get_mut(&id).unwrap();
+        profile.user_edit_revision = 0;
+        profile.automatic_switching = false;
+    }
     let executable = crate::application_layouts::builtin_application_layout_presets()
         .into_iter().find(|p|p.id == preset).unwrap().executable.to_owned();
     let id = settings.layouts.values().find(|p|p.executable == executable).unwrap().id.clone();

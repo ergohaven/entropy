@@ -22,7 +22,7 @@ fn final_product_autolayer_has_no_internal_sync_status_or_retry(){
         assert!(all.contains("Autolayer")||all.contains("Автослой"),"fixture must reach actual autolayer page: {texts:?}");
         assert!(!all.contains("native Default")&&!all.contains("Native Default")&&!all.contains("Нативный Default")&&!all.contains("Retry sync")&&!all.contains("Повторить синхронизацию"),"internal resident tooling leaked into final UI: {texts:?}");
         let key=app.application_layout_device_key().unwrap();
-        assert_eq!(app.app_settings.application_layouts[&key].layouts.len(),1+crate::application_layouts::builtin_application_layout_presets().len());
+        assert_eq!(app.app_settings.application_layouts[&key].layouts.len(),1,"SM62 has no automatic Macropad presets");
     }}
 }
 #[test]

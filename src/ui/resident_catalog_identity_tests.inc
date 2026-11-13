@@ -1,7 +1,7 @@
 #[test]
 fn sm62_manual_catalog_choice_uses_its_existing_device_record_not_a_duplicate_template() {
     let _storage=crate::app::app_storage::ScopedTempConfig::new();
-    let mut app=name_review_device_app(true);app.update_application_layout_runtime_with(Default::default());
+    let mut app=name_review_cached_sm62_app();app.update_application_layout_runtime_with(Default::default());
     let key=app.application_layout_device_key().unwrap();
     let id=app.application_layout_settings().unwrap().layouts.values().find(|p|p.executable.to_ascii_lowercase().contains("firefox")).unwrap().id.clone();
     let device=app.device_manager.devices()[0].clone();let (hid,rec)=crate::hid::HidDevice::test_device();
