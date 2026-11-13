@@ -236,9 +236,7 @@ impl EntropyApp {
             #[cfg(target_os = "macos")]
             macos_window_hidden_to_menu_bar: false,
             #[cfg(target_os = "macos")]
-            macos_app_was_hidden: false,
-            #[cfg(target_os = "macos")]
-            macos_hidden_to_menu_bar_at: None,
+            macos_start_in_menu_bar_pending: false,
             #[cfg(target_os = "linux")]
             linux_background_since: None,
             #[cfg(target_os = "linux")]
