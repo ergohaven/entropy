@@ -1855,8 +1855,11 @@ mod tests {
     fn settings_worker_fault_allows_deferred_exit(fault: crate::hid::TestHidFault) {
         let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
-        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EntropyApp::new(&creation_context);
+        let mut app = EntropyApp::new_inert_for_test();
+        // Disconnect requests a rescan, but this fixture owns synthetic HID.
+        // Keep discovery pending here instead of launching native workers.
+        let (scans, _scan_requests) = std::sync::mpsc::channel();
+        app.test_device_scan_requests = Some(scans);
         let (hid_device, recorder) =
             crate::hid::HidDevice::test_device_with_fault_after_requests(Some((2, fault)));
         app.hid_device = Some(hid_device.into());
