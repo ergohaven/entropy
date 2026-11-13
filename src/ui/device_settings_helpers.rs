@@ -74,8 +74,7 @@ impl EntropyApp {
             .enumerate()
             .filter_map(|(idx, option)| {
                 (!Self::is_encoder_layout_option(option)
-                    && !(layout.firmware == FirmwareProtocol::Vial
-                        && Self::is_universal_geometry_layout_option(option))
+                    && !Self::is_universal_geometry_layout_option(option)
                     && !firmware_managed.contains(&idx))
                 .then_some(idx)
             })

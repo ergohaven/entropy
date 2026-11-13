@@ -97,6 +97,13 @@ Accessibility/Input Monitoring grants during a normal update. The first move
 from an older unsigned/ad-hoc build may require granting access once to the
 new stable identity.
 
+On the Text Expander setup page, the main button opens the missing permission's
+settings, then offers **Restart capture** once both permissions are granted.
+If System Settings shows access enabled but Entropy still reports it missing,
+fully quit Entropy, remove its outdated entry from the affected permission list,
+add `/Applications/Entropy.app` again, and reopen it. Firmware-native Universal
+Symbols do not require these Text Expander permissions.
+
 ## Quick Start
 
 1. Download the build for your platform from GitHub Releases

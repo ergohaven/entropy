@@ -1438,6 +1438,7 @@ impl EntropyApp {
                 self.keycode_picker.macro_descriptions = macro_metadata.descriptions;
                 self.keycode_picker.macro_metadata_dirty = false;
                 self.keycode_picker.supports_macro_ext_keycodes = r.supports_macro_ext_keycodes;
+                self.keycode_picker.supports_universal_macros = r.vial_features.universal_macros;
                 self.keycode_picker.supports_rmk_native_key_actions =
                     r.supports_rmk_native_key_actions;
                 self.keycode_picker.supports_universal_numero = r.supports_universal_numero;

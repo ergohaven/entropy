@@ -73,6 +73,11 @@ impl KeycodePicker {
             3 => crate::i18n::tr_catalog(self.language, "key_picker_text.tap_then_hold_actions_are_limited_to_left_right_modifiers_and_layers"),
             _ => tr_picker(self.language, "key_picker.press_key_or_click_cancel"),
         };
+        let helper_text = if matches!(field, 1 | 3) && self.tap_dance_native_actions_available() {
+            crate::i18n::tr_catalog(self.language, "key_picker_text.hold_macro_runs_on_release")
+        } else {
+            helper_text
+        };
         let mut still_open = true;
         let popup_size = key_picker_popup_size(ctx);
         let window_title = if let Some((_pending_td_idx, _pending_field, base)) = pending_mod_key {
@@ -176,9 +181,11 @@ impl KeycodePicker {
                                 self.show_tap_dance_mod_key_section(ui, td_idx, field);
                                 self.show_tap_dance_layer_section(ui, td_idx, field);
                                 self.show_tap_dance_custom_keycode_section(ui, td_idx, field);
-                                self.show_tap_dance_macro_section(ui, td_idx, field);
                             }
                         }
+                    }
+                    if pending_mod_key.is_none() {
+                        self.show_tap_dance_macro_section(ui, td_idx, field);
                     }
                     self.show_tap_dance_universal_sections(ui, td_idx, field);
                 });
@@ -274,7 +281,7 @@ impl KeycodePicker {
     }
 
     fn show_tap_dance_macro_section(&mut self, ui: &mut egui::Ui, td_idx: usize, field: u8) {
-        if !Self::tap_dance_macros_allowed_in_field(field)
+        if !self.tap_dance_macros_allowed_in_field(field)
             || !self.supports_macro
             || self.macro_count == 0
         {
@@ -372,8 +379,9 @@ impl KeycodePicker {
         matches!(field, 0..=3)
     }
 
-    fn tap_dance_macros_allowed_in_field(field: u8) -> bool {
+    fn tap_dance_macros_allowed_in_field(&self, field: u8) -> bool {
         matches!(field, 0 | 2)
+            || (matches!(field, 1 | 3) && self.tap_dance_native_actions_available())
     }
 
     fn show_tap_dance_universal_sections(&mut self, ui: &mut egui::Ui, td_idx: usize, field: u8) {
@@ -470,11 +478,21 @@ mod tests {
     }
 
     #[test]
-    fn tap_dance_macros_remain_tap_actions_only() {
-        assert!(KeycodePicker::tap_dance_macros_allowed_in_field(0));
-        assert!(!KeycodePicker::tap_dance_macros_allowed_in_field(1));
-        assert!(KeycodePicker::tap_dance_macros_allowed_in_field(2));
-        assert!(!KeycodePicker::tap_dance_macros_allowed_in_field(3));
+    fn tap_dance_macros_include_rmk_hold_actions() {
+        let rmk = KeycodePicker {
+            supports_rmk_native_key_actions: true,
+            supports_rmk_native_tap_dance_actions: true,
+            ..Default::default()
+        };
+        let legacy = KeycodePicker::default();
+        for field in 0..=3 {
+            assert!(rmk.tap_dance_macros_allowed_in_field(field));
+            assert_eq!(
+                legacy.tap_dance_macros_allowed_in_field(field),
+                matches!(field, 0 | 2)
+            );
+        }
+        assert!(!rmk.tap_dance_macros_allowed_in_field(4));
     }
 
     #[test]

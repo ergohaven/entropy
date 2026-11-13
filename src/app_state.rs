@@ -463,6 +463,22 @@ pub(crate) fn key_binding_label_with_macro_names(
                 );
                 return format!("{hold}\n{tap}");
             }
+            if let Some((tap, base)) = crate::rmk_native::rmk_macro_tap_hold_parts(action) {
+                let hold = if base & 0xF000 == 0x4000 {
+                    format!("L{}", (base >> 8) & 0x0F)
+                } else {
+                    crate::keycode::modifier_label_from_bits((base >> 8) & 0x1F)
+                };
+                let tap = keycode_label_with_macro_names(
+                    tap,
+                    custom,
+                    layer_names,
+                    macro_names,
+                    tap_dance_names,
+                    key_legend_layout,
+                );
+                return format!("{hold}\n{tap}");
+            }
             "RMK\nAction".to_owned()
         }
         crate::keyboard::KeyBinding::Rynk(action) => {
@@ -579,6 +595,24 @@ pub(crate) fn key_binding_tooltip_with_macro_names(
                     "RMK Mod Tap — tap for {tap}, hold for {hold}\nRight click to change tap key\nCtrl+right-click to switch left/right side"
                 );
             }
+            if let Some((tap, base)) = crate::rmk_native::rmk_macro_tap_hold_parts(action) {
+                let tap = keycode_tooltip_with_macro_names(
+                    tap,
+                    custom,
+                    layer_names,
+                    macro_names,
+                    macro_descriptions,
+                    tap_dance_names,
+                );
+                let hold = if base & 0xF000 == 0x4000 {
+                    format!("MO({})", (base >> 8) & 0x0F)
+                } else {
+                    crate::keycode::modifier_label_from_bits((base >> 8) & 0x1F)
+                };
+                return format!(
+                    "RMK Tap Hold — tap: {tap}, hold: {hold}\nRight click to change tap key"
+                );
+            }
             format!("Native RMK key action: {action:?}")
         }
         crate::keyboard::KeyBinding::Rynk(action) => {
@@ -602,6 +636,7 @@ use std::sync::mpsc;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct VialFeatureSupport {
+    pub(crate) universal_macros: bool,
     pub(crate) caps_word: bool,
     pub(crate) layer_lock: bool,
     pub(crate) persistent_default_layer: bool,
