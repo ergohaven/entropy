@@ -299,6 +299,8 @@ impl EntropyApp {
             native_time_offset: 0.0,
             app_settings,
             app_clock: std::time::Instant::now(),
+            #[cfg(test)]
+            test_app_clock: None,
             text_expander_rules_signature,
             text_expander_rules_last_check_at: 0.0,
             text_expander_settings_save_pending: false,

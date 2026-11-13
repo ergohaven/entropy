@@ -5809,6 +5809,9 @@ pub struct EntropyApp {
     /// this clock so they keep advancing while the window is hidden and only
     /// `run_logic` runs (the painted `ctx.input()` time is frozen then).
     pub(crate) app_clock: std::time::Instant,
+    /// Scripted test time stays fixed until the test advances it explicitly.
+    #[cfg(test)]
+    pub(crate) test_app_clock: Option<f64>,
     pub(crate) text_expander_rules_signature: Vec<(String, Option<std::time::SystemTime>)>,
     pub(crate) text_expander_rules_last_check_at: f64,
     pub(crate) text_expander_settings_save_pending: bool,
