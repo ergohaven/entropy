@@ -1838,6 +1838,23 @@ fn read_response(
     command: &[u8],
     timeout_ms: i32,
 ) -> Result<[u8; MSG_LEN]> {
+    read_response_with(
+        transport,
+        write_framing,
+        command,
+        timeout_ms,
+        |buffer, timeout| Ok(device.read_timeout(buffer, timeout)?),
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_response_with(
+    transport: HidTransport,
+    write_framing: HidWriteFraming,
+    command: &[u8],
+    timeout_ms: i32,
+    mut read: impl FnMut(&mut [u8; MSG_LEN + 1], i32) -> Result<usize>,
+) -> Result<[u8; MSG_LEN]> {
     let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms.max(1) as u64);
     let mut last_error: Option<anyhow::Error> = None;
 
@@ -1855,7 +1872,7 @@ fn read_response(
         };
 
         let mut read_buf = [0u8; MSG_LEN + 1];
-        let bytes_read = match device.read_timeout(&mut read_buf, read_timeout) {
+        let bytes_read = match read(&mut read_buf, read_timeout) {
             Ok(bytes_read) => bytes_read,
             Err(e) => {
                 return Err(anyhow::anyhow!("HID read failed: {e}"));
@@ -2028,9 +2045,15 @@ fn response_matches_command(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
                 && resp[4..] == command[4..]
         }
         0xE6 if matches!(command, [0xe6, 7 | 8, 0xa5, _, _, ..]) => {
-            resp[0] == 0xE6
-                && resp[1] == command[1]
-                && resp[2] == 0x5A
+            // Old Ergohaven firmware echoes unknown commands; stock Vial
+            // changes only the command byte to id_unhandled (0xFF).
+            let legacy_rejection = is_application_layout_capability_probe(command)
+                && matches!(resp[0], 0xE6 | 0xFF)
+                && resp[1..].iter().enumerate().all(|(index, byte)| {
+                    *byte == command.get(index + 1).copied().unwrap_or(0)
+                });
+            legacy_rejection
+                || (resp[0] == 0xE6 && resp[1] == command[1] && resp[2] == 0x5A)
         }
         0xD7 => {
             command.len() == MSG_LEN && command[..3] == [0xd7, 0x62, 3]
@@ -2661,6 +2684,41 @@ mod tests {
         assert!(response_matches_command(&request, &response));
         response[2] = 0;
         assert!(!response_matches_command(&request, &response));
+    }
+
+    #[test]
+    fn application_layout_probe_accepts_only_correlated_legacy_rejections() {
+        let request = [
+            0xE6,
+            crate::application_layouts::APPLICATION_LAYOUT_PROTOCOL_VERSION,
+            0xA5,
+            0,
+            0,
+        ];
+        for command_id in [0xE6, 0xFF] {
+            let mut response = [0; MSG_LEN];
+            response[..request.len()].copy_from_slice(&request);
+            response[0] = command_id;
+            assert!(response_matches_command(&request, &response));
+
+            // A different version, marker, acknowledgement or payload is not
+            // this probe's rejection and must not consume a stale report.
+            for index in 1..MSG_LEN {
+                let mut unrelated = response;
+                unrelated[index] ^= 1;
+                assert!(
+                    !response_matches_command(&request, &unrelated),
+                    "accepted unrelated byte {index} in {unrelated:02X?}"
+                );
+            }
+        }
+        for index in [3, 4] {
+            let mut event_poll = request;
+            event_poll[index] = 1;
+            let mut echo = [0; MSG_LEN];
+            echo[..event_poll.len()].copy_from_slice(&event_poll);
+            assert!(!response_matches_command(&event_poll, &echo));
+        }
     }
 
     #[test]

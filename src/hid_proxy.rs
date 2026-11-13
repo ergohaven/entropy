@@ -1239,6 +1239,54 @@ mod tests {
                     }
                 }
                 data.resize(MSG_LEN, 0);
+                if matches!(mode.as_str(), "legacy-echo" | "legacy-unhandled") {
+                    let command = data.clone();
+                    if super::super::is_application_layout_capability_probe(&command) {
+                        if mode == "legacy-unhandled" {
+                            data[0] = 0xFF;
+                        }
+                    } else if command.starts_with(&[
+                        super::super::CMD_VIA_VIAL_PREFIX,
+                        super::super::CMD_VIAL_GET_SIZE,
+                    ]) {
+                        data.fill(0);
+                        data[..4].copy_from_slice(&512u32.to_le_bytes());
+                    }
+                    // Exercise the same framing, response matching and deadline
+                    // as the native backend, with firmware bytes in place of USB.
+                    let mut pending = true;
+                    let result = super::super::read_response_with(
+                        HidTransport::Usb,
+                        super::super::HidWriteFraming::ReportIdPrefixed(0),
+                        &command,
+                        20,
+                        |buffer, timeout| {
+                            if pending {
+                                pending = false;
+                                buffer[..MSG_LEN].copy_from_slice(&data);
+                                Ok(MSG_LEN)
+                            } else {
+                                std::thread::sleep(Duration::from_millis(timeout as u64));
+                                Ok(0)
+                            }
+                        },
+                    );
+                    if let Err(error) = result {
+                        writeln!(
+                            output,
+                            "{}",
+                            serde_json::to_string(&ProxyResponse {
+                                ok: false,
+                                data: None,
+                                error: Some(format!("{error:#}")),
+                            })
+                            .unwrap()
+                        )
+                        .unwrap();
+                        output.flush().unwrap();
+                        return;
+                    }
+                }
                 serde_json::to_string(&ProxyResponse {
                     ok: true,
                     data: Some(bytes_to_hex(&data)),
@@ -1252,6 +1300,33 @@ mod tests {
             {
                 return;
             }
+        }
+    }
+
+    #[test]
+    fn real_helper_legacy_application_layout_rejection_keeps_definition_readable() {
+        let _guard = serial_test();
+        for mode in ["legacy-echo", "legacy-unhandled"] {
+            let proxy = Arc::new(start(mode, "A"));
+            let hid = HidDevice {
+                unlock_confirmation_pending: AtomicBool::new(false),
+                read_only: None,
+                native_capabilities: Default::default(),
+                backend: super::super::HidBackend::Proxy(proxy.clone()),
+            };
+            for version in [7, 8] {
+                let supported = hid.probe_application_layout_protocol_version(version);
+                let definition_size = hid.get_definition_size();
+                assert!(
+                    matches!(supported, Ok(false)),
+                    "{mode}/{version}: {supported:?}"
+                );
+                assert_eq!(definition_size.unwrap(), 512, "{mode}/{version}");
+                assert!(proxy.is_available(), "{mode}/{version}");
+            }
+            drop(hid);
+            drop(proxy);
+            empty_registry();
         }
     }
 
