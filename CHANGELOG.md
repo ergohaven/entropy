@@ -5,6 +5,56 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.6.0
+
+### Main Features
+
+- Added support for Ergohaven RMK keyboards using the Rynk protocol over USB and Bluetooth, alongside existing Vial devices: keymaps, encoders, macros, Tap Dance, Combos, Key Overrides, layer names, module settings, unlock, and Matrix Tester follow the capabilities reported by the firmware
+- Added Rynk `.entlayout` import/export with compatibility and loss checks before writing, read-only headless backup, and time, keyboard layout, and media integration for compatible Qube displays
+- Added SM62 resident application layouts on compatible firmware, including up to 100 stored profiles, resident inventory/readback, reconnect synchronization, and guarded complete backups before resident-layout imports
+- Added SM62 display configuration and host previews for clocks, keymaps, media players, and standby animation, with per-device/half controls, shared-setting confirmation, and firmware-matched artwork
+- Expanded macros with modifier combinations, firmware-supported RMK Tap-Hold and Universal actions, complete-slot copy/paste with Undo, and capacity checks against the active firmware storage codec
+- Added a Linux system-tray icon with Open and Quit, background startup, and a minimized-window fallback when the desktop has no tray host
+- Added a choice of stable releases or published Rynk development builds for application updates, plus separate opt-in macOS notifications for application and firmware updates
+
+### Improvements
+
+- Added persistent Universal Symbols ANSI/ISO geometry and capability-gated universal numero support for compatible Vial/RMK and Rynk firmware, with negotiated native v1/v2 compatibility rather than assuming a codec
+- Added Qube display brightness, background, and text-size controls when the firmware exposes them; retained the selected-mode workflow for pointing-module settings
+- Extended device backups to preserve confirmed layer/connection colors, LED brightness and timeout, and compatible RGBLight or VialRGB settings, while leaving omitted settings in older backups unchanged
+- Allowed `--export-layout` to borrow a running Entropy instance's connection read-only on Linux and macOS, with bounded requests, cancellation, and complete-snapshot checks; Windows still requires the other instance to be closed
+- Added desktop-specific Linux Text Expander status and setup guidance, confirmed GNOME input-source replacement/restoration, KDE input-method guidance, and declarative NixOS setup without taking over the user's input method
+- Improved USB discovery while Bluetooth devices are connected, stable device-list ordering, and reconnection to the last explicitly selected unambiguous keyboard
+- Reduced idle work with event-driven KDE focus/layout tracking, cached complete Linux USB scans, deadline-driven host bridges, and lower background repaint activity
+- Bounded preview/texture caches, decoded animation frames on demand, and deferred the Windows graphics window for minimized startup; this is not a measured process-memory saving
+- Updated the GUI integration to egui/eframe 0.37, kept module/display controls within the established compact settings layout, and improved Russian picker hints and About-value tooltips
+- Retained stable project-certificate macOS signing and the DMG Applications link, added bounded transient DMG verification retries, improved Nix media-tool availability, and hardened pinned dependency downloads and source-bound CI coverage reuse
+
+### Fixes
+
+- Preserved Macropad layer rename drafts across metadata/profile changes, wrote Default layer names through confirmed firmware SET/GET, and retained explicitly cleared or firmware-provided names across reconnect and export
+- Scoped Display settings and probes to the selected device's actual firmware, preventing unrelated K:04 settings from being interpreted as Macropad or SM62 display controls
+- Preserved background device owners and fresh desktop feedback through USB hotplug, partial inventory, keyboard takeover, and successful empty macOS USB enumeration
+- Restored and read back Vial macro bytecode during layout import, including deferred unlock/HID return, without replacing confirmed local macros after failed writes
+- Reported failed and partial layout imports with their actual errors and successfully written sections, and refused incomplete or uncertain backups instead of exporting defaults
+- Reconciled SM62 resident STORE/QUERY results with authoritative FULL readback, fenced stale owner/library results, and kept existing backups intact when export or publication fails
+- Kept pending device edits and Text Expander saves progressing while hidden, and connected keyboards during tray-only startup without requiring a visible graphics frame
+- Corrected Rynk bulk paging, USB reply draining, Bluetooth device deduplication, reconnect handling, and Rynk-specific firmware asset selection; pipelined Bluetooth reads and cached verified definitions
+- Allowed momentary-layer replacements in RMK Key Overrides, including supported K:04 Vial firmware, while retaining QMK restrictions and firmware capability gates
+- Preserved native Tap-Hold retargeting, made macro Bluetooth/layer choices available in both picker views, scrolled modifier choices with the key list, and retained the original Alt captions and side-specific encoded values
+- Explained macro text normalization and unsupported characters, rendered escapes in formatted translations, and directed macOS Text Expander setup to the missing permission before offering Restart capture
+- Retired Macropad-only application templates from SM62 without deleting device records or automatically creating new profiles
+
+### Contributors
+
+- Special thanks to @AlexBSoD for the Rynk backend, Linux tray and Text Expander integration, read-only running-instance exports, discovery/reconnect, host/KDE efficiency, macro memory accounting, Nix integration, and coauthored GUI/text fixes in #200–#215, #217–#219, #221, #222, #227, and #236, including the ported work from #216, #220, #224, #226, and #230
+- Special thanks to @D19ital for stable self-signed macOS packaging and persistent Universal Symbols/native compatibility in #195 and #223
+- Special thanks to @IgorArkhipov for modifier/macro editing and restore, lighting backups, Qube controls, layer-name handling, updater/notifications, native lifecycle and CI regressions, RMK momentary-layer overrides, and Universal Symbols/permission fixes in #193, #233, #237, the original #238 macro series, #239–#264, including the ported work from #228, #229, #231, #232, #234, and #235
+- Special thanks to @Yurii-Q for Macropad rename persistence, device-owner/hotplug and display repairs, Default layer names, SM62 display/resident-layout integration, and guarded backups in #191, #196, #199, and #265
+- Thanks to @kissetfall for release integration, final display/picker/template corrections, packaging corrections, and source-bound CI coverage reuse in #197 and #198
+
+Preparation verification is provisional: this is a local v0.6.0 source candidate, not a built or published release. Build [43601448536](https://github.com/ergohaven/entropy/actions/runs/43601448536) and Nix [43601448524](https://github.com/ergohaven/entropy/actions/runs/43601448524) passed on the pre-version-bump source `fda1c133f90ecdbcfed78e3e1e8c695632a39786`; those binaries still identify as `0.5.0-test.25` and must not be renamed or presented as v0.6.0. Fresh exact-candidate platform builds, signing, checksum/embedded-version checks, and native package/launch verification remain required before publication. No new physical-device or OS permission-retention acceptance is claimed.
+
 ## v0.5.0 - Public Beta
 
 ### Main Features
