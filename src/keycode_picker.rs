@@ -388,6 +388,68 @@ mod tests {
     }
 
     #[test]
+    fn search_hint_is_fully_visible_in_each_language() {
+        fn hint_shape<'a>(
+            shape: &'a egui::Shape,
+            hint: &str,
+        ) -> Option<&'a egui::epaint::TextShape> {
+            match shape {
+                egui::Shape::Text(text) if text.galley.job.text == hint => Some(text),
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| hint_shape(shape, hint)),
+                _ => None,
+            }
+        }
+
+        for language in crate::i18n::Language::ALL {
+            for width in [900.0, 1_400.0] {
+                for pixels_per_point in [1.0, 2.0] {
+                    let ctx = egui::Context::default();
+                    setup_picker_test_fonts(&ctx);
+                    ctx.set_pixels_per_point(pixels_per_point);
+                    let mut picker = KeycodePicker {
+                        language,
+                        ..english_picker()
+                    };
+                    let mut output = egui::FullOutput::default();
+                    for _ in 0..3 {
+                        output = crate::app::discard_texture_deltas(ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(width, 900.0),
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                picker.show(
+                                    ui.ctx(),
+                                    DeferredPickerDataState::Ready,
+                                    DeferredPickerDataState::Ready,
+                                );
+                            },
+                        ));
+                    }
+                    let hint = tr_picker(language, "key_picker.search_hint");
+                    let text = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| hint_shape(&shape.shape, hint))
+                        .expect("the empty picker search must paint its hint");
+                    assert!(
+                        !text.galley.elided,
+                        "{language:?} search hint must fit without an ellipsis at width {width}, scale {pixels_per_point}: {hint}"
+                    );
+                    assert_eq!(
+                        text.galley.rows.len(),
+                        1,
+                        "search hint must stay single-line"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn tabs_expose_names_and_selected_state_to_assistive_tech() {
         use egui::accesskit::Role;
         use egui_kittest::kittest::{NodeT, Queryable};
@@ -1264,7 +1326,7 @@ fn mod_key_choices(compact_only: bool) -> Vec<ModKeyChoice> {
             compact: true,
         },
         ModKeyChoice {
-            label: "Alt/key".into(),
+            label: picker_mod_key_label(0x0400),
             left_value: 0x0400,
             right_value: Some(0x1400),
             mod_name: "Alt".into(),
@@ -2000,15 +2062,6 @@ impl KeycodePicker {
                     }
                 }
                 ui.add_space(4.0);
-                if self.macro_key_pick.is_some()
-                    && pending_mod_key.is_none()
-                    && self.supports_macro_ext_keycodes
-                    && self.popup_view_mode == PickerViewMode::List
-                {
-                    if let Some(base) = self.show_mod_key_section(ui, false) {
-                        self.macro_mod_key_pick = Some(base);
-                    }
-                }
                 let layer_choices = self
                     .macro_key_pick_kind(macro_idx, action_idx)
                     .map(|kind| self.macro_layer_key_choices(kind))
@@ -2032,6 +2085,15 @@ impl KeycodePicker {
                     .max_height(key_picker_popup_scroll_height(popup_size))
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        if self.macro_key_pick.is_some()
+                            && pending_mod_key.is_none()
+                            && self.supports_macro_ext_keycodes
+                            && self.popup_view_mode == PickerViewMode::List
+                        {
+                            if let Some(base) = self.show_mod_key_section(ui, false) {
+                                self.macro_mod_key_pick = Some(base);
+                            }
+                        }
                         if self.macro_key_pick.is_some()
                             && pending_mod_key.is_none()
                             && !universal_choices.is_empty()
@@ -2744,27 +2806,16 @@ impl KeycodePicker {
         }
 
         if let Some(base) = pending {
-            let title_key = if is_mt {
-                "key_picker.pick_tap_key_title"
+            let title = if is_mt {
+                tr_picker(self.language, "key_picker.pick_tap_key_title")
             } else {
-                "key_picker.pick_modifier_combo_title"
+                tr_picker(self.language, "key_picker.pick_modifier_combo_title")
             };
-            let mut title = tr_picker(self.language, title_key).to_owned();
-            // Layer-Tap shares the tap-key picker but has no modifier bits.
-            if !is_mt || base & 0xE000 == 0x2000 {
-                let selected_label = if is_mt {
-                    picker_mod_tap_label(base)
-                } else {
-                    picker_mod_key_label(base)
-                };
-                title.push_str(": ");
-                title.push_str(&selected_label);
-            }
             let mut still_open = true;
             let popup_size = key_picker_popup_size(ctx);
             let _resp_win = crate::ui_style::centered_modal_window(
                 ctx,
-                &title,
+                title,
                 self.popup_state.id(PopupKey::PendingKeyPickWindow),
                 &mut still_open,
                 popup_size,

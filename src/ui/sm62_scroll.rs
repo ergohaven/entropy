@@ -1,7 +1,7 @@
-// Keep the original 900-point settings column centered, including the same
-// 18-point right gutter (12 gap + 6 track) as the other settings list viewports.
-// Do not give ScrollArea the full window width: its minimum content width wins
-// over the page's set_width(900) and stretches every shared settings row.
+// Keep the existing preview beside a standard settings list. The same
+// 18-point right gutter (12 gap + 6 track) is used by other settings viewports.
+const SM62_DISPLAY_PREVIEW_WIDTH: f32 = 245.0;
+const SM62_DISPLAY_PANEL_GAP: f32 = 20.0;
 fn sm62_display_scroll<R>(
     ui: &mut egui::Ui,
     body: egui::Rect,
@@ -9,7 +9,9 @@ fn sm62_display_scroll<R>(
 ) -> egui::scroll_area::ScrollAreaOutput<R> {
     let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
     let gutter = metrics.settings_content_width() - metrics.settings_row_content_width();
-    let width = body.width().min(900.0 + gutter);
+    let width = body.width().min(
+        SM62_DISPLAY_PREVIEW_WIDTH + SM62_DISPLAY_PANEL_GAP + metrics.settings_content_width(),
+    );
     let column =
         egui::Rect::from_center_size(body.center(), egui::vec2(width, body.height().max(1.0)));
     let track = egui::Rect::from_min_max(

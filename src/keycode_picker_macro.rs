@@ -1890,6 +1890,70 @@ mod tests {
 
 
     #[test]
+    fn macro_modifier_row_scrolls_with_keys_while_clear_stays_fixed() {
+        for language in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            let ctx = egui::Context::default();
+            let mut picker = KeycodePicker {
+                language,
+                popup_view_mode: PickerViewMode::List,
+                layer_count: 1,
+                macro_key_pick: Some((0, 0)),
+                macro_actions: vec![vec![MacroAction::Tap(0x04)]],
+                ..Default::default()
+            };
+            for _ in 0..4 {
+                let _ = macro_picker_frame(&mut picker, &ctx, vec![]);
+            }
+            let before = macro_picker_frame(&mut picker, &ctx, vec![]);
+            let clear_label = tr_picker(language, "key_picker.none_clear");
+            let clear_before = macro_picker_text_position(&before, clear_label).unwrap();
+            let modifier_before = macro_picker_text_position(&before, "Hyper").unwrap();
+            let key_before = macro_picker_text_position(&before, "A").unwrap();
+            let mut after = macro_picker_frame(
+                &mut picker,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(key_before),
+                    egui::Event::MouseWheel {
+                        source: egui::MouseWheelSource::Unknown,
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -12.0),
+                        modifiers: egui::Modifiers::NONE,
+                        phase: egui::TouchPhase::Move,
+                    },
+                ],
+            );
+            for _ in 0..5 {
+                after = macro_picker_frame(&mut picker, &ctx, vec![]);
+            }
+            let key_after = macro_picker_text_position(&after, "A").unwrap();
+            let clear_after = macro_picker_text_position(&after, clear_label).unwrap();
+            assert!(
+                key_after.y < key_before.y - 1.0,
+                "key list actually scrolled"
+            );
+            assert!(
+                (clear_after.y - clear_before.y).abs() < 1.0,
+                "clear stays fixed"
+            );
+            let modifier_after = macro_picker_text_position(&after, "Hyper").unwrap();
+            assert!(
+                modifier_after.y < modifier_before.y - 1.0,
+                "Mod+Key must scroll with the key list: {language:?}, before={modifier_before:?}, after={modifier_after:?}"
+            );
+            assert!(
+                (modifier_before.y - modifier_after.y - (key_before.y - key_after.y)).abs() < 1.0
+            );
+            assert_eq!(picker.macro_actions[0], [MacroAction::Tap(0x04)]);
+            assert!(!picker.macros_dirty);
+            assert!(picker.macro_mod_key_pick.is_none());
+        }
+    }
+
+    #[test]
     fn macro_modifier_picker_mouse_selection_encodes_hyper_f16_for_each_action_kind() {
         for (action, expected, opcode) in [
             (MacroAction::Tap(0x04), MacroAction::Tap(0x0F6B), 5),

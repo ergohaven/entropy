@@ -1332,7 +1332,7 @@ pub const KEYCODES: &[Keycode] = &[
     Keycode {
         value: 0x00E2,
         name: "KC_LALT",
-        label: "LAlt",
+        label: "Alt",
         category: KeycodeCategory::Modifier,
     },
     Keycode {
@@ -1356,7 +1356,7 @@ pub const KEYCODES: &[Keycode] = &[
     Keycode {
         value: 0x00E6,
         name: "KC_RALT",
-        label: "RAlt",
+        label: "Alt",
         category: KeycodeCategory::Modifier,
     },
     Keycode {
@@ -2056,8 +2056,7 @@ pub fn keycode_label_with_names(
     match value {
         0x00E0 | 0x00E4 => return "Ctrl".to_string(),
         0x00E1 | 0x00E5 => return "Shift".to_string(),
-        0x00E2 => return "LAlt".to_string(),
-        0x00E6 => return "RAlt".to_string(),
+        0x00E2 | 0x00E6 => return "Alt".to_string(),
         0x00E3 => return gui_label(false).to_string(),
         0x00E7 => return gui_label(true).to_string(),
         _ => {}
@@ -2149,7 +2148,7 @@ pub fn keycode_label_with_names(
         let mod_str: String = match mods {
             0x01 => "Ctrl".into(),
             0x02 => "Shift".into(),
-            0x04 => "LAlt".into(),
+            0x04 => "Alt".into(),
             0x08 => gui.into(),
             0x03 => "Ctrl+Shift".into(),
             0x05 => "Ctrl+Alt".into(),
@@ -2191,8 +2190,7 @@ pub fn modifier_label_from_bits(mods: u16) -> String {
     match mods {
         0x01 | 0x11 => "Ctrl".to_string(),
         0x02 | 0x12 => "Shift".to_string(),
-        0x04 => "LAlt".to_string(),
-        0x14 => "RAlt".to_string(),
+        0x04 | 0x14 => "Alt".to_string(),
         0x08 | 0x18 => gui_sym().to_string(),
         0x03 | 0x13 => "Ctrl+Shift".to_string(),
         0x05 | 0x15 => "Ctrl+Alt".to_string(),
@@ -2957,24 +2955,31 @@ mod tests {
     }
 
     #[test]
-    fn alt_keycap_labels_distinguish_left_and_right() {
+    fn alt_keycaps_keep_original_captions_and_side_values() {
         for layout in [KeyLegendLayout::English, KeyLegendLayout::RussianPrimary] {
             for (value, expected) in [
-                (0x00E2, "LAlt"),
-                (0x00E6, "RAlt"),
-                (0x042D, "LAlt\n_\n-"),
+                (0x00E2, "Alt"),
+                (0x00E6, "Alt"),
+                (0x042D, "Alt\n_\n-"),
                 (0x142D, "RAlt\n_\n-"),
-                (0x242D, "LAlt\n_\n-"),
-                (0x342D, "RAlt\n_\n-"),
+                (0x242D, "Alt\n_\n-"),
+                (0x342D, "Alt\n_\n-"),
             ] {
                 assert_eq!(
                     keycode_label_with_names_and_layout(value, &[], &[], layout),
                     expected,
                 );
+                assert_eq!(
+                    crate::keyboard::KeyBinding::Vial(value).vial_keycode(),
+                    value
+                );
             }
         }
-        assert_eq!(modifier_label_from_bits(0x04), "LAlt");
-        assert_eq!(modifier_label_from_bits(0x14), "RAlt");
+        for value in [0x00E2, 0x00E6] {
+            assert_eq!(find_keycode(value).unwrap().label, "Alt");
+        }
+        assert_eq!(modifier_label_from_bits(0x04), "Alt");
+        assert_eq!(modifier_label_from_bits(0x14), "Alt");
     }
 
     #[test]

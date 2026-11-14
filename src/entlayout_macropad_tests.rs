@@ -2744,6 +2744,10 @@ fn exercise_unified_device_menu_lifecycle(export: bool, nondefault: bool, failin
         app.keycode_picker.macro_descriptions.clear();
         let settings=app.application_layout_settings_mut().unwrap();
         settings.provision_builtin_presets(None);
+        // Populate this backup stress fixture explicitly; SM62 no longer auto-seeds presets.
+        for preset in crate::application_layouts::builtin_application_layout_presets() {
+            settings.create_from_preset(&preset);
+        }
         let empty=settings.create_category("Пустая группа").unwrap();
         let custom=settings.create_category("Мои проекты").unwrap();
         settings.set_layout_category_id(&application,&custom);

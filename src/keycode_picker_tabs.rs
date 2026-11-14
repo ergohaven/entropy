@@ -22,7 +22,12 @@ fn mod_tap_choices(lgui: &str) -> Vec<(String, u16, Option<u16>, String)> {
             Some(0x3200),
             "Shift".into(),
         ),
-        ("Hold Alt/key".into(), 0x2400, Some(0x3400), "Alt".into()),
+        (
+            picker_mod_tap_label(0x2400),
+            0x2400,
+            Some(0x3400),
+            "Alt".into(),
+        ),
         (
             picker_mod_tap_label(0x2800),
             0x2800,

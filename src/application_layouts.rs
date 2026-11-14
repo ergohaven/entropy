@@ -49,6 +49,8 @@ mod sm62_geometry_tests {
     #[test]
     fn resident_three_firefox_retarget_releases_role_without_eviction_and_survives_reload() {
         let mut s=DeviceApplicationLayouts::default();s.layouts.get_mut("default").unwrap().layers=vec![vec![42;62];16];s.provision_builtin_presets(None);
+        let preset = builtin_application_layout_presets().into_iter().find(|p| p.id == "firefox").unwrap();
+        s.create_from_preset(&preset);
         let firefox=s.layouts.values().find(|p|DeviceApplicationLayouts::is_firefox(p)).map(|p|p.id.clone());
         let firefox=firefox.unwrap();s.normalize();let before=s.resident_slots.clone();
         assert!(s.update_application_rule(&firefox,&DetectedApplication{executable:"new-editor".into(),..Default::default()},"Editor",""));
@@ -70,6 +72,8 @@ mod sm62_geometry_tests {
     #[test]
     fn resident_three_firefox_all_os_and_existing_data_preserved() {
         let mut s=DeviceApplicationLayouts::default();s.layouts.get_mut("default").unwrap().layers=vec![vec![42;62];16];s.provision_builtin_presets(Some(&BTreeSet::from(["firefox".into()])));
+        let preset = builtin_application_layout_presets().into_iter().find(|p| p.id == "firefox").unwrap();
+        s.create_from_preset(&preset);
         let firefox=s.layouts.values().find(|p|DeviceApplicationLayouts::is_firefox(p)).unwrap().id.clone();
         let user=s.create_for_application(&DetectedApplication{executable:"user-app".into(),..Default::default()});
         for executable in ["firefox.exe","org.mozilla.firefox","Firefox","/usr/bin/firefox"]{assert_eq!(s.resolve(Some(&DetectedApplication{executable:executable.into(),..Default::default()})),firefox);}
@@ -97,6 +101,209 @@ mod sm62_geometry_tests {
         let mut value = serde_json::to_value(ApplicationLayout::default_layout()).unwrap();
         value["layers"][15] = serde_json::json!(vec![4u16; 62]);
         assert!(serde_json::from_value::<ApplicationLayout>(value).is_err());
+    }
+
+    #[test]
+    fn sm62_does_not_provision_macropad_presets() {
+        let mut settings = DeviceApplicationLayouts::default();
+        let seed = vec![vec![42; 62]; APPLICATION_LAYOUT_LAYER_COUNT];
+        settings
+            .layouts
+            .get_mut(DEFAULT_APPLICATION_LAYOUT_ID)
+            .unwrap()
+            .layers = seed.clone();
+        let installed = builtin_application_layout_presets()
+            .iter()
+            .map(|preset| preset.id.to_owned())
+            .collect();
+        settings.provision_builtin_presets(Some(&installed));
+        assert_eq!(
+            settings.layouts.len(),
+            1,
+            "SM62 must not receive Macropad presets"
+        );
+        assert_eq!(settings.layouts[DEFAULT_APPLICATION_LAYOUT_ID].layers, seed);
+        assert!(settings.resident_slots.is_empty());
+        assert!(settings.pending_builtin_auto_bind.is_empty());
+        assert!(!settings.provision_builtin_presets(None));
+        let mut macropad = DeviceApplicationLayouts::default();
+        macropad.provision_builtin_presets(None);
+        assert_eq!(
+            macropad.layouts.len(),
+            1 + builtin_application_layout_presets().len()
+        );
+    }
+
+    // Legacy host placeholders produced by the retired SM62 provisioning path.
+    fn legacy_sm62_catalog() -> DeviceApplicationLayouts {
+        let mut settings = DeviceApplicationLayouts::default();
+        settings
+            .layouts
+            .get_mut(DEFAULT_APPLICATION_LAYOUT_ID)
+            .unwrap()
+            .layers = vec![vec![42; 62]; APPLICATION_LAYOUT_LAYER_COUNT];
+        for preset in builtin_application_layout_presets() {
+            let id = settings.create_from_preset(&preset);
+            let profile = settings.layouts.get_mut(&id).unwrap();
+            profile.user_edit_revision = 0;
+            profile.automatic_switching = false;
+            settings
+                .pending_builtin_auto_bind
+                .insert(id, preset.id.into());
+            settings.sm62_seen_builtin_presets.insert(preset.id.into());
+        }
+        settings.builtin_presets_provisioned = true;
+        settings.editor_layout_id = DEFAULT_APPLICATION_LAYOUT_ID.into();
+        settings.active_layout_id = DEFAULT_APPLICATION_LAYOUT_ID.into();
+        settings
+    }
+
+    #[test]
+    fn sm62_retires_only_untouched_automatic_host_presets() {
+        let mut settings = legacy_sm62_catalog();
+        let ids: Vec<_> = settings
+            .layouts
+            .keys()
+            .filter(|id| id.as_str() != "default")
+            .cloned()
+            .collect();
+        settings
+            .layouts
+            .get_mut(&ids[0])
+            .unwrap()
+            .set_keycode(15, 61, 0x1234);
+        settings.layouts.get_mut(&ids[1]).unwrap().layers[15][61] = 0x1235;
+        settings
+            .device_raw_profiles
+            .insert(ids[2].clone(), b"device-owned record".to_vec());
+        settings.layouts.get_mut(&ids[3]).unwrap().name = "My application".into();
+        settings.layouts.get_mut(&ids[4]).unwrap().layer_names[15] = "My layer".into();
+        settings.active_layout_id = ids[5].clone();
+        settings.editor_layout_id = ids[6].clone();
+        settings.layouts.get_mut(&ids[7]).unwrap().title_contains = "My document".into();
+        settings
+            .layouts
+            .get_mut(&ids[8])
+            .unwrap()
+            .application_identities
+            .push("my-alias".into());
+        let before = settings.clone();
+        let changed = settings.provision_builtin_presets(Some(&BTreeSet::new()));
+        assert_eq!(
+            settings.layouts.len(),
+            10,
+            "only Default and protected profiles remain"
+        );
+        assert!(changed);
+        for id in std::iter::once(&DEFAULT_APPLICATION_LAYOUT_ID.to_owned()).chain(ids[..9].iter())
+        {
+            assert_eq!(settings.layouts[id], before.layouts[id]);
+            assert_eq!(
+                settings.resident_slots.get(id),
+                before.resident_slots.get(id)
+            );
+        }
+        assert_eq!(settings.device_raw_profiles, before.device_raw_profiles);
+        assert_eq!(
+            settings.resident_deleted, before.resident_deleted,
+            "no firmware tombstones"
+        );
+        assert_eq!(settings.active_layout_id, before.active_layout_id);
+        assert_eq!(settings.editor_layout_id, before.editor_layout_id);
+        for id in &ids[9..] {
+            assert!(!settings.layouts.contains_key(id));
+            assert!(!settings.resident_slots.contains_key(id));
+            assert!(!settings.pending_builtin_auto_bind.contains_key(id));
+        }
+        let mut reload: DeviceApplicationLayouts =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert!(!reload.provision_builtin_presets(None));
+        assert_eq!(reload, settings);
+    }
+
+    #[test]
+    fn sm62_saved_catalog_retires_stock_names_after_native_default_names_change() {
+        // Minimized legacy serialization consistent with the user's diagnostic:
+        // 62 controls, zero profile authorship, Default updated independently.
+        for names in [default_layer_names(), legacy_default_layer_names()] {
+            let mut settings = legacy_sm62_catalog();
+            for profile in settings.layouts.values_mut() {
+                profile.layer_names = names.clone();
+                profile.revision = 16;
+            }
+            let default = settings.layouts.get_mut("default").unwrap();
+            default.layer_names = (0..16).map(|index| format!("Native {index}")).collect();
+            default.revision = 32;
+            default.user_edit_revision = 16;
+            let default_before = default.clone();
+            let mut settings: DeviceApplicationLayouts =
+                serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+            settings.normalize();
+            assert!(settings.layouts.values().filter(|p| p.id != "default")
+                .all(|p| p.user_edit_revision == 0 && p.layers == default_before.layers
+                    && p.layer_names != default_before.layer_names));
+            assert!(settings.provision_builtin_presets(None), "old host placeholders must retire");
+            assert_eq!(settings.layouts.len(), 1, "stock names must not depend on current Default names");
+            assert_eq!(settings.layouts["default"], default_before);
+            assert!(settings.resident_deleted.is_empty(), "no firmware tombstones");
+            assert!(!settings.provision_builtin_presets(None));
+        }
+    }
+
+    #[test]
+    fn sm62_saved_catalog_guards_keep_custom_native_and_ambiguous_profiles_selectable() {
+        for case in 0..12 {
+            let mut settings = legacy_sm62_catalog();
+            settings.layouts.get_mut("default").unwrap().layer_names =
+                (0..16).map(|index| format!("Native {index}")).collect();
+            let id = settings.layouts.keys().find(|id| id.as_str() != "default").unwrap().clone();
+            settings.device_raw_profiles.insert(id.clone(), b"unchanged native record".to_vec());
+            match case {
+                0 => settings.layouts.get_mut(&id).unwrap().user_edit_revision = 1,
+                1 => settings.layouts.get_mut(&id).unwrap().layers[15][61] = 43,
+                2 => settings.layouts.get_mut(&id).unwrap().layer_names[15] = "My layer".into(),
+                3 => settings.layouts.get_mut(&id).unwrap().category = Some(ApplicationLayoutCategory::ALL[0]),
+                4 => {
+                    settings.category_names.insert("custom:1".into(), "My category".into());
+                    settings.layouts.get_mut(&id).unwrap().custom_category_id = Some("custom:1".into());
+                }
+                5 => settings.layouts.get_mut(&id).unwrap().title_contains = "My document".into(),
+                6 => settings.layouts.get_mut(&id).unwrap().application_identities.push("my-alias".into()),
+                7 => settings.layouts.get_mut(&id).unwrap().name = "My profile".into(),
+                8 => settings.layouts.get_mut(&id).unwrap().executable = "my-executable".into(),
+                9 => settings.active_layout_id = id.clone(),
+                10 => settings.editor_layout_id = id.clone(),
+                11 => {
+                    settings.pending_builtin_auto_bind.remove(&id);
+                    settings.sm62_seen_builtin_presets.clear();
+                }
+                _ => unreachable!(),
+            }
+            let before = settings.clone();
+            assert!(settings.selectable_layouts().any(|p| p.id == id), "guard {case}: visible before cleanup");
+            settings.provision_builtin_presets(None);
+            assert!(settings.selectable_layouts().any(|p| p.id == id), "guard {case}: visible after cleanup");
+            assert_eq!(settings.layouts[&id], before.layouts[&id], "guard {case}");
+            assert_eq!(settings.device_raw_profiles, before.device_raw_profiles);
+            assert_eq!(settings.resident_slots[&id], before.resident_slots[&id]);
+            assert_eq!(settings.resident_deleted, before.resident_deleted);
+        }
+    }
+
+    #[test]
+    fn sm62_keeps_ambiguous_legacy_profiles_without_auto_origin() {
+        let mut settings = DeviceApplicationLayouts::default();
+        settings.layouts.get_mut("default").unwrap().layers = vec![vec![42; 62]; 16];
+        let preset = builtin_application_layout_presets().remove(0);
+        let id = settings.create_from_preset(&preset);
+        settings.layouts.get_mut(&id).unwrap().user_edit_revision = 0;
+        settings.editor_layout_id = "default".into();
+        let original = settings.layouts[&id].clone();
+        settings.provision_builtin_presets(None);
+        assert_eq!(
+            settings.layouts[&id], original,
+            "missing provenance is not deletion permission"
+        );
     }
 
     #[test]
@@ -129,25 +336,43 @@ mod sm62_geometry_tests {
     }
 
     #[test]
-    fn sm62_catalog_provision_and_enrichment_preserve_default_derived_bindings() {
+    fn sm62_provision_preserves_explicit_profiles_without_catalog_enrichment() {
         let mut settings = DeviceApplicationLayouts::default();
-        let seed: Vec<Vec<u16>> = (0..16).map(|l| (0..62).map(|k| 4+l*62+k).collect()).collect();
-        settings.layouts.get_mut(DEFAULT_APPLICATION_LAYOUT_ID).unwrap().layers = seed.clone();
+        let seed: Vec<Vec<u16>> = (0..16)
+            .map(|l| (0..62).map(|k| 4 + l * 62 + k).collect())
+            .collect();
+        settings
+            .layouts
+            .get_mut(DEFAULT_APPLICATION_LAYOUT_ID)
+            .unwrap()
+            .layers = seed.clone();
+        let id = settings.create_for_application(&DetectedApplication {
+            executable: "my-editor".into(),
+            ..Default::default()
+        });
         settings.provision_builtin_presets(None);
-        assert_eq!(settings.layouts.len(), 1 + builtin_application_layout_presets().len(), "SM62 exposes the complete application catalog, not native layers");
-        let categories: BTreeSet<_> = settings.layouts.values().filter(|p| p.id != "default").map(|p| application_layout_category_for_executable(&p.executable)).collect();
-        assert_eq!(categories.len(), 6, "all nonempty builtin catalog groups");
-        assert!(settings.layouts.len() > 1);
+        assert_eq!(
+            settings.layouts.len(),
+            2,
+            "Default and the explicit user profile only"
+        );
         for profile in settings.layouts.values() {
-            assert_eq!(profile.layers, seed, "arbitrary Macropad preset mapping on {}", profile.name);
+            assert_eq!(profile.layers, seed);
             assert!(profile.encoder_stacks.iter().all(Vec::is_empty));
         }
-        let id = settings.layouts.keys().find(|id| id.as_str() != DEFAULT_APPLICATION_LAYOUT_ID).unwrap().clone();
-        settings.layouts.get_mut(&id).unwrap().set_keycode(15,61,0x1234);
+        settings
+            .layouts
+            .get_mut(&id)
+            .unwrap()
+            .set_keycode(15, 61, 0x1234);
         settings.builtin_presets_catalog_revision = 1;
         settings.provision_builtin_presets(None);
-        assert_eq!(settings.layouts[&id].layers[15][61],0x1234);
-        assert!(settings.layouts.values().all(|p| p.layers.iter().all(|l| l.len()==62)));
+        assert_eq!(settings.layouts.len(), 2);
+        assert_eq!(settings.layouts[&id].layers[15][61], 0x1234);
+        assert!(settings
+            .layouts
+            .values()
+            .all(|p| p.layers.iter().all(|l| l.len() == 62)));
     }
 
     #[test]
@@ -166,7 +391,7 @@ mod sm62_geometry_tests {
         s.set_layout_category_id(&id,&custom);
         s.active_layout_id = id.clone();
         let before = s.layouts[&id].clone();
-        assert!(s.provision_builtin_presets(None));
+        assert!(!s.provision_builtin_presets(None));
         assert_eq!(s.layouts[&id], before);
         assert_eq!(s.editor_layout_id,id);
         assert_eq!(s.active_layout_id,id);
@@ -175,7 +400,7 @@ mod sm62_geometry_tests {
             std::iter::once(p.executable.as_str()).chain(p.application_identities.iter().map(String::as_str)),
             ["google-chrome"])).count(),1,"alias must not duplicate custom profile");
         let discord = builtin_application_layout_presets().into_iter().find(|p|p.id == "discord").unwrap();
-        let delete = s.layouts.values().find(|p| p.executable == discord.executable).unwrap().id.clone();
+        let delete = s.create_from_preset(&discord);
         s.remove(&delete);
         let installed = builtin_application_layout_presets().iter().map(|p|p.id.to_owned()).collect();
         s.provision_builtin_presets(Some(&installed));
@@ -188,7 +413,7 @@ mod sm62_geometry_tests {
     }
 
     #[test]
-    fn sm62_catalog_existing_firefox_only_json_migrates_without_overwriting_edits() {
+    fn sm62_existing_firefox_only_json_does_not_expand_or_overwrite_edits() {
         let mut s=DeviceApplicationLayouts::default();
         s.layouts.get_mut("default").unwrap().layers=vec![vec![4;62];16];
         let firefox=builtin_application_layout_presets().into_iter().find(|p|p.id=="firefox").unwrap();
@@ -202,8 +427,8 @@ mod sm62_geometry_tests {
         let mut json=serde_json::to_value(&s).unwrap();
         json.as_object_mut().unwrap().remove("sm62_seen_builtin_presets");
         let mut reload:DeviceApplicationLayouts=serde_json::from_value(json).unwrap();
-        assert!(reload.provision_builtin_presets(None));
-        assert_eq!(reload.layouts.len(),15);
+        assert!(!reload.provision_builtin_presets(None));
+        assert_eq!(reload.layouts.len(),2);
         assert_eq!(reload.layouts[&id],original);
         assert_eq!(reload.editor_layout_id,id); assert_eq!(reload.active_layout_id,id);
         assert!(!reload.provision_builtin_presets(None));
@@ -218,8 +443,8 @@ mod sm62_geometry_tests {
         let before=s.layouts[&unrelated].clone();
         s.provision_builtin_presets(None);
         assert_eq!(s.layouts[&unrelated],before);
-        assert!(s.layouts.values().any(|p|p.executable==discord.executable),"display labels do not establish application identity");
-        assert_eq!(s.layouts.len(),16);
+        assert!(!s.layouts.values().any(|p|p.executable==discord.executable),"no automatic preset may appear alongside a manually named profile");
+        assert_eq!(s.layouts.len(),2);
         assert!(!s.provision_builtin_presets(None));
     }
 
@@ -1185,77 +1410,70 @@ impl DeviceApplicationLayouts {
         id
     }
 
+    // Applicability is separate from deletion permission: a legacy template
+    // may have a device-owned record that must remain byte-exact in backups.
+    fn is_retired_sm62_builtin(&self, layout: &ApplicationLayout) -> bool {
+        let Some(default) = self.layouts.get(DEFAULT_APPLICATION_LAYOUT_ID) else {
+            return false;
+        };
+        self.is_sm62()
+            && layout.id != DEFAULT_APPLICATION_LAYOUT_ID
+            && layout.id != self.editor_layout_id
+            && layout.id != self.active_layout_id
+            && layout.user_edit_revision == 0
+            && layout.layers == default.layers
+            && (layout.layer_names == default.layer_names
+                || layout.layer_names == default_layer_names()
+                || layout.layer_names == legacy_default_layer_names())
+            && layout.encoder_stacks.iter().all(Vec::is_empty)
+            && layout.category.is_none()
+            && layout.custom_category_id.is_none()
+            && layout.title_contains.is_empty()
+            && builtin_application_layout_presets().iter().any(|preset| {
+                (self.sm62_seen_builtin_presets.contains(preset.id)
+                    || self.pending_builtin_auto_bind.get(&layout.id)
+                        .is_some_and(|origin| origin == preset.id))
+                    && layout.name == preset.name
+                    && executables_match(&layout.executable, preset.executable)
+                    && layout.application_identities == normalized_identity_values(
+                        std::iter::once(preset.executable).chain(preset.identities.iter().copied()),
+                    )
+            })
+    }
+
+    pub(crate) fn selectable_layouts(&self) -> impl Iterator<Item = &ApplicationLayout> {
+        self.layouts.values().filter(|layout| !self.is_retired_sm62_builtin(layout))
+    }
+
     pub(crate) fn provision_builtin_presets(
         &mut self,
         installed: Option<&std::collections::BTreeSet<String>>,
     ) -> bool {
         if self.is_sm62() {
-            // Versioned SM62 matching catalog. Preset key/encoder placement stays
-            // disabled by apply_preset: every new profile inherits native Default.
-            let mut changed = false;
-            let editor = self.editor_layout_id.clone();
-            let active = self.active_layout_id.clone();
-            // The legacy SM62 catalog only ever auto-created Firefox. Absence
-            // after provisioning means deleted; never resurrect it. Historical
-            // manual deletions of other apps were not recorded and are unknowable.
-            if self.builtin_presets_provisioned && self.sm62_seen_builtin_presets.is_empty() {
-                self.sm62_seen_builtin_presets.insert("firefox".into());
-                changed = true;
-            }
-            for preset in builtin_application_layout_presets() {
-                if !self.sm62_seen_builtin_presets.insert(preset.id.to_owned()) {
-                    continue;
+            // These built-ins describe Macropad shortcuts, not SM62 profiles.
+            let mut changed = !self.builtin_presets_provisioned;
+            self.builtin_presets_provisioned = true;
+            let retired = self
+                .layouts
+                .iter()
+                .filter(|(id, layout)| {
+                    !self.device_raw_profiles.contains_key(*id)
+                        && self.is_retired_sm62_builtin(layout)
+                })
+                .map(|(id, _)| id.clone())
+                .collect::<Vec<_>>();
+            for id in retired {
+                // Host-only placeholders must not enqueue firmware tombstones.
+                self.layouts.remove(&id);
+                self.resident_slots.remove(&id);
+                self.pending_builtin_auto_bind.remove(&id);
+                if self.sm62_resident_firefox_id.as_ref() == Some(&id) {
+                    self.sm62_resident_firefox_id = None;
+                }
+                if self.sm62_resident_application_id.as_ref() == Some(&id) {
+                    self.sm62_resident_application_id = None;
                 }
                 changed = true;
-                let existing = self.layouts.values().any(|layout| {
-                    layout.id != DEFAULT_APPLICATION_LAYOUT_ID
-                        && application_identities_match(
-                                std::iter::once(layout.executable.as_str())
-                                    .chain(layout.application_identities.iter().map(String::as_str)),
-                                std::iter::once(preset.executable)
-                                    .chain(preset.identities.iter().copied()))
-                });
-                let category = application_layout_category_for_executable(preset.executable);
-                if existing || self.removed_categories.contains(category.id()) {
-                    continue;
-                }
-                let id = self.create_from_preset(&preset);
-                let linked = installed.is_some_and(|found| found.contains(preset.id));
-                let layout = self.layouts.get_mut(&id).unwrap();
-                layout.automatic_switching = linked;
-                layout.user_edit_revision = 0; // automatic catalog placeholder, not an explicit add
-                if !linked {
-                    self.pending_builtin_auto_bind.insert(id, preset.id.to_owned());
-                }
-            }
-            if !self.builtin_presets_provisioned {
-                self.builtin_presets_provisioned = true;
-                changed = true;
-            }
-            self.editor_layout_id = editor;
-            self.active_layout_id = active;
-            // Migrate identity only, preserving every saved profile and binding.
-            // An older ordinary app is assigned only by an explicit add/edit.
-            if self.sm62_resident_firefox_id.is_none() {
-                if let Some(id) = self.layouts.values().find(|layout|
-                    layout.id != DEFAULT_APPLICATION_LAYOUT_ID && Self::is_firefox(layout))
-                    .map(|layout| layout.id.clone()) {
-                    self.sm62_resident_firefox_id = Some(id);
-                    changed = true;
-                }
-            }
-            if let Some(installed) = installed {
-                let ids: Vec<_> = self.pending_builtin_auto_bind.iter()
-                    .filter(|(_, preset)| installed.contains(preset.as_str()))
-                    .map(|(id, _)| id.clone()).collect();
-                for id in ids {
-                    self.pending_builtin_auto_bind.remove(&id);
-                    if let Some(layout) = self.layouts.get_mut(&id) {
-                        layout.automatic_switching = true;
-                        layout.bump_derived_revision();
-                    }
-                    changed = true;
-                }
             }
             return changed;
         }
@@ -1524,7 +1742,7 @@ impl DeviceApplicationLayouts {
         excluding_id: Option<&str>,
     ) -> bool {
         let title_contains = title_contains.trim();
-        self.layouts.values().any(|layout| {
+        self.selectable_layouts().any(|layout| {
             layout.id != DEFAULT_APPLICATION_LAYOUT_ID
                 && Some(layout.id.as_str()) != excluding_id
                 && layout
@@ -1631,8 +1849,7 @@ impl DeviceApplicationLayouts {
             }
         };
         let matched = application.and_then(|application| {
-            self.layouts
-                .values()
+            self.selectable_layouts()
                 .filter(|layout| permitted(&layout.id))
                 .filter(|layout| layout.matches(application))
                 .max_by(|left, right| {

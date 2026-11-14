@@ -1858,7 +1858,9 @@ mod tests {
         // This fixture exercises write/exit ordering without native desktop
         // services or device enumeration on a Rust test worker thread.
         let mut app = EntropyApp::new_inert_for_test();
-        app.last_device_scan_at = f64::EPSILON;
+        // A disconnect deliberately rescans; keep that request inside the fixture.
+        let (scans, _scan_requests) = mpsc::channel();
+        app.test_device_scan_requests = Some(scans);
         let (hid_device, recorder) =
             crate::hid::HidDevice::test_device_with_fault_after_requests(Some((2, fault)));
         app.hid_device = Some(hid_device.into());

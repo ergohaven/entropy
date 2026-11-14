@@ -161,12 +161,6 @@ enum ModuleSettingsRow {
     Field { group_idx: usize, field_idx: usize },
 }
 
-/// Each row describes the same setting across the firmware's pointing modes.
-struct PointerModeSettingsTable {
-    headers: Vec<String>,
-    rows: Vec<Vec<Option<(usize, usize)>>>,
-}
-
 // Vial's K:03 tabs are per encoder, but the general module parser coalesces them
 // by side. Their field titles retain the side-local encoder number.
 pub(super) fn fixed_encoder_side_size(layout: &KeyboardLayout) -> Option<usize> {
@@ -594,22 +588,13 @@ impl EntropyApp {
     }
 
     fn module_settings_rows(&self) -> Vec<ModuleSettingsRow> {
-        let selected_mode = self
-            .module_settings
-            .selected_module_group()
-            .and_then(|group_idx| self.selected_pointer_mode(group_idx));
-        self.module_settings_rows_for_mode(selected_mode)
-    }
-
-    fn module_settings_rows_for_mode(
-        &self,
-        selected_mode: Option<PointerModeKind>,
-    ) -> Vec<ModuleSettingsRow> {
         let mut rows = Vec::new();
         let side_groups = self.module_settings_side_group_indices();
         let selected_side_group = self.module_settings.selected_module_group();
         let selected_module =
             selected_side_group.and_then(|group_idx| self.selected_module_kind(group_idx));
+        let selected_mode =
+            selected_side_group.and_then(|group_idx| self.selected_pointer_mode(group_idx));
         if side_groups.len() > 1 {
             rows.push(ModuleSettingsRow::SideSelector);
         }
@@ -635,185 +620,6 @@ impl EntropyApp {
             rows.extend(self.module_settings_field_rows(group_idx, selected_module, selected_mode));
         }
         rows
-    }
-
-    fn pointer_mode_settings_table(&self) -> Option<PointerModeSettingsTable> {
-        let selected_group = self.module_settings.selected_module_group().or_else(|| {
-            self.module_settings
-                .is_trackball_page()
-                .then(|| {
-                    self.module_settings
-                        .groups
-                        .iter()
-                        .position(|group| group.mode_selector_field().is_some())
-                })
-                .flatten()
-        })?;
-        let selected_module = if self.module_settings.is_trackball_page() {
-            ModuleDeviceKind::Trackball
-        } else {
-            self.selected_module_kind(selected_group)?
-        };
-        if !selected_module.is_pointing() {
-            return None;
-        }
-        let selector = self.module_settings.groups[selected_group].mode_selector_field()?;
-        let modes = selector
-            .variants
-            .iter()
-            .filter_map(|variant| {
-                let mode = PointerModeKind::from_variant(variant);
-                (mode != PointerModeKind::Other).then_some((mode, variant))
-            })
-            .collect::<Vec<_>>();
-        if modes.len() < 2 {
-            return None;
-        }
-        let mut keys = Vec::new();
-        let mut rows: Vec<Vec<Option<(usize, usize)>>> = Vec::new();
-        for (group_idx, group) in self.module_settings.groups.iter().enumerate() {
-            if group_idx != selected_group && group.kind != ModuleSettingsGroupKind::AutoLayer {
-                continue;
-            }
-            for (field_idx, field) in group.fields.iter().enumerate() {
-                if !group.field_visible_for_selection(field, Some(selected_module), None) {
-                    continue;
-                }
-                let visible_modes = modes
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, (mode, _))| {
-                        group
-                            .field_visible_for_pointer_mode(field, *mode)
-                            .then_some(idx)
-                    })
-                    .collect::<Vec<_>>();
-                // Shared settings (including the active mode) stay above the table.
-                if visible_modes.len() != 1 {
-                    continue;
-                }
-                let key = group
-                    .kind
-                    .field_base_title(&field.title)
-                    .split_whitespace()
-                    .map(str::to_ascii_lowercase)
-                    .filter(|word| {
-                        !matches!(word.as_str(), "normal" | "sniper" | "scroll" | "text")
-                    })
-                    .map(|word| {
-                        if word == "sensitivity" {
-                            "sens".to_owned()
-                        } else {
-                            word
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let key = (group_idx, key);
-                let column = visible_modes[0];
-                let row_idx = keys
-                    .iter()
-                    .enumerate()
-                    .position(|(idx, existing)| *existing == key && rows[idx][column].is_none())
-                    .unwrap_or_else(|| {
-                        keys.push(key);
-                        rows.push(vec![None; modes.len()]);
-                        rows.len() - 1
-                    });
-                rows[row_idx][column] = Some((group_idx, field_idx));
-            }
-        }
-        if rows.is_empty() {
-            return None;
-        }
-        Some(PointerModeSettingsTable {
-            headers: modes
-                .iter()
-                .map(|(_, variant)| {
-                    module_setting_variant_label(self.app_settings.language, variant)
-                })
-                .collect(),
-            rows,
-        })
-    }
-
-    fn module_settings_overview_rows(
-        &self,
-        table: &PointerModeSettingsTable,
-    ) -> Vec<ModuleSettingsRow> {
-        self.module_settings_rows_for_mode(None)
-            .into_iter()
-            .filter(|row| match row {
-                ModuleSettingsRow::Field {
-                    group_idx,
-                    field_idx,
-                } => !table
-                    .rows
-                    .iter()
-                    .flatten()
-                    .any(|cell| *cell == Some((*group_idx, *field_idx))),
-                _ => true,
-            })
-            .collect()
-    }
-
-    fn draw_pointer_mode_settings_overview(
-        &mut self,
-        ui: &mut egui::Ui,
-        table: &PointerModeSettingsTable,
-        metrics: crate::ui_style::ResponsiveMetrics,
-    ) {
-        let common = self.module_settings_overview_rows(table);
-        let gap = metrics.value(12.0);
-        let min_width = metrics.value(300.0) * table.headers.len() as f32
-            + gap * table.headers.len().saturating_sub(1) as f32;
-        show_adaptive_settings_grid(
-            ui,
-            "module_settings_overview",
-            metrics,
-            common.len() + 1 + table.rows.len(),
-            min_width,
-            |ui, row, width, row_height, suppress_tooltips| {
-                if let Some(entry) = common.get(row).copied() {
-                    self.draw_module_settings_row_entry(
-                        ui,
-                        entry,
-                        metrics.settings_row_content_width(),
-                        row_height,
-                        suppress_tooltips,
-                    );
-                    return;
-                }
-                let width = (width - gap * table.headers.len().saturating_sub(1) as f32)
-                    / table.headers.len() as f32;
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = gap;
-                    for (column, header) in table.headers.iter().enumerate() {
-                        ui.push_id(("pointer_mode_column", column), |ui| {
-                            if row == common.len() {
-                                ui.add_sized(
-                                    [width, row_height],
-                                    egui::Label::new(RichText::new(header).strong()),
-                                );
-                            } else if let Some((group_idx, field_idx)) =
-                                table.rows[row - common.len() - 1][column]
-                            {
-                                self.draw_module_settings_field_row(
-                                    ui,
-                                    group_idx,
-                                    field_idx,
-                                    width,
-                                    row_height,
-                                    suppress_tooltips,
-                                );
-                            } else {
-                                ui.allocate_space(egui::vec2(width, row_height));
-                            }
-                        });
-                    }
-                });
-            },
-        );
     }
 
     fn selected_module_kind(&self, group_idx: usize) -> Option<ModuleDeviceKind> {
@@ -1082,11 +888,6 @@ impl EntropyApp {
                             crate::i18n::Key::QmkSettingsEnableHint,
                         )),
                     );
-                    return;
-                }
-
-                if let Some(table) = self.pointer_mode_settings_table() {
-                    self.draw_pointer_mode_settings_overview(ui, &table, metrics);
                     return;
                 }
 
@@ -1821,218 +1622,6 @@ mod tests {
         );
     }
 
-    fn table_qsids(app: &EntropyApp, table: &PointerModeSettingsTable) -> Vec<Vec<Option<u16>>> {
-        table
-            .rows
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|cell| {
-                        cell.map(|(group, field)| {
-                            app.module_settings.groups[group].fields[field].qsid
-                        })
-                    })
-                    .collect()
-            })
-            .collect()
-    }
-
-    #[test]
-    fn mode_columns_show_every_mode_and_align_equivalent_settings() {
-        let mut app = test_app();
-        add_filterable_module_groups(&mut app);
-        app.module_settings.set_value(149, 2);
-        let table = app
-            .pointer_mode_settings_table()
-            .expect("pointing mode table");
-        let expected = vec![
-            vec![None, Some(124), Some(125), Some(126)],
-            vec![None, None, Some(136), Some(147)],
-            vec![None, None, Some(327), Some(329)],
-            vec![Some(142), Some(144), Some(145), Some(146)],
-        ];
-        assert_eq!(table_qsids(&app, &table), expected);
-        let common = app
-            .module_settings_overview_rows(&table)
-            .iter()
-            .filter_map(|row| {
-                if let ModuleSettingsRow::Field {
-                    group_idx,
-                    field_idx,
-                } = row
-                {
-                    Some(app.module_settings.groups[*group_idx].fields[*field_idx].qsid)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(common, vec![149, 134, 130, 120, 137, 140, 143, 324]);
-        for mode in 0..=4 {
-            app.module_settings.set_value(134, mode);
-            let table = app.pointer_mode_settings_table().unwrap();
-            assert_eq!(table_qsids(&app, &table), expected);
-            assert_eq!(table.headers.len(), 4);
-        }
-        app.module_settings.set_value(149, 3);
-        assert_eq!(
-            table_qsids(&app, &app.pointer_mode_settings_table().unwrap()),
-            expected
-        );
-        for module in [0, 1] {
-            app.module_settings.set_value(149, module);
-            assert!(app.pointer_mode_settings_table().is_none());
-        }
-    }
-
-    #[test]
-    fn mode_columns_preserve_fields_with_colliding_titles() {
-        let mut app = test_app();
-        add_filterable_module_groups(&mut app);
-        app.module_settings.set_value(149, 2);
-        app.module_settings.groups[0]
-            .fields
-            .push(module_filter_field("Scroll sensitivity", 399));
-        let table = app.pointer_mode_settings_table().unwrap();
-        let scroll_qsids = table_qsids(&app, &table)
-            .iter()
-            .filter_map(|row| row[2])
-            .collect::<Vec<_>>();
-        assert_eq!(scroll_qsids, vec![125, 136, 327, 399, 145]);
-        for mode in 0..=4 {
-            app.module_settings.set_value(134, mode);
-            let table = app.pointer_mode_settings_table().unwrap();
-            let common = app
-                .module_settings_overview_rows(&table)
-                .iter()
-                .filter_map(|row| {
-                    if let ModuleSettingsRow::Field {
-                        group_idx,
-                        field_idx,
-                    } = row
-                    {
-                        Some(app.module_settings.groups[*group_idx].fields[*field_idx].qsid)
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(common, vec![149, 134, 130, 120, 137, 140, 143, 324]);
-        }
-    }
-
-    #[test]
-    fn standalone_trackball_has_mode_columns_without_module_selector() {
-        let mut app = test_app();
-        add_filterable_module_groups(&mut app);
-        let group = &mut app.module_settings.groups[0];
-        group.kind = ModuleSettingsGroupKind::Other;
-        group.title = "Trackball".into();
-        group.fields.retain(|field| field.qsid != 149);
-        assert!(app.pointer_mode_settings_table().is_some());
-    }
-
-    #[test]
-    fn mode_overview_renders_and_scrolls_to_every_column() {
-        fn text_positions(
-            shape: &egui::Shape,
-            labels: &[String],
-            found: &mut Vec<(usize, egui::Pos2)>,
-        ) {
-            match shape {
-                egui::Shape::Text(text) => {
-                    if let Some(index) = labels
-                        .iter()
-                        .position(|label| *label == text.galley.job.text)
-                    {
-                        found.push((index, text.pos));
-                    }
-                }
-                egui::Shape::Vec(shapes) => {
-                    for shape in shapes {
-                        text_positions(shape, labels, found);
-                    }
-                }
-                _ => {}
-            }
-        }
-        for language in [
-            crate::i18n::Language::English,
-            crate::i18n::Language::Russian,
-        ] {
-            for width in [600.0, 1400.0] {
-                let ctx = egui::Context::default();
-                let mut app = test_app();
-                app.app_settings.language = language;
-                add_filterable_module_groups(&mut app);
-                app.module_settings.set_value(149, 2);
-                let table = app.pointer_mode_settings_table().unwrap();
-                let mut found = Vec::new();
-                for frame in 0..24 {
-                    let events = if width < 1000.0 && (2..10).contains(&frame) {
-                        vec![
-                            egui::Event::PointerMoved(egui::pos2(300.0, 550.0)),
-                            egui::Event::MouseWheel {
-                                source: egui::MouseWheelSource::Unknown,
-                                unit: egui::MouseWheelUnit::Point,
-                                delta: egui::vec2(-640.0, 0.0),
-                                modifiers: egui::Modifiers::NONE,
-                                phase: egui::TouchPhase::Move,
-                            },
-                        ]
-                    } else {
-                        vec![]
-                    };
-                    let output = crate::app::discard_texture_deltas(ctx.run_ui(
-                        egui::RawInput {
-                            screen_rect: Some(egui::Rect::from_min_size(
-                                egui::Pos2::ZERO,
-                                egui::vec2(width, 1000.0),
-                            )),
-                            events,
-                            ..Default::default()
-                        },
-                        |ui| {
-                            let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
-                            app.draw_pointer_mode_settings_overview(ui, &table, metrics);
-                        },
-                    ));
-                    for shape in &output.shapes {
-                        let mut positions = Vec::new();
-                        text_positions(&shape.shape, &table.headers, &mut positions);
-                        found.extend(
-                            positions
-                                .into_iter()
-                                .filter(|(_, pos)| shape.clip_rect.contains(*pos)),
-                        );
-                    }
-                }
-                for column in 0..table.headers.len() {
-                    assert!(
-                        found.iter().any(|(idx, _)| *idx == column),
-                        "missing column {column}, width {width}, language {language:?}"
-                    );
-                }
-                if width > 1000.0 {
-                    let xs = (0..table.headers.len())
-                        .map(|column| {
-                            found
-                                .iter()
-                                .rev()
-                                .find(|(idx, _)| *idx == column)
-                                .unwrap()
-                                .1
-                                .x
-                        })
-                        .collect::<Vec<_>>();
-                    assert!(xs.windows(2).all(|pair| pair[0] < pair[1]));
-                }
-                assert_eq!(app.module_settings.value(134), 0);
-                assert!(app.settings_write_task.is_none());
-            }
-        }
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn editing_inactive_mode_does_not_change_active_mode() {
@@ -2042,9 +1631,13 @@ mod tests {
         app.module_settings.set_value(149, 2);
         let (device, recorder) = crate::hid::HidDevice::test_device();
         app.hid_device = Some(device.into());
-        let table = app.pointer_mode_settings_table().unwrap();
-        let (group, field) = table.rows[0][2].expect("scroll sensitivity");
-        let field = app.module_settings.groups[group].fields[field].clone();
+        let group = 0;
+        let field = app.module_settings.groups[group]
+            .fields
+            .iter()
+            .find(|field| field.qsid == 125)
+            .unwrap()
+            .clone();
         app.write_module_setting_value(group, &field, 2);
         drain_hid_writes(&mut app, &ctx);
         assert_eq!(app.module_settings.value(125), 2);
@@ -2052,6 +1645,95 @@ mod tests {
         let requests = recorder.requests();
         assert_eq!(requests.len(), 1);
         assert_eq!(&requests[0][2..4], &125u16.to_le_bytes());
+    }
+
+    #[test]
+    fn module_page_shows_selected_mode_in_one_settings_list() {
+        fn collect_visible_text(
+            shape: &egui::Shape,
+            clip: egui::Rect,
+            found: &mut Vec<(String, egui::Pos2)>,
+        ) {
+            match shape {
+                egui::Shape::Text(text) if clip.contains(text.pos) => {
+                    found.push((text.galley.job.text.clone(), text.pos));
+                }
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect_visible_text(shape, clip, found);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for language in [
+            crate::i18n::Language::English,
+            crate::i18n::Language::Russian,
+        ] {
+            for width in [1400.0, 600.0] {
+                for mode in 0..=3 {
+                    let ctx = egui::Context::default();
+                    let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
+                    let mut app = EntropyApp::new(&creation_context);
+                    app.app_settings.language = language;
+                    add_filterable_module_groups(&mut app);
+                    app.module_settings.supported = true;
+                    app.module_settings.set_value(149, 2);
+                    app.module_settings.set_value(134, mode);
+                    let label_for = |qsid| {
+                        let group = &app.module_settings.groups[0];
+                        let field = group
+                            .fields
+                            .iter()
+                            .find(|field| field.qsid == qsid)
+                            .unwrap();
+                        app.module_setting_label(group.kind, &field.title)
+                    };
+                    let mode_labels = [label_for(124), label_for(125), label_for(126)];
+                    let mut common_labels = vec![label_for(149), label_for(134), label_for(120)];
+                    let mut found = Vec::new();
+                    for _ in 0..6 {
+                        let output = crate::app::discard_texture_deltas(ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(width, 1200.0),
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| app.draw_module_settings_page(ui, ui.max_rect()),
+                        ));
+                        found.clear();
+                        for shape in &output.shapes {
+                            collect_visible_text(&shape.shape, shape.clip_rect, &mut found);
+                        }
+                    }
+                    for (index, label) in mode_labels.iter().enumerate() {
+                        let visible = found.iter().any(|(text, _)| text == label);
+                        assert_eq!(
+                            visible,
+                            mode as usize == index + 1,
+                            "mode {mode}, width {width}, language {language:?}: {label}"
+                        );
+                    }
+                    if mode > 0 {
+                        common_labels.push(mode_labels[mode as usize - 1].clone());
+                    }
+                    let positions = common_labels
+                        .iter()
+                        .map(|label| found.iter().find(|(text, _)| text == label).unwrap().1)
+                        .collect::<Vec<_>>();
+                    assert!(positions
+                        .iter()
+                        .all(|pos| (pos.x - positions[0].x).abs() < 1.0));
+                    if width > 1000.0 {
+                        assert!(positions[0].x > width / 4.0, "settings list stays centered");
+                    }
+                    assert_eq!(app.module_settings.value(134), mode);
+                    assert!(app.settings_write_task.is_none());
+                }
+            }
+        }
     }
 
     #[test]

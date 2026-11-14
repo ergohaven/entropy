@@ -202,7 +202,25 @@ fn universal_geometry_rynk_existing_option_uses_its_original_session_writer() {
     app.device_manager.replace_devices(vec![device]);
     let (board, stored) = board(Stored::new(1, 1, 1));
     app.hid_device = Some(RynkSession::new(link("geometry-rynk-option", &board)).into());
-    app.set_layout_option_value(0, 1);
+    let rect = selector(&frame(&mut app, &ctx, None)).0;
+    let release = battery_gate(&mut app, &ctx);
+    click(&mut app, &ctx, rect.center());
+    let borrowed = frame(&mut app, &ctx, Some(rect.center()));
+    assert!(
+        !borrowed.shapes.iter().any(|shape| matches!(
+            &shape.shape, egui::Shape::Text(text) if text.galley.text() == "ISO"
+        )),
+        "Rynk has no geometry queue while its session is borrowed"
+    );
+    assert_eq!(app.layout_options_value, Some(0));
+    release.send(()).unwrap();
+    drain(&mut app, &ctx);
+    let rect = selector(&frame(&mut app, &ctx, None)).0;
+    click(&mut app, &ctx, rect.center());
+    let popup = frame(&mut app, &ctx, Some(rect.center()));
+    let pos = text_center(&popup, "ISO");
+    click(&mut app, &ctx, pos);
+    assert_eq!(app.layout_options_value, Some(1));
     assert!(
         app.pending_universal_geometry.is_none(),
         "Vial queue intercepted Rynk option"

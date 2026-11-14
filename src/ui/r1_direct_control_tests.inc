@@ -1,5 +1,5 @@
 fn r1_first_tick_direct_action_fixture() -> (EntropyApp,String,String) {
-    let mut app=name_review_device_app(true);
+    let mut app=name_review_cached_sm62_app();
     app.update_application_layout_runtime_with(Default::default());
     let path=r1_attach_inert_owner(&mut app);
     let key=app.application_layout_device_key().unwrap();
