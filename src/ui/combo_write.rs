@@ -87,7 +87,7 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn hid_write_lifecycle_busy(&self) -> bool {
-        self.hid_write_task_active() || self.qmk_settings_write_pending()
+        self.firmware_flash.owns_device() || self.hid_write_task_active() || self.qmk_settings_write_pending()
             || !self.pending_layer_name_writes.is_empty()
             || self.pending_universal_geometry.is_some()
     }

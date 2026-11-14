@@ -118,6 +118,14 @@ impl EntropyApp {
     /// Services shared by the renderer and the Windows windowless tray loop.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn tick_background(&mut self, ctx: &egui::Context) {
+        self.poll_firmware_flash(ctx);
+        if self.firmware_flash.owns_device() {
+            if ctx.input(|i| i.viewport().close_requested()) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            return;
+        }
         #[cfg(target_os = "linux")]
         self.handle_linux_start_hidden_to_tray(ctx);
         #[cfg(target_os = "linux")]
@@ -2648,6 +2656,8 @@ impl eframe::App for EntropyApp {
 
         // Keycode picker modal
         self.draw_vial_unlock_overlay(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.draw_firmware_flash(ctx);
 
         if self.keycode_picker.has_open_modal() {
             let screen_rect = ctx.content_rect();

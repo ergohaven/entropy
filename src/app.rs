@@ -84,6 +84,9 @@ pub(crate) use settings_viewport::*;
 #[path = "ui/onboarding_tour_state.rs"]
 mod onboarding_tour_state;
 use onboarding_tour_state::*;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "ui/firmware_flash.rs"]
+mod firmware_flash_ui;
 #[path = "ui/about_device.rs"]
 mod about_device_ui;
 #[path = "ui/alt_repeat_settings.rs"]

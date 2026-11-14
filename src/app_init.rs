@@ -437,6 +437,8 @@ impl EntropyApp {
             update_check,
             firmware_update_check: FirmwareUpdateCheckState::Unsupported,
             #[cfg(not(target_arch = "wasm32"))]
+            firmware_flash: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
             update_notifications: Default::default(),
             tour_state: TourState::default(),
             tour_target_rects: Vec::new(),
