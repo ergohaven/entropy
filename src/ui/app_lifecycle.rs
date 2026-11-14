@@ -1852,11 +1852,35 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn isolated_hid_fixture_routes_discovery_without_desktop_bootstrap() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let (mut app, scans) = EntropyApp::new_isolated_hid_for_test();
+        let ctx = egui::Context::default();
+        assert!(matches!(app.update_check, UpdateCheckState::Idle));
+        assert!(app.device_manager.devices().is_empty());
+        app.update_native_background(&ctx, 1.0, true, false);
+        let (usb_only, completion) = scans
+            .try_recv()
+            .expect("hidden discovery must be intercepted before the native backend");
+        assert!(!usb_only);
+        assert!(matches!(
+            app.device_scan_state,
+            DeviceScanState::Scanning { .. }
+        ));
+        completion.send(Ok(vec![])).unwrap();
+        app.update_native_background(&ctx, 1.1, true, false);
+        assert!(matches!(app.device_scan_state, DeviceScanState::Idle));
+        assert!(scans.try_recv().is_err(), "discovery remains rate limited");
+        assert!(app.device_manager.devices().is_empty());
+        assert!(matches!(app.update_check, UpdateCheckState::Idle));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn settings_worker_fault_allows_deferred_exit(fault: crate::hid::TestHidFault) {
         let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
-        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EntropyApp::new(&creation_context);
+        let (mut app, scans) = EntropyApp::new_isolated_hid_for_test();
         let (hid_device, recorder) =
             crate::hid::HidDevice::test_device_with_fault_after_requests(Some((2, fault)));
         app.hid_device = Some(hid_device.into());
@@ -1888,6 +1912,14 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
 
+        let (usb_only, scan_completion) = scans
+            .try_recv()
+            .expect("hidden lifecycle discovery must reach the fixture, not native HID");
+        assert!(!usb_only, "the empty fixture starts with full discovery");
+        assert!(scans.try_recv().is_err(), "keep one discovery owner");
+        // Keep this scan pending: publishing an empty inventory is unrelated
+        // to the worker fault and could invalidate its connection generation.
+        let _scan_completion = scan_completion;
         assert_eq!(close_count, 1);
         assert!(!app.exit_after_hid_write);
         assert!(app.hid_device.is_none());
@@ -1913,9 +1945,19 @@ mod tests {
                 .count(),
             1
         );
+        assert_eq!(
+            requests.len(),
+            3,
+            "combo SET/GET completes before settings fails"
+        );
+        assert_eq!(&requests[0][..3], &[0xfe, 0x0d, 0x04]);
+        assert_eq!(&requests[1][..3], &[0xfe, 0x0d, 0x03]);
+        assert_eq!(&requests[2][..4], &[0xfe, 0x0b, 121, 0]);
 
         let output =
-            crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |_ui| {}));
+            crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput::default(), |_ui| {
+                app.update_native_background(&ctx, 0.0, true, false);
+            }));
         assert!(!output
             .viewport_output
             .get(&egui::ViewportId::ROOT)
