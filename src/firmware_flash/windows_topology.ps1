@@ -28,7 +28,8 @@ foreach ($device in @(Get-PnpDevice -PresentOnly)) {
     if ($device.InstanceId -notmatch '^USB\\VID_([0-9A-F]{4})&PID_([0-9A-F]{4})\\([^\\]+)$') { continue }
     $vendor = [Convert]::ToInt32($Matches[1], 16)
     $product = [Convert]::ToInt32($Matches[2], 16)
-    if (!(($vendor -eq 0xE126 -and $product -ge 0x52 -and $product -le 0x54) -or ($vendor -eq 0x2E8A -and $product -eq 3))) { continue }
+    $runtime = $vendor -eq 0xE126 -and (($product -ge 0x52 -and $product -le 0x54) -or ($product -ge 0x71 -and $product -le 0x76))
+    if (!($runtime -or ($vendor -eq 0x2E8A -and $product -eq 3) -or $volumes.ContainsKey($device.InstanceId))) { continue }
     $locations = @(Property $device.InstanceId 'DEVPKEY_Device_LocationPaths')
     if ($locations.Count -lt 1 -or !$locations[0]) { throw 'USB location unavailable' }
     $roots = @()

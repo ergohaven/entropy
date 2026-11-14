@@ -62,6 +62,7 @@ futures-lite = "2"
 # Rynk boards over USB: the vendor bulk interface, claimed without libusb.
 nusb = "0.2"
 sha2 = "0.10"
+zip = { version = "2.6", default-features = false, features = ["deflate-flate2", "flate2"] }
 rfd = "0.15"
 tempfile = "3"
 ureq = { version = "2", features = ["json"] }

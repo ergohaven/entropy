@@ -162,7 +162,7 @@ Exit status: `0` exported, `1` export failed, `2` no or ambiguous keyboard,
 `3` another Entropy instance is running and did not answer, `4` incomplete (the missing sections
 are logged), `64` usage error.
 
-## Updating Phenom firmware
+## Updating keyboard firmware
 
 For Phenom, Phenom Mini, and Phenom Micro over USB, open **About device** and
 check for updates. When newer stable firmware is available, choose **Update
@@ -178,6 +178,24 @@ update only after reading the new firmware version. An already updated half cann
 be flashed or counted again. Import the saved `.entlayout`
 backup afterward if needed. The existing firmware download remains available for
 manual recovery, other keyboards, and reinstalling an already installed version.
+
+RMK K:04, K:04 Mini, and K:04 Micro with Vial firmware also have a guided
+update for both standalone and Qube setups. Start with the left USB central
+or Qube dongle selected. Entropy backs up the configuration and verifies the
+complete model-specific release ZIP, its image checksums, and each image's
+nRF52840 flash boundaries. The guide transfers the right peripheral first
+(left, then right for Qube), followed by the USB central or dongle.
+
+For each peripheral, start the named transfer, disconnect the previous part,
+connect only the requested half to the original USB port, and double-press
+Reset. Check left versus right yourself: the UF2 bootloader does not identify
+the role. A peripheral step is labeled **transfer complete, version unverified**;
+those halves have no normal USB HID for reading back the installed version.
+After the peripheral steps, use **Select USB central or dongle** to return to
+device selection, then resume the guide. The final USB device must report the
+expected new version. Completing the guide does not verify peripheral versions.
+Other RMK models, native Rynk firmware, Bluetooth flashing, and bootloader
+installation are not supported by this updater.
 
 ## Linux Device Access
 

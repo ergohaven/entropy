@@ -68,9 +68,9 @@ fn collect_macos(value: &plist::Value, targets: &mut Vec<UsbTarget>) -> Result<(
                 product: product.try_into()?,
                 mounts: Vec::new(),
             };
-            if vendor == 0x2e8a && product == 3 {
+            if let Some(children) = dict.get("IORegistryEntryChildren") {
                 let mut disks = std::collections::BTreeSet::new();
-                collect_bsd_names(value, &mut disks);
+                collect_bsd_names(children, &mut disks);
                 for disk in disks {
                     let bytes =
                         output(Command::new("/usr/sbin/diskutil").args(["info", "-plist", &disk]))?;
@@ -88,8 +88,9 @@ fn collect_macos(value: &plist::Value, targets: &mut Vec<UsbTarget>) -> Result<(
                     }
                 }
             }
-            if (vendor == 0xe126 && (0x52..=0x54).contains(&product))
+            if (vendor == 0xe126 && super::runtime_product(product.try_into()?))
                 || (vendor == 0x2e8a && product == 3)
+                || !target.mounts.is_empty()
             {
                 targets.push(target);
             }
@@ -109,6 +110,10 @@ fn collect_bsd_names(value: &plist::Value, names: &mut std::collections::BTreeSe
         }
     }
     if let Some(dict) = value.as_dictionary() {
+        // A hub's descendants belong to their own physical USB ports.
+        if dict.contains_key("idVendor") && !dict.contains_key("bInterfaceNumber") {
+            return;
+        }
         if let Some(name) = dict.get("BSD Name").and_then(plist::Value::as_string) {
             names.insert(name.into());
         }
@@ -133,11 +138,6 @@ pub(super) fn snapshot() -> Result<Vec<UsbTarget>> {
         let (Some(vendor), Some(product)) = (hex("idVendor"), hex("idProduct")) else {
             continue;
         };
-        if !((vendor == 0xe126 && (0x52..=0x54).contains(&product))
-            || (vendor == 0x2e8a && product == 3))
-        {
-            continue;
-        }
         let physical = path.canonicalize()?;
         let mut target = UsbTarget {
             port: format!("linux:{}", entry.file_name().to_string_lossy()),
@@ -145,15 +145,19 @@ pub(super) fn snapshot() -> Result<Vec<UsbTarget>> {
             product,
             mounts: Vec::new(),
         };
-        if vendor == 0x2e8a {
+        {
             for line in mounts.lines() {
                 let fields: Vec<_> = line.split_whitespace().collect();
                 if fields.len() < 6 {
                     continue;
                 }
-                if std::fs::canonicalize(PathBuf::from("/sys/dev/block").join(fields[2]))
-                    .is_ok_and(|p| p.starts_with(&physical))
-                {
+                if std::fs::canonicalize(PathBuf::from("/sys/dev/block").join(fields[2])).is_ok_and(
+                    |p| {
+                        p.ancestors()
+                            .find(|ancestor| ancestor.join("idVendor").is_file())
+                            == Some(physical.as_path())
+                    },
+                ) {
                     let mount = unescape_mount(fields[4])?;
                     if !target.mounts.contains(&mount) {
                         target.mounts.push(mount);
@@ -161,7 +165,12 @@ pub(super) fn snapshot() -> Result<Vec<UsbTarget>> {
                 }
             }
         }
-        targets.push(target);
+        if (vendor == 0xe126 && super::runtime_product(product))
+            || (vendor == 0x2e8a && product == 3)
+            || !target.mounts.is_empty()
+        {
+            targets.push(target);
+        }
     }
     Ok(targets)
 }

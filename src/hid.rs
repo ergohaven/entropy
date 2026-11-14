@@ -1074,12 +1074,19 @@ impl HidDevice {
     }
 
     /// Secure Vial permits bootloader entry only after physical unlock.
-    pub(crate) fn enter_bootloader(&self) -> Result<()> {
+    pub(crate) fn enter_bootloader(&self, resets_before_ack: bool) -> Result<()> {
         anyhow::ensure!(!self.is_bluetooth_transport(), "Bootloader entry requires USB");
         let (unlocked, in_progress, _) = self.get_unlock_status_with_progress()?;
         anyhow::ensure!(unlocked && !in_progress, "Unlock the keyboard before entering update mode");
         self.with_host_output_paused_for_settings(|| {
-            let response = self.usb_send(&[0x0b])?;
+            let response = self.usb_send(&[0x0b]);
+            // RMK jumps from the command handler before replying. USB removal
+            // is expected; the updater still requires the original USB port
+            // and a validated bootloader before it may write firmware.
+            if resets_before_ack {
+                return Ok(());
+            }
+            let response = response?;
             anyhow::ensure!(response[0] == 0x0b, "Keyboard did not acknowledge bootloader entry");
             Ok(())
         })
@@ -2208,24 +2215,39 @@ mod tests {
 
     #[test]
     fn firmware_flash_bootloader_entry_requires_fresh_physical_unlock() {
-        for (unlocked, in_progress, allowed) in [(0, 0, false), (1, 1, false), (1, 0, true)] {
+        for resets_before_ack in [false, true] {
+            for (unlocked, in_progress, allowed) in [(0, 0, false), (1, 1, false), (1, 0, true)] {
+                let (hid, recorder) = HidDevice::test_device();
+                let mut status = [0xff; MSG_LEN];
+                status[0] = unlocked;
+                status[1] = in_progress;
+                let mut ack = [0; MSG_LEN];
+                ack[0] = 0x0b;
+                recorder.respond_with([status, ack]);
+                assert_eq!(hid.enter_bootloader(resets_before_ack).is_ok(), allowed);
+                let requests = recorder.requests();
+                assert_eq!(requests[0][..2], [0xfe, 5]);
+                assert_eq!(requests.iter().filter(|r| r[0] == 0x0b).count(), usize::from(allowed));
+            }
             let (hid, recorder) = HidDevice::test_device();
-            let mut status = [0xff; MSG_LEN];
-            status[0] = unlocked;
-            status[1] = in_progress;
-            let mut ack = [0; MSG_LEN];
-            ack[0] = 0x0b;
-            recorder.respond_with([status, ack]);
-            assert_eq!(hid.enter_bootloader().is_ok(), allowed);
-            let requests = recorder.requests();
-            assert_eq!(requests[0][..2], [0xfe, 5]);
-            assert_eq!(requests.iter().filter(|r| r[0] == 0x0b).count(), usize::from(allowed));
+            recorder.set_bluetooth();
+            assert!(hid.enter_bootloader(false).is_err());
+            assert!(recorder.requests().is_empty());
+            assert_eq!(usb_send_max_attempts(HidTransport::Usb, &[0x0b]), 1);
         }
-        let (hid, recorder) = HidDevice::test_device();
-        recorder.set_bluetooth();
-        assert!(hid.enter_bootloader().is_err());
-        assert!(recorder.requests().is_empty());
-        assert_eq!(usb_send_max_attempts(HidTransport::Usb, &[0x0b]), 1);
+        for resets_before_ack in [false, true] {
+            let (hid, recorder) = HidDevice::test_device();
+            recorder.respond_by(|request| {
+                if request[0] == 0x0b { Some(Err("USB device reset before ACK".into())) }
+                else if request[..2] == [0xfe, 5] {
+                    let mut status = [0xff; MSG_LEN];
+                    status[0] = 1; status[1] = 0;
+                    Some(Ok(status))
+                } else { None }
+            });
+            assert_eq!(hid.enter_bootloader(resets_before_ack).is_ok(), resets_before_ack);
+            assert_eq!(recorder.requests().iter().filter(|r| r[0] == 0x0b).count(), 1);
+        }
     }
 
 
