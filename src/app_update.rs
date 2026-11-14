@@ -62,6 +62,7 @@ impl UpdateCheckResult {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FirmwareReleaseFamily {
     Rmk,
+    Rynk,
     Qmk,
 }
 
@@ -268,7 +269,7 @@ pub(crate) fn start_firmware_update_check(
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let outcome = match fetch_github_json(match worker_target.family {
-                FirmwareReleaseFamily::Rmk => RMK_RELEASES_API,
+                FirmwareReleaseFamily::Rmk | FirmwareReleaseFamily::Rynk => RMK_RELEASES_API,
                 FirmwareReleaseFamily::Qmk => QMK_RELEASES_API,
             }) {
                 Ok(releases) => build_firmware_update_result(&worker_target, releases)
@@ -446,7 +447,7 @@ pub(crate) fn rmk_firmware_release_target(
         .and_then(serde_json::Value::as_str)
         .is_some_and(|name| name.to_ascii_lowercase().contains("rmk"));
     let legacy_zero_major = numeric_version_parts(current_version).first() == Some(&0);
-    let catalog_asset = legacy_rmk_asset_prefix(product_id, legacy_qube);
+    let catalog_asset = rmk_asset_prefix(product_id, legacy_qube);
 
     if explicit_metadata_present && explicit_asset.is_none() {
         return None;
@@ -463,11 +464,8 @@ pub(crate) fn rmk_firmware_release_target(
     })
 }
 
-/// What a Rynk build's package adds to its board's asset name, so that a Vial
-/// package of the board never passes for one, whatever the release numbering.
-const RYNK_ASSET_SUFFIX: &str = "-rynk";
-
-/// The release a Rynk board updates from: its board's, under Rynk's own asset.
+/// Native Rynk is the default package protocol starting with Ergohaven RMK 0.3.0.
+/// Earlier model-only archives contain Vial firmware and must never be selected.
 pub(crate) fn rynk_firmware_release_target(
     vendor_id: u16,
     product_id: u16,
@@ -476,14 +474,9 @@ pub(crate) fn rynk_firmware_release_target(
     legacy_qube: bool,
 ) -> Option<FirmwareReleaseTarget> {
     let mut target = rmk_firmware_release_target(
-        vendor_id,
-        product_id,
-        firmware_version,
-        board_definition,
-        legacy_qube,
-        true,
+        vendor_id, product_id, firmware_version, board_definition, legacy_qube, true,
     )?;
-    target.asset_prefix.push_str(RYNK_ASSET_SUFFIX);
+    target.family = FirmwareReleaseFamily::Rynk;
     Some(target)
 }
 
@@ -571,8 +564,11 @@ pub(crate) fn firmware_release_target(
     })
 }
 
-fn legacy_rmk_asset_prefix(product_id: u16, qube: bool) -> Option<&'static str> {
+fn rmk_asset_prefix(product_id: u16, qube: bool) -> Option<&'static str> {
     match (product_id, qube) {
+        (0x0052, false) => Some("phenom"),
+        (0x0053, false) => Some("phenom-mini"),
+        (0x0054, false) => Some("phenom-micro"),
         (0x0036, false) => Some("op36"),
         (0x0036, true) => Some("op36-qube"),
         (0x0044, false) => Some("imperial44"),
@@ -856,8 +852,18 @@ fn build_firmware_update_result(
         .filter(|release| !release.draft && !release.prerelease)
         .filter_map(|mut release| {
             let expected_asset = match target.family {
-                FirmwareReleaseFamily::Rmk => {
+                FirmwareReleaseFamily::Rynk => {
+                    let version = semver::Version::parse(release.tag_name.trim_start_matches('v')).ok()?;
+                    if version < semver::Version::new(0, 3, 0) || !version.pre.is_empty() || !version.build.is_empty() { return None; }
                     format!("{}-{}.zip", target.asset_prefix, release.tag_name)
+                }
+                FirmwareReleaseFamily::Rmk => {
+                    // Preserve manual Vial downloads without sending a Vial board
+                    // to the new native default archive. No Vial flashing is offered.
+                    let native = semver::Version::parse(release.tag_name.trim_start_matches('v'))
+                        .is_ok_and(|v| v >= semver::Version::new(0, 3, 0));
+                    let variant = if native { "-vial" } else { "" };
+                    format!("{}{variant}-{}.zip", target.asset_prefix, release.tag_name)
                 }
                 FirmwareReleaseFamily::Qmk => {
                     format!("{}_{}.uf2", release.tag_name, target.asset_prefix)
@@ -1543,39 +1549,38 @@ mod tests {
     #[test]
     fn a_rynk_board_takes_only_rynk_packages() {
         let target = rynk_firmware_release_target(
-            ERGOHAVEN_VENDOR_ID,
-            0x0072,
-            Some("0.2.0"),
-            &serde_json::json!({
-                "firmware": {"name": "RMK"},
-                "entropy": {"firmwareUpdate": {"asset": "k04-mini-qube"}}
-            }),
+            ERGOHAVEN_VENDOR_ID, 0x0072, Some("0.3.0"),
+            &serde_json::json!({"entropy": {"firmwareUpdate": {"asset": "k04-mini-qube"}}}),
             true,
-        )
-        .unwrap();
-        let vial_releases = || {
-            vec![
-                release("v0.2.0", false, false, &["k04-mini-qube-v0.2.0.zip"]),
-                release("v0.3.0", false, false, &["k04-mini-qube-v0.3.0.zip"]),
-            ]
-        };
-
-        assert!(
-            build_firmware_update_result(&target, vial_releases()).is_none(),
-            "a Vial package is no update for a Rynk board"
-        );
-
-        let mut releases = vial_releases();
-        releases.push(release(
-            "v0.2.1",
-            false,
-            false,
-            &["k04-mini-qube-v0.2.1.zip", "k04-mini-qube-rynk-v0.2.1.zip"],
-        ));
-        let result = build_firmware_update_result(&target, releases).unwrap();
-
-        assert_eq!(result.asset.name, "k04-mini-qube-rynk-v0.2.1.zip");
+        ).unwrap();
+        // Model-only archives before 0.3.0 are Vial, as are explicit Vial variants.
+        assert!(build_firmware_update_result(&target, vec![
+            release("v0.2.0", false, false, &["k04-mini-qube-v0.2.0.zip"]),
+            release("v0.4.0", false, false, &["k04-mini-qube-vial-v0.4.0.zip"]),
+        ]).is_none());
+        let result = build_firmware_update_result(&target, vec![
+            release("v0.3.1", false, false, &["k04-mini-qube-v0.3.1.zip"]),
+            release("v0.4.0", false, false, &["k04-mini-qube-vial-v0.4.0.zip"]),
+        ]).expect("Rynk is the default archive protocol starting with RMK 0.3.0");
+        assert_eq!(result.asset.name, "k04-mini-qube-v0.3.1.zip");
         assert_eq!(result.relation, VersionRelation::UpdateAvailable);
+        let phenom = rynk_firmware_release_target(
+            ERGOHAVEN_VENDOR_ID, 0x0052, Some("0.3.0"), &serde_json::json!({}), false,
+        ).expect("Phenom RMK has no embedded updater selector");
+        assert_eq!(phenom.asset_prefix, "phenom");
+    }
+
+    #[test]
+    fn vial_downloads_choose_explicit_variants_after_rmk_030() {
+        let target = FirmwareReleaseTarget {
+            family: FirmwareReleaseFamily::Rmk,
+            current_version: "0.2.0".into(),
+            asset_prefix: "k04".into(),
+        };
+        let result = build_firmware_update_result(&target, vec![release(
+            "v0.3.1", false, false, &["k04-v0.3.1.zip", "k04-vial-v0.3.1.zip"],
+        )]).unwrap();
+        assert_eq!(result.asset.name, "k04-vial-v0.3.1.zip");
     }
 
     #[test]
@@ -1591,6 +1596,19 @@ mod tests {
             vec![release("v0.1.6", false, false, &["k04-v0.1.6.zip"])]
         )
         .is_none());
+    }
+
+    #[test]
+    fn legacy_downloads_keep_non_semver_release_tags() {
+        for (family, asset) in [
+            (FirmwareReleaseFamily::Qmk, "4.1_phenom_v1.uf2"),
+            (FirmwareReleaseFamily::Rmk, "phenom_v1-4.1.zip"),
+        ] {
+            let target = FirmwareReleaseTarget {
+                family, current_version: "4.0".into(), asset_prefix: "phenom_v1".into(),
+            };
+            assert_eq!(build_firmware_update_result(&target, vec![release("4.1", false, false, &[asset])]).unwrap().asset.name, asset);
+        }
     }
 
     #[test]

@@ -880,8 +880,20 @@ impl EntropyApp {
                 );
 
                 #[cfg(not(target_arch = "wasm32"))]
+                if self.selected_device.and_then(|i| self.device_manager.devices().get(i))
+                    .is_some_and(|d| d.vendor_id == 0xe126 && matches!(d.product_id, 0x52..=0x54 | 0x71..=0x76))
+                {
+                    ui.label(match lang {
+                        crate::i18n::Language::English => "In-app flashing requires Entropy 0.6.0+ and RMK 0.3.0+ with Rynk over USB. For QMK/Vial or older RMK, first migrate the complete keyboard manually; export your layout before migrating.",
+                        crate::i18n::Language::Russian => "Прошивка из приложения требует Entropy 0.6.0+ и RMK 0.3.0+ с Rynk по USB. С QMK/Vial или старой RMK сначала обновите все части вручную; перед переходом экспортируйте раскладку.",
+                    });
+                }
+                #[cfg(not(target_arch = "wasm32"))]
                 if let FirmwareUpdateCheckState::Ready { target, result } = &self.firmware_update_check {
                     if info.firmware_update_target.as_ref() == Some(target)
+                        && target.family == FirmwareReleaseFamily::Rynk
+                        && crate::firmware_flash::compatible_version(&target.current_version)
+                        && crate::firmware_flash::compatible_version(&result.latest_version)
                         && result.relation == VersionRelation::UpdateAvailable
                         && self.selected_device.and_then(|i| self.device_manager.devices().get(i))
                             .is_some_and(crate::firmware_flash::supported) {

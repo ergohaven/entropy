@@ -592,7 +592,7 @@ mod tests {
         assert_eq!(result.combo_term, Some(200));
         assert!(result.supports_universal_symbols, "the board has symbols");
         let update = result.about_info.firmware_update_target.as_ref().unwrap();
-        assert_eq!(update.asset_prefix, "k04-rynk", "the board's Rynk package");
+        assert_eq!(update.asset_prefix, "k04", "the board's Rynk package");
         assert_eq!(update.current_version, "2.3.1");
         assert!(
             !result.supports_universal_russian_letters,

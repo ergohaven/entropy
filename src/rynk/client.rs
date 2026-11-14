@@ -490,6 +490,19 @@ impl<T: RynkTransport> RynkClient<T> {
         reply
     }
 
+    /// Reset may disconnect USB after the command has been written. A failed
+    /// write is still an error; only a missing reply can mean reset succeeded.
+    pub(crate) fn enter_bootloader(&mut self) -> Result<(), RynkClientError> {
+        let seq = self.send::<command::BootloaderJump>(&())?;
+        match self.wait_reply(command::BootloaderJump::CMD, seq)
+            .and_then(|frame| decode_reply::<command::BootloaderJump>(&frame))
+        {
+            Ok(()) | Err(RynkClientError::Transport(_))
+                | Err(RynkClientError::Timeout { .. }) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Requests of one endpoint and their replies, in order. Over a transport
     /// that pipelines, a window of them goes out back to back before their
     /// replies are read, which the board sends in order. One the board

@@ -1,10 +1,11 @@
-//! Published RMK K:04 Vial packages. Roles follow the six release profiles;
+//! Native RMK 0.3.0+ packages for Phenom and K:04. Roles follow the release profiles;
 //! peripheral images have no runtime USB HID through which to verify a version.
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Part {
-    Phenom,
+    PhenomCentral,
+    PhenomPeripheral,
     LeftPeripheral,
     RightPeripheral,
     LeftCentral,
@@ -13,15 +14,21 @@ pub(crate) enum Part {
 
 impl Part {
     pub(crate) fn peripheral(self) -> bool {
-        matches!(self, Self::LeftPeripheral | Self::RightPeripheral)
+        matches!(
+            self,
+            Self::LeftPeripheral | Self::RightPeripheral | Self::PhenomPeripheral
+        )
+    }
+
+    pub(crate) fn rp2040(self) -> bool {
+        matches!(self, Self::PhenomCentral | Self::PhenomPeripheral)
     }
 
     fn suffix(self) -> &'static str {
         match self {
-            Self::LeftPeripheral | Self::LeftCentral => "left",
-            Self::RightPeripheral => "right",
+            Self::LeftPeripheral | Self::LeftCentral | Self::PhenomCentral => "left",
+            Self::RightPeripheral | Self::PhenomPeripheral => "right",
             Self::Dongle => "dongle",
-            Self::Phenom => unreachable!(),
         }
     }
 }
@@ -34,6 +41,9 @@ pub(crate) struct Profile {
 
 pub(crate) fn profile(pid: u16) -> Option<Profile> {
     let (archive, output, qube) = match pid {
+        0x52 => ("phenom", "phenom", false),
+        0x53 => ("phenom-mini", "phenom_mini", false),
+        0x54 => ("phenom-micro", "phenom_micro", false),
         0x71 => ("k04-qube", "k04_qube_k04", true),
         0x72 => ("k04-mini-qube", "k04_qube_mini", true),
         0x73 => ("k04-micro-qube", "k04_qube_micro", true),
@@ -46,7 +56,9 @@ pub(crate) fn profile(pid: u16) -> Option<Profile> {
         archive,
         output,
         // Keep the normal USB device on old firmware until the final step.
-        parts: if qube {
+        parts: if matches!(pid, 0x52..=0x54) {
+            &[Part::PhenomPeripheral, Part::PhenomCentral]
+        } else if qube {
             &[Part::LeftPeripheral, Part::RightPeripheral, Part::Dongle]
         } else {
             &[Part::RightPeripheral, Part::LeftCentral]
@@ -55,7 +67,7 @@ pub(crate) fn profile(pid: u16) -> Option<Profile> {
 }
 
 pub(super) fn unpack(bytes: &[u8], pid: u16) -> Result<Vec<(Part, Vec<u8>)>> {
-    let profile = profile(pid).context("Unsupported K:04 model")?;
+    let profile = profile(pid).context("Unsupported Rynk keyboard model")?;
     let names: Vec<_> = profile
         .parts
         .iter()
@@ -144,7 +156,9 @@ mod tests {
             (8, 0x2000),
             (
                 12,
-                if part == Part::Dongle {
+                if part.rp2040() {
+                    0x10000000
+                } else if part == Part::Dongle {
                     0x1000
                 } else {
                     0x26000
@@ -152,7 +166,14 @@ mod tests {
             ),
             (16, 256),
             (24, 1),
-            (28, 0xada52840),
+            (
+                28,
+                if part.rp2040() {
+                    0xe48bff56
+                } else {
+                    0xada52840
+                },
+            ),
             (508, 0x0ab16f30),
         ] {
             bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
@@ -193,7 +214,7 @@ mod tests {
 
     #[test]
     fn firmware_flash_k04_packages_preserve_model_topology_and_role_order() {
-        for pid in 0x71..=0x76 {
+        for pid in (0x52..=0x54).chain(0x71..=0x76) {
             let images = unpack(&package(pid, |_| {}), pid).unwrap();
             assert_eq!(
                 images.iter().map(|(p, _)| *p).collect::<Vec<_>>(),
@@ -204,6 +225,8 @@ mod tests {
             }
         }
         assert!(unpack(&package(0x74, |_| {}), 0x75).is_err());
+        assert!(unpack(&package(0x52, |_| {}), 0x74).is_err());
+        assert!(unpack(&package(0x52, |_| {}), 0x53).is_err());
         assert!(unpack(&package(0x71, |_| {}), 0x74).is_err());
         assert!(unpack(&package(0x74, |f| f[0].1[32] ^= 1), 0x74).is_err());
         assert!(unpack(&package(0x74, |f| f[0].0 = "../left.uf2".into()), 0x74).is_err());
@@ -220,7 +243,7 @@ mod tests {
             Part::Dongle,
         ] {
             assert!(validate_uf2_for(&image(part), part).is_ok());
-            assert!(validate_uf2_for(&image(part), Part::Phenom).is_err());
+            assert!(validate_uf2_for(&image(part), Part::PhenomCentral).is_err());
             for address in [0, 0xcc000, 0xec000, 0xf4000, 0x10000000] {
                 let mut bytes = image(part);
                 bytes[12..16].copy_from_slice(&u32::to_le_bytes(address));
@@ -234,19 +257,22 @@ mod tests {
         assert!(validate_uf2_for(&image(Part::LeftCentral), Part::Dongle).is_err());
     }
 
-    // Source-only release compatibility probe. Download the six named stable
-    // archives separately, then opt in with ENTROPY_K04_RELEASE_DIR.
+    // Source-only release compatibility probe. Download the nine named stable
+    // archives separately, then opt in with ENTROPY_RYNK_RELEASE_DIR.
     #[test]
-    #[ignore = "requires downloaded official K:04 release archives"]
-    fn firmware_flash_k04_published_archives() {
-        let root = std::env::var_os("ENTROPY_K04_RELEASE_DIR").expect("release fixture directory");
+    #[ignore = "requires published native RMK 0.3.0 archives"]
+    fn firmware_flash_rynk_published_archives() {
+        let root = std::env::var_os("ENTROPY_RYNK_RELEASE_DIR").expect("release fixture directory");
         for (pid, name) in [
-            (0x74, "k04-v0.2.0.zip"),
-            (0x75, "k04-mini-v0.2.0.zip"),
-            (0x76, "k04-micro-v0.2.0.zip"),
-            (0x71, "k04-qube-v0.2.0.zip"),
-            (0x72, "k04-mini-qube-v0.2.0.zip"),
-            (0x73, "k04-micro-qube-v0.2.0.zip"),
+            (0x52, "phenom-v0.3.0.zip"),
+            (0x53, "phenom-mini-v0.3.0.zip"),
+            (0x54, "phenom-micro-v0.3.0.zip"),
+            (0x74, "k04-v0.3.0.zip"),
+            (0x75, "k04-mini-v0.3.0.zip"),
+            (0x76, "k04-micro-v0.3.0.zip"),
+            (0x71, "k04-qube-v0.3.0.zip"),
+            (0x72, "k04-mini-qube-v0.3.0.zip"),
+            (0x73, "k04-micro-qube-v0.3.0.zip"),
         ] {
             let bytes = std::fs::read(PathBuf::from(&root).join(name)).unwrap();
             let images = unpack(&bytes, pid).unwrap();
