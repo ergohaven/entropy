@@ -61,6 +61,7 @@ url = "2"
 futures-lite = "2"
 # Rynk boards over USB: the vendor bulk interface, claimed without libusb.
 nusb = "0.2"
+sha2 = "0.10"
 rfd = "0.15"
 tempfile = "3"
 ureq = { version = "2", features = ["json"] }
@@ -77,6 +78,7 @@ windows-sys = { version = "0.60", features = ["Win32_Devices_DeviceAndDriverInst
 windows = { version = "0.56", features = ["Foundation", "Foundation_Collections", "Media_Control", "Win32_Media_Audio_Endpoints", "Win32_System_Com_StructuredStorage"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+plist = "1"
 # Vial shares a Bluetooth HID service with the keyboard reports. Shared mode
 # prevents hidapi from trying to seize the whole keyboard, which macOS rejects.
 hidapi = { version = "2.6", features = ["macos-shared-device"] }

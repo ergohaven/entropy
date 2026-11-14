@@ -5994,6 +5994,8 @@ pub struct EntropyApp {
     pub(crate) update_check: UpdateCheckState,
     pub(crate) firmware_update_check: FirmwareUpdateCheckState,
     #[cfg(not(target_arch = "wasm32"))]
+    pub(super) firmware_flash: super::firmware_flash_ui::FirmwareFlashUi,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) update_notifications: super::update_notifications::UpdateNotifications,
     pub(crate) tour_state: TourState,
     pub(crate) tour_target_rects: Vec<(TourTarget, egui::Rect)>,

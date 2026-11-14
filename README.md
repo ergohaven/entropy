@@ -162,6 +162,23 @@ Exit status: `0` exported, `1` export failed, `2` no or ambiguous keyboard,
 `3` another Entropy instance is running and did not answer, `4` incomplete (the missing sections
 are logged), `64` usage error.
 
+## Updating Phenom firmware
+
+For Phenom, Phenom Mini, and Phenom Micro over USB, open **About device** and
+check for updates. When newer stable firmware is available, choose **Update
+firmware…**. Entropy saves a complete configuration backup, verifies the release
+checksum and UF2 image, and offers physical unlock or the keyboard's Reset button
+to enter update mode. Keep that half in the same USB port until verification ends.
+The bootloader drive must be mounted by the operating system.
+
+Connect only one Phenom half by USB at a time. Update each half with its own direct USB connection. After the first half is
+verified, connect and select the other half, then open **Update firmware…** again.
+Entropy counts verified version changes during this app session and confirms an
+update only after reading the new firmware version. An already updated half cannot
+be flashed or counted again. Import the saved `.entlayout`
+backup afterward if needed. The existing firmware download remains available for
+manual recovery, other keyboards, and reinstalling an already installed version.
+
 ## Linux Device Access
 
 Vial devices use hidraw access on Linux. If your device appears but cannot be opened,

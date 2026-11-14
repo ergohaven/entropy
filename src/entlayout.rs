@@ -2328,6 +2328,22 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn write_firmware_update_backup(&mut self) -> Result<PathBuf> {
+        self.require_complete_entlayout_lighting()?;
+        self.confirm_entlayout_macros()?;
+        self.confirm_uncertain_layer_names()?;
+        let bundle = self.prepared_entlayout_snapshot()?.context("Load the full keyboard configuration before updating firmware")?;
+        self.validate_entlayout_file(&bundle)?;
+        let config_root = storage_config_dir().context("No backup storage directory")?;
+        let namespace = self.import_backup_namespace.as_ref()
+            .map_err(|error| anyhow::anyhow!("Prepare backup storage: {error}"))?;
+        anyhow::ensure!(namespace.matches_config_root(&config_root), "Backup storage changed; restart before updating firmware");
+        let backup = backup_durability::publish_backup(namespace, &device_id_slug(&bundle.keyboard.name),
+            |file| serde_json::to_writer_pretty(file, &bundle).map_err(std::io::Error::other))?;
+        Ok(backup.path)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn write_entlayout_auto_backup(&self) -> Result<PathBuf> {
         let bundle = self.entlayout_snapshot().context(crate::i18n::tr_catalog(
             self.app_settings.language,
@@ -5884,6 +5900,23 @@ mod tests {
             &hid,
         );
         app
+    }
+
+    #[test]
+    fn firmware_flash_backup_publishes_complete_layout_without_replacing_prior_backup() {
+        let config = ScopedTempConfig::new();
+        let mut app = phenom_app(16);
+        let expected = app.entlayout_snapshot().unwrap();
+        let first = app.write_firmware_update_backup().unwrap();
+        let bytes = std::fs::read(&first).unwrap();
+        let saved: EntLayoutFile = serde_json::from_slice(&bytes).unwrap();
+        assert!(first.starts_with(config.path().canonicalize().unwrap()));
+        assert_eq!(saved.data.keymap, expected.data.keymap);
+        assert_eq!(saved.data.portable_settings.len(), 4);
+        assert_eq!(serde_json::to_value(&saved.data).unwrap(), serde_json::to_value(&expected.data).unwrap());
+        let second = app.write_firmware_update_backup().unwrap();
+        assert_ne!(first, second);
+        assert_eq!(std::fs::read(first).unwrap(), bytes);
     }
 
     #[test]
