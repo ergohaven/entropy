@@ -2227,14 +2227,19 @@ mod tests {
     }
 
     fn poll_until_vial_hid_idle(app: &mut EntropyApp, ctx: &egui::Context) {
-        for _ in 0..100 {
+        // Leave room for readback retries and worker scheduling on slower CI hosts.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
             app.poll_vial_hid_task(ctx);
             if !app.vial_hid_task_active() {
                 return;
             }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Keyboard HID task did not finish within 5 seconds"
+            );
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        panic!("Keyboard HID task did not finish");
     }
 
     #[test]
@@ -3185,7 +3190,17 @@ mod tests {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EntropyApp::new(&creation_context);
-        let (hid, _recorder) = crate::hid::HidDevice::test_device();
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        let mut readback_delay = Some(std::time::Duration::from_millis(250));
+        recorder.respond_by(move |request| {
+            if request[0] == 0x04 {
+                // A slow readback must still reach the rollback assertions.
+                if let Some(delay) = readback_delay.take() {
+                    std::thread::sleep(delay);
+                }
+            }
+            None
+        });
         app.hid_device = Some(hid.into());
         app.layout = Some(single_key_layout(0x0004));
 
