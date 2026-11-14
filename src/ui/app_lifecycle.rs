@@ -568,15 +568,17 @@ impl EntropyApp {
         // These synthetic import ticks do not model external rule-file edits.
         // Keep their unrelated watcher from replacing the operation's status
         // when an isolated test has no Text Expander rule files on disk.
-        self.text_expander_rules_last_check_at = self.app_clock.elapsed().as_secs_f64() + 60.0;
-        self.update_native_background(ctx, now, false, true);
+        self.text_expander_rules_last_check_at = self.app_clock_now() + 60.0;
+        crate::app_discovery::with_test_application_discovery_or_default(|| {
+            self.update_native_background(ctx, now, false, true);
+        });
     }
 
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(super) fn tick_foreground_runtime_for_test(&mut self, ctx: &egui::Context, now: f64, hidden: bool) {
         self.last_device_scan_at = now.max(f64::EPSILON);
         self.last_full_device_scan_at = now.max(f64::EPSILON);
-        self.text_expander_rules_last_check_at = self.app_clock.elapsed().as_secs_f64() + 60.0;
+        self.text_expander_rules_last_check_at = self.app_clock_now() + 60.0;
         self.update_native_background(ctx, now, hidden, true);
     }
 
@@ -1030,6 +1032,16 @@ mod tests {
     use crate::keyboard::{KeyboardLayout, LayoutOption, PhysicalKey};
 
     #[test]
+    fn scripted_app_clock_does_not_advance_with_host_time() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let mut app = EntropyApp::new_inert_for_test();
+        app.test_set_app_clock(11.5);
+        // Simulate a slow frame or a scheduler pause without sleeping.
+        app.app_clock -= std::time::Duration::from_secs(3);
+        assert_eq!(app.app_clock_now(), 11.5);
+    }
+
+    #[test]
     fn logic_only_ticks_advance_device_discovery_with_frozen_painted_time() {
         let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
@@ -1063,7 +1075,11 @@ mod tests {
                 assert!(!usb_only, "an empty inventory needs full discovery");
                 complete.send(Ok(vec![])).unwrap();
             } else {
-                assert!(scans.try_recv().is_err(), "keep the scan rate limit");
+                assert!(
+                    scans.try_recv().is_err(),
+                    "keep the scan rate limit at scripted time {now}; last scan at {}",
+                    app.last_device_scan_at,
+                );
             }
         }
         assert!(app.last_full_device_scan_at >= 14.2);
