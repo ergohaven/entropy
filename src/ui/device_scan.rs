@@ -106,6 +106,7 @@ impl EntropyApp {
     /// A board picked in the device menu: connected unless it already is,
     /// and remembered either way.
     pub(super) fn pick_device(&mut self, device_idx: usize) {
+        self.startup_device = None;
         if self.selected_device != Some(device_idx) || self.pending_device_connect.is_some() {
             self.connect_picked_device(device_idx);
         } else {
@@ -143,6 +144,19 @@ impl EntropyApp {
                 self.pending_device_connect = None;
             }
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn startup_target_needs_udev(
+        &self,
+        access: super::app_settings_ui::UdevAccess,
+    ) -> bool {
+        self.startup_device
+            .as_ref()
+            .and_then(|target| target.select(self.device_manager.devices()))
+            .is_some_and(|index| {
+                udev_rule_missing(&self.device_manager.devices()[index..=index], access)
+            })
     }
 
     #[cfg(target_os = "linux")]
@@ -467,6 +481,23 @@ impl EntropyApp {
         {
             self.retain_connected_qmk_hid_host_bridges();
             return;
+        }
+
+        if !was_loading && self.selected_device.is_none() && self.layout.is_none() {
+            if let Some(target) = &self.startup_device {
+                if let Some(index) = target.select(self.device_manager.devices()) {
+                    #[cfg(target_os = "linux")]
+                    if self.startup_target_needs_udev(self.device_scan_udev_access()) {
+                        self.retain_connected_qmk_hid_host_bridges();
+                        return;
+                    }
+                    self.connect_picked_device(index);
+                }
+                // Never fall back to a different board while the target is absent
+                // or ambiguous. Inventory remains available for a manual pick.
+                self.retain_connected_qmk_hid_host_bridges();
+                return;
+            }
         }
 
         // The board picked last comes back on its own, however many others
@@ -806,6 +837,27 @@ mod tests {
         twin.path = format!("/nonexistent/entropy-test-{path}");
         twin.instance_token = format!("{path}-instance");
         twin
+    }
+
+    #[test]
+    fn startup_device_reconnects_like_a_manually_picked_board() {
+        let mut app = EntropyApp::new_inert_for_test().with_startup_device(Some("Target".into()));
+        let (tx, requests) = mpsc::channel();
+        app.test_connect_requests = Some(tx);
+        #[cfg(target_os = "linux")]
+        {
+            app.test_device_scan_udev_access = Some(V3);
+        }
+        let target = scan_test_device("Target");
+        let other = scan_test_device("Other");
+        app.apply_device_scan_result(vec![target.clone(), other.clone()]);
+        assert_eq!(requests.try_recv().unwrap().0.path, target.path);
+        connected_to(&mut app, 0);
+        app.apply_device_scan_result(vec![other.clone()]);
+        assert_eq!(requests.try_recv().unwrap().0.path, other.path);
+        connected_to(&mut app, 0);
+        app.apply_device_scan_result(vec![target.clone(), other]);
+        assert_eq!(requests.try_recv().unwrap().0.path, target.path);
     }
 
     /// The picked board, opened and loaded.

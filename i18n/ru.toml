@@ -123,6 +123,10 @@ pending_tap_hint = "Hold отправит модификатор; tap отпра
 cancel = "✕ Отмена"
 
 [ui]
+startup_device_ambiguous = "Эти устройства невозможно различить. Выберите устройство вручную при запуске."
+startup_device_label = "Устройство при запуске"
+startup_device_tooltip = "Подключаться к этому устройству при следующем запуске. «Автоматически» возвращает обычный выбор устройства."
+startup_device_automatic = "Автоматически"
 main_tab_layout = "Раскладка"
 main_tab_advanced = "Дополнительно"
 main_tab_config = "Настройки"

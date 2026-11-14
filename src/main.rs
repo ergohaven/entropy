@@ -307,13 +307,20 @@ fn main() -> eframe::Result<()> {
     app::EntropyApp::initialize_import_backup_namespace();
 
     #[cfg(not(target_arch = "wasm32"))]
-    let headless_export = match app::HeadlessExportRequest::from_args(std::env::args_os()) {
+    let launch_request = match app::LaunchRequest::from_args(std::env::args_os()) {
         Ok(request) => request,
         Err(usage) => {
             eprintln!("{usage}");
             std::process::exit(app::EXIT_USAGE);
         }
     };
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let headless_export = launch_request.export;
+    #[cfg(not(target_arch = "wasm32"))]
+    let launch_device = launch_request.gui_device;
+    #[cfg(target_arch = "wasm32")]
+    let launch_device: Option<String> = None;
 
     diagnostics::init(diagnostics::settings_file_enabled());
     let launch_minimized = launch_minimized_from_args(std::env::args_os());
@@ -342,6 +349,13 @@ fn main() -> eframe::Result<()> {
     {
         if single_instance_enabled() {
             if !try_acquire_single_instance() {
+                if launch_device.is_some() {
+                    let message =
+                        "Entropy is already running; close it before launching with --device";
+                    log::error!("{message}");
+                    eprintln!("{message}");
+                    std::process::exit(app::EXIT_INSTANCE_RUNNING);
+                }
                 if !launch_minimized {
                     notify_existing_instance();
                     #[cfg(target_os = "windows")]
@@ -365,7 +379,8 @@ fn main() -> eframe::Result<()> {
     #[cfg(target_os = "windows")]
     let (background_app, launch_minimized) = if launch_minimized {
         let ctx = egui::Context::default();
-        let mut app = app::EntropyApp::new_with_context(&ctx);
+        let mut app =
+            app::EntropyApp::new_with_context(&ctx).with_startup_device(launch_device.clone());
         // The layout indicator is itself a graphics window. Keep its existing
         // startup behavior, including the hidden main window.
         if app.app_settings.sticky_layout_window {
@@ -518,9 +533,10 @@ fn main() -> eframe::Result<()> {
             }
             cc.egui_ctx.set_fonts(fonts);
             #[cfg(target_os = "windows")]
-            let app = background_app.unwrap_or_else(|| EntropyApp::new(cc));
+            let app = background_app
+                .unwrap_or_else(|| EntropyApp::new(cc).with_startup_device(launch_device.clone()));
             #[cfg(not(target_os = "windows"))]
-            let app = EntropyApp::new(cc);
+            let app = EntropyApp::new(cc).with_startup_device(launch_device.clone());
             cc.egui_ctx.set_zoom_factor(app.app_settings.ui_scale);
             #[cfg(target_os = "windows")]
             let app = if launch_minimized {

@@ -115,6 +115,32 @@ Symbols do not require these Text Expander permissions.
 6. Edit layers, keycodes, advanced firmware features, or app settings
 7. Save/write changes when the edited feature requires it
 
+## Startup Device
+
+Choose **Preferred startup device** in Entropy settings to connect to that
+keyboard automatically on future launches, including when Entropy starts at
+login. **Automatic** restores the usual behavior: connect when exactly one
+device is found, otherwise show the device picker.
+
+A launch argument overrides the saved preference for that launch:
+
+```sh
+entropy --device "Phenom Mini"
+entropy --minimized --device e126:0071
+```
+
+The filter accepts a case-insensitive part of the reported product name, a hex
+`VID:PID`, or an exact HID path, using the same rules as layout export.
+Empty and repeated `--device` filters are rejected.
+Entropy connects only when exactly one device matches. While the target is
+missing or ambiguous, the picker remains available and discovery continues.
+A manual choice ends startup selection for that session. The saved preference
+uses device identity rather than the HID path, so USB re-enumeration does not
+lose it; indistinguishable devices still require a manual choice.
+
+Close an already-running Entropy before using `--device` for GUI startup.
+The argument does not switch devices in an existing instance (exit status `3`).
+
 ## Headless Layout Export
 
 Scripts and backup jobs can save a keyboard's `.entlayout` without opening a
