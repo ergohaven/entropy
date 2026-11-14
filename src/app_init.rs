@@ -138,6 +138,29 @@ impl EntropyApp {
         })
     }
 
+    /// Logic/HID fixtures opt out of desktop bootstrap and route discovery to
+    /// the existing scan channel. Keep the receiver alive while ticking; tests
+    /// can assert that discovery was attempted without opening native HID.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn new_isolated_hid_for_test() -> (
+        Self,
+        mpsc::Receiver<(bool, mpsc::Sender<Result<Vec<Device>, String>>)>,
+    ) {
+        let mut app = Self::new_inert_for_test();
+        let (requests, scans) = mpsc::channel();
+        app.test_device_scan_requests = Some(requests);
+        assert!(
+            matches!(app.update_check, UpdateCheckState::Idle),
+            "HID fixtures must not start network/bootstrap services"
+        );
+        assert!(app.device_manager.devices().is_empty());
+        assert!(
+            app.test_device_scan_requests.is_some(),
+            "HID fixtures must intercept platform discovery"
+        );
+        (app, scans)
+    }
+
     fn from_bootstrap(bootstrap: AppBootstrap) -> Self {
         let AppBootstrap {
             #[cfg(not(target_arch = "wasm32"))]

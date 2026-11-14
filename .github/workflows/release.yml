@@ -105,6 +105,23 @@ jobs:
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
         run: bash scripts/sign_macos_release.sh
 
+      - name: Verify signed release DMG and collect public evidence
+        if: matrix.kind == 'macos'
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash scripts/collect_macos_signing_evidence.sh
+
+      - name: Upload public release signing evidence only
+        if: matrix.kind == 'macos'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-signing-evidence-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            dist/signing-test/signing-evidence.txt
+            dist/signing-test/SHA256SUMS
+
       - name: Collect signed macOS DMG
         if: matrix.kind == 'macos'
         shell: bash
@@ -198,6 +215,7 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
+          pattern: release-assets-*
           path: artifacts/
 
       - name: Write release notes
@@ -225,7 +243,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: Entropy ${{ github.ref_name }}
-          draft: false
+          draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
           body_path: RELEASE_NOTES.md
