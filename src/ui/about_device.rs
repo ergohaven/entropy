@@ -880,26 +880,6 @@ impl EntropyApp {
                         .color(app_muted_text(dark)),
                 );
 
-                if cfg!(target_os = "macos")
-                    && info.firmware_update_target.as_ref().is_some_and(|target| {
-                        matches!(target.family, FirmwareReleaseFamily::Rmk | FirmwareReleaseFamily::Rynk)
-                    })
-                {
-                    ui.add_space(metrics.value(12.0));
-                    let (notice, instructions) = match lang {
-                        crate::i18n::Language::Russian => (
-                            "После копирования UF2 загрузочный диск (например, NRF52BOOT) отключается для перезапуска. macOS может показать «Диск извлечён неправильно». Это уведомление само по себе не означает ошибку прошивки. После перезапуска проверьте версию подключённого устройства.",
-                            "Инструкция по обновлению прошивки",
-                        ),
-                        crate::i18n::Language::English => (
-                            "After a UF2 copy, the bootloader drive (such as NRF52BOOT) disconnects to restart. macOS may show “Disk Not Ejected Properly”. This notification alone does not mean flashing failed. Check the connected device's firmware version after it restarts.",
-                            "Firmware update instructions",
-                        ),
-                    };
-                    ui.add(egui::Label::new(RichText::new(notice).size(metrics.value(12.0))).wrap());
-                    ui.hyperlink_to(instructions, "https://docs.eh.works/firmware/");
-                }
-
                 ui.add_space(metrics.value(24.0));
                 let bottom_reserve = if firmware_update_supported {
                     metrics.value(54.0)
