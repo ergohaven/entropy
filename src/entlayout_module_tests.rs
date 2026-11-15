@@ -1,6 +1,201 @@
 use super::tests::module_app;
 use super::*;
 
+fn phenom_settings_app(rmk: bool) -> EntropyApp {
+    // Settings-only extracts from the pinned definitions in the filenames.
+    let definition: serde_json::Value = serde_json::from_str(if rmk {
+        include_str!("../tests/fixtures/phenom-rmk-settings-513718e9.json")
+    } else {
+        include_str!("../tests/fixtures/phenom-qmk-settings-f6d3d4d5.json")
+    })
+    .unwrap();
+    let mut app = module_app();
+    app.supported_qmk_settings = definition["settings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|group| group["fields"].as_array().unwrap())
+        .map(|field| field["qsid"].as_u64().unwrap() as u16)
+        .collect();
+    app.module_settings =
+        EntropyApp::module_settings_from_definition(&definition, &app.supported_qmk_settings);
+    for field in &app.module_settings.fields {
+        app.module_settings.values.insert(field.qsid, field.min);
+    }
+    app
+}
+
+#[test]
+fn entlayout_phenom_migrates_changed_module_qsids_by_contract() {
+    let mut source = phenom_settings_app(false);
+    let mappings = [
+        (149, 327),
+        (150, 328),
+        (151, 329),
+        (152, 330),
+        (327, 151),
+        (328, 152),
+    ];
+    source
+        .module_settings
+        .values
+        .extend(mappings.map(|(from, _)| (from, 1)));
+    let mut bundle = roundtrip(&source);
+    bundle
+        .data
+        .portable_settings
+        .retain(|setting| mappings.iter().any(|(from, _)| setting.qsid == *from));
+    let mut target = phenom_settings_app(true);
+    target.module_settings.values.extend([(149, 3), (150, 2)]);
+    let (hid, recorder) = crate::hid::HidDevice::test_device();
+    target.hid_device = Some(hid.into());
+    let (_, _, report) = target.apply_entlayout(&bundle).unwrap();
+    assert_eq!(report.imported, 6);
+    assert_eq!(report.incompatible, 0);
+    let sets: Vec<_> = recorder
+        .requests()
+        .into_iter()
+        .filter(|r| r[..2] == [0xfe, 0x0b])
+        .map(|r| {
+            (
+                u16::from_le_bytes([r[2], r[3]]),
+                u16::from_le_bytes([r[4], r[5]]),
+            )
+        })
+        .collect();
+    assert_eq!(sets, mappings.map(|(_, to)| (to, 1)));
+    for (_, to) in mappings {
+        assert_eq!(target.module_settings.values[&to], 1);
+    }
+    assert_eq!(target.module_settings.values[&149], 3);
+    assert_eq!(target.module_settings.values[&150], 2);
+}
+
+#[test]
+fn entlayout_phenom_migrates_timeout_duration() {
+    for (from, to) in [(0, 4), (1, 9), (2, 10), (3, 11), (4, 12), (5, 13)] {
+        let mut source = phenom_settings_app(false);
+        source.module_settings.values.insert(324, from);
+        let mut bundle = roundtrip(&source);
+        bundle
+            .data
+            .portable_settings
+            .retain(|setting| setting.qsid == 324);
+        let mut target = phenom_settings_app(true);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        target.hid_device = Some(hid.into());
+        let (_, _, report) = target.apply_entlayout(&bundle).unwrap();
+        assert_eq!(report.imported, 1, "old timeout index {from}");
+        assert_eq!(target.module_settings.values[&324], to);
+        assert!(recorder
+            .requests()
+            .iter()
+            .any(|r| r[..6] == [0xfe, 0x0b, 0x44, 1, to as u8, 0]));
+    }
+}
+
+#[test]
+fn entlayout_phenom_manual_choices_survive_appended_auto_variant() {
+    for qsid in [149, 150] {
+        for value in 0..4 {
+            let mut source = phenom_settings_app(true);
+            source.module_settings.values.insert(qsid, value);
+            let mut bundle = roundtrip(&source);
+            bundle
+                .data
+                .portable_settings
+                .retain(|setting| setting.qsid == qsid);
+            let mut target = phenom_settings_app(true);
+            for field in &mut target.module_settings.fields {
+                if field.qsid == qsid {
+                    field.variants.push("Auto".into());
+                    field.max = 4;
+                }
+            }
+            for group in &mut target.module_settings.groups {
+                for field in &mut group.fields {
+                    if field.qsid == qsid {
+                        field.variants.push("Auto".into());
+                        field.max = 4;
+                    }
+                }
+            }
+            target.module_settings.values.insert(qsid, 4);
+            let (hid, _) = crate::hid::HidDevice::test_device();
+            target.hid_device = Some(hid.into());
+            let (_, _, report) = target.apply_entlayout(&bundle).unwrap();
+            assert_eq!(report.imported, 1, "module {qsid} value {value}");
+            assert_eq!(target.module_settings.values[&qsid], value);
+        }
+    }
+}
+
+#[test]
+fn entlayout_phenom_migration_rejects_changed_contracts_and_aliases() {
+    let source = phenom_settings_app(false).entlayout_portable_settings_snapshot();
+    let target = phenom_settings_app(true).entlayout_portable_settings_snapshot();
+    let original = source.iter().find(|setting| setting.qsid == 149).unwrap();
+    let mut aliases = vec![original.clone(), original.clone()];
+    aliases[1].qsid = 327;
+    let plan = plan_entlayout_portable_settings_import(&aliases, &target, &[]);
+    assert!(plan.compatible.is_empty());
+    assert_eq!(plan.report.incompatible, 2);
+    for (key, value) in [
+        ("group", serde_json::json!("Other modules")),
+        ("side", serde_json::json!("right")),
+        ("title", serde_json::json!("Different meaning")),
+        ("bit", serde_json::json!(1)),
+        ("width", serde_json::json!(2)),
+        ("min", serde_json::json!(1)),
+        ("max", serde_json::json!(1)),
+    ] {
+        let mut altered = serde_json::to_value(original).unwrap();
+        altered["module"][0][key] = value;
+        let altered = serde_json::from_value(altered).unwrap();
+        let plan = plan_entlayout_portable_settings_import(&[altered], &target, &[]);
+        assert!(plan.compatible.is_empty(), "altered {key}");
+        assert_eq!(plan.report.incompatible, 1);
+    }
+    // A new 50 ms preset has no representation in the old six-value contract.
+    let timeout = target.iter().find(|setting| setting.qsid == 324).unwrap().clone();
+    let plan = plan_entlayout_portable_settings_import(&[timeout], &source, &[]);
+    assert!(plan.compatible.is_empty());
+    assert_eq!(plan.report.incompatible, 1);
+}
+
+#[test]
+fn entlayout_phenom_migration_preserves_destination_bits_and_confirmation() {
+    let mut source = phenom_settings_app(false).entlayout_portable_settings_snapshot()
+        .into_iter().find(|setting| setting.qsid == 149).unwrap();
+    source.value = 0x81;
+    let mut target = phenom_settings_app(true).entlayout_portable_settings_snapshot();
+    target.iter_mut().find(|setting| setting.qsid == 327).unwrap().value = 0x40;
+    let plan = plan_entlayout_portable_settings_import(&[source.clone()], &target, &[]);
+    assert_eq!(plan.compatible.len(), 1);
+    assert_eq!((plan.compatible[0].qsid, plan.compatible[0].value), (327, 0x41));
+    target.iter_mut().find(|setting| setting.qsid == 327).unwrap().value = 0x41;
+    let plan = plan_entlayout_portable_settings_import(&[source.clone()], &target, &[]);
+    assert!(plan.compatible.is_empty());
+    assert_eq!(plan.report.imported, 1);
+    let plan = plan_entlayout_portable_settings_import(&[source], &target, &[327]);
+    assert_eq!(plan.compatible.len(), 1, "confirm the destination register, not source 149");
+}
+
+#[test]
+fn entlayout_phenom_relocated_settings_survive_return_to_qmk() {
+    let mappings = [(327, 149), (328, 150), (329, 151), (330, 152), (151, 327), (152, 328)];
+    let mut source = phenom_settings_app(true).entlayout_portable_settings_snapshot();
+    source.retain(|setting| mappings.iter().any(|(from, _)| *from == setting.qsid));
+    for setting in &mut source { setting.value = 1; }
+    let target = phenom_settings_app(false).entlayout_portable_settings_snapshot();
+    let plan = plan_entlayout_portable_settings_import(&source, &target, &[]);
+    assert_eq!(plan.compatible.len(), 6);
+    for setting in plan.compatible {
+        assert!(mappings.iter().any(|(_, to)| *to == setting.qsid));
+        assert_eq!(setting.value, 1);
+    }
+}
+
 fn roundtrip(app: &EntropyApp) -> EntLayoutFile {
     serde_json::from_str(&serde_json::to_string(&app.entlayout_snapshot().unwrap()).unwrap())
         .unwrap()
