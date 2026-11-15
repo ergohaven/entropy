@@ -220,9 +220,9 @@ impl EntropyApp {
             let _ = requests.send((usb_only, tx));
             return;
         }
+        let previous = self.device_manager.devices().to_vec();
         std::thread::spawn(move || {
-            let result = if usb_only { DeviceManager::scan_usb_devices() }
-                else { DeviceManager::scan_devices() };
+            let result = DeviceManager::scan_with_previous(&previous, usb_only);
             if let Ok(devices) = &result {
                 log::debug!(
                     "HID scan completed with {} Vial endpoint(s): {}",

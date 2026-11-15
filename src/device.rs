@@ -485,14 +485,48 @@ impl Device {
 /// Rynk boards a scan found. Finding them opens nothing, so the USB-only scan
 /// may take the USB ones too.
 #[cfg(not(target_arch = "wasm32"))]
-fn rynk_devices(found: std::io::Result<Vec<crate::rynk::transport::FoundBoard>>) -> Vec<Device> {
-    match found {
-        Ok(boards) => boards.into_iter().map(Device::from_rynk_board).collect(),
-        Err(error) => {
-            log::warn!("Rynk scan failed: {error}");
-            Vec::new()
-        }
+fn rynk_devices(
+    found: std::io::Result<Vec<crate::rynk::transport::FoundBoard>>,
+) -> Result<Vec<Device>, String> {
+    found
+        .map(|boards| boards.into_iter().map(Device::from_rynk_board).collect())
+        .map_err(|error| format!("Rynk scan failed: {error}"))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn scan_backends(
+    previous: &[Device],
+    hid: impl FnOnce() -> Result<Vec<Device>, String>,
+    rynk: impl FnOnce() -> Result<Vec<Device>, String>,
+) -> Result<Vec<Device>, String> {
+    let hid = hid();
+    let rynk = rynk();
+    if let (Err(hid_error), Err(rynk_error)) = (&hid, &rynk) {
+        return Err(format!("{hid_error}; {rynk_error}"));
     }
+    // Rynk Bluetooth report endpoints share HID enumeration with Vial.
+    let via_hid = |device: &&Device| {
+        device.firmware == FirmwareProtocol::Vial
+            || crate::rynk::transport::hid_reports::owns(
+                &crate::rynk::link::PhysicalId(device.path.clone()),
+            )
+    };
+    let mut devices = hid.unwrap_or_else(|error| {
+        log::warn!("{error}; retaining previous HID devices");
+        previous.iter().filter(via_hid).cloned().collect()
+    });
+    let rynk = rynk.unwrap_or_else(|error| {
+        log::warn!("{error}; retaining previous Rynk transport devices");
+        previous
+            .iter()
+            .filter(|device| !via_hid(device))
+            .cloned()
+            .collect()
+    });
+    #[cfg(target_os = "linux")]
+    drop_vial_twins_of_rynk_boards(&mut devices, &rynk);
+    devices.extend(rynk);
+    Ok(devices)
 }
 
 #[cfg(target_os = "linux")]
@@ -631,20 +665,42 @@ impl DeviceManager {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn scan_usb_devices() -> Result<Vec<Device>, String> {
-        let mut devices = usb_discovery::scan()?;
-        devices.extend(rynk_devices(crate::rynk::transport::scan_usb()));
-        Ok(devices)
+    pub fn scan_devices() -> Result<Vec<Device>, String> {
+        Self::scan_with_previous(&[], false)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn scan_devices() -> Result<Vec<Device>, String> {
-        let mut devices = Vec::new();
-
+    pub(crate) fn scan_with_previous(
+        previous: &[Device],
+        usb_only: bool,
+    ) -> Result<Vec<Device>, String> {
         #[cfg(target_os = "macos")]
-        if crate::hid::macos_hid_scan_disabled_for_rosetta() {
-            return Ok(devices);
+        if !usb_only && crate::hid::macos_hid_scan_disabled_for_rosetta() {
+            return Ok(Vec::new());
         }
+        let previous: Vec<_> = previous
+            .iter()
+            .filter(|device| !usb_only || device.bus_type == "Usb")
+            .cloned()
+            .collect();
+        scan_backends(
+            &previous,
+            || {
+                if usb_only { usb_discovery::scan() } else { Self::scan_hid_devices() }
+            },
+            || {
+                rynk_devices(if usb_only {
+                    crate::rynk::transport::scan_usb()
+                } else {
+                    crate::rynk::transport::scan()
+                })
+            },
+        )
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn scan_hid_devices() -> Result<Vec<Device>, String> {
+        let mut devices = Vec::new();
 
         #[cfg(target_os = "macos")]
         let _hid_lock = crate::hid::macos_hid_operation_lock();
@@ -704,17 +760,13 @@ impl DeviceManager {
             merge_bluez_vial_devices(&mut devices, bluez_devices);
         }
 
-        let rynk = rynk_devices(crate::rynk::transport::scan());
-        #[cfg(target_os = "linux")]
-        drop_vial_twins_of_rynk_boards(&mut devices, &rynk);
-        devices.extend(rynk);
         Ok(devices)
     }
 
     pub fn scan(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            match Self::scan_devices() {
+            match Self::scan_with_previous(&self.devices, false) {
                 Ok(devices) => self.devices = devices,
                 Err(error) => log::warn!("{error}"),
             }
@@ -819,6 +871,53 @@ fn drop_vial_twins_of_rynk_boards(devices: &mut Vec<Device>, rynk: &[Device]) {
 mod tests {
     use super::*;
     include!("device_usb_identity_tests.rs");
+
+    #[test]
+    fn discovery_keeps_scanning_after_either_backend_fails() {
+        let vial = test_device("Usb", "vial-endpoint");
+        let mut rynk = test_device("Usb", "usb:qube");
+        rynk.firmware = FirmwareProtocol::Rynk;
+        for hid_failed in [true, false] {
+            let devices = scan_backends(&[],
+                || if hid_failed { Err("HID unavailable".into()) } else { Ok(vec![vial.clone()]) },
+                || if hid_failed { Ok(vec![rynk.clone()]) } else { Err("Rynk unavailable".into()) },
+            ).expect("the successful backend still discovers devices");
+            assert_eq!(devices.len(), 1);
+            assert_eq!(devices[0].path, if hid_failed { rynk.path.as_str() } else { vial.path.as_str() });
+        }
+    }
+
+    #[test]
+    fn discovery_preserves_only_the_failed_backends_inventory() {
+        let vial = test_device("Usb", "vial-endpoint");
+        let mut rynk = test_device("Usb", "usb:qube");
+        rynk.firmware = FirmwareProtocol::Rynk;
+        let previous = [vial.clone(), rynk.clone()];
+        for hid_failed in [true, false] {
+            let devices = scan_backends(&previous,
+                || if hid_failed { Err("HID unavailable".into()) } else { Ok(vec![]) },
+                || if hid_failed { Ok(vec![]) } else { Err("Rynk unavailable".into()) },
+            ).unwrap();
+            assert_eq!(devices.len(), 1);
+            assert_eq!(devices[0].path, if hid_failed { vial.path.as_str() } else { rynk.path.as_str() });
+        }
+        assert!(scan_backends(&previous, || Err("HID unavailable".into()),
+            || Err("Rynk unavailable".into())).is_err());
+        assert!(scan_backends(&previous, || Ok(vec![]), || Ok(vec![])).unwrap().is_empty());
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn discovery_preserves_rynk_bluetooth_when_hid_enumeration_fails() {
+        let mut bluetooth = test_device("Bluetooth", "hid:qube");
+        bluetooth.firmware = FirmwareProtocol::Rynk;
+        let devices = scan_backends(&[bluetooth.clone()],
+            || Err("HID unavailable".into()), || Ok(vec![])).unwrap();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].path, bluetooth.path);
+        assert!(scan_backends(&[bluetooth], || Ok(vec![]),
+            || Err("Rynk unavailable".into())).unwrap().is_empty());
+    }
 
     fn test_device(bus_type: &str, path: &str) -> Device {
         Device {
