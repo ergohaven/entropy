@@ -175,6 +175,7 @@ fn is_app_key(key: &str) -> bool {
 fn firmware_key(target: &FirmwareReleaseTarget) -> String {
     let family = match target.family {
         FirmwareReleaseFamily::Rmk => "rmk",
+        FirmwareReleaseFamily::Rynk => "rynk",
         FirmwareReleaseFamily::Qmk => "qmk",
     };
     format!("{family}:{}", target.asset_prefix)
