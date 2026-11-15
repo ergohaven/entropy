@@ -173,14 +173,17 @@ pub(super) fn ent_portable_setting_import_value(
     source: &EntPortableSetting,
     target: &EntPortableSetting,
 ) -> u16 {
-    module_setting_import_value(source, target)
+    led_contract::timeout_migration_value(source, target)
+        .unwrap_or_else(|| module_setting_import_value(source, target))
 }
 
 pub(super) fn ent_portable_setting_contracts_match(
     source: &EntPortableSetting,
     target: &EntPortableSetting,
 ) -> bool {
-    if module_setting_migration_value(source, target).is_some() {
+    if led_contract::timeout_migration_value(source, target).is_some()
+        || module_setting_migration_value(source, target).is_some()
+    {
         return true;
     }
     source.id == target.id

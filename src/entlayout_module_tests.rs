@@ -465,3 +465,81 @@ fn entlayout_module_all_real_k04_loaded_fields_roundtrip() {
         );
     }
 }
+
+#[test]
+fn entlayout_phenom_led_minutes_migrate_to_exact_seconds_and_back() {
+    let presets = [0, 60, 120, 300, 600, 900, 1800, 3600];
+    let minutes = |value| EntPortableSetting {
+        id: "led_timeout:minutes".into(), qsid: 317,
+        width: EntPortableSettingWidth::U8, value,
+        variants: ["max:7", "Never", "1 min", "2 min", "5 min", "10 min", "15 min", "30 min", "60 min"]
+            .map(String::from).to_vec(), module: None,
+    };
+    let seconds = |value, max| EntPortableSetting {
+        id: "led_timeout:seconds".into(), qsid: 317,
+        width: if max == 255 { EntPortableSettingWidth::U8 } else { EntPortableSettingWidth::U16 },
+        value, variants: vec![format!("max:{max}")], module: None,
+    };
+    for (index, value) in presets.into_iter().enumerate() {
+        let source = minutes(index as u16);
+        let target = seconds(42, 3600);
+        let plan = plan_entlayout_portable_settings_import(&[source.clone()], &[target.clone()], &[]);
+        assert_eq!(plan.compatible.len(), 1, "preset {index}");
+        assert_eq!(plan.compatible[0].value, value);
+        assert_eq!(plan.compatible[0].width, EntPortableSettingWidth::U16);
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        write_entlayout_portable_setting(&hid.into(), &plan.compatible[0]).unwrap();
+        assert!(recorder.requests().iter().any(|r| r[..6] == [0xfe, 0x0b, 61, 1, value as u8, (value >> 8) as u8]));
+        let plan = plan_entlayout_portable_settings_import(&[seconds(value, 3600)], &[minutes(7)], &[]);
+        if index == 7 { assert!(plan.compatible.is_empty()); assert_eq!(plan.report.imported, 1); }
+        else { assert_eq!(plan.compatible[0].value, index as u16); }
+        let old = plan_entlayout_portable_settings_import(&[source], &[seconds(42, 255)], &[]);
+        assert_eq!(old.compatible.len(), usize::from(value <= 255));
+    }
+    let plan = plan_entlayout_portable_settings_import(&[seconds(601, 3600)], &[minutes(0)], &[]);
+    assert_eq!(plan.report.incompatible, 1, "never round an explicit duration");
+    for value in [0, 42, 255] {
+        let plan = plan_entlayout_portable_settings_import(&[seconds(value,255)], &[seconds(600,3600)], &[]);
+        assert_eq!(plan.compatible[0].value, value, "existing explicit RMK seconds");
+        let plan = plan_entlayout_portable_settings_import(&[seconds(value,3600)], &[seconds(1,255)], &[]);
+        assert_eq!(plan.compatible[0].value, value, "representable downgrade");
+    }
+    assert_eq!(plan_entlayout_portable_settings_import(&[seconds(600,3600)], &[seconds(1,255)], &[]).report.incompatible, 1);
+    let mut bad = minutes(4);
+    bad.variants.swap(2, 3);
+    assert_eq!(plan_entlayout_portable_settings_import(&[bad], &[seconds(42,3600)], &[]).report.incompatible, 1);
+}
+
+#[test]
+fn entlayout_phenom_led_migration_uses_parsed_firmware_contracts() {
+    let cases: Vec<serde_json::Value> = serde_json::from_str(
+        include_str!("../tests/fixtures/phenom-led-timeout-contracts.json")
+    ).unwrap();
+    let snapshot = |index: usize, value: u16| {
+        let mut app = module_app();
+        app.supported_qmk_settings = vec![317];
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        recorder.respond_by(move |request| {
+            (request[..2] == [0xfe, 0x0a]).then(|| {
+                let mut response = [0; 32];
+                response[1..3].copy_from_slice(&value.to_le_bytes());
+                Ok(response)
+            })
+        });
+        app.layer_led_settings = EntropyApp::read_layer_led_settings(
+            &cases[index]["definition"], &[317], 4, &hid,
+        );
+        app.entlayout_portable_settings_snapshot()
+    };
+    let wide = snapshot(2, 1);
+    assert_eq!(wide.len(), 1);
+    assert_eq!(wide[0].id, "led_timeout:seconds");
+    assert_eq!(wide[0].width, EntPortableSettingWidth::U16);
+    let qmk = snapshot(0, 4);
+    assert_eq!(qmk[0].id, "led_timeout:minutes");
+    let plan = plan_entlayout_portable_settings_import(&qmk, &wide, &[]);
+    assert_eq!(plan.compatible[0].value, 600);
+    let old = snapshot(1, 42);
+    assert_eq!(old[0].id, "led_timeout:seconds");
+    assert_eq!(plan_entlayout_portable_settings_import(&old, &wide, &[]).compatible[0].value, 42);
+}
