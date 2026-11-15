@@ -2227,14 +2227,31 @@ mod tests {
     }
 
     fn poll_until_vial_hid_idle(app: &mut EntropyApp, ctx: &egui::Context) {
-        for _ in 0..100 {
-            app.poll_vial_hid_task(ctx);
-            if !app.vial_hid_task_active() {
-                return;
+        // This is a deadlock guard, not a keyboard latency requirement. Wait
+        // for the actual worker's terminal result instead of racing its full
+        // protocol/readback workload against 100 one-millisecond UI polls.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while let Some(task) = app.vial_hid_task.as_mut() {
+            match task
+                .receiver
+                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            {
+                Ok(result) => {
+                    // Put the unchanged result back at the owning poller's
+                    // boundary: generation, handle restoration and rollback
+                    // stay real. No fabricated completion or protocol bypass.
+                    let (sender, receiver) = std::sync::mpsc::channel();
+                    sender.send(result).unwrap();
+                    task.receiver = receiver;
+                }
+                // Let the production owner apply its channel-failure path too.
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    panic!("Keyboard HID worker did not complete before the deadlock guard");
+                }
             }
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            app.poll_vial_hid_task(ctx);
         }
-        panic!("Keyboard HID task did not finish");
     }
 
     #[test]
@@ -3181,11 +3198,41 @@ mod tests {
     }
 
     #[test]
-    fn failed_background_key_write_rolls_back_the_optimistic_value() {
+    fn completion_wait_preserves_worker_channel_failure_handling() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
-        let creation_context = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EntropyApp::new(&creation_context);
-        let (hid, _recorder) = crate::hid::HidDevice::test_device();
+        let (mut app, _scans) = EntropyApp::new_isolated_hid_for_test();
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid.into());
+        app.layout = Some(single_key_layout(0x0005));
+        assert_eq!(
+            app.start_vial_hid_operation_with_runner(
+                &ctx,
+                VialHidOperation::Lock,
+                |_, _, _, _| panic!("injected HID worker failure"),
+            ),
+            VialHidTaskStart::Started
+        );
+
+        poll_until_vial_hid_idle(&mut app, &ctx);
+
+        assert!(!app.vial_hid_task_active());
+        assert!(app.hid_device.is_none());
+        assert!(
+            app.layout.is_none(),
+            "the real owner applies disconnect cleanup"
+        );
+        assert!(app.undo_stack.is_empty());
+        assert_eq!(app.status_msg, "Keyboard HID worker stopped");
+        assert!(recorder.requests().is_empty());
+    }
+
+    #[test]
+    fn failed_background_key_write_rolls_back_the_optimistic_value() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let ctx = egui::Context::default();
+        let (mut app, _scans) = EntropyApp::new_isolated_hid_for_test();
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
         app.hid_device = Some(hid.into());
         app.layout = Some(single_key_layout(0x0004));
 
@@ -3198,5 +3245,15 @@ mod tests {
         assert!(app.undo_stack.is_empty());
         assert!(app.status_msg.starts_with("Write error:"));
         assert!(app.hid_device.is_some());
+        let requests = recorder.requests();
+        assert_eq!(
+            requests.len(),
+            5,
+            "one SET and all four mismatching readbacks"
+        );
+        assert_eq!(&requests[0][..6], &[0x05, 0, 0, 0, 0, 5]);
+        for request in &requests[1..] {
+            assert_eq!(&request[..4], &[0x04, 0, 0, 0]);
+        }
     }
 }
