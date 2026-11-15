@@ -197,13 +197,29 @@ fn unescape_mount(field: &str) -> Result<PathBuf> {
     Ok(PathBuf::from(String::from_utf8(bytes)?))
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn windows_topology_script(profiles: &[super::profiles::Profile]) -> String {
+    // Only compile-time u16 product IDs enter this script; no device-provided
+    // strings or shell quoting. Keep Windows admission on the same registry.
+    let products = profiles
+        .iter()
+        .map(|profile| profile.product_id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "$EntropyRuntimeProducts = @({products})\n{}",
+        include_str!("windows_topology.ps1")
+    )
+}
+
 #[cfg(target_os = "windows")]
 pub(super) fn snapshot() -> Result<Vec<UsbTarget>> {
+    let script = windows_topology_script(super::profiles::PROFILES);
     let bytes = output(Command::new("powershell.exe").args([
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        include_str!("windows_topology.ps1"),
+        &script,
     ]))?;
     let text = String::from_utf8(bytes)?;
     Ok(serde_json::from_str(
@@ -219,6 +235,13 @@ pub(super) fn snapshot() -> Result<Vec<UsbTarget>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn firmware_flash_windows_topology_accepts_a_new_profile_without_script_allowlist_edits() {
+        let script = windows_topology_script(&[super::super::profiles::fixtures::SINGLE_RP2040]);
+        assert!(script.starts_with("$EntropyRuntimeProducts = @(65535)\n"));
+        assert!(script.contains("$EntropyRuntimeProducts -contains $product"));
+    }
+
     #[test]
     fn firmware_flash_mount_paths_decode_kernel_escapes_without_shell_expansion() {
         assert_eq!(

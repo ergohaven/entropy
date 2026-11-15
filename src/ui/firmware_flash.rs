@@ -1,6 +1,6 @@
 use super::*;
 use crate::device_session::DeviceSession;
-use crate::firmware_flash::{self as flash, Event, Outcome, Part, Prepared, Stage};
+use crate::firmware_flash::{self as flash, Event, Outcome, Part, Prepared, Role, Stage};
 use std::{
     path::PathBuf,
     sync::mpsc::{Receiver, TryRecvError},
@@ -14,6 +14,7 @@ pub(crate) struct FirmwareFlashUi {
 
 struct Dialog {
     device: Device,
+    profile: flash::profiles::Profile,
     generation: u64,
     release: FirmwareUpdateCheckResult,
     current_version: String,
@@ -54,7 +55,7 @@ fn text<'a>(language: crate::i18n::Language, en: &'a str, ru: &'a str) -> &'a st
 
 impl Dialog {
     fn standalone(&self) -> bool {
-        flash::profile(self.device.product_id).is_some_and(|p| p.parts.len() == 2)
+        self.profile.has_peripherals() && !self.profile.has_dongle()
     }
 
     fn physical_recovery(&self, app: &EntropyApp, physical_reset: bool) -> bool {
@@ -66,25 +67,7 @@ impl Dialog {
     }
 
     fn part_label(&self, language: crate::i18n::Language, part: Part) -> &'static str {
-        match part {
-            Part::PhenomCentral => text(
-                language,
-                "Primary half (left)",
-                "Основная половинка (левая)",
-            ),
-            Part::PhenomPeripheral => text(
-                language,
-                "Secondary half (right)",
-                "Вторая половинка (правая)",
-            ),
-            Part::LeftCentral => text(language, "Primary half", "Основная половинка"),
-            Part::RightPeripheral if self.standalone() => {
-                text(language, "Secondary half", "Вторая половинка")
-            }
-            Part::LeftPeripheral => text(language, "Left half", "Левая половинка"),
-            Part::RightPeripheral => text(language, "Right half", "Правая половинка"),
-            Part::Dongle => text(language, "Qube USB dongle", "USB-донгл Qube"),
-        }
+        text(language, part.label.0, part.label.1)
     }
 }
 
@@ -127,8 +110,12 @@ impl EntropyApp {
         {
             return;
         }
+        let Some(profile) = flash::profile(device.product_id) else {
+            return;
+        };
         self.firmware_flash.dialog = Some(Dialog {
-            part: flash::profile(device.product_id).map_or(Part::PhenomCentral, |p| p.parts[0]),
+            part: profile.parts[0],
+            profile,
             device,
             generation: self.connection_generation,
             release,
@@ -173,6 +160,10 @@ impl EntropyApp {
         ctx: &egui::Context,
         dialog: &mut Dialog,
     ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            dialog.profile.product_id == dialog.device.product_id,
+            "Update profile does not match the selected keyboard"
+        );
         anyhow::ensure!(
             self.firmware_flash_owner_matches(dialog),
             "Keyboard changed; start the update again"
@@ -423,7 +414,8 @@ impl EntropyApp {
             ui.heading(text(lang, "Update firmware", "Обновить прошивку"));
             ui.label(&dialog.device.name);
             ui.label(format!("{} → {}", dialog.current_version, dialog.release.latest_version));
-            if let Some(profile) = flash::profile(dialog.device.product_id) {
+            {
+                let profile = dialog.profile;
                 ui.label(format!("{} · {}: {}", profile.archive, text(lang, "Update target", "Обновляем"), dialog.part_label(lang, dialog.part)));
                 for (part, outcome) in &dialog.steps {
                     ui.label(format!("{}: {}", dialog.part_label(lang, *part), match outcome {
@@ -433,13 +425,15 @@ impl EntropyApp {
                 }
             }
             ui.label(text(lang, "Requires Entropy 0.6.0+ and RMK 0.3.0+ using Rynk. Update every component from the same release.", "Требуются Entropy 0.6.0+ и RMK 0.3.0+ с Rynk. Обновите все части прошивкой одного релиза."));
-            if dialog.part.rp2040() {
-                ui.label(text(lang, "Phenom RMK uses the left half as primary and the right half as secondary. Keep the halves linked during normal use; move only the computer's USB cable when prompted.", "В RMK для Phenom левая половинка — основная, правая — вторая. Для обычной работы оставьте половинки соединёнными; по инструкции переставляйте только USB-кабель компьютера."));
+            if let Some((en, ru)) = dialog.profile.connection_note {
+                ui.label(text(lang, en, ru));
             }
             ui.add_space(8.0);
             match &dialog.phase {
                 Phase::Confirm => {
-                    ui.label(if dialog.standalone() {
+                    ui.label(if !dialog.profile.has_peripherals() {
+                        text(lang, "Keep the keyboard connected while Entropy backs up your configuration and verifies the firmware image.", "Оставьте клавиатуру подключённой, пока Entropy сохраняет настройки и проверяет образ прошивки.")
+                    } else if dialog.standalone() {
                         text(lang, "The half already connected by USB is the primary half; the other is the secondary half. Keep the primary connected while Entropy backs up your configuration and prepares both images. When prompted, disconnect the primary from USB and connect the secondary. The primary will be updated last. The secondary's installed version cannot be verified through USB.", "Половинка, уже подключённая по USB, — основная; другая — вторая. Оставьте основную подключённой, пока Entropy сохраняет настройки и готовит оба образа. По инструкции отключите основную от USB и подключите вторую. Основная обновится последней. Установленную версию второй половинки нельзя проверить через USB.")
                     } else {
                         text(lang, "Qube is already connected by USB. Keep it connected while Entropy backs up your configuration and verifies every image. The guide updates the left half, the right half, then Qube. Connect only the requested part to the same USB port. The halves' installed versions cannot be verified through USB.", "Qube уже подключён по USB. Оставьте его подключённым для резервного копирования и проверки всех образов. Обновим левую половинку, правую, затем Qube. Подключайте только указанную часть к тому же USB-порту. Установленные версии половинок нельзя проверить через USB.")
@@ -448,24 +442,28 @@ impl EntropyApp {
                 },
                 Phase::Preparing(_) => { ui.spinner(); ui.label(text(lang, "Downloading and verifying firmware…", "Скачиваем и проверяем прошивку…")); },
                 Phase::Ready(_) if dialog.part.peripheral() => {
-                    ui.label(if dialog.part.rp2040() {
-                        text(lang, "Start the transfer while the primary half is connected. Disconnect the primary from USB, hold BOOT on the RIGHT secondary half and connect it to the SAME USB port, then release BOOT. Entropy cannot identify left versus right in the bootloader; check the named half.", "Запустите передачу с подключённой основной половинкой. Отключите её от USB, удерживайте BOOT на ПРАВОЙ второй половинке и подключите её к ТОМУ ЖЕ USB-порту, затем отпустите BOOT. Entropy не различает половинки в загрузчике: проверьте указанную половинку.")
+                    ui.label(format!("{}: {}", dialog.part_label(lang, dialog.part), if dialog.part.rp2040() {
+                        text(lang, "Start the transfer while the primary half is connected. Disconnect the primary from USB, hold BOOT on the named secondary half and connect it to the SAME USB port, then release BOOT. Entropy cannot identify left versus right in the bootloader; check the named half.", "Запустите передачу с подключённой основной половинкой. Отключите её от USB, удерживайте BOOT на указанной второй половинке и подключите её к ТОМУ ЖЕ USB-порту, затем отпустите BOOT. Entropy не различает половинки в загрузчике: проверьте указанную половинку.")
                     } else if dialog.standalone() {
                         text(lang, "Start the transfer below while the primary half is still connected. Then disconnect the primary from USB and connect only the secondary half to the SAME USB port. Double-press Reset on the secondary half. Entropy cannot identify halves in the bootloader; check that you connected the secondary half.", "Запустите передачу ниже, пока основная половинка ещё подключена. Затем отключите основную от USB и подключите только вторую к ТОМУ ЖЕ USB-порту. Дважды нажмите Reset на второй половинке. Entropy не различает половинки в загрузчике: проверьте, что подключили вторую.")
                     } else {
                         text(lang, "Start the transfer below, then disconnect Qube or the previous half from USB. Connect ONLY the named half to the SAME USB port and double-press its Reset button. Entropy cannot detect left versus right in the bootloader: check the named half before proceeding.", "Запустите передачу ниже, затем отключите Qube или предыдущую половинку от USB. Подключите ТОЛЬКО указанную половинку к ТОМУ ЖЕ USB-порту и дважды нажмите Reset. Entropy не различает левую и правую половинки в загрузчике: проверьте указанную половинку перед продолжением.")
-                    });
+                    }));
                     ui.label(text(lang, "A completed transfer will remain version unverified.", "После передачи версия останется непроверенной."));
                     if ui.button(format!("{}: {}", text(lang, "Start transfer", "Начать передачу"), dialog.part_label(lang, dialog.part))).clicked() { action = Some(Action::PhysicalReset); }
                 },
                 Phase::Ready(_) => {
                     if !session_ready && !dialog.physical_recovery(self, true) {
-                        ui.label(if dialog.part == Part::Dongle {
+                        ui.label(if !dialog.profile.has_peripherals() {
+                            text(lang, "Reconnect the keyboard to the original USB port and select it in Entropy.", "Подключите клавиатуру к исходному USB-порту и выберите её в Entropy.")
+                        } else if dialog.part.role == Role::Dongle {
                             text(lang, "Reconnect Qube to the original USB port and select it in Entropy. Entropy will back up the freshly loaded configuration before updating it.", "Подключите Qube к исходному USB-порту и выберите его в Entropy. Перед обновлением Entropy сохранит загруженные настройки.")
                         } else {
                             text(lang, "Disconnect the secondary half from USB. Reconnect the primary half to the original USB port and select it in Entropy. Entropy will back up its freshly loaded configuration before updating it.", "Отключите вторую половинку от USB. Подключите основную половинку к исходному USB-порту и выберите её в Entropy. Перед обновлением Entropy сохранит загруженные настройки.")
                         });
-                        let select_label = if dialog.part == Part::Dongle {
+                        let select_label = if !dialog.profile.has_peripherals() {
+                            text(lang, "Select keyboard", "Выбрать клавиатуру")
+                        } else if dialog.part.role == Role::Dongle {
                             text(lang, "Select Qube USB dongle", "Выбрать USB-донгл Qube")
                         } else {
                             text(lang, "Select primary half", "Выбрать основную половинку")
@@ -475,11 +473,11 @@ impl EntropyApp {
                     if dialog.physical_recovery(self, true) {
                         ui.label(text(lang, "The previous attempt's firmware image and backup are retained. Use physical update mode below to retry on the original USB port.", "Образ прошивки и резервная копия предыдущей попытки сохранены. Используйте ручной вход в режим прошивки ниже для повтора в исходном USB-порту."));
                     }
-                    ui.label(if dialog.part.rp2040() { text(lang, "Firmware image verified. Connect and select the LEFT primary half on the original USB port. Unlock it to enter update mode, or hold BOOT while reconnecting it.", "Образ прошивки проверен. Подключите и выберите ЛЕВУЮ основную половинку в исходном USB-порту. Разблокируйте её для перехода в режим прошивки или удерживайте BOOT при подключении.") } else { text(lang, "Firmware image verified. Once the update target is connected to the original USB port and selected, unlock it to enter update mode or use the physical Reset option below.", "Образ прошивки проверен. Подключите обновляемую часть к исходному USB-порту и выберите её, затем разблокируйте для перехода в режим прошивки или используйте кнопку Reset ниже.") });
+                    ui.label(format!("{}: {}", dialog.part_label(lang, dialog.part), if dialog.part.rp2040() { text(lang, "Firmware image verified. Connect and select the named update target on the original USB port. Unlock it to enter update mode, or hold BOOT while reconnecting it.", "Образ прошивки проверен. Подключите и выберите указанную обновляемую часть в исходном USB-порту. Разблокируйте её для перехода в режим прошивки или удерживайте BOOT при подключении.") } else { text(lang, "Firmware image verified. Once the update target is connected to the original USB port and selected, unlock it to enter update mode or use the physical Reset option below.", "Образ прошивки проверен. Подключите обновляемую часть к исходному USB-порту и выберите её, затем разблокируйте для перехода в режим прошивки или используйте кнопку Reset ниже.") }));
                     ui.add_enabled_ui(session_ready, |ui| {
                     if self.vial_unlocked != Some(true) {
                         if ui.button(text(lang, "Unlock keyboard", "Разблокировать клавиатуру")).clicked() { action = Some(Action::Unlock); }
-                    } else if ui.button(text(lang, "Flash this half", "Прошить эту половинку")).clicked() { action = Some(Action::Flash); }
+                    } else if ui.button(text(lang, "Flash this target", "Прошить эту часть")).clicked() { action = Some(Action::Flash); }
                     });
                     ui.add_enabled_ui(session_ready || dialog.physical_recovery(self, true), |ui| {
                     if ui.button(if dialog.part.rp2040() { text(lang, "Use physical BOOT", "Использовать кнопку BOOT") } else { text(lang, "Use physical Reset", "Использовать кнопку Reset") }).clicked() { action = Some(Action::PhysicalReset); }
@@ -487,27 +485,34 @@ impl EntropyApp {
                 },
                 Phase::Flashing { stage, .. } => {
                     ui.spinner();
-                    ui.label(match *stage {
-                        Stage::WaitingBootloader if dialog.part.rp2040() && dialog.part.peripheral() => text(lang, "Disconnect the primary half from USB. Hold BOOT on the RIGHT secondary half while connecting it to the original USB port, then release BOOT.", "Отключите основную половинку от USB. Удерживайте BOOT на ПРАВОЙ второй половинке при подключении к исходному USB-порту, затем отпустите BOOT."),
-                        Stage::WaitingBootloader if dialog.part.rp2040() => text(lang, "Waiting for update mode on the LEFT primary half. If needed, hold BOOT while reconnecting it to the original USB port.", "Ждём режим прошивки ЛЕВОЙ основной половинки. При необходимости удерживайте BOOT при подключении к исходному USB-порту."),
+                    let instruction = match *stage {
+                        Stage::WaitingBootloader if dialog.part.rp2040() && dialog.part.peripheral() => text(lang, "Disconnect the primary half from USB. Hold BOOT on the named secondary half while connecting it to the original USB port, then release BOOT.", "Отключите основную половинку от USB. Удерживайте BOOT на указанной второй половинке при подключении к исходному USB-порту, затем отпустите BOOT."),
+                        Stage::WaitingBootloader if dialog.part.rp2040() => text(lang, "Waiting for update mode on the named target. If needed, hold BOOT while reconnecting it to the original USB port.", "Ждём режим прошивки указанной части. При необходимости удерживайте BOOT при подключении к исходному USB-порту."),
                         Stage::WaitingBootloader if dialog.part.peripheral() && dialog.standalone() => text(lang, "Disconnect the primary half from USB. Connect ONLY the secondary half to the original USB port and double-press its Reset button.", "Отключите основную половинку от USB. Подключите ТОЛЬКО вторую половинку к исходному USB-порту и дважды нажмите её кнопку Reset."),
                         Stage::WaitingBootloader if dialog.part.peripheral() => text(lang, "Disconnect Qube or the previous half from USB. Connect ONLY the named half to the original USB port and double-press its Reset button.", "Отключите Qube или предыдущую половинку от USB. Подключите ТОЛЬКО указанную половинку к исходному USB-порту и дважды нажмите её кнопку Reset."),
-                        Stage::WaitingBootloader => text(lang, "Waiting for update mode. If needed, double-press Reset on this half. Keep the USB cable connected to the same port.", "Ждём режим прошивки. При необходимости дважды нажмите Reset на этой половинке. Оставьте USB-кабель в том же порту."),
+                        Stage::WaitingBootloader => text(lang, "Waiting for update mode. If needed, double-press Reset on this target. Keep the USB cable connected to the same port.", "Ждём режим прошивки. При необходимости дважды нажмите Reset на этой части. Оставьте USB-кабель в том же порту."),
                         Stage::Writing => text(lang, "Writing firmware. Keep the keyboard connected.", "Записываем прошивку. Не отключайте клавиатуру."),
-                        Stage::WaitingReconnect => text(lang, "Waiting for the half to restart and report its firmware version…", "Ждём перезапуска половинки и проверяем версию прошивки…"),
+                        Stage::WaitingReconnect => text(lang, "Waiting for the target to restart and report its firmware version…", "Ждём перезапуска обновляемой части и проверяем версию прошивки…"),
                         Stage::EnteringBootloader => text(lang, "Entering update mode…", "Переходим в режим прошивки…"),
                         Stage::WaitingDisconnect => text(lang, "Firmware data sent. Waiting for the peripheral to leave update mode. Its application and installed version are unverified.", "Данные прошивки отправлены. Ждём выхода половинки из режима прошивки. Запуск и установленная версия не проверены."),
-                    });
+                    };
+                    if matches!(stage, Stage::WaitingBootloader) {
+                        ui.label(format!("{}: {instruction}", dialog.part_label(lang, dialog.part)));
+                    } else {
+                        ui.label(instruction);
+                    }
                 },
                 Phase::Finished(Ok(outcome)) => {
                     ui.label(match outcome {
-                        Outcome::Verified => text(lang, "The primary half or Qube USB dongle returned with the expected firmware version.", "Основная половинка или USB-донгл Qube вернулись с ожидаемой версией прошивки."),
-                        Outcome::TransferredUnverified => text(lang, "Transfer complete, version unverified. Entropy cannot read this half's installed firmware version over USB.", "Передача завершена, версия не проверена. Entropy не может прочитать установленную версию прошивки этой половинки через USB."),
+                        Outcome::Verified => text(lang, "The update target returned with the expected firmware version.", "Обновляемая часть вернулась с ожидаемой версией прошивки."),
+                        Outcome::TransferredUnverified => text(lang, "Transfer complete, version unverified. Entropy cannot read this target's installed firmware version over USB.", "Передача завершена, версия не проверена. Entropy не может прочитать установленную версию прошивки этой половинки через USB."),
                     });
                     if let Some(next) = &dialog.next {
                         if ui.button(format!("{}: {}", text(lang, "Continue", "Продолжить"), dialog.part_label(lang, next.part))).clicked() { action = Some(Action::Next); }
                     } else {
-                        ui.label(if dialog.standalone() {
+                        ui.label(if !dialog.profile.has_peripherals() {
+                            text(lang, "The keyboard's firmware version is verified. Import the saved layout if needed.", "Версия прошивки клавиатуры проверена. При необходимости импортируйте сохранённую раскладку.")
+                        } else if dialog.standalone() {
                             text(lang, "All guided steps are finished. The secondary half's version remains unverified. Restore your normal keyboard connection and check both halves; import the saved layout if needed.", "Все этапы инструкции завершены. Версия второй половинки остаётся непроверенной. Верните обычное подключение клавиатуры и проверьте обе половинки; при необходимости импортируйте сохранённую раскладку.")
                         } else {
                             text(lang, "All guided steps are finished. Peripheral versions remain unverified. Reconnect the keyboard and check both halves; import the saved layout if needed.", "Все этапы инструкции завершены. Версии периферийных половинок остаются непроверенными. Подключите клавиатуру и проверьте обе половинки; при необходимости импортируйте сохранённую раскладку.")
@@ -518,7 +523,7 @@ impl EntropyApp {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                     ui.label(if dialog.part.rp2040() { text(lang, "No successful update is recorded for this part. Reconnect it before retrying; hold BOOT while reconnecting if it remains in update mode.", "Успешное обновление этой части не подтверждено. Подключите её заново перед повтором; если она осталась в режиме прошивки, удерживайте BOOT при подключении.") } else { text(lang, "No successful update is recorded for this part. Reconnect it before retrying; use physical Reset if it remains in update mode.", "Успешное обновление этой части не подтверждено. Перед повтором подключите её заново; если она осталась в режиме прошивки, используйте Reset.") });
                     if dialog.retry.is_some() {
-                        if ui.button(text(lang, "Retry this half", "Повторить эту половинку")).clicked() { action = Some(Action::Retry); }
+                        if ui.button(text(lang, "Retry this target", "Повторить эту часть")).clicked() { action = Some(Action::Retry); }
                     } else {
                         ui.label(text(lang, "Reconnect and select the primary half or Qube USB dongle, then open About device → Update firmware again to restart the guide.", "Подключите и выберите основную половинку или USB-донгл Qube, затем снова откройте «Об устройстве → Обновить прошивку», чтобы начать инструкцию заново."));
                     }
@@ -572,6 +577,7 @@ impl EntropyApp {
 mod tests {
     use super::*;
     use crate::app::app_update::{FirmwareReleaseFamily, UpdateAsset, VersionRelation};
+    use flash::profiles::*;
 
     use crate::rynk::client::testing::{handshake, info, ok, FakeBoard};
     use rmk_types_rynk::protocol::rynk::ergohaven::ERGOHAVEN_RYNK_REVISION;
@@ -690,7 +696,7 @@ mod tests {
             app.app_settings.language = lang;
             assert_eq!(
                 app.firmware_flash.dialog.as_ref().unwrap().part,
-                Part::PhenomPeripheral
+                PHENOM_PERIPHERAL
             );
             let mut harness = egui_kittest::Harness::builder()
                 .with_size(egui::vec2(640.0, 800.0))
@@ -763,12 +769,12 @@ mod tests {
         let _config = ScopedTempConfig::new();
         let (mut app, recorder) = fixture();
         let mut dialog = app.firmware_flash.dialog.take().unwrap();
-        dialog.part = Part::PhenomCentral;
+        dialog.part = PHENOM_CENTRAL;
         dialog.phase = Phase::Ready(Prepared {
             keyboard_uid: [0; 8],
             bytes: vec![],
             version: "0.3.1".into(),
-            part: Part::PhenomCentral,
+            part: PHENOM_CENTRAL,
             remaining: vec![],
             origin: flash::UsbTarget {
                 port: "test".into(),
@@ -805,7 +811,7 @@ mod tests {
             keyboard_uid: [0; 8],
             bytes: vec![],
             version: "0.3.1".into(),
-            part: Part::PhenomCentral,
+            part: PHENOM_CENTRAL,
             remaining: vec![],
             origin: flash::UsbTarget {
                 port: "test".into(),
@@ -854,26 +860,76 @@ mod tests {
     }
 
     #[test]
+    fn firmware_flash_future_single_board_guide_needs_no_half_swapping() {
+        use egui_kittest::kittest::Queryable;
+        let _config = ScopedTempConfig::new();
+        for profile in [fixtures::SINGLE_RP2040, fixtures::SINGLE_NRF52840] {
+            let (mut app, recorder) = fixture();
+            let dialog = app.firmware_flash.dialog.as_mut().unwrap();
+            dialog.device.product_id = profile.product_id;
+            dialog.profile = profile;
+            dialog.part = profile.parts[0];
+            let mut harness = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(640.0, 700.0))
+                .with_context_setup(crate::keycode_picker::setup_picker_test_fonts)
+                .build_ui_state(
+                    |ui, app: &mut EntropyApp| app.draw_firmware_flash(ui.ctx()),
+                    app,
+                );
+            harness.run();
+            harness.get_by_label("future-board · Update target: Keyboard");
+            harness.get_by_label("Keep the keyboard connected while Entropy backs up your configuration and verifies the firmware image.");
+            let dialog = harness.state_mut().firmware_flash.dialog.as_mut().unwrap();
+            assert!(!dialog.standalone());
+            let (_tx, receiver) = mpsc::channel();
+            dialog.phase = Phase::Flashing {
+                receiver,
+                stage: Stage::WaitingBootloader,
+            };
+            harness.run_steps(2);
+            let waiting = if profile.parts[0].rp2040() {
+                "Keyboard: Waiting for update mode on the named target. If needed, hold BOOT while reconnecting it to the original USB port."
+            } else {
+                "Keyboard: Waiting for update mode. If needed, double-press Reset on this target. Keep the USB cable connected to the same port."
+            };
+            harness.get_by_label(waiting);
+            harness
+                .state_mut()
+                .firmware_flash
+                .dialog
+                .as_mut()
+                .unwrap()
+                .phase = Phase::Finished(Ok(Outcome::Verified));
+            harness.run();
+            harness.get_by_label(
+                "The keyboard's firmware version is verified. Import the saved layout if needed.",
+            );
+            assert!(recorder.sent().iter().all(|h| h.cmd != Cmd::BootloaderJump));
+        }
+    }
+
+    #[test]
     fn firmware_flash_native_peripheral_remains_unverified_and_central_can_be_selected() {
         use egui_kittest::kittest::Queryable;
         let _config = ScopedTempConfig::new();
         for (pid, peripheral, central, continue_label) in [
             (
                 0x74,
-                Part::RightPeripheral,
-                Part::LeftCentral,
+                K04_SECONDARY,
+                K04_LEFT_CENTRAL,
                 "Continue: Primary half",
             ),
             (
                 0x52,
-                Part::PhenomPeripheral,
-                Part::PhenomCentral,
+                PHENOM_PERIPHERAL,
+                PHENOM_CENTRAL,
                 "Continue: Primary half (left)",
             ),
         ] {
             let (mut app, recorder) = fixture();
             let mut dialog = app.firmware_flash.dialog.take().unwrap();
             dialog.device.product_id = pid;
+            dialog.profile = flash::profile(pid).unwrap();
             dialog.part = peripheral;
             dialog.next = Some(Prepared {
                 keyboard_uid: [0; 8],
@@ -917,7 +973,7 @@ mod tests {
                     app,
                 );
             harness.run();
-            harness.get_by_label("Transfer complete, version unverified. Entropy cannot read this half's installed firmware version over USB.");
+            harness.get_by_label("Transfer complete, version unverified. Entropy cannot read this target's installed firmware version over USB.");
             harness.get_by_label(continue_label).click();
             harness.run();
             assert_eq!(
@@ -949,30 +1005,16 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let _config = ScopedTempConfig::new();
         for (pid, part, peripheral, button) in [
-            (
-                0x52,
-                Part::PhenomCentral,
-                Part::PhenomPeripheral,
-                "Use physical BOOT",
-            ),
-            (
-                0x74,
-                Part::LeftCentral,
-                Part::RightPeripheral,
-                "Use physical Reset",
-            ),
-            (
-                0x71,
-                Part::Dongle,
-                Part::RightPeripheral,
-                "Use physical Reset",
-            ),
+            (0x52, PHENOM_CENTRAL, PHENOM_PERIPHERAL, "Use physical BOOT"),
+            (0x74, K04_LEFT_CENTRAL, K04_SECONDARY, "Use physical Reset"),
+            (0x71, K04_DONGLE, K04_RIGHT_PERIPHERAL, "Use physical Reset"),
         ] {
             let (mut app, recorder) = fixture();
             app.hid_device = None;
             app.selected_device = None;
             let dialog = app.firmware_flash.dialog.as_mut().unwrap();
             dialog.device.product_id = pid;
+            dialog.profile = flash::profile(pid).unwrap();
             dialog.part = part;
             dialog
                 .steps
@@ -1000,7 +1042,7 @@ mod tests {
                     app,
                 );
             harness.run();
-            harness.get_by_label("Retry this half").click();
+            harness.get_by_label("Retry this target").click();
             harness.run();
             harness.get_by_label(button);
             let app = harness.state();
@@ -1025,7 +1067,8 @@ mod tests {
         let (_tx, rx) = mpsc::channel();
         let dialog = app.firmware_flash.dialog.as_mut().unwrap();
         dialog.device.product_id = 0x74;
-        dialog.part = Part::RightPeripheral;
+        dialog.profile = flash::profile(0x74).unwrap();
+        dialog.part = K04_SECONDARY;
         dialog.phase = Phase::Flashing {
             receiver: rx,
             stage: Stage::WaitingBootloader,
@@ -1039,7 +1082,7 @@ mod tests {
             );
         harness.run_steps(2);
         harness.get_by_label("k04 · Update target: Secondary half");
-        harness.get_by_label("Disconnect the primary half from USB. Connect ONLY the secondary half to the original USB port and double-press its Reset button.");
+        harness.get_by_label("Secondary half: Disconnect the primary half from USB. Connect ONLY the secondary half to the original USB port and double-press its Reset button.");
         assert!(recorder.sent().iter().all(|h| h.cmd != Cmd::BootloaderJump));
     }
 
@@ -1050,16 +1093,17 @@ mod tests {
         let (mut app, recorder) = fixture();
         let dialog = app.firmware_flash.dialog.as_mut().unwrap();
         dialog.device.product_id = 0x71;
-        dialog.part = Part::RightPeripheral;
+        dialog.profile = flash::profile(0x71).unwrap();
+        dialog.part = K04_RIGHT_PERIPHERAL;
         dialog
             .steps
-            .push((Part::LeftPeripheral, Outcome::TransferredUnverified));
+            .push((K04_LEFT_PERIPHERAL, Outcome::TransferredUnverified));
         dialog.retry = Some(Prepared {
             keyboard_uid: [0; 8],
             bytes: vec![7],
             version: "0.3.1".into(),
-            part: Part::RightPeripheral,
-            remaining: vec![(Part::Dongle, vec![9])],
+            part: K04_RIGHT_PERIPHERAL,
+            remaining: vec![(K04_DONGLE, vec![9])],
             origin: flash::UsbTarget {
                 port: "original-port".into(),
                 vendor: 0xe126,
@@ -1083,19 +1127,19 @@ mod tests {
                 app,
             );
         harness.run();
-        harness.get_by_label("Retry this half").click();
+        harness.get_by_label("Retry this target").click();
         harness.run();
         harness.get_by_label("k04-qube · Update target: Right half");
         let dialog = harness.state().firmware_flash.dialog.as_ref().unwrap();
         let Phase::Ready(prepared) = &dialog.phase else {
             panic!("retry must return to confirmation");
         };
-        assert_eq!(prepared.part, Part::RightPeripheral);
+        assert_eq!(prepared.part, K04_RIGHT_PERIPHERAL);
         assert_eq!(prepared.bytes, vec![7]);
-        assert_eq!(prepared.remaining, vec![(Part::Dongle, vec![9])]);
+        assert_eq!(prepared.remaining, vec![(K04_DONGLE, vec![9])]);
         assert_eq!(
             dialog.steps,
-            vec![(Part::LeftPeripheral, Outcome::TransferredUnverified)]
+            vec![(K04_LEFT_PERIPHERAL, Outcome::TransferredUnverified)]
         );
         assert!(recorder.sent().iter().all(|h| h.cmd != Cmd::BootloaderJump));
     }

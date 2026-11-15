@@ -1020,6 +1020,22 @@ fn normalized_arch_label() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn firmware_flash_registry_agrees_with_release_discovery() {
+        for profile in crate::firmware_flash::profiles::PROFILES {
+            let release = super::rynk_firmware_release_target(
+                0xe126,
+                profile.product_id,
+                Some("0.3.0"),
+                &serde_json::json!({}),
+                false,
+            )
+            .unwrap();
+            assert_eq!(release.asset_prefix, profile.archive);
+        }
+    }
+
     use super::*;
 
     fn entropy_release(tag: &str, assets: &[&str]) -> GitHubRelease {

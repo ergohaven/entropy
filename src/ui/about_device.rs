@@ -881,7 +881,7 @@ impl EntropyApp {
 
                 #[cfg(not(target_arch = "wasm32"))]
                 if self.selected_device.and_then(|i| self.device_manager.devices().get(i))
-                    .is_some_and(|d| d.vendor_id == 0xe126 && matches!(d.product_id, 0x52..=0x54 | 0x71..=0x76))
+                    .is_some_and(|d| d.vendor_id == 0xe126 && crate::firmware_flash::profile(d.product_id).is_some())
                 {
                     ui.label(match lang {
                         crate::i18n::Language::English => "In-app flashing requires Entropy 0.6.0+ and RMK 0.3.0+ with Rynk over USB. For QMK/Vial or older RMK, first migrate the complete keyboard manually; export your layout before migrating.",

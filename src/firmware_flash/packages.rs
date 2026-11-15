@@ -1,77 +1,17 @@
-//! Native RMK 0.3.0+ packages for Phenom and K:04. Roles follow the release profiles;
-//! peripheral images have no runtime USB HID through which to verify a version.
+//! Native RMK 0.3.0+ package validation, independent of keyboard model.
+//! Peripheral images have no runtime USB HID through which to verify a version.
 use super::*;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Part {
-    PhenomCentral,
-    PhenomPeripheral,
-    LeftPeripheral,
-    RightPeripheral,
-    LeftCentral,
-    Dongle,
-}
-
-impl Part {
-    pub(crate) fn peripheral(self) -> bool {
-        matches!(
-            self,
-            Self::LeftPeripheral | Self::RightPeripheral | Self::PhenomPeripheral
-        )
-    }
-
-    pub(crate) fn rp2040(self) -> bool {
-        matches!(self, Self::PhenomCentral | Self::PhenomPeripheral)
-    }
-
-    fn suffix(self) -> &'static str {
-        match self {
-            Self::LeftPeripheral | Self::LeftCentral | Self::PhenomCentral => "left",
-            Self::RightPeripheral | Self::PhenomPeripheral => "right",
-            Self::Dongle => "dongle",
-        }
-    }
-}
-
-pub(crate) struct Profile {
-    pub archive: &'static str,
-    output: &'static str,
-    pub parts: &'static [Part],
-}
-
-pub(crate) fn profile(pid: u16) -> Option<Profile> {
-    let (archive, output, qube) = match pid {
-        0x52 => ("phenom", "phenom", false),
-        0x53 => ("phenom-mini", "phenom_mini", false),
-        0x54 => ("phenom-micro", "phenom_micro", false),
-        0x71 => ("k04-qube", "k04_qube_k04", true),
-        0x72 => ("k04-mini-qube", "k04_qube_mini", true),
-        0x73 => ("k04-micro-qube", "k04_qube_micro", true),
-        0x74 => ("k04", "k04_series_k04", false),
-        0x75 => ("k04-mini", "k04_series_mini", false),
-        0x76 => ("k04-micro", "k04_series_micro", false),
-        _ => return None,
-    };
-    Some(Profile {
-        archive,
-        output,
-        // Keep the normal USB device on old firmware until the final step.
-        parts: if matches!(pid, 0x52..=0x54) {
-            &[Part::PhenomPeripheral, Part::PhenomCentral]
-        } else if qube {
-            &[Part::LeftPeripheral, Part::RightPeripheral, Part::Dongle]
-        } else {
-            &[Part::RightPeripheral, Part::LeftCentral]
-        },
-    })
-}
 
 pub(super) fn unpack(bytes: &[u8], pid: u16) -> Result<Vec<(Part, Vec<u8>)>> {
     let profile = profile(pid).context("Unsupported Rynk keyboard model")?;
+    unpack_profile(bytes, profile)
+}
+
+fn unpack_profile(bytes: &[u8], profile: profiles::Profile) -> Result<Vec<(Part, Vec<u8>)>> {
     let names: Vec<_> = profile
         .parts
         .iter()
-        .map(|part| format!("{}_{}.uf2", profile.output, part.suffix()))
+        .map(|part| profile.image_name(*part))
         .collect();
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))?;
     ensure!(
@@ -147,6 +87,7 @@ pub(super) fn unpack(bytes: &[u8], pid: u16) -> Result<Vec<(Part, Vec<u8>)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use profiles::*;
 
     fn image(part: Part) -> Vec<u8> {
         let mut bytes = vec![0; 512];
@@ -158,7 +99,7 @@ mod tests {
                 12,
                 if part.rp2040() {
                     0x10000000
-                } else if part == Part::Dongle {
+                } else if part == K04_DONGLE {
                     0x1000
                 } else {
                     0x26000
@@ -178,16 +119,23 @@ mod tests {
         ] {
             bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
         }
-        bytes[32] = part as u8;
+        bytes[32] = part.role as u8;
+        bytes[33..33 + part.suffix.len()].copy_from_slice(part.suffix.as_bytes());
         bytes
     }
 
     fn package(pid: u16, change: impl FnOnce(&mut Vec<(String, Vec<u8>)>)) -> Vec<u8> {
-        let p = profile(pid).unwrap();
+        package_for_profile(profile(pid).unwrap(), change)
+    }
+
+    fn package_for_profile(
+        p: Profile,
+        change: impl FnOnce(&mut Vec<(String, Vec<u8>)>),
+    ) -> Vec<u8> {
         let mut files: Vec<_> = p
             .parts
             .iter()
-            .map(|&part| (format!("{}_{}.uf2", p.output, part.suffix()), image(part)))
+            .map(|&part| (p.image_name(part), image(part)))
             .collect();
         let checksums: String = files
             .iter()
@@ -213,6 +161,27 @@ mod tests {
     }
 
     #[test]
+    fn firmware_flash_future_single_board_uses_profile_without_model_branches() {
+        // Deliberately absent from the production registry. The same central
+        // role works with either MCU and does not inherit the dongle's map.
+        for p in [fixtures::SINGLE_RP2040, fixtures::SINGLE_NRF52840] {
+            let name = "future-board-v0.3.1.zip";
+            let url = format!("https://github.com/ergohaven/rmk/releases/download/v0.3.1/{name}");
+            assert!(validate_profile_asset(p, "v0.3.1", name, &url).is_ok());
+            assert!(validate_profile_asset(p, "v0.3.1", "phenom-v0.3.1.zip", &url).is_err());
+            let bytes = package_for_profile(p, |_| {});
+            let images = unpack_profile(&bytes, p).unwrap();
+            assert_eq!(images, vec![(p.parts[0], image(p.parts[0]))]);
+            assert!(!p.has_peripherals());
+            assert!(!p.has_dongle());
+            assert!(unpack(&bytes, p.product_id).is_err());
+            let mut device = crate::device::test_usb_device("fixture", 1, p.product_id);
+            device.firmware = crate::firmware::FirmwareProtocol::Rynk;
+            assert!(!supported(&device));
+        }
+    }
+
+    #[test]
     fn firmware_flash_k04_packages_preserve_model_topology_and_role_order() {
         for pid in (0x52..=0x54).chain(0x71..=0x76) {
             let images = unpack(&package(pid, |_| {}), pid).unwrap();
@@ -229,6 +198,18 @@ mod tests {
         assert!(unpack(&package(0x52, |_| {}), 0x53).is_err());
         assert!(unpack(&package(0x71, |_| {}), 0x74).is_err());
         assert!(unpack(&package(0x74, |f| f[0].1[32] ^= 1), 0x74).is_err());
+        // Same MCU and role, different physical halves: checksums must catch a
+        // package whose left/right contents were exchanged after publication.
+        assert_ne!(image(K04_LEFT_PERIPHERAL), image(K04_RIGHT_PERIPHERAL));
+        assert!(unpack(
+            &package(0x71, |files| {
+                let left = files[0].1.clone();
+                files[0].1 = files[1].1.clone();
+                files[1].1 = left;
+            }),
+            0x71
+        )
+        .is_err());
         assert!(unpack(&package(0x74, |f| f[0].0 = "../left.uf2".into()), 0x74).is_err());
         assert!(unpack(&package(0x74, |f| f[0].1.resize(MAX_DOWNLOAD + 1, 0)), 0x74).is_err());
         assert!(unpack(&package(0x74, |f| f.pop().map(|_| ()).unwrap()), 0x74).is_err());
@@ -237,13 +218,13 @@ mod tests {
     #[test]
     fn firmware_flash_k04_images_exclude_mbr_softdevice_storage_and_bootloader() {
         for part in [
-            Part::LeftPeripheral,
-            Part::RightPeripheral,
-            Part::LeftCentral,
-            Part::Dongle,
+            K04_LEFT_PERIPHERAL,
+            K04_RIGHT_PERIPHERAL,
+            K04_LEFT_CENTRAL,
+            K04_DONGLE,
         ] {
             assert!(validate_uf2_for(&image(part), part).is_ok());
-            assert!(validate_uf2_for(&image(part), Part::PhenomCentral).is_err());
+            assert!(validate_uf2_for(&image(part), PHENOM_CENTRAL).is_err());
             for address in [0, 0xcc000, 0xec000, 0xf4000, 0x10000000] {
                 let mut bytes = image(part);
                 bytes[12..16].copy_from_slice(&u32::to_le_bytes(address));
@@ -253,8 +234,8 @@ mod tests {
                 );
             }
         }
-        assert!(validate_uf2_for(&image(Part::Dongle), Part::LeftCentral).is_err());
-        assert!(validate_uf2_for(&image(Part::LeftCentral), Part::Dongle).is_err());
+        assert!(validate_uf2_for(&image(K04_DONGLE), K04_LEFT_CENTRAL).is_err());
+        assert!(validate_uf2_for(&image(K04_LEFT_CENTRAL), K04_DONGLE).is_err());
     }
 
     // Source-only release compatibility probe. Download the nine named stable

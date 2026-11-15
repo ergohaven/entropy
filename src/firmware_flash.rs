@@ -1,4 +1,4 @@
-//! Guided UF2 updates for explicitly identified Phenom and RMK K:04 keyboards.
+//! Guided UF2 updates for explicitly reviewed Rynk keyboard profiles.
 use anyhow::{bail, ensure, Context, Result};
 use sha2::{Digest, Sha256};
 use std::{
@@ -10,7 +10,8 @@ use std::{
 mod packages;
 #[path = "firmware_flash/platform.rs"]
 mod platform;
-pub(crate) use packages::{profile, Part};
+pub(crate) mod profiles;
+pub(crate) use profiles::{profile, Part, Role};
 
 const MAX_DOWNLOAD: usize = 4 * 1024 * 1024;
 
@@ -76,7 +77,7 @@ pub(crate) fn supported(device: &crate::device::Device) -> bool {
 }
 
 fn runtime_product(pid: u16) -> bool {
-    matches!(pid, 0x52..=0x54 | 0x71..=0x76)
+    profile(pid).is_some()
 }
 
 pub(crate) fn compatible_version(version: &str) -> bool {
@@ -85,7 +86,16 @@ pub(crate) fn compatible_version(version: &str) -> bool {
 }
 
 fn validate_asset(pid: u16, version: &str, name: &str, address: &str) -> Result<()> {
-    let profile = packages::profile(pid).context("Unsupported Rynk keyboard model")?;
+    let profile = profile(pid).context("Unsupported Rynk keyboard model")?;
+    validate_profile_asset(profile, version, name, address)
+}
+
+fn validate_profile_asset(
+    profile: profiles::Profile,
+    version: &str,
+    name: &str,
+    address: &str,
+) -> Result<()> {
     ensure!(
         compatible_version(version),
         "Firmware updates require RMK 0.3.0 or later"
@@ -103,7 +113,7 @@ fn validate_asset(pid: u16, version: &str, name: &str, address: &str) -> Result<
 
 #[cfg(test)]
 fn validate_uf2(bytes: &[u8]) -> Result<()> {
-    validate_uf2_for(bytes, Part::PhenomCentral)
+    validate_uf2_for(bytes, profiles::PHENOM_CENTRAL)
 }
 
 fn validate_uf2_for(bytes: &[u8], part: Part) -> Result<()> {
@@ -114,11 +124,7 @@ fn validate_uf2_for(bytes: &[u8], part: Part) -> Result<()> {
     let count = bytes.len() / 512;
     let mut seen = vec![false; count];
     let mut addresses = std::collections::BTreeSet::new();
-    let (family, start, end) = match part {
-        Part::PhenomCentral | Part::PhenomPeripheral => (0xe48bff56, 0x10000000, 0x10100000),
-        Part::Dongle => (0xada52840, 0x1000, 0xcc000),
-        _ => (0xada52840, 0x26000, 0xcc000),
-    };
+    let (family, start, end) = part.layout.limits();
     for block in bytes.chunks_exact(512) {
         let word = |offset| u32::from_le_bytes(block[offset..offset + 4].try_into().unwrap());
         ensure!(
@@ -166,7 +172,7 @@ fn require_newer_version(current: Option<&str>, expected: &str) -> Result<()> {
     let expected = semver::Version::parse(expected).context("Invalid proposed firmware version")?;
     ensure!(
         current < expected,
-        "This half already has this firmware or a newer version"
+        "This target already has this firmware or a newer version"
     );
     Ok(())
 }
@@ -225,7 +231,7 @@ pub(crate) fn prepare(
 ) -> Result<Prepared> {
     ensure!(
         supported(device),
-        "Only Rynk Phenom and K:04 keyboards connected by USB are supported"
+        "Only supported Rynk keyboard profiles connected by USB can be flashed"
     );
     validate_asset(device.product_id, version, name, url)?;
     let origin = find_origin(&platform::snapshot()?, device.product_id)?;
@@ -515,6 +521,7 @@ fn validate_bootloader_info(info: &str, part: Part) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use profiles::*;
 
     #[test]
     fn firmware_flash_rynk_bootloader_requires_fresh_unlock_and_handles_reset_before_reply() {
@@ -586,20 +593,20 @@ mod tests {
         let boot = usb("port", 0x2e8a, 3, Some("/boot"));
         let mut unmounted = boot.clone();
         unmounted.mounts.clear();
-        assert!(!bootloader_departed(&[unmounted], &boot, Part::PhenomPeripheral).unwrap());
-        assert!(bootloader_departed(&[], &boot, Part::PhenomPeripheral).unwrap());
+        assert!(!bootloader_departed(&[unmounted], &boot, PHENOM_PERIPHERAL).unwrap());
+        assert!(bootloader_departed(&[], &boot, PHENOM_PERIPHERAL).unwrap());
     }
 
     #[test]
     fn firmware_flash_rp2040_protects_settings_and_rejects_nordic_images() {
         let mut bytes = uf2();
-        assert!(validate_uf2_for(&bytes, Part::PhenomPeripheral).is_ok());
-        assert!(validate_uf2_for(&bytes, Part::LeftPeripheral).is_err());
+        assert!(validate_uf2_for(&bytes, PHENOM_PERIPHERAL).is_ok());
+        assert!(validate_uf2_for(&bytes, K04_LEFT_PERIPHERAL).is_err());
         bytes[12..16].copy_from_slice(&0x10100000u32.to_le_bytes());
-        assert!(validate_uf2_for(&bytes, Part::PhenomPeripheral).is_err());
+        assert!(validate_uf2_for(&bytes, PHENOM_PERIPHERAL).is_err());
         bytes[12..16].copy_from_slice(&0x10000000u32.to_le_bytes());
         bytes[28..32].copy_from_slice(&0xada52840u32.to_le_bytes());
-        assert!(validate_uf2_for(&bytes, Part::PhenomCentral).is_err());
+        assert!(validate_uf2_for(&bytes, PHENOM_CENTRAL).is_err());
     }
 
     #[test]
@@ -675,26 +682,26 @@ mod tests {
     fn firmware_flash_k04_bootloader_is_port_bound_and_requires_nordic_board_info() {
         let boot = usb("port", 0x239a, 0x29, Some("/boot"));
         assert_eq!(
-            bootloader_target(&[boot.clone()], "port", Part::RightPeripheral).unwrap(),
+            bootloader_target(&[boot.clone()], "port", K04_RIGHT_PERIPHERAL).unwrap(),
             Some(boot.clone())
         );
         assert!(
-            bootloader_target(&[boot.clone()], "other", Part::RightPeripheral)
+            bootloader_target(&[boot.clone()], "other", K04_RIGHT_PERIPHERAL)
                 .unwrap()
                 .is_none()
         );
         assert!(bootloader_target(
             &[boot, usb("other", 0xe126, 0x74, None)],
             "port",
-            Part::RightPeripheral
+            K04_RIGHT_PERIPHERAL
         )
         .is_err());
         let info = "UF2 Bootloader 0.9.2\r\nModel: Test board\r\nBoard-ID: nRF52840-Test-revD\r\n";
-        assert!(validate_bootloader_info(info, Part::RightPeripheral).is_ok());
-        assert!(validate_bootloader_info(info, Part::PhenomCentral).is_err());
-        assert!(validate_bootloader_info("Board-ID: RPI-RP2", Part::LeftCentral).is_err());
-        assert!(validate_bootloader_info(&info.replace("52840", "52832"), Part::Dongle).is_err());
-        assert!(validate_bootloader_info("Model: nRF52840", Part::Dongle).is_err());
+        assert!(validate_bootloader_info(info, K04_RIGHT_PERIPHERAL).is_ok());
+        assert!(validate_bootloader_info(info, PHENOM_CENTRAL).is_err());
+        assert!(validate_bootloader_info("Board-ID: RPI-RP2", K04_LEFT_CENTRAL).is_err());
+        assert!(validate_bootloader_info(&info.replace("52840", "52832"), K04_DONGLE).is_err());
+        assert!(validate_bootloader_info("Model: nRF52840", K04_DONGLE).is_err());
         assert!(find_origin(
             &[usb("p", 0xe126, 0x74, None), usb("q", 0xe126, 0x71, None)],
             0x74
@@ -749,21 +756,21 @@ mod tests {
         assert!(find_origin(&[normal.clone(), normal.clone()], 0x52).is_err());
         assert!(find_origin(&[normal.clone()], 0x53).is_err());
         let boot = usb("port1", 0x2e8a, 3, Some("/boot"));
-        assert!(bootloader_target(&[normal, boot.clone()], "port1", Part::PhenomCentral).is_err());
+        assert!(bootloader_target(&[normal, boot.clone()], "port1", PHENOM_CENTRAL).is_err());
         assert_eq!(
-            bootloader_target(&[boot.clone()], "port1", Part::PhenomCentral).unwrap(),
+            bootloader_target(&[boot.clone()], "port1", PHENOM_CENTRAL).unwrap(),
             Some(boot.clone())
         );
         assert_eq!(
             bootloader_target(
                 &[usb("port2", 0x2e8a, 3, Some("/other"))],
                 "port1",
-                Part::PhenomCentral
+                PHENOM_CENTRAL
             )
             .unwrap(),
             None
         );
-        assert!(bootloader_target(&[boot.clone(), boot], "port1", Part::PhenomCentral).is_err());
+        assert!(bootloader_target(&[boot.clone(), boot], "port1", PHENOM_CENTRAL).is_err());
     }
 
     #[test]
@@ -772,7 +779,7 @@ mod tests {
         let other = usb("other", 0xe126, 0x53, None);
         assert!(find_origin(&[normal, other.clone()], 0x52).is_err());
         let boot = usb("selected", 0x2e8a, 3, Some("/boot"));
-        assert!(bootloader_target(&[boot, other], "selected", Part::PhenomCentral).is_err());
+        assert!(bootloader_target(&[boot, other], "selected", PHENOM_CENTRAL).is_err());
     }
 
     #[test]
@@ -785,7 +792,7 @@ mod tests {
         let target = wait_for_usb(
             Duration::from_secs(10),
             || snapshots.pop_front().unwrap(),
-            |devices| bootloader_target(devices, "port", Part::PhenomCentral),
+            |devices| bootloader_target(devices, "port", PHENOM_CENTRAL),
         )
         .unwrap();
         assert_eq!(target.mounts, vec![PathBuf::from("/boot")]);
@@ -794,7 +801,7 @@ mod tests {
         let error = wait_for_usb(
             Duration::from_secs(10),
             || Ok(vec![boot.clone(), boot.clone()]),
-            |devices| bootloader_target(devices, "port", Part::PhenomCentral),
+            |devices| bootloader_target(devices, "port", PHENOM_CENTRAL),
         )
         .unwrap_err();
         assert!(error.to_string().contains("ambiguous"));
