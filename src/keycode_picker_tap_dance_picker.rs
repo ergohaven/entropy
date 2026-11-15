@@ -398,7 +398,7 @@ impl KeycodePicker {
             }
         }
         if self.supports_universal_russian_letters {
-            if let Some(binding) = show_universal_russian_letter_section(ui, self.language) {
+            if let Some(binding) = show_universal_russian_letter_section(ui, self.language, self.supports_extended_russian_letters) {
                 self.set_tap_dance_binding(td_idx, field, binding);
                 self.td_key_pick = None;
             }
@@ -420,6 +420,11 @@ impl KeycodePicker {
     }
 
     fn set_tap_dance_binding(&mut self, n: usize, field: u8, value: crate::keyboard::KeyBinding) {
+        if crate::universal_symbols::binding_contains_extended_russian_letter(value)
+            && !self.supports_extended_russian_letters
+        {
+            return;
+        }
         if crate::universal_symbols::binding_contains_numero(value)
             && !self.supports_universal_numero
         {
@@ -540,6 +545,38 @@ mod tests {
         assert_eq!(entry.on_hold, binding);
         assert_eq!(entry.on_double_tap, binding);
         assert_eq!(entry.on_tap_hold, binding);
+    }
+
+    #[test]
+    fn extended_russian_letters_are_gated_in_all_tap_dance_fields() {
+        for rynk_board in [false, true] {
+            for id in 0xB5..=0xB7 {
+                let binding = crate::universal_symbols::binding(id);
+                let mut picker = KeycodePicker {
+                    tap_dance_entries: vec![TapDanceEntry::default()],
+                    rynk_board,
+                    ..Default::default()
+                };
+                for field in 0..=3 {
+                    picker.set_tap_dance_binding(0, field, binding);
+                }
+                assert_eq!(picker.tap_dance_entries[0], TapDanceEntry::default());
+                picker.supports_extended_russian_letters = true;
+                for field in 0..=3 {
+                    picker.set_tap_dance_binding(0, field, binding);
+                }
+                let entry = &picker.tap_dance_entries[0];
+                for actual in [entry.on_tap, entry.on_hold, entry.on_double_tap, entry.on_tap_hold] {
+                    if rynk_board {
+                        assert_eq!(crate::rynk::keycode::binding_action(actual), Ok(
+                            rmk_types_rynk::action::KeyAction::Single(rmk_types_rynk::action::Action::User(id))
+                        ));
+                    } else {
+                        assert_eq!(actual, binding);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

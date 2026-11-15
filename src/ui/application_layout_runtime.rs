@@ -4726,7 +4726,7 @@ mod tests {
             key_override_count:0, alt_repeat_count:0, modules_supported:false, touchpad_supported:false,
             bluetooth_supported:false, layer_leds_supported:false, rgb_supported:false, lighting_mode:None,
             supports_rmk_native_key_actions:false, supports_universal_numero: false, supports_universal_symbols:false,
-            supports_universal_russian_letters:false, supports_rmk_native_combo_output:false,
+            supports_universal_russian_letters:false, supports_extended_russian_letters: false, supports_rmk_native_combo_output:false,
             supports_rmk_native_tap_dance_actions:false, supports_rmk_combo_layers:false,
         });
         let (hid, packets) = crate::hid::HidDevice::test_device();

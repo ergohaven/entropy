@@ -284,10 +284,8 @@ mod tests {
             )
         }));
         bindings.extend(
-            (0..crate::universal_symbols::RUSSIAN_LETTERS.len()).map(|offset| {
-                crate::universal_symbols::binding(
-                    crate::universal_symbols::USER_RUSSIAN_LETTER_START + offset as u8,
-                )
+            crate::universal_symbols::RUSSIAN_LETTERS.iter().map(|letter| {
+                crate::universal_symbols::binding(letter.user_id)
             }),
         );
         let layout = test_layout(vec![bindings]);

@@ -43,6 +43,7 @@ pub(crate) struct RmkNativeCapabilities {
     pub(crate) key_actions: bool,
     pub(crate) universal_symbols: bool,
     pub(crate) russian_letters: bool,
+    pub(crate) extended_russian_letters: bool,
     pub(crate) combo_output: bool,
     pub(crate) tap_dance_actions: bool,
     pub(crate) combo_layers: bool,
@@ -327,6 +328,7 @@ fn decode_native_capabilities(response: &[u8; MSG_LEN]) -> RmkNativeCapabilities
         key_actions: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_GET_SET != 0,
         universal_symbols: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_UNIVERSAL_SYMBOLS != 0,
         russian_letters: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_RUSSIAN_LETTERS != 0,
+        extended_russian_letters: flags & 0x0800 != 0,
         combo_output: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_OUTPUT != 0,
         tap_dance_actions: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_MORSE_ACTIONS != 0,
         combo_layers: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_COMBO_LAYER != 0,
@@ -397,6 +399,9 @@ impl crate::hid::HidDevice {
         binding: crate::keyboard::KeyBinding,
     ) -> Result<Vec<u8>> {
         let caps = self.cached_rmk_native_capabilities()?;
+        if crate::universal_symbols::binding_contains_extended_russian_letter(binding) && !caps.extended_russian_letters {
+            bail!("These Russian letters are not supported by this device; update its firmware");
+        }
         if crate::universal_symbols::binding_contains_numero(binding) && !caps.universal_numero {
             bail!("Numero is not supported by this device; update its firmware");
         }
@@ -852,6 +857,39 @@ mod tests {
     use rmk_types::modifier::ModifierCombination;
 
     #[test]
+    fn extended_russian_letters_require_their_own_capability_before_transport() {
+        let (device, recorder) = crate::hid::HidDevice::test_device();
+        *device.native_capabilities.lock().unwrap() = Some(RmkNativeCapabilities {
+            version: 1,
+            key_actions: true,
+            russian_letters: true,
+            universal_symbols: true,
+            ..Default::default()
+        });
+        for id in 0xB5..=0xB7 {
+            for action in [
+                KeyAction::Single(Action::User(id)),
+                KeyAction::Tap(Action::User(id)),
+                KeyAction::TapHold(Action::User(id), Action::User(0x90), Default::default()),
+                KeyAction::TapHold(Action::User(0x90), Action::User(id), Default::default()),
+            ] {
+                assert!(device.set_rmk_key_action(0, 0, 0, action).is_err());
+            }
+        }
+        assert!(recorder.requests().is_empty());
+        let mut reply = [0; 32];
+        reply[..6].copy_from_slice(&[8, 0xe8, 2, 2, 7, 0]);
+        assert!(!decode_native_capabilities(&reply).extended_russian_letters);
+        reply[5] = 8;
+        let caps = decode_native_capabilities(&reply);
+        assert!(caps.extended_russian_letters);
+        *device.native_capabilities.lock().unwrap() = Some(caps);
+        for id in 0xB5..=0xB7 {
+            assert!(device.encode_vial_binding(crate::universal_symbols::binding(id)).is_ok());
+        }
+    }
+
+    #[test]
     fn version_compat_numero_rejected_on_legacy_device_before_write() {
         let (device, recorder) = crate::hid::HidDevice::test_device();
         *device.native_capabilities.lock().unwrap() = Some(RmkNativeCapabilities {
@@ -991,7 +1029,7 @@ mod tests {
                 profile_resolution: false,
                 key_actions: true,
                 universal_symbols: true,
-                russian_letters: true,
+                russian_letters: true, extended_russian_letters: false,
                 combo_output: false,
                 tap_dance_actions: false,
                 combo_layers: false,
@@ -1051,7 +1089,7 @@ mod tests {
             profile_resolution: false,
             key_actions: true,
             universal_symbols: true,
-            russian_letters: false,
+            russian_letters: false, extended_russian_letters: false,
             combo_output: false,
             tap_dance_actions: false,
             combo_layers: false,
@@ -1065,7 +1103,7 @@ mod tests {
             profile_resolution: false,
             key_actions: true,
             universal_symbols: false,
-            russian_letters: false,
+            russian_letters: false, extended_russian_letters: false,
             combo_output: false,
             tap_dance_actions: false,
             combo_layers: false,

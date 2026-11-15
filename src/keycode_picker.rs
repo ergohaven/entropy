@@ -169,6 +169,7 @@ pub struct KeycodePicker {
     pub supports_universal_numero: bool,
     pub supports_universal_symbols: bool,
     pub supports_universal_russian_letters: bool,
+    pub(crate) supports_extended_russian_letters: bool,
     pub supports_rmk_native_combo_output: bool,
     pub supports_rmk_native_tap_dance_actions: bool,
     /// The connected board speaks Rynk: tap dance fields take the native v1
@@ -666,6 +667,7 @@ mod tests {
             supports_universal_numero: false,
             supports_universal_symbols: true,
             supports_universal_russian_letters: true,
+            supports_extended_russian_letters: false,
             rmk_native_key_actions_allowed_for_target: true,
             ..Default::default()
         };
@@ -677,6 +679,7 @@ mod tests {
                 supports_universal_numero: false,
                 supports_universal_symbols: true,
                 supports_universal_russian_letters: true,
+                supports_extended_russian_letters: false,
                 rmk_native_key_actions_allowed_for_target: true,
                 ..Default::default()
             },
@@ -685,6 +688,7 @@ mod tests {
                 supports_universal_numero: false,
                 supports_universal_symbols: false,
                 supports_universal_russian_letters: true,
+                supports_extended_russian_letters: false,
                 rmk_native_key_actions_allowed_for_target: true,
                 ..Default::default()
             },
@@ -693,6 +697,7 @@ mod tests {
                 supports_universal_numero: false,
                 supports_universal_symbols: true,
                 supports_universal_russian_letters: true,
+                supports_extended_russian_letters: false,
                 rmk_native_key_actions_allowed_for_target: false,
                 ..Default::default()
             },
@@ -706,6 +711,7 @@ mod tests {
             supports_universal_numero: false,
             supports_universal_symbols: true,
             supports_universal_russian_letters: false,
+            supports_extended_russian_letters: false,
             rmk_native_key_actions_allowed_for_target: true,
             ..Default::default()
         }
@@ -1213,6 +1219,34 @@ mod tests {
 mod version_compat_numero_tests {
     use super::*;
     #[test]
+    fn extended_russian_letter_authoring_and_cache_follow_device_capability() {
+        let mut picker = KeycodePicker {
+            supports_rmk_native_key_actions: true,
+            supports_universal_symbols: true,
+            supports_universal_russian_letters: true,
+            rmk_native_key_actions_allowed_for_target: true,
+            ..Default::default()
+        };
+        let old = picker.row_fingerprint();
+        for id in 0xB5..=0xB7 {
+            let binding = crate::universal_symbols::binding(id);
+            assert!(!picker.cached_tab_rows(KeycodeTab::Special).iter().any(|r| r.action == PickerAction::Assign(binding)));
+            picker.perform_picker_action(PickerAction::Assign(binding));
+            assert!(picker.result.is_none());
+        }
+        picker.supports_extended_russian_letters = true;
+        assert_ne!(old, picker.row_fingerprint());
+        for id in 0xB5..=0xB7 {
+            let binding = crate::universal_symbols::binding(id);
+            assert!(picker.cached_tab_rows(KeycodeTab::Special).iter().any(|r| r.action == PickerAction::Assign(binding)));
+            picker.perform_picker_action(PickerAction::Assign(binding));
+            assert_eq!(picker.result.take(), Some(binding));
+        }
+        picker.supports_extended_russian_letters = false;
+        assert!(!picker.cached_tab_rows(KeycodeTab::Special).iter().any(|r| r.action == PickerAction::Assign(crate::universal_symbols::binding(0xB5))));
+    }
+
+    #[test]
     fn version_compat_numero_authoring_and_cache_follow_device_changes() {
         let mut picker = KeycodePicker {
             supports_rmk_native_key_actions: true,
@@ -1280,11 +1314,12 @@ fn show_universal_symbol_section(
 fn show_universal_russian_letter_section(
     ui: &mut egui::Ui,
     language: crate::i18n::Language,
+    extended: bool,
 ) -> Option<crate::keyboard::KeyBinding> {
     ui.add_space(crate::ui_style::modal_space_sm());
     let section = crate::i18n::tr_catalog(language, "key_picker_text.international");
     show_section_heading(ui, section);
-    let rows = universal_russian_letter_rows(language, KeycodeTab::Special, section);
+    let rows = universal_russian_letter_rows(language, KeycodeTab::Special, section, extended);
     match show_row_grid(ui, &rows) {
         Some(PickerAction::Assign(binding)) => Some(binding),
         _ => None,
@@ -1471,6 +1506,7 @@ impl Default for KeycodePicker {
             supports_universal_numero: false,
             supports_universal_symbols: false,
             supports_universal_russian_letters: false,
+            supports_extended_russian_letters: false,
             supports_rmk_native_combo_output: false,
             supports_rmk_native_tap_dance_actions: false,
             rynk_board: false,

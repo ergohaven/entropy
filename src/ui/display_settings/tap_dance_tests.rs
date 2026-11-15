@@ -285,6 +285,7 @@ fn deferred_context() -> DeferredDeviceLoadContext {
         supports_universal_numero: false,
         supports_universal_symbols: false,
         supports_universal_russian_letters: false,
+        supports_extended_russian_letters: false,
         supports_rmk_native_combo_output: false,
         supports_rmk_native_tap_dance_actions: false,
         supports_rmk_combo_layers: false,

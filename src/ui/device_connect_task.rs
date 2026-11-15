@@ -687,6 +687,7 @@ impl EntropyApp {
             self.selected_encoder = None;
             self.keycode_picker.open = false;
             self.keycode_picker.supports_universal_numero = false;
+            self.keycode_picker.supports_extended_russian_letters = false;
             self.reset_matrix_tester_state();
         } else {
             self.status_msg = format!(
@@ -1129,6 +1130,7 @@ impl EntropyApp {
                 let supports_universal_numero = rmk_native_capabilities.universal_numero;
                 let supports_universal_symbols = rmk_native_capabilities.universal_symbols;
                 let supports_universal_russian_letters = rmk_native_capabilities.russian_letters;
+                let supports_extended_russian_letters = rmk_native_capabilities.extended_russian_letters;
                 let supports_rmk_native_combo_output = rmk_native_capabilities.combo_output;
                 let supports_rmk_native_tap_dance_actions =
                     rmk_native_capabilities.tap_dance_actions;
@@ -1561,6 +1563,7 @@ impl EntropyApp {
                         supports_universal_numero,
                         supports_universal_symbols,
                         supports_universal_russian_letters,
+                        supports_extended_russian_letters,
                         supports_rmk_native_combo_output,
                         supports_rmk_native_tap_dance_actions,
                         supports_rmk_combo_layers,
@@ -1628,6 +1631,7 @@ impl EntropyApp {
                     supports_universal_numero,
                     supports_universal_symbols,
                     supports_universal_russian_letters,
+                    supports_extended_russian_letters,
                     supports_rmk_native_combo_output,
                     supports_rmk_native_tap_dance_actions,
                     supports_rmk_combo_layers,

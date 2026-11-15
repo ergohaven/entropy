@@ -200,6 +200,7 @@ fn gui_export_uncertain_names(mode: &str, recovered: bool) {
             supports_universal_numero: false,
             supports_universal_symbols: false,
             supports_universal_russian_letters: false,
+            supports_extended_russian_letters: false,
             supports_rmk_native_combo_output: false,
             supports_rmk_native_tap_dance_actions: false,
             supports_rmk_combo_layers: false,
@@ -929,7 +930,7 @@ fn exercise_failed_resource_export(kind: usize) {
                 combo_count:if kind==0 {1}else{0},tap_dance_count:if kind==1 {1}else{0},
                 key_override_count:if kind==2 {1}else{0},alt_repeat_count:if kind==3 {1}else{0},
                 modules_supported:false,touchpad_supported:false,bluetooth_supported:false,layer_leds_supported:false,rgb_supported:false,lighting_mode:None,
-                supports_rmk_native_key_actions:false,supports_universal_symbols:false,supports_universal_russian_letters:false,
+                supports_rmk_native_key_actions:false,supports_universal_symbols:false,supports_universal_russian_letters:false, supports_extended_russian_letters: false,
                 supports_rmk_native_combo_output:false,supports_rmk_native_tap_dance_actions:false,supports_rmk_combo_layers:false,
             });
         }
@@ -2833,6 +2834,7 @@ fn exercise_unified_device_menu_lifecycle(export: bool, nondefault: bool, failin
             supports_universal_numero: false,
             supports_universal_symbols: false,
             supports_universal_russian_letters: false,
+            supports_extended_russian_letters: false,
             supports_rmk_native_combo_output: false,
             supports_rmk_native_tap_dance_actions: false,
             supports_rmk_combo_layers: false,
@@ -3996,7 +3998,7 @@ fn exercise_uncertain_macro_import(sm62: bool, fault: u8, corrective: bool) {
         key_override_count: 0, alt_repeat_count: 0, modules_supported: false,
         touchpad_supported: false, bluetooth_supported: false, layer_leds_supported: false,
         rgb_supported: false, lighting_mode: None, supports_rmk_native_key_actions: false,
-        supports_universal_symbols: false, supports_universal_russian_letters: false,
+        supports_universal_symbols: false, supports_universal_russian_letters: false, supports_extended_russian_letters: false,
         supports_rmk_native_combo_output: false, supports_rmk_native_tap_dance_actions: false,
         supports_rmk_combo_layers: false,
     });
@@ -4849,6 +4851,7 @@ fn gui_macro_confirmation(
             supports_universal_numero: false,
             supports_universal_symbols: false,
             supports_universal_russian_letters: false,
+            supports_extended_russian_letters: false,
             supports_rmk_native_combo_output: false,
             supports_rmk_native_tap_dance_actions: false,
             supports_rmk_combo_layers: false,
