@@ -18,6 +18,18 @@ fn sm62_new_keyboard_must_not_receive_previous_keyboard_saved_profile() {
         let bridge=crate::qmk_hid_host::test_start_profile_handoff_bridge(device.clone(),hid.shared_output());
         bridge.set_selected_application_layout_support(supported);app.qmk_hid_hosts.insert(device.path.clone(),bridge);
         runtime_fixture_connect(&mut app,&device,hid);
+        // poll_connect finishes before the bridge's asynchronous identity and
+        // read-first handshake necessarily grants publication. Establish that
+        // owner through ordinary runtime ticks before creating A's explicit
+        // edit; edits made before a new owner exists must not be inherited.
+        let ready_deadline=std::time::Instant::now()+std::time::Duration::from_secs(5);
+        while app.qmk_hid_hosts[&device.path].application_layout_publication_generation().is_none() {
+            app.update_application_layout_runtime_with(Default::default());
+            assert!(std::time::Instant::now()<ready_deadline,"{unit} bridge never became ready");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // Observe the ready owner before recording any user-authored delta.
+        app.update_application_layout_runtime_with(Default::default());
         let key=app.application_layout_device_key().unwrap();
         if unit=="unit-a" {
             let s=app.application_layout_settings_mut().unwrap();let id=s.create_for_application(&foreground);
