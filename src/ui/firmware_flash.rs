@@ -529,6 +529,13 @@ impl EntropyApp {
                     }
                 },
             }
+            if cfg!(target_os = "macos") && matches!(dialog.phase, Phase::Ready(_)) {
+                ui.add_space(8.0);
+                ui.add(egui::Label::new(text(lang,
+                    "After a UF2 copy, the bootloader drive (such as NRF52BOOT) disconnects to restart. macOS may show “Disk Not Ejected Properly”. This notification alone does not mean flashing failed. Check the connected device's firmware version after it restarts.",
+                    "После копирования UF2 загрузочный диск (например, NRF52BOOT) отключается для перезапуска. macOS может показать «Диск извлечён неправильно». Это уведомление само по себе не означает ошибку прошивки. После перезапуска проверьте версию подключённого устройства.")).wrap());
+                ui.hyperlink_to(text(lang, "Firmware update instructions", "Инструкция по обновлению прошивки"), "https://docs.eh.works/firmware/");
+            }
             if let Some(error) = &dialog.error { ui.colored_label(ui.visuals().error_fg_color, error); }
             if let Some(path) = &dialog.backup {
                 ui.add_space(8.0);
@@ -681,6 +688,41 @@ mod tests {
                 Phase::Confirm
             ));
             assert!(recorder.sent().iter().all(|h| h.cmd != Cmd::BootloaderJump));
+        }
+    }
+
+    #[test]
+    fn firmware_flash_restart_hint_only_appears_after_preparation() {
+        use egui_kittest::kittest::Queryable;
+        let _config = ScopedTempConfig::new();
+        for lang in [crate::i18n::Language::English, crate::i18n::Language::Russian] {
+            for ready in [false, true] {
+                let (mut app, board) = fixture();
+                app.app_settings.language = lang;
+                if ready {
+                    let dialog = app.firmware_flash.dialog.as_mut().unwrap();
+                    dialog.phase = Phase::Ready(Prepared {
+                        keyboard_uid: [1; 8], bytes: vec![7], version: "0.3.1".into(),
+                        part: dialog.part, remaining: vec![],
+                        origin: flash::UsbTarget {
+                            port: "preview".into(), vendor: 0xe126, product: 0x52, mounts: vec![],
+                        },
+                    });
+                }
+                let mut harness = egui_kittest::Harness::builder()
+                    .with_size(egui::vec2(900.0, 900.0))
+                    .with_context_setup(crate::keycode_picker::setup_picker_test_fonts)
+                    .build_ui_state(|ui, app: &mut EntropyApp| app.draw_firmware_flash(ui.ctx()), app);
+                harness.run_steps(2);
+                let label = text(lang,
+                    "After a UF2 copy, the bootloader drive (such as NRF52BOOT) disconnects to restart. macOS may show “Disk Not Ejected Properly”. This notification alone does not mean flashing failed. Check the connected device's firmware version after it restarts.",
+                    "После копирования UF2 загрузочный диск (например, NRF52BOOT) отключается для перезапуска. macOS может показать «Диск извлечён неправильно». Это уведомление само по себе не означает ошибку прошивки. После перезапуска проверьте версию подключённого устройства.");
+                assert_eq!(harness.query_by_label(label).is_some(), ready && cfg!(target_os = "macos"));
+                if ready && cfg!(target_os = "macos") {
+                    assert!(harness.get_by_label(label).rect().width() <= 440.0);
+                }
+                assert!(board.sent().iter().all(|h| h.cmd != Cmd::BootloaderJump));
+            }
         }
     }
 
