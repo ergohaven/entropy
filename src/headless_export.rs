@@ -41,7 +41,8 @@ const POLL_INTERVAL: Duration = Duration::from_millis(25);
 const DISCOVERY_INTERVAL: Duration = Duration::from_millis(500);
 
 pub(crate) const USAGE: &str = "\
-Usage: entropy --export-layout <PATH> [--device <FILTER>] [--timeout <SECONDS>]
+Usage: entropy [--minimized] [--device <FILTER>]
+       entropy --export-layout <PATH> [--device <FILTER>] [--timeout <SECONDS>]
 
   --export-layout <PATH>  write the connected keyboard's .entlayout to PATH
                           (\"-\" writes it to standard output)
@@ -70,10 +71,15 @@ pub(crate) struct HeadlessExportRequest {
     pub(crate) timeout: Duration,
 }
 
-impl HeadlessExportRequest {
-    /// `Ok(None)` when the arguments do not ask for a headless export, so the
-    /// GUI starts as usual. `Err` carries the usage message.
-    pub(crate) fn from_args<I, S>(args: I) -> Result<Option<Self>, String>
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct LaunchRequest {
+    pub(crate) export: Option<HeadlessExportRequest>,
+    pub(crate) gui_device: Option<String>,
+}
+
+impl LaunchRequest {
+    /// Parses GUI and export launches. `Err` carries the usage message.
+    pub(crate) fn from_args<I, S>(args: I) -> Result<Self, String>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<std::ffi::OsStr>,
@@ -113,7 +119,15 @@ impl HeadlessExportRequest {
                         ExportDestination::File(PathBuf::from(value))
                     });
                 }
-                DEVICE_ARG => device = Some(take_value(&mut index)?),
+                DEVICE_ARG => {
+                    let value = take_value(&mut index)?;
+                    if device.is_some() || value.trim().is_empty() || value.starts_with("--") {
+                        return Err(format!(
+                            "{DEVICE_ARG} needs one non-empty filter\n\n{USAGE}"
+                        ));
+                    }
+                    device = Some(value);
+                }
                 TIMEOUT_ARG => {
                     let value = take_value(&mut index)?;
                     let seconds: u64 = value
@@ -131,41 +145,30 @@ impl HeadlessExportRequest {
         }
 
         let Some(destination) = destination else {
-            if device.is_some() || timeout.is_some() {
+            if timeout.is_some() {
                 return Err(format!(
-                    "{DEVICE_ARG} and {TIMEOUT_ARG} only apply together with {EXPORT_LAYOUT_ARG}\n\n{USAGE}"
+                    "{TIMEOUT_ARG} only applies together with {EXPORT_LAYOUT_ARG}\n\n{USAGE}"
                 ));
             }
-            return Ok(None);
+            return Ok(Self {
+                export: None,
+                gui_device: device,
+            });
         };
         if let Some(unexpected) = rest.first() {
             return Err(format!(
                 "unexpected argument {unexpected:?} with {EXPORT_LAYOUT_ARG}\n\n{USAGE}"
             ));
         }
-        Ok(Some(Self {
-            destination,
-            device,
-            timeout: timeout.unwrap_or(DEFAULT_TIMEOUT),
-        }))
+        Ok(Self {
+            gui_device: None,
+            export: Some(HeadlessExportRequest {
+                destination,
+                device,
+                timeout: timeout.unwrap_or(DEFAULT_TIMEOUT),
+            }),
+        })
     }
-}
-
-/// `--device` matching: a hex `VID:PID`, the exact HID path, or a
-/// case-insensitive fragment of the product name.
-fn device_matches(device: &Device, filter: &str) -> bool {
-    let filter = filter.trim();
-    if let Some((vendor, product)) = filter.split_once(':') {
-        if let (Ok(vendor), Ok(product)) = (
-            u16::from_str_radix(vendor.trim(), 16),
-            u16::from_str_radix(product.trim(), 16),
-        ) {
-            if device.vendor_id == vendor && device.product_id == product {
-                return true;
-            }
-        }
-    }
-    device.path == filter || device.name.to_lowercase().contains(&filter.to_lowercase())
 }
 
 fn describe(device: &Device) -> String {
@@ -176,27 +179,6 @@ fn describe(device: &Device) -> String {
         device.product_id,
         device.path
     )
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum NoDevice {
-    Missing,
-    Ambiguous(Vec<usize>),
-}
-
-/// The index of the one keyboard the request means.
-fn select_device(devices: &[Device], filter: Option<&str>) -> Result<usize, NoDevice> {
-    let candidates: Vec<usize> = devices
-        .iter()
-        .enumerate()
-        .filter(|(_, device)| filter.is_none_or(|filter| device_matches(device, filter)))
-        .map(|(index, _)| index)
-        .collect();
-    match candidates.as_slice() {
-        [index] => Ok(*index),
-        [] => Err(NoDevice::Missing),
-        _ => Err(NoDevice::Ambiguous(candidates)),
-    }
 }
 
 fn report_no_device(devices: &[Device], filter: Option<&str>, no_device: &NoDevice) {
@@ -601,13 +583,36 @@ mod tests {
     }
 
     fn parse(args: &[&str]) -> Result<Option<HeadlessExportRequest>, String> {
-        HeadlessExportRequest::from_args(std::iter::once("entropy").chain(args.iter().copied()))
+        LaunchRequest::from_args(std::iter::once("entropy").chain(args.iter().copied()))
+            .map(|request| request.export)
     }
 
     #[test]
     fn plain_launch_is_not_an_export() {
         assert_eq!(parse(&[]), Ok(None));
         assert_eq!(parse(&["--minimized"]), Ok(None));
+    }
+
+    #[test]
+    fn gui_launch_takes_device_and_rejects_invalid_filters() {
+        for args in [
+            vec!["entropy", "--device", "Phenom Mini"],
+            vec!["entropy", "--minimized", "--device=Phenom Mini"],
+        ] {
+            let request = LaunchRequest::from_args(args).unwrap();
+            assert!(request.export.is_none());
+            assert_eq!(request.gui_device.as_deref(), Some("Phenom Mini"));
+        }
+        for args in [
+            vec!["entropy", "--device"],
+            vec!["entropy", "--device="],
+            vec!["entropy", "--device", "  "],
+            vec!["entropy", "--device", "--minimized"],
+            vec!["entropy", "--device=A", "--device=B"],
+            vec!["entropy", "--timeout=5"],
+        ] {
+            assert!(LaunchRequest::from_args(args.clone()).is_err(), "{args:?}");
+        }
     }
 
     #[test]
@@ -643,7 +648,7 @@ mod tests {
     #[test]
     fn usage_errors_are_reported() {
         assert!(parse(&["--export-layout"]).is_err());
-        assert!(parse(&["--device", "Qube"]).is_err());
+        assert_eq!(parse(&["--device", "Qube"]), Ok(None));
         assert!(parse(&["--export-layout", "x", "--timeout", "0"]).is_err());
         assert!(parse(&["--export-layout", "x", "--timeout", "soon"]).is_err());
         assert!(parse(&["--export-layout", "x", "--minimized"]).is_err());

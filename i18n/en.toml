@@ -123,6 +123,10 @@ pending_tap_hint = "Hold will send the modifier; tap will send the key you pick"
 cancel = "✕ Cancel"
 
 [ui]
+startup_device_ambiguous = "These devices cannot be distinguished. Choose a device manually at startup."
+startup_device_label = "Startup"
+startup_device_tooltip = "Choose what opens on the next launch: the startup screen or a connected device"
+startup_device_screen = "Startup screen"
 main_tab_layout = "Layout"
 main_tab_advanced = "Advanced"
 main_tab_config = "Config"

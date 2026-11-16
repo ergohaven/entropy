@@ -123,6 +123,10 @@ pending_tap_hint = "Hold отправит модификатор; tap отпра
 cancel = "✕ Отмена"
 
 [ui]
+startup_device_ambiguous = "Эти устройства невозможно различить. Выберите устройство вручную при запуске."
+startup_device_label = "Запуск"
+startup_device_tooltip = "Что открывать при следующем запуске: стартовый экран или подключённое устройство"
+startup_device_screen = "Стартовый экран"
 main_tab_layout = "Раскладка"
 main_tab_advanced = "Дополнительно"
 main_tab_config = "Настройки"
