@@ -100,6 +100,8 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) launch_minimized: bool,
     #[serde(default)]
+    pub(crate) preferred_startup_device: Option<StartupDevicePreference>,
+    #[serde(default)]
     pub(crate) app_update_notifications: bool,
     #[serde(default)]
     pub(crate) development_updates: bool,
@@ -279,6 +281,7 @@ impl Default for AppSettings {
             close_to_tray_behavior: CloseToTrayBehavior::Ask,
             launch_at_startup: false,
             launch_minimized: false,
+            preferred_startup_device: None,
             app_update_notifications: false,
             development_updates: false,
             firmware_update_notifications: false,
@@ -5724,6 +5727,8 @@ pub struct EntropyApp {
     /// The board the user picked last: it is connected again when it comes
     /// back, however many others are listed. Picking another replaces it.
     pub(super) remembered_device: Option<DeviceIdentity>,
+    /// Pending startup selection. Consumed by the first connect or manual pick.
+    pub(super) startup_device: Option<StartupDeviceTarget>,
     /// The remembered board's takeover while it waits in
     /// `pending_device_connect`: it lapses with the memory.
     pub(super) pending_takeover: Option<DeviceIdentity>,

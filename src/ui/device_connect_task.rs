@@ -565,6 +565,7 @@ fn supports_vial_macro_ext_keycodes(
 
 impl EntropyApp {
     pub(super) fn start_connect(&mut self, device_idx: usize) {
+        self.startup_device = None;
         self.start_connect_with_reconnect(device_idx, None);
     }
 
