@@ -932,59 +932,76 @@ mod usb_hotplug_tests {
         for platform in ["linux", "windows", "macos"] {
             for bus in ["Usb", "Bluetooth"] {
                 for prefer_device in [false, true] {
-                    let mut app = EntropyApp::new_inert_for_test();
-                    #[cfg(target_os = "linux")]
-                    {
-                        app.test_device_scan_udev_access =
-                            Some(super::super::app_settings_ui::UdevAccess {
-                                vial: true,
-                                rynk: true,
-                            });
-                    }
-                    let keyboard = device("Tray startup keyboard", bus);
-                    if prefer_device {
-                        let preference = StartupDevicePreference::from_device(&keyboard);
-                        app.app_settings.preferred_startup_device = Some(preference.clone());
-                        app.startup_device = Some(StartupDeviceTarget::Preferred(preference));
-                    }
-                    let ctx = egui::Context::default();
-                    let (scan_tx, scans) = mpsc::channel();
-                    let (connect_tx, connects) = mpsc::channel();
-                    app.test_device_scan_requests = Some(scan_tx);
-                    app.test_connect_requests = Some(connect_tx);
+                    for multiple_devices in [false, true] {
+                        let mut app = EntropyApp::new_inert_for_test();
+                        #[cfg(target_os = "linux")]
+                        {
+                            app.test_device_scan_udev_access =
+                                Some(super::super::app_settings_ui::UdevAccess {
+                                    vial: true,
+                                    rynk: true,
+                                });
+                        }
+                        let keyboard = device("Tray startup keyboard", bus);
+                        if prefer_device {
+                            let preference = StartupDevicePreference::from_device(&keyboard);
+                            app.app_settings.preferred_startup_device = Some(preference.clone());
+                            app.startup_device = Some(StartupDeviceTarget::Preferred(preference));
+                        }
+                        let ctx = egui::Context::default();
+                        let (scan_tx, scans) = mpsc::channel();
+                        let (connect_tx, connects) = mpsc::channel();
+                        app.test_device_scan_requests = Some(scan_tx);
+                        app.test_connect_requests = Some(connect_tx);
 
-                    app.update_native_background_for_platform(&ctx, 12.0, true, false, platform);
-                    let (usb_only, complete) = scans
-                        .try_recv()
-                        .expect("cold startup must discover keyboards while hidden to tray");
-                    assert!(
-                        !usb_only,
-                        "cold startup must also discover Bluetooth keyboards"
-                    );
-                    app.update_native_background_for_platform(&ctx, 12.05, true, false, platform);
-                    assert!(scans.try_recv().is_err(), "only one scan worker may run");
-
-                    complete.send(Ok(vec![keyboard.clone()])).unwrap();
-                    app.update_native_background_for_platform(&ctx, 12.1, true, false, platform);
-                    if prefer_device {
-                        let (connecting, _complete) = connects
-                            .try_recv()
-                            .expect("the saved device must connect before the window is shown");
-                        assert_eq!(connecting.path, keyboard.path);
-                        assert_eq!(app.selected_device, Some(0));
-                        assert!(matches!(app.connect_state, ConnectState::Loading { .. }));
-                    } else {
-                        assert!(
-                            connects.try_recv().is_err(),
-                            "startup screen waits for a manual pick"
+                        app.update_native_background_for_platform(
+                            &ctx, 12.0, true, false, platform,
                         );
-                        assert!(app.selected_device.is_none());
-                        assert!(matches!(
-                            app.startup_device,
-                            Some(StartupDeviceTarget::Screen)
-                        ));
+                        let (usb_only, complete) = scans
+                            .try_recv()
+                            .expect("cold startup must discover keyboards while hidden to tray");
+                        assert!(
+                            !usb_only,
+                            "cold startup must also discover Bluetooth keyboards"
+                        );
+                        app.update_native_background_for_platform(
+                            &ctx, 12.05, true, false, platform,
+                        );
+                        assert!(scans.try_recv().is_err(), "only one scan worker may run");
+
+                        let mut devices = vec![keyboard.clone()];
+                        if multiple_devices {
+                            devices.push(device("Other keyboard", "Usb"));
+                        }
+                        complete.send(Ok(devices)).unwrap();
+                        app.update_native_background_for_platform(
+                            &ctx, 12.1, true, false, platform,
+                        );
+                        if prefer_device || !multiple_devices {
+                            let (connecting, _complete) = connects.try_recv().expect(
+                                "the saved or sole device must connect before the window is shown",
+                            );
+                            assert_eq!(connecting.path, keyboard.path);
+                            assert_eq!(app.selected_device, Some(0));
+                            assert!(matches!(app.connect_state, ConnectState::Loading { .. }));
+                        } else {
+                            assert!(
+                                connects.try_recv().is_err(),
+                                "multiple-device startup screen waits for a manual pick"
+                            );
+                            assert!(app.selected_device.is_none());
+                            assert!(matches!(
+                                app.startup_device,
+                                Some(StartupDeviceTarget::Screen)
+                            ));
+                        }
+                        assert_eq!(
+                            app.device_manager.devices().len(),
+                            if multiple_devices { 2 } else { 1 }
+                        );
+                        assert!(matches!(app.device_scan_state, DeviceScanState::Idle));
+                        assert!(scans.try_recv().is_err(), "keep the discovery rate limit");
                     }
-                    assert!(scans.try_recv().is_err(), "keep the discovery rate limit");
                 }
             }
         }

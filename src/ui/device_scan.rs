@@ -493,8 +493,9 @@ impl EntropyApp {
                     }
                     self.connect_picked_device(index);
                 }
-                // Never fall back to a different board while the target is absent
-                // or ambiguous. Inventory remains available for a manual pick.
+                // With multiple boards, an absent or ambiguous target leaves
+                // the picker available. select() already resolves a sole GUI
+                // device; an explicit CLI filter never falls back.
                 self.retain_connected_qmk_hid_host_bridges();
                 return;
             }

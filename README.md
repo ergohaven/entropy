@@ -117,15 +117,18 @@ Symbols do not require these Text Expander permissions.
 
 ## Startup Device
 
-Choose what opens under **Startup** in Entropy settings:
+When only one keyboard is connected, Entropy opens it automatically, even if a
+different keyboard was saved previously. With several connected devices, choose
+the startup behavior under **Multiple devices** in Entropy settings:
 
-- **Startup screen** keeps the device picker open until you choose a keyboard,
-  even when only one device is connected.
-- A connected keyboard opens automatically on future launches, including when
-  Entropy starts at login.
+- **Startup screen** keeps the device picker open until you choose a keyboard.
+- A preferred keyboard opens automatically when it is among the connected
+  devices. If it is absent or cannot be uniquely identified, Entropy shows the
+  device picker instead of choosing another keyboard.
 
-The startup screen is the default. There is no automatic single-device selection
-until you pick a keyboard or save a startup device.
+The startup screen is the default for multiple devices. The same rules apply
+when Entropy starts at login. A one-device fallback does not replace the saved
+preference for future launches with multiple devices.
 
 A launch argument overrides the saved preference for that launch:
 

@@ -26,6 +26,9 @@ pub(super) enum StartupDeviceTarget {
 impl StartupDeviceTarget {
     pub(super) fn select(&self, devices: &[Device]) -> Option<usize> {
         match self {
+            // GUI preferences resolve a choice between boards, never block the
+            // only connected board. An explicit CLI filter remains strict.
+            Self::Screen | Self::Preferred(_) if devices.len() == 1 => Some(0),
             Self::Screen => None,
             Self::Filter(filter) => select_device(devices, Some(filter)).ok(),
             Self::Preferred(preference) => {
@@ -126,6 +129,44 @@ mod tests {
             });
         }
         (app, rx)
+    }
+
+    #[test]
+    fn startup_device_single_gui_device_takes_precedence_but_cli_stays_strict() {
+        let saved = device("Saved keyboard");
+        let only = device("Only connected keyboard");
+        for firmware in [FirmwareProtocol::Vial, FirmwareProtocol::Rynk] {
+            let mut only = only.clone();
+            only.firmware = firmware;
+            for target in [
+                StartupDeviceTarget::Screen,
+                StartupDeviceTarget::Preferred(StartupDevicePreference::from_device(&saved)),
+                StartupDeviceTarget::Preferred(StartupDevicePreference::from_device(&only)),
+            ] {
+                assert_eq!(target.select(&[]), None);
+                assert_eq!(target.select(&[only.clone()]), Some(0));
+            }
+            assert_eq!(
+                StartupDeviceTarget::Screen.select(&[saved.clone(), only.clone()]),
+                None
+            );
+            let preferred =
+                StartupDeviceTarget::Preferred(StartupDevicePreference::from_device(&saved));
+            assert_eq!(preferred.select(&[only.clone(), saved.clone()]), Some(1));
+            assert_eq!(
+                preferred.select(&[only.clone(), device("Another keyboard")]),
+                None
+            );
+            assert_eq!(preferred.select(&[saved.clone(), saved.clone()]), None);
+            assert_eq!(
+                StartupDeviceTarget::Filter("Saved keyboard".into()).select(&[only.clone()]),
+                None
+            );
+            assert_eq!(
+                StartupDeviceTarget::Filter("Only connected keyboard".into()).select(&[only]),
+                Some(0)
+            );
+        }
     }
 
     #[cfg(target_os = "linux")]

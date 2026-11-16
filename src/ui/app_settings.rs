@@ -1129,7 +1129,7 @@ mod startup_device_ui_tests {
     }
 
     #[test]
-    fn startup_screen_choice_is_saved_and_waits_for_a_manual_pick_after_restart() {
+    fn startup_screen_choice_waits_for_manual_pick_with_multiple_devices_after_restart() {
         let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let ctx = egui::Context::default();
         let mut app = EntropyApp::new_inert_for_test();
@@ -1151,7 +1151,7 @@ mod startup_device_ui_tests {
         save_app_settings(&app.app_settings);
         frame(&mut app, &ctx, 800.0, vec![]);
         let output = frame(&mut app, &ctx, 800.0, vec![]);
-        position(&output, "Startup");
+        position(&output, "Multiple devices");
         let device_label = StartupDevicePreference::from_device(&device).name;
         click(&mut app, &ctx, 800.0, position(&output, &device_label));
         let output = frame(&mut app, &ctx, 800.0, vec![]);
@@ -1159,6 +1159,10 @@ mod startup_device_ui_tests {
         let settings = load_app_settings();
         assert!(settings.preferred_startup_device.is_none());
         let mut restarted = EntropyApp::new_inert_for_test();
+        let mut other = device.clone();
+        other.name = "Macropad".into();
+        other.serial_number = "other-board".into();
+        other.path = "/test/other".into();
         let (tx, requests) = mpsc::channel();
         restarted.test_connect_requests = Some(tx);
         #[cfg(target_os = "linux")]
@@ -1169,11 +1173,11 @@ mod startup_device_ui_tests {
             });
         }
         restarted.apply_device_scan_result(vec![]);
-        restarted.apply_device_scan_result(vec![device.clone()]);
-        restarted.apply_device_scan_result(vec![device.clone()]);
+        restarted.apply_device_scan_result(vec![device.clone(), other.clone()]);
+        restarted.apply_device_scan_result(vec![device.clone(), other]);
         assert!(
             requests.try_recv().is_err(),
-            "startup screen must not open even the only device"
+            "multiple-device startup screen must wait for a manual pick"
         );
         assert!(restarted.selected_device.is_none());
         restarted.pick_device(0);
