@@ -1,7 +1,7 @@
 #[test]
 fn sm62_matrix_idle_ticks_do_not_serialize_unchanged_profile_library(){
     let _storage=crate::app::app_storage::ScopedTempConfig::new();
-    let mut app=name_review_device_app(true);
+    let mut app=name_review_cached_sm62_app();
     app.main_menu_tab=MainMenuTab::Settings;app.settings_tab=SettingsTab::MatrixTester;
     app.update_application_layout_runtime_with(Default::default());
     crate::app::app_storage::take_settings_serialization_count();

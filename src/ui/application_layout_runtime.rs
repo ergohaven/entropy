@@ -335,8 +335,7 @@ impl EntropyApp {
             .application_layout_settings()
             .map(|settings| {
                 settings
-                    .layouts
-                    .values()
+                    .selectable_layouts()
                     .map(|layout| (layout.id.clone(), layout.name.clone()))
                     .collect::<Vec<_>>()
             })
@@ -3234,7 +3233,7 @@ mod tests {
     }
 
     #[test]
-    fn sm62_background_initialization_provisions_full_default_derived_profiles() {
+    fn sm62_background_initialization_keeps_native_default_without_macropad_presets() {
         let _storage = crate::app::app_storage::ScopedTempConfig::new();
         let mut app = EntropyApp::new_inert_for_test();
         let mut device = m4cr0pad_v3_device(); device.product_id = 0x00b2; device.name = "SM62".into();
@@ -3247,7 +3246,7 @@ mod tests {
         app.app_settings.application_layouts.remove(&key);
         app.update_application_layout_runtime_with(Default::default());
         let settings = app.application_layout_settings().unwrap();
-        assert!(settings.layouts.len()>1);
+        assert_eq!(settings.layouts.len(),1);
         for p in settings.layouts.values() {
             assert_eq!(p.layers,vec![vec![4;62];16],"{}",p.name);
             assert!(p.encoder_stacks.iter().all(Vec::is_empty));

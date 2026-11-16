@@ -1757,8 +1757,151 @@ mod tests {
         app.deferred_device_load = DeferredDeviceLoadState::complete(16);
         app.ensure_application_layout_settings();
         let settings=app.application_layout_settings().unwrap();
-        assert_eq!(settings.layouts.len(),1+crate::application_layouts::builtin_application_layout_presets().len(),"settings-first must expose the complete SM62 matching catalog");
+        assert_eq!(settings.layouts.len(),1,"settings-first must not create Macropad presets on SM62");
+        let options = app.application_layout_editor_options();
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].0, crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID);
+        assert!(app.application_layout_editor_grouped_options(&options).is_empty());
         assert!(settings.layouts.values().all(|layout|layout.layers==vec![vec![42;62];16]));
+    }
+
+    // Synthetic old catalog matching the diagnostic's observable shape, not
+    // a reconstruction of the user's private bindings or raw device bytes.
+    fn sm62_saved_catalog_fixture() -> crate::application_layouts::DeviceApplicationLayouts {
+        use crate::application_layouts::*;
+        let mut settings = DeviceApplicationLayouts::default();
+        settings.layouts.get_mut("default").unwrap().layers = vec![vec![42; 62]; 16];
+        let presets = builtin_application_layout_presets();
+        for preset in &presets {
+            let id = settings.create_from_preset(preset);
+            let profile = settings.layouts.get_mut(&id).unwrap();
+            profile.user_edit_revision = 0;
+            profile.revision = 16;
+            if !["firefox", "obs"].contains(&preset.executable) {
+                settings.pending_builtin_auto_bind.insert(id.clone(), preset.id.into());
+            }
+            if preset.name == "Adobe Premiere Pro" {
+                settings.device_raw_profiles.insert(id, b"opaque record retained byte-for-byte".to_vec());
+            }
+        }
+        let default = settings.layouts.get_mut("default").unwrap();
+        default.layer_names = (0..16).map(|index| format!("Native {index}")).collect();
+        default.user_edit_revision = 16;
+        default.revision = 32;
+        settings.editor_layout_id = "default".into();
+        settings.active_layout_id = "default".into();
+        settings.builtin_presets_provisioned = true;
+        let mut serialized = serde_json::to_value(settings).unwrap();
+        serialized["sm62_seen_builtin_presets"] = serde_json::json!(
+            presets.iter().map(|preset| preset.id).collect::<Vec<_>>()
+        );
+        serde_json::from_value(serialized).unwrap()
+    }
+
+    #[test]
+    fn sm62_saved_catalog_main_chooser_omits_retired_device_record_without_deletion() {
+        use crate::application_layouts::*;
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let mut app = EntropyApp::new_inert_for_test();
+        app.app_settings.language = crate::i18n::Language::English;
+        let key = "saved-sm62-diagnostic".to_owned();
+        let settings = sm62_saved_catalog_fixture();
+        assert_eq!(settings.layouts.len(), 15);
+        assert_eq!(settings.device_raw_profiles.len(), 1);
+        assert!(settings.layouts.values().filter(|p| p.id != "default").all(|p|
+            p.user_edit_revision == 0 && p.layers == settings.layouts["default"].layers
+                && p.layer_names != settings.layouts["default"].layer_names));
+        let public_catalog: Vec<_> = settings.layouts.values().filter(|p| p.id != "default")
+            .map(|p| serde_json::json!({"name":p.name,"executable":p.executable,"identities":p.application_identities})).collect();
+        println!("PUBLIC_CATALOG_JSON={}", serde_json::to_string(&public_catalog).unwrap());
+        let protected_id = settings.device_raw_profiles.keys().next().unwrap().clone();
+        let protected_profile = settings.layouts[&protected_id].clone();
+        let raw_before = settings.device_raw_profiles.clone();
+        let slot_before = settings.resident_slots[&protected_id];
+        app.app_settings.application_layouts.insert(key.clone(), settings);
+        app.app_settings.last_application_layout_device_key = Some(key.clone());
+        crate::app::app_storage::save_app_settings(&app.app_settings);
+        app.app_settings = crate::app::app_storage::load_app_settings();
+        app.ensure_application_layout_settings();
+        let settings = app.application_layout_settings().unwrap();
+        assert_eq!(settings.layouts.len(), 2, "retire host-only entries, retain device record");
+        assert_eq!(settings.layouts[&protected_id], protected_profile);
+        assert_eq!(settings.device_raw_profiles, raw_before);
+        assert_eq!(settings.resident_slots[&protected_id], slot_before);
+        assert!(settings.resident_deleted.is_empty());
+        assert_eq!(settings.active_layout_id, "default");
+        assert_eq!(settings.editor_layout_id, "default");
+        let options = app.application_layout_editor_options();
+        let groups = app.application_layout_editor_labeled_groups(&options, crate::i18n::Language::English);
+        let ctx = egui::Context::default();
+        let mut texts = Vec::new();
+        fn visit(shape: &egui::Shape, texts: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(text) => texts.push(text.galley.text().into()),
+                egui::Shape::Vec(shapes) => for shape in shapes { visit(shape, texts); },
+                _ => {}
+            }
+        }
+        for _ in 0..2 {
+            texts.clear();
+            let out = crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200., 900.))),
+                ..Default::default()
+            }, |ui| {
+                let trigger = ui.button("Default");
+                let id = egui::Id::new("sm62-saved-real-chooser");
+                egui::Popup::open_id(ui.ctx(), id);
+                crate::ui_style::modern_dropdown_grouped_options_with_action(
+                    ui, id, &trigger, &("default".into(), "Default".into()), &groups,
+                    "default", 220., 16., Some("Configure"),
+                );
+            }));
+            for shape in &out.shapes { visit(&shape.shape, &mut texts); }
+            out.drop_without_applying_deltas();
+        }
+        assert!(texts.iter().any(|text| text == "Configure"), "actual popup must be open: {texts:?}");
+        assert!(groups.is_empty(), "retired presets still offered in main chooser: {groups:?}; painted: {texts:?}");
+        assert_eq!(options, vec![("default".into(), "Default".into())]);
+        let settings = app.application_layout_settings().unwrap();
+        assert_eq!(settings.resolve(Some(&DetectedApplication {
+            executable: protected_profile.executable.clone(), ..Default::default()
+        })), "default", "retired template must not auto-activate");
+        crate::app::app_storage::save_app_settings(&app.app_settings);
+        app.app_settings = crate::app::app_storage::load_app_settings();
+        app.ensure_application_layout_settings();
+        assert_eq!(app.application_layout_editor_options(), options, "no resurrection after reload");
+        let settings = app.application_layout_settings().unwrap();
+        assert_eq!(settings.device_raw_profiles, raw_before);
+        assert_eq!(settings.layouts[&protected_id], protected_profile);
+        assert_eq!(settings.resident_slots[&protected_id], slot_before);
+        assert!(settings.resident_deleted.is_empty());
+    }
+
+    #[test]
+    fn sm62_saved_catalog_explicit_add_can_replace_retired_template() {
+        use crate::application_layouts::*;
+        let mut settings = sm62_saved_catalog_fixture();
+        let raw_before = settings.device_raw_profiles.clone();
+        let protected_id = raw_before.keys().next().unwrap().clone();
+        let protected_slot = settings.resident_slots[&protected_id];
+        let application = DetectedApplication {
+            executable: settings.layouts[&protected_id].executable.clone(),
+            display_name: settings.layouts[&protected_id].name.clone(),
+            ..Default::default()
+        };
+        assert!(!settings.application_rule_exists(&application, "", None),
+            "retired template must not block an explicit user-created profile");
+        let authored = settings.create_for_application(&application);
+        settings.provision_builtin_presets(None);
+        assert!(settings.layouts[&authored].user_edit_revision > 0);
+        assert_eq!(settings.layouts.len(), 3);
+        assert_eq!(settings.selectable_layouts().count(), 2);
+        assert!(settings.application_rule_exists(&application, "", None));
+        assert_eq!(settings.resolve(Some(&application)), authored);
+        assert_eq!(settings.device_raw_profiles, raw_before);
+        assert_eq!(settings.resident_slots[&protected_id], protected_slot);
+        assert_ne!(settings.resident_slots[&authored], protected_slot);
+        assert!(settings.resident_deleted.is_empty());
     }
 
     #[test]

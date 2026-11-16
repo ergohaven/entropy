@@ -1,7 +1,7 @@
 #[test]
 fn r1_readback_preserves_authorship_before_next_explicit_edit() {
     let _storage=crate::app::app_storage::ScopedTempConfig::new();
-    let mut app=name_review_device_app(true);
+    let mut app=name_review_cached_sm62_app();
     app.update_application_layout_runtime_with(Default::default());
     let key=app.application_layout_device_key().unwrap();
     let id=app.application_layout_settings().unwrap().layouts.values()

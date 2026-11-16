@@ -614,7 +614,9 @@ fn rig(
 fn resident_three_switches_all_slots_without_storing_and_nonresident_falls_back() {
     let mut settings = DeviceApplicationLayouts::default();
     settings.layouts.get_mut("default").unwrap().layers = vec![vec![0x22; 62]; 16];
-    settings.provision_builtin_presets(None);
+    let preset = crate::application_layouts::builtin_application_layout_presets()
+        .into_iter().find(|preset| preset.id == "firefox").unwrap();
+    settings.create_from_preset(&preset);
     let firefox = settings
         .layouts
         .values()

@@ -8,7 +8,7 @@ fn sm62_manual_switch_with_real_probe_sends_complete_profile_to_each_usb_owner()
 fn sm62_read_first_usb_role_change(manual: bool) {
     let _storage = crate::app::app_storage::ScopedTempConfig::new();
     let mut app = EntropyApp::new_inert_for_test();
-    let mut previous_key = None;
+    let mut previous_owner = None;
     for (half, serial, code) in [
         ("main", "C281FE0DD04A01230000000000000000", 0x41),
         ("app", "C281FE0DD04A04560000000000000000", 0x42),
@@ -26,9 +26,9 @@ fn sm62_read_first_usb_role_change(manual: bool) {
         let (hid, packets, unlock_pending) = runtime_fixture_hid(vec![(7,raw.clone())]);
         runtime_fixture_connect(&mut app, &device, hid);
         let key = app.application_layout_device_key().unwrap();
-        if let Some(previous) = previous_key.as_ref() {
-            assert_ne!(&key, previous, "USB half identity is not common-library authority");
-            assert_ne!(app.app_settings.application_layouts[previous].device_raw_profiles[&id], raw);
+        if let Some((previous_key, previous_id)) = previous_owner.as_ref() {
+            assert_ne!(&key, previous_key, "USB half identity is not common-library authority");
+            assert_ne!(app.app_settings.application_layouts[previous_key].device_raw_profiles[previous_id], raw);
         }
         let id = runtime_fixture_adopt(&mut app, &device.path, &key, &id, &raw, &packets);
         assert_eq!(app.app_settings.application_layouts[&key].layouts[&id].layers[15][61], code);
@@ -103,6 +103,6 @@ fn sm62_read_first_usb_role_change(manual: bool) {
                 serde_json::to_vec_pretty(&serde_json::json!({"serial":serial,"profile":id,"requests":packets.requests()})).unwrap()).unwrap();
         }
         assert!(!packets.requests().iter().any(|p|p[0]==5||p[..2]==[0xfe,0x0b]||p[..2]==[0xef,9]&&matches!(p[2],1|4)), "confirmed record selection rewrote device data");
-        previous_key = Some(key);
+        previous_owner = Some((key, id));
     }
 }

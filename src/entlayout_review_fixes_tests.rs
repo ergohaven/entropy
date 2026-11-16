@@ -199,10 +199,7 @@ fn review_menu(app: &mut EntropyApp, ctx: &egui::Context, label: &str, path: &st
     let started = std::time::Instant::now();
     let deadline = started + std::time::Duration::from_secs(30);
     loop {
-        app.tick_layout_import_lifecycle_for_test(
-            ctx,
-            2. + started.elapsed().as_secs_f64(),
-        );
+        app.tick_layout_import_lifecycle_for_test(ctx, 2. + started.elapsed().as_secs_f64());
         app.poll_file_dialog(ctx);
         if !app.deferred_full_layout_action_pending()
             && app.pending_file_dialog.is_none()

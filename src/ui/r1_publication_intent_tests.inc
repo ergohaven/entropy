@@ -12,7 +12,7 @@ fn r1_attach_inert_owner(app: &mut EntropyApp) -> String {
 #[test]
 fn r1_unconfirmed_linked_template_never_becomes_active_on_foreground() {
     let _storage=crate::app::app_storage::ScopedTempConfig::new();
-    let mut app=name_review_device_app(true);
+    let mut app=name_review_cached_sm62_app();
     app.update_application_layout_runtime_with(Default::default());
     let path=r1_attach_inert_owner(&mut app);
     let s=app.application_layout_settings_mut().unwrap();
@@ -35,7 +35,7 @@ fn r1_unconfirmed_linked_template_never_becomes_active_on_foreground() {
 fn r1_explicit_edit_and_manual_selection_authorize_only_intended_profile_on_repaint() {
     let _storage=crate::app::app_storage::ScopedTempConfig::new();
     for edit in [false,true] {
-        let mut app=name_review_device_app(true);
+        let mut app=name_review_cached_sm62_app();
         app.update_application_layout_runtime_with(Default::default());
         let path=r1_attach_inert_owner(&mut app);
         let id=app.application_layout_settings().unwrap().layouts.values().find(|p|p.executable.to_lowercase().contains("firefox")).unwrap().id.clone();
@@ -58,7 +58,7 @@ fn r1_explicit_edit_and_manual_selection_authorize_only_intended_profile_on_repa
 #[test]
 fn r1_replaced_owner_must_not_inherit_previous_owner_intent() {
     let _storage=crate::app::app_storage::ScopedTempConfig::new();
-    let mut app=name_review_device_app(true);
+    let mut app=name_review_cached_sm62_app();
     app.update_application_layout_runtime_with(Default::default());
     let path=r1_attach_inert_owner(&mut app);
     let id=app.application_layout_settings().unwrap().layouts.values().find(|p|p.executable.to_lowercase().contains("firefox")).unwrap().id.clone();

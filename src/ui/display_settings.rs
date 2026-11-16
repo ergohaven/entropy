@@ -5212,6 +5212,69 @@ mod tests {
     }
 
     #[test]
+    fn sm62_display_sections_use_standard_settings_row_width() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        for language in [crate::i18n::Language::English, crate::i18n::Language::Russian] {
+            for (width, height) in [(1000., 1600.), (540., 1600.), (2560., 2160.)] {
+                let ctx = egui::Context::default();
+                let mut fonts = egui::FontDefinitions::default();
+                fonts.font_data.insert("roboto".into(), egui::FontData::from_static(
+                    include_bytes!("../../assets/Roboto-Regular.ttf")).into());
+                fonts.font_data.insert("montserrat".into(), egui::FontData::from_static(
+                    include_bytes!("../../assets/Montserrat-Medium.ttf")).into());
+                fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap().insert(0, "roboto".into());
+                fonts.families.insert(egui::FontFamily::Name("display_preview".into()), vec!["montserrat".into()]);
+                ctx.set_fonts(fonts);
+                let mut app = EntropyApp::new_inert_for_test();
+                app.app_settings.language = language;
+                let (hid, recorder) = crate::hid::HidDevice::test_device();
+                app.hid_device = Some(hid.into());
+                app.display_settings.sm62_supported = true;
+                app.display_settings.sm62_date_supported = true;
+                app.display_settings.sm62_hold_supported = true;
+                app.display_settings.sm62_language_supported = true;
+                app.display_settings.sm62_stars_supported = true;
+                app.display_settings.sm62_screens_off_supported = true;
+                app.display_settings.display_timeout_supported = true;
+                let before = app.display_settings.clone();
+                let mut result = None;
+                for _ in 0..3 {
+                    result = Some(crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height))),
+                        ..Default::default()
+                    }, |ui| app.draw_sm62_display_settings_page(ui, ui.max_rect()))));
+                }
+                let result = result.unwrap();
+                let expected = crate::ui_style::ResponsiveMetrics::from_ctx(&ctx).settings_row_content_width();
+                let rows: Vec<_> = result.shapes.iter().filter_map(|shape| match &shape.shape {
+                    egui::Shape::LineSegment { points, .. }
+                        if (points[0].y - points[1].y).abs() < 0.1
+                            && (points[1].x - points[0].x) > 300. => Some(points[1].x - points[0].x),
+                    _ => None,
+                }).collect();
+                assert_eq!(rows.len(), 11, "all per-half and shared setting rows must render");
+                assert!(rows.iter().all(|actual| (*actual - expected).abs() < 1.),
+                    "Display sections must use standard settings width {expected}, not separate oversized widths: {rows:?}, viewport={width}, language={language:?}");
+                for shape in &result.shapes {
+                    if let egui::Shape::Text(text) = &shape.shape {
+                        if (shape.clip_rect.height() - 54.0).abs() < 0.1 {
+                            assert!(!text.galley.elided && text.galley.rows.len() <= 2,
+                                "localized row must fit without ellipsis: {}", text.galley.text());
+                            assert!(shape.clip_rect.expand(0.1).contains_rect(
+                                egui::Rect::from_min_size(text.pos, text.galley.size())),
+                                "row label must stay inside its own column: {}", text.galley.text());
+                        }
+                    }
+                }
+                assert_eq!(app.display_settings, before);
+                assert!(recorder.requests().is_empty(), "layout and repaint must not write settings");
+                assert!(!app.qmk_settings_write_busy());
+                result.drop_without_applying_deltas();
+            }
+        }
+    }
+
+    #[test]
     fn sm62_scrollbar_uses_common_style_at_right_edge() {
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
@@ -5230,7 +5293,10 @@ mod tests {
         let thumbs:Vec<_>=output.shapes.iter().filter_map(|s|match &s.shape {
             egui::Shape::Rect(r) if r.fill==Color32::from_rgb(62,62,66) && (r.rect.width()-6.0).abs()<0.1=>Some(r.rect),_=>None}).collect();
         assert_eq!(thumbs.len(),1,"common floating scrollbar handle must be painted once");
-        assert!((thumbs[0].right()-959.0).abs()<1.0,"scrollbar belongs beside the centered 918px viewport, not at the window edge: {:?}",thumbs[0]);
+        let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(&ctx);
+        let block_width = SM62_DISPLAY_PREVIEW_WIDTH + SM62_DISPLAY_PANEL_GAP + metrics.settings_content_width();
+        assert!((thumbs[0].right() - (1000.0 + block_width) / 2.0).abs() < 1.0,
+            "scrollbar belongs beside the compact preview/settings group: {:?}", thumbs[0]);
     }
 
     #[test]
@@ -5299,7 +5365,13 @@ mod tests {
             ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| {app.draw_sm62_display_settings_page(ui,ui.max_rect());}));
         }));
         for _ in 0..3 {draw(vec![]);}
-        let pos=egui::pos2(956.0,625.0);draw(vec![egui::Event::PointerMoved(pos),
+        let top = draw(vec![]);
+        let thumb = top.shapes.iter().find_map(|s| match &s.shape {
+            egui::Shape::Rect(r) if r.fill == Color32::from_rgb(62,62,66)
+                && (r.rect.width() - 6.0).abs() < 0.1 => Some(r.rect),
+            _ => None,
+        }).expect("visible common scrollbar handle");
+        let pos=egui::pos2(thumb.center().x,625.0);draw(vec![egui::Event::PointerMoved(pos),
             egui::Event::PointerButton {pos,button:egui::PointerButton::Primary,pressed:true,modifiers:Default::default()},
             egui::Event::PointerButton {pos,button:egui::PointerButton::Primary,pressed:false,modifiers:Default::default()}]);
         let output=draw(vec![]);
@@ -5333,7 +5405,9 @@ mod tests {
                 }
                 if width>=1000.0 {
                     let frame=top.shapes.iter().find_map(|s|match &s.shape {egui::Shape::Rect(r) if r.fill==Color32::from_rgb(7,7,5)&&r.stroke.color==Color32::from_gray(75)=>Some(r.rect),_=>None}).unwrap();
-                    assert!((frame.left()-(width-918.0)/2.0).abs()<2.0,"preview must align with centered block left: {frame:?}");
+                    let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(&ctx);
+                    let group_width = SM62_DISPLAY_PREVIEW_WIDTH + SM62_DISPLAY_PANEL_GAP + metrics.settings_content_width();
+                    assert!((frame.left()-(width-group_width)/2.0).abs()<2.0,"preview must align with compact centered block left: {frame:?}");
                 }
                 let (_,max)=ctx.data(|d|d.get_temp::<(egui::Id,f32)>(egui::Id::unique("sm62_scroll_fixture"))).unwrap();
                 scroll_sm62_display_to(&ctx,max);
@@ -5343,11 +5417,21 @@ mod tests {
                 let shared_center=bottom.shapes.iter().find_map(|s|match &s.shape {egui::Shape::Text(t) if t.galley.job.text==shared=>Some(t.pos.x+t.galley.rect.center().x),_=>None}).unwrap();
                 assert!((shared_center-expected_center).abs()<2.0,"shared heading must align with half headings, width={width}");
                 let left=bottom.shapes.iter().find_map(|s|match &s.shape {egui::Shape::Text(t) if t.galley.job.text==symbol=>Some(t.pos.x-2.0),_=>None}).unwrap();
-                let block_width=(full.width()-18.0).min(900.0);
+                let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(&ctx);
+                let gutter = metrics.settings_content_width() - metrics.settings_row_content_width();
+                let block_width=(full.width()-gutter).min(metrics.settings_row_content_width());
                 assert!((left-(expected_center-block_width/2.0)).abs()<2.0,"shared row must not stretch to window width: width={width}, left={left}, expected_center={expected_center}, block_width={block_width}, full={full:?}");
-                let switches:Vec<_>=bottom.shapes.iter().filter_map(|s|match &s.shape {egui::Shape::Rect(r) if r.rect.width()==46.0&&r.rect.height()==24.0=>Some(r.rect),_=>None}).collect();
-                let right=switches.iter().map(|r|r.right()).fold(0.0_f32,f32::max);
-                assert!((right-(left+block_width)).abs()<2.0,"shared controls must stay in the same bounded block");
+                let symbol_top = bottom.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(t) if t.galley.job.text == symbol => Some(t.pos.y), _ => None,
+                }).unwrap();
+                let switches:Vec<_>=bottom.shapes.iter().filter_map(|s|match &s.shape {
+                    egui::Shape::Rect(r) if r.rect.width()==46.0 && r.rect.height()==24.0
+                        && r.rect.center().y >= symbol_top
+                        && s.clip_rect.contains(r.rect.center()) => Some(r.rect), _=>None
+                }).collect();
+                assert_eq!(switches.len(), 5, "all shared switches must be visible at the bottom");
+                assert!(switches.iter().all(|r| (r.right()-(left+block_width)).abs()<2.0),
+                    "shared controls must stay in the same bounded block");
             }
         }
     }
@@ -6236,6 +6320,8 @@ fn sm62_display_controls(
 impl EntropyApp {
     fn draw_sm62_display_settings_page(&mut self, ui: &mut egui::Ui, content_rect: egui::Rect) {
         let russian = self.app_settings.language == crate::i18n::Language::Russian;
+        let settings_width = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx())
+            .settings_row_content_width();
         let preview_language = match self.standby_preview_language() {
             "EN" => Some("EN"),
             "RU" => Some("RU"),
@@ -6310,7 +6396,6 @@ impl EntropyApp {
                 let scene = 0;
                 let body=ui.available_rect_before_wrap();
                 sm62_display_scroll(ui,body,|ui| {
-                        ui.set_width(ui.available_width().min(900.0));
                         {
                             let half_control = |ui: &mut egui::Ui, mut side: usize| {
                                 let width = ui.available_width();
@@ -6329,16 +6414,18 @@ impl EntropyApp {
                             };
                             let base = side * 5;
                             let side_values: [u8; 5] = values[base..base + 5].try_into().unwrap();
-                            let wide = ui.available_width() >= 620.0;
+                            let wide = ui.available_width()
+                                >= SM62_DISPLAY_PREVIEW_WIDTH + SM62_DISPLAY_PANEL_GAP + settings_width;
                             if wide {
                                 ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 0.0;
                                     ui.vertical(|ui| {
-                                        ui.set_width(245.0);
-                                        super::display_preview::draw_sm62_preview(ui, &side_values, scene, date_supported && date_values[side] != 0, 245.0, side, if language_values[side] != 0 { preview_language } else { None }, stars_values[side] != 0, screens_off_values[side] != 0, clock_live);
+                                        ui.set_width(SM62_DISPLAY_PREVIEW_WIDTH);
+                                        super::display_preview::draw_sm62_preview(ui, &side_values, scene, date_supported && date_values[side] != 0, SM62_DISPLAY_PREVIEW_WIDTH, side, if language_values[side] != 0 { preview_language } else { None }, stars_values[side] != 0, screens_off_values[side] != 0, clock_live);
                                     });
-                                    ui.add_space(20.0);
+                                    ui.add_space(SM62_DISPLAY_PANEL_GAP);
                                     ui.vertical(|ui| {
-                                        ui.set_width(ui.available_width().min(560.0));
+                                        ui.set_width(settings_width.min(ui.available_width()));
                                         side = half_control(ui, side);
                                         ui.add_enabled_ui(ready, |ui| {
                                             sm62_display_controls(ui, side, &mut values, &mut changed, russian);
@@ -6350,15 +6437,20 @@ impl EntropyApp {
                                     super::display_preview::draw_sm62_preview(ui, &side_values, scene, date_supported && date_values[side] != 0, 210.0, side, if language_values[side] != 0 { preview_language } else { None }, stars_values[side] != 0, screens_off_values[side] != 0, clock_live);
                                 });
                                 ui.add_space(10.0);
-                                side = half_control(ui, side);
-                                ui.add_enabled_ui(ready, |ui| {
-                                    sm62_display_controls(ui, side, &mut values, &mut changed, russian);
+                                ui.vertical_centered(|ui| {
+                                    ui.set_width(settings_width.min(ui.available_width()));
+                                    side = half_control(ui, side);
+                                    ui.add_enabled_ui(ready, |ui| {
+                                        sm62_display_controls(ui, side, &mut values, &mut changed, russian);
+                                    });
                                 });
                             }
                             ui.add_space(16.0);
                         }
                         ui.add_space(12.0);
-                        ui.add_enabled_ui(ready, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.set_width(settings_width.min(ui.available_width()));
+                            ui.add_enabled_ui(ready, |ui| {
                             sm62_shared_controls(ui, &mut values, &mut changed, russian,
                                 date_supported.then_some(&mut date_values),
                                 hold_supported.then_some(&mut hold_values),
@@ -6366,6 +6458,7 @@ impl EntropyApp {
                                 stars_supported.then_some(&mut stars_values),
                                 screens_off_supported.then_some(&mut screens_off_values));
                             self.draw_sm62_timeout_control(ui);
+                            });
                         });
                     });
             });

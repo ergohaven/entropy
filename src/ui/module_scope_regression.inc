@@ -1,5 +1,5 @@
 #[test]
-fn k04_module_page_retains_upstream_all_mode_table() {
+fn k04_module_page_shows_only_the_selected_pointing_mode() {
     fn text(shape:&egui::Shape,out:&mut Vec<String>){match shape {egui::Shape::Text(t)=>out.push(t.galley.job.text.clone()),egui::Shape::Vec(v)=>for s in v{text(s,out)},_=>{}}}
     for lang in [crate::i18n::Language::English,crate::i18n::Language::Russian] {
         let mut app=EntropyApp::new_inert_for_test();add_filterable_module_groups(&mut app);
@@ -11,9 +11,12 @@ fn k04_module_page_retains_upstream_all_mode_table() {
         for mode in 0..4 {
             app.module_settings.set_value(134,mode);let ctx=egui::Context::default();let mut painted=Vec::new();
             for _ in 0..3 {let out=crate::app::discard_texture_deltas(ctx.run_ui(egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1600.0,1800.0))),..Default::default()},|ui|{let r=ui.available_rect_before_wrap();app.draw_module_settings_page(ui,r);}));painted.clear();for s in &out.shapes{text(&s.shape,&mut painted)}}
-            // Upstream now intentionally shows every pointing-mode column on
-            // K:04 as well; painting must not silently change the selected mode.
-            for label in &labels { assert!(painted.contains(label), "upstream K:04 mode table omitted a column: mode={mode}, label={label}, lang={lang:?}"); }
+            // Restore the selected-mode list on K:04 without changing the
+            // active firmware mode or issuing hardware writes while painting.
+            for (index, label) in labels.iter().enumerate() {
+                assert_eq!(painted.contains(label), mode as usize == index + 1,
+                    "K:04 selected-mode list: mode={mode}, label={label}, lang={lang:?}");
+            }
             assert_eq!(app.module_settings.values.get(&134), Some(&mode));
         }
         assert!(rec.requests().is_empty(),"ordinary module-page paint wrote hardware");
