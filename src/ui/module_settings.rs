@@ -157,6 +157,7 @@ fn module_setting_variant_label(language: crate::i18n::Language, variant: &str) 
 #[derive(Clone, Copy)]
 enum ModuleSettingsRow {
     SideSelector,
+    PointerModeSettingsSelector(usize),
     Section(usize),
     Field { group_idx: usize, field_idx: usize },
 }
@@ -593,8 +594,32 @@ impl EntropyApp {
         let selected_side_group = self.module_settings.selected_module_group();
         let selected_module =
             selected_side_group.and_then(|group_idx| self.selected_module_kind(group_idx));
+        let mode_group = selected_side_group.or_else(|| {
+            if self.module_settings.is_trackball_page() {
+                self.module_settings
+                    .groups
+                    .iter()
+                    .position(|group| group.mode_selector_field().is_some())
+            } else {
+                None
+            }
+        });
+        let mode_settings_selector = mode_group.and_then(|group_idx| {
+            if matches!(
+                selected_module,
+                Some(ModuleDeviceKind::None | ModuleDeviceKind::Encoder)
+            ) {
+                return None;
+            }
+            let group = &self.module_settings.groups[group_idx];
+            let selector = group.mode_selector_field()?;
+            (Self::pointer_mode_settings_options(selector).count() > 1)
+                .then_some((group_idx, selector.qsid))
+        });
+        let mode_override =
+            mode_settings_selector.and(self.module_settings.pointer_mode_settings_view);
         let selected_mode =
-            selected_side_group.and_then(|group_idx| self.selected_pointer_mode(group_idx));
+            mode_override.or_else(|| mode_group.and_then(|idx| self.selected_pointer_mode(idx)));
         if side_groups.len() > 1 {
             rows.push(ModuleSettingsRow::SideSelector);
         }
@@ -617,7 +642,26 @@ impl EntropyApp {
                 continue;
             }
             rows.push(ModuleSettingsRow::Section(group_idx));
-            rows.extend(self.module_settings_field_rows(group_idx, selected_module, selected_mode));
+            let mode = if group.kind == ModuleSettingsGroupKind::AutoLayer
+                || mode_group == Some(group_idx)
+            {
+                selected_mode
+            } else {
+                None
+            };
+            rows.extend(self.module_settings_field_rows(group_idx, selected_module, mode));
+        }
+        if let Some((mode_group_idx, qsid)) = mode_settings_selector {
+            if let Some(index) = rows.iter().position(|row| {
+                matches!(row, ModuleSettingsRow::Field { group_idx, field_idx }
+                    if *group_idx == mode_group_idx
+                        && self.module_settings.groups[*group_idx].fields[*field_idx].qsid == qsid)
+            }) {
+                rows.insert(
+                    index + 1,
+                    ModuleSettingsRow::PointerModeSettingsSelector(mode_group_idx),
+                );
+            }
         }
         rows
     }
@@ -638,6 +682,15 @@ impl EntropyApp {
             .pending_settings_write_value(field.qsid)
             .unwrap_or_else(|| self.module_settings.value(field.qsid));
         group.selected_pointer_mode(value)
+    }
+
+    fn pointer_mode_settings_options(
+        selector: &ModuleSettingField,
+    ) -> impl Iterator<Item = (PointerModeKind, &str)> {
+        selector.variants.iter().filter_map(|variant| {
+            let mode = PointerModeKind::from_variant(variant);
+            (mode != PointerModeKind::Other).then_some((mode, variant.as_str()))
+        })
     }
 
     fn module_settings_field_rows(
@@ -832,6 +885,14 @@ impl EntropyApp {
                 row_height,
                 suppress_tooltips,
             ),
+            ModuleSettingsRow::PointerModeSettingsSelector(group_idx) => self
+                .draw_pointer_mode_settings_selector(
+                    ui,
+                    group_idx,
+                    content_width,
+                    row_height,
+                    suppress_tooltips,
+                ),
             ModuleSettingsRow::Section(group_idx) => {
                 self.draw_module_settings_section(ui, content_width, row_height, group_idx)
             }
@@ -847,6 +908,59 @@ impl EntropyApp {
                 suppress_tooltips,
             ),
         }
+    }
+
+    fn draw_pointer_mode_settings_selector(
+        &mut self,
+        ui: &mut egui::Ui,
+        group_idx: usize,
+        content_width: f32,
+        row_height: f32,
+        suppress_tooltips: bool,
+    ) {
+        let Some(selector) = self.module_settings.groups[group_idx].mode_selector_field() else {
+            return;
+        };
+        let lang = self.app_settings.language;
+        let mut modes = vec![None];
+        let mut labels =
+            vec![crate::i18n::tr_catalog(lang, "modules_settings.follow_mode").to_owned()];
+        for (mode, variant) in Self::pointer_mode_settings_options(selector) {
+            modes.push(Some(mode));
+            labels.push(module_setting_variant_label(lang, variant));
+        }
+        let selected_idx = modes
+            .iter()
+            .position(|mode| *mode == self.module_settings.pointer_mode_settings_view)
+            .unwrap_or(0);
+        let width = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx()).value(120.0);
+        let tooltip = (!suppress_tooltips)
+            .then(|| crate::i18n::tr_catalog(lang, "modules_settings.mode_settings_tooltip"));
+        let dark = ui.visuals().dark_mode;
+        crate::ui_style::settings_list_row_with_tooltip(
+            ui,
+            content_width,
+            row_height,
+            crate::i18n::tr_catalog(lang, "modules_settings.mode_settings"),
+            true,
+            tooltip,
+            width,
+            |ui| {
+                let dropdown_id =
+                    ui.make_persistent_id(("pointer_mode_settings_dropdown", group_idx));
+                let (_, picked) = Self::draw_touchpad_select_control(
+                    ui,
+                    dark,
+                    dropdown_id,
+                    selected_idx,
+                    &labels,
+                    width,
+                );
+                if let Some(picked) = picked {
+                    self.module_settings.pointer_mode_settings_view = modes[picked];
+                }
+            },
+        );
     }
 
     pub(super) fn draw_module_settings_page(
@@ -1373,7 +1487,7 @@ mod tests {
                     .get(group_idx)
                     .and_then(|group| group.fields.get(field_idx))
                     .map(|field| field.qsid),
-                ModuleSettingsRow::SideSelector | ModuleSettingsRow::Section(_) => None,
+                _ => None,
             })
             .collect()
     }
@@ -1625,26 +1739,91 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn editing_inactive_mode_does_not_change_active_mode() {
+        fn position(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        let center = text.pos + text.galley.size() / 2.0;
+                        shape.clip_rect.contains(center).then_some(center)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing visible label: {label}"))
+        }
+
         let ctx = egui::Context::default();
-        let mut app = test_app();
+        let mut app = EntropyApp::new_inert_for_test();
+        app.app_settings.language = crate::i18n::Language::English;
         add_filterable_module_groups(&mut app);
+        app.module_settings.supported = true;
         app.module_settings.set_value(149, 2);
         let (device, recorder) = crate::hid::HidDevice::test_device();
         app.hid_device = Some(device.into());
-        let group = 0;
-        let field = app.module_settings.groups[group]
-            .fields
-            .iter()
-            .find(|field| field.qsid == 125)
-            .unwrap()
-            .clone();
-        app.write_module_setting_value(group, &field, 2);
+        let frame = |app: &mut EntropyApp, events| {
+            crate::app::discard_texture_deltas(ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600.0, 1000.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.draw_module_settings_page(ui, ui.max_rect()),
+            ))
+        };
+        let click = |app: &mut EntropyApp, pos| {
+            frame(
+                app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    },
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+            frame(app, vec![])
+        };
+
+        frame(&mut app, vec![]);
+        let output = frame(&mut app, vec![]);
+        let output = click(&mut app, position(&output, "Follow Mode"));
+        let output = click(&mut app, position(&output, "Scroll"));
+        assert_eq!(
+            visible_module_qsids(&app),
+            vec![149, 134, 130, 120, 125, 136, 327, 137, 140, 143, 145, 324]
+        );
+        assert!(recorder.requests().is_empty());
+        let scroll_label = position(&output, "Scroll sens");
+        let value_control = egui::pos2(position(&output, "Normal").x, scroll_label.y);
+        let output = click(&mut app, value_control);
+        click(&mut app, position(&output, "On"));
         drain_hid_writes(&mut app, &ctx);
-        assert_eq!(app.module_settings.value(125), 2);
+        assert_eq!(app.module_settings.value(125), 1);
         assert_eq!(app.module_settings.value(134), 0);
         let requests = recorder.requests();
         assert_eq!(requests.len(), 1);
         assert_eq!(&requests[0][2..4], &125u16.to_le_bytes());
+
+        let output = frame(&mut app, vec![]);
+        let output = click(&mut app, position(&output, "Scroll"));
+        click(&mut app, position(&output, "Follow Mode"));
+        assert_eq!(
+            visible_module_qsids(&app),
+            vec![149, 134, 130, 120, 137, 140, 143, 142, 324]
+        );
+        assert_eq!(recorder.requests().len(), 1);
     }
 
     #[test]
@@ -1690,7 +1869,13 @@ mod tests {
                         app.module_setting_label(group.kind, &field.title)
                     };
                     let mode_labels = [label_for(124), label_for(125), label_for(126)];
-                    let mut common_labels = vec![label_for(149), label_for(134), label_for(120)];
+                    let mut common_labels = vec![
+                        label_for(149),
+                        label_for(134),
+                        crate::i18n::tr_catalog(language, "modules_settings.mode_settings")
+                            .to_owned(),
+                        label_for(120),
+                    ];
                     let mut found = Vec::new();
                     for _ in 0..6 {
                         let output = crate::app::discard_texture_deltas(ctx.run_ui(
@@ -1910,7 +2095,11 @@ mod tests {
             ModuleSettingsGroup {
                 title: "Trackball".to_owned(),
                 kind: ModuleSettingsGroupKind::Other,
-                fields: vec![test_module_field()],
+                fields: vec![
+                    test_module_field(),
+                    module_filter_field("Scroll sens", 125),
+                    module_filter_field("Sniper sens", 124),
+                ],
             },
             ModuleSettingsGroup {
                 title: "Auto layer".to_owned(),
@@ -1924,6 +2113,11 @@ mod tests {
             app.module_settings_title_key(),
             "modules_settings.trackball_title"
         );
+        assert_eq!(visible_module_qsids(&app), [134, 324]);
+        app.module_settings.pointer_mode_settings_view = Some(PointerModeKind::Scroll);
+        assert_eq!(visible_module_qsids(&app), [134, 125, 324]);
+        app.module_settings.pointer_mode_settings_view = Some(PointerModeKind::Sniper);
+        assert_eq!(visible_module_qsids(&app), [134, 124, 324]);
     }
 
     #[test]

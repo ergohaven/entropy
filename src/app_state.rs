@@ -2172,10 +2172,9 @@ impl ModuleSettingsGroup {
                         .map(|selected| self.field_visible_for_pointer_mode(field, selected))
                         .unwrap_or(true)
             }
-            ModuleSettingsGroupKind::AutoLayer => selected_mode
+            ModuleSettingsGroupKind::AutoLayer | ModuleSettingsGroupKind::Other => selected_mode
                 .map(|selected| self.field_visible_for_pointer_mode(field, selected))
                 .unwrap_or(true),
-            ModuleSettingsGroupKind::Other => true,
         }
     }
 }
@@ -2186,6 +2185,8 @@ pub(crate) struct ModuleSettingsState {
     pub(crate) fields: Vec<ModuleSettingField>,
     pub(crate) groups: Vec<ModuleSettingsGroup>,
     pub(crate) selected_module_group: usize,
+    /// Which mode's settings to display. None follows the firmware's Mode setting.
+    pub(crate) pointer_mode_settings_view: Option<PointerModeKind>,
     pub(crate) values: std::collections::BTreeMap<u16, u16>,
     pub(crate) supported: bool,
 }
@@ -2253,8 +2254,10 @@ impl ModuleSettingsState {
         if matches!(
             group.kind,
             ModuleSettingsGroupKind::Left | ModuleSettingsGroupKind::Right
-        ) {
+        ) && self.selected_module_group != group_idx
+        {
             self.selected_module_group = group_idx;
+            self.pointer_mode_settings_view = None;
         }
     }
 
