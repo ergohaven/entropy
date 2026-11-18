@@ -175,6 +175,15 @@ fn firmware_update_rows(
                 crate::i18n::Language::English => "checking GitHub Releases".to_owned(),
             },
             FirmwareUpdateCheckState::Ready { result, .. } => match result.relation {
+                VersionRelation::UpdateAvailable
+                    if target.family == crate::app::FirmwareReleaseFamily::RynkMigration =>
+                {
+                    let migration = match lang {
+                        crate::i18n::Language::Russian => "доступен переход на RMK/Rynk",
+                        crate::i18n::Language::English => "RMK/Rynk migration available",
+                    };
+                    format!("{migration}. {}", backup_before_update(lang))
+                }
                 VersionRelation::UpdateAvailable => format!(
                     "{}. {}",
                     match lang {

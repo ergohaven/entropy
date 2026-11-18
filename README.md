@@ -115,6 +115,23 @@ Symbols do not require these Text Expander permissions.
 6. Edit layers, keycodes, advanced firmware features, or app settings
 7. Save/write changes when the edited feature requires it
 
+## Manual firmware updates
+
+Follow the [firmware instructions for your model](https://docs.eh.works/firmware/)
+and export a `.entlayout` backup before flashing. Update every component with its
+matching image from the same release.
+
+After copying a UF2 image, the `NRF52BOOT` drive disconnects automatically as the
+device restarts. macOS may report **Disk Not Ejected Properly**. That notification
+alone does not mean the flash failed or that all components were updated. Check
+the connected device's firmware version in **About device** after it restarts;
+the primary's version does not verify a peripheral half. An actual copy/write
+failure or a device that does not restart still needs investigation.
+
+RMK 0.3.0 resets settings and Bluetooth pairings when upgrading from 0.2.0.
+After updating all parts, follow the model's reset/pairing instructions and
+restore the saved layout. See the [RMK 0.3.0 release notes](https://github.com/ergohaven/rmk/releases/tag/v0.3.0).
+
 ## Startup Device
 
 When only one keyboard is connected, Entropy opens it automatically, even if a
