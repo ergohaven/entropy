@@ -48,21 +48,6 @@ impl std::fmt::Display for NotConnected {
 #[cfg(target_os = "linux")]
 impl std::error::Error for NotConnected {}
 
-/// The Rynk boards on every bus Entropy can reach.
-pub(crate) fn scan() -> io::Result<Vec<FoundBoard>> {
-    let boards = scan_usb()?;
-    // Elsewhere a Bluetooth board shows through the OS HID stack instead.
-    #[cfg(target_os = "linux")]
-    let boards = match ble_linux::scan() {
-        Ok(found) => boards.into_iter().chain(found).collect(),
-        Err(error) => {
-            log::warn!("Rynk Bluetooth scan failed: {error}");
-            boards
-        }
-    };
-    Ok(boards)
-}
-
 /// The Rynk boards on USB alone, without asking the Bluetooth stack.
 pub(crate) fn scan_usb() -> io::Result<Vec<FoundBoard>> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]

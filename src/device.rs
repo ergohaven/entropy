@@ -493,6 +493,32 @@ fn rynk_devices(
         .map_err(|error| format!("Rynk scan failed: {error}"))
 }
 
+#[cfg(target_os = "linux")]
+fn merge_rynk_ble(
+    mut usb: Vec<Device>,
+    previous: &[Device],
+    found: std::io::Result<Vec<crate::rynk::transport::FoundBoard>>,
+) -> Vec<Device> {
+    use crate::rynk::{link::PhysicalId, transport::ble_linux};
+
+    match found {
+        Ok(boards) => usb.extend(boards.into_iter().map(Device::from_rynk_board)),
+        Err(error) => {
+            log::warn!("Rynk Bluetooth scan failed: {error}; retaining previous Rynk BLE devices");
+            usb.extend(
+                previous
+                    .iter()
+                    .filter(|device| {
+                        device.firmware == FirmwareProtocol::Rynk
+                            && ble_linux::owns(&PhysicalId(device.path.clone()))
+                    })
+                    .cloned(),
+            );
+        }
+    }
+    usb
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn scan_backends(
     previous: &[Device],
@@ -689,11 +715,17 @@ impl DeviceManager {
                 if usb_only { usb_discovery::scan() } else { Self::scan_hid_devices() }
             },
             || {
-                rynk_devices(if usb_only {
-                    crate::rynk::transport::scan_usb()
-                } else {
-                    crate::rynk::transport::scan()
-                })
+                let usb = rynk_devices(crate::rynk::transport::scan_usb())?;
+                // On other platforms Rynk Bluetooth boards come from HID.
+                #[cfg(target_os = "linux")]
+                if !usb_only {
+                    return Ok(merge_rynk_ble(
+                        usb,
+                        &previous,
+                        crate::rynk::transport::ble_linux::scan(),
+                    ));
+                }
+                Ok(usb)
             },
         )
     }
@@ -904,6 +936,37 @@ mod tests {
         assert!(scan_backends(&previous, || Err("HID unavailable".into()),
             || Err("Rynk unavailable".into())).is_err());
         assert!(scan_backends(&previous, || Ok(vec![]), || Ok(vec![])).unwrap().is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn discovery_publishes_usb_and_retains_ble_only_when_bluez_fails() {
+        let mut old_usb = test_device("Usb", "usb:old");
+        old_usb.firmware = FirmwareProtocol::Rynk;
+        let mut new_usb = old_usb.clone();
+        new_usb.path = "usb:new".into();
+        let mut ble = test_device("Bluetooth", "ble:new");
+        ble.firmware = FirmwareProtocol::Rynk;
+
+        for ble_failed in [true, false] {
+            let previous = [old_usb.clone(), ble.clone()];
+            let found = if ble_failed {
+                Err(std::io::Error::other("BlueZ unavailable"))
+            } else {
+                Ok(vec![])
+            };
+            let devices = scan_backends(
+                &previous,
+                || Err("HID unavailable".into()),
+                || Ok(merge_rynk_ble(vec![new_usb.clone()], &previous, found)),
+            )
+            .expect("USB still discovers devices");
+            let paths: Vec<_> = devices.iter().map(|device| device.path.as_str()).collect();
+            assert_eq!(
+                paths,
+                if ble_failed { &["usb:new", "ble:new"][..] } else { &["usb:new"][..] }
+            );
+        }
     }
 
     #[cfg(not(target_os = "linux"))]
