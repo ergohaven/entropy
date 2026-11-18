@@ -636,6 +636,40 @@ mod version_compat_export_tests {
     }
 
     #[test]
+    fn version_compat_magic_import_preflight_prevents_keymap_writes() {
+        let mut source = super::tests::module_app();
+        source.layout.as_mut().unwrap().layers[0][0] = 0x7001.into();
+        let bundle = source.entlayout_snapshot().unwrap();
+        let mut target = super::tests::module_app();
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        *hid.native_capabilities.lock().unwrap() = Some(
+            crate::rmk_native::RmkNativeCapabilities {
+                magic_keycodes: 1,
+                ..Default::default()
+            },
+        );
+        target.hid_device = Some(hid.into());
+
+        let error = match target.apply_entlayout(&bundle) {
+            Ok(_) => panic!("unsupported Magic import unexpectedly succeeded"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("0x7001"), "{error}");
+        assert!(recorder.requests().is_empty(), "preflight wrote to HID");
+    }
+
+    #[test]
+    fn unrestricted_vial_magic_preflight_does_not_parse_macro_bytecode() {
+        let mut bundle = super::tests::module_app().entlayout_snapshot().unwrap();
+        bundle.data.macros.bytecode_base64 = vec!["not base64".to_owned()];
+        bundle.data.macros.texts.clear();
+        let (hid, _) = crate::hid::HidDevice::test_device();
+        let session: crate::device_session::DeviceSession = hid.into();
+
+        assert!(preflight_vial_entlayout(&session, &bundle).is_ok());
+    }
+
+    #[test]
     fn version_compat_export_native_profile_roundtrip() {
         let binding = crate::keyboard::KeyBinding::VialTapHold {
             tap: rmk_types::action::Action::User(180),
@@ -754,6 +788,70 @@ fn preflight_vial_entlayout(
     let Some(vial) = hid.as_vial() else {
         return Ok(());
     };
+    if vial.vial_magic_keycodes_restricted() {
+        // Validate every plain keycode before any native/dynamic preflight or
+        // write. This covers layers and the Vial-shaped entries that bypass the
+        // picker during import.
+        for (layer, keys) in bundle.data.keymap.iter().enumerate() {
+            for (key, &keycode) in keys.iter().enumerate() {
+                if entlayout_native_key_action(bundle, layer, key, NativeTarget::Vial)?.is_none() {
+                    vial.validate_vial_magic_keycode(keycode)?;
+                }
+            }
+        }
+        for keycode in bundle.data.encoder_keymap.iter().flatten().copied() {
+            vial.validate_vial_magic_keycode(keycode)?;
+        }
+        for entry in &bundle.data.combos.entries {
+            for keycode in entry.keys {
+                vial.validate_vial_magic_keycode(keycode)?;
+            }
+            if entlayout_native_binding(
+                bundle.version,
+                entry.native_output.as_deref(),
+                entry.rynk_output,
+                NativeTarget::Vial,
+            )?
+            .is_none()
+            {
+                vial.validate_vial_magic_keycode(entry.output)?;
+            }
+        }
+        for entry in &bundle.data.tap_dance.entries {
+            for (keycode, native, rynk) in [
+                (entry.on_tap, &entry.native_on_tap, entry.rynk_on_tap),
+                (entry.on_hold, &entry.native_on_hold, entry.rynk_on_hold),
+                (
+                    entry.on_double_tap,
+                    &entry.native_on_double_tap,
+                    entry.rynk_on_double_tap,
+                ),
+                (entry.on_tap_hold, &entry.native_on_tap_hold, entry.rynk_on_tap_hold),
+            ] {
+                if entlayout_native_binding(
+                    bundle.version,
+                    native.as_deref(),
+                    rynk,
+                    NativeTarget::Vial,
+                )?
+                .is_none()
+                {
+                    vial.validate_vial_magic_keycode(keycode)?;
+                }
+            }
+        }
+        for entry in &bundle.data.key_overrides.entries {
+            vial.validate_vial_magic_keycode(entry.trigger)?;
+            vial.validate_vial_magic_keycode(entry.replacement)?;
+        }
+        for entry in &bundle.data.alt_repeat.entries {
+            vial.validate_vial_magic_keycode(entry.keycode)?;
+            vial.validate_vial_magic_keycode(entry.alt_keycode)?;
+        }
+        for macro_bytes in entmacro_bytecode(&bundle.data.macros)? {
+            vial.validate_vial_magic_macro_bytes(&macro_bytes)?;
+        }
+    }
     let mut bindings = Vec::new();
     for (layer, keys) in bundle.data.keymap.iter().enumerate() {
         for key in 0..keys.len() {
@@ -797,6 +895,34 @@ fn preflight_vial_entlayout(
         vial.encode_vial_binding(binding)?;
     }
     Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn unsupported_rynk_magic_macro(macros: &[Vec<u8>], supported_keycodes: u64) -> Option<u16> {
+    use rmk_types_rynk::action::KeyAction;
+    use rmk_types_rynk::keyboard_macros::MacroOp;
+
+    macros
+        .iter()
+        .flat_map(|bytes| {
+            crate::rynk::macros::vial_macro_ops(bytes)
+                .0
+                .into_iter()
+                .filter_map(|op| match op {
+                    MacroOp::Tap(action) | MacroOp::Press(action) | MacroOp::Release(action) => {
+                        Some(KeyAction::Single(action))
+                    }
+                    _ => None,
+                })
+        })
+        .find_map(|action| {
+            match crate::rynk::keycode::check_magic_action(action, supported_keycodes) {
+                Err(crate::rynk::keycode::KeyBindingError::UnsupportedKeycode(keycode)) => {
+                    Some(keycode)
+                }
+                _ => None,
+            }
+        })
 }
 
 fn entlayout_dynamic_binding(
@@ -1700,7 +1826,10 @@ impl EntropyApp {
         }
         self.require_complete_entlayout_lighting()?;
         let backup = self.write_prepared_entlayout_import_backup(path)?;
-        let (firmware_failures, mapping, portable_settings) = self.apply_entlayout(&bundle)?;
+        // `consent_to_rynk_losses` already performed the hard Magic preflight;
+        // keep the direct-apply wrapper's defense without scanning this map again.
+        let (firmware_failures, mapping, portable_settings) =
+            self.apply_entlayout_after_rynk_preflight(&bundle)?;
         let report = self.entlayout_import_report(
             &bundle,
             &backup.path,
@@ -2882,11 +3011,47 @@ impl EntropyApp {
         EntLayoutImportMapping,
         EntPortableSettingsImportReport,
     )> {
+        self.apply_entlayout_inner(bundle, true)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn apply_entlayout_after_rynk_preflight(
+        &mut self,
+        bundle: &EntLayoutFile,
+    ) -> Result<(
+        EntFirmwareFailures,
+        EntLayoutImportMapping,
+        EntPortableSettingsImportReport,
+    )> {
+        if self
+            .hid_device
+            .as_ref()
+            .and_then(crate::device_session::DeviceSession::as_rynk)
+            .is_none()
+        {
+            return self.apply_entlayout(bundle);
+        }
+        self.apply_entlayout_inner(bundle, false)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn apply_entlayout_inner(
+        &mut self,
+        bundle: &EntLayoutFile,
+        preflight_rynk_magic: bool,
+    ) -> Result<(
+        EntFirmwareFailures,
+        EntLayoutImportMapping,
+        EntPortableSettingsImportReport,
+    )> {
         self.hid_device
             .as_ref()
             .context("No active keyboard connection")?;
         preflight_vial_entlayout(self.hid_device.as_ref().unwrap(), bundle)?;
         let mapping = self.entlayout_import_mapping(bundle)?;
+        if preflight_rynk_magic {
+            self.preflight_rynk_magic_entlayout(bundle, &mapping)?;
+        }
         let mut sidecars = EntLayoutSidecars::default();
         if bundle.application_layouts.is_some() && !self.current_device_is_likely_rmk() {
             let name = &self.current_device_name;
@@ -3231,6 +3396,7 @@ impl EntropyApp {
 
     /// What `bundle` would lose on a Rynk board: the editor state after the
     /// import, built the way the import builds it, checked whole.
+    #[cfg(not(target_arch = "wasm32"))]
     fn entlayout_rynk_losses(
         &self,
         bundle: &EntLayoutFile,
@@ -3404,7 +3570,81 @@ impl EntropyApp {
             },
             capabilities,
         ));
+        // `rynk_import_losses` validates the action shape and board capacity;
+        // this fail-fast pass applies the board's per-Magic-action bitmap to
+        // the fully mapped import, including nested native Rynk values.
+        let magic_keycodes = self
+            .hid_device
+            .as_ref()
+            .and_then(|session| session.as_rynk())
+            .map(|session| session.magic_keycodes())
+            .unwrap_or(0);
+        if let Some(keycode) = unsupported_rynk_magic_macro(&macros, magic_keycodes) {
+            bail!(
+                "Rynk firmware does not support QMK Magic keycode {keycode:#06x} in a macro; import left unchanged"
+            );
+        }
+        let check_binding = |binding: crate::keyboard::KeyBinding| -> Result<()> {
+            if let Ok(action) = crate::rynk::keycode::binding_action(binding) {
+                crate::rynk::keycode::check_magic_action(action, magic_keycodes)?;
+            }
+            Ok(())
+        };
+        let check_keycode = |keycode: u16| -> Result<()> {
+            if let Some(action) = crate::rynk::keycode::vial_keycode_action(keycode) {
+                crate::rynk::keycode::check_magic_action(action, magic_keycodes)?;
+            }
+            Ok(())
+        };
+        for binding in layers.iter().flatten().copied() {
+            check_binding(binding)?;
+        }
+        for keycode in encoder_layers.iter().flatten().copied() {
+            check_keycode(keycode)?;
+        }
+        for entry in &combos {
+            for keycode in entry.keys {
+                check_keycode(keycode)?;
+            }
+            check_binding(entry.output)?;
+        }
+        for entry in &tap_dances {
+            for binding in [
+                entry.on_tap,
+                entry.on_hold,
+                entry.on_double_tap,
+                entry.on_tap_hold,
+            ] {
+                check_binding(binding)?;
+            }
+        }
+        for entry in &key_overrides {
+            check_keycode(entry.trigger)?;
+            check_keycode(entry.replacement)?;
+        }
         Ok(losses)
+    }
+
+    /// A Magic action is not a lenient Rynk import loss: accepting the usual
+    /// loss prompt would leave the unsupported action in the file and let a
+    /// later direct apply overwrite it as `KC_NO`. Reject it before consent,
+    /// and reuse the same check for callers that invoke `apply_entlayout`
+    /// directly.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn preflight_rynk_magic_entlayout(
+        &self,
+        bundle: &EntLayoutFile,
+        mapping: &EntLayoutImportMapping,
+    ) -> Result<()> {
+        let Some((capabilities, morses)) = self
+            .hid_device
+            .as_ref()
+            .and_then(crate::device_session::DeviceSession::rynk_import_context)
+        else {
+            return Ok(());
+        };
+        self.entlayout_rynk_losses(bundle, mapping, &capabilities, &morses)
+            .map(|_| ())
     }
 
     /// On a Rynk board, what `bundle` cannot carry stops the import before the
@@ -3422,6 +3662,7 @@ impl EntropyApp {
         self.settle_rynk_losses(bundle, &capabilities, &morses, accepted)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn settle_rynk_losses(
         &self,
         bundle: &mut EntLayoutFile,

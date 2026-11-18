@@ -57,6 +57,7 @@ impl HidDevice {
 
     /// Write macro buffer to device.
     pub fn set_macro_buffer(&self, data: &[u8]) -> Result<()> {
+        self.validate_vial_magic_macro_bytes(data)?;
         let mut offset: u16 = 0;
         let total = data.len() as u16;
         while offset < total {
@@ -75,6 +76,19 @@ impl HidDevice {
         Ok(())
     }
 
+    pub(crate) fn validate_vial_magic_macro_bytes(&self, data: &[u8]) -> Result<()> {
+        for action in crate::keycode_picker::decode_macro_actions(data) {
+            let keycode = match action {
+                crate::keycode_picker::MacroAction::Tap(keycode)
+                | crate::keycode_picker::MacroAction::Down(keycode)
+                | crate::keycode_picker::MacroAction::Up(keycode) => keycode,
+                _ => continue,
+            };
+            self.validate_vial_magic_keycode(keycode)?;
+        }
+        Ok(())
+    }
+
     /// Parse macro buffer into individual macro bytecode entries.
     pub fn parse_macros(buf: &[u8], count: u8) -> Vec<Vec<u8>> {
         parse_macro_buffer(buf, count)
@@ -84,5 +98,20 @@ impl HidDevice {
     /// they do not fit in `buf_size`.
     pub fn encode_macros(macros: &[Vec<u8>], buf_size: u16) -> Result<Vec<u8>> {
         encode_macro_buffer(macros, buf_size)
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    #[test]
+    fn unsupported_magic_macro_is_rejected_before_buffer_writes() {
+        let (device, recorder) = crate::hid::HidDevice::test_device();
+        device.set_vial_magic_keycodes(1);
+
+        // Vial's extended macro op 5 carries 0x7001 little-endian.
+        assert!(device
+            .set_macro_buffer(&[0x01, 0x05, 0x01, 0x70, 0])
+            .is_err());
+        assert!(recorder.requests().is_empty());
     }
 }

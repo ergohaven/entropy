@@ -256,7 +256,7 @@ fn a_rynk_import_lists_what_it_would_lose_before_writing() {
     let debug = V1KeyAction::Single(V1Action::KeyboardControl(V1Control::DebugToggle));
     let source = app_with(vec![
         KeyBinding::Rmk(debug),
-        KeyBinding::Vial(0x7000),
+        KeyBinding::Vial(0xFFFF),
         KeyBinding::Vial(0x06),
     ]);
     let bundle = exported(&source);
@@ -280,7 +280,7 @@ fn a_rynk_import_lists_what_it_would_lose_before_writing() {
             },
             ImportLoss::Binding {
                 place: BindingPlace::Key { layer: 0, key: 1 },
-                error: crate::rynk::keycode::KeyBindingError::UnsupportedKeycode(0x7000),
+                error: crate::rynk::keycode::KeyBindingError::UnsupportedKeycode(0xFFFF),
             },
         ]
     );
@@ -288,6 +288,18 @@ fn a_rynk_import_lists_what_it_would_lose_before_writing() {
         crate::rynk::entlayout::describe_import_losses(target.app_settings.language, &losses);
     assert_eq!(message.lines().count(), 3, "{message}");
     assert!(!message.contains('{'), "{message}");
+
+    let mut blocked = exported(&app_with(vec![
+        KeyBinding::Vial(0x7000),
+        KeyBinding::Vial(0x06),
+        KeyBinding::Vial(0x07),
+    ]));
+    let untouched = serde_json::to_value(&blocked).unwrap();
+    let error = target
+        .settle_rynk_losses(&mut blocked, &capabilities, &[], false)
+        .unwrap_err();
+    assert!(error.to_string().contains("0x7000"), "{error}");
+    assert_eq!(serde_json::to_value(&blocked).unwrap(), untouched);
 
     // Nothing to lose: an import of what a Rynk board holds.
     let clean = exported(&app_with(vec![
@@ -325,19 +337,19 @@ fn rynk_losses_wait_for_consent_and_then_go_as_over_vial() {
     let mut source = with_slots(
         app_with(vec![
             KeyBinding::Rmk(debug),
-            KeyBinding::Vial(0x7000),
+            KeyBinding::Vial(0xFFFF),
             KeyBinding::Vial(0x06),
         ]),
         4,
     );
     source.combo_entries[0] = ComboEntry {
-        keys: [0x04, 0x7000, 0, 0],
-        output: KeyBinding::Vial(0x7000),
+        keys: [0x04, 0xFFFF, 0, 0],
+        output: KeyBinding::Vial(0xFFFF),
         layer: None,
     };
     // The import skips a combo for a layer the target lacks: it stays.
     source.combo_entries[1] = ComboEntry {
-        keys: [0x7000, 0x04, 0, 0],
+        keys: [0xFFFF, 0x04, 0, 0],
         output: KeyBinding::Vial(0x05),
         layer: Some(9),
     };
@@ -354,7 +366,7 @@ fn rynk_losses_wait_for_consent_and_then_go_as_over_vial() {
     };
     source.key_override_entries[0] = KeyOverrideEntry {
         trigger: 0x04,
-        replacement: 0x7000,
+        replacement: 0xFFFF,
         layers: 0xFFFF,
         ..Default::default()
     };
@@ -404,7 +416,7 @@ fn rynk_losses_wait_for_consent_and_then_go_as_over_vial() {
     );
     let combos = &data.combos.entries;
     assert_eq!((combos[0].keys, combos[0].output), ([0x04, 0, 0, 0], 0));
-    assert_eq!((combos[1].keys[0], combos[1].layer), (0x7000, Some(9)));
+    assert_eq!((combos[1].keys[0], combos[1].layer), (0xFFFF, Some(9)));
     assert_eq!((combos[2].keys, combos[2].output), ([0; 4], 0));
     let tap_dance = &data.tap_dance.entries[0];
     assert_eq!(

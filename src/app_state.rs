@@ -1330,6 +1330,8 @@ pub(crate) struct ConnectResult {
     pub(crate) supports_rmk_native_combo_output: bool,
     /// Firmware accepts native RMK actions in Tap Dance fields.
     pub(crate) supports_rmk_native_tap_dance_actions: bool,
+    /// QMK Magic actions accepted by this target; bit index is keycode - 0x7000.
+    pub(crate) magic_keycodes: u64,
     /// Firmware can restrict each Combo to one active layer.
     pub(crate) supports_rmk_combo_layers: bool,
     pub(crate) macro_ext_keycodes_disabled_reason: Option<MacroExtKeycodesDisabledReason>,
