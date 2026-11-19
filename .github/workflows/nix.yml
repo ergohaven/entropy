@@ -42,7 +42,7 @@ jobs:
         id: policy
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 .github/scripts/ci_policy.py plan --profile nix
+        run: python3 .github/scripts/ci_policy.py plan --profile nix --manual-builds
 
   flake:
     name: Flake (${{ matrix.system }})

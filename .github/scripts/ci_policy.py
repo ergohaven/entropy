@@ -182,7 +182,7 @@ def reuse(profile, env, tree, transport):
     return decision(reason='no-matching-full-pr-proof')
 
 
-def plan(profile, env, event, transport=None):
+def plan(profile, env, event, transport=None, *, manual_builds=False):
     try:
         git('rev-parse', 'HEAD^{tree}')
         if env.get('GITHUB_EVENT_NAME') not in ('push', 'pull_request') or env.get('GITHUB_REF', '').startswith('refs/tags/'):
@@ -190,6 +190,8 @@ def plan(profile, env, event, transport=None):
         ref = env.get('GITHUB_REF', '')
         if (env['GITHUB_EVENT_NAME'] == 'push' and not ref.startswith('refs/heads/')) or (env['GITHUB_EVENT_NAME'] == 'pull_request' and not re.fullmatch(r'refs/pull/[0-9]+/(merge|head)', ref)):
             return decision(reason='unknown-ref-requires-full-validation')
+        if manual_builds:
+            return decision(False, 'manual-build-request-required')
         paths = changed_paths(env, event)
         def doc(path):
             return path in ('README.md', 'README.rst', 'CHANGELOG.md', 'CHANGELOG.rst', 'AGENTS.md', 'LICENSE') or (path.startswith('docs/') and path.endswith(('.md', '.rst')))
@@ -215,6 +217,7 @@ def main():
     rec.add_argument('--output', required=True)
     planner = sub.add_parser('plan')
     planner.add_argument('--profile', choices=PROFILES, required=True)
+    planner.add_argument('--manual-builds', action='store_true')
     args = parser.parse_args()
     if args.command == 'record':
         proof = record(args.profile, os.environ)
@@ -224,7 +227,7 @@ def main():
         return
     try:
         event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
-        result = plan(args.profile, os.environ, event)
+        result = plan(args.profile, os.environ, event, manual_builds=args.manual_builds)
     except Exception:
         result = decision(reason='uncertain-requires-full-validation')
     lines = f"run={str(result['run']).lower()}\nreason={result['reason']}\nsource_run={result['source_run']}\n"
