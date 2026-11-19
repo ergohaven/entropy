@@ -48,6 +48,25 @@ class ReceiptTests(unittest.TestCase):
             self.assertEqual(output.read_text(), 'run=true\nreason=event-requires-full-validation\nsource_run=\n')
             self.assertIn('event-requires-full-validation', summary.read_text())
 
+    def test_manual_builds_cli_skips_ordinary_source_pr(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            event = Path(tmp) / 'event.json'
+            event.write_text(json.dumps({'pull_request': {
+                'base': {'sha': 'a' * 40}, 'head': {'sha': 'b' * 40}}}))
+            output, summary = Path(tmp) / 'output', Path(tmp) / 'summary'
+            env = dict(os.environ, GITHUB_EVENT_NAME='pull_request',
+                       GITHUB_REF='refs/pull/1/merge', GITHUB_EVENT_PATH=str(event),
+                       GITHUB_OUTPUT=str(output), GITHUB_STEP_SUMMARY=str(summary))
+            result = subprocess.run(['python3', str(HERE / 'ci_policy.py'), 'plan',
+                                     '--profile', 'build', '--manual-builds'],
+                                    cwd=ROOT, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(output.read_text(),
+                             'run=false\nreason=manual-build-request-required\nsource_run=\n')
+            self.assertIn('manual-build-request-required (run=false)', summary.read_text())
+            self.assertNotIn('Original full validation:', summary.read_text())
+            self.assertNotIn('Proof artifact:', summary.read_text())
+
     def test_missing_event_cli_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / 'output'
@@ -77,6 +96,55 @@ class SelectionTests(unittest.TestCase):
         self.assertTrue(callable(getattr(self.p, 'plan', None)), 'planner is not implemented')
         with patch.object(self.p, 'changed_paths', return_value=paths):
             return self.p.plan(profile, self.env, self.event, transport=lambda path: self.fail('unexpected API'))
+
+    def test_manual_builds_ordinary_source_events_skip_before_diff_or_api(self):
+        for profile in ('build', 'nix'):
+            for name, ref, event in (
+                    ('pull_request', 'refs/pull/1/merge', self.event),
+                    ('pull_request', 'refs/pull/1/head', self.event),
+                    ('push', 'refs/heads/main', {'before': 'a' * 40, 'after': 'b' * 40})):
+                with self.subTest(profile=profile, event=name, ref=ref):
+                    env = dict(self.env, GITHUB_EVENT_NAME=name, GITHUB_REF=ref, GH_TOKEN='offline')
+                    with patch.object(self.p, 'changed_paths', return_value=['src/main.rs']) as diff, \
+                            patch.object(self.p, 'reuse') as reuse, \
+                            patch.object(self.p, 'api_transport') as api:
+                        result = self.p.plan(profile, env, event, manual_builds=True)
+                    self.assertEqual(result, self.p.decision(False, 'manual-build-request-required'))
+                    diff.assert_not_called()
+                    reuse.assert_not_called()
+                    api.assert_not_called()
+
+    def test_manual_builds_conservative_events_still_require_full_even_docs(self):
+        cases = (
+            ('workflow_dispatch', 'refs/heads/main', 'event-requires-full-validation'),
+            ('workflow_call', 'refs/heads/main', 'event-requires-full-validation'),
+            ('push', 'refs/tags/v1', 'event-requires-full-validation'),
+            ('release', 'refs/tags/v1', 'event-requires-full-validation'),
+            ('unknown', 'refs/heads/main', 'event-requires-full-validation'),
+            ('push', 'unknown', 'unknown-ref-requires-full-validation'),
+            ('pull_request', 'refs/heads/main', 'unknown-ref-requires-full-validation'),
+        )
+        for profile in ('build', 'nix'):
+            for name, ref, reason in cases:
+                with self.subTest(profile=profile, event=name, ref=ref):
+                    env = dict(self.env, GITHUB_EVENT_NAME=name, GITHUB_REF=ref)
+                    with patch.object(self.p, 'changed_paths', return_value=['README.md']) as diff, \
+                            patch.object(self.p, 'reuse') as reuse:
+                        result = self.p.plan(profile, env, self.event, manual_builds=True)
+                    self.assertEqual(result, self.p.decision(reason=reason))
+                    diff.assert_not_called()
+                    reuse.assert_not_called()
+
+    def test_manual_builds_checkout_failure_still_fails_closed(self):
+        with patch.object(self.p, 'git', side_effect=OSError('missing checkout')):
+            self.assertEqual(self.p.plan('build', self.env, self.event, manual_builds=True),
+                             self.p.decision(reason='uncertain-requires-full-validation'))
+
+    def test_manual_builds_false_retains_unflagged_pr_selection(self):
+        for paths in (['README.md'], ['src/main.rs']):
+            with self.subTest(paths=paths), patch.object(self.p, 'changed_paths', return_value=paths):
+                self.assertEqual(self.p.plan('build', self.env, self.event, manual_builds=False),
+                                 self.decision(paths))
 
     def test_docs_skip(self):
         self.assertFalse(self.decision(['README.md', 'docs/guide.rst'])['run'])

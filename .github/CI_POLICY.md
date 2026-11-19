@@ -5,6 +5,7 @@ Run from the repository root. The helper never writes GitHub statuses or checks.
 
 ```sh
 python3 .github/scripts/ci_policy.py plan --profile build
+python3 .github/scripts/ci_policy.py plan --profile build --manual-builds
 python3 .github/scripts/ci_policy.py record --profile build --output proof.json
 python3 .github/scripts/test_ci_policy.py -v
 ```
@@ -25,12 +26,30 @@ Local documentation/test selection needs no token.
 
 ## Selection and proof rules
 
-- PRs never reuse remote validation. Pushes may reuse only a successful,
-  completed base-repository PR run of the same workflow path and profile.
+### Lightweight automatic checks; manual heavy builds
+
+Build and Nix opt into `plan --manual-builds` (`plan(..., manual_builds=False)`
+remains the default for other callers). Their ordinary branch pushes and PRs
+still run the unconditional Python selection/workflow contract suite, then skip
+heavy jobs with `manual-build-request-required` before diff or API/reuse lookup.
+This is a selection result, not full build evidence: no new proof is published.
+
+After an explicit evening-build request, a maintainer uses **Run workflow**
+(`workflow_dispatch`) for Build and Nix on the intended ref. Both select full
+coverage even for documentation-only changes. There is no scheduled evening
+build. Tags, releases, called workflows and unknown events/refs retain the
+conservative full path; release/signing workflows are unchanged.
+
+### Default selection and receipt validation
+
+- Without `--manual-builds`, PRs never reuse remote validation. Pushes may reuse
+  only a successful, completed base-repository PR run of the same workflow path
+  and profile.
 - Manual/called workflows, unknown events/refs, releases, and tags run full.
   Release workflows must remain unconditional full validation at the caller.
-- Diffs use PR `base.sha...head.sha` or push `before..after`, NUL-delimited,
-  with rename detection disabled. Shallow history, missing history, invalid SHAs,
+- When diff selection is reached, diffs use PR `base.sha...head.sha` or push
+  `before..after`, NUL-delimited, with rename detection disabled.
+  Shallow history, missing history, invalid SHAs,
   new/deleted branches, malformed input and API failures require full validation.
 - Documentation means root `README.md`, `README.rst`, `CHANGELOG.md`,
   `CHANGELOG.rst`, `AGENTS.md`, `LICENSE`, or `docs/**/*.md|rst`.
@@ -55,8 +74,9 @@ Local documentation/test selection needs no token.
 
 Gate full jobs on `needs.plan.outputs.run == 'true'`. Keep an aggregate job that
 fails when required jobs fail; a policy decision is not a substitute for job
-success. Never invoke `record` or publish a proof after a documentation skip,
-reuse, partial validation, failed job, or canceled job. Only after **all** full
+success. Never invoke `record` or publish a proof after a manual-build policy
+skip, documentation skip, reuse, partial validation, failed job, or canceled job.
+Only after **all** full
 jobs for the profile succeed, on the same checkout, create and upload the single
 JSON file using `actions/upload-artifact` and the exact artifact name above.
 Do not upload unrelated files in that proof artifact. Reruns use their own attempt

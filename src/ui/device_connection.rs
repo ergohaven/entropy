@@ -140,6 +140,7 @@ impl EntropyApp {
         self.keycode_picker.open = false;
         self.keycode_picker.supports_universal_numero = false;
         self.keycode_picker.supports_extended_russian_letters = false;
+        self.keycode_picker.magic_keycodes = crate::keycode::QMK_MAGIC_KEYCODE_ALL_MASK;
         self.selected_key = None;
         self.selected_encoder = None;
         self.unlock_open = false;
@@ -264,6 +265,7 @@ impl EntropyApp {
         self.keycode_picker.open = false;
         self.keycode_picker.supports_universal_numero = false;
         self.keycode_picker.supports_extended_russian_letters = false;
+        self.keycode_picker.magic_keycodes = crate::keycode::QMK_MAGIC_KEYCODE_ALL_MASK;
         self.current_device_name.clear();
         self.current_keyboard_id = None;
         self.current_encoder_visibility_id.clear();

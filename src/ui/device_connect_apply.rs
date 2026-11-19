@@ -180,6 +180,7 @@ mod tests {
             supports_extended_russian_letters: false,
             supports_rmk_native_combo_output: Default::default(),
             supports_rmk_native_tap_dance_actions: Default::default(),
+            magic_keycodes: crate::keycode::QMK_MAGIC_KEYCODE_ALL_MASK,
             supports_rmk_combo_layers: Default::default(),
             macro_ext_keycodes_disabled_reason: Default::default(),
             tap_dance_entries: Default::default(),
@@ -1451,6 +1452,7 @@ impl EntropyApp {
                     r.supports_rmk_native_combo_output;
                 self.keycode_picker.supports_rmk_native_tap_dance_actions =
                     r.supports_rmk_native_tap_dance_actions;
+                self.keycode_picker.magic_keycodes = r.magic_keycodes;
                 self.supports_rmk_combo_layers = r.supports_rmk_combo_layers;
                 self.keycode_picker.macro_ext_keycodes_disabled_reason =
                     r.macro_ext_keycodes_disabled_reason;
@@ -1788,6 +1790,7 @@ mod qa_followup_reconnect {
             supports_extended_russian_letters: false,
             supports_rmk_native_combo_output: Default::default(),
             supports_rmk_native_tap_dance_actions: Default::default(),
+            magic_keycodes: crate::keycode::QMK_MAGIC_KEYCODE_ALL_MASK,
             supports_rmk_combo_layers: Default::default(),
             macro_ext_keycodes_disabled_reason: Default::default(),
             tap_dance_entries: Default::default(),

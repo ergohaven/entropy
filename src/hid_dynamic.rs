@@ -91,6 +91,9 @@ impl HidDevice {
 
     /// Set combo entry
     pub fn set_combo(&self, idx: u8, keys: [u16; 4], output: u16) -> Result<()> {
+        for keycode in keys.into_iter().chain([output]) {
+            self.validate_vial_magic_keycode(keycode)?;
+        }
         let requested = (keys, output);
         let mut cmd = [0u8; 32];
         cmd[0] = CMD_VIA_VIAL_PREFIX;
@@ -120,6 +123,12 @@ impl HidDevice {
         keys: [u16; 4],
         output: crate::keyboard::KeyBinding,
     ) -> Result<()> {
+        for keycode in keys {
+            self.validate_vial_magic_keycode(keycode)?;
+        }
+        if let crate::keyboard::KeyBinding::Vial(keycode) = output {
+            self.validate_vial_magic_keycode(keycode)?;
+        }
         if output.is_vial_native() {
             self.preflight_vial_dynamic(output, false)?;
         }
@@ -166,6 +175,8 @@ impl HidDevice {
         suppressed_mods: u8,
         options: u8,
     ) -> Result<()> {
+        self.validate_vial_magic_keycode(trigger)?;
+        self.validate_vial_magic_keycode(replacement)?;
         let mut cmd = [0u8; 32];
         cmd[0] = CMD_VIA_VIAL_PREFIX;
         cmd[1] = CMD_VIAL_DYNAMIC_ENTRY_OP;
@@ -205,6 +216,8 @@ impl HidDevice {
         allowed_mods: u8,
         options: u8,
     ) -> Result<()> {
+        self.validate_vial_magic_keycode(keycode)?;
+        self.validate_vial_magic_keycode(alt_keycode)?;
         let mut cmd = [0u8; 32];
         cmd[0] = CMD_VIA_VIAL_PREFIX;
         cmd[1] = CMD_VIAL_DYNAMIC_ENTRY_OP;
@@ -249,6 +262,9 @@ impl HidDevice {
         on_tap_hold: u16,
         tapping_term: u16,
     ) -> Result<()> {
+        for keycode in [on_tap, on_hold, on_double_tap, on_tap_hold] {
+            self.validate_vial_magic_keycode(keycode)?;
+        }
         let requested = (on_tap, on_hold, on_double_tap, on_tap_hold, tapping_term);
         let mut cmd = [0u8; 32];
         cmd[0] = CMD_VIA_VIAL_PREFIX;
@@ -275,6 +291,9 @@ impl HidDevice {
         tapping_term: u16,
     ) -> Result<()> {
         for binding in actions {
+            if let crate::keyboard::KeyBinding::Vial(keycode) = binding {
+                self.validate_vial_magic_keycode(keycode)?;
+            }
             if binding.is_vial_native() {
                 self.preflight_vial_dynamic(binding, true)?;
             }

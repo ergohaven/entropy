@@ -44,6 +44,18 @@ class EntropyCIContract(unittest.TestCase):
         self.assertIn('pull-requests: read', owner)
         self.assertNotIn('cargo ', owner)
 
+    def test_heavy_planners_opt_in_without_gating_lightweight_checks(self):
+        for name, profile in (('build.yml', 'build'), ('nix.yml', 'nix')):
+            with self.subTest(workflow=name):
+                owner = job(workflow(name), 'plan')
+                commands = re.findall(r'^        run: (.+)$', owner, re.M)
+                self.assertEqual(commands, [
+                    "python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v",
+                    f'python3 .github/scripts/ci_policy.py plan --profile {profile} --manual-builds',
+                ])
+                self.assertNotRegex(owner, r'(?m)^\s+if:')
+                self.assertEqual(workflow(name).count('--manual-builds'), 1)
+
     def test_build_gates_all_expensive_owners(self):
         text = workflow('build.yml')
         for name in ('build', 'container', 'packages'):

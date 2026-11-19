@@ -38,6 +38,9 @@ const NATIVE_KEY_ACTION_MAX_PAYLOAD: usize = MSG_LEN - NATIVE_KEY_ACTION_SET_PAY
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct RmkNativeCapabilities {
     pub(crate) version: u8,
+    /// QMK Magic actions supported by this Vial-RMK target. The low 35 bits
+    /// correspond to keycodes 0x7000..=0x7022. Legacy replies leave this zero.
+    pub(crate) magic_keycodes: u64,
     pub(crate) universal_numero: bool,
     pub(crate) profile_resolution: bool,
     pub(crate) key_actions: bool,
@@ -321,8 +324,14 @@ fn decode_native_capabilities(response: &[u8; MSG_LEN]) -> RmkNativeCapabilities
         return RmkNativeCapabilities::default();
     }
     let flags = u16::from_le_bytes([response[4], response[5]]);
+    let mut magic_keycodes = [0u8; 8];
+    // The negotiated v1/v2 reply reserves bytes 6..11 for the little-endian
+    // 35-action Magic bitmap. The remaining three bytes stay zero-cleared.
+    magic_keycodes[..5].copy_from_slice(&response[6..11]);
     RmkNativeCapabilities {
         version: response[3],
+        magic_keycodes: u64::from_le_bytes(magic_keycodes)
+            & crate::keycode::QMK_MAGIC_KEYCODE_ALL_MASK,
         universal_numero: flags & 0x0100 != 0,
         profile_resolution: flags & 0x0200 != 0,
         key_actions: flags & ERGOHAVEN_NATIVE_KEY_ACTION_CAP_GET_SET != 0,
@@ -365,6 +374,38 @@ fn decode_native_action(
 
 #[cfg(not(target_arch = "wasm32"))]
 impl crate::hid::HidDevice {
+    pub(crate) fn set_vial_magic_keycodes(&self, magic_keycodes: u64) {
+        let mut capabilities = self.native_capabilities.lock().unwrap();
+        capabilities
+            .get_or_insert_with(Default::default)
+            .magic_keycodes = magic_keycodes;
+    }
+
+    pub(crate) fn vial_magic_keycodes_restricted(&self) -> bool {
+        self.native_capabilities
+            .lock()
+            .unwrap()
+            .is_some_and(|capabilities| {
+                capabilities.magic_keycodes != crate::keycode::QMK_MAGIC_KEYCODE_ALL_MASK
+            })
+    }
+
+    pub(crate) fn validate_vial_magic_keycode(&self, keycode: u16) -> Result<()> {
+        if crate::keycode::qmk_magic_keycode_index(keycode).is_none() {
+            return Ok(());
+        }
+        let Some(capabilities) = *self.native_capabilities.lock().unwrap() else {
+            // Handles used by low-level tests or pre-connect compatibility
+            // probes have no target classification yet; the connect path sets
+            // an explicit QMK/RMK policy before exposing them to writers.
+            return Ok(());
+        };
+        if crate::keycode::qmk_magic_keycode_supported(capabilities.magic_keycodes, keycode) {
+            return Ok(());
+        }
+        bail!("QMK Magic keycode {keycode:#06x} is not supported by this RMK firmware")
+    }
+
     pub(crate) fn cached_rmk_native_capabilities(&self) -> Result<RmkNativeCapabilities> {
         let cached = *self.native_capabilities.lock().unwrap();
         if let Some(caps) = cached {
@@ -398,9 +439,30 @@ impl crate::hid::HidDevice {
         &self,
         binding: crate::keyboard::KeyBinding,
     ) -> Result<Vec<u8>> {
+        use rmk_types::action::Action;
+
         let caps = self.cached_rmk_native_capabilities()?;
         if crate::universal_symbols::binding_contains_extended_russian_letter(binding) && !caps.extended_russian_letters {
             bail!("These Russian letters are not supported by this device; update its firmware");
+        }
+        let check_magic = |action| {
+            if let Action::User(id) = action {
+                if let Some(keycode) = crate::keycode::rmk_magic_keycode(id) {
+                    self.validate_vial_magic_keycode(keycode)?;
+                }
+            }
+            Ok::<_, anyhow::Error>(())
+        };
+        match binding {
+            KeyBinding::Rmk(KeyAction::Single(action) | KeyAction::Tap(action)) => {
+                check_magic(action)?;
+            }
+            KeyBinding::Rmk(KeyAction::TapHold(tap, hold, _))
+            | KeyBinding::VialTapHold { tap, hold, .. } => {
+                check_magic(tap)?;
+                check_magic(hold)?;
+            }
+            _ => {}
         }
         if crate::universal_symbols::binding_contains_numero(binding) && !caps.universal_numero {
             bail!("Numero is not supported by this device; update its firmware");
@@ -994,6 +1056,50 @@ mod tests {
     }
 
     #[test]
+    fn version_compat_magic_bitmap_decodes_only_negotiated_reply_bytes() {
+        let mut reply = [0; 32];
+        reply[..6].copy_from_slice(&[8, 0xe8, 2, 1, 1, 0]);
+        reply[6..11].copy_from_slice(&[1, 0, 0, 0, 4]);
+        let caps = decode_native_capabilities(&reply);
+        assert_eq!(caps.magic_keycodes, 1 | (1u64 << 34));
+
+        reply[3] = 3;
+        assert_eq!(decode_native_capabilities(&reply).magic_keycodes, 0);
+    }
+
+    #[test]
+    fn unrestricted_magic_policy_keeps_vial_import_preflight_compatibility() {
+        let (device, _) = crate::hid::HidDevice::test_device();
+        assert!(!device.vial_magic_keycodes_restricted());
+
+        device.set_vial_magic_keycodes(crate::keycode::QMK_MAGIC_KEYCODE_ALL_MASK);
+        assert!(!device.vial_magic_keycodes_restricted());
+
+        device.set_vial_magic_keycodes(1);
+        assert!(device.vial_magic_keycodes_restricted());
+    }
+
+    #[test]
+    fn unsupported_magic_keycodes_are_rejected_before_vial_key_or_encoder_writes() {
+        use rmk_types::action::Action;
+
+        let (device, recorder) = crate::hid::HidDevice::test_device();
+        *device.native_capabilities.lock().unwrap() = Some(RmkNativeCapabilities {
+            version: 1,
+            key_actions: true,
+            magic_keycodes: 1,
+            ..Default::default()
+        });
+
+        assert!(device.set_keycode(0, 0, 0, 0x7001).is_err());
+        assert!(device.set_encoder(0, 0, 0, 0x7001).is_err());
+        assert!(device
+            .set_rmk_key_action(0, 0, 0, KeyAction::Single(Action::User(0xc1)))
+            .is_err());
+        assert!(recorder.requests().is_empty());
+    }
+
+    #[test]
     fn version_compat_v2_native_response_matches_negotiated_request() {
         for opcode in 2..=8 {
             let mut request = [0; 32];
@@ -1025,6 +1131,7 @@ mod tests {
             decode_native_capabilities(&response),
             RmkNativeCapabilities {
                 version: 1,
+                magic_keycodes: 0,
                 universal_numero: false,
                 profile_resolution: false,
                 key_actions: true,
@@ -1085,6 +1192,7 @@ mod tests {
     fn universal_symbols_capability_enables_existing_layout_sync_bridge() {
         assert!(supports_layout_sync(RmkNativeCapabilities {
             version: 1,
+            magic_keycodes: 0,
             universal_numero: false,
             profile_resolution: false,
             key_actions: true,
@@ -1099,6 +1207,7 @@ mod tests {
         }));
         assert!(!supports_layout_sync(RmkNativeCapabilities {
             version: 1,
+            magic_keycodes: 0,
             universal_numero: false,
             profile_resolution: false,
             key_actions: true,

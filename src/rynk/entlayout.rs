@@ -805,7 +805,7 @@ mod tests {
         };
         assert_eq!(rynk_import_losses(&import, &capabilities()), []);
 
-        let layers = vec![vec![KeyBinding::Vial(0x7000)]];
+        let layers = vec![vec![KeyBinding::Vial(0x7023)]];
         let encoders = vec![vec![0x7800]];
         let macros = vec![b"\xd0\x9f".to_vec(), b"x".to_vec(), b"x".to_vec()];
         let combos = vec![
@@ -825,7 +825,7 @@ mod tests {
             ..Default::default()
         }];
         let key_overrides = vec![crate::app::KeyOverrideEntry {
-            trigger: 0x7000,
+            trigger: 0x7023,
             ..Default::default()
         }];
         let import = RynkImport {
@@ -849,7 +849,7 @@ mod tests {
             [
                 ImportLoss::Binding {
                     place: BindingPlace::Key { layer: 0, key: 0 },
-                    error: KeyBindingError::UnsupportedKeycode(0x7000),
+                    error: KeyBindingError::UnsupportedKeycode(0x7023),
                 },
                 ImportLoss::Encoder {
                     layer: 0,
@@ -887,7 +887,7 @@ mod tests {
                 },
                 ImportLoss::KeyOverride {
                     index: 0,
-                    error: DynamicError::Binding(KeyBindingError::UnsupportedKeycode(0x7000)),
+                    error: DynamicError::Binding(KeyBindingError::UnsupportedKeycode(0x7023)),
                 },
             ]
         );
@@ -913,7 +913,7 @@ mod tests {
             },
             ImportLoss::Binding {
                 place: key,
-                error: KeyBindingError::UnsupportedKeycode(0x7000),
+                error: KeyBindingError::UnsupportedKeycode(0x7023),
             },
             ImportLoss::Binding {
                 place: key,
@@ -1029,7 +1029,7 @@ mod tests {
         assert!(runs_in_tap_dance(KeyBinding::Vial(0x04)));
         assert!(runs_in_tap_dance(KeyBinding::Vial(0)));
         assert!(!runs_in_tap_dance(KeyBinding::Vial(0x4104)));
-        assert!(!runs_in_tap_dance(KeyBinding::Vial(0x7000)));
+        assert!(!runs_in_tap_dance(KeyBinding::Vial(0x7023)));
 
         assert_eq!(lenient_macro(b"hi"), None);
         assert_eq!(lenient_macro(b"h\xd0i\x01\x01\x00"), Some(b"hi".to_vec()));

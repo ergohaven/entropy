@@ -40,6 +40,9 @@ use pictogram_origin::is_known_migrated_stock_pictogram;
 
 #[path = "app_init.rs"]
 mod app_init;
+#[path = "startup_device.rs"]
+mod startup_device;
+use startup_device::*;
 
 #[path = "app_storage.rs"]
 mod app_storage;
@@ -70,7 +73,7 @@ mod headless_export;
 pub(crate) use headless_export::export_via_running_instance;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use headless_export::{
-    EXIT_INSTANCE_RUNNING, EXIT_USAGE, HeadlessExportRequest, run_headless_export,
+    run_headless_export, LaunchRequest, EXIT_INSTANCE_RUNNING, EXIT_USAGE,
 };
 #[path = "entsettings.rs"]
 mod entsettings;

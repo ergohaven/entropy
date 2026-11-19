@@ -172,6 +172,9 @@ pub struct KeycodePicker {
     pub(crate) supports_extended_russian_letters: bool,
     pub supports_rmk_native_combo_output: bool,
     pub supports_rmk_native_tap_dance_actions: bool,
+    /// QMK Magic actions the connected target accepts. The bit index is the
+    /// keycode minus 0x7000; QMK targets use all 35 bits.
+    pub magic_keycodes: u64,
     /// The connected board speaks Rynk: tap dance fields take the native v1
     /// actions the picker builds as their Rynk upgrade.
     pub rynk_board: bool,
@@ -1213,6 +1216,26 @@ mod tests {
         picker.open_full_key_picker(KeycodeTab::Basic);
         assert!(picker.picker_value_supported(0x00E1));
     }
+
+    #[test]
+    fn magic_picker_rows_and_assignment_follow_the_target_bitmap() {
+        let mut picker = KeycodePicker::default();
+        picker.magic_keycodes = 1;
+
+        assert!(picker.picker_value_supported(0x7000));
+        assert!(!picker.picker_value_supported(0x7001));
+        assert!(picker
+            .cached_tab_rows(KeycodeTab::Special)
+            .iter()
+            .any(|row| row.action == PickerAction::Assign(0x7000.into())));
+        assert!(!picker
+            .cached_tab_rows(KeycodeTab::Special)
+            .iter()
+            .any(|row| row.action == PickerAction::Assign(0x7001.into())));
+
+        picker.assign_keycode_value(0x7001);
+        assert!(picker.result.is_none());
+    }
 }
 
 #[cfg(test)]
@@ -1509,6 +1532,7 @@ impl Default for KeycodePicker {
             supports_extended_russian_letters: false,
             supports_rmk_native_combo_output: false,
             supports_rmk_native_tap_dance_actions: false,
+            magic_keycodes: crate::keycode::QMK_MAGIC_KEYCODE_ALL_MASK,
             rynk_board: false,
             rmk_native_key_actions_allowed_for_target: false,
             value_policy: PickerValuePolicy::default(),
@@ -1597,12 +1621,13 @@ impl KeycodePicker {
     }
 
     pub(crate) fn picker_value_supported(&self, value: u16) -> bool {
-        match self.value_policy {
-            PickerValuePolicy::Any | PickerValuePolicy::RmkKeyOverrideReplacement => true,
-            PickerValuePolicy::KeyOverrideTrigger => {
-                !matches!(value, 0x0000 | 0x0001 | 0x00E0..=0x00E7)
+        crate::keycode::qmk_magic_keycode_supported(self.magic_keycodes, value)
+            && match self.value_policy {
+                PickerValuePolicy::Any | PickerValuePolicy::RmkKeyOverrideReplacement => true,
+                PickerValuePolicy::KeyOverrideTrigger => {
+                    !matches!(value, 0x0000 | 0x0001 | 0x00E0..=0x00E7)
+                }
             }
-        }
     }
 
     fn assign_keycode_value(&mut self, value: u16) {

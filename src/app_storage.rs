@@ -1124,7 +1124,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let _scope=ScopedTempConfig::new();let settings=AppSettings::default();let path=app_settings_path();
         let original=serde_json::to_vec(&settings).unwrap();std::fs::write(&path,&original).unwrap();
-        let original_mode=std::fs::metadata(&path).unwrap().permissions();std::fs::set_permissions(&path,std::fs::Permissions::from_mode(0)).unwrap();
+        let original_mode=std::fs::metadata(&path).unwrap().permissions();std::fs::set_permissions(&path,std::fs::Permissions::from_mode(0o000)).unwrap();
         let mut changed=settings;changed.application_layouts.insert("new".into(),Default::default());save_app_settings(&changed);
         std::fs::set_permissions(&path,original_mode).unwrap();assert_eq!(std::fs::read(path).unwrap(),original,"read failure is not evidence that no old settings exist");
     }

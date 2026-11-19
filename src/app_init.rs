@@ -117,6 +117,7 @@ impl EntropyApp {
             update_check: UpdateCheckState::Idle,
         });
         app.headless = true;
+        app.startup_device = None;
         app
     }
 
@@ -256,6 +257,12 @@ impl EntropyApp {
             application_categories_name: String::new(),
             pending_device_connect: None,
             remembered_device: None,
+            startup_device: Some(
+                app_settings
+                    .preferred_startup_device
+                    .clone()
+                    .map_or(StartupDeviceTarget::Screen, StartupDeviceTarget::Preferred),
+            ),
             pending_takeover: None,
             #[cfg(not(target_arch = "wasm32"))]
             headless: false,
@@ -322,6 +329,8 @@ impl EntropyApp {
             native_time_offset: 0.0,
             app_settings,
             app_clock: std::time::Instant::now(),
+            #[cfg(test)]
+            test_app_clock: None,
             text_expander_rules_signature,
             text_expander_rules_last_check_at: 0.0,
             text_expander_settings_save_pending: false,
@@ -566,5 +575,111 @@ impl EntropyApp {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod startup_device_bootstrap_tests {
+    use super::*;
+
+    #[test]
+    fn startup_device_saved_missing_device_opens_the_only_other_keyboard_after_restart() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let saved_device = Device {
+            name: "Phenom Mini".into(),
+            vendor_id: 0xe126,
+            product_id: 0x71,
+            manufacturer: "Test".into(),
+            serial_number: "saved-board".into(),
+            bus_type: "Usb".into(),
+            path: "/test/saved".into(),
+            instance_token: "saved".into(),
+            firmware: FirmwareProtocol::Vial,
+        };
+        let preference = StartupDevicePreference::from_device(&saved_device);
+        let mut settings = AppSettings::default();
+        settings.preferred_startup_device = Some(preference.clone());
+        save_app_settings(&settings);
+        let app_settings = load_app_settings();
+        let mut app = EntropyApp::from_bootstrap(AppBootstrap {
+            import_backup_namespace: capture_import_backup_namespace(),
+            typing_trainer: TypingTrainerState::from_settings(app_settings.typing_trainer),
+            app_settings,
+            device_manager: DeviceManager::empty(),
+            text_expander_rules_signature: Vec::new(),
+            last_single_instance_signal: String::new(),
+            layer_names: Vec::new(),
+            update_check: UpdateCheckState::Idle,
+        });
+        let (tx, requests) = mpsc::channel();
+        app.test_connect_requests = Some(tx);
+        #[cfg(target_os = "linux")]
+        {
+            app.test_device_scan_udev_access = Some(crate::app::app_settings_ui::UdevAccess {
+                vial: true,
+                rynk: true,
+            });
+        }
+        let mut only_connected = saved_device.clone();
+        only_connected.name = "Macropad".into();
+        only_connected.serial_number = "only-other-board".into();
+        only_connected.path = "/test/other".into();
+        only_connected.instance_token = "other".into();
+        app.apply_device_scan_result(vec![]);
+        assert!(requests.try_recv().is_err());
+        app.apply_device_scan_result(vec![only_connected.clone()]);
+        let opened = requests
+            .try_recv()
+            .expect("the sole connected keyboard must open even when the saved device is absent")
+            .0;
+        assert_eq!(opened.stable_identity(), only_connected.stable_identity());
+        assert_eq!(app.selected_device, Some(0));
+        assert!(app.startup_device.is_none());
+        assert_eq!(
+            load_app_settings().preferred_startup_device,
+            Some(preference)
+        );
+    }
+
+    #[test]
+    fn startup_device_saved_preference_is_loaded_and_connects_after_discovery() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let target = Device {
+            name: "Phenom Mini".into(),
+            vendor_id: 0xe126,
+            product_id: 0x71,
+            manufacturer: "Test".into(),
+            serial_number: "123".into(),
+            bus_type: "Usb".into(),
+            path: "/test/phenom".into(),
+            instance_token: "one".into(),
+            firmware: FirmwareProtocol::Vial,
+        };
+        let mut settings = AppSettings::default();
+        settings.preferred_startup_device = Some(StartupDevicePreference::from_device(&target));
+        save_app_settings(&settings);
+        let app_settings = load_app_settings();
+        let mut app = EntropyApp::from_bootstrap(AppBootstrap {
+            import_backup_namespace: capture_import_backup_namespace(),
+            typing_trainer: TypingTrainerState::from_settings(app_settings.typing_trainer),
+            app_settings,
+            device_manager: DeviceManager::empty(),
+            text_expander_rules_signature: Vec::new(),
+            last_single_instance_signal: String::new(),
+            layer_names: Vec::new(),
+            update_check: UpdateCheckState::Idle,
+        });
+        let (tx, requests) = mpsc::channel();
+        app.test_connect_requests = Some(tx);
+        #[cfg(target_os = "linux")]
+        {
+            app.test_device_scan_udev_access = Some(crate::app::app_settings_ui::UdevAccess {
+                vial: true,
+                rynk: true,
+            });
+        }
+        app.apply_device_scan_result(vec![]);
+        app.apply_device_scan_result(vec![target.clone()]);
+        assert_eq!(requests.try_recv().unwrap().0.path, target.path);
     }
 }

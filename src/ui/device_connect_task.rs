@@ -546,6 +546,31 @@ fn is_rmk_vial_definition(json: &serde_json::Value) -> bool {
         && json_path_u16(json, &["productId"]) == Some(0x4643)
 }
 
+fn vial_magic_keycodes(
+    json: &serde_json::Value,
+    capabilities: crate::rmk_native::RmkNativeCapabilities,
+) -> u64 {
+    // The oldest RMK K:03 definitions lack a firmware name and share their
+    // VID/PID with QMK. Their Bluetooth profile and bond actions identify them.
+    let legacy_rmk_k03 = json_path_u16(json, &["vendorId"]) == Some(0xE126)
+        && json_path_u16(json, &["productId"]) == Some(0x0070)
+        && json
+            .get("customKeycodes")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|keys| {
+                ["BT0", "BT_CLR"].iter().all(|&name| {
+                    keys.iter().any(|key| {
+                        key.get("name").and_then(serde_json::Value::as_str) == Some(name)
+                    })
+                })
+            });
+    if capabilities.version != 0 || is_rmk_vial_definition(json) || legacy_rmk_k03 {
+        capabilities.magic_keycodes
+    } else {
+        crate::keycode::QMK_MAGIC_KEYCODE_ALL_MASK
+    }
+}
+
 fn macro_ext_keycodes_disabled_reason(
     json: &serde_json::Value,
     rmk_vial_macro_ext_supported: bool,
@@ -565,6 +590,7 @@ fn supports_vial_macro_ext_keycodes(
 
 impl EntropyApp {
     pub(super) fn start_connect(&mut self, device_idx: usize) {
+        self.startup_device = None;
         self.start_connect_with_reconnect(device_idx, None);
     }
 
@@ -1126,6 +1152,11 @@ impl EntropyApp {
                     rmk_native_capabilities(&dev_conn).map_err(|error| {
                         format!("RMK native key-action capability read failed: {error:#}")
                     })?;
+                // QMK implements the complete Magic range. RMK replies carry
+                // an explicit bitmap; legacy RMK definitions remain empty so
+                // unsupported writes cannot silently become KC_NO.
+                let magic_keycodes = vial_magic_keycodes(&json, rmk_native_capabilities);
+                dev_conn.set_vial_magic_keycodes(magic_keycodes);
                 let supports_rmk_native_key_actions = rmk_native_capabilities.key_actions;
                 let supports_universal_numero = rmk_native_capabilities.universal_numero;
                 let supports_universal_symbols = rmk_native_capabilities.universal_symbols;
@@ -1634,6 +1665,7 @@ impl EntropyApp {
                     supports_extended_russian_letters,
                     supports_rmk_native_combo_output,
                     supports_rmk_native_tap_dance_actions,
+                    magic_keycodes,
                     supports_rmk_combo_layers,
                     macro_ext_keycodes_disabled_reason,
                     tap_dance_entries,
@@ -2053,6 +2085,36 @@ mod tests {
             layer_name_sync_updates(&names, &current, &[200, 201]),
             vec![(201, "Nav".to_owned())]
         );
+    }
+
+    #[test]
+    fn vial_magic_capabilities_distinguish_rmk_and_qmk_with_the_same_product_id() {
+        let mut definition = serde_json::json!({
+            "name": "Ergohaven K:03",
+            "vendorId": "0xE126",
+            "productId": "0x0070",
+            "firmware": {"version": "4.2.0"}
+        });
+        let legacy = crate::rmk_native::RmkNativeCapabilities::default();
+        assert_eq!(
+            vial_magic_keycodes(&definition, legacy),
+            crate::keycode::QMK_MAGIC_KEYCODE_ALL_MASK
+        );
+
+        definition["firmware"] = serde_json::json!({"version": "0.1.6"});
+        definition["customKeycodes"] = serde_json::json!([{"name": "BT0"}, {"name": "BT_CLR"}]);
+        assert_eq!(vial_magic_keycodes(&definition, legacy), 0);
+
+        definition["firmware"]["name"] = serde_json::json!("RMK");
+        definition.as_object_mut().unwrap().remove("customKeycodes");
+        assert_eq!(vial_magic_keycodes(&definition, legacy), 0);
+
+        let native = crate::rmk_native::RmkNativeCapabilities {
+            version: 2,
+            magic_keycodes: 0x7_3ff1_ffff,
+            ..Default::default()
+        };
+        assert_eq!(vial_magic_keycodes(&definition, native), native.magic_keycodes);
     }
 
     #[test]

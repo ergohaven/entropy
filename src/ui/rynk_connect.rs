@@ -44,6 +44,7 @@ impl EntropyApp {
         let session = RynkSession::new(link);
         let info = session.info().clone();
         let capabilities = *session.capabilities();
+        let magic_keycodes = session.magic_keycodes();
 
         progress("Reading keyboard definition…")?;
         let definition = board_definition(&session, rynk_cache_dir().as_deref())
@@ -348,6 +349,7 @@ impl EntropyApp {
             supports_extended_russian_letters: info.caps & EXTENDED_RUSSIAN_LETTERS_CAP != 0,
             supports_rmk_native_combo_output: true,
             supports_rmk_native_tap_dance_actions: true,
+            magic_keycodes,
             supports_rmk_combo_layers: true,
             macro_ext_keycodes_disabled_reason: None,
             tap_dance_entries,
@@ -594,7 +596,8 @@ mod tests {
         assert_eq!(result.combo_term, Some(200));
         assert!(result.supports_universal_symbols, "the board has symbols");
         let update = result.about_info.firmware_update_target.as_ref().unwrap();
-        assert_eq!(update.asset_prefix, "k04-rynk", "the board's Rynk package");
+        assert_eq!(update.asset_prefix, "k04", "the board's model package");
+        assert_eq!(update.family, FirmwareReleaseFamily::Rynk);
         assert_eq!(update.current_version, "2.3.1");
         assert!(
             !result.supports_universal_russian_letters,
