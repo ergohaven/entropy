@@ -541,14 +541,20 @@ fn plan_confirmed_entlayout_portable_settings_import(
             report.record_incompatible();
             continue;
         }
-        let Some(target) = target_settings
-            .iter()
-            .find(|target| target.qsid == setting.qsid)
-        else {
-            report.record_unsupported();
+        let targets = target_settings.iter()
+            .filter(|target| ent_portable_setting_contracts_match(setting, target))
+            .collect::<Vec<_>>();
+        let [target] = targets.as_slice() else {
+            if targets.is_empty() && !target_settings.iter().any(|target| target.qsid == setting.qsid) {
+                report.record_unsupported();
+            } else {
+                report.record_incompatible();
+            }
             continue;
         };
-        if !ent_portable_setting_contracts_match(setting, target) {
+        // Aliased source registers must not overwrite the same destination.
+        if setting.module.is_some()
+            && settings.iter().filter(|source| ent_portable_setting_contracts_match(source, target)).count() != 1 {
             report.record_incompatible();
             continue;
         }
@@ -568,8 +574,9 @@ fn plan_confirmed_entlayout_portable_settings_import(
             report.record_incompatible();
             continue;
         }
-        let mut setting = setting.clone();
-        setting.value = ent_portable_setting_import_value(&setting, target);
+        let value = ent_portable_setting_import_value(setting, target);
+        let mut setting = (*target).clone();
+        setting.value = value;
         // The layer LED reader only reads the primary register. Its cached
         // value cannot prove that linked registers match after a partial write.
         let has_linked_colors = setting.is_layer_led_color()

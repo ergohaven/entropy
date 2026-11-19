@@ -1,5 +1,41 @@
 use super::*;
 
+pub(super) fn timeout_migration_value(
+    source: &EntPortableSetting,
+    target: &EntPortableSetting,
+) -> Option<u16> {
+    if source.qsid != 317 || target.qsid != 317
+        || !indication_setting_valid(source) || !indication_setting_valid(target)
+    {
+        return None;
+    }
+    let minutes = |s: &EntPortableSetting| {
+        s.id == "led_timeout:minutes" && s.width == EntPortableSettingWidth::U8
+            && s.variants.iter().map(String::as_str).eq([
+                "max:7", "Never", "1 min", "2 min", "5 min", "10 min", "15 min", "30 min", "60 min",
+            ])
+    };
+    let seconds = |s: &EntPortableSetting| {
+        s.id == "led_timeout:seconds" && match s.width {
+            EntPortableSettingWidth::U8 => s.variants == ["max:255"],
+            EntPortableSettingWidth::U16 => s.variants == ["max:3600"],
+        }
+    };
+    let presets = [0, 60, 120, 300, 600, 900, 1800, 3600];
+    if minutes(source) && seconds(target) {
+        let value = *presets.get(usize::from(source.value))?;
+        let max = if target.width == EntPortableSettingWidth::U8 { 255 } else { 3600 };
+        (value <= max).then_some(value)
+    } else if seconds(source) && minutes(target) {
+        presets.iter().position(|&value| value == source.value).map(|index| index as u16)
+    } else if seconds(source) && seconds(target) {
+        let max = if target.width == EntPortableSettingWidth::U8 { 255 } else { 3600 };
+        (source.value <= max).then_some(source.value)
+    } else {
+        None
+    }
+}
+
 impl EntPortableSetting {
     pub(in crate::app) fn is_layer_led_color(&self) -> bool {
         self.id

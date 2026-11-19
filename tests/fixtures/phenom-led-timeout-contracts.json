@@ -1,0 +1,75 @@
+[
+  {
+    "name": "qmk",
+    "source": "keyboards/ergohaven/src/json/settings_leds.json",
+    "revision": "f6d3d4d50d4b78d18622ba345d5617d3f20e4e6a",
+    "definition": {
+      "settings": [
+        {
+          "name": "LEDs settings",
+          "fields": [
+            {
+              "type": "select",
+              "title": "LED timeout",
+              "qsid": 317,
+              "variants": [
+                "Never",
+                "1 min",
+                "2 min",
+                "5 min",
+                "10 min",
+                "15 min",
+                "30 min",
+                "60 min"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "old_rmk",
+    "source": "keyboards/phenom/vial.json",
+    "revision": "513718e941e3a6f2f0990f5e9db97b952588b54c",
+    "definition": {
+      "settings": [
+        {
+          "name": "LEDs settings",
+          "fields": [
+            {
+              "type": "integer",
+              "title": "LED timeout, sec",
+              "qsid": 317,
+              "min": 0,
+              "max": 255,
+              "width": 1
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "wide_rmk",
+    "source": "keyboards/phenom/vial.json",
+    "revision": "e4db275f",
+    "definition": {
+      "settings": [
+        {
+          "name": "LEDs settings",
+          "fields": [
+            {
+              "type": "integer",
+              "title": "LED timeout, sec",
+              "qsid": 317,
+              "min": 0,
+              "max": 3600,
+              "width": 2
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
