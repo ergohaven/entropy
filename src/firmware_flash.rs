@@ -13,6 +13,8 @@ use std::{
     sync::mpsc::Sender,
     time::{Duration, Instant},
 };
+#[cfg(debug_assertions)]
+pub(crate) mod actions_test;
 mod packages;
 #[path = "firmware_flash/platform.rs"]
 mod platform;
@@ -242,8 +244,33 @@ pub(crate) fn prepare(
         supported(device),
         "Only supported Rynk keyboard profiles connected by USB can be flashed"
     );
-    validate_asset(device.product_id, version, name, url)?;
     let origin = find_origin(&platform::snapshot()?, device.product_id)?;
+    let mut images = load_images(device.product_id, version, name, url)?;
+    let runtime_index = images
+        .iter()
+        .position(|(part, _)| *part == runtime_part)
+        .context("USB component is not in this firmware package")?;
+    let runtime_image = images.remove(runtime_index);
+    images.push(runtime_image);
+    let (part, bytes) = images.remove(0);
+    let version = version.strip_prefix('v').unwrap_or(version);
+    Ok(Prepared {
+        bytes,
+        origin,
+        version: version.to_owned(),
+        part,
+        remaining: images,
+        keyboard_uid,
+    })
+}
+
+fn load_images(pid: u16, version: &str, name: &str, url: &str) -> Result<Vec<(Part, Vec<u8>)>> {
+    #[cfg(debug_assertions)]
+    if let Some(images) = actions_test::load_images(pid, version, name, url) {
+        return images;
+    }
+
+    validate_asset(pid, version, name, url)?;
     #[derive(serde::Deserialize)]
     struct Asset {
         name: String,
@@ -293,24 +320,7 @@ pub(crate) fn prepare(
         .take((MAX_DOWNLOAD + 1) as u64)
         .read_to_end(&mut bytes)?;
     validate_checksum(&bytes, asset.size, &digest)?;
-    let mut images = packages::unpack(&bytes, device.product_id)?;
-    let runtime_index = images
-        .iter()
-        .position(|(part, _)| *part == runtime_part)
-        .context("USB component is not in this firmware package")?;
-    let runtime_image = images.remove(runtime_index);
-    images.push(runtime_image);
-    let (part, bytes) = images.remove(0);
-    let remaining = images;
-    let version = version.strip_prefix('v').unwrap_or(version);
-    Ok(Prepared {
-        bytes,
-        origin,
-        version: version.to_owned(),
-        part,
-        remaining,
-        keyboard_uid,
-    })
+    packages::unpack(&bytes, pid)
 }
 
 fn wait_for_usb<T>(

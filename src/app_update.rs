@@ -263,6 +263,11 @@ pub(crate) fn start_firmware_update_check(
         return FirmwareUpdateCheckState::Unsupported;
     };
 
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    if let Some(result) = rmk_actions_test_result(&target) {
+        return FirmwareUpdateCheckState::Ready { target, result };
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     {
         let worker_target = target.clone();
@@ -288,6 +293,62 @@ pub(crate) fn start_firmware_update_check(
             target,
             error: "Update checks are not available in the web build".to_owned(),
         }
+    }
+}
+
+#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+fn rmk_actions_test_result(target: &FirmwareReleaseTarget) -> Option<FirmwareUpdateCheckResult> {
+    use crate::firmware_flash::actions_test as test;
+
+    if target.family != FirmwareReleaseFamily::Rynk
+        || !crate::firmware_flash::compatible_version(&target.current_version)
+    {
+        return None;
+    }
+    let artifact = test::artifact_for(&target.asset_prefix)?;
+    build_firmware_update_result(
+        target,
+        vec![GitHubRelease {
+            tag_name: test::VERSION.to_owned(),
+            html_url: test::RUN_URL.to_owned(),
+            draft: false,
+            prerelease: false,
+            assets: vec![GitHubAsset {
+                name: artifact.release_name(),
+                browser_download_url: test::RUN_URL.to_owned(),
+            }],
+        }],
+    )
+}
+
+#[cfg(all(test, debug_assertions, not(target_arch = "wasm32")))]
+#[test]
+#[ignore = "requires the downloaded RMK #79 test archives"]
+fn firmware_flash_pr275_revision_three_artifacts() {
+    use crate::firmware_flash::{actions_test, profile};
+    for (product_id, prefix) in [(0x0052, "phenom"), (0x0074, "k04")] {
+        let FirmwareUpdateCheckState::Ready { result, .. } =
+            start_firmware_update_check(Some(FirmwareReleaseTarget {
+                family: FirmwareReleaseFamily::Rynk,
+                current_version: "0.3.0".into(),
+                asset_prefix: prefix.into(),
+            }))
+        else {
+            panic!("set ENTROPY_PR275_RYNK3_DIR to the directory containing both pinned test ZIPs");
+        };
+        assert_eq!(result.relation, VersionRelation::UpdateAvailable);
+        let images = actions_test::load_images(
+            product_id,
+            &result.latest_version,
+            &result.asset.name,
+            &result.asset.url,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            images.iter().map(|(part, _)| *part).collect::<Vec<_>>(),
+            profile(product_id).unwrap().parts
+        );
     }
 }
 
