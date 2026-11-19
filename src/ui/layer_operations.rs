@@ -1252,11 +1252,48 @@ impl EntropyApp {
             let _hid_lock = hid_device.macos_hid_operation_lock();
 
             let preflight = match hid_device.as_vial() {
-                Some(vial) => key_changes
-                    .iter()
-                    .filter(|c| c.3.is_vial_native())
-                    .try_for_each(|c| vial.encode_vial_binding(c.3).map(|_| ())),
-                None => Ok(()),
+                Some(vial) => {
+                    let key_preflight = key_changes.iter().try_for_each(|c| match c.3 {
+                        crate::keyboard::KeyBinding::Vial(keycode) => {
+                            vial.validate_vial_magic_keycode(keycode)
+                        }
+                        binding if binding.is_vial_native() => {
+                            vial.encode_vial_binding(binding).map(|_| ())
+                        }
+                        _ => Ok(()),
+                    });
+                    key_preflight.and_then(|()| {
+                        encoder_changes.iter().try_for_each(|&(_, _, _, keycode)| {
+                            vial.validate_vial_magic_keycode(keycode)
+                        })
+                    })
+                }
+                None => {
+                    if let Some(rynk) = hid_device.as_rynk() {
+                        let magic_keycodes = rynk.magic_keycodes();
+                        let key_preflight = key_changes.iter().try_for_each(|c| {
+                            if let Ok(action) = crate::rynk::keycode::binding_action(c.3) {
+                                crate::rynk::keycode::check_magic_action(action, magic_keycodes)?;
+                            }
+                            Ok::<_, anyhow::Error>(())
+                        });
+                        key_preflight.and_then(|()| {
+                            encoder_changes.iter().try_for_each(|&(_, _, _, keycode)| {
+                                if let Some(action) =
+                                    crate::rynk::keycode::vial_keycode_action(keycode)
+                                {
+                                    crate::rynk::keycode::check_magic_action(
+                                        action,
+                                        magic_keycodes,
+                                    )?;
+                                }
+                                Ok::<_, anyhow::Error>(())
+                            })
+                        })
+                    } else {
+                        Ok(())
+                    }
+                }
             };
             let mut progress = match preflight {
                 Ok(()) => run_layer_writes(

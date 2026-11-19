@@ -1230,13 +1230,14 @@ mod tests {
         let storage = crate::app::app_storage::ScopedTempConfig::new();
         let mut app = EntropyApp::new_inert_for_test();
         let ctx = egui::Context::default();
-        // A key a Rynk board cannot hold.
+        // A non-Magic key a Rynk board cannot hold: ordinary losses still ask
+        // for consent, while unsupported QMK Magic is a hard preflight error.
         let mut layout = KeyboardLayout::from_vial_json(&serde_json::json!({
             "matrix": { "rows": 1, "cols": 1 },
             "layouts": { "keymap": [["0,0"]] }
         }))
         .unwrap();
-        layout.layers = vec![vec![crate::keyboard::KeyBinding::Vial(0x7000)]];
+        layout.layers = vec![vec![crate::keyboard::KeyBinding::Vial(0xFFFF)]];
         app.layout = Some(layout);
         let file = storage.path().join("lossy.entlayout");
         std::fs::write(&file, app.entlayout_export_json().unwrap().unwrap()).unwrap();

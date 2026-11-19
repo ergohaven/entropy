@@ -212,6 +212,32 @@ pub const fn is_extended_function_key(value: u16) -> bool {
     matches!(value, 0x0068..=0x0073)
 }
 
+pub const QMK_MAGIC_KEYCODE_FIRST: u16 = 0x7000;
+pub const QMK_MAGIC_KEYCODE_LAST: u16 = 0x7022;
+pub const QMK_MAGIC_KEYCODE_COUNT: u8 = 35;
+pub const QMK_MAGIC_KEYCODE_ALL_MASK: u64 = (1u64 << QMK_MAGIC_KEYCODE_COUNT) - 1;
+pub(crate) const RMK_MAGIC_USER_ID_FIRST: u8 = 0xc0;
+
+pub(crate) fn rmk_magic_keycode(user_id: u8) -> Option<u16> {
+    let index = user_id.checked_sub(RMK_MAGIC_USER_ID_FIRST)?;
+    (index < QMK_MAGIC_KEYCODE_COUNT).then_some(QMK_MAGIC_KEYCODE_FIRST + u16::from(index))
+}
+
+pub const fn qmk_magic_keycode_index(value: u16) -> Option<u8> {
+    if value >= QMK_MAGIC_KEYCODE_FIRST && value <= QMK_MAGIC_KEYCODE_LAST {
+        Some((value - QMK_MAGIC_KEYCODE_FIRST) as u8)
+    } else {
+        None
+    }
+}
+
+pub const fn qmk_magic_keycode_supported(mask: u64, value: u16) -> bool {
+    match qmk_magic_keycode_index(value) {
+        Some(index) => mask & (1u64 << index) != 0,
+        None => true,
+    }
+}
+
 pub const KEYCODES: &[Keycode] = &[
     // ── Special ──────────────────────────────────────────────────────────────
     Keycode {
@@ -3136,5 +3162,18 @@ mod tests {
                 "{tooltip}"
             );
         }
+    }
+
+    #[test]
+    fn magic_keycode_mask_is_indexed_by_the_qmk_value() {
+        assert_eq!(qmk_magic_keycode_index(0x7000), Some(0));
+        assert_eq!(qmk_magic_keycode_index(0x7022), Some(34));
+        assert_eq!(qmk_magic_keycode_index(0x7023), None);
+        assert!(qmk_magic_keycode_supported(
+            QMK_MAGIC_KEYCODE_ALL_MASK,
+            0x7022
+        ));
+        assert!(!qmk_magic_keycode_supported(1u64 << 34, 0x7000));
+        assert!(qmk_magic_keycode_supported(0, 0x0004));
     }
 }

@@ -245,6 +245,7 @@ impl KeycodePicker {
             self.rmk_native_key_actions_allowed_for_target,
         ]
         .hash(&mut hasher);
+        self.magic_keycodes.hash(&mut hasher);
         hasher.finish()
     }
 
