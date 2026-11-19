@@ -13,8 +13,6 @@ use std::{
     sync::mpsc::Sender,
     time::{Duration, Instant},
 };
-#[cfg(debug_assertions)]
-pub(crate) mod actions_test;
 mod packages;
 #[path = "firmware_flash/platform.rs"]
 mod platform;
@@ -267,11 +265,6 @@ pub(crate) fn prepare(
 }
 
 fn load_images(profile: profiles::Profile, version: &str, name: &str, url: &str) -> Result<Vec<(Part, Vec<u8>)>> {
-    #[cfg(debug_assertions)]
-    if let Some(images) = actions_test::load_images(profile.product_id, version, name, url) {
-        return images;
-    }
-
     validate_profile_asset(profile, version, name, url)?;
     #[derive(serde::Deserialize)]
     struct Asset {
