@@ -1,5 +1,11 @@
 //! Guided UF2 updates for explicitly reviewed Rynk keyboard profiles.
 use anyhow::{bail, ensure, Context, Result};
+use crate::rynk::{
+    client::{RynkBoard, RynkClient, RynkTimeouts},
+    link::{PhysicalId, RynkLink},
+    session::RynkSession,
+    transport,
+};
 use sha2::{Digest, Sha256};
 use std::{
     io::{Read, Write},
@@ -47,9 +53,11 @@ impl Prepared {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) enum Stage {
     EnteringBootloader,
+    WaitingComponent,
+    Unlocking(Vec<(u8, u8)>),
     WaitingBootloader,
     Writing,
     WaitingReconnect,
@@ -228,6 +236,7 @@ pub(crate) fn prepare(
     name: &str,
     url: &str,
     keyboard_uid: [u8; 8],
+    runtime_part: Part,
 ) -> Result<Prepared> {
     ensure!(
         supported(device),
@@ -285,6 +294,12 @@ pub(crate) fn prepare(
         .read_to_end(&mut bytes)?;
     validate_checksum(&bytes, asset.size, &digest)?;
     let mut images = packages::unpack(&bytes, device.product_id)?;
+    let runtime_index = images
+        .iter()
+        .position(|(part, _)| *part == runtime_part)
+        .context("USB component is not in this firmware package")?;
+    let runtime_image = images.remove(runtime_index);
+    images.push(runtime_image);
     let (part, bytes) = images.remove(0);
     let remaining = images;
     let version = version.strip_prefix('v').unwrap_or(version);
@@ -329,13 +344,14 @@ fn wait_for_usb<T>(
 /// until this worker finishes, so no reconnect worker can borrow the same half.
 pub(crate) fn flash(
     prepared: Prepared,
-    session: Option<crate::rynk::session::RynkSession>,
+    session: Option<RynkSession>,
     physical_reset: bool,
     events: &Sender<Event>,
 ) -> Result<Outcome> {
+    let final_step = prepared.remaining.is_empty();
     ensure!(
-        prepared.part.peripheral() || session.is_some() || physical_reset,
-        "Reconnect the USB central or dongle first"
+        !final_step || session.is_some() || physical_reset,
+        "Reconnect the original USB component first"
     );
     if let Some(session) = &session {
         let current = find_origin(&platform::snapshot()?, prepared.origin.product)?;
@@ -350,16 +366,38 @@ pub(crate) fn flash(
             info.keyboard_uid == prepared.keyboard_uid,
             "Keyboard definition changed; start the update again"
         );
-        let version = info_version(&info);
-        require_newer_version(Some(&version), &prepared.version)?;
-        if !prepared.part.peripheral() && !physical_reset {
+        let expected = prepared.remaining.last().map_or(prepared.part, |(part, _)| *part);
+        ensure!(
+            profile(current.product).and_then(|profile| profile.runtime_part(session.link().board()))
+                == Some(expected),
+            "Reconnect the original USB component before restarting the update"
+        );
+        require_newer_version(Some(&info_version(&info)), &prepared.version)?;
+        if final_step && !physical_reset {
             session.enter_bootloader()?;
         }
     }
     drop(session);
-    let _ = events.send(Event::Progress(Stage::WaitingBootloader));
+    let mut software_entry = final_step && !physical_reset;
+    let mut wait_for_component = !final_step && !physical_reset;
+    let _ = events.send(Event::Progress(if wait_for_component {
+        Stage::WaitingComponent
+    } else {
+        Stage::WaitingBootloader
+    }));
     let target = wait_for_usb(Duration::from_secs(90), platform::snapshot, |devices| {
-        bootloader_target(devices, &prepared.origin.port, prepared.part)
+        if let Some(target) = bootloader_target(devices, &prepared.origin.port, prepared.part)? {
+            return Ok(Some(target));
+        }
+        if wait_for_component {
+            if let Some(session) = maintenance_session(devices, &prepared)? {
+                enter_component_bootloader(&session, &prepared, events)?;
+                software_entry = true;
+                wait_for_component = false;
+                let _ = events.send(Event::Progress(Stage::WaitingBootloader));
+            }
+        }
+        Ok(None)
     })
     .with_context(|| {
         if prepared.part.rp2040() {
@@ -390,66 +428,32 @@ pub(crate) fn flash(
         write_payload(&mut file, &prepared.bytes, |file| file.sync_all())?;
         Ok(())
     })();
-    if prepared.part.peripheral() {
-        // There is no runtime USB HID on these parts. A successful filesystem
-        // transfer cannot establish that the application booted or its version.
-        write_result.context(
-            "Peripheral transfer could not be confirmed; re-enter bootloader mode and retry",
-        )?;
+    if !final_step && !software_entry {
+        // A manual transfer may install maintenance support for the first time.
+        // Give those images a chance to report their target and version.
         let _ = events.send(Event::Progress(Stage::WaitingDisconnect));
         wait_for_usb(Duration::from_secs(45), platform::snapshot, |devices| {
-            Ok(
-                bootloader_departed(devices, &target, prepared.part)?
-                    .then_some(()),
-            )
+            Ok(bootloader_departed(devices, &target, prepared.part)?.then_some(()))
         })
-        .context("Peripheral did not leave update mode after transfer; its application and version are unverified. Reconnect it before retrying")?;
-        return Ok(Outcome::TransferredUnverified);
+        .context("Peripheral did not leave update mode after transfer")?;
+        let _ = events.send(Event::Progress(Stage::WaitingReconnect));
+        let fallback_at = Instant::now() + Duration::from_secs(8);
+        let outcome = wait_for_usb(Duration::from_secs(11), platform::snapshot, |devices| {
+            if verify_on_port(devices, &prepared, true)? {
+                return Ok(Some(Outcome::Verified));
+            }
+            Ok((Instant::now() >= fallback_at).then_some(Outcome::TransferredUnverified))
+        })?;
+        if outcome == Outcome::TransferredUnverified {
+            write_result.context("Peripheral transfer could not be confirmed; re-enter update mode and retry")?;
+        }
+        return Ok(outcome);
     }
     // A UF2 drive can disappear before flush returns. A fresh version change
     // from the sole Rynk board on the original port establishes success either way.
     let _ = events.send(Event::Progress(Stage::WaitingReconnect));
-    let verification = wait_for_usb(Duration::from_secs(45), platform::snapshot, |snapshot| {
-        if !snapshot
-            .iter()
-            .any(|d| d.vendor == 0xe126 && runtime_product(d.product))
-        {
-            return Ok(None);
-        }
-        let current = find_origin(snapshot, prepared.origin.product)?;
-        ensure!(
-            current.port == prepared.origin.port,
-            "Returning keyboard moved to another USB port"
-        );
-        let boards = match crate::rynk::transport::scan_usb() {
-            Ok(boards) => boards,
-            Err(error) => {
-                log::debug!("Firmware verification enumeration: {error}");
-                return Ok(None);
-            }
-        };
-        let matches: Vec<_> = boards
-            .into_iter()
-            .filter(|d| d.vendor_id == 0xe126 && runtime_product(d.product_id))
-            .collect();
-        ensure!(
-            matches.len() <= 1,
-            "Returning Rynk keyboard identity is ambiguous"
-        );
-        if let Some(board) = matches.first().filter(|d| d.product_id == current.product) {
-            // Open a new transport and handshake, bypassing RynkLink's cached
-            // handshake information and any surviving background publisher.
-            if let Ok(transport) = crate::rynk::transport::open(&board.id) {
-                if let Ok((_client, board)) = crate::rynk::client::RynkClient::connect(
-                    transport,
-                    crate::rynk::client::RynkTimeouts::default(),
-                ) {
-                    verify_returned_info(&board.info, prepared.keyboard_uid, &prepared.version)?;
-                    return Ok(Some(()));
-                }
-            }
-        }
-        Ok(None)
+    let verification = wait_for_usb(Duration::from_secs(45), platform::snapshot, |devices| {
+        Ok(verify_on_port(devices, &prepared, !final_step)?.then_some(()))
     });
     match verification {
         Ok(()) => Ok(Outcome::Verified),
@@ -458,6 +462,118 @@ pub(crate) fn flash(
             Ok(()) => bail!("Transfer finished, but firmware could not be verified: {error:#}. Reconnect the half before retrying"),
         }
     }
+}
+
+fn runtime_id(devices: &[UsbTarget], prepared: &Prepared) -> Result<Option<PhysicalId>> {
+    if !devices
+        .iter()
+        .any(|d| d.vendor == 0xe126 && runtime_product(d.product))
+    {
+        return Ok(None);
+    }
+    let current = find_origin(devices, prepared.origin.product)?;
+    ensure!(
+        current.port == prepared.origin.port,
+        "Keyboard moved to a different USB port"
+    );
+    let boards = match transport::scan_usb() {
+        Ok(boards) => boards,
+        Err(error) => {
+            log::debug!("Firmware update enumeration: {error}");
+            return Ok(None);
+        }
+    };
+    let mut matches = boards
+        .into_iter()
+        .filter(|d| d.vendor_id == 0xe126 && runtime_product(d.product_id));
+    let first = matches.next();
+    ensure!(matches.next().is_none(), "Rynk keyboard identity is ambiguous");
+    Ok(first.filter(|d| d.product_id == current.product).map(|d| d.id))
+}
+
+fn maintenance_session(devices: &[UsbTarget], prepared: &Prepared) -> Result<Option<RynkSession>> {
+    let Some(id) = runtime_id(devices, prepared)? else {
+        return Ok(None);
+    };
+    let Ok(link) = RynkLink::open(&id) else {
+        return Ok(None);
+    };
+    let board = link.board();
+    ensure!(
+        board.info.keyboard_uid == prepared.keyboard_uid,
+        "Connected USB component has a different keyboard definition"
+    );
+    // The original primary or the previous half may still be plugged in.
+    if board.firmware_target != Some(prepared.part.target) {
+        return Ok(None);
+    }
+    require_newer_version(Some(&info_version(&board.info)), &prepared.version)?;
+    Ok(Some(RynkSession::new(link)))
+}
+
+fn enter_component_bootloader(
+    session: &RynkSession,
+    prepared: &Prepared,
+    events: &Sender<Event>,
+) -> Result<()> {
+    session.lock()?;
+    let result = (|| {
+        unlock_component(session, events)?;
+        let devices = platform::snapshot()?;
+        ensure!(
+            runtime_id(&devices, prepared)?.as_ref() == Some(session.link().id()),
+            "USB component changed during unlock"
+        );
+        session.enter_bootloader()
+    })();
+    if result.is_err() {
+        let _ = session.lock();
+    }
+    result
+}
+
+fn unlock_component(session: &RynkSession, events: &Sender<Event>) -> Result<()> {
+    let (_, _, keys) = session.unlock_status()?;
+    ensure!(!keys.is_empty(), "Component did not report physical unlock keys");
+    let _ = events.send(Event::Progress(Stage::Unlocking(keys)));
+    let deadline = Instant::now() + Duration::from_secs(40);
+    while Instant::now() < deadline {
+        let (unlocked, unlocking, _) = session.unlock_poll()?;
+        if unlocked && !unlocking {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    bail!("Physical unlock timed out. Reconnect the requested part and try again")
+}
+
+fn verify_on_port(devices: &[UsbTarget], prepared: &Prepared, require_target: bool) -> Result<bool> {
+    let Some(id) = runtime_id(devices, prepared)? else {
+        return Ok(false);
+    };
+    // Reopen the transport after reboot so no cached information can verify a write.
+    let Ok(transport) = transport::open(&id) else {
+        return Ok(false);
+    };
+    let Ok((_, board)) = RynkClient::connect(transport, RynkTimeouts::default()) else {
+        return Ok(false);
+    };
+    if require_target && board.info.revision == 2 {
+        return Ok(false);
+    }
+    verify_returned_board(&board, prepared, require_target)?;
+    Ok(true)
+}
+
+fn verify_returned_board(board: &RynkBoard, prepared: &Prepared, require_target: bool) -> Result<()> {
+    verify_returned_info(&board.info, prepared.keyboard_uid, &prepared.version)?;
+    if require_target || board.info.revision >= 3 {
+        ensure!(
+            board.firmware_target == Some(prepared.part.target),
+            "A different firmware component returned after the update"
+        );
+    }
+    Ok(())
 }
 
 // A complete host write alone does not establish that cached bytes reached USB.
@@ -522,6 +638,31 @@ fn validate_bootloader_info(info: &str, part: Part) -> Result<()> {
 mod tests {
     use super::*;
     use profiles::*;
+
+    #[test]
+    fn firmware_flash_revision_three_readback_must_match_the_physical_image() {
+        use crate::rynk::client::testing::{capabilities, info};
+        let mut info = info(3);
+        info.firmware.major = 0;
+        let prepared = Prepared {
+            bytes: Vec::new(),
+            origin: UsbTarget { port: "port".into(), vendor: 0xe126, product: 0x52, mounts: Vec::new() },
+            version: "0.3.1".into(),
+            part: PHENOM_PERIPHERAL,
+            remaining: Vec::new(),
+            keyboard_uid: info.keyboard_uid,
+        };
+        let mut board = RynkBoard {
+            info,
+            capabilities: capabilities(512),
+            firmware_target: Some(PHENOM_CENTRAL.target),
+        };
+        assert!(verify_returned_board(&board, &prepared, false).is_err());
+        board.firmware_target = None;
+        assert!(verify_returned_board(&board, &prepared, true).is_err());
+        board.firmware_target = Some(prepared.part.target);
+        assert!(verify_returned_board(&board, &prepared, true).is_ok());
+    }
 
     #[test]
     fn firmware_flash_rynk_bootloader_requires_fresh_unlock_and_handles_reset_before_reply() {

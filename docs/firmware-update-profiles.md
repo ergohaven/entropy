@@ -22,10 +22,12 @@ For a new keyboard using an existing supported UF2 bootloader:
    `app_update.rs` if it does not exist: that broader catalog includes keyboards
    without reviewed flashing support. Keep product
    IDs unique, including dongle versus standalone variants.
-2. Define its ordered `Part` values. Each specifies a role, bilingual label,
-   image filename suffix and `FlashLayout`. Put peripherals first and exactly
-   one runtime USB central or dongle last. A single-piece keyboard uses one
-   `Central` part labelled "Keyboard". Roles do not choose memory maps.
+2. Define its ordered `Part` values. Each specifies a role, Rynk firmware target,
+   bilingual label, image filename suffix and `FlashLayout`. Put peripherals
+   first and the default USB primary or dongle last. For a board where either
+   half can become primary, enable `either_half_primary` so the directly
+   connected half reported by revision 3 is updated last. A single-piece board
+   uses one `Standalone` firmware target.
 3. Verify the chosen layout against the board's linker configuration and
    bootloader. Existing limits are specific application intervals, not defaults
    for every RP2040 or nRF52840 board. Add a layout for a different interval.
@@ -40,12 +42,13 @@ For a new keyboard using an existing supported UF2 bootloader:
    single-piece RP2040 and nRF52840 fixtures demonstrate extension without
    registering a real unsupported keyboard.
 
-Runtime flashing requires Entropy 0.6.0+, stable native RMK 0.3.0+ using Rynk,
-and USB. Vial/QMK and earlier RMK need manual migration first. The current Entropy
-draft uses physical bootloader entry for peripherals and reports their transfers
-as version unverified; RMK's peripheral USB maintenance work needs separate
-Rynk integration in Entropy. Never infer successful peripheral boot or version
-from a completed filesystem copy.
+Runtime flashing requires Entropy 0.6.0+, stable native RMK 0.3.0+, and USB.
+Entropy accepts Ergohaven Rynk revisions 2 and 3. Revision 3 components report
+their image target and can enter update mode after physical-key unlock. The
+guide connects directly to maintenance-only peripherals, without loading the
+keyboard editor. A legacy peripheral still needs BOOT or Reset for its first
+installation. Entropy verifies the target and version if the new image exposes
+them after restarting. A transfer without version readback remains unverified.
 
 Source tests and CI do not establish hardware support. Before enabling a real
 model for release, validate its bootloader transition, original-port mapping,

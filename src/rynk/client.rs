@@ -29,6 +29,27 @@ use serde::Serialize;
 
 use super::read_only::{read_only_rynk_session, ReadOnlyRynkSession};
 
+/// RMK #79 adds target identity to the otherwise compatible revision 2
+/// wire. Keep the released revision eligible as an upgrade source.
+const FIRMWARE_TARGET_REVISION: u16 = 3;
+const FIRMWARE_TARGET_CAP: u32 = 1 << 10;
+const USB_MAINTENANCE_CAP: u32 = 1 << 11;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) enum FirmwareTarget {
+    Standalone,
+    Central,
+    Peripheral(u8),
+}
+
+pub(super) struct GetFirmwareTarget;
+
+impl Endpoint for GetFirmwareTarget {
+    const CMD: Cmd = Cmd::from_raw(0x7E60);
+    type Request = ();
+    type Response = FirmwareTarget;
+}
+
 /// Payload budget before the board reports its own: enough for the handshake.
 const HANDSHAKE_MAX_PAYLOAD: usize = 64;
 /// Receive buffer: the largest frame a `u16` payload size allows, COBS-encoded.
@@ -372,6 +393,13 @@ fn postcard_len<T: Serialize>(value: &T) -> Option<usize> {
 pub(crate) struct RynkBoard {
     pub(crate) info: ErgohavenInfo,
     pub(crate) capabilities: DeviceCapabilities,
+    pub(crate) firmware_target: Option<FirmwareTarget>,
+}
+
+impl RynkBoard {
+    pub(crate) fn maintenance_only(&self) -> bool {
+        self.info.revision == FIRMWARE_TARGET_REVISION && self.info.caps & USB_MAINTENANCE_CAP != 0
+    }
 }
 
 /// A start SEQ that differs from session to session, so a reply left over
@@ -444,16 +472,28 @@ impl<T: RynkTransport> RynkClient<T> {
             });
         }
         let revision = client.probe_revision()?;
-        if revision != ERGOHAVEN_RYNK_REVISION {
+        if !matches!(revision, ERGOHAVEN_RYNK_REVISION | FIRMWARE_TARGET_REVISION) {
             return Err(RynkClientError::RevisionMismatch {
                 board: Some(revision),
-                host: ERGOHAVEN_RYNK_REVISION,
+                host: FIRMWARE_TARGET_REVISION,
             });
         }
         let info = client.request::<ergohaven::GetErgohavenInfo>(&())?;
+        if info.revision != revision {
+            return Err(RynkClientError::Malformed {
+                cmd: ergohaven::GetErgohavenInfo::CMD.raw(),
+            });
+        }
         let capabilities = client.request::<command::GetCapabilities>(&())?;
         client.max_payload = capabilities.max_payload_size as usize;
-        Ok((client, RynkBoard { info, capabilities }))
+        let firmware_target = if revision == FIRMWARE_TARGET_REVISION
+            && info.caps & FIRMWARE_TARGET_CAP != 0
+        {
+            Some(client.request::<GetFirmwareTarget>(&())?)
+        } else {
+            None
+        };
+        Ok((client, RynkBoard { info, capabilities, firmware_target }))
     }
 
     /// The revision `GetErgohavenInfo` leads with, read without the rest.
@@ -465,7 +505,7 @@ impl<T: RynkTransport> RynkClient<T> {
             Ok((Ok(revision), _)) => Ok(revision),
             Ok((Err(RynkError::UnknownCmd), _)) => Err(RynkClientError::RevisionMismatch {
                 board: None,
-                host: ERGOHAVEN_RYNK_REVISION,
+                host: FIRMWARE_TARGET_REVISION,
             }),
             Ok((Err(error), _)) => Err(RynkClientError::Device {
                 cmd: cmd.raw(),
@@ -1148,6 +1188,36 @@ mod tests {
     use rmk_types_rynk::protocol::rynk::GetKeymapBulkResponse;
 
     #[test]
+    fn revision_three_connects_without_excluding_revision_two() {
+        for revision in [2, 3] {
+            let transport = FakeBoard::new(move |header, _| {
+                vec![match header.cmd {
+                    Cmd::GetErgohavenInfo => {
+                        let mut info = info(revision);
+                        if revision == 3 {
+                            info.caps |= FIRMWARE_TARGET_CAP | USB_MAINTENANCE_CAP;
+                        }
+                        ok(header, info)
+                    }
+                    GetFirmwareTarget::CMD => ok(header, FirmwareTarget::Peripheral(0)),
+                    _ => handshake(header, 512).unwrap(),
+                }]
+            });
+            let (_, board) = RynkClient::connect(transport.transport(), quick()).unwrap();
+            assert_eq!(board.info.revision, revision);
+            assert_eq!(board.maintenance_only(), revision == 3);
+            assert_eq!(
+                board.firmware_target,
+                (revision == 3).then_some(FirmwareTarget::Peripheral(0))
+            );
+            assert_eq!(
+                transport.sent().iter().any(|header| header.cmd == GetFirmwareTarget::CMD),
+                revision == 3
+            );
+        }
+    }
+
+    #[test]
     fn connect_checks_the_version_and_takes_the_payload_size() {
         let board = FakeBoard::new(|header, _| vec![handshake(header, 4000).unwrap()]);
         let (client, board) = RynkClient::connect(board.transport(), quick()).unwrap();
@@ -1427,7 +1497,7 @@ mod tests {
 
     #[test]
     fn connect_refuses_another_revision_before_decoding_the_rest() {
-        let next = ERGOHAVEN_RYNK_REVISION + 1;
+        let next = FIRMWARE_TARGET_REVISION + 1;
         // A later revision may have reshaped the info: here it grew a field.
         let later = FakeBoard::new(move |header, _| {
             vec![match header.cmd {
@@ -1715,16 +1785,16 @@ mod tests {
                 host: version(1, 1),
             },
             RynkClientError::RevisionMismatch {
-                board: Some(ERGOHAVEN_RYNK_REVISION + 1),
-                host: ERGOHAVEN_RYNK_REVISION,
+                board: Some(FIRMWARE_TARGET_REVISION + 1),
+                host: FIRMWARE_TARGET_REVISION,
             },
             RynkClientError::RevisionMismatch {
                 board: Some(0),
-                host: ERGOHAVEN_RYNK_REVISION,
+                host: FIRMWARE_TARGET_REVISION,
             },
             RynkClientError::RevisionMismatch {
                 board: None,
-                host: ERGOHAVEN_RYNK_REVISION,
+                host: FIRMWARE_TARGET_REVISION,
             },
             RynkClientError::DefinitionHash {
                 expected: 1,

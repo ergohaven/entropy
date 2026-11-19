@@ -1,6 +1,8 @@
 //! Explicitly reviewed release profiles. Rynk compatibility alone never opts a
 //! keyboard into flashing: its package, component order and memory map must agree.
 
+use crate::rynk::client::{FirmwareTarget, RynkBoard};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Role {
     Central,
@@ -31,6 +33,7 @@ impl FlashLayout {
 /// and presentation; engine decisions use role and layout explicitly.
 pub(crate) struct Part {
     pub role: Role,
+    pub target: FirmwareTarget,
     pub layout: FlashLayout,
     pub label: (&'static str, &'static str),
     pub suffix: &'static str,
@@ -48,38 +51,45 @@ impl Part {
 
 pub(crate) const PHENOM_CENTRAL: Part = Part {
     role: Role::Central,
+    target: FirmwareTarget::Central,
     layout: FlashLayout::Rp2040,
-    label: ("Primary half (left)", "Основная половинка (левая)"),
+    label: ("Left half", "Левая половинка"),
     suffix: "left",
 };
 pub(crate) const PHENOM_PERIPHERAL: Part = Part {
     role: Role::Peripheral,
+    target: FirmwareTarget::Peripheral(0),
     layout: FlashLayout::Rp2040,
-    label: ("Secondary half (right)", "Вторая половинка (правая)"),
+    label: ("Right half", "Правая половинка"),
     suffix: "right",
 };
 pub(crate) const K04_LEFT_PERIPHERAL: Part = Part {
     role: Role::Peripheral,
+    target: FirmwareTarget::Peripheral(0),
     layout: FlashLayout::Nrf52840Softdevice,
     label: ("Left half", "Левая половинка"),
     suffix: "left",
 };
 pub(crate) const K04_RIGHT_PERIPHERAL: Part = Part {
     suffix: "right",
+    target: FirmwareTarget::Peripheral(1),
     label: ("Right half", "Правая половинка"),
     ..K04_LEFT_PERIPHERAL
 };
 pub(crate) const K04_SECONDARY: Part = Part {
     label: ("Secondary half", "Вторая половинка"),
+    target: FirmwareTarget::Peripheral(0),
     ..K04_RIGHT_PERIPHERAL
 };
 pub(crate) const K04_LEFT_CENTRAL: Part = Part {
     role: Role::Central,
+    target: FirmwareTarget::Central,
     label: ("Primary half", "Основная половинка"),
     ..K04_LEFT_PERIPHERAL
 };
 pub(crate) const K04_DONGLE: Part = Part {
     role: Role::Dongle,
+    target: FirmwareTarget::Central,
     layout: FlashLayout::Nrf52840Dongle,
     label: ("Qube USB dongle", "USB-донгл Qube"),
     suffix: "dongle",
@@ -93,10 +103,26 @@ pub(crate) struct Profile {
     /// Transfer peripherals first, then the runtime USB component. A whole
     /// keyboard can use a single Central image; no split-specific engine needed.
     pub parts: &'static [Part],
+    pub either_half_primary: bool,
     pub connection_note: Option<(&'static str, &'static str)>,
 }
 
 impl Profile {
+    /// Revision 2 release firmware exposes only the fixed primary/dongle.
+    pub(crate) fn runtime_part(self, board: &RynkBoard) -> Option<Part> {
+        let legacy_primary = self.parts.last().copied()?;
+        if board.maintenance_only() {
+            return None;
+        }
+        if board.info.revision == 2 {
+            return Some(legacy_primary);
+        }
+        let target = board.firmware_target?;
+        self.parts.iter().copied().find(|part| {
+            part.target == target && (*part == legacy_primary || self.either_half_primary)
+        })
+    }
+
     pub(crate) fn has_peripherals(self) -> bool {
         self.parts.iter().any(|part| part.peripheral())
     }
@@ -129,9 +155,10 @@ const fn phenom(product_id: u16, archive: &'static str, output: &'static str) ->
         archive,
         output,
         parts: &[PHENOM_PERIPHERAL, PHENOM_CENTRAL],
+        either_half_primary: true,
         connection_note: Some((
-            "Phenom RMK uses the left half as primary and the right half as secondary. Keep the halves linked during normal use; move only the computer's USB cable when prompted.",
-            "В RMK для Phenom левая половинка — основная, правая — вторая. Для обычной работы оставьте половинки соединёнными; по инструкции переставляйте только USB-кабель компьютера.",
+            "Keep the Phenom halves linked. Move only the computer's USB cable when the guide asks.",
+            "Оставьте половинки Phenom соединёнными. По инструкции переставляйте только USB-кабель компьютера.",
         )),
     }
 }
@@ -146,6 +173,7 @@ const fn k04(product_id: u16, archive: &'static str, output: &'static str, qube:
         } else {
             &[K04_SECONDARY, K04_LEFT_CENTRAL]
         },
+        either_half_primary: false,
         connection_note: None,
     }
 }
@@ -168,10 +196,12 @@ pub(crate) mod fixtures {
         output: "future_board",
         parts: &[Part {
             role: Role::Central,
+            target: FirmwareTarget::Standalone,
             layout: FlashLayout::Rp2040,
             label: ("Keyboard", "Клавиатура"),
             suffix: "application",
         }],
+        either_half_primary: false,
         connection_note: None,
     };
     pub(crate) const SINGLE_NRF52840: Profile = Profile {
@@ -186,6 +216,27 @@ pub(crate) mod fixtures {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn firmware_flash_revision_three_admits_either_detected_phenom_half_only() {
+        use crate::rynk::client::testing::{capabilities, info};
+        let phenom = profile(0x52).unwrap();
+        let k04 = profile(0x74).unwrap();
+        let mut board = RynkBoard {
+            info: info(2),
+            capabilities: capabilities(512),
+            firmware_target: None,
+        };
+        assert_eq!(phenom.runtime_part(&board), Some(PHENOM_CENTRAL));
+        board.info.revision = 3;
+        assert_eq!(phenom.runtime_part(&board), None);
+        board.firmware_target = Some(FirmwareTarget::Peripheral(0));
+        assert_eq!(phenom.runtime_part(&board), Some(PHENOM_PERIPHERAL));
+        assert_eq!(k04.runtime_part(&board), None);
+        board.firmware_target = Some(FirmwareTarget::Central);
+        assert_eq!(phenom.runtime_part(&board), Some(PHENOM_CENTRAL));
+        assert_eq!(k04.runtime_part(&board), Some(K04_LEFT_CENTRAL));
+    }
 
     #[test]
     fn firmware_flash_registry_has_unique_models_and_peripherals_before_one_runtime_target() {
