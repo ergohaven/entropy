@@ -263,11 +263,6 @@ pub(crate) fn start_firmware_update_check(
         return FirmwareUpdateCheckState::Unsupported;
     };
 
-    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
-    if let Some(result) = rmk_actions_test_result(&target) {
-        return FirmwareUpdateCheckState::Ready { target, result };
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
     {
         let worker_target = target.clone();
@@ -294,59 +289,6 @@ pub(crate) fn start_firmware_update_check(
             error: "Update checks are not available in the web build".to_owned(),
         }
     }
-}
-
-// Temporary source for the hardware acceptance test in PR #275.
-#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
-fn rmk_actions_test_result(target: &FirmwareReleaseTarget) -> Option<FirmwareUpdateCheckResult> {
-    use crate::firmware_flash::actions_test as test;
-
-    if target.family != FirmwareReleaseFamily::Rynk
-        || target.asset_prefix != test::PROFILE
-        || !crate::firmware_flash::compatible_version(&target.current_version)
-    {
-        return None;
-    }
-    test::archive_path()?;
-    Some(FirmwareUpdateCheckResult {
-        latest_version: test::VERSION.to_owned(),
-        release_url: test::RUN_URL.to_owned(),
-        asset: UpdateAsset {
-            name: test::ARCHIVE.to_owned(),
-            url: test::RUN_URL.to_owned(),
-        },
-        relation: compare_firmware_versions(&target.current_version, test::VERSION),
-    })
-}
-
-#[cfg(all(test, debug_assertions, not(target_arch = "wasm32")))]
-#[test]
-#[ignore = "requires ENTROPY_PR275_PHENOM_ZIP with the pinned Actions artifact"]
-fn firmware_flash_pr275_actions_artifact() {
-    use crate::firmware_flash::{actions_test as test, profile};
-
-    let FirmwareUpdateCheckState::Ready { result, .. } =
-        start_firmware_update_check(Some(FirmwareReleaseTarget {
-            family: FirmwareReleaseFamily::Rynk,
-            current_version: "0.3.0".into(),
-            asset_prefix: "phenom".into(),
-        }))
-    else {
-        panic!("set ENTROPY_PR275_PHENOM_ZIP to the pinned Phenom Actions archive");
-    };
-    assert_eq!(result.relation, VersionRelation::UpdateAvailable);
-    let images = test::load_images(
-        0x0052,
-        &result.latest_version,
-        &result.asset.name,
-        &result.asset.url,
-    )
-    .unwrap()
-    .unwrap();
-    assert_eq!(
-        images.iter().map(|(part, _)| *part).collect::<Vec<_>>(),
-        profile(0x0052).unwrap().parts
-    );
 }
 
 pub(crate) fn ensure_firmware_update_check(
