@@ -31,6 +31,13 @@ class LinuxReleaseContainer(unittest.TestCase):
         self.assertIn('-e VERSION -e SOURCE_DATE_EPOCH -e DIST', runner)
         self.assertIn('task {{.TASKS}}', runner)
 
+    def test_linux_container_target_builds_packages_and_appimage(self):
+        target = block(self.tasks, 'docker:linux')
+        self.assertIn('    deps: [docker:image]\n', target)
+        self.assertIn('      - task: docker:run\n', target)
+        self.assertIn('        vars: {TASKS: linux:all}\n', target)
+        self.assertNotIn('docker run', target)
+
     def test_linux_release_uses_only_the_pinned_container_packager(self):
         steps = self.build.split('\n      - ')
         installers = [s for s in steps if 'uses: arduino/setup-task@v2' in s]
@@ -41,9 +48,15 @@ class LinuxReleaseContainer(unittest.TestCase):
         packages = [s for s in steps if 'name: Package Linux artifact' in s]
         self.assertEqual(len(packages), 1)
         self.assertIn("if: matrix.kind == 'linux'", packages[0])
-        self.assertIn('VERSION="${GITHUB_REF_NAME#v}" task docker:appimage', packages[0])
-        self.assertIn('asset="entropy-${GITHUB_REF_NAME}-x86_64.AppImage"', packages[0])
-        self.assertIn('cp "dist/linux/$asset" "dist/release/$asset"', packages[0])
+        self.assertIn('VERSION="${GITHUB_REF_NAME#v}" task docker:linux', packages[0])
+        self.assertIn('prefix="entropy-${GITHUB_REF_NAME}"', packages[0])
+        for copy in [
+            'cp "dist/linux/$prefix-x86_64.AppImage" dist/release/',
+            'cp dist/linux/*.deb "dist/release/$prefix-amd64.deb"',
+            'cp dist/linux/*.rpm "dist/release/$prefix-x86_64.rpm"',
+            'cp dist/linux/*.pkg.tar.zst "dist/release/$prefix-x86_64.pkg.tar.zst"',
+        ]:
+            self.assertIn(copy, packages[0])
         self.assertIn('scripts/glibc_baseline.sh target/release/entropy', packages[0])
         self.assertNotIn('scripts/build_linux_appimage.sh', packages[0])
         self.assertNotIn('Install Linux dependencies', self.build)
