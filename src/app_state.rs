@@ -100,6 +100,8 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) launch_minimized: bool,
     #[serde(default)]
+    pub(crate) preferred_startup_device: Option<StartupDevicePreference>,
+    #[serde(default)]
     pub(crate) app_update_notifications: bool,
     #[serde(default)]
     pub(crate) development_updates: bool,
@@ -279,6 +281,7 @@ impl Default for AppSettings {
             close_to_tray_behavior: CloseToTrayBehavior::Ask,
             launch_at_startup: false,
             launch_minimized: false,
+            preferred_startup_device: None,
             app_update_notifications: false,
             development_updates: false,
             firmware_update_notifications: false,
@@ -1327,6 +1330,8 @@ pub(crate) struct ConnectResult {
     pub(crate) supports_rmk_native_combo_output: bool,
     /// Firmware accepts native RMK actions in Tap Dance fields.
     pub(crate) supports_rmk_native_tap_dance_actions: bool,
+    /// QMK Magic actions accepted by this target; bit index is keycode - 0x7000.
+    pub(crate) magic_keycodes: u64,
     /// Firmware can restrict each Combo to one active layer.
     pub(crate) supports_rmk_combo_layers: bool,
     pub(crate) macro_ext_keycodes_disabled_reason: Option<MacroExtKeycodesDisabledReason>,
@@ -5724,6 +5729,8 @@ pub struct EntropyApp {
     /// The board the user picked last: it is connected again when it comes
     /// back, however many others are listed. Picking another replaces it.
     pub(super) remembered_device: Option<DeviceIdentity>,
+    /// Pending startup selection. Consumed by the first connect or manual pick.
+    pub(super) startup_device: Option<StartupDeviceTarget>,
     /// The remembered board's takeover while it waits in
     /// `pending_device_connect`: it lapses with the memory.
     pub(super) pending_takeover: Option<DeviceIdentity>,
@@ -5844,6 +5851,9 @@ pub struct EntropyApp {
     /// this clock so they keep advancing while the window is hidden and only
     /// `run_logic` runs (the painted `ctx.input()` time is frozen then).
     pub(crate) app_clock: std::time::Instant,
+    /// Scripted test time stays fixed until the test advances it explicitly.
+    #[cfg(test)]
+    pub(crate) test_app_clock: Option<f64>,
     pub(crate) text_expander_rules_signature: Vec<(String, Option<std::time::SystemTime>)>,
     pub(crate) text_expander_rules_last_check_at: f64,
     pub(crate) text_expander_settings_save_pending: bool,

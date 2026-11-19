@@ -176,6 +176,7 @@ fn firmware_key(target: &FirmwareReleaseTarget) -> String {
     let family = match target.family {
         FirmwareReleaseFamily::Rmk => "rmk",
         FirmwareReleaseFamily::Rynk => "rynk",
+        FirmwareReleaseFamily::RynkMigration => "rynk-migration",
         FirmwareReleaseFamily::Qmk => "qmk",
     };
     format!("{family}:{}", target.asset_prefix)
@@ -200,7 +201,7 @@ struct PendingClick {
 fn notification_release_url(key: &str, version: &str) -> Option<String> {
     let repository = key.split_once(':').and_then(|(family, _)| match family {
         "qmk" => Some("vial-qmk"),
-        "rmk" => Some("rmk"),
+        "rmk" | "rynk" | "rynk-migration" => Some("rmk"),
         _ => None,
     })?;
     let mut url = url::Url::parse(&format!(
@@ -477,6 +478,37 @@ mod tests {
             app.notification_click_route("qmk:phenom_v1", "4.1.0"),
             Some(ClickRoute::Release(_))
         ));
+    }
+
+    #[test]
+    fn native_rynk_notification_click_waits_for_initial_discovery() {
+        let app = EntropyApp::new_inert_for_test();
+        let target = FirmwareReleaseTarget {
+            family: FirmwareReleaseFamily::Rynk,
+            current_version: "0.3.0".into(),
+            asset_prefix: "k04".into(),
+        };
+        assert_eq!(
+            app.notification_click_route(&firmware_key(&target), "v0.3.1"),
+            Some(ClickRoute::Pending)
+        );
+    }
+
+    #[test]
+    fn native_rynk_notification_click_uses_release_when_detached() {
+        let mut app = EntropyApp::new_inert_for_test();
+        app.scan_frame = 1;
+        let target = FirmwareReleaseTarget {
+            family: FirmwareReleaseFamily::Rynk,
+            current_version: "0.3.0".into(),
+            asset_prefix: "k04".into(),
+        };
+        assert_eq!(
+            app.notification_click_route(&firmware_key(&target), "v0.3.1"),
+            Some(ClickRoute::Release(
+                "https://github.com/ergohaven/rmk/releases/tag/v0.3.1".into()
+            ))
+        );
     }
 
     #[test]

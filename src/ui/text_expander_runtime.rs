@@ -5,13 +5,16 @@ impl EntropyApp {
     /// egui input time, so background scheduling keeps advancing while the
     /// window is hidden and only `run_logic` runs.
     pub(super) fn app_clock_now(&self) -> f64 {
+        #[cfg(test)]
+        if let Some(now) = self.test_app_clock {
+            return now;
+        }
         self.app_clock.elapsed().as_secs_f64()
     }
 
     #[cfg(test)]
     pub(super) fn test_set_app_clock(&mut self, elapsed_secs: f64) {
-        self.app_clock =
-            std::time::Instant::now() - std::time::Duration::from_secs_f64(elapsed_secs);
+        self.test_app_clock = Some(elapsed_secs);
     }
 
     pub(super) fn text_expander_rule_issue(

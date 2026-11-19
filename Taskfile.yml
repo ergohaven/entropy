@@ -301,6 +301,13 @@ tasks:
         -v "$PWD":/work -w /work "$IMAGE"
         task {{.TASKS}}
 
+  docker:appimage:
+    desc: Linux AppImage from the pinned toolchain container
+    deps: [docker:image]
+    cmds:
+      - task: docker:run
+        vars: {TASKS: linux:appimage}
+
   docker:linux:
     desc: All Linux artifacts from the toolchain container
     deps: [docker:image]

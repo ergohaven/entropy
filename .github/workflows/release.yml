@@ -45,28 +45,22 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install Rust
+        if: matrix.kind != 'linux'
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust
+        if: matrix.kind != 'linux'
         uses: Swatinem/rust-cache@v2
 
       - name: Install macOS Rust target
         if: matrix.kind == 'macos'
         run: rustup target add ${{ matrix.target }}
 
-      - name: Install Linux dependencies
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libhidapi-dev \
-            libudev-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libxkbcommon-dev \
-            libssl-dev \
-            libgtk-3-dev
+      - name: Install go-task
+        if: matrix.kind == 'linux'
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.44.0
 
       - name: Build
         if: matrix.kind == 'windows'
@@ -77,7 +71,11 @@ jobs:
         shell: bash
         run: |
           asset="entropy-${GITHUB_REF_NAME}-x86_64.AppImage"
-          scripts/build_linux_appimage.sh "${GITHUB_REF_NAME}" "dist/release/$asset"
+          VERSION="${GITHUB_REF_NAME#v}" task docker:appimage
+          mkdir -p dist/release
+          cp "dist/linux/$asset" "dist/release/$asset"
+          printf 'Release AppImage glibc requirement: '
+          scripts/glibc_baseline.sh target/release/entropy
 
       - name: Package Windows artifact
         if: matrix.kind == 'windows'

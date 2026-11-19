@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 mod led_contract;
 #[path = "portable_settings/module_contract.rs"]
 mod module_contract;
-use module_contract::{module_setting_import_value, module_setting_valid, EntModuleField};
+use module_contract::{module_setting_import_value, module_setting_migration_value, module_setting_valid, EntModuleField};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -173,13 +173,19 @@ pub(super) fn ent_portable_setting_import_value(
     source: &EntPortableSetting,
     target: &EntPortableSetting,
 ) -> u16 {
-    module_setting_import_value(source, target)
+    led_contract::timeout_migration_value(source, target)
+        .unwrap_or_else(|| module_setting_import_value(source, target))
 }
 
 pub(super) fn ent_portable_setting_contracts_match(
     source: &EntPortableSetting,
     target: &EntPortableSetting,
 ) -> bool {
+    if led_contract::timeout_migration_value(source, target).is_some()
+        || module_setting_migration_value(source, target).is_some()
+    {
+        return true;
+    }
     source.id == target.id
         && source.qsid == target.qsid
         && source.width == target.width

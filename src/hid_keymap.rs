@@ -231,6 +231,7 @@ impl HidDevice {
     }
 
     pub fn set_keycode(&self, layer: u8, row: u8, col: u8, keycode: u16) -> Result<()> {
+        self.validate_vial_magic_keycode(keycode)?;
         let [hi, lo] = keycode.to_be_bytes();
         self.usb_send(&[CMD_VIA_SET_KEYCODE, layer, row, col, hi, lo])
             .with_context(|| {
@@ -264,6 +265,7 @@ impl HidDevice {
     }
 
     pub fn set_encoder(&self, layer: u8, idx: u8, direction: u8, keycode: u16) -> Result<()> {
+        self.validate_vial_magic_keycode(keycode)?;
         let bytes = keycode.to_be_bytes();
         let _ = self
             .usb_send(&[

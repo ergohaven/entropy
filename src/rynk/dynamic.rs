@@ -431,13 +431,13 @@ mod tests {
         assert_eq!(
             super::combo(
                 &ComboEntry {
-                    keys: [KC_A, 0x7000, 0, 0],
+                    keys: [KC_A, 0x7023, 0, 0],
                     ..entry
                 },
                 4
             ),
             Err(DynamicError::Binding(KeyBindingError::UnsupportedKeycode(
-                0x7000
+                0x7023
             )))
         );
     }

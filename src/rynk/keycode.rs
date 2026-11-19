@@ -14,6 +14,46 @@ use rmk_types_rynk::keycode::{HidKeyCode, KeyCode, SpecialKey};
 use rmk_types_rynk::modifier::ModifierCombination;
 
 use crate::keyboard::KeyBinding;
+use crate::keycode::{
+    qmk_magic_keycode_supported, rmk_magic_keycode, QMK_MAGIC_KEYCODE_ALL_MASK,
+    QMK_MAGIC_KEYCODE_FIRST, QMK_MAGIC_KEYCODE_LAST, RMK_MAGIC_USER_ID_FIRST,
+};
+
+// Ergohaven Rynk capability groups. The individual action bits use the
+// same layout as the Vial capability response (keycode minus 0x7000).
+pub(crate) const MAGIC_REMAP_CAP: u32 = 1 << 10;
+const MAGIC_NKRO_CAP: u32 = 1 << 11;
+const MAGIC_HANDS_CAP: u32 = 1 << 12;
+const MAGIC_NKRO_MASK: u64 = 0b111 << 0x11;
+const MAGIC_HANDS_MASK: u64 = 0b11 << 0x1e;
+const MAGIC_REMAP_MASK: u64 = QMK_MAGIC_KEYCODE_ALL_MASK & !(MAGIC_NKRO_MASK | MAGIC_HANDS_MASK);
+
+pub(crate) fn magic_keycodes(caps: u32) -> u64 {
+    let mask = |cap, bits| if caps & cap != 0 { bits } else { 0 };
+    mask(MAGIC_REMAP_CAP, MAGIC_REMAP_MASK)
+        | mask(MAGIC_NKRO_CAP, MAGIC_NKRO_MASK)
+        | mask(MAGIC_HANDS_CAP, MAGIC_HANDS_MASK)
+}
+
+pub(crate) fn check_magic_action(
+    binding: KeyAction,
+    supported_keycodes: u64,
+) -> Result<(), KeyBindingError> {
+    let check = |action| match action {
+        Action::User(id) => match rmk_magic_keycode(id) {
+            Some(keycode) if !qmk_magic_keycode_supported(supported_keycodes, keycode) => {
+                Err(KeyBindingError::UnsupportedKeycode(keycode))
+            }
+            _ => Ok(()),
+        },
+        _ => Ok(()),
+    };
+    match binding {
+        KeyAction::Single(action) | KeyAction::Tap(action) => check(action),
+        KeyAction::TapHold(tap, hold, _) => check(tap).and_then(|()| check(hold)),
+        _ => Ok(()),
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum KeyBindingError {
@@ -26,6 +66,14 @@ pub(crate) enum KeyBindingError {
 impl fmt::Display for KeyBindingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::UnsupportedKeycode(keycode)
+                if crate::keycode::qmk_magic_keycode_index(*keycode).is_some() =>
+            {
+                write!(
+                    f,
+                    "QMK Magic keycode {keycode:#06x} is not supported by this RMK firmware"
+                )
+            }
             Self::UnsupportedKeycode(keycode) => {
                 write!(f, "keycode {keycode:#06x} has no RMK action")
             }
@@ -179,6 +227,7 @@ pub(crate) fn to_vial_keycode(key_action: KeyAction) -> u16 {
                 _ => 0,
             },
             Action::User(id) if id < 64 => id as u16 | 0x7E00,
+            Action::User(id) => rmk_magic_keycode(id).unwrap_or_default(),
             _ => 0,
         },
         KeyAction::Tap(_) => 0,
@@ -270,6 +319,9 @@ pub(crate) fn from_vial_keycode(via_keycode: u16) -> KeyAction {
             KeyAction::Single(Action::PersistentDefaultLayer(via_keycode as u8 & 0x1F))
         }
         0x5700..=0x57FF => KeyAction::Morse((via_keycode & 0xFF) as u8),
+        QMK_MAGIC_KEYCODE_FIRST..=QMK_MAGIC_KEYCODE_LAST => KeyAction::Single(Action::User(
+            RMK_MAGIC_USER_ID_FIRST + (via_keycode - QMK_MAGIC_KEYCODE_FIRST) as u8,
+        )),
         0x7700..=0x77FF => KeyAction::Single(Action::TriggerMacro(via_keycode as u8)),
         0x7C00 => KeyAction::Single(Action::KeyboardControl(KeyboardAction::Bootloader)),
         0x7C01 => KeyAction::Single(Action::KeyboardControl(KeyboardAction::Reboot)),
@@ -498,9 +550,32 @@ mod tests {
     }
 
     #[test]
+    fn magic_actions_round_trip_but_require_their_reported_capability() {
+        let legacy = magic_keycodes(0);
+        let remaps = magic_keycodes(MAGIC_REMAP_CAP);
+        let all = magic_keycodes(MAGIC_REMAP_CAP | MAGIC_NKRO_CAP | MAGIC_HANDS_CAP);
+        assert_eq!(remaps.count_ones(), 30);
+        assert_eq!(all.count_ones(), 35);
+        for code in 0x7000..=0x7022 {
+            let binding = KeyBinding::Vial(code);
+            let action = binding_action(binding).unwrap();
+            assert_eq!(key_binding(action), binding);
+            assert_eq!(
+                check_magic_action(action, legacy),
+                Err(KeyBindingError::UnsupportedKeycode(code))
+            );
+            assert_eq!(check_magic_action(action, all), Ok(()));
+            assert_eq!(
+                check_magic_action(action, remaps).is_ok(),
+                !matches!(code, 0x7011..=0x7013 | 0x701e..=0x701f)
+            );
+        }
+    }
+
+    #[test]
     fn keycodes_without_an_action_are_refused() {
         for keycode in [
-            0x7000, // QMK function
+            0x7023, // outside the Magic action range
             0x7800, // backlight / RGB
             0x7C02, // QK_DEBUG_TOGGLE
             0x7E40, // QK_KB_64: user keys past 63 are native only

@@ -101,10 +101,10 @@ class ManualWorkflow(unittest.TestCase):
             '', self.workflow, count=1, flags=re.S)
         unchanged = unchanged.replace('          pattern: release-assets-*\n', '', 1)
         unchanged = unchanged.replace('          draft: true\n', '          draft: false\n', 1)
-        # Frozen pre-release workflow: all gates, jobs, matrix rows, existing
-        # build/signing steps, credential boundaries and manual flow are retained.
+        # Frozen workflow after routing Linux through the existing pinned
+        # container owner; all non-Linux gates, signing and manual flow remain.
         self.assertEqual(hashlib.sha256(unchanged.encode()).hexdigest(),
-                         '8133cecc2ef4ab7fd3e321ce5496c32ae878d6d2c1d521318b53692047eecf1c')
+                         '775e39de2aeb33e6b1acbaa98f347a8fd7724a7cde4cb5ee5d09ec0a65bff3c9')
 
     def test_secrets_only_in_sign_step_after_compilation_and_allowlisted_upload(self):
         self.assertIn('macos-signing-test', self.jobs)

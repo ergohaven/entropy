@@ -115,6 +115,57 @@ Symbols do not require these Text Expander permissions.
 6. Edit layers, keycodes, advanced firmware features, or app settings
 7. Save/write changes when the edited feature requires it
 
+## Manual firmware updates
+
+Follow the [firmware instructions for your model](https://docs.eh.works/firmware/)
+and export a `.entlayout` backup before flashing. Update every component with its
+matching image from the same release.
+
+After copying a UF2 image, the `NRF52BOOT` drive disconnects automatically as the
+device restarts. macOS may report **Disk Not Ejected Properly**. That notification
+alone does not mean the flash failed or that all components were updated. Check
+the connected device's firmware version in **About device** after it restarts;
+the primary's version does not verify a peripheral half. An actual copy/write
+failure or a device that does not restart still needs investigation.
+
+RMK 0.3.0 resets settings and Bluetooth pairings when upgrading from 0.2.0.
+After updating all parts, follow the model's reset/pairing instructions and
+restore the saved layout. See the [RMK 0.3.0 release notes](https://github.com/ergohaven/rmk/releases/tag/v0.3.0).
+
+## Startup Device
+
+When only one keyboard is connected, Entropy opens it automatically, even if a
+different keyboard was saved previously. With several connected devices, choose
+the startup behavior under **Multiple devices** in Entropy settings:
+
+- **Startup screen** keeps the device picker open until you choose a keyboard.
+- A preferred keyboard opens automatically when it is among the connected
+  devices. If it is absent or cannot be uniquely identified, Entropy shows the
+  device picker instead of choosing another keyboard.
+
+The startup screen is the default for multiple devices. The same rules apply
+when Entropy starts at login. A one-device fallback does not replace the saved
+preference for future launches with multiple devices.
+
+A launch argument overrides the saved preference for that launch:
+
+```sh
+entropy --device "Phenom Mini"
+entropy --minimized --device e126:0071
+```
+
+The filter accepts a case-insensitive part of the reported product name, a hex
+`VID:PID`, or an exact HID path, using the same rules as layout export.
+Empty and repeated `--device` filters are rejected.
+Entropy connects only when exactly one device matches. While the target is
+missing or ambiguous, the picker remains available and discovery continues.
+A manual choice ends startup selection for that session. The saved preference
+uses device identity rather than the HID path, so USB re-enumeration does not
+lose it; indistinguishable devices still require a manual choice.
+
+Close an already-running Entropy before using `--device` for GUI startup.
+The argument does not switch devices in an existing instance (exit status `3`).
+
 ## Headless Layout Export
 
 Scripts and backup jobs can save a keyboard's `.entlayout` without opening a

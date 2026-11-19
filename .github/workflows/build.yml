@@ -37,7 +37,7 @@ jobs:
         id: policy
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 .github/scripts/ci_policy.py plan --profile build
+        run: python3 .github/scripts/ci_policy.py plan --profile build --manual-builds
 
   build:
     name: Build (${{ matrix.os }})

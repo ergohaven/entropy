@@ -90,6 +90,9 @@ pub(super) fn module_setting_import_value(
     source: &EntPortableSetting,
     target: &EntPortableSetting,
 ) -> u16 {
+    if let Some(value) = module_setting_migration_value(source, target) {
+        return value;
+    }
     let Some(fields) = &source.module else {
         return source.value;
     };
@@ -100,6 +103,89 @@ pub(super) fn module_setting_import_value(
         .iter()
         .fold(0u16, |mask, field| mask | (1u16 << field.bit));
     (source.value & mask) | (target.value & !mask)
+}
+
+pub(super) fn module_setting_migration_value(
+    source: &EntPortableSetting,
+    target: &EntPortableSetting,
+) -> Option<u16> {
+    if !module_setting_valid(source)
+        || !module_setting_valid(target)
+        || source.width != target.width
+    {
+        return None;
+    }
+    let [field] = source.module.as_deref()? else {
+        return None;
+    };
+    let [target_field] = target.module.as_deref()? else {
+        return None;
+    };
+    // These QMK registers moved because RMK uses 149/150 for module selection.
+    let relocated = match (source.qsid, field.side.as_str(), field.title.as_str()) {
+        (149, "left", "Invert scroll horizontal") => 327,
+        (150, "right", "Invert scroll horizontal") => 328,
+        (151, "left", "Invert text horizontal") => 329,
+        (152, "right", "Invert text horizontal") => 330,
+        (327, "left", "Touch gestures") => 151,
+        (328, "right", "Touch gestures") => 152,
+        (327, "left", "Invert scroll horizontal") => 149,
+        (328, "right", "Invert scroll horizontal") => 150,
+        (329, "left", "Invert text horizontal") => 151,
+        (330, "right", "Invert text horizontal") => 152,
+        (151, "left", "Touch gestures") => 327,
+        (152, "right", "Touch gestures") => 328,
+        _ => source.qsid,
+    };
+    if source.qsid != target.qsid {
+        return (relocated == target.qsid && field.kind == "boolean" && field == target_field)
+            .then(|| {
+                let mask = 1u16 << field.bit;
+                (source.value & mask) | (target.value & !mask)
+            });
+    }
+
+    let old_timeouts = [
+        "250 ms", "500 ms", "750 ms", "1000 ms", "1250 ms", "1500 ms",
+    ];
+    let new_timeouts = [
+        "50 ms", "100 ms", "150 ms", "200 ms", "250 ms", "300 ms", "350 ms", "400 ms", "450 ms",
+        "500 ms", "750 ms", "1000 ms", "1250 ms", "1500 ms",
+    ];
+    let manual = ["None", "Encoder", "Trackball", "Touchpad"];
+    let auto = ["None", "Encoder", "Trackball", "Touchpad", "Auto"];
+    let (before, after): (&[&str], &[&str]) =
+        match (source.qsid, field.side.as_str(), field.title.as_str()) {
+            (324, "auto_layer", "Auto layer timeout") => (&old_timeouts, &new_timeouts),
+            (149, "left", "Module") | (150, "right", "Module") => (&manual, &auto),
+            _ => return None,
+        };
+    let is_variants = |field: &EntModuleField, variants: &[&str]| {
+        field.kind == "select"
+            && field.min == 0
+            && usize::from(field.max) + 1 == variants.len()
+            && field
+                .variants
+                .iter()
+                .map(String::as_str)
+                .eq(variants.iter().copied())
+    };
+    if !((is_variants(field, before) && is_variants(target_field, after))
+        || (is_variants(field, after) && is_variants(target_field, before)))
+    {
+        return None;
+    }
+    let mut normalized = field.clone();
+    normalized.max = target_field.max;
+    normalized.variants.clone_from(&target_field.variants);
+    if normalized != *target_field {
+        return None;
+    }
+    target_field
+        .variants
+        .iter()
+        .position(|label| label == &field.variants[usize::from(source.value)])
+        .map(|index| index as u16)
 }
 
 impl EntropyApp {

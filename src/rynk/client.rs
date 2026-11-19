@@ -32,8 +32,10 @@ use super::read_only::{read_only_rynk_session, ReadOnlyRynkSession};
 /// RMK #79 adds target identity to the otherwise compatible revision 2
 /// wire. Keep the released revision eligible as an upgrade source.
 const FIRMWARE_TARGET_REVISION: u16 = 3;
-const FIRMWARE_TARGET_CAP: u32 = 1 << 10;
-const USB_MAINTENANCE_CAP: u32 = 1 << 11;
+const FIRMWARE_TARGET_CAP: u32 = 1 << 13;
+const USB_MAINTENANCE_CAP: u32 = 1 << 14;
+const DRAFT_FIRMWARE_TARGET_CAP: u32 = 1 << 10;
+const DRAFT_USB_MAINTENANCE_CAP: u32 = 1 << 11;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum FirmwareTarget {
@@ -478,11 +480,24 @@ impl<T: RynkTransport> RynkClient<T> {
                 host: FIRMWARE_TARGET_REVISION,
             });
         }
-        let info = client.request::<ergohaven::GetErgohavenInfo>(&())?;
+        let mut info = client.request::<ergohaven::GetErgohavenInfo>(&())?;
         if info.revision != revision {
             return Err(RynkClientError::Malformed {
                 cmd: ergohaven::GetErgohavenInfo::CMD.raw(),
             });
+        }
+        // The pinned RMK #79 test images used these bits before Magic claimed
+        // them. Translate only the draft revision 3 layout, never revision 2.
+        if revision == FIRMWARE_TARGET_REVISION
+            && info.caps & FIRMWARE_TARGET_CAP == 0
+            && info.caps & DRAFT_FIRMWARE_TARGET_CAP != 0
+        {
+            let maintenance = info.caps & DRAFT_USB_MAINTENANCE_CAP != 0;
+            info.caps &= !(DRAFT_FIRMWARE_TARGET_CAP | DRAFT_USB_MAINTENANCE_CAP);
+            info.caps |= FIRMWARE_TARGET_CAP;
+            if maintenance {
+                info.caps |= USB_MAINTENANCE_CAP;
+            }
         }
         let capabilities = client.request::<command::GetCapabilities>(&())?;
         client.max_payload = capabilities.max_payload_size as usize;
@@ -1189,14 +1204,20 @@ mod tests {
 
     #[test]
     fn revision_three_connects_without_excluding_revision_two() {
-        for revision in [2, 3] {
+        let magic = crate::rynk::keycode::MAGIC_REMAP_CAP | DRAFT_USB_MAINTENANCE_CAP;
+        let maintenance = FIRMWARE_TARGET_CAP | USB_MAINTENANCE_CAP;
+        for (revision, advertised, expected) in [
+            (2, magic, magic),
+            (3, DRAFT_FIRMWARE_TARGET_CAP, FIRMWARE_TARGET_CAP),
+            (3, DRAFT_FIRMWARE_TARGET_CAP | DRAFT_USB_MAINTENANCE_CAP, maintenance),
+            (3, FIRMWARE_TARGET_CAP | magic, FIRMWARE_TARGET_CAP | magic),
+            (3, maintenance, maintenance),
+        ] {
             let transport = FakeBoard::new(move |header, _| {
                 vec![match header.cmd {
                     Cmd::GetErgohavenInfo => {
                         let mut info = info(revision);
-                        if revision == 3 {
-                            info.caps |= FIRMWARE_TARGET_CAP | USB_MAINTENANCE_CAP;
-                        }
+                        info.caps = advertised;
                         ok(header, info)
                     }
                     GetFirmwareTarget::CMD => ok(header, FirmwareTarget::Peripheral(0)),
@@ -1205,7 +1226,8 @@ mod tests {
             });
             let (_, board) = RynkClient::connect(transport.transport(), quick()).unwrap();
             assert_eq!(board.info.revision, revision);
-            assert_eq!(board.maintenance_only(), revision == 3);
+            assert_eq!(board.info.caps, expected);
+            assert_eq!(board.maintenance_only(), expected & USB_MAINTENANCE_CAP != 0);
             assert_eq!(
                 board.firmware_target,
                 (revision == 3).then_some(FirmwareTarget::Peripheral(0))

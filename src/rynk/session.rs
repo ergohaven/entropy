@@ -73,6 +73,10 @@ impl RynkSession {
         &self.link.board().capabilities
     }
 
+    pub(crate) fn magic_keycodes(&self) -> u64 {
+        keycode::magic_keycodes(self.info().caps)
+    }
+
     pub(crate) fn is_transport_available(&self) -> bool {
         self.link.is_open()
     }
@@ -85,6 +89,7 @@ impl RynkSession {
         binding: KeyBinding,
     ) -> Result<()> {
         let action = keycode::binding_action(binding)?;
+        keycode::check_magic_action(action, self.magic_keycodes())?;
         self.link.request::<command::SetKeyAction>(SetKeyRequest {
             position: KeyPosition { layer, row, col },
             action,
@@ -102,6 +107,7 @@ impl RynkSession {
         keycode: u16,
     ) -> Result<()> {
         let action = keycode::binding_action(KeyBinding::Vial(keycode))?;
+        keycode::check_magic_action(action, self.magic_keycodes())?;
         self.link.run(move |client| {
             let request = GetEncoderRequest {
                 encoder_id: idx,
@@ -125,6 +131,10 @@ impl RynkSession {
     /// Keys, output and layer of a combo in one write.
     pub(crate) fn set_combo(&self, idx: u8, entry: &ComboEntry) -> Result<()> {
         let config = dynamic::combo(entry, self.capabilities().max_combo_keys as usize)?;
+        let magic_keycodes = self.magic_keycodes();
+        for action in config.actions.iter().copied().chain([config.output]) {
+            keycode::check_magic_action(action, magic_keycodes)?;
+        }
         self.link
             .request::<command::SetCombo>(SetComboRequest { index: idx, config })?;
         Ok(())
@@ -154,6 +164,10 @@ impl RynkSession {
         };
         let max_patterns = self.capabilities().max_patterns_per_key as usize;
         let config = dynamic::merge_tap_dance(&current, entry, max_patterns)?;
+        let magic_keycodes = self.magic_keycodes();
+        for (_, &action) in config.actions.iter() {
+            keycode::check_magic_action(KeyAction::Single(action), magic_keycodes)?;
+        }
         self.link.request::<command::SetMorse>(SetMorseRequest {
             index: idx,
             config: config.clone(),
@@ -167,6 +181,14 @@ impl RynkSession {
 
     pub(crate) fn set_key_override(&self, idx: u8, entry: &KeyOverrideEntry) -> Result<()> {
         let config = dynamic::fork(entry)?;
+        let magic_keycodes = self.magic_keycodes();
+        for action in [
+            config.trigger,
+            config.negative_output,
+            config.positive_output,
+        ] {
+            keycode::check_magic_action(action, magic_keycodes)?;
+        }
         self.link
             .request::<command::SetFork>(SetForkRequest { index: idx, config })?;
         Ok(())
@@ -209,6 +231,12 @@ impl RynkSession {
                 ops
             })
             .collect();
+        let magic_keycodes = self.magic_keycodes();
+        for op in wanted.iter().flatten() {
+            if let MacroOp::Tap(action) | MacroOp::Press(action) | MacroOp::Release(action) = *op {
+                keycode::check_magic_action(KeyAction::Single(action), magic_keycodes)?;
+            }
+        }
         // The board would refuse the SetMacro that passes its pool, after the
         // ones before it went through.
         let used = macros::macro_space_used(wanted.iter().map(Vec::as_slice), max);
@@ -727,6 +755,35 @@ mod tests {
         let (board, state) = board(stored);
         let session = RynkSession::new(link(&format!("session-{name}"), &board));
         (session, state)
+    }
+
+    #[test]
+    fn magic_key_writes_require_the_board_capability() {
+        let mut legacy = Stored::new(1, 1, 1);
+        legacy.keymap[0] = key(HidKeyCode::A);
+        let (legacy_session, legacy_state) = session("legacy-magic", legacy);
+        assert!(legacy_session
+            .set_key_binding(0, 0, 0, KeyBinding::Vial(0x701d))
+            .is_err());
+        let legacy_state = legacy_state.lock().unwrap();
+        assert!(legacy_state.writes().is_empty());
+        assert_eq!(legacy_state.keymap[0], key(HidKeyCode::A));
+
+        let mut remaps = Stored::new(1, 1, 1);
+        remaps.caps = keycode::MAGIC_REMAP_CAP;
+        let (session, state) = session("magic-remaps", remaps);
+        session
+            .set_key_binding(0, 0, 0, KeyBinding::Vial(0x701d))
+            .unwrap();
+        assert!(session
+            .set_key_binding(0, 0, 0, KeyBinding::Vial(0x7013))
+            .is_err());
+        let state = state.lock().unwrap();
+        assert_eq!(state.writes(), [Cmd::SetKeyAction]);
+        assert_eq!(
+            keycode::key_binding(state.keymap[0]),
+            KeyBinding::Vial(0x701d)
+        );
     }
 
     #[test]
