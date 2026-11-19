@@ -10,6 +10,8 @@ use std::{
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn output(command: &mut Command) -> Result<Vec<u8>> {
+    const MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+
     // Files keep large IORegistry output from filling a pipe while waiting for
     // process exit. A stuck OS utility must not leave an update worker forever.
     let stdout = tempfile::tempfile()?;
@@ -26,7 +28,13 @@ fn output(command: &mut Command) -> Result<Vec<u8>> {
             let mut stdout = stdout;
             stdout.rewind()?;
             let mut bytes = Vec::new();
-            stdout.take(16 * 1024 * 1024).read_to_end(&mut bytes)?;
+            stdout
+                .take((MAX_OUTPUT_BYTES + 1) as u64)
+                .read_to_end(&mut bytes)?;
+            ensure!(
+                bytes.len() <= MAX_OUTPUT_BYTES,
+                "USB topology utility output exceeded 16 MiB"
+            );
             return Ok(bytes);
         }
         if Instant::now() >= deadline {
@@ -40,8 +48,18 @@ fn output(command: &mut Command) -> Result<Vec<u8>> {
 
 #[cfg(target_os = "macos")]
 pub(super) fn snapshot() -> Result<Vec<UsbTarget>> {
-    let bytes =
-        output(Command::new("/usr/sbin/ioreg").args(["-a", "-l", "-w", "0", "-p", "IOService"]))?;
+    // Use USB device subtrees from IOService to retain their disk descendants.
+    let bytes = output(Command::new("/usr/sbin/ioreg").args([
+        "-a",
+        "-l",
+        "-w",
+        "0",
+        "-p",
+        "IOService",
+        "-r",
+        "-c",
+        "IOUSBHostDevice",
+    ]))?;
     let value = plist::Value::from_reader(std::io::Cursor::new(bytes))?;
     let mut targets = Vec::new();
     collect_macos(&value, &mut targets)?;
@@ -238,6 +256,18 @@ pub(super) fn snapshot() -> Result<Vec<UsbTarget>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn firmware_flash_rejects_oversized_topology_output() {
+        let oversized_count = (16 * 1024 * 1024 + 1).to_string();
+        let result =
+            output(Command::new("/usr/bin/head").args(["-c", &oversized_count, "/dev/zero"]));
+        let Err(error) = result else {
+            panic!("oversized USB topology output should be rejected");
+        };
+        assert!(error.to_string().contains("exceeded 16 MiB"));
+    }
+
     #[test]
     fn firmware_flash_windows_topology_accepts_a_new_profile_without_script_allowlist_edits() {
         let script = windows_topology_script(&[super::super::profiles::fixtures::SINGLE_RP2040]);
